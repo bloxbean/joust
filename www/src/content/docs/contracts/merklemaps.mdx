@@ -101,7 +101,7 @@ public static State transfer(State s, byte[] to, BigInteger amount, Ctx ctx) {
 
 ## In `.jsc`
 
-In [`.jsc`](/languages/jsc/) 2, a `BigMap<K, Int>` or `BigMap<K, Bytes>` state field is a MerkleMap (keys are
+In [`.jsc`](/languages/jsc/), a `BigMap<K, Int>` or `BigMap<K, Bytes>` state field is a MerkleMap (keys are
 `Bytes`, `Key` or `Hash` of at most 64 bytes). `m[k]` reads an `Int` entry, `0` when absent; `m.get(k)` and `m.has(k)`
 read any entry. A write is the field's own value in the next state, `{ ...state, points: points.set(k, v) }`:
 `set(k, 0)` removes an `Int` entry, a value can never go negative, and `delete(k)` removes any entry. `m.isEmpty`

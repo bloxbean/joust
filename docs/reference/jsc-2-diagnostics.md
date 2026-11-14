@@ -1,6 +1,6 @@
-# `.jsc` 2 diagnostics
+# `.jsc` diagnostics
 
-Every error and warning of the `.jsc` 2 front end has a stable code (ADR-0018 D12, J5), printed with its
+Every error and warning of the `.jsc` front end has a stable code (ADR-0018 D12, J5), printed with its
 position on both build paths: `File.jsc:12:5: error[JSC0502]: …`. A code names one rule and is never reused for
 another; a message may change wording, its code does not. `…` marks the parts a message fills in (names, types,
 positions). This catalogue is checked against the front end's sources (`JscV2DiagnosticsTest`).

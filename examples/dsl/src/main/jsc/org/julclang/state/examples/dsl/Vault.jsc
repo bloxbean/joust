@@ -1,7 +1,7 @@
 jsc 1
 package org.julclang.state.examples.dsl
 
-// examples/vault in .jsc 2 (ADR-0018 M1c, J11): a time-locked savings vault. Anyone deposits; only the owner
+// examples/vault in .jsc (ADR-0018 M1c, J11): a time-locked savings vault. Anyone deposits; only the owner
 // withdraws, and only once the whole validity window is after unlockAt.
 contract Vault(maxDatumBytes = 128) {
   state { owner: Key, unlockAt: Int, total: Int }

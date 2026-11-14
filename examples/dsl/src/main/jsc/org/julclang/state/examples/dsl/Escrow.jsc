@@ -1,7 +1,7 @@
 jsc 1
 package org.julclang.state.examples.dsl
 
-// examples/escrow in .jsc 2 (ADR-0018 M1c, J11): two-party escrow with an arbiter. The buyer funds it when deploying.
+// examples/escrow in .jsc (ADR-0018 M1c, J11): two-party escrow with an arbiter. The buyer funds it when deploying.
 // The buyer (or the arbiter) releases the funds to the seller; the seller (or the arbiter) can refund the buyer at any
 // time, and anyone can once the deadline has passed (after under ||, D11).
 contract Escrow(maxDatumBytes = 192) {

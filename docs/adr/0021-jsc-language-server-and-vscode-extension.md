@@ -1,10 +1,10 @@
-# ADR-0021: A language server and VS Code extension for `.jsc` 2
+# ADR-0021: A language server and VS Code extension for `.jsc`
 
-**Status:** Proposed (r6, with r7a). r5 was approved on #66 (design, security, Codex); r6 records the amendments that M5a's
+**Status:** Proposed (r6, with r7a and r7b). r5 was approved on #66 (design, security, Codex); r6 records the amendments that M5a's
 implementation (#83, draft) made, which its reviews asked for, and is to be reviewed with #83. r7a records the project
 reading that the `.jsc` 2 integration (#98) brought forward from M5c; M5b's amendments are r7 (#99), a separate entry.
 **Date:** 2026-11-13
-**Builds on:** ADR-0018 (`.jsc` 2), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
+**Builds on:** ADR-0018 (`.jsc`, called `.jsc` 2 before its r26), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
 D3 (names), D9 (libraries and `java:` imports, built in M4), D12 (stable codes, source maps, generated Java, ABI
 manifest), D13 (tree-sitter and TextMate grammars), D14 (npm projects), D16 (deployed scripts stay rebuildable), §8
 (M5 is named there but not designed). ADR-0015 (the toolchain engine: JOUST's processor and JuLC in a GraalVM Web
@@ -26,7 +26,7 @@ revision any edit that moves a line changes the script hash (F12), which is why 
 
 ## 1. Context
 
-ADR-0018 makes `.jsc` 2 the language JavaScript developers start with, and promises editor support in two steps:
+ADR-0018 makes `.jsc` the language JavaScript developers start with, and promises editor support in two steps:
 grammars now (D13, being built in M1d) and a language server later (M5). Since the front end already has stable
 diagnostic codes, positions on both build paths, source maps and an ABI manifest (M1a), the question is no longer
 whether a language server is possible but where it runs, which compiler it uses, how it stays responsive and safe on
@@ -1148,3 +1148,6 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
   mode, freshness, keys), D4b's note on import text and roots, and D2a's note on worker state. This brings forward the
   part of M5c that L1 needs for files with `.jsc` and contract imports; navigation and rename across files, and `java:`
   imports, stay M5c's.
+- **r7b** (2026-11-14; ADR-0018 r26, the `.jsc` v1 removal, #111; separate from M5b's r7 on #99): the title says
+  `.jsc`, and §6's Commands row drops M5b's planned **Migrate to .jsc 2** command, since ADR-0018 r26 removes
+  `joust migrate` (D16) and with it every v1 file such a command would translate.

@@ -1,7 +1,7 @@
 {
  "ir": 2,
  "language": "jsc 2",
- "sourceSha256": "9146b233b6b2be0b01fc7da004f4eadc74f53753601bad7eb9185e11db1be0bb",
+ "sourceSha256": "086379c54f4873c585a06b31589e198530215881d6888b2bc8d56be0f5a4afa7",
  "package": "org.julclang.state.examples.dsl",
  "contract": "Pool",
  "source": "Pool.jsc",

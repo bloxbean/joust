@@ -41,8 +41,8 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
-| [0018](#adr-0018-the-jsc-language-an-immutable-contract-language) | The `.jsc` language: an immutable contract language for JavaScript developers | Proposed (r6) | [.jsc](/languages/jsc/) |
-| [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc) | A language server and VS Code extension for `.jsc` | Proposed (r6); M5a in #83 (draft) | – |
+| [0018](#adr-0018-the-jsc-language-an-immutable-contract-language) | The `.jsc` language: an immutable contract language for JavaScript developers | Proposed (r26) | [.jsc](/languages/jsc/) |
+| [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc) | A language server and VS Code extension for `.jsc` | Proposed (r6, with r7a and r7b); M5a in the `.jsc` integration (#98) | – |
 
 ## The base
 
@@ -313,7 +313,7 @@ Covered in: [Quick start: Java & Gradle](/start/quick-start-java/#create-it-with
 ### ADR-0018: The `.jsc` language, an immutable contract language
 
 [`0018-jsc-2-immutable-contract-language.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)
-· Proposed (r6)
+· Proposed (r26)
 
 `.jsc` makes the language npm projects start with able to express every JOUST contract. It is **immutable**, like
 UPLC: names are bound once with `const`, blocks and `if`/`match` are expressions, and an action evaluates to the next
@@ -329,7 +329,7 @@ The first language, `.jsc` v1 (ADR-0005), and its migration were removed in r26.
 ### ADR-0021: A language server and VS Code extension for `.jsc`
 
 [`0021-jsc-language-server-and-vscode-extension.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0021-jsc-language-server-and-vscode-extension.md)
-· Proposed (r6); M5a implemented in #83 (draft)
+· Proposed (r6, with r7a and r7b); M5a in the `.jsc` integration (#98)
 
 The editor runs the build's own `.jsc` front end, so the editor and the build cannot disagree about the language.
 A Java language core beside the checker turns files into a document model (diagnostics with their stable codes,

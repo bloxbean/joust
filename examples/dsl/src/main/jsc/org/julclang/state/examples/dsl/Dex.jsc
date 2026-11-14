@@ -4,7 +4,7 @@ package org.julclang.state.examples.dsl
 import { blake2b_224 } from "std/crypto"
 import { isEmpty } from "std/value"
 
-// examples/dex in .jsc 2 (ADR-0018 M2, J11; ADR-0007): a constant-product AMM for one ADA/token pair. The reserves are
+// examples/dex in .jsc (ADR-0018 M2, J11; ADR-0007): a constant-product AMM for one ADA/token pair. The reserves are
 // what the pool's UTxO holds: lovelace above the deposit (balance) and the token (funds.held), so the state cannot drift
 // from the funds. Liquidity providers get LP tokens minted under this contract's own policy, named blake2b_224 of the
 // pool's id: one name per pool, so one pool's LP tokens never redeem another's reserves. Swaps pay a 0.3% fee to the pool.

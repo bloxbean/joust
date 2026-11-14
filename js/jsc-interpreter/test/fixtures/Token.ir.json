@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "d974af1f9a356cd7d9a26c77bba9f6ad782df85e79134dc6007e16a75ff333b3",
+  "sourceSha256": "e0816c30c42bfe044457cafc95ad342adc4f00baff901f81fba68d229ab91570",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Token",
   "source": "Token.jsc",

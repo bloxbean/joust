@@ -93,8 +93,8 @@ them on everything it emits).
 
 *(r26)* A file may start with the header `jsc 1` (after comments); a file with no header is version 1. Any other
 version is refused (JSC0113), and `jsc 2`, the header of the previews, has no alias: its message says to write
-`jsc 1` or drop the line. A later version of the language would take a new header and leave version 1 files as they
-are. *(Until r26: a `.jsc` 2 file started with `jsc 2`, a file without it was `.jsc` v1, compiled by the v1 front end
+`jsc 1` or drop the line. **`jsc 2` is reserved for good and never reused**, so that message stays right: the next
+breaking version of the language is `jsc 3`, with its own header, and leaves version 1 files as they are. *(Until r26: a `.jsc` 2 file started with `jsc 2`, a file without it was `.jsc` v1, compiled by the v1 front end
 with a deprecation warning, and both CLIs offered `joust migrate`, D16.)*
 
 ### D3. Immutable and expression-oriented
@@ -827,7 +827,7 @@ validator never accepts it (r17, #76 review S5, S6).
   `send`, a time value in an `accept`, `deposit` or `BigMap` int value (refused), a `fn` dividing or requiring on a
   time parameter (refused at the call), `div`/`pow` with a time argument (refused); and the oracle's
   `before(updatedAt + maxAge)` accepted (J6). The v1 front end gets the
-  positional part of this rule as a warning.
+  positional part of this rule as a warning *(superseded by r26: v1 is removed)*.
 
 ### D12. Diagnostics, source maps, the generated Java and the ABI
 
@@ -940,7 +940,7 @@ validator never accepts it (r17, #76 review S5, S6).
 
 ### D13. Editor support
 
-A **tree-sitter grammar** for `.jsc` 2 (and v1), as Elci has (F15): it serves editors that use tree-sitter, a VS Code
+A **tree-sitter grammar** for `.jsc` 2 (and v1; *superseded by r26: v1's rules are removed*), as Elci has (F15): it serves editors that use tree-sitter, a VS Code
 extension and the docs (replacing the Kotlin alias, F7); a TextMate grammar beside it covers highlighters that need one
 (Shiki). A language server is later work (M5); it keeps the hand-written front end (ADR-0021 D5), so tree-sitter stays
 in the editor.
@@ -1200,7 +1200,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J10 | Generated names cannot collide with user names; no binding shadows a state field or a built-in name in methods with input state; no binding or state field replaces a declared type, enum, variant or `fn`; names are ASCII, and a file holds no format character, no line end other than LF or CRLF (r8) and no control character but TAB (r9) | D3, D7 | checker tests |
 | J11 | A D10 row is supported only once its gating port builds, passes its Java example's tests and attack suite, and stays within the size and budget bounds of §8 | D10 | milestone exit criteria |
 | J12 | The build names every library with its on-chain-source hash, and fails when one from outside the project's sources (a package's `.jsc` library, a `java:` library, a Java library a Java contract imports: its source closure, all the build compiles of it) is not pinned by `joust.lock` or does not match it (r20 amended) | D9, D14 | build tests |
-| J13 | `joust migrate` preserves behaviour (equal next state, equal per-kind obligation multisets) or refuses with a reason; it never overwrites without a flag | D16 | migration tests over v1 vectors and generated v1 programs |
+| J13 | **Retired by r26** (D16 superseded: `joust migrate` is removed, so this gate has no tests to look for). Was: `joust migrate` preserves behaviour (equal next state, equal per-kind obligation multisets) or refuses with a reason; it never overwrites without a flag | D16 | none (was: migration tests over v1 vectors and generated v1 programs) |
 | J14 | Every inline `Map` is canonical (unique keys of at most 64 bytes, strictly ascending), whether built by `set`/`delete` or received as input | D5, D7 | property tests against CCL and the JS codec, keys of 0–80 bytes, duplicates |
 | J15 | Every checked input (D5) is validated recursively before user code reads it: nested `Key`/`Hash` lengths, map canonicality, canonical `Value`, `Address` shape | D5 | negative tests on-chain and in the attack suite |
 | J16 | No method that can reach `pay`, `send`, `mint`/`burn` or `deposit` lacks an audience (`only`, `authorized`, `quorum` or `open`) | D4 | checker tests per effect kind |
@@ -1256,7 +1256,7 @@ interpreter.
 
 **Negative:** a large implementation with a high cost of mistakes, hence the gates; generated checks, encoders and
 equality helpers add script size and budget (measured in M0, bounded per port); v1 stays frozen in the codebase;
-migrated contracts are new scripts; time-dependent amounts carry a documented submitter bias.
+migrated contracts are new scripts *(both superseded by r26: v1 and the migration are removed)*; time-dependent amounts carry a documented submitter bias.
 
 ## 8. Milestones
 
@@ -1309,19 +1309,22 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   bypass; every D4 legality cell and audience case (J16); shadowing (J10).
 - **Library bindings:** the binding test; per-row differential vectors; import refusals for each unmappable or
   unchecked signature (J7).
-- **Migration:** `examples/dsl` (Jar, Points, Guards), the templates and generated v1 programs migrated and compared
-  (J13); refusals for time uses D11 rejects.
+- **Migration** *(superseded by r26: J13 is retired; examples/dsl's Jar, Points and Guards are ported, and DslTest and
+  DslDevnetTest run them)*: `examples/dsl` (Jar, Points, Guards), the templates and generated v1 programs migrated and
+  compared (J13); refusals for time uses D11 rejects.
 - **Security review** of the lowering, generated checks and bindings before the recommendation (§8).
 
 ## 10. Open questions
 
-1. **The version line.** `jsc 2` (lean), a `.jsc2` extension or a `language` keyword.
+1. **The version line.** `jsc 2` (lean), a `.jsc2` extension or a `language` keyword. *Answered in r26:* the header is
+   `jsc 1`, optional; `jsc 2` is reserved and refused (D2).
 2. **`const` vs `let`.** Lean `const` (JS reads it as immutable).
 3. **`return`.** Lean: a block's value is its last expression; `return e` allowed as the last statement of a method or
    `fn` body.
 4. **Recursion.** Lean: direct self-recursion, checked after lowering, reported, bounded off-chain (D7, J18).
    Alternative: none, for totality.
 5. **v1.** Lean: deprecated with a warning from M1, frozen (kept to rebuild deployed scripts), never silently removed.
+   *Answered in r26:* removed, with `joust migrate`, at the maintainer's direction (D16 superseded).
 6. **Library descriptions upstream.** javac attribution (F22) gives exact signatures today; ADR-050's descriptions add
    representation facts. Lean: ask JuLC (a `joust`-labelled ADR) to add exact Java types to `LibraryExport`, so one API
    serves both; until then use both.
@@ -1663,4 +1666,8 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   `jsc 2` header in the repository is rewritten in place, so no script hash changes. D16 is superseded: `.jsc` v1
   (ADR-0005, now superseded by this ADR), its JSC9006 warning and `joust migrate` are removed, with JSC1101 to JSC1110;
   examples/dsl's Guards and Points take their committed migrations and Jar is ported by hand (new scripts, so
-  fixtures/m0's dsl group is recorded again). The IR keeps format 2.
+  fixtures/m0's dsl group is recorded again). The IR keeps format 2. Round r1 (#111): `jsc 2` is reserved for good and
+  the next breaking version is `jsc 3` (D2; design F6); the header's version is its literal spelling, so `jsc 1_` is
+  refused (security S1, Codex C1); J13 is retired and the places that stated v1 as current (D11, D13, §7, §9, §10 Q1
+  and Q5) are marked superseded (design F3). The generated Java's banner says `.jsc`; the library marker between the
+  lowering and the processor, `(ADR-0018, a .jsc 2 library)`, is a fixed protocol string and keeps its 2 (design F4).

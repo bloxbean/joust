@@ -3,7 +3,7 @@ package org.julclang.state.examples.dsl
 
 import contract { Pot } from "./Pot.jsc"
 
-// examples/fees' Stall in .jsc 2 (ADR-0018 M2c, J11; ADR-0011 D3): a market stall. Each sale pays the stall, and a fee
+// examples/fees' Stall in .jsc (ADR-0018 M2c, J11; ADR-0011 D3): a market stall. Each sale pays the stall, and a fee
 // goes straight into the Pot instance fixed in the params, as a deposit whose memo names the buyer. The stall's validator
 // subtracts the fee from its own value and requires the pot to take it in the same transaction.
 contract Stall {

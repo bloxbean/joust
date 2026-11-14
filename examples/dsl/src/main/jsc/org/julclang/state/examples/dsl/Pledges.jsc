@@ -4,7 +4,7 @@ package org.julclang.state.examples.dsl
 import { blake2b_224 } from "std/crypto"
 import { slice, length } from "std/bytes"
 
-// A crowdfund in .jsc 2 (ADR-0018 M0): records, lists, folds, Option, std bindings, time, pays in loops and branches.
+// A crowdfund in .jsc (ADR-0018 M0): records, lists, folds, Option, std bindings, time, pays in loops and branches.
 type Share = { to: Key, bps: Int }
 
 fn total(shares: List<Share>): Int = shares.fold(0, (acc, s) => acc + s.bps)
