@@ -158,7 +158,7 @@ in place of putInt's (`JscV2M1eR2BuildTest`). These ports are not in `fixtures/m
 
 ## Builds and DevKit
 
-BUILD_RESULTS
+`./gradlew clean build -PnoDevnet --continue --no-watch-fs` at `600511f1`: 1,007 JVM tests, 0 failures (1 skipped). DevKit: `:examples:dsl:test` 134 tests, 0 failures (`LockerDevnetPortTest` among them). `toolchainWasmTest` (the Web Image against the JVM): 140 build outputs identical, 117 language-server models byte-identical, 3,612/3,612 S2 cases, 21 depth cases. npm: `js/jsc-interpreter` 50/50, `tree-sitter-jsc` 20/20 and the shared corpus in agreement, `js/state-client` 48/48, `js/joust` 157/159 (1 skipped) and `js/joust-runtime` 35/37 (1 skipped). The one failure in each is environmental and is the same as on M3a1: `joust dev … redeploys on save` (Node's recursive `fs.watch` fires no events in this sandbox) and the Ogmios provider test (it probes the M0 fixtures' transactions; after a devnet reset only 3 of the 5 reference-script outputs it needs are on chain).
 
 ## Decisions for the maintainers
 
