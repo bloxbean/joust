@@ -310,7 +310,7 @@ class IrReaderFuzzTest {
             new String[]{"a type check", "(a bad (big)?map type|.* is of type .*, not .*|not a string)"},
             new String[]{"a name that resolves to nothing", "(no (fn|record|enum|variant|imported contract) .*|.* has no field .*|the (state|params) (has|have) no field .*|unknown (name|op) \".*\"|a reference to the local \\d+ \\(.*\\) outside its scope)"},
             new String[]{"a method's checked inputs or transaction use", "(checked is \\[.*\\], but .*|usesCtx is (true|false), but .*)"},
-            new String[]{"a declaration's shape", "(the (state|params) record .* named .*|a bad name.*|binds and fields differ in length|only a single-constructor arm binds)"},
+            new String[]{"a declaration's shape", "(the (state|params) record .* named .*|its state is named .*|a bad name.*|binds and fields differ in length|only a single-constructor arm binds)"},
             new String[]{"a number out of the format's range", "(IR JSON: the integer -?\\d+ outside the safe range at offset \\d+|not a non-negative integer|not a decimal integer: .*)"});
 
     /** The #97 rule a JavaScript refusal's message falls under, or null. */
