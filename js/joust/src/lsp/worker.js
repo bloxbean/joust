@@ -69,7 +69,7 @@ export async function runEngineWorker({ engineFile }) {
       // A project's files go only to an engine that takes them (lang.info's "modules": the integration with ADR-0018 M2c
       // and M4); an older engine analyses the file on its own.
       const modules = m.files && Array.isArray(info?.features) && info.features.includes('modules');
-      r = api.lang.analyze(modules ? { file: m.file, source: m.source, id: m.id, files: m.files } : { file: m.file, source: m.source });
+      r = api.lang.analyze(modules ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source });
     } catch (e) {
       // Web Image surfaces a Java failure that escaped as a TypeError (F7), a Wasm stack overflow as a RangeError.
       parentPort.postMessage({ id: m.id, failed: `${e?.name ?? 'Error'}: ${e?.message ?? e}` });

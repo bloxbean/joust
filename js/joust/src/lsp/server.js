@@ -348,7 +348,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const file = fileNameOf(uri);
     const project = await projectOf(uri, text, sel);
     if (state.get(uri) !== s || s.seq !== seq || documents.get(uri)?.version !== version) return;
-    const r = await host.analyze(sel.key, sel.engine, { file, source: text, scope: scopeOf(sel), ...(project ?? {}) }, cts.token);
+    const r = await host.analyze(sel.key, sel.engine, { file, source: text, scope: scopeOf(sel), ...(project ? { moduleId: project.id, files: project.files } : {}) }, cts.token);
     if (s.cts === cts) s.cts = undefined;
     // D4a: a result is published only if nothing it read changed since: the open lifetime (C2), the buffer's version and
     // the selection.

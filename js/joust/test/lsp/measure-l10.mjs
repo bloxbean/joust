@@ -53,8 +53,15 @@ const build = new Worker(new URL('../../src/toolchain-worker.js', import.meta.ur
 const builds = [];
 for (let k = 0; k < 3; k++) {
   const t = performance.now();
+  // The build worker's protocol since #80 (M1h): it says it is ready, then that a build started, then the result; only
+  // the result answers (the integration of M1h with M5a).
   const r = await new Promise((resolve, reject) => {
-    build.once('message', resolve);
+    const on = (m) => {
+      if (m?.id !== k || (m.result === undefined && m.error === undefined)) return;
+      build.off('message', on);
+      resolve(m);
+    };
+    build.on('message', on);
     build.once('error', reject);
     build.postMessage({ id: k, files: { 'org/julclang/state/examples/dsl/Ledger.jsc': ledger }, options: {}, dir: ENGINE });
   });
