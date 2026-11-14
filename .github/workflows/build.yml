@@ -380,7 +380,7 @@ jobs:
       # (the security tests of M1h, M4 and #80 among them: migrate's link refusals, the worker's heap and time limits, the
       # library pin, the keyed window). Not here, because they need DevKit or Chromium: js/joust's create, dev and page;
       # js/joust-runtime's devkit, examples and providers; preview needs a Blockfrost preview key; exnref assumes a Node 22
-      # whose Wasm exnref is off, which the runner's current Node 22 is not (reviewing.md §2).
+      # whose Wasm exnref is off, which the runner's current Node 22 is not (#108; reviewing.md §2).
       - name: Test the npm packages on the engines
         shell: bash
         run: |

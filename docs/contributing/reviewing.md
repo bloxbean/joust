@@ -89,7 +89,7 @@ The npm suites CI runs:
   running DevKit (and Chromium for `page`);
 - js/joust-runtime's `preview`, which needs a Blockfrost preview key;
 - js/joust-runtime's `exnref`, whose second case assumes a Node 22 with Wasm exnref off, which the runner's current
-  Node 22 is not (it fails there on its expectation, not on the runtime).
+  Node 22 is not (it fails there on its expectation, not on the runtime; #108, and it rejoins CI once that is fixed).
 
 Run those yourself when a change touches what they cover.
 
