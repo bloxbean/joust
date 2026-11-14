@@ -62,6 +62,8 @@ final class JavaEmitter {
     private int counter;
     /** The method or fn being emitted: helper names start with it. */
     private String owner;
+    /** M3a: the type of {@code s__}, the input of the method being emitted: State, or an owned method's object type. */
+    private String stateType = "State";
 
     private JavaEmitter(Ir.Program p) {
         this.p = p;
@@ -329,6 +331,7 @@ final class JavaEmitter {
 
     private String method(Ir.Method m) {
         owner = m.name();
+        stateType = m.on() != null ? m.on() : "State";
         redeemer = switch (m.kind()) {
             case INIT -> "mint0";
             case ACTION, DESTROY, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY -> redeemers.get(m.name());
@@ -705,6 +708,7 @@ final class JavaEmitter {
      */
     private String invariant(Ir.Invariant inv) {
         owner = inv.name();
+        stateType = inv.on() != null ? inv.on() : "State";
         redeemer = null;
         ordinals = Map.of();
         imports.add("org.julclang.state.api.Invariant");
@@ -977,7 +981,7 @@ final class JavaEmitter {
 
     private String capParams(Free f) {
         var ps = new ArrayList<String>();
-        if (f.state) ps.add("State s__");
+        if (f.state) ps.add(stateType + " s__");
         if (f.params) ps.add(Ir.PARAMS + " params__");
         for (Ir.Local l : f.locals()) ps.add(jt(l.type) + " " + l.name);
         if (f.deposits != null) ps.add(jt(f.deposits) + " deposits__");

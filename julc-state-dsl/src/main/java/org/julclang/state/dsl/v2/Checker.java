@@ -1415,7 +1415,7 @@ final class Checker {
                     throw p.pos().error("JSC1206", "the " + p.role() + " parameter comes first" + (isShared ? "" : ", after shared if there is one")
                             + " (ADR-0003 D1, ADR-0012 D3)");
                 }
-                if (!isShared && (p.name().equals("into") || p.name().equals("destination") || p.name().equals("destination_state"))) {
+                if (!isShared && (p.name().equals("into") || p.name().equals("destination_state"))) {
                     throw p.pos().error("JSC0216", "'" + p.name() + "' is a name a move's generated redeemer and client use; rename the parameter");
                 }
                 // The instance's time fields are time values here (D11), as in its own methods.
@@ -2575,7 +2575,10 @@ final class Checker {
             return emptyMap(n.name(), m, sc, expected);
         }
         if (m.target() instanceof Name n && sc.lookup(n.name()) == null && n.name().equals("Value")) return valueCtor(m, sc);
-        Ir.Expr target = isRange(m.target(), sc) ? range((Call) m.target(), sc) : expr(m.target(), sc, null);
+        // M3a (ADR-0012 D2): an owned init may write its object's new map, BigMap.empty().set(k, v), as the field's value.
+        Ty targetType = sc.kind == Ir.Kind.OWNED_INIT && bigWriteField != null && m.target() instanceof MethodCall e
+                && e.target() instanceof Name bn && bn.name().equals("BigMap") && sc.lookup("BigMap") == null ? inFields().get(bigWriteField) : null;
+        Ir.Expr target = isRange(m.target(), sc) ? range((Call) m.target(), sc) : expr(m.target(), sc, targetType);
         if (target.type().equals(Ty.VALUE)) return valueMethod(m, target, sc);
         if (target.type() instanceof Ty.Ledger l) {
             throw m.pos().error("JSC0342", l.name() + " has no methods: " + (l.equals(Ty.ADDRESS) ? "read a.payment" : "match it: KeyCred { key } or ScriptCred { hash }"));
@@ -3313,6 +3316,8 @@ final class Checker {
         Ir.Expr root = target;
         while (root instanceof Ir.BigOp b) root = b.map();
         String field = root instanceof Ir.StateField sf ? sf.field() : root instanceof Ir.GetField g ? g.field() : null;
+        // M3a: in an owned init, the field's own new map (BigMap.empty(), being written as that field's value).
+        if (root instanceof Ir.BigEmpty && bigWriteField != null && inputRec != null && !inputRec.equals("State")) field = bigWriteField;
         if (bigWriteField == null || !bigWriteField.equals(field)) {
             throw p.error("JSC0827", "a BigMap is changed only in the value of its own field in the next state, { ...state, f: f.set(k, v) },"
                     + " not in a require, a condition or a view (ADR-0018 D7)");
