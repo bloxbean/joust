@@ -1,0 +1,63 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3a2 coverage: what the locker ports leave out. Two owned types under one instance (the sealed Holding_T
+// datum, a tag check per arm) and a payable owned destroy. Seat and Pass have the same shape (a Key and an Int), so only
+// their type's tag tells their objects apart. (Safes covers a BigMap in an owned type and an owned init that accepts.)
+contract Studio {
+  state { host: Key, isOpen: Bool, fee: Int }
+
+  owned Seat { holder: Key, row: Int }
+  owned Pass { holder: Key, level: Int }
+
+  init(fee: Int) {
+    require(fee >= 1_000_000, "a fee of at least 1 ADA")
+    return { host: caller, isOpen: true, fee }
+  }
+
+  action setOpen(nowOpen: Bool) only host {
+    return { ...state, isOpen: nowOpen }
+  }
+
+  // A seat is booked for at least the fee while the studio is open.
+  owned init Seat.book(s: shared, row: Int) payable {
+    require(s.isOpen, "the studio is closed")
+    require(row > 0, "rows start at 1")
+    require(received >= s.fee, "a seat costs the fee")
+    return { holder: caller, row }
+  }
+
+  owned action Seat.change(newRow: Int) only holder {
+    require(newRow > 0, "rows start at 1")
+    return { ...state, row: newRow }
+  }
+
+  // Giving a seat back pays the host the fee (a payable owned destroy); the holder gets the seat's value.
+  owned destroy Seat.release(s: shared) payable only holder {
+    require(received == s.fee, "the release costs the fee")
+    pay(s.host, received)
+    pay(holder, balance)
+  }
+
+  // The escape hatch: no studio read.
+  owned destroy Seat.leave() only holder {
+    pay(holder, balance)
+  }
+
+  // A pass is free; its level rises by one at a time, up to 3.
+  owned init Pass.issue(s: shared) {
+    require(s.isOpen, "the studio is closed")
+    return { holder: caller, level: 1 }
+  }
+
+  owned action Pass.raise() only holder {
+    require(level < 3, "the top level is 3")
+    return { ...state, level: level + 1 }
+  }
+
+  owned destroy Pass.surrender() only holder {
+    pay(holder, balance)
+  }
+
+  view isOpen(): Bool = isOpen
+}

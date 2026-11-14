@@ -1916,8 +1916,19 @@ final class Checker {
             throw firstEffect(m.body(), Set.of("emit")).error("JSC0413", "emit(…) is allowed only in an action or destroy, not in a fn, view,"
                     + " lambda or value block (ADR-0018 D4)");
         }
-        // M3a2: issue #81 is fixed (a creation's transition program reads what it accepted), so an init and an owned init
-        // take native assets as any payable method does: accept in a creation is allowed (M2's JSC0426 is retired).
+        // M3a2: issue #81 is fixed for owned inits (an @OwnedInit returning (state, accepted) has a transition program that
+        // reports what it accepted), so an owned init takes native assets as any payable method does. An init still does
+        // not: the processor reads the state's type from @Init's return type, so an @Init cannot return (state, accepted).
+        if (ik == Ir.Kind.INIT && fx.contains("accept")) {
+            throw firstEffect(m.body(), Set.of("accept")).error("JSC0426", "accept in an init is not supported yet: the processor reads the"
+                    + " state's type from what @Init returns, so an init cannot also return what it accepted (an owned init can, M3a2);"
+                    + " create the instance, then take the assets in an action");
+        }
+        if (ik == Ir.Kind.INIT && payable && funds) {
+            throw m.pos().error("JSC0426", "a payable init that uses funds would take native assets, which needs accept in an init: not"
+                    + " supported yet (the processor reads the state's type from what @Init returns); drop payable, or create the"
+                    + " instance and take the assets in an action");
+        }
         if (fx.contains("accept") && !payable) {
             throw firstEffect(m.body(), Set.of("accept")).error("JSC0422", "accept states the native assets a method takes in, so the method must"
                     + " be payable (ADR-0007 D1)");
