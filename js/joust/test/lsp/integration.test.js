@@ -5,7 +5,7 @@
 //   - the outline holds M2b's params, events and invariants.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ENGINE, HAS_ENGINE, startLsp, STUB, tmp, uriOf } from './client.js';
@@ -474,6 +474,22 @@ test('a link whose target goes and comes back reschedules its importer (C15); a 
     const uri = uriOf(join(n2.src, 'Shop.jsc'));
     lsp.open(uri, scoped);
     assert.equal((await lsp.diagnostics(uri, 1, 60_000)).diagnostics[0]?.code, 'JSC0706');
+  } finally {
+    await lsp.stop();
+  }
+  // #111 r1 S2: node_modules -> deps (the whole directory a link, in the folder) with a real @acme scope under it:
+  // libraryPackages() lstats the scope entry only, so joust build takes @acme/fees, and so does the server.
+  const n3 = npm();
+  renameSync(join(n3.dir, 'node_modules'), join(n3.dir, 'deps'));
+  mkdirSync(join(n3.dir, 'deps', '@acme', 'fees', 'joust-lib'), { recursive: true });
+  writeFileSync(join(n3.dir, 'deps', '@acme', 'fees', 'joust-lib', 'fees.jsc'), FEES.replace('library app', 'library acme.fees'));
+  symlinkSync('deps', join(n3.dir, 'node_modules'));
+  writeFileSync(join(n3.src, 'Shop.jsc'), scoped);
+  lsp = await startLsp({ folders: [n3.dir], args: ['--project-engine'] });
+  try {
+    const uri = uriOf(join(n3.src, 'Shop.jsc'));
+    lsp.open(uri, scoped);
+    assert.deepEqual((await lsp.diagnostics(uri, 1, 60_000)).diagnostics.filter((d) => d.severity === 1), []);
   } finally {
     await lsp.stop();
   }

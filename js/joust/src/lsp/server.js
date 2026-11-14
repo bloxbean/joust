@@ -318,9 +318,13 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       // 'package'
       const root = await confined(pkgRoot);
       if (!root) return null;
-      // #110 C16/S8: only node_modules/<pkg> or node_modules/@scope/<pkg> may be a link; a scope directory resolves to
-      // itself (libraryPackages() lists a scope's packages only when it is a directory).
-      if (basename(dirname(pkgRoot)).startsWith('@') && (await confined(dirname(pkgRoot))) !== dirname(pkgRoot)) return null;
+      // #110 C16/S8: only node_modules/<pkg> or node_modules/@scope/<pkg> may be a link, not a scope directory: as
+      // libraryPackages() (packagesOf) does, the scope entry itself is lstat'ed, so a node_modules that is a link
+      // stays allowed (#111 r1 S2).
+      if (basename(dirname(pkgRoot)).startsWith('@')) {
+        const scope = await fsp.lstat(dirname(pkgRoot)).catch(() => null);
+        if (!scope || !scope.isDirectory()) return null;
+      }
       const below = relative(pkgRoot, path).split(sep);
       return r === join(root, ...below) ? r : null;
     };
