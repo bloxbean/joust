@@ -131,6 +131,10 @@ final class Checker {
      * object's value is a record like any other (D5), held in its own UTxO.
      */
     private final LinkedHashSet<String> ownedTypes = new LinkedHashSet<>();
+    /** M3b (ADR-0016 D1): the keyed owned types' declarations ({@code owned T keyed by f (…)}), in declaration order. */
+    private final LinkedHashMap<String, Syntax.KeyedDecl> keyedDecls = new LinkedHashMap<>();
+    /** M3b: their options as checked, with the processor's defaults applied. */
+    private final LinkedHashMap<String, Ir.Keyed> keyed = new LinkedHashMap<>();
 
     /**
      * M3a: the record a method reads as its input: {@code State}, or the owned type of an owned method. Bare field names,
@@ -542,7 +546,7 @@ final class Checker {
         }
         return new Ir.Program(p.pkg(), p.fileName(), p.name(), p.options(), p.records(), p.enums(), p.state(), p.methods(), p.fns(),
                 Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings), p.params(), p.invariants(), Map.copyOf(c.contracts),
-                p.library(), p.libraries(), p.javaLibraries(), List.copyOf(c.ownedTypes));
+                p.library(), p.libraries(), p.javaLibraries(), List.copyOf(c.ownedTypes), Collections.unmodifiableMap(new LinkedHashMap<>(c.keyed)));
     }
 
     private void resetRound() {
@@ -851,6 +855,7 @@ final class Checker {
                 records.put(t.name(), new LinkedHashMap<>());
                 owner.put(t.name(), main);
                 ownedTypes.add(t.name());
+                if (t.keyed() != null) keyedDecls.put(t.name(), t.keyed());
             }
         }
         var methodNames = new HashSet<String>();
@@ -897,6 +902,7 @@ final class Checker {
                         + t.name() + " { owner: Key }");
                 fillFields(records.get(t.name()), t.fields(), t.name(), true);
             }
+            keyedOptions(c);
         }
         if (c != null && c.params() != null) {
             // M2b (ADR-0009 D1): the deploy-time parameters, a record named Config, read as params.f.
@@ -972,6 +978,7 @@ final class Checker {
         generated.add(c.name());   // the variant would shadow the contract's class in its validator
         // M3a: each owned type's result records (<T>Outcome, <T>Received, <T>Created) and the client's lookup of it.
         for (String o : ownedTypes) generated.addAll(List.of(o + "Outcome", o + "Received", o + "Created"));
+        keyedNames(c, generated);
         var lookups = new HashMap<String, String>();
         for (String o : ownedTypes) lookups.put(Character.toLowerCase(o.charAt(0)) + o.substring(1), o);
         for (Syntax.Method m : c.methods()) {
@@ -1711,7 +1718,7 @@ final class Checker {
         return new Ir.Program(file.pkg(), fileName, c.name(), options, recs, enumsIrOf(main),
                 new Ir.RecordType("State", stateFields, c.pos()), methods, own, Set.of(), Set.of(), List.of(),
                 paramsFields == null ? null : new Ir.RecordType(Ir.PARAMS, paramsFields, c.paramsPos()), invariants, Map.of(), false,
-                List.copyOf(libs), java, List.copyOf(ownedTypes));
+                List.copyOf(libs), java, List.copyOf(ownedTypes), Collections.unmodifiableMap(new LinkedHashMap<>(keyed)));
     }
 
     private LinkedHashMap<String, Ir.RecordType> recordsOf(Module m) {
@@ -1811,6 +1818,16 @@ final class Checker {
             if (methods.stream().noneMatch(m -> m.kind() == Ir.Kind.OWNED_INIT && o.equals(m.on()))) {
                 throw t.pos().error("JSC1208", "the owned type " + o + " needs an owned init to create its objects: owned init " + o + ".open(…) { … }");
             }
+            if (keyedDecls.containsKey(o)) {
+                // M3b (ADR-0016 D1, D10): a keyed type's escape hatch is its retiring exit, which needs no neighbour (a removal
+                // needs its predecessor, which anyone can delay).
+                if (methods.stream().noneMatch(m -> m.kind() == Ir.Kind.OWNED_DESTROY && o.equals(m.on()) && retires(m))) {
+                    throw t.pos().error("JSC1245", "objects of the keyed type " + o + " need an escape hatch that needs nobody else: an owned"
+                            + " destroy on " + o + " with 'retire' (owned destroy " + o + ".leave() only owner retire { … }), which keeps the node"
+                            + " and its key; a removal needs its predecessor in the list, which anyone can delay (ADR-0016 D1, D10)");
+                }
+                continue;
+            }
             if (methods.stream().noneMatch(m -> m.kind() == Ir.Kind.OWNED_DESTROY && o.equals(m.on()) && m.owned().shared() == null)) {
                 throw t.pos().error("JSC1209", "objects of the owned type " + o + " need an escape hatch: an owned destroy on " + o + " without a"
                         + " shared parameter, so an owner can always close their object whatever the instance's state (ADR-0003 r2, ADR-0012 D1)");
@@ -1838,6 +1855,354 @@ final class Checker {
             if (m.admits() != null && !moving.contains(m.admits())) {
                 throw m.pos().error("JSC1214", m.name() + " admits " + m.admits() + ", but no owned action moves a " + m.admits() + " (an into"
                         + " parameter): no object could ever arrive through it (ADR-0012 D3)");
+            }
+        }
+        keyedRules(c, methods);
+    }
+
+    // ------------------------------------------------------------------ keyed types (M3b, ADR-0016)
+
+    /** Most keyed types in one contract, and the largest maxDatumBytes beside them (ADR-0016 D1, D4c; the processor's). */
+    static final int MAX_KEYED_TYPES = 16, MAX_KEYED_DATUM_BYTES = 2048;
+
+    /** Field names of the keyed redeemers the validator generates (Insert_m, Remove_T): no keyed method's parameter. */
+    static final Set<String> KEYED_PARAMS = Set.of("anchor", "removed", "instance");
+
+    /** Members of a keyed object's generated handles, Java and JavaScript (ClientGenerator.KEYED_HANDLE_MEMBERS, F83). */
+    static final List<String> KEYED_HANDLE_MEMBERS = List.of("key", "value", "retired", "lovelace", "object", "read", "o", "constructor");
+
+    /** A contract option's value as written, or its default (the processor's, StateContract). */
+    private static long option(Contract c, String name, long dflt) {
+        for (Syntax.Option o : c.options()) if (o.name().equals(name)) return o.value().longValueExact();
+        return dflt;
+    }
+
+    private static Syntax.Option optionDecl(Contract c, String name) {
+        for (Syntax.Option o : c.options()) if (o.name().equals(name)) return o;
+        return null;
+    }
+
+    /** Whether an owned destroy says {@code retire} (ADR-0016 D10). */
+    private static boolean retires(Syntax.Method m) {
+        return m.mods().stream().anyMatch(x -> x.name().equals("retire"));
+    }
+
+    private static boolean retires(Ir.Method m) {
+        return m.mods().stream().anyMatch(x -> x.name().equals("retire"));
+    }
+
+    /**
+     * M3b (ADR-0016 D1): each keyed type's key field and options, the processor's rules at their positions: the key names a
+     * Bytes (or Key, Hash) field of the type; maxKeyBytes is 1 to 64 (serialiseData chunks longer byte strings, D2) and at
+     * least 28 with signed (the key is then a key hash, I53); the cooldown C is 0 or 60,000 to 3,600,000 ms, the window W
+     * 20,000 to min(900,000, maxValidityMs) ms (D9), both durations in milliseconds; the type's name is at most 255 bytes
+     * (its typeId, D2). C = 0 is allowed with the processor's warning (JSC9012).
+     */
+    private void keyedOptions(Contract c) {
+        long maxValidity = option(c, "maxValidityMs", 3_600_000L);
+        for (TypeDecl t : c.owned()) {
+            Syntax.KeyedDecl k = t.keyed();
+            if (k == null) continue;
+            Ty kt = records.get(t.name()).get(k.field());
+            if (kt == null) {
+                throw k.fieldPos().error("JSC1241", "keyed by " + k.field() + ": " + t.name() + " has no field " + k.field() + " (its fields: "
+                        + String.join(", ", records.get(t.name()).keySet()) + ")");
+            }
+            if (!(kt.equals(Ty.BYTES) || kt.equals(Ty.KEY) || kt.equals(Ty.HASH))) {
+                throw k.fieldPos().error("JSC1241", "the key field " + k.field() + " is " + Ty.show(kt) + ": a key is Bytes (or a Key or Hash),"
+                        + " ordered byte by byte in the instance's list (ADR-0016 D1, D2)");
+            }
+            if (t.name().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 255) {
+                throw t.pos().error("JSC1241", "a keyed type's name is at most 255 bytes: it is length-prefixed in its token names (typeId, ADR-0016 D2)");
+            }
+            int maxKey = 32;
+            long cooldown = 60_000L, window = Math.min(120_000L, maxValidity);
+            boolean cooldownWritten = false;
+            for (Syntax.Option o : k.options()) {
+                switch (o.name()) {
+                    case "maxKeyBytes" -> {
+                        if (o.value().signum() <= 0 || o.value().compareTo(BigInteger.valueOf(64)) > 0) {
+                            throw o.pos().error("JSC1242", "maxKeyBytes is 1 to 64: Plutus serialiseData encodes longer byte strings in chunks,"
+                                    + " which would break the datum size rule (ADR-0016 D1, D2)");
+                        }
+                        maxKey = o.value().intValueExact();
+                    }
+                    case "linkCooldownMs" -> {
+                        if (o.value().signum() != 0 && (o.value().compareTo(BigInteger.valueOf(60_000)) < 0
+                                || o.value().compareTo(BigInteger.valueOf(3_600_000)) > 0)) {
+                            throw o.pos().error("JSC1243", "linkCooldownMs is 0, or 60000 to 3600000 milliseconds (ADR-0016 D1, D9)");
+                        }
+                        cooldown = o.value().longValueExact();
+                        cooldownWritten = true;
+                    }
+                    case "linkWindowMs" -> {
+                        long cap = Math.min(900_000L, maxValidity);
+                        if (o.value().compareTo(BigInteger.valueOf(20_000)) < 0 || o.value().compareTo(BigInteger.valueOf(cap)) > 0) {
+                            throw o.pos().error("JSC1243", "linkWindowMs is 20000 to min(900000, maxValidityMs) = " + cap + " milliseconds (ADR-0016 D1, D9)");
+                        }
+                        window = o.value().longValueExact();
+                    }
+                    default -> throw new IllegalStateException("the parser takes no keyed option " + o.name());
+                }
+            }
+            if (window < 20_000L) {
+                throw t.pos().error("JSC1243", "the default link window min(120000, maxValidityMs) = " + window + " ms is under 20000 ms: raise"
+                        + " maxValidityMs (ADR-0016 D1, D9)");
+            }
+            if (k.isSigned() && maxKey < 28) {
+                throw k.signed().error("JSC1242", "a signed key is a 28-byte key hash: maxKeyBytes must be at least 28 (ADR-0016 I53)");
+            }
+            if (k.isSigned() && kt.equals(Ty.HASH)) {
+                throw k.signed().error("JSC1242", "a signed key is a key hash that signs the insert: type " + k.field() + " Key or Bytes, not Hash (ADR-0016 I53)");
+            }
+            if (cooldown == 0L && cooldownWritten) {
+                warn(t.pos(), "JSC9012", "linkCooldownMs = 0 on " + t.name() + ": without a link cooldown anyone can keep a node in flight by"
+                        + " relinking it every block, so its retiring exit is no longer guaranteed against churn (ADR-0016 §2, D9)");
+            }
+            keyed.put(t.name(), new Ir.Keyed(k.field(), maxKey, k.isSigned(), cooldown, window));
+        }
+    }
+
+    /**
+     * M3b (ADR-0016 D1, D7): the names a keyed contract's validator and client generate: the spend redeemer {@code Link}; per
+     * keyed type its datums {@code Head_T}, {@code Keyed_T}, {@code Retired_T} and its burn {@code Remove_T}; per keyed
+     * initializer its insert {@code Insert_m}; the client's {@code tList}, {@code tExists} and {@code tKeys} (beside the
+     * lookup {@code t}, JSC1204) and its constant per type. No method's redeemer and no view may take one.
+     */
+    private void keyedNames(Contract c, Set<String> generated) {
+        if (keyedDecls.isEmpty()) return;
+        var names = new LinkedHashSet<String>(List.of("Link"));
+        var members = new HashMap<String, String>();
+        var constants = new HashMap<String, String>();
+        for (String o : keyedDecls.keySet()) {
+            names.addAll(List.of("Head_" + o, "Keyed_" + o, "Retired_" + o, "Remove_" + o));
+            String lookup = Character.toLowerCase(o.charAt(0)) + o.substring(1);
+            for (String x : List.of(lookup + "List", lookup + "Exists", lookup + "Keys")) members.put(x, o);
+            String constant = o.replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase() + "_TYPE";
+            String other = constants.putIfAbsent(constant, o);
+            if (other != null) {
+                throw keyedTypeDecl(c, o).pos().error("JSC1249", "the keyed types " + other + " and " + o + " both give the generated client's"
+                        + " constant " + constant + "; rename one (ADR-0016 D7)");
+            }
+        }
+        for (Syntax.Method m : c.methods()) {
+            if (m.kind() == Kind.OWNED_INIT && keyedDecls.containsKey(m.on())) names.add("Insert_" + m.name());
+        }
+        for (Syntax.Method m : c.methods()) {
+            String variant = Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1);
+            if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && names.contains(variant)) {
+                throw m.pos().error("JSC1249", "the method name " + m.name() + " would be the redeemer " + variant + ", a name the validator"
+                        + " generates for keyed types (Link, Insert_m, Remove_T, Head_T, Keyed_T, Retired_T; ADR-0016 D1); rename it");
+            }
+            if (members.containsKey(m.name())) {
+                throw m.pos().error("JSC1249", "the " + (m.kind() == Kind.VIEW ? "view" : "method") + " " + m.name() + " has the name of a"
+                        + " member the generated client has for the keyed type " + members.get(m.name()) + " (ADR-0016 D7); rename it");
+            }
+        }
+        generated.addAll(names);
+    }
+
+    private static TypeDecl keyedTypeDecl(Contract c, String name) {
+        for (TypeDecl t : c.owned()) if (t.name().equals(name)) return t;
+        throw new IllegalStateException(name);
+    }
+
+    /**
+     * M3b (ADR-0016 D1, D10): a keyed type's methods at their positions. Its retiring exit is the escape hatch, so it is
+     * signed by the owner ({@code only f}: unsigned, anyone could retire anyone's node, and its key, for good) and needs
+     * nobody else (no {@code payable}, {@code quorum}, {@code authorized}, {@code after}, {@code before}; no shared or read
+     * state, refused at the parameter). Every keyed action names its audience ({@code only}, {@code quorum} or
+     * {@code authorized}; {@code open} is not one): otherwise anyone could spend the node every block and block its owner's
+     * exit (§2). No action or destroy of a keyed type takes a name of its generated handles.
+     */
+    private void keyedMethod(Syntax.Method m, Ir.Kind ik, Set<String> modNames) {
+        if (!m.owned() || !keyedDecls.containsKey(m.on())) return;
+        if (ik != Ir.Kind.OWNED_INIT && KEYED_HANDLE_MEMBERS.contains(m.name())) {
+            throw m.pos().error("JSC1249", "the method " + m.name() + " has the name of a member of the generated " + m.on() + "Object handle"
+                    + " (" + String.join(", ", KEYED_HANDLE_MEMBERS) + "; ADR-0016 D7, F83); rename it");
+        }
+        if (ik == Ir.Kind.OWNED_DESTROY && retires(m)) {
+            for (Mod mod : m.mods()) {
+                if (Set.of("payable", "quorum", "authorized", "after", "before").contains(mod.name())) {
+                    throw mod.pos().error("JSC1245", "a retiring exit takes no '" + mod.name() + "': it is the escape hatch, which nothing may"
+                            + " stop and nobody else need sign (ADR-0016 D1, §2)");
+                }
+            }
+            if (!modNames.contains("only")) {
+                throw m.pos().error("JSC1245", "the retiring exit " + m.name() + " needs 'only <field>': unsigned, anyone could retire anyone's "
+                        + m.on() + ", and its key, for good (ADR-0016 D1, M1 review)");
+            }
+        }
+        if (ik == Ir.Kind.OWNED_ACTION && modNames.stream().noneMatch(Set.of("only", "quorum", "authorized")::contains)) {
+            throw m.pos().error("JSC1246", "the keyed action " + m.name() + " must name who may call it ('only <field>', 'quorum' or"
+                    + " 'authorized'; 'open' is not enough): otherwise anyone could spend the " + m.on() + " every block and block its owner's"
+                    + " exit (ADR-0016 D1, §2)");
+        }
+    }
+
+    /**
+     * M3b (ADR-0016 D6, I50): a keyed action's result keeps the key. Checked syntactically, conservatively: the result is
+     * {@code state}, or a record whose key field is not written ({@code { ...state, … }}) or is written as the input's own
+     * ({@code key} or {@code state.key}), or a conditional, {@code if}, {@code match} or block whose every arm is one of
+     * these. The validator checks it too (the checker is not a security boundary).
+     */
+    private void fixedKey(Syntax.Method m, Syntax.Block b) {
+        String key = keyedDecls.get(m.on()).field();
+        var shadowed = new HashSet<String>();
+        consts(b, shadowed);
+        for (Param p : m.params()) shadowed.add(p.name());
+        Pos bad = keyKept(b.result(), key, shadowed);
+        if (bad != null) {
+            throw bad.error("JSC1248", "the key " + key + " of a keyed " + m.on() + " is fixed for its life (ADR-0016 I50): return { ...state, … }"
+                    + " without " + key + ", or with " + key + ": " + key + "; to change a key, retire or remove the object and insert another");
+        }
+    }
+
+    /** Where {@code e} might not keep the input's {@code key}, or null when it does (see {@link #fixedKey}). */
+    private static Pos keyKept(Syntax.Expr e, String key, Set<String> shadowed) {
+        return switch (e) {
+            case Syntax.Name n -> n.name().equals("state") && !shadowed.contains("state") ? null : n.pos();
+            case Syntax.ObjLit o -> {
+                if (o.spread() != null) {
+                    Pos sp = keyKept(o.spread(), key, shadowed);
+                    if (sp != null) yield sp;
+                } else if (o.fields().stream().noneMatch(f -> f.name().equals(key))) {
+                    yield o.pos();
+                }
+                for (Syntax.FieldInit f : o.fields()) {
+                    if (!f.name().equals(key)) continue;
+                    Syntax.Expr v = f.value() == null ? new Syntax.Name(key, f.pos()) : f.value();
+                    boolean own = v instanceof Syntax.Name n && n.name().equals(key) && !shadowed.contains(key)
+                            || v instanceof Syntax.Field fd && fd.name().equals(key) && fd.target() instanceof Syntax.Name s && s.name().equals("state")
+                            && !shadowed.contains("state");
+                    if (!own) yield f.pos();
+                }
+                yield null;
+            }
+            case Syntax.Cond c -> {
+                Pos a = keyKept(c.then(), key, shadowed);
+                yield a != null ? a : keyKept(c.otherwise(), key, shadowed);
+            }
+            case Syntax.IfExpr i -> {
+                for (Syntax.Branch br : i.branches()) {
+                    Pos a = keyKeptBlock(br.then(), key, shadowed);
+                    if (a != null) yield a;
+                }
+                yield i.otherwise() == null ? i.pos() : keyKeptBlock(i.otherwise(), key, shadowed);
+            }
+            case Syntax.Match mt -> {
+                for (Syntax.Arm a : mt.arms()) {
+                    var inner = new HashSet<>(shadowed);
+                    for (Syntax.Bind bd : a.pattern().binds()) inner.add(bd.name());
+                    Pos x = keyKeptBlock(a.body(), key, inner);
+                    if (x != null) yield x;
+                }
+                yield null;
+            }
+            case Syntax.BlockExpr be -> keyKeptBlock(be.block(), key, shadowed);
+            default -> e.pos();
+        };
+    }
+
+    private static Pos keyKeptBlock(Syntax.Block b, String key, Set<String> shadowed) {
+        if (b.result() == null) return b.pos();
+        var inner = new HashSet<>(shadowed);
+        consts(b, inner);
+        return keyKept(b.result(), key, inner);
+    }
+
+    /** The names a block's own consts bind (they would shadow a field read by its bare name). */
+    private static void consts(Syntax.Block b, Set<String> out) {
+        for (Syntax.Stmt st : b.stmts()) if (st instanceof Syntax.Const k) out.add(k.name());
+    }
+
+    /**
+     * M3b (ADR-0016 §2, D1): the processor's squatting warning at the initializer. Without {@code signed}, anyone may take a
+     * free key first, unless the initializer takes the key from the caller: its result is a record whose key field is
+     * {@code caller}, in every arm (as the processor's syntactic rule: {@code new T(..., ctx.caller(), ...)} in every return).
+     */
+    private void squatting(Syntax.Method m, Syntax.Block b) {
+        Syntax.KeyedDecl k = keyedDecls.get(m.on());
+        if (k.isSigned()) return;
+        if (!keyFromCaller(b.result(), k.field())) {
+            warn(m.pos(), "JSC9011", m.name() + " lets anyone take a free " + m.on() + " key first (squatting, ADR-0016 §2): to silence this,"
+                    + " declare the key signed (keyed by " + k.field() + " (signed)), or set " + k.field() + ": caller in every result");
+        }
+    }
+
+    private static boolean keyFromCaller(Syntax.Expr e, String key) {
+        return switch (e) {
+            case Syntax.ObjLit o -> o.spread() == null && o.fields().stream().anyMatch(f -> f.name().equals(key)
+                    && f.value() instanceof Syntax.Name n && n.name().equals("caller"));
+            case Syntax.Cond c -> keyFromCaller(c.then(), key) && keyFromCaller(c.otherwise(), key);
+            default -> false;
+        };
+    }
+
+    /**
+     * M3b (ADR-0016 D1): the processor's contract-level limits on keyed types, at {@code .jsc} positions: no native assets
+     * (funds, sends, mints, accepts, deposits, receives), no batched actions, no BigMap in any owned type, at most 16 keyed
+     * types, maxDatumBytes at most 2048 (JSC1244); a retired node's worst case fits maxDatumBytes (JSC1250); the key field
+     * is never a time field (D11: a key decides the list's order and whether an insert succeeds, as a map key does; JSC1251);
+     * and the processor's warning for a keyed action authorized by someone other than its retiring exit's signer (JSC9013).
+     */
+    private void keyedRules(Contract c, List<Ir.Method> methods) {
+        if (keyedDecls.isEmpty()) return;
+        TypeDecl first = keyedTypeDecl(c, keyedDecls.keySet().iterator().next());
+        if (assetAware) {
+            throw first.pos().error("JSC1244", "keyed types cannot be combined with native assets yet (a method uses funds, send, mint, burn,"
+                    + " accept, deposit or receives): a follow-up of ADR-0016 (D1, M4)");
+        }
+        for (Ir.Method m : methods) {
+            if (Abi.batched(m)) throw m.pos().error("JSC1244", "keyed types cannot be combined with batched actions yet (ADR-0016 D1)");
+        }
+        for (String o : ownedTypes) {
+            if (records.get(o).values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                throw keyedTypeDecl(c, o).pos().error("JSC1244", "BigMaps cannot be combined with keyed types (here in " + o + "): the map"
+                        + " verifier's support and the keyed list's checks together exceed the 15,000-byte script limit (ADR-0016 M1)");
+            }
+        }
+        if (keyedDecls.size() > MAX_KEYED_TYPES) {
+            String o = new ArrayList<>(keyedDecls.keySet()).get(MAX_KEYED_TYPES);
+            throw keyedTypeDecl(c, o).pos().error("JSC1244", "at most " + MAX_KEYED_TYPES + " keyed types per contract: the instance's creation"
+                    + " mints a head for each (ADR-0016 D1, D4c)");
+        }
+        long maxDatum = option(c, "maxDatumBytes", 512);
+        if (maxDatum > MAX_KEYED_DATUM_BYTES) {
+            Syntax.Option o = optionDecl(c, "maxDatumBytes");
+            throw (o == null ? c.pos() : o.pos()).error("JSC1244", "maxDatumBytes is at most " + MAX_KEYED_DATUM_BYTES + " in a contract with"
+                    + " keyed types: an insert carries two datums in one 16 KB transaction (ADR-0016 D1, D4c)");
+        }
+        for (var e : keyed.entrySet()) {
+            String o = e.getKey();
+            Ir.Keyed k = e.getValue();
+            // The processor's static bound (ADR-0016 D2): a constructor tag of at most 3 bytes, an indefinite list 2, the
+            // instance (32 + 2), next and the key (maxKeyBytes + 2 each), linkedAt 9.
+            int retiredWorst = 3 + 2 + (32 + 2) + (k.maxKeyBytes() + 2) + 9 + (k.maxKeyBytes() + 2);
+            if (retiredWorst > maxDatum) {
+                throw keyedTypeDecl(c, o).pos().error("JSC1250", "a retired " + o + " may need " + retiredWorst + " datum bytes, over maxDatumBytes = "
+                        + maxDatum + ": raise maxDatumBytes or lower maxKeyBytes (ADR-0016 D2)");
+            }
+            if (timeFields.contains(timeKey(o, k.key()))) {
+                throw keyedDecls.get(o).fieldPos().error("JSC1251", "the key " + k.key() + " of " + o + " is set from a time value somewhere: a key"
+                        + " decides the list's order and whether an insert succeeds (a taken key refuses it), so a window-dependent key"
+                        + " would let the submitter's window decide, as a map key would (ADR-0018 D11)");
+            }
+            var retireSigners = new ArrayList<List<String>>();
+            for (Ir.Method m : methods) {
+                if (m.kind() == Ir.Kind.OWNED_DESTROY && o.equals(m.on()) && retires(m)) {
+                    retireSigners.add(m.mods().stream().filter(x -> x.name().equals("only")).map(Ir.Mod::field).toList());
+                }
+            }
+            for (Ir.Method m : methods) {
+                if (m.kind() != Ir.Kind.OWNED_ACTION || !o.equals(m.on())) continue;
+                List<String> only = m.mods().stream().filter(x -> x.name().equals("only")).map(Ir.Mod::field).toList();
+                boolean other = m.mods().stream().anyMatch(x -> x.name().equals("quorum") || x.name().equals("authorized"))
+                        || retireSigners.stream().anyMatch(r -> r.isEmpty() || !r.containsAll(only));
+                if (other) {
+                    warn(m.pos(), "JSC9013", "the keyed action " + m.name() + " is authorized by someone other than the retiring exit's signer:"
+                            + " that party can spend the " + o + " every block and delay its owner's exit (ADR-0016 §2)");
+                }
             }
         }
     }
@@ -2064,6 +2429,19 @@ final class Checker {
                     if (!ownedTypes.contains(mod.arg())) {
                         throw mod.pos().error("JSC1212", "admits " + mod.arg() + ": " + mod.arg() + " is not an owned type of this contract");
                     }
+                    // M3b (ADR-0016 D1, Q4): a keyed object is a node of its instance's list, so it never moves.
+                    if (keyedDecls.containsKey(mod.arg())) {
+                        throw mod.pos().error("JSC1247", "admits " + mod.arg() + ": " + mod.arg() + " is a keyed type, and keyed objects do not move"
+                                + " between instances (a move would remove a node from one list and insert it into another; ADR-0016 D1, Q4)");
+                    }
+                }
+                case "retire" -> {
+                    // M3b (ADR-0016 D10): @OwnedDestroy(retire = true): the node stays, retired, keeping its key for good.
+                    if (ik != Ir.Kind.OWNED_DESTROY || !keyedDecls.containsKey(m.on())) {
+                        throw mod.pos().error("JSC1245", "retire goes on an owned destroy of a keyed type: only a keyed object can stay as a"
+                                + " retired node, keeping its key (ADR-0016 D10)" + (ik == Ir.Kind.OWNED_DESTROY ? "; " + m.on() + " is not keyed"
+                                + " (owned " + m.on() + " keyed by field { … })" : ""));
+                    }
                 }
                 default -> throw mod.pos().error("JSC0407", "unknown modifier " + mod.name());
             }
@@ -2081,8 +2459,9 @@ final class Checker {
             throw m.pos().error("JSC0409", (ik == Ir.Kind.DESTROY ? "a destroy ends the instance" : "an owned destroy ends its object")
                     + ", so it must pay out what it holds: pay(…), send(…), mint(…), burn(…) or deposit(…) at least once (ADR-0018 D4)");
         }
+        keyedMethod(m, ik, modNames);
         // M3a (ADR-0003 r2): the processor warns of an owned action or destroy without @SignedBy, which anyone can call on
-        // anyone's object; 'open' says that is meant.
+        // anyone's object; 'open' says that is meant. M3b: a keyed action without one is an error (keyedMethod).
         if ((ik == Ir.Kind.OWNED_ACTION || ik == Ir.Kind.OWNED_DESTROY) && modNames.stream().noneMatch(Set.of("only", "open", "quorum", "authorized")::contains)) {
             warn(m.pos(), "JSC9010", m.name() + " has no audience: anyone can call it on anyone's " + m.on() + " (and keep its owner's own"
                     + " calls failing); add 'only <field>', or 'open' if that is meant (ADR-0003 r2)");
@@ -2105,6 +2484,14 @@ final class Checker {
                             : "an into parameter is for an owned action, which moves its object to that instance (ADR-0012 D3)");
                 }
                 boolean isShared = p.role().equals("shared");
+                if (!isShared && keyedDecls.containsKey(m.on())) {
+                    throw p.pos().error("JSC1247", m.on() + " is a keyed type, and keyed objects do not move between instances: a move would"
+                            + " remove a node from one list and insert it into another in one transaction (ADR-0016 D1, Q4)");
+                }
+                if (isShared && ik == Ir.Kind.OWNED_DESTROY && retires(m)) {
+                    throw p.pos().error("JSC1245", "a retiring exit reads no shared state: it is the escape hatch, which needs nobody else, so a"
+                            + " paused or closed instance cannot keep an owner in (ADR-0016 D1, D10)");
+                }
                 if (isShared ? shared != null : into != null) throw p.pos().error("JSC1206", "a method has at most one " + p.role() + " parameter");
                 int expectedAt = isShared ? 0 : shared != null ? 1 : 0;
                 if (pi != expectedAt) {
@@ -2138,7 +2525,15 @@ final class Checker {
                 arriving = sc.declare(p.name(), new Ty.Rec(admits), whole, p.pos(), false, fts);
                 continue;
             }
+            if (keyedDecls.containsKey(m.on()) && KEYED_PARAMS.contains(p.name())) {
+                throw p.pos().error("JSC1249", "'" + p.name() + "' is a field name of the keyed type " + m.on() + "'s generated redeemers"
+                        + " (Insert_m(instance, anchor, …), Remove_" + m.on() + "(anchor, removed)); rename the parameter (ADR-0016 D1)");
+            }
             if (p.reads() != null) {
+                if (ik == Ir.Kind.OWNED_DESTROY && retires(m)) {
+                    throw p.pos().error("JSC1245", "a retiring exit reads no other contract: it is the escape hatch, which needs nobody else"
+                            + " (ADR-0016 D1, D10)");
+                }
                 reads.add(read(m, p, sc, batched));
                 continue;
             }
@@ -2195,6 +2590,10 @@ final class Checker {
                             : m.kind() == Kind.OWNED_ACTION ? "an owned action evaluates to the object's next value: return { ...state, … }"
                             : "an action evaluates to the next state: return { ...state, … }");
                 }
+                // M3b (ADR-0016 D6, I50): a keyed object's key is fixed for its life.
+                if (ik == Ir.Kind.OWNED_ACTION && keyedDecls.containsKey(m.on())) fixedKey(m, b);
+                // M3b (ADR-0016 §2): an initializer that neither signs the key nor takes it from the caller lets anyone squat it.
+                if (ik == Ir.Kind.OWNED_INIT && keyedDecls.containsKey(m.on())) squatting(m, b);
                 // M3a: an owned method's result is a value of its owned type (inTy()).
                 result = expr(b.result(), sc, inTy());
                 expectType(inTy(), result, b.result().pos());

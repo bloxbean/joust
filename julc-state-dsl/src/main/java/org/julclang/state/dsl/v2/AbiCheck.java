@@ -52,6 +52,34 @@ public final class AbiCheck {
         } else if (defs.keySet().stream().anyMatch(k -> k.equals(validator + "Holding") || k.startsWith(validator + "Holding_"))) {
             problems.add("the description has owned objects (Holding) that the manifest does not state");
         }
+        // M3b (ADR-0016 D1, D11): each keyed type as x-joust.keyed describes it, field by field, in its order.
+        List<?> describedKeyed = xj != null && xj.get("keyed") instanceof List<?> dk ? dk : List.of();
+        List<?> statedKeyed = abi.get("keyed") instanceof List<?> sk ? sk : List.of();
+        if (describedKeyed.size() != statedKeyed.size()) {
+            problems.add("keyed types: " + statedKeyed.size() + " stated, " + describedKeyed.size() + " described");
+        } else {
+            for (int i = 0; i < statedKeyed.size(); i++) {
+                var st = (Map<String, Object>) statedKeyed.get(i);
+                var d = (Map<String, Object>) describedKeyed.get(i);
+                String t = String.valueOf(st.get("type"));
+                var want = new java.util.LinkedHashMap<String, Object>();
+                want.put("simple", t);
+                want.put("type", pkg + "." + name + "." + t);
+                for (String f : List.of("key", "keyIndex", "maxKeyBytes", "signedKey", "linkCooldownMs", "linkWindowMs", "typeId", "headTag",
+                        "nodeTag", "retiredTag", "inserts", "actions", "removes", "retires")) {
+                    want.put(f, st.get(f));
+                }
+                for (var e : want.entrySet()) {
+                    if (!same(e.getValue(), d.get(e.getKey()))) {
+                        problems.add("keyed type " + t + ": " + e.getKey() + " is " + e.getValue() + " here, " + d.get(e.getKey()) + " described");
+                    }
+                }
+                Object link = d.get("link") instanceof Map<?, ?> l ? l.get("index") : null;
+                if (!same(st.get("link"), link)) problems.add("keyed type " + t + ": Link is spend " + st.get("link") + " here, " + link + " described");
+                Object remove = d.get("remove") instanceof Map<?, ?> r ? r.get("index") : null;
+                if (!same(st.get("remove"), remove)) problems.add("keyed type " + t + ": Remove_" + t + " is mint " + st.get("remove") + " here, " + remove + " described");
+            }
+        }
         var redeemers = (Map<String, Object>) abi.get("redeemers");
         c.constructors("the spend redeemer", (List<Object>) redeemers.get("spend"), validator + "Calls");
         c.constructors("the mint redeemer", (List<Object>) redeemers.get("mint"), validator + "Lifecycle");
@@ -116,6 +144,17 @@ public final class AbiCheck {
             c.constructors("the type " + t, (List<Object>) m.get("constructors"), c.ref(t));
         }
         return problems;
+    }
+
+    /** Two JSON values alike (numbers by value, whatever their Java type). */
+    private static boolean same(Object a, Object b) {
+        if (a instanceof Number x && b instanceof Number y) return x.longValue() == y.longValue();
+        if (a instanceof List<?> x && b instanceof List<?> y) {
+            if (x.size() != y.size()) return false;
+            for (int i = 0; i < x.size(); i++) if (!same(x.get(i), y.get(i))) return false;
+            return true;
+        }
+        return java.util.Objects.equals(a, b);
     }
 
     /** A manifest shape, parsed: a name with arguments ({@code map<bytes28, Item>}). */

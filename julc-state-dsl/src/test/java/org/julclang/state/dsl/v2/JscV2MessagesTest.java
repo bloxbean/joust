@@ -114,9 +114,12 @@ class JscV2MessagesTest {
                 List<Map<String, Object>> ctors;
                 String ctor, want;
                 if (red.startsWith("mint")) {
-                    // M3a: an owned init's keys name its own creation constructor (Open, after BurnInstance).
+                    // M3a: an owned init's keys name its own creation constructor (Open, after BurnInstance); M3b: a keyed
+                    // type's initializer's, its insert (Insert_m).
                     ctors = redeemers.get("mint");
-                    ctor = redeemers.get("mint").stream().anyMatch(c -> c.get("name").equals(cap)) ? cap : "CreateInstance";
+                    String insert = "Insert_" + s.in();
+                    ctor = redeemers.get("mint").stream().anyMatch(c -> c.get("name").equals(cap)) ? cap
+                            : redeemers.get("mint").stream().anyMatch(c -> c.get("name").equals(insert)) ? insert : "CreateInstance";
                     want = "mint";
                 } else if (red.startsWith("intent")) {
                     ctors = intentCalls;

@@ -189,7 +189,14 @@ module.exports = grammar({
       $.owned_destroy_declaration,
     ),
 
-    owned_declaration: $ => seq('owned', field('name', $.identifier), field('fields', $.field_list)),
+    owned_declaration: $ => seq('owned', field('name', $.identifier), optional(field('keyed', $.keyed_clause)), field('fields', $.field_list)),
+
+    // M3b (ADR-0016 D1): keyed by f (signed, maxKeyBytes = n, linkCooldownMs = c, linkWindowMs = w).
+    keyed_clause: $ => seq('keyed', 'by', field('key', $.identifier), optional(field('options', $.keyed_options))),
+
+    keyed_options: $ => seq('(', sep1($.keyed_option, ','), ')'),
+
+    keyed_option: $ => choice('signed', seq(field('name', $.identifier), '=', field('value', $.integer))),
 
     // owned init T.m(…): a method of the owned type T (named, always).
     owned_init_declaration: $ => seq(
@@ -253,6 +260,8 @@ module.exports = grammar({
       seq('receives', optional(field('memo', $.type))),
       // M3a (ADR-0012 D3): objects of the owned type arrive through the action.
       seq('admits', field('type', $.identifier)),
+      // M3b (ADR-0016 D10): a keyed type's retiring exit.
+      'retire',
     ),
 
     _field_ref: $ => choice($.identifier, $.params_field),

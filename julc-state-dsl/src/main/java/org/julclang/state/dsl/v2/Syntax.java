@@ -41,7 +41,25 @@ final class Syntax {
         }
     }
 
-    record TypeDecl(String name, List<FieldDecl> fields, Pos pos) {}
+    /**
+     * A record declaration; M3b (ADR-0016 D1): {@code keyed}, for an owned type declared {@code owned T keyed by f (…)},
+     * its key and options, else null.
+     */
+    record TypeDecl(String name, List<FieldDecl> fields, Pos pos, KeyedDecl keyed) {
+        TypeDecl(String name, List<FieldDecl> fields, Pos pos) {
+            this(name, fields, pos, null);
+        }
+    }
+
+    /**
+     * M3b (ADR-0016 D1): {@code keyed by field (signed, maxKeyBytes = n, linkCooldownMs = c, linkWindowMs = w)}: the key
+     * field and its position, whether the key is a signer's ({@code signed}, and where), and the written options.
+     */
+    record KeyedDecl(String field, Pos fieldPos, Pos signed, List<Option> options, Pos pos) {
+        boolean isSigned() {
+            return signed != null;
+        }
+    }
 
     record FieldDecl(String name, TypeRef type, Pos pos) {}
 

@@ -1,0 +1,88 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/registry's Registry in .jsc 2 (ADR-0018 M3b, J11; ADR-0016): a registry of keyed objects. Each key is its own
+// UTxO, unique per instance, kept in a sorted on-chain list whose head the instance's creation makes.
+// - Ballot: one ballot per voter, ever. The key is the voter's key hash, which must sign the insert (signed); the only
+//   exit retires the ballot, so its key stays taken.
+// - Entry: a name registry. A name can be released (removed, freeing the name) or retired (kept for good); guardians can
+//   recover an entry by quorum.
+// A keyed registry is permanent: it can be neither destroyed nor migrated (ADR-0016 §5, Q5).
+contract Registry(maxDatumBytes = 384) {
+  state { admin: Key, isOpen: Bool }
+
+  // One ballot per voter, ever (only a retiring exit).
+  owned Ballot keyed by voter (signed, maxKeyBytes = 28) { voter: Key, choice: Int }
+
+  // A registered name: its owner, the lovelace it holds, a tier (0..3), and guardians who can recover it. The guardians'
+  // quorum must be reachable (strictly ascending 28-byte keys, 1 <= needed <= their number; ADR-0009).
+  owned Entry keyed by name (maxKeyBytes = 64) { name: Bytes, owner: Key, stake: Int, tier: Int, guardians: List<Key>, needed: Int }
+
+  init() {
+    return { admin: caller, isOpen: true }
+  }
+
+  action setOpen(nowOpen: Bool) only admin {
+    return { ...state, isOpen: nowOpen }
+  }
+
+  // ---- ballots
+
+  owned init Ballot.cast(registry: shared, voter: Key, choice: Int) {
+    require(registry.isOpen, "voting is closed")
+    require(choice >= 0 && choice < 10, "choose 0 to 9")
+    return { voter, choice }
+  }
+
+  owned action Ballot.change(pick: Int) only voter {
+    require(pick >= 0 && pick < 10, "choose 0 to 9")
+    return { ...state, choice: pick }
+  }
+
+  // The voter leaves with everything but the deposit; the ballot stays retired, so the voter can never vote again.
+  owned destroy Ballot.leave() only voter retire {
+    pay(voter, balance)
+  }
+
+  // ---- names
+
+  // Claims a free name for the caller, staking what the call pays.
+  owned init Entry.claim(name: Bytes, tier: Int, guardians: List<Key>, needed: Int) payable {
+    return { name, owner: caller, stake: received, tier, guardians, needed }
+  }
+
+  // The admin grants a name to someone, while the registry is open; the owner is its only guardian.
+  owned init Entry.grant(registry: shared, name: Bytes, owner: Key) {
+    require(registry.isOpen, "the registry is closed")
+    require(caller == registry.admin, "only the admin grants names")
+    return { name, owner, stake: 0, tier: 0, guardians: [owner], needed: 1 }
+  }
+
+  // Adds to the stake and sets the tier (the tier invariant is checked on-chain on the result).
+  owned action Entry.upgrade(newTier: Int) payable only owner {
+    return { ...state, stake: stake + received, tier: newTier }
+  }
+
+  owned action Entry.withdraw(amount: Int) only owner {
+    require(amount > 0 && amount <= stake, "withdraw within the stake")
+    pay(owner, amount)
+    return { ...state, stake: stake - amount }
+  }
+
+  // Guardians hand the entry to a new owner (the old owner can still retire or release first).
+  owned action Entry.recover(newOwner: Key) quorum guardians needed {
+    return { ...state, owner: newOwner }
+  }
+
+  // Releases the name: the entry is removed from the list and the name can be claimed again.
+  owned destroy Entry.release() only owner {
+    pay(owner, balance)
+  }
+
+  // Retires the name: the owner leaves with the stake, the name stays taken for good.
+  owned destroy Entry.retire() only owner retire {
+    pay(owner, balance)
+  }
+
+  invariant Entry.tierInRange = tier >= 0 && tier <= 3
+}

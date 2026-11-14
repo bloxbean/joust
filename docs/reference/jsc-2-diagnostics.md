@@ -175,6 +175,16 @@ As the earlier parts', these are refused **in every contract**, whether it decla
 generated client names a contract's types by their qualified names, so examples/bank's owned `Account` does not meet
 cardano-client-lib's `Account` there.
 
+### Names M3b reserves (ADR-0018 D16)
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `retire` (a method modifier) | a field or binding name, in every contract | JSC0211 |
+| `Link`, and for a keyed type `T` `Head_T`, `Keyed_T`, `Retired_T`, `Remove_T`, and for its initializer `m` `Insert_m` (the keyed list's redeemers and datums) | a method name whose redeemer would take it (`link`, …), in a contract with keyed types | JSC1249 |
+| for a keyed type `T`: the client's `tList`, `tExists`, `tKeys`; the handle's `key`, `value`, `retired`, `lovelace`, `object`, `read`, `o`, `constructor`; the redeemer fields `anchor`, `removed`, `instance` | a method or view name; an action or destroy of `T`; a parameter of a method of `T` | JSC1249 |
+
+`keyed` and `by` are not reserved: they are words only after `owned T`.
+
 ## Types and values (ADR-0018 D5, D6)
 
 | Code | Severity | Message | Raised by |
@@ -482,6 +492,27 @@ and from M3a2 an owned init's `accept` is allowed (issue #81 is fixed for `@Owne
 bind `o`, `sh`, `seed`, `inst`; a move's redeemer `into`) and effects (JSC0404, JSC0409, JSC0410, JSC0411) read an owned
 method's object as an instance method reads the state.
 
+## Keyed objects (ADR-0018 D10, M3b; ADR-0016)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1240 | error | a keyed type names its key field: owned … keyed by name { name: Bytes } / empty keyed options … / the keyed option … is written twice / the keyed option … takes a value … / the keyed option … is an integer (milliseconds or bytes) / unknown keyed option '…' (signed, maxKeyBytes, linkCooldownMs, linkWindowMs) | Parser (M3b) |
+| JSC1241 | error | keyed by …: … has no field … / the key field … is …: a key is Bytes (or a Key or Hash), ordered byte by byte in the instance's list (ADR-0016 D1, D2) / a keyed type's name is at most 255 bytes … | Checker (M3b) |
+| JSC1242 | error | maxKeyBytes is 1 to 64: Plutus serialiseData encodes longer byte strings in chunks … / a signed key is a 28-byte key hash: maxKeyBytes must be at least 28 (ADR-0016 I53) / a signed key is a key hash that signs the insert: type … Key or Bytes, not Hash | Checker (M3b) |
+| JSC1243 | error | linkCooldownMs is 0, or 60000 to 3600000 milliseconds (ADR-0016 D1, D9) / linkWindowMs is 20000 to min(900000, maxValidityMs) = … milliseconds / the default link window … is under 20000 ms: raise maxValidityMs | Checker (M3b) |
+| JSC1244 | error | keyed types cannot be combined with native assets yet … / with batched actions yet / BigMaps cannot be combined with keyed types … / at most 16 keyed types per contract … / maxDatumBytes is at most 2048 in a contract with keyed types … (ADR-0016 D1, D4c) | Checker (M3b) |
+| JSC1245 | error | retire goes on an owned destroy of a keyed type … / objects of the keyed type … need an escape hatch that needs nobody else: an owned destroy on … with 'retire' … / the retiring exit … needs 'only <field>' … / a retiring exit takes no '…' / a retiring exit reads no shared state / no other contract (ADR-0016 D1, D10) | Checker (M3b) |
+| JSC1246 | error | the keyed action … must name who may call it ('only <field>', 'quorum' or 'authorized'; 'open' is not enough) … (ADR-0016 D1, §2) | Checker (M3b) |
+| JSC1247 | error | … is a keyed type, and keyed objects do not move between instances … / admits …: … is a keyed type … (ADR-0016 D1, Q4) | Checker (M3b) |
+| JSC1248 | error | the key … of a keyed … is fixed for its life (ADR-0016 I50): return { ...state, … } without …, or with …: …; to change a key, retire or remove the object and insert another | Checker (M3b) |
+| JSC1249 | error | the method name … would be the redeemer …, a name the validator generates for keyed types … / the method / view … has the name of a member the generated client has for the keyed type … / the method … has the name of a member of the generated …Object handle … / '…' is a field name of the keyed type …'s generated redeemers … / the keyed types … and … both give the generated client's constant … | Checker (M3b) |
+| JSC1250 | error | a retired … may need … datum bytes, over maxDatumBytes = …: raise maxDatumBytes or lower maxKeyBytes (ADR-0016 D2) | Checker (M3b) |
+| JSC1251 | error | the key … of … is set from a time value somewhere: a key decides the list's order and whether an insert succeeds … (ADR-0018 D11) | Checker (M3b) |
+
+M3b also reads earlier rules at keyed positions: a keyed type's escape hatch is its retiring exit (JSC1245 in place of
+JSC1209), an initializer takes only `payable` (JSC0405, as every owned init), and the instance is never destroyed
+(JSC1210).
+
 ## Migration from .jsc v1 (ADR-0018 D16)
 
 `joust migrate` (Gradle: `migrateJsc`; `JscMain --migrate`) refuses, at the v1 position, what it cannot translate.
@@ -513,3 +544,6 @@ method's object as an instance method reads the state.
 | JSC9008 | warning | this event carries a time value: whoever submits the transaction chooses the window, so a value of it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2b) |
 | JSC9009 | warning | … carries a time value: whoever submits the transaction chooses the window, so it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2c) |
 | JSC9010 | warning | … has no audience: anyone can call it on anyone's … (and keep its owner's own calls failing); add 'only <field>', or 'open' if that is meant (ADR-0003 r2) | Checker (M3a) |
+| JSC9011 | warning | … lets anyone take a free … key first (squatting, ADR-0016 §2): to silence this, declare the key signed (keyed by … (signed)), or set …: caller in every result | Checker (M3b) |
+| JSC9012 | warning | linkCooldownMs = 0 on …: without a link cooldown anyone can keep a node in flight by relinking it every block, so its retiring exit is no longer guaranteed against churn (ADR-0016 §2, D9) | Checker (M3b) |
+| JSC9013 | warning | the keyed action … is authorized by someone other than the retiring exit's signer: that party can spend the … every block and delay its owner's exit (ADR-0016 §2) | Checker (M3b) |

@@ -67,6 +67,10 @@ final class Parser {
             if (toks.get(k).is("owned") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
                 typeNames.add(toks.get(k + 1).text());
             }
+            // M3b: a keyed owned type too: owned Entry keyed by name (…) { … }.
+            if (toks.get(k).is("owned") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("keyed")) {
+                typeNames.add(toks.get(k + 1).text());
+            }
             // An enum's variants start constructors too: Closed { at: t } (D5).
             if (toks.get(k).is("enum") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
                 int depth = 0;
@@ -342,7 +346,7 @@ final class Parser {
 
     /** The method modifiers (D4, D10); none is a field or binding name (M1c review F4). */
     static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched", "receives",
-            "admits");
+            "admits", "retire");
 
     /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
     private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
@@ -602,15 +606,18 @@ final class Parser {
         while (!at("}")) {
             Tok t = peek();
             int[] member = startMember();
-            if (t.is("owned") && peek(1).kind() == K.IDENT && peek(2).is("{")) {
-                // M3a (ADR-0003 D1, ADR-0012 D1): owned T { … }, an owned object's record.
+            if (t.is("owned") && peek(1).kind() == K.IDENT && (peek(2).is("{") || peek(2).is("keyed"))) {
+                // M3a (ADR-0003 D1, ADR-0012 D1): owned T { … }, an owned object's record. M3b (ADR-0016 D1): owned T keyed
+                // by f (…) { … }, a keyed type: one object per key, unique per instance.
                 openDecl("owned");
                 next();
                 Pos tp = peek().pos();
                 Tok nt = peek();
                 String n = ident("an owned type's name");
                 named(nt);
-                owned.add(new TypeDecl(n, fieldBlock("field"), tp));
+                Syntax.KeyedDecl keyed = at("keyed") ? keyedDecl(n) : null;
+                if (!at("{")) throw peek().pos().error("JSC1201", "an owned type's fields follow in a block: owned " + n + " { owner: Key }");
+                owned.add(new TypeDecl(n, fieldBlock("field"), tp, keyed));
                 closeDecl();
             } else if (t.is("owned") && (peek(1).is("init") || peek(1).is("action") || peek(1).is("destroy"))) {
                 // M3a: owned init T.m(…), owned action T.m(…), owned destroy T.m(…): a method of the owned type T.
@@ -745,11 +752,49 @@ final class Parser {
         return new Contract(name, options, state, methods, fns, types, enums, p, params, paramsPos, events, invariants, owned);
     }
 
+    /**
+     * M3b (ADR-0016 D1): {@code keyed by f}, then optionally {@code (signed, maxKeyBytes = n, linkCooldownMs = c,
+     * linkWindowMs = w)} in any order, each at most once (the checker refuses unknown names and values out of range).
+     */
+    private Syntax.KeyedDecl keyedDecl(String type) {
+        Pos kp = next().pos();
+        if (!at("by")) throw peek().pos().error("JSC1240", "a keyed type names its key field: owned " + type + " keyed by name { name: Bytes }");
+        next();
+        Pos fp = peek().pos();
+        String field = ident("the key field after 'keyed by' (owned " + type + " keyed by name)");
+        Pos signed = null;
+        var options = new ArrayList<Option>();
+        var seen = new java.util.HashSet<String>();
+        if (eat("(")) {
+            if (at(")")) throw peek().pos().error("JSC1240", "empty keyed options: drop the parentheses, or write (signed, maxKeyBytes = 28)");
+            do {
+                Pos op = peek().pos();
+                String on = ident("a keyed option (signed, maxKeyBytes, linkCooldownMs, linkWindowMs)");
+                if (!java.util.Set.of("signed", "maxKeyBytes", "linkCooldownMs", "linkWindowMs").contains(on)) {
+                    throw op.error("JSC1240", "unknown keyed option '" + on + "' (signed, maxKeyBytes, linkCooldownMs, linkWindowMs)");
+                }
+                if (!seen.add(on)) throw op.error("JSC1240", "the keyed option " + on + " is written twice");
+                if (on.equals("signed")) {
+                    signed = op;
+                    continue;
+                }
+                if (!at("=")) throw peek().pos().error("JSC1240", "the keyed option " + on + " takes a value: " + on + " = 64");
+                next();
+                Tok v = next();
+                if (v.kind() != K.INT) throw v.pos().error("JSC1240", "the keyed option " + on + " is an integer (milliseconds or bytes)");
+                options.add(new Option(on, new BigInteger(v.text()), op));
+            } while (eat(","));
+            expect(")");
+        }
+        return new Syntax.KeyedDecl(field, fp, signed, List.copyOf(options), kp);
+    }
+
     private List<Mod> mods() {
         var mods = new ArrayList<Mod>();
         while (true) {
             Tok t = peek();
-            if (t.is("payable") || t.is("open")) {
+            if (t.is("payable") || t.is("open") || t.is("retire")) {
+                // M3b (ADR-0016 D10): retire, on a keyed type's owned destroy: the object stays as a retired node.
                 next();
                 mods.add(new Mod(t.text(), null, t.pos()));
             } else if (t.is("only") || t.is("after") || t.is("before")) {

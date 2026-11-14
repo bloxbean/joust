@@ -31,7 +31,27 @@ final class Ir {
                    Map<String, RecordType> records, Map<String, EnumType> enums, RecordType state, List<Method> methods,
                    List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings, RecordType params,
                    List<Invariant> invariants, Map<String, Foreign> contracts, boolean library, List<Library> libraries,
-                   List<JavaLib> javaLibraries, List<String> owned) {
+                   List<JavaLib> javaLibraries, List<String> owned, Map<String, Keyed> keyed) {
+
+        /** M3a's shape: no keyed types (M3b). */
+        Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
+                Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
+                Set<String> recursiveFns, List<Warning> warnings, RecordType params, List<Invariant> invariants,
+                Map<String, Foreign> contracts, boolean library, List<Library> libraries, List<JavaLib> javaLibraries,
+                List<String> owned) {
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, params, invariants,
+                    contracts, library, libraries, javaLibraries, owned, Map.of());
+        }
+
+        /** M3b (ADR-0016 D1): the keyed options of owned type {@code name}, or null for a plain owned type (or none). */
+        Keyed keyedOf(String name) {
+            return name == null ? null : keyed.get(name);
+        }
+
+        /** M3b: whether the contract has keyed types (its datum then has the keyed variants, ADR-0016 D2). */
+        boolean anyKeyed() {
+            return !keyed.isEmpty();
+        }
 
         /** M4's shape: no owned types (M3a). */
         Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
@@ -235,6 +255,13 @@ final class Ir {
             this(name, body, pos, null);
         }
     }
+
+    /**
+     * M3b (ADR-0016 D1): a keyed owned type's options, with the processor's defaults applied: its key field, the key's
+     * largest length in bytes, whether the key is a 28-byte key hash that signs the insert ({@code signed}), the link
+     * cooldown {@code C} and window {@code W} in milliseconds (D9).
+     */
+    record Keyed(String key, int maxKeyBytes, boolean signed, long cooldownMs, long windowMs) {}
 
     /** A record type: a {@code type} declaration or the state; fields in declaration order. */
     record RecordType(String name, LinkedHashMap<String, Ty> fields, Pos pos) {

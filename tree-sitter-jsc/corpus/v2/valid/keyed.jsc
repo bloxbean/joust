@@ -1,0 +1,38 @@
+jsc 2
+package t
+
+// M3b (ADR-0018 D10, ADR-0016): keyed types (one object per key, unique per instance), their options, a retiring exit.
+contract Names(maxDatumBytes = 384) {
+  state { admin: Key, isOpen: Bool }
+  owned Ballot keyed by voter (signed, maxKeyBytes = 28) { voter: Key, choice: Int }
+  owned Entry keyed by name (maxKeyBytes = 64, linkCooldownMs = 120_000, linkWindowMs = 60000) { name: Bytes, owner: Key }
+  owned Tag keyed by label { label: Bytes, by: Key }
+
+  init() {
+    return { admin: caller, isOpen: true }
+  }
+
+  owned init Ballot.cast(registry: shared, voter: Key, choice: Int) {
+    require(registry.isOpen, "closed")
+    return { voter, choice }
+  }
+
+  owned destroy Ballot.leave() only voter retire { pay(voter, balance) }
+
+  owned init Entry.claim(name: Bytes) {
+    return { name, owner: caller }
+  }
+
+  owned action Entry.give(to: Key) only owner {
+    return { ...state, owner: to }
+  }
+
+  owned destroy Entry.release() only owner { pay(owner, balance) }
+  owned destroy Entry.retire() only owner retire { pay(owner, balance) }
+
+  owned init Tag.make(label: Bytes) {
+    return { label, by: caller }
+  }
+
+  owned destroy Tag.drop() only by retire { pay(by, balance) }
+}

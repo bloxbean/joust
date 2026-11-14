@@ -211,6 +211,23 @@ final class JavaEmitter {
         return out.toString();
     }
 
+    /**
+     * M3b (ADR-0016 D1): a keyed type's {@code @Owned} attributes: its key and maxKeyBytes, then signedKey, the cooldown and
+     * the window where they differ from the processor's defaults (the values are the same either way).
+     */
+    private String keyedAttributes(Ir.Keyed k) {
+        if (k == null) return "";
+        var a = new ArrayList<String>();
+        a.add("key = \"" + k.key() + "\"");
+        a.add("maxKeyBytes = " + k.maxKeyBytes());
+        if (k.signed()) a.add("signedKey = true");
+        if (k.cooldownMs() != 60_000L) a.add("linkCooldownMs = " + k.cooldownMs() + "L");
+        long maxValidity = 3_600_000L;
+        for (Ir.ContractOption o : p.options()) if (o.name().equals("maxValidityMs")) maxValidity = o.value().longValueExact();
+        if (k.windowMs() != Math.min(120_000L, maxValidity)) a.add("linkWindowMs = " + k.windowMs() + "L");
+        return "(" + String.join(", ", a) + ")";
+    }
+
     /** The program's own records and enums (a library's are declared in its class). */
     private String typeDecls() {
         var records = new StringBuilder();
@@ -219,7 +236,7 @@ final class JavaEmitter {
             // M3a (ADR-0003 D1, ADR-0012 D1): an owned type, each object its own UTxO.
             if (p.isOwned(r.name())) {
                 imports.add("org.julclang.state.api.Owned");
-                records.append("    @Owned\n");
+                records.append("    @Owned").append(keyedAttributes(p.keyedOf(r.name()))).append("\n");
             }
             records.append("    public record ").append(r.name()).append("(").append(components(r)).append(") {}\n\n");
         }
@@ -493,7 +510,9 @@ final class JavaEmitter {
         imports.add("org.julclang.state.api." + ann);
         var code = new StringBuilder();
         code.append("    // ").append(mark(m.pos())).append("\n");
-        code.append("    @").append(ann).append("\n");
+        // M3b (ADR-0016 D10): a retiring exit keeps its node, retired, with its key.
+        boolean retire = m.mods().stream().anyMatch(x -> x.name().equals("retire"));
+        code.append("    @").append(ann).append(retire ? "(retire = true)" : "").append("\n");
         for (Ir.Mod mod : m.mods()) {
             switch (mod.name()) {
                 case "payable" -> {

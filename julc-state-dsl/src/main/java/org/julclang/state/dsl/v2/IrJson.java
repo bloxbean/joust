@@ -70,6 +70,16 @@ final class IrJson {
         out.put("state", w.record(p.state()));
         // M3a (additive): the owned types (records of "records"), in declaration order, present only when declared.
         if (!p.owned().isEmpty()) out.put("owned", List.copyOf(p.owned()));
+        // M3b (additive): the keyed owned types' options, in declaration order, present only when declared (ADR-0016 D1).
+        if (p.anyKeyed()) {
+            var ks = new ArrayList<Object>();
+            for (var e : p.keyed().entrySet()) {
+                Ir.Keyed k = e.getValue();
+                ks.add(obj("type", e.getKey(), "key", k.key(), "maxKeyBytes", k.maxKeyBytes(), "signed", k.signed(),
+                        "linkCooldownMs", k.cooldownMs(), "linkWindowMs", k.windowMs()));
+            }
+            out.put("keyed", ks);
+        }
         // M2b (additive): the params record and the invariants, present only when the contract declares them.
         if (p.params() != null) out.put("params", w.record(p.params()));
         // M2c (additive): the contracts this one imports, present only when it imports any.
@@ -579,6 +589,12 @@ final class IrJson {
             return Math.toIntExact((Long) o);
         }
 
+        /** A whole number written as a JSON integer (M3b's durations in milliseconds). */
+        static long whole(Object o) {
+            if (!(o instanceof Long v)) throw new IllegalArgumentException("not an integer: " + o);
+            return v;
+        }
+
         static Pos pos(Object o) {
             return new Pos(i(l(o).get(0)), i(l(o).get(1)));
         }
@@ -663,7 +679,8 @@ final class IrJson {
         Ir.Program program(Map<String, Object> r) {
             // #84 review C2 and M4 review r2: every field of the program is known (both formats' additions, one version 2).
             known(r, Set.of("ir", "language", "sourceSha256", "package", "contract", "source", "options", "records", "enums", "state", "params",
-                    "timeFields", "recursiveFns", "libraries", "javaLibraries", "fns", "methods", "invariants", "warnings", "contracts", "owned"), "the program");
+                    "timeFields", "recursiveFns", "libraries", "javaLibraries", "fns", "methods", "invariants", "warnings", "contracts", "owned",
+                    "keyed"), "the program");
             // M4: libraries and javaLibraries are always written ([] without any); M2b/M2c: params, invariants and contracts
             // only when the contract has them, never as null (the integration of M2 and M4: refused, never a crash).
             for (String k : List.of("libraries", "javaLibraries")) {
@@ -726,6 +743,25 @@ final class IrJson {
                 if (owned.isEmpty()) throw new IllegalArgumentException("owned lists the owned types; it is absent when there are none");
             } else if (r.containsKey("owned")) {
                 throw new IllegalArgumentException("\"owned\" is null: absent owned types are not written");
+            }
+            // M3b: the keyed types, each an owned type once, with its options (checked with the methods: keyedChecked).
+            var keyed = new LinkedHashMap<String, Ir.Keyed>();
+            if (r.get("keyed") != null) {
+                for (Object o : l(r.get("keyed"))) {
+                    var k = m(o);
+                    known(k, Set.of("type", "key", "maxKeyBytes", "signed", "linkCooldownMs", "linkWindowMs"), "a keyed type");
+                    for (String f : List.of("type", "key", "maxKeyBytes", "signed", "linkCooldownMs", "linkWindowMs")) {
+                        if (!k.containsKey(f)) throw new IllegalArgumentException("a keyed type has no \"" + f + "\"");
+                    }
+                    String t = s(k.get("type"));
+                    if (!owned.contains(t) || keyed.containsKey(t)) throw new IllegalArgumentException("keyed type " + t + " is not one owned type");
+                    if (!(k.get("signed") instanceof Boolean signed)) throw new IllegalArgumentException("keyed type " + t + ": signed is a boolean");
+                    keyed.put(t, new Ir.Keyed(s(k.get("key")), i(k.get("maxKeyBytes")), signed, whole(k.get("linkCooldownMs")),
+                            whole(k.get("linkWindowMs"))));
+                }
+                if (keyed.isEmpty()) throw new IllegalArgumentException("keyed lists the keyed types; it is absent when there are none");
+            } else if (r.containsKey("keyed")) {
+                throw new IllegalArgumentException("\"keyed\" is null: absent keyed types are not written");
             }
             var libraries = new ArrayList<Ir.Library>();
             for (Object o : l(r.get("libraries"))) {
@@ -790,7 +826,7 @@ final class IrJson {
                     Set<String> allowed = switch (name) {
                         case "quorum" -> Set.of("name", "keys", "threshold");
                         case "receives" -> Set.of("name", "type");
-                        case "payable", "open" -> Set.of("name");
+                        case "payable", "open", "retire" -> Set.of("name");
                         default -> Set.of("name", "field");
                     };
                     known(md, allowed, "a modifier");
@@ -894,7 +930,99 @@ final class IrJson {
             }
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
                     Set.copyOf(timeFields), recursive, warnings, params0, invariants, contracts, false, List.copyOf(libraries), List.copyOf(java),
-                    List.copyOf(owned));
+                    List.copyOf(owned), keyedChecked(r, keyed, records, options, methods, owned, timeFields));
+        }
+
+        /**
+         * M3b (ADR-0016 D1, K2): a keyed program is read only in the checker's shapes, as the JavaScript reader reads it. Each
+         * entry of {@code keyed} names an owned type once, its key a Bytes, Key or Hash field of that type, with the options'
+         * ranges (maxKeyBytes 1 to 64, at least 28 when signed, a signed key no Hash; C 0 or 60,000 to 3,600,000; W 20,000 to
+         * min(900,000, maxValidityMs)); a keyed contract has at most 16 keyed types, maxDatumBytes at most 2048, no batched
+         * action, no BigMap in an owned type, no native assets (send, mint, accept, deposit, receives, funds), no key that is a
+         * time field; each keyed type has a retiring exit signed by its owner (only f) that reads no shared or other state and
+         * has no payable, quorum, authorized, after or before; every keyed action names its audience (only, quorum or
+         * authorized); no keyed type moves (into, admits); retire is only a keyed type's.
+         */
+        Map<String, Ir.Keyed> keyedChecked(Map<String, Object> r, Map<String, Ir.Keyed> keyed, Map<String, Ir.RecordType> records,
+                                           List<Ir.ContractOption> options, List<Ir.Method> methods, List<String> owned, Set<String> timeFields) {
+            for (Ir.Method m : methods) {
+                boolean retire = m.mods().stream().anyMatch(x -> x.name().equals("retire"));
+                if (retire && !keyed.containsKey(m.on())) {
+                    throw new IllegalArgumentException("method " + m.name() + ": only a keyed type's owned destroy retires");
+                }
+            }
+            if (keyed.isEmpty()) return Map.of();
+            if (keyed.size() > 16) throw new IllegalArgumentException("a contract has at most 16 keyed types, not " + keyed.size());
+            long maxDatum = 512, maxValidity = 3_600_000L;
+            for (Ir.ContractOption o : options) {
+                if (o.name().equals("maxDatumBytes")) maxDatum = o.value().longValueExact();
+                if (o.name().equals("maxValidityMs")) maxValidity = o.value().longValueExact();
+            }
+            if (maxDatum > 2048) throw new IllegalArgumentException("maxDatumBytes is at most 2048 in a contract with keyed types, not " + maxDatum);
+            for (String o : owned) {
+                if (records.get(o).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                    throw new IllegalArgumentException("owned type " + o + " keeps a BigMap beside keyed types");
+                }
+            }
+            if (assetsIn(r.get("methods"))) throw new IllegalArgumentException("a keyed contract handles no native assets (send, mint, accept, deposit, funds)");
+            for (var e : keyed.entrySet()) {
+                String t = e.getKey();
+                Ir.Keyed k = e.getValue();
+                Ty kt = records.get(t).fields().get(k.key());
+                if (kt == null || !(kt.equals(Ty.BYTES) || kt.equals(Ty.KEY) || kt.equals(Ty.HASH))) {
+                    throw new IllegalArgumentException("keyed type " + t + ": its key " + k.key() + " is not a Bytes, Key or Hash field");
+                }
+                if (k.maxKeyBytes() < 1 || k.maxKeyBytes() > 64) throw new IllegalArgumentException("keyed type " + t + ": maxKeyBytes is 1 to 64");
+                if (k.signed() && (k.maxKeyBytes() < 28 || kt.equals(Ty.HASH))) {
+                    throw new IllegalArgumentException("keyed type " + t + ": a signed key is a 28-byte key hash (maxKeyBytes at least 28, no Hash)");
+                }
+                if (k.cooldownMs() != 0 && (k.cooldownMs() < 60_000L || k.cooldownMs() > 3_600_000L)) {
+                    throw new IllegalArgumentException("keyed type " + t + ": linkCooldownMs is 0 or 60000 to 3600000");
+                }
+                if (k.windowMs() < 20_000L || k.windowMs() > Math.min(900_000L, maxValidity)) {
+                    throw new IllegalArgumentException("keyed type " + t + ": linkWindowMs is 20000 to min(900000, maxValidityMs)");
+                }
+                if (timeFields.contains(t + "." + k.key())) throw new IllegalArgumentException("keyed type " + t + ": its key is a time field");
+                boolean hatch = false;
+                for (Ir.Method m : methods) {
+                    if (!t.equals(m.on())) continue;
+                    var names = new HashSet<String>();
+                    for (Ir.Mod md : m.mods()) names.add(md.name());
+                    if (m.kind() == Ir.Kind.OWNED_DESTROY && names.contains("retire")) {
+                        if (!names.contains("only") || names.stream().anyMatch(Set.of("payable", "quorum", "authorized", "after", "before")::contains)
+                                || m.owned().shared() != null || !m.reads().isEmpty()) {
+                            throw new IllegalArgumentException("method " + m.name() + ": a retiring exit is signed by its owner (only f) and needs"
+                                    + " nobody else (no shared, reads, payable, quorum, authorized, after or before)");
+                        }
+                        hatch = true;
+                    }
+                    if (m.kind() == Ir.Kind.OWNED_ACTION && names.stream().noneMatch(Set.of("only", "quorum", "authorized")::contains)) {
+                        throw new IllegalArgumentException("method " + m.name() + ": a keyed action names its audience (only, quorum or authorized)");
+                    }
+                    if (m.owned().into() != null) throw new IllegalArgumentException("method " + m.name() + ": a keyed object does not move (into)");
+                }
+                if (!hatch) throw new IllegalArgumentException("keyed type " + t + " has no retiring exit (an owned destroy with retire)");
+            }
+            for (Ir.Method m : methods) {
+                if (Abi.batched(m)) throw new IllegalArgumentException("method " + m.name() + ": a keyed contract has no batched action");
+                if (m.admits() != null && keyed.containsKey(m.admits())) {
+                    throw new IllegalArgumentException("method " + m.name() + ": a keyed object does not move (admits " + m.admits() + ")");
+                }
+                if (m.receives() != null) throw new IllegalArgumentException("method " + m.name() + ": a keyed contract receives no deposits");
+            }
+            return java.util.Collections.unmodifiableMap(keyed);
+        }
+
+        /** Whether any method's body holds a native-asset statement or reads funds (M3b: none in a keyed contract). */
+        static boolean assetsIn(Object o) {
+            if (o instanceof List<?> list) {
+                for (Object x : list) if (assetsIn(x)) return true;
+            } else if (o instanceof Map<?, ?> map) {
+                if (map.get("stmt") instanceof String k && Set.of("Send", "Mint", "Accept", "Deposit").contains(k)) return true;
+                if ("FundsRef".equals(map.get("node"))) return true;
+                for (Object v : map.values()) if (assetsIn(v)) return true;
+            }
+            return false;
         }
 
         /**
@@ -914,8 +1042,12 @@ final class IrJson {
                 if (kind == Ir.Kind.VIEW) throw new IllegalArgumentException(where + "a view takes no modifiers, not " + w);
                 if (kind.creates() && !w.equals("payable")) throw new IllegalArgumentException(where + "an init takes only payable, not " + w);
                 switch (w) {
-                    case "payable", "open" -> {
+                    case "payable", "open", "retire" -> {
                         if (f != null) throw new IllegalArgumentException(where + w + " names no field, not " + f);
+                        // M3b (ADR-0016 D10, JSC1245): retire is an owned destroy's (the caller checks that its type is keyed).
+                        if (w.equals("retire") && kind != Ir.Kind.OWNED_DESTROY) {
+                            throw new IllegalArgumentException(where + "only an owned destroy retires, not a " + kind.name().toLowerCase());
+                        }
                         if (w.equals("payable") && kind == Ir.Kind.DESTROY) throw new IllegalArgumentException(where + "a destroy cannot be payable");
                     }
                     case "only", "after", "before" -> {
@@ -1047,7 +1179,7 @@ final class IrJson {
         }
 
         static final Set<String> MODIFIERS = Set.of("payable", "open", "only", "after", "before", "batched", "quorum", "authorized", "receives",
-                "admits");
+                "admits", "retire");
 
         Ir.RecordType record(Map<String, Object> r) {
             known(r, Set.of("name", "fields", "at"), "a record");

@@ -235,7 +235,15 @@ function shape(file) {
   // M3a: the owned types, and an owned type's invariant as T.name (as CorpusParse.shape).
   const owned = kids(body, 'owned_declaration');
   if (owned.length) {
-    out.push('owned: ' + join(owned.map((o) => `${text(fieldOf(o, 'name'))}(${join(kids(fieldOf(o, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name'))))})`)));
+    // M3b: a keyed type with its key and options, as written (as CorpusParse.shape).
+    const keyed = (o) => {
+      const k = fieldOf(o, 'keyed');
+      if (!k) return '';
+      const opts = fieldOf(k, 'options');
+      const os = opts ? kids(opts, 'keyed_option').map((x) => (fieldOf(x, 'name') ? `${text(fieldOf(x, 'name'))}=${BigInt(text(fieldOf(x, 'value')).replaceAll('_', ''))}` : 'signed')) : [];
+      return ` keyed by ${text(fieldOf(k, 'key'))}(${join(os)})`;
+    };
+    out.push('owned: ' + join(owned.map((o) => `${text(fieldOf(o, 'name'))}(${join(kids(fieldOf(o, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name'))))})${keyed(o)}`)));
   }
   const invariants = kids(body, 'invariant_declaration');
   if (invariants.length) {

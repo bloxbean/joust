@@ -1,0 +1,67 @@
+================================================================================
+Keyed types, their options, a retiring exit (M3b)
+================================================================================
+
+jsc 2
+package t
+contract C {
+  state { a: Int }
+  owned Name keyed by n (signed, maxKeyBytes = 28) { n: Key }
+  owned Tag keyed by t { t: Bytes, owner: Key }
+  owned destroy Name.leave() only n retire { pay(n, balance) }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (owned_declaration
+        (identifier)
+        (keyed_clause
+          (identifier)
+          (keyed_options
+            (keyed_option)
+            (keyed_option
+              (identifier)
+              (integer))))
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (owned_declaration
+        (identifier)
+        (keyed_clause
+          (identifier))
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (owned_destroy_declaration
+        (identifier)
+        (identifier)
+        (parameters)
+        (modifier
+          (identifier))
+        (modifier)
+        (block
+          (pay_statement
+            (identifier)
+            (identifier)))))))

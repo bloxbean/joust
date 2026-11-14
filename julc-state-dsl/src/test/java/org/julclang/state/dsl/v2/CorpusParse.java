@@ -70,7 +70,9 @@ public final class CorpusParse {
         }
         // M3a: the owned types, and an owned type's invariant as T.name, only when the contract declares some.
         if (!c.owned().isEmpty()) {
-            out.add("owned: " + join(c.owned().stream().map(t -> t.name() + "(" + join(t.fields().stream().map(Syntax.FieldDecl::name).toList()) + ")").toList()));
+            // M3b: a keyed type with its key and options, as written: Ballot(voter,choice) keyed by voter(signed,maxKeyBytes=28).
+            out.add("owned: " + join(c.owned().stream().map(t -> t.name() + "(" + join(t.fields().stream().map(Syntax.FieldDecl::name).toList()) + ")"
+                    + (t.keyed() == null ? "" : " keyed by " + t.keyed().field() + "(" + join(keyedOptions(t.keyed())) + ")")).toList()));
         }
         if (!c.invariants().isEmpty()) {
             out.add("invariants: " + join(c.invariants().stream().map(i -> i.on() == null ? i.name() : i.on() + "." + i.name()).toList()));
@@ -101,5 +103,14 @@ public final class CorpusParse {
 
     private static String join(List<String> xs) {
         return String.join(",", xs);
+    }
+
+    /** M3b: a keyed type's options in source order, signed by its name and the others as name=value. */
+    private static java.util.List<String> keyedOptions(Syntax.KeyedDecl k) {
+        var all = new java.util.ArrayList<java.util.Map.Entry<Syntax.Pos, String>>();
+        if (k.signed() != null) all.add(java.util.Map.entry(k.signed(), "signed"));
+        for (Syntax.Option o : k.options()) all.add(java.util.Map.entry(o.pos(), o.name() + "=" + o.value()));
+        all.sort(java.util.Comparator.comparing((java.util.Map.Entry<Syntax.Pos, String> e) -> e.getKey().line()).thenComparing(e -> e.getKey().col()));
+        return all.stream().map(java.util.Map.Entry::getValue).toList();
     }
 }

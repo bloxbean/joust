@@ -217,7 +217,7 @@
         },
         {
           "name": "storage.modifier.jsc",
-          "match": "\\b(payable|open|only|batched|quorum|authorized|receives|reads|admits|shared|into|owned)\\b"
+          "match": "\\b(payable|open|only|batched|quorum|authorized|receives|reads|admits|shared|into|owned|keyed|by|retire)\\b"
         },
         {
           "name": "storage.modifier.jsc",

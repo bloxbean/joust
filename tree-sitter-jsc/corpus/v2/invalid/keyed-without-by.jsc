@@ -1,0 +1,8 @@
+jsc 2
+package t
+
+// M3b: a keyed type names its key with 'keyed by'.
+contract Names {
+  state { admin: Key }
+  owned Entry keyed name { name: Bytes, owner: Key }
+}

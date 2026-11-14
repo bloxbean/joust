@@ -1,0 +1,8 @@
+jsc 2
+package t
+
+// M3b: a keyed option other than signed takes a value.
+contract Names {
+  state { admin: Key }
+  owned Entry keyed by name (maxKeyBytes) { name: Bytes, owner: Key }
+}
