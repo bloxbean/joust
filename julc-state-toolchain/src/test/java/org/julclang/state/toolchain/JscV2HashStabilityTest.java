@@ -238,7 +238,9 @@ class JscV2HashStabilityTest {
             // quorum (treasury's is): such a name is not renamed, since the modifier word beside it is not.
             "params", "event", "invariant", "emit", "quorum", "authorized", "Config", "Event",
             // M2c: composition's words, funds.deposits and a deposit's members.
-            "deposit", "receives", "reads", "Instance", "deposits", "memo", "value"));
+            "deposit", "receives", "reads", "Instance", "deposits", "memo", "value",
+            // M3b: a keyed type's clause, its options and the retiring modifier (a field may be called by: Keys' event's is).
+            "keyed", "by", "signed", "maxKeyBytes", "linkCooldownMs", "linkWindowMs", "retire"));
 
     static {
         for (var b : org.julclang.state.dsl.v2.JscV2.bindings()) LANGUAGE.add(b.name());
