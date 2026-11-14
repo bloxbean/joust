@@ -1,0 +1,6 @@
+jsc 2
+package t
+contract C {
+  state { a: Int }
+  owned function Hero.x() { return state }
+}

@@ -169,7 +169,8 @@ public final class TransitionsGenerator {
             if (first) {
                 call.add("target");
                 first = false;
-            } else if (t.takesParams() && !paramsTaken) {
+            } else if (t.takesParams() && !paramsTaken && render(p.asType()).equals(c.paramsType())) {
+                // The params by their type: an owned method's @Shared (and @Into) come before them (M3a).
                 call.add("args.joustParams()");
                 paramsTaken = true;
             } else if (readNames.contains(name)) {
@@ -277,7 +278,8 @@ public final class TransitionsGenerator {
         boolean paramsTaken = false;
         for (VariableElement p : m.getParameters()) {
             String name = p.getSimpleName().toString();
-            if (t.takesParams() && !paramsTaken) {
+            if (t.takesParams() && !paramsTaken && render(p.asType()).equals(c.paramsType())) {
+                // The params by their type: an owned init's @Shared comes before them (M3a).
                 call.add("args.joustParams()");
                 paramsTaken = true;
             } else if (named(p.asType(), API + "Funds")) {

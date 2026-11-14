@@ -232,13 +232,22 @@ function shape(file) {
   if (events.length) {
     out.push('events: ' + join(events.map((e) => `${text(fieldOf(e, 'name'))}(${join(kids(fieldOf(e, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name'))))})`)));
   }
+  // M3a: the owned types, and an owned type's invariant as T.name (as CorpusParse.shape).
+  const owned = kids(body, 'owned_declaration');
+  if (owned.length) {
+    out.push('owned: ' + join(owned.map((o) => `${text(fieldOf(o, 'name'))}(${join(kids(fieldOf(o, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name'))))})`)));
+  }
   const invariants = kids(body, 'invariant_declaration');
-  if (invariants.length) out.push('invariants: ' + join(invariants.map((i) => text(fieldOf(i, 'name')))));
-  const KINDS = { init_declaration: 'init', action_declaration: 'action', destroy_declaration: 'destroy', view_declaration: 'view' };
+  if (invariants.length) {
+    out.push('invariants: ' + join(invariants.map((i) => (fieldOf(i, 'type') ? text(fieldOf(i, 'type')) + '.' : '') + text(fieldOf(i, 'name')))));
+  }
+  const KINDS = { init_declaration: 'init', action_declaration: 'action', destroy_declaration: 'destroy', view_declaration: 'view',
+    owned_init_declaration: 'owned init', owned_action_declaration: 'owned action', owned_destroy_declaration: 'owned destroy' };
   out.push('methods: ' + body.children.filter((m) => KINDS[m.kind]).map((m) => {
     const kind = KINDS[m.kind];
     const md = mods(m);
-    return kind + (kind === 'init' ? '' : ' ' + text(fieldOf(m, 'name'))) + '(' + params(fieldOf(m, 'parameters')) + ')' + (md ? ' ' + md : '');
+    const name = kind === 'init' ? '' : kind.startsWith('owned') ? ` ${text(fieldOf(m, 'type'))}.${text(fieldOf(m, 'name'))}` : ' ' + text(fieldOf(m, 'name'));
+    return kind + name + '(' + params(fieldOf(m, 'parameters')) + ')' + (md ? ' ' + md : '');
   }).join('; '));
   decls(body, 'contract ');
   return out.join(' | ');

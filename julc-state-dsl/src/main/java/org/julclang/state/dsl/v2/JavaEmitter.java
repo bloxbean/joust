@@ -82,6 +82,8 @@ final class JavaEmitter {
     private int counter;
     /** The method or fn being emitted: helper names start with it. */
     private String owner;
+    /** M3a: the type of {@code s__}, the input of the method being emitted: State, or an owned method's object type. */
+    private String stateType = "State";
 
     private JavaEmitter(Ir.Program p) {
         this.p = p;
@@ -129,11 +131,16 @@ final class JavaEmitter {
         List<Ir.Method> spend = Abi.spendOrder(p), intents = Abi.intentOrder(p);
         for (int i = 0; i < spend.size(); i++) redeemers.put(spend.get(i).name(), "spend" + i);
         for (int k = 0; k < intents.size(); k++) redeemers.putIfAbsent(intents.get(k).name(), "intent" + k);
+        // M3a: an owned init's key names its mint redeemer constructor, after CreateInstance and BurnInstance (D12).
+        List<Ir.Method> creations = Abi.ownedInits(p);
+        for (int k = 0; k < creations.size(); k++) redeemers.put(creations.get(k).name(), "mint" + (2 + k));
         var body = new StringBuilder();
         var results = new TreeSet<String>();
         for (Ir.Method m : p.methods()) {
             body.append(method(m));
             if (m.kind() == Ir.Kind.ACTION && Effects.actionRecord(p, m) != null) results.add(Effects.actionRecord(p, m));
+            // M3a: the records of owned methods, of creations that accept, and of owned destroys that take assets.
+            if ((m.kind().owned() || m.kind() == Ir.Kind.INIT) && Effects.record(p, m) != null) results.add(Effects.record(p, m));
         }
         if (Effects.settled(p)) results.add("Settled");
         for (Ir.Fn f : p.fns()) body.append(fn(f));
@@ -150,10 +157,14 @@ final class JavaEmitter {
         records.append(typeDecls());
         // The result records (D4; Effects): Outcome and Received hold the next state, then each kind of effect their actions
         // produce; Settled a destroy's. A contract that only pays keeps M1's Outcome(state, payouts).
-        for (String r : List.of("Outcome", "Stepped", "Received", "Settled")) {
+        // M2's records first, in their order, then (M3a) the others by name: an earlier contract's Java is unchanged.
+        var recordOrder = new ArrayList<String>(List.of("Outcome", "Stepped", "Received", "Settled"));
+        for (String r : results) if (!recordOrder.contains(r)) recordOrder.add(r);
+        for (String r : recordOrder) {
             if (!results.contains(r)) continue;
             var comps = new ArrayList<String>();
-            if (!r.equals("Settled")) comps.add("State state");
+            String st = Effects.stateOf(p, r);
+            if (st != null) comps.add(st + " state");
             for (String k : Effects.recordKinds(p, r)) comps.add(kindType(k) + " " + Effects.component(k));
             records.append("    // (generated)\n    public record ").append(r).append("(").append(String.join(", ", comps)).append(") {}\n\n");
         }
@@ -205,6 +216,11 @@ final class JavaEmitter {
         var records = new StringBuilder();
         for (Ir.RecordType r : p.records().values()) {
             records.append("    // ").append(mark(r.pos())).append("\n");
+            // M3a (ADR-0003 D1, ADR-0012 D1): an owned type, each object its own UTxO.
+            if (p.isOwned(r.name())) {
+                imports.add("org.julclang.state.api.Owned");
+                records.append("    @Owned\n");
+            }
             records.append("    public record ").append(r.name()).append("(").append(components(r)).append(") {}\n\n");
         }
         // An enum: a sealed interface whose permits clause lists the variants in declaration order, which is their
@@ -424,9 +440,10 @@ final class JavaEmitter {
 
     private String method(Ir.Method m) {
         owner = m.name();
+        stateType = m.on() != null ? m.on() : "State";
         redeemer = switch (m.kind()) {
             case INIT -> "mint0";
-            case ACTION, DESTROY -> redeemers.get(m.name());
+            case ACTION, DESTROY, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY -> redeemers.get(m.name());
             case VIEW -> null;
         };
         ordinals = ordinals(m.body());
@@ -435,6 +452,10 @@ final class JavaEmitter {
             case ACTION -> "Action";
             case DESTROY -> "Destroy";
             case VIEW -> "View";
+            // M3a (ADR-0003 D1)
+            case OWNED_INIT -> "OwnedInit";
+            case OWNED_ACTION -> "OwnedAction";
+            case OWNED_DESTROY -> "OwnedDestroy";
         };
         imports.add("org.julclang.state.api." + ann);
         var code = new StringBuilder();
@@ -474,13 +495,29 @@ final class JavaEmitter {
                     imports.add("org.julclang.state.api.Receives");
                     code.append("    @Receives\n");
                 }
+                case "admits" -> {
+                    // M3a (ADR-0012 D3): objects of this owned type arrive through the action, bound to their move.
+                    imports.add("org.julclang.state.api.Admits");
+                    code.append("    @Admits(\"").append(mod.field()).append("\")\n");
+                }
                 default -> {
                 }
             }
         }
         boolean funds = Effects.takesFunds(m);
         var params = new ArrayList<String>();
-        if (m.kind() != Ir.Kind.INIT) params.add("State s__");
+        // M3a: an owned action's or destroy's first parameter is its object.
+        if (m.kind() == Ir.Kind.OWNED_ACTION || m.kind() == Ir.Kind.OWNED_DESTROY) params.add(m.on() + " s__");
+        else if (!m.kind().creates()) params.add("State s__");
+        // M3a (ADR-0003 D1, ADR-0012 D3): the instance's state by reference, then a move's destination, right after it.
+        if (m.owned() != null && m.owned().shared() != null) {
+            imports.add("org.julclang.state.api.Shared");
+            params.add("@Shared State " + m.owned().shared().name);
+        }
+        if (m.owned() != null && m.owned().into() != null) {
+            imports.add("org.julclang.state.api.Into");
+            params.add("@Into State " + m.owned().into().name);
+        }
         // M2b (ADR-0009 D1): an init, and a method that reads params, takes them directly after the state (first in an init).
         if (Effects.takesParams(p, m)) params.add(Ir.PARAMS + " params__");
         // M2c (ADR-0011 D2): each read state right after the params, as the processor requires.
@@ -488,7 +525,14 @@ final class JavaEmitter {
             imports.add("org.julclang.state.api.Reads");
             params.add("@Reads(\"params." + r.field() + "\") " + jt(r.local().type) + " " + r.local().name);
         }
-        for (Ir.Local l : m.params()) params.add(jt(l.type) + " " + l.name);
+        for (int i = 0; i < m.params().size(); i++) {
+            Ir.Local l = m.params().get(i);
+            params.add(jt(l.type) + " " + l.name);
+            // M3a (ADR-0012 r4): an admits action's arriving object right after the object's id; not a redeemer field.
+            if (i == 0 && m.owned() != null && m.owned().arriving() != null) {
+                params.add(m.owned().arriving().type instanceof Ty.Rec r ? r.name() + " " + m.owned().arriving().name : null);
+            }
+        }
         if (m.usesCtx()) {
             imports.add("org.julclang.state.api.Ctx");
             params.add("Ctx ctx");
@@ -502,7 +546,9 @@ final class JavaEmitter {
         var stmts = new StringBuilder();
         for (Ir.Local l : m.checked()) {
             // The redeemer field the parameter is: a CreateInstance's fields start with the seed (ABI manifest).
-            int field = m.params().indexOf(l) + (m.kind() == Ir.Kind.INIT ? 1 : 0);
+            // M3a: an owned init's fields start with the seed and the instance; a move's with its destination.
+            int field = m.params().indexOf(l) + (m.kind() == Ir.Kind.INIT ? 1 : m.kind() == Ir.Kind.OWNED_INIT ? 2
+                    : m.owned() != null && m.owned().into() != null ? 1 : 0);
             imports.add("org.julclang.state.api.Require");
             stmts.append("        Require.that(").append(checkCall(l.type, l.name)).append(", ")
                     .append(str(key("input", field, l.pos, l.name))).append(");\n");
@@ -537,20 +583,37 @@ final class JavaEmitter {
         // The effects this method threads (D4): each kind it reaches, plus payouts for any destroy (M1's layout).
         var kinds = new ArrayList<String>();
         var reached = Effects.kinds(m);
-        for (String k : Effects.ORDER) if (reached.contains(k) || (k.equals("pay") && m.kind() == Ir.Kind.DESTROY)) kinds.add(k);
-        Acc acc = new Acc(m.kind() == Ir.Kind.VIEW || m.kind() == Ir.Kind.INIT ? List.of() : kinds);
+        for (String k : Effects.ORDER) if (reached.contains(k) || (k.equals("pay") && m.kind().ends())) kinds.add(k);
+        // M3a: a creation threads what it accepts (issue #81 fixed), nothing else.
+        Acc acc = new Acc(m.kind() == Ir.Kind.VIEW ? List.of() : m.kind().creates() ? (kinds.contains("accept") ? List.of("accept") : List.of()) : kinds);
         for (String k : acc.kinds) acc.cur.put(k, empty(k));
         stmts(m.body().stmts(), stmts, "        ", acc);
         String ret;
         switch (m.kind()) {
-            case INIT -> {
-                ret = "State";
-                stmts.append("        return ").append(ex(m.body().result())).append(";\n");
-            }
-            case ACTION -> {
-                String record = Effects.actionRecord(p, m);
+            case INIT, OWNED_INIT -> {
+                String made = m.kind() == Ir.Kind.INIT ? "State" : m.on();
+                String record = Effects.record(p, m);
                 if (record == null) {
-                    ret = "State";
+                    ret = made;
+                    stmts.append("        return ").append(ex(m.body().result())).append(";\n");
+                } else {
+                    // M3a (issue #81 fixed): the first state or object, then the check that what it accepted is what the
+                    // caller offers (ADR-0007 r2), then the record (state, accepted).
+                    ret = record;
+                    imports.add("org.julclang.state.api.Require");
+                    String next = fresh("next");
+                    stmts.append("        ").append(made).append(" ").append(next).append(" = ").append(ex(m.body().result())).append(";\n");
+                    stmts.append("        Require.that(ValueAdapter.same(").append(acc.cur.get("accept")).append(", funds.received()), ")
+                            .append(str(key("funds", 1, m.pos(), null))).append(");\n");
+                    stmts.append("        return new ").append(record).append("(").append(next).append(", ").append(acc.cur.get("accept"))
+                            .append(");\n");
+                }
+            }
+            case ACTION, OWNED_ACTION -> {
+                String made = m.kind() == Ir.Kind.ACTION ? "State" : m.on();
+                String record = m.kind() == Ir.Kind.ACTION ? Effects.actionRecord(p, m) : Effects.record(p, m);
+                if (record == null) {
+                    ret = made;
                     stmts.append("        return ").append(ex(m.body().result())).append(";\n");
                 } else if (!acc.kinds.contains("accept")) {
                     ret = record;
@@ -562,15 +625,23 @@ final class JavaEmitter {
                     ret = record;
                     imports.add("org.julclang.state.api.Require");
                     String next = fresh("next");
-                    stmts.append("        State ").append(next).append(" = ").append(ex(m.body().result())).append(";\n");
+                    stmts.append("        ").append(made).append(" ").append(next).append(" = ").append(ex(m.body().result())).append(";\n");
                     stmts.append("        Require.that(ValueAdapter.same(").append(acc.cur.get("accept")).append(", funds.received()), ")
                             .append(str(key("funds", 1, m.pos(), null))).append(");\n");
                     stmts.append("        return new ").append(record).append("(").append(next).append(", ").append(result(record, acc))
                             .append(");\n");
                 }
             }
-            case DESTROY -> {
-                if (Effects.settled(p)) {
+            case DESTROY, OWNED_DESTROY -> {
+                if (Effects.exchanges(m)) {
+                    // M3a: an owned destroy that takes native assets (examples/market's buy): its effects, then what it
+                    // accepted, checked last against what the caller offers.
+                    ret = "Exchanged";
+                    imports.add("org.julclang.state.api.Require");
+                    stmts.append("        Require.that(ValueAdapter.same(").append(acc.cur.get("accept")).append(", funds.received()), ")
+                            .append(str(key("funds", 1, m.pos(), null))).append(");\n");
+                    stmts.append("        return new Exchanged(").append(result("Exchanged", acc)).append(");\n");
+                } else if (Effects.settled(p)) {
                     ret = "Settled";
                     stmts.append("        return new Settled(").append(result("Settled", acc)).append(");\n");
                 } else {
@@ -746,11 +817,13 @@ final class JavaEmitter {
      */
     private String invariant(Ir.Invariant inv) {
         owner = inv.name();
+        stateType = inv.on() != null ? inv.on() : "State";
         redeemer = null;
         ordinals = Map.of();
         imports.add("org.julclang.state.api.Invariant");
         var u = new Free().block(inv.body());
-        String params = "State s__" + (u.params ? ", " + Ir.PARAMS + " params__" : "");
+        // M3a (ADR-0012 D1): an owned type's invariant takes the object.
+        String params = (inv.on() == null ? "State" : inv.on()) + " s__" + (u.params ? ", " + Ir.PARAMS + " params__" : "");
         var stmts = new StringBuilder();
         stmts(inv.body().stmts(), stmts, "        ", none());
         return "    // " + mark(inv.pos()) + "\n    @Invariant\n    public static boolean " + inv.name() + "(" + params + ") {\n" + stmts
@@ -1018,7 +1091,7 @@ final class JavaEmitter {
 
     private String capParams(Free f) {
         var ps = new ArrayList<String>();
-        if (f.state) ps.add("State s__");
+        if (f.state) ps.add(stateType + " s__");
         if (f.params) ps.add(Ir.PARAMS + " params__");
         for (Ir.Local l : f.locals()) ps.add(jt(l.type) + " " + l.name);
         if (f.deposits != null) ps.add(jt(f.deposits) + " deposits__");

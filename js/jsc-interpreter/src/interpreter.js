@@ -142,7 +142,10 @@ class Program {
   #call(name, state, args, tx, modifiers) {
     const m = this.#method(name);
     if (args.length !== m.params.length) throw new Error(`${name} takes ${m.params.length} arguments`);
-    if ((m.kind === 'init') !== (state === null || state === undefined)) throw new Error('an init has no input state; others do');
+    const creates = m.kind === 'init' || m.kind === 'ownedInit';
+    if (creates !== (state === null || state === undefined)) throw new Error('an init has no input state; others do');
+    // M3a (§2.8): an owned method runs on an object of its type; another type is the caller's error.
+    if (m.on && state && state.type !== m.on) throw new Error(`${name} runs on a ${m.on}, not a ${state.type}`);
     // §2: τ.signers holds the caller (review S6 on #76). A τ whose caller did not sign is the caller's error, like a
     // missing τ: no answer, never an agreement with a validator that requires the caller's signature.
     if (tx && tx.signers != null && !tx.signers.some((k) => bytesEqual(k, tx.caller))) {
@@ -152,7 +155,24 @@ class Program {
       if (modifiers) this.#modifiers(m, state, tx);
       const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [], deposits: [] };
       let env = null;
-      m.params.forEach((l, i) => (env = bind(env, l, args[i])));
+      // M3a (§2.8): an owned method's shared state and a move's destination first, from the transaction; an admits
+      // action's arriving object after its first argument.
+      if (m.shared) {
+        if (!tx || !tx.shared) throw new Error(`${m.name} reads the instance (shared): its transaction needs it`);
+        env = bind(env, m.shared, tx.shared);
+      }
+      if (m.into) {
+        // τ.into and τ.arriving (M3a3, semantics §2.8 then): bound only for programs the reader admits, none before M3a3.
+        if (!tx || !tx.into) throw new Error(`${m.name} moves its object (into): its transaction needs the destination`);
+        env = bind(env, m.into, tx.into);
+      }
+      m.params.forEach((l, i) => {
+        env = bind(env, l, args[i]);
+        if (i === 0 && m.arriving) {
+          if (!tx || !tx.arriving) throw new Error(`${m.name} reads the arriving object: its transaction needs it`);
+          env = bind(env, m.arriving, tx.arriving);
+        }
+      });
       // M2c (ADR-0011 D2): each read state, from the transaction's reference inputs by the params field naming it.
       const reads = m.reads ?? [];
       for (const r of reads) {
@@ -198,29 +218,36 @@ class Program {
   }
 
   /**
-   * §2.7 (M2b): what the validator checks of every state it accepts as an output, after the body. At a creation, each
-   * quorum naming params is well formed; then for an init's or action's next state each quorum naming state fields
+   * §2.7 (M2b): what the validator checks of every state it accepts as an output, after the body. At the instance's init,
+   * each quorum naming params (any method's, an owned one's too) is well formed; then for an init's or action's next state
+   * (or object) each quorum naming its fields
    * (every pair any method's quorum names, once, in source order) is well formed, class invariant:quorum <keys>
    * <threshold>; then each invariant holds, in declaration order, class invariant:<name>.
    */
   #outputs(m, next) {
-    if (m.kind !== 'init' && m.kind !== 'action') return;
+    if (!['init', 'action', 'ownedInit', 'ownedAction'].includes(m.kind)) return;
+    // M3a (§2.8): an object's output checks are its type's: the quorums over fields its type's methods name, its type's
+    // invariants. The params are the deployment's (#101 review S1, C1): every params quorum any method names, an owned
+    // one's too, is checked at the instance's init, and at no other creation, as the validator checks them.
+    const on = m.on ?? null;
     const pairs = [];
     for (const x of this.ir.methods) {
       for (const mod of x.mods) {
         if (mod.name !== 'quorum') continue;
+        const ofParams = mod.keys.startsWith('params.');
+        if (ofParams ? m.kind !== 'init' : (x.on ?? null) !== on) continue;
         const pair = `${mod.keys} ${mod.threshold}`;
         if (!pairs.includes(pair)) pairs.push(pair);
       }
     }
     for (const pair of pairs) {
       const [k, t] = pair.split(' ');
-      if (k.startsWith('params.') && m.kind !== 'init') continue;
       if (!wellFormedQuorum(this.#modField(next, k), this.#modField(next, t))) {
         throw new Refused(`the quorum ${pair} is not well formed`, 'invariant', `quorum ${pair}`);
       }
     }
     for (const inv of this.invariants) {
+      if ((inv.on ?? null) !== on) continue;
       const frame = { state: next, tx: null, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [] };
       let holds;
       try {

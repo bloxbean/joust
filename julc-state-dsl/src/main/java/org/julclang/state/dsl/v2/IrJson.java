@@ -68,6 +68,8 @@ final class IrJson {
         out.put("records", w.records(p.records()));
         out.put("enums", w.enums(p.enums()));
         out.put("state", w.record(p.state()));
+        // M3a (additive): the owned types (records of "records"), in declaration order, present only when declared.
+        if (!p.owned().isEmpty()) out.put("owned", List.copyOf(p.owned()));
         // M2b (additive): the params record and the invariants, present only when the contract declares them.
         if (p.params() != null) out.put("params", w.record(p.params()));
         // M2c (additive): the contracts this one imports, present only when it imports any.
@@ -134,9 +136,14 @@ final class IrJson {
                 }
             }
             var m2 = new LinkedHashMap<String, Object>();
-            m2.put("kind", m.kind().name().toLowerCase());
+            m2.put("kind", kindName(m.kind()));
             m2.put("name", m.name());
+            // M3a (additive): an owned method's type, and the locals it binds besides its parameters (each declared before them).
+            if (m.on() != null) m2.put("on", m.on());
+            if (m.owned() != null && m.owned().shared() != null) m2.put("shared", w.decl(m.owned().shared()));
+            if (m.owned() != null && m.owned().into() != null) m2.put("into", w.decl(m.owned().into()));
             m2.put("params", w.decls(m.params()));
+            if (m.owned() != null && m.owned().arriving() != null) m2.put("arriving", w.decl(m.owned().arriving()));
             m2.put("mods", mods);
             m2.put("checked", m.checked().stream().<Object>map(l -> (long) w.ref(l)).toList());
             // M2c (additive): the reads parameters, present only when the method reads another contract.
@@ -155,7 +162,11 @@ final class IrJson {
         out.put("methods", methods);
         if (!p.invariants().isEmpty()) {
             var invariants = new ArrayList<Object>();
-            for (Ir.Invariant inv : p.invariants()) invariants.add(obj("name", inv.name(), "body", w.block(inv.body()), "at", at(inv.pos())));
+            for (Ir.Invariant inv : p.invariants()) {
+                // M3a (additive): an owned type's invariant names it (on).
+                invariants.add(inv.on() == null ? obj("name", inv.name(), "body", w.block(inv.body()), "at", at(inv.pos()))
+                        : obj("name", inv.name(), "on", inv.on(), "body", w.block(inv.body()), "at", at(inv.pos())));
+            }
             out.put("invariants", invariants);
         }
         var warnings = new ArrayList<Object>();
@@ -164,6 +175,16 @@ final class IrJson {
         var sb = new StringBuilder();
         print(out, sb, "");
         return sb.append('\n').toString();
+    }
+
+    /** A method's kind as the IR writes it: init, action, destroy, view; M3a: ownedInit, ownedAction, ownedDestroy. */
+    static String kindName(Ir.Kind k) {
+        return switch (k) {
+            case OWNED_INIT -> "ownedInit";
+            case OWNED_ACTION -> "ownedAction";
+            case OWNED_DESTROY -> "ownedDestroy";
+            default -> k.name().toLowerCase();
+        };
     }
 
     /** {@code key, value, key, value…} as an ordered object; null values are kept. */
@@ -642,7 +663,7 @@ final class IrJson {
         Ir.Program program(Map<String, Object> r) {
             // #84 review C2 and M4 review r2: every field of the program is known (both formats' additions, one version 2).
             known(r, Set.of("ir", "language", "sourceSha256", "package", "contract", "source", "options", "records", "enums", "state", "params",
-                    "timeFields", "recursiveFns", "libraries", "javaLibraries", "fns", "methods", "invariants", "warnings", "contracts"), "the program");
+                    "timeFields", "recursiveFns", "libraries", "javaLibraries", "fns", "methods", "invariants", "warnings", "contracts", "owned"), "the program");
             // M4: libraries and javaLibraries are always written ([] without any); M2b/M2c: params, invariants and contracts
             // only when the contract has them, never as null (the integration of M2 and M4: refused, never a crash).
             for (String k : List.of("libraries", "javaLibraries")) {
@@ -694,6 +715,18 @@ final class IrJson {
             var records = records(r.get("records"));
             var enums = enums(r.get("enums"));
             Ir.RecordType state = record(m(r.get("state")));
+            // M3a: the owned types, each a record of "records", none twice.
+            var owned = new ArrayList<String>();
+            if (r.get("owned") != null) {
+                for (Object o : l(r.get("owned"))) {
+                    String n = s(o);
+                    if (!records.containsKey(n) || owned.contains(n)) throw new IllegalArgumentException("owned type " + n + " is not one record of records");
+                    owned.add(n);
+                }
+                if (owned.isEmpty()) throw new IllegalArgumentException("owned lists the owned types; it is absent when there are none");
+            } else if (r.containsKey("owned")) {
+                throw new IllegalArgumentException("\"owned\" is null: absent owned types are not written");
+            }
             var libraries = new ArrayList<Ir.Library>();
             for (Object o : l(r.get("libraries"))) {
                 var x = m(o);
@@ -730,8 +763,13 @@ final class IrJson {
             var methods = new ArrayList<Ir.Method>();
             for (Object o : l(r.get("methods"))) {
                 var x = m(o);
-                known(x, Set.of("kind", "name", "params", "mods", "checked", "usesCtx", "pays", "result", "body", "at", "reads"), "a method");
+                known(x, Set.of("kind", "name", "params", "mods", "checked", "usesCtx", "pays", "result", "body", "at", "reads", "on", "shared",
+                        "into", "arriving"), "a method");
+                // M3a: the locals an owned method binds before its parameters, then the arriving object after the first.
+                Ir.Local shared = x.get("shared") == null ? null : decl(x.get("shared"));
+                Ir.Local into = x.get("into") == null ? null : decl(x.get("into"));
                 var params = decls(x.get("params"));
+                Ir.Local arriving = x.get("arriving") == null ? null : decl(x.get("arriving"));
                 var reads = new ArrayList<Ir.Read>();
                 if (x.get("reads") != null) {
                     for (Object ro : l(x.get("reads"))) {
@@ -781,9 +819,29 @@ final class IrJson {
                     case "action" -> Ir.Kind.ACTION;
                     case "destroy" -> Ir.Kind.DESTROY;
                     case "view" -> Ir.Kind.VIEW;
+                    case "ownedInit" -> Ir.Kind.OWNED_INIT;
+                    case "ownedAction" -> Ir.Kind.OWNED_ACTION;
+                    case "ownedDestroy" -> Ir.Kind.OWNED_DESTROY;
                     default -> throw new IllegalArgumentException("method " + x.get("name") + ": unknown kind " + x.get("kind"));
                 };
-                modifiers(kind, s(x.get("name")), mods, state, params0);
+                // M3a: an owned method names an owned type (and only one does); its modifiers read that type's fields.
+                String on = x.get("on") == null ? null : s(x.get("on"));
+                if (kind.owned() != (on != null) || on != null && !owned.contains(on)) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": " + (kind.owned() ? "an owned method names one of the owned types (on)"
+                            : "only an owned method names an owned type"));
+                }
+                if (shared != null && !kind.owned() || into != null && kind != Ir.Kind.OWNED_ACTION) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": shared is an owned method's, into an owned action's");
+                }
+                String admitted = null;
+                for (Ir.Mod md : mods) if (md.name().equals("admits")) admitted = md.field();
+                if (arriving != null && (admitted == null || !arriving.type.equals(new Ty.Rec(admitted)))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": only an admits action has an arriving object, of the type it admits");
+                }
+                if (admitted != null && (kind != Ir.Kind.ACTION || !owned.contains(admitted))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": admits is an instance action's, naming an owned type");
+                }
+                modifiers(kind, s(x.get("name")), mods, on == null ? state : records.get(on), params0);
                 var checked = new ArrayList<Ir.Local>();
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
                 // #80 review C4, S7: a pay only in the method's statement blocks, never under an expression (JSC0413).
@@ -804,13 +862,43 @@ final class IrJson {
                             + " ('only f', 'open', quorum or authorized)");
                 }
                 // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409).
-                if (kind == Ir.Kind.DESTROY && !moves) {
+                if (kind.ends() && !moves) {
                     throw new IllegalArgumentException("method " + x.get("name") + ": a destroy pays out what the instance holds: it has no pay, send,"
                             + " mint, burn or deposit");
                 }
+                // #101 review F2: an owned program as strict as the checker, staged with M3a's parts (OWNED_STAGE).
+                if (kind.owned() && mods.stream().anyMatch(md -> md.name().equals("receives"))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": an owned method receives no deposits: a deposit's target is an"
+                            + " instance (JSC0447)");
+                }
+                if (shared != null && !shared.type.equals(new Ty.Rec("State"))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": the shared state is a State");
+                }
+                if (OWNED_STAGE < 2 && kind == Ir.Kind.OWNED_DESTROY && mods.stream().anyMatch(md -> md.name().equals("payable"))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": a payable owned destroy is not produced yet (M3a2; JSC0406)");
+                }
+                if (OWNED_STAGE < 2 && kind.owned() && hasNode(x.get("body"), Set.of("Send", "Mint", "Deposit", "Accept", "FundsRef"))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": native assets in an owned method (accept, send, mint, burn,"
+                            + " deposit, funds) are not produced yet (M3a2; JSC1215)");
+                }
+                if (OWNED_STAGE < 3 && (into != null || arriving != null || admitted != null)) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": moves (into, admits) are not produced yet (M3a3; JSC1215)");
+                }
+                Ir.Owned ow = on != null || admitted != null ? new Ir.Owned(on, shared, into, arriving) : null;
                 methods.add(new Ir.Method(kind, s(x.get("name")), params, mods, checked,
                         (Boolean) x.get("usesCtx"), pays, body,
-                        x.get("result") == null ? null : type(x.get("result")), pos(x.get("at")), List.copyOf(reads)));
+                        x.get("result") == null ? null : type(x.get("result")), pos(x.get("at")), List.copyOf(reads), ow));
+            }
+            // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy
+            // without shared, before or after, so no object is trapped behind its instance or a deadline.
+            for (String o : owned) {
+                if (methods.stream().noneMatch(m -> m.kind() == Ir.Kind.OWNED_INIT && o.equals(m.on()))) {
+                    throw new IllegalArgumentException("the owned type " + o + " has no owned init (JSC1208)");
+                }
+                if (methods.stream().noneMatch(m -> escapeHatch(m, o))) {
+                    throw new IllegalArgumentException("the owned type " + o + " has no escape hatch: an owned destroy without shared, before or after"
+                            + " (JSC1209)");
+                }
             }
             var timeFields = new LinkedHashSet<String>();
             for (Object o : l(r.get("timeFields"))) timeFields.add(s(o));
@@ -826,13 +914,19 @@ final class IrJson {
             if (r.get("invariants") != null) {
                 for (Object o : l(r.get("invariants"))) {
                     var x = m(o);
-                    known(x, Set.of("name", "body", "at"), "an invariant");
+                    known(x, Set.of("name", "on", "body", "at"), "an invariant");
                     noPayInExpressions(x.get("body"), true, "invariant " + x.get("name"));   // #98 F1: an invariant moves nothing
-                    invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at"))));
+                    String on = x.get("on") == null ? null : s(x.get("on"));
+                    if (on != null && !owned.contains(on)) throw new IllegalArgumentException("invariant " + x.get("name") + ": " + on + " is not an owned type");
+                    if (on != null && OWNED_STAGE < 3) {
+                        throw new IllegalArgumentException("invariant " + x.get("name") + ": an owned type's invariant is not produced yet (M3a3; JSC1215)");
+                    }
+                    invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at")), on));
                 }
             }
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
-                    Set.copyOf(timeFields), recursive, warnings, params0, invariants, contracts, false, List.copyOf(libraries), List.copyOf(java));
+                    Set.copyOf(timeFields), recursive, warnings, params0, invariants, contracts, false, List.copyOf(libraries), List.copyOf(java),
+                    List.copyOf(owned));
         }
 
         /**
@@ -850,7 +944,7 @@ final class IrJson {
                 if (!MODIFIERS.contains(w)) throw new IllegalArgumentException(where + "unknown modifier " + w);
                 if (!seen.add(w)) throw new IllegalArgumentException(where + "the modifier " + w + " is given twice");
                 if (kind == Ir.Kind.VIEW) throw new IllegalArgumentException(where + "a view takes no modifiers, not " + w);
-                if (kind == Ir.Kind.INIT && !w.equals("payable")) throw new IllegalArgumentException(where + "an init takes only payable, not " + w);
+                if (kind.creates() && !w.equals("payable")) throw new IllegalArgumentException(where + "an init takes only payable, not " + w);
                 switch (w) {
                     case "payable", "open" -> {
                         if (f != null) throw new IllegalArgumentException(where + w + " names no field, not " + f);
@@ -876,9 +970,14 @@ final class IrJson {
                     }
                     case "authorized" -> modField(where, "authorized", f, Ty.CREDENTIAL, state, params);   // M2b (ADR-0009 D3)
                     case "receives" -> {
-                        // M2c (ADR-0011 D3, JSC0447): an action that continues, never batched.
-                        if (kind != Ir.Kind.ACTION) throw new IllegalArgumentException(where + "only an action receives deposits, not a " + kind.name().toLowerCase());
+                        // M2c (ADR-0011 D3, JSC0447): an action that continues, never batched (M3a: an owned action too).
+                        if (!kind.continues()) throw new IllegalArgumentException(where + "only an action receives deposits, not a " + kind.name().toLowerCase());
                         if (f != null) throw new IllegalArgumentException(where + "receives names no field, not " + f);
+                    }
+                    case "admits" -> {
+                        // M3a (ADR-0012 D3, JSC1212): an instance action, naming the owned type (checked by the caller).
+                        if (kind != Ir.Kind.ACTION) throw new IllegalArgumentException(where + "only an action admits objects, not a " + kind.name().toLowerCase());
+                        if (f == null) throw new IllegalArgumentException(where + "admits names an owned type");
                     }
                     default -> {   // batched
                         if (f != null && !f.equals("only")) throw new IllegalArgumentException(where + "batched is plain or batched only, not " + f);
@@ -979,7 +1078,32 @@ final class IrJson {
             return false;
         }
 
-        static final Set<String> MODIFIERS = Set.of("payable", "open", "only", "after", "before", "batched", "quorum", "authorized", "receives");
+        static final Set<String> MODIFIERS = Set.of("payable", "open", "only", "after", "before", "batched", "quorum", "authorized", "receives",
+                "admits");
+
+        /**
+         * #101 review F2: the parts of M3a the checker produces so far (1: M3a1's owned objects of one type with shared reads;
+         * 2: M3a2's native assets in owned methods and payable owned destroys; 3: M3a3's moves and invariants by type). A
+         * program with a later part's shape is refused, as the checker would refuse its source.
+         */
+        static final int OWNED_STAGE = 1;
+
+        /** An owned type's escape hatch (JSC1209): an owned destroy of it without shared, before or after. */
+        static boolean escapeHatch(Ir.Method m, String type) {
+            return m.kind() == Ir.Kind.OWNED_DESTROY && type.equals(m.on()) && (m.owned() == null || m.owned().shared() == null)
+                    && m.mods().stream().noneMatch(md -> md.name().equals("before") || md.name().equals("after"));
+        }
+
+        /** Whether raw IR JSON holds a statement or expression node of one of {@code names}, at any depth. */
+        static boolean hasNode(Object json, Set<String> names) {
+            if (json instanceof Map<?, ?> mp) {
+                if (mp.get("stmt") instanceof String st && names.contains(st) || mp.get("node") instanceof String nd && names.contains(nd)) return true;
+                for (Object v : mp.values()) if (hasNode(v, names)) return true;
+            } else if (json instanceof List<?> ls) {
+                for (Object v : ls) if (hasNode(v, names)) return true;
+            }
+            return false;
+        }
 
         Ir.RecordType record(Map<String, Object> r) {
             known(r, Set.of("name", "fields", "at"), "a record");

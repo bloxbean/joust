@@ -132,6 +132,7 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   "records": [Record…],
   "enums": [{ "name": "Phase", "variants": [Record…], "at": [3, 1] }],
   "state": Record,
+  "owned": [name…],
   "params": Record,
   "contracts": [{ "name", "package", "state": Record, "records": [Record…], "enums": [Enum…], "timeFields": [name…],
                   "receives": [Type|null…], "bigMaps" }],
@@ -143,9 +144,10 @@ the program read back to the same Java and the same ABI manifest, and checks tha
                       "records": [Record + { "owner", "import", "javaName", "verified" }…],
                       "fns": [{ "name", "params": [Type…], "result": Type }…] }],
   "fns": [{ "name", "params": [Local…], "result": Type, "body": Block, "at" }],
-  "methods": [{ "kind": "init|action|destroy|view", "name", "params": [Local…], "mods": [{ "name", "field"? }],
-                "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at", "reads"? }],
-  "invariants": [{ "name", "body": Block, "at" }],
+  "methods": [{ "kind": "init|action|destroy|view|ownedInit|ownedAction|ownedDestroy", "name", "on"?, "shared"?, "into"?,
+                "params": [Local…], "arriving"?, "mods": [{ "name", "field"? }], "checked": [localId…], "usesCtx", "pays",
+                "result": Type|null, "body": Block, "at", "reads"? }],
+  "invariants": [{ "name", "on"?, "body": Block, "at" }],
   "warnings": [{ "line", "col", "code", "message" }]
 }
 ```
@@ -174,6 +176,19 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   BigMap. A method's `reads` (present only when it reads another contract) lists `{ "local": Local, "field" }`: the
   local holding the state the params field `field` (an `Instance<C>`) names, declared before the body. The modifier
   `receives` is `{ "name": "receives" }`, or `{ "name": "receives", "type": T }` for `receives T`.
+- **M3a** (additive within format 2). `owned` (present only when the contract declares owned types) lists them in
+  declaration order; each is a record of `records`. An owned method's `kind` is `ownedInit`, `ownedAction` or
+  `ownedDestroy` and its `on` names its type; its `StateRef` and `StateField` read its object, and its result type is the
+  type's record. `shared` (present only for a method with a `shared` parameter) is the Local holding the instance's state
+  (`{ "record": "State" }`), `into` (a move, M3a3) the destination's, both declared before the parameters; `arriving`
+  (an `admits T` action's arriving object, M3a3) is declared after the first parameter. The modifier `admits` is
+  `{ "name": "admits", "field": T }`. An owned type's invariant names it in `on` (M3a3). A time field of an owned type is
+  `T.f` in `timeFields`. Both readers refuse an owned kind without `on`, an `on` that is not an owned type, `shared` outside
+  an owned method or of another type than `State`, `into` outside an owned action, `arriving` without `admits`, modifiers
+  naming fields the object does not have, `receives` on an owned method, and an owned type without an owned init or an
+  escape hatch (an owned destroy without `shared`, `before` or `after`). **Not produced until their part** (#101 review
+  F2, F9; refused by both readers until then): `into`, `arriving`, `admits` and an invariant's `on` (M3a3), a payable owned
+  destroy and native assets in an owned method (M3a2).
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),
   `{ "instance": C }` (M2c, `Instance<C>`), `{ "deposit": T|null }` (M2c, an element of `funds.deposits`: its memo type,
   or null),

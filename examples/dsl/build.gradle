@@ -139,7 +139,10 @@ def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['
              // ADR-0018 M2c: oracle (Oracle and Shop; the port names the shop Kiosk, since examples/dsl's Shop.jsc is M4a's and
              // JuLC writes a script by its validator's simple name) and fees (Pot and Stall).
              oracle: ['Oracle', 'open', [:], [Shop: 'Kiosk', ShopClient: 'KioskClient', ShopValidator: 'KioskValidator']],
-             fees: ['Pot', null]]
+             fees: ['Pot', null],
+             // ADR-0018 M3a1: the owned-object port of examples/bank; its Account field balance is the port's saved (balance is
+             // a built-in name).
+             bank: ['Bank', null, [:], ['(?<=\\.)balance(?=\\(\\))': 'saved']]]
 def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
 def copyPortTests = tasks.register('copyPortTests', Sync) {
     description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'

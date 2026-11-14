@@ -63,6 +63,10 @@ final class Parser {
             if (toks.get(k).is("type") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
             // M2b: an event is a variant of the contract's Event, so it starts a constructor too: Paid { to, amount }.
             if (toks.get(k).is("event") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
+            // M3a: an owned type is a record too: Account { owner, saved }.
+            if (toks.get(k).is("owned") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
+                typeNames.add(toks.get(k + 1).text());
+            }
             // An enum's variants start constructors too: Closed { at: t } (D5).
             if (toks.get(k).is("enum") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
                 int depth = 0;
@@ -337,7 +341,8 @@ final class Parser {
     }
 
     /** The method modifiers (D4, D10); none is a field or binding name (M1c review F4). */
-    static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched", "receives");
+    static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched", "receives",
+            "admits");
 
     /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
     private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
@@ -545,6 +550,10 @@ final class Parser {
                     next();
                     expect(".");
                     ps.add(new Param(n, null, p, ident("a params field after 'reads params.'")));
+                } else if ((at("shared") || at("into")) && (peek(1).is(",") || peek(1).is(")"))) {
+                    // M3a (ADR-0003 D1, ADR-0012 D3): name: shared, the instance's state read by reference; name: into, a
+                    // move's destination state. Contextual: a type is capitalised, so neither word names one.
+                    ps.add(new Param(n, null, p, null, next().text()));
                 } else {
                     ps.add(new Param(n, type(), p));
                 }
@@ -589,10 +598,43 @@ final class Parser {
         var fns = new ArrayList<Fn>();
         var types = new ArrayList<TypeDecl>();
         var enums = new ArrayList<EnumDecl>();
+        var owned = new ArrayList<TypeDecl>();
         while (!at("}")) {
             Tok t = peek();
             int[] member = startMember();
-            if (t.is("state")) {
+            if (t.is("owned") && peek(1).kind() == K.IDENT && peek(2).is("{")) {
+                // M3a (ADR-0003 D1, ADR-0012 D1): owned T { … }, an owned object's record.
+                openDecl("owned");
+                next();
+                Pos tp = peek().pos();
+                Tok nt = peek();
+                String n = ident("an owned type's name");
+                named(nt);
+                owned.add(new TypeDecl(n, fieldBlock("field"), tp));
+                closeDecl();
+            } else if (t.is("owned") && (peek(1).is("init") || peek(1).is("action") || peek(1).is("destroy"))) {
+                // M3a: owned init T.m(…), owned action T.m(…), owned destroy T.m(…): a method of the owned type T. Its
+                // declaration (#101 review F8) is an owned kind named T.m, so the outline says whose method it is.
+                openDecl(peek(1).is("init") ? "ownedInit" : peek(1).is("action") ? "ownedAction" : "ownedDestroy");
+                next();
+                Tok k = next();
+                String on = ident("the owned type of an owned " + k.text() + " (owned " + k.text() + " Account.name(…))");
+                if (!at(".")) {
+                    throw peek().pos().error("JSC1201", "an owned method names its type and itself: owned " + k.text() + " " + on + ".name(…)");
+                }
+                next();
+                Tok nt = peek();
+                String n = ident("a method name");
+                if (spans != null) spans.name(nt, on + "." + n);
+                var ps = params();
+                var mods = mods();
+                Kind kind = k.is("init") ? Kind.OWNED_INIT : k.is("action") ? Kind.OWNED_ACTION : Kind.OWNED_DESTROY;
+                methods.add(new Method(kind, n, ps, mods, block(), null, t.pos(), on));
+                closeDecl();
+            } else if (t.is("owned")) {
+                throw peek(1).pos().error("JSC1201", "after 'owned' comes an owned type (owned Account { owner: Key }) or an owned method"
+                        + " (owned init Account.open(…), owned action Account.name(…), owned destroy Account.name(…))");
+            } else if (t.is("state")) {
                 if (state != null) throw t.pos().error("JSC0121", "the state is declared once: state { … }");
                 openDecl("state");
                 named(t);
@@ -625,6 +667,14 @@ final class Parser {
                 next();
                 Tok nt = peek();
                 String n = ident("an invariant name");
+                String on = null;
+                if (at(".")) {
+                    // M3a (ADR-0012 D1): invariant T.name = e, an invariant of the owned type T.
+                    next();
+                    on = n;
+                    nt = peek();
+                    n = ident("an invariant name after '" + on + ".'");
+                }
                 named(nt);
                 Block body;
                 if (eat("=")) {
@@ -633,7 +683,7 @@ final class Parser {
                 } else {
                     body = block();
                 }
-                invariants.add(new InvariantDecl(n, body, t.pos()));
+                invariants.add(new InvariantDecl(n, body, t.pos(), on));
                 closeDecl();
             } else if (t.is("init")) {
                 openDecl("init");
@@ -684,7 +734,7 @@ final class Parser {
             } else if (t.is("let") || t.is("const") || t.is("var")) {
                 throw t.pos().error("JSC0124", "a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10)");
             } else {
-                throw t.pos().error("JSC0125", "expected state, params, event, invariant, init, action, destroy, view, fn, type or enum but found " + t);
+                throw t.pos().error("JSC0125", "expected state, params, event, invariant, init, action, destroy, view, owned, fn, type or enum but found " + t);
             }
             endMember(member);
             semis();
@@ -693,7 +743,7 @@ final class Parser {
         braces(clb);
         closeDecl();
         if (state == null) throw p.error("JSC0126", "the contract declares no state { … }");
-        return new Contract(name, options, state, methods, fns, types, enums, p, params, paramsPos, events, invariants);
+        return new Contract(name, options, state, methods, fns, types, enums, p, params, paramsPos, events, invariants, owned);
     }
 
     private List<Mod> mods() {
@@ -718,6 +768,10 @@ final class Parser {
                 TypeRef memo = null;
                 if (peek().kind() == K.IDENT && !MODIFIERS.contains(peek().text()) && Character.isUpperCase(peek().text().charAt(0))) memo = type();
                 mods.add(new Mod("receives", null, t.pos(), memo));
+            } else if (t.is("admits")) {
+                // M3a (ADR-0012 D3): admits T, an instance action through which objects of the owned type T arrive.
+                next();
+                mods.add(new Mod("admits", ident("the owned type after 'admits' (admits Hero)"), t.pos()));
             } else if (t.is("authorized")) {
                 // M2b (ADR-0009 D3): authorized <credential>, a state field or params.f.
                 next();

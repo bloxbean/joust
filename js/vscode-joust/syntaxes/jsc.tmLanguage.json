@@ -101,6 +101,34 @@
           }
         },
         {
+          "match": "\\b(owned)\\s+(init|action|destroy)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\.\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.jsc"
+            },
+            "2": {
+              "name": "storage.type.function.jsc"
+            },
+            "3": {
+              "name": "entity.name.type.jsc"
+            },
+            "4": {
+              "name": "entity.name.function.jsc"
+            }
+          }
+        },
+        {
+          "match": "\\b(owned)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.jsc"
+            },
+            "2": {
+              "name": "entity.name.type.jsc"
+            }
+          }
+        },
+        {
           "match": "\\b(init)\\b(?=\\s*\\()",
           "name": "storage.type.function.jsc"
         },
@@ -217,7 +245,7 @@
         },
         {
           "name": "storage.modifier.jsc",
-          "match": "\\b(payable|open|only|batched|quorum|authorized|receives|reads)\\b"
+          "match": "\\b(payable|open|only|batched|quorum|authorized|receives|reads|admits|shared|into)\\b"
         },
         {
           "name": "storage.modifier.jsc",

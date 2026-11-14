@@ -1,0 +1,94 @@
+================================================================================
+Owned types, owned methods, shared and into, admits, an owned invariant (M3a)
+================================================================================
+
+jsc 2
+package t
+contract C {
+  state { a: Int }
+  owned Hero { owner: Key }
+  owned init Hero.make(s: shared) { return { owner: caller } }
+  owned action Hero.go(s: shared, d: into) only owner { return state }
+  owned destroy Hero.end() only owner { pay(owner, balance) }
+  action admit(id: Bytes, h: Hero) admits Hero { return state }
+  invariant Hero.ok = true
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (owned_declaration
+        (identifier)
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (owned_init_declaration
+        (identifier)
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)))
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (identifier))))))
+      (owned_action_declaration
+        (identifier)
+        (identifier)
+        (parameters
+          (parameter
+            (identifier))
+          (parameter
+            (identifier)))
+        (modifier
+          (identifier))
+        (block
+          (return_statement
+            (identifier))))
+      (owned_destroy_declaration
+        (identifier)
+        (identifier)
+        (parameters)
+        (modifier
+          (identifier))
+        (block
+          (pay_statement
+            (identifier)
+            (identifier))))
+      (action_declaration
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (type
+              (identifier)))
+          (parameter
+            (identifier)
+            (type
+              (identifier))))
+        (modifier
+          (identifier))
+        (block
+          (return_statement
+            (identifier))))
+      (invariant_declaration
+        (identifier)
+        (identifier)
+        (boolean)))))

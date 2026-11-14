@@ -43,6 +43,15 @@ public final class AbiCheck {
         } else if (describedParams != null) {
             problems.add("the description has params that the manifest does not state");
         }
+        // M3a (ADR-0003 D2, ADR-0012 D1): an object's datum, the validator's Holding (or one Holding_T per owned type).
+        if (abi.get("holdings") instanceof List<?> hs) {
+            for (Object h : hs) {
+                String hn = (String) ((Map<String, Object>) h).get("name");
+                c.constructors("the owned datum " + hn, List.of(h), validator + hn);
+            }
+        } else if (defs.keySet().stream().anyMatch(k -> k.equals(validator + "Holding") || k.startsWith(validator + "Holding_"))) {
+            problems.add("the description has owned objects (Holding) that the manifest does not state");
+        }
         var redeemers = (Map<String, Object>) abi.get("redeemers");
         c.constructors("the spend redeemer", (List<Object>) redeemers.get("spend"), validator + "Calls");
         c.constructors("the mint redeemer", (List<Object>) redeemers.get("mint"), validator + "Lifecycle");

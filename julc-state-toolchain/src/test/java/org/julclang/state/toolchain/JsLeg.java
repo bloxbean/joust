@@ -398,6 +398,10 @@ final class JsLeg {
                 + (t.reads().isEmpty() ? "" : ", \"reads\": {" + String.join(", ", new TreeMap<>(t.reads()).entrySet().stream()
                         .map(e -> "\"" + e.getKey() + "\": " + json(e.getValue())).toList()) + "}")
                 + (t.approvers().isEmpty() ? "" : ", \"approvers\": [" + String.join(", ", t.approvers().stream().map(k -> "\"" + HEX.formatHex(k.bytes()) + "\"").toList()) + "]")
+                // M3a: the instance's state an owned method reads, a move's destination, an admits action's arriving object.
+                + (t.shared() == null ? "" : ", \"shared\": " + json(t.shared()))
+                + (t.into() == null ? "" : ", \"into\": " + json(t.into()))
+                + (t.arriving() == null ? "" : ", \"arriving\": " + json(t.arriving()))
                 + "}";
         return "{\"method\": \"" + method + "\", \"state\": " + json(state) + ", \"args\": [" + String.join(", ", parts) + "], \"tx\": " + tx
                 + (params == null ? "" : ", \"params\": " + json(params)) + "}";

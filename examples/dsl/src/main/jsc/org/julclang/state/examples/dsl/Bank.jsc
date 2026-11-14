@@ -1,0 +1,52 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/bank in .jsc 2 (ADR-0018 M3a, J11; ADR-0003): a bank with one account per customer. The bank's own state
+// (admin, paused, limit) is read by accounts through a reference input (shared), so customers never queue behind each
+// other. A customer can always close their account, whatever the bank's state (the escape hatch).
+contract Bank(maxDatumBytes = 160) {
+  state { admin: Key, paused: Bool, withdrawLimit: Int }
+
+  // Each account is its own UTxO; `saved` is examples/bank's `balance` (a built-in name in .jsc 2).
+  owned Account { owner: Key, saved: Int }
+
+  init(withdrawLimit: Int) {
+    return { admin: caller, paused: false, withdrawLimit }
+  }
+
+  action setPaused(pause: Bool) only admin {
+    return { ...state, paused: pause }
+  }
+
+  action setLimit(limit: Int) only admin {
+    require(limit > 0, "limit must be positive")
+    return { ...state, withdrawLimit: limit }
+  }
+
+  // Opens an account for the caller, with a first deposit.
+  owned init Account.open(bank: shared) payable {
+    require(!bank.paused, "the bank is paused")
+    return { owner: caller, saved: received }
+  }
+
+  owned action Account.deposit() payable only owner {
+    require(received > 0, "deposit must be positive")
+    return { ...state, saved: saved + received }
+  }
+
+  // Takes money out, within the bank's limit, unless the bank is paused.
+  owned action Account.withdraw(bank: shared, amount: Int) only owner {
+    require(!bank.paused, "the bank is paused")
+    require(amount > 0 && amount <= bank.withdrawLimit, "amount outside the withdrawal limit")
+    require(amount <= saved, "insufficient balance")
+    pay(owner, amount)
+    return { ...state, saved: saved - amount }
+  }
+
+  // The owner closes the account and takes everything (works even when the bank is paused).
+  owned destroy Account.close() only owner {
+    pay(owner, balance)
+  }
+
+  view paused(): Bool = paused
+}

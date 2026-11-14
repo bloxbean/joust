@@ -108,6 +108,8 @@ final class Abi {
         var spend = new ArrayList<String>();
         for (Ir.Method m : spendOrder(p)) {
             var fs = new ArrayList<String>();
+            // M3a (ADR-0012 D3): a move's redeemer carries its destination instance's id first.
+            if (m.owned() != null && m.owned().into() != null) fs.add(field("into", "Bytes", "bytes", ind));
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
             // M2: a payable method with Funds carries the native assets the caller offers (ADR-0007 r2).
@@ -136,13 +138,38 @@ final class Abi {
             mint.add("      " + ctor("CreateInstance", 0, fs, "        "));
         }
         mint.add("      " + ctor("BurnInstance", 1, List.of(), "        "));
+        // M3a (ADR-0003 D3): each owned init creates an object, after BurnInstance in source order: its seed, the
+        // instance it is created under, its arguments.
+        for (Ir.Method m : ownedInits(p)) {
+            var fs = new ArrayList<String>();
+            fs.add(field("seed", "TxOutRef", "TxOutRef", ind));
+            fs.add(field("instance", "Bytes", "bytes", ind));
+            for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
+            if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            if (Effects.takesAssets(m)) fs.add(field("assetsIn", "Value", VALUE_SHAPE, ind));
+            ctx |= m.usesCtx();
+            mint.add("      " + ctor(Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1), mint.size(), fs, "        "));
+        }
         // M2: methods that mint user tokens; the mint validator's ByAction names the input whose spend checks it (ADR-0007 D4).
-        if (Effects.mints(p)) mint.add("      " + ctor("ByAction", 2, List.of(field("by", "TxOutRef", "TxOutRef", ind)), "        "));
+        // (Its index follows the processor's Lifecycle order: after the creations and CreateIntent, which a contract with
+        // mints never has.)
+        if (Effects.mints(p)) mint.add("      " + ctor("ByAction", mint.size(), List.of(field("by", "TxOutRef", "TxOutRef", ind)), "        "));
         if (!batched.isEmpty()) {
-            mint.add("      " + ctor("CreateIntent", 2, List.of(field("seed", "TxOutRef", "TxOutRef", ind), field("intent", "Intent", "Intent", ind)),
+            mint.add("      " + ctor("CreateIntent", mint.size(), List.of(field("seed", "TxOutRef", "TxOutRef", ind), field("intent", "Intent", "Intent", ind)),
                     "        "));
             // An intent's datum, and the tag of its refund output, beside the state's (their schemas are in "types").
             w.append("  \"intent\": { \"datum\": \"Intent\", \"refund\": \"IntentRefund\" },\n");
+        }
+        // M3a (ADR-0003 D2, ADR-0012 D1): an object's datum, Holding(instance, value), one constructor per owned type when
+        // there are several (Holding_T, their tags in declaration order).
+        if (!p.owned().isEmpty()) {
+            var hs = new ArrayList<String>();
+            for (String o : p.owned()) {
+                String hn = p.owned().size() == 1 ? "Holding" : "Holding_" + o;
+                hs.add("      " + ctor(hn, hs.size(), List.of(field("instance", "Bytes", "bytes", ind), field("value", o, o, ind)), "        "));
+            }
+            w.append("  \"owned\": [").append(String.join(", ", p.owned().stream().map(Abi::str).toList())).append("],\n");
+            w.append("  \"holdings\": [\n").append(String.join(",\n", hs)).append("\n  ],\n");
         }
         w.append("  \"redeemers\": {\n    \"spend\": [").append(spend.isEmpty() ? "" : "\n" + String.join(",\n", spend) + "\n    ").append("],\n");
         w.append("    \"mint\": [\n").append(String.join(",\n", mint)).append("\n    ]\n  },\n");
@@ -206,7 +233,9 @@ final class Abi {
                     + "      " + ctor("StakingPtr", 1, List.of(field("slot", "Int", "int", ind), field("txIndex", "Int", "int", ind),
                     field("certIndex", "Int", "int", ind)), "        ") + "\n    ] }");
         }
-        boolean merkle = p.state().fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT);
+        boolean merkle = p.state().fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)
+                // M3a (ADR-0012 D2): an owned type's maps
+                || p.owned().stream().anyMatch(o -> p.records().get(o).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT));
         if (ctx) {
             types.add("    \"Ctx\": { \"kind\": \"api\", \"constructors\": [" + ctor("Ctx", 0, List.of(field("caller", "Key", "bytes28", "        "),
                     field("received", "Int", "int", "        "), field("balance", "Int", "int", "        "), field("validFrom", "Int", "int", "        "),
@@ -288,6 +317,17 @@ final class Abi {
         var order = new ArrayList<Ir.Method>();
         for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION && !batchedOnly(m)) order.add(m);
         for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.DESTROY) order.add(m);
+        // M3a (ADR-0003 D3): the owned spends follow, owned actions then owned destroys, each in source order
+        // (ContractIR.ownedSpendTransitions).
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.OWNED_ACTION) order.add(m);
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.OWNED_DESTROY) order.add(m);
+        return order;
+    }
+
+    /** M3a: the owned inits in source order; the k-th is the mint redeemer's constructor 2 + k (after BurnInstance). */
+    static List<Ir.Method> ownedInits(Ir.Program p) {
+        var order = new ArrayList<Ir.Method>();
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.OWNED_INIT) order.add(m);
         return order;
     }
 

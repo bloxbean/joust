@@ -31,7 +31,21 @@ final class Ir {
                    Map<String, RecordType> records, Map<String, EnumType> enums, RecordType state, List<Method> methods,
                    List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings, RecordType params,
                    List<Invariant> invariants, Map<String, Foreign> contracts, boolean library, List<Library> libraries,
-                   List<JavaLib> javaLibraries) {
+                   List<JavaLib> javaLibraries, List<String> owned) {
+
+        /** M4's shape: no owned types (M3a). */
+        Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
+                Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
+                Set<String> recursiveFns, List<Warning> warnings, RecordType params, List<Invariant> invariants,
+                Map<String, Foreign> contracts, boolean library, List<Library> libraries, List<JavaLib> javaLibraries) {
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, params, invariants,
+                    contracts, library, libraries, javaLibraries, List.of());
+        }
+
+        /** M3a (ADR-0003, ADR-0012): whether {@code name} is an owned type (its record is in {@code records}). */
+        boolean isOwned(String name) {
+            return owned.contains(name);
+        }
 
         /** M2c's shape (params, invariants, imported contracts), without libraries. */
         Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
@@ -216,7 +230,11 @@ final class Ir {
     static final String EVENT = "Event";
 
     /** {@code invariant name = body} (ADR-0009 D4): a Bool over the state ({@code StateRef}/{@code StateField}) and the params. */
-    record Invariant(String name, Block body, Pos pos) {}
+    record Invariant(String name, Block body, Pos pos, String on) {
+        Invariant(String name, Block body, Pos pos) {
+            this(name, body, pos, null);
+        }
+    }
 
     /** A record type: a {@code type} declaration or the state; fields in declaration order. */
     record RecordType(String name, LinkedHashMap<String, Ty> fields, Pos pos) {
@@ -239,7 +257,29 @@ final class Ir {
     /** A located warning (D12), with its stable code. */
     record Warning(int line, int col, String code, String message) {}
 
-    enum Kind { INIT, ACTION, DESTROY, VIEW }
+    /** M3a (ADR-0003, ADR-0012): the owned kinds, on an owned type ({@link Method#on}). */
+    enum Kind {
+        INIT, ACTION, DESTROY, VIEW, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY;
+
+        /** An init or an owned init: a creation, with no input. */
+        boolean creates() {
+            return this == INIT || this == OWNED_INIT;
+        }
+
+        /** An action or an owned action: it continues its input. */
+        boolean continues() {
+            return this == ACTION || this == OWNED_ACTION;
+        }
+
+        /** A destroy or an owned destroy: it ends its input. */
+        boolean ends() {
+            return this == DESTROY || this == OWNED_DESTROY;
+        }
+
+        boolean owned() {
+            return this == OWNED_INIT || this == OWNED_ACTION || this == OWNED_DESTROY;
+        }
+    }
 
     /** A modifier in source order: {@code payable}, {@code open}, {@code only f}, {@code after f}, {@code before f}. */
     record Mod(String name, String field, Ty type) {
@@ -247,6 +287,15 @@ final class Ir {
             this(name, field, null);
         }
     }
+
+    /**
+     * M3a (ADR-0003, ADR-0012): what an owned method or an {@code admits} action binds besides its parameters.
+     * {@code on}: the owned type of an owned method (null for an admits action); {@code shared}: the local holding the
+     * instance's state, read by reference ({@code name: shared}), or null; {@code into}: a move's destination state
+     * ({@code name: into}), or null; {@code arriving}: an admits action's arriving object, or null. None is a redeemer
+     * field: the validator reads each from the transaction.
+     */
+    record Owned(String on, Local shared, Local into, Local arriving) {}
 
     /** M2c: a {@code reads} parameter: {@code local} holds the state of the instance the params field {@code field} names. */
     record Read(Local local, String field) {}
@@ -257,10 +306,26 @@ final class Ir {
      * whether the method takes the transaction.
      */
     record Method(Kind kind, String name, List<Local> params, List<Mod> mods, List<Local> checked, boolean usesCtx,
-                  boolean pays, Block body, Ty resultType, Pos pos, List<Read> reads) {
+                  boolean pays, Block body, Ty resultType, Pos pos, List<Read> reads, Owned owned) {
+        Method(Kind kind, String name, List<Local> params, List<Mod> mods, List<Local> checked, boolean usesCtx, boolean pays,
+               Block body, Ty resultType, Pos pos, List<Read> reads) {
+            this(kind, name, params, mods, checked, usesCtx, pays, body, resultType, pos, reads, null);
+        }
+
         Method(Kind kind, String name, List<Local> params, List<Mod> mods, List<Local> checked, boolean usesCtx, boolean pays,
                Block body, Ty resultType, Pos pos) {
             this(kind, name, params, mods, checked, usesCtx, pays, body, resultType, pos, List.of());
+        }
+
+        /** M3a: an owned method's type; null for the instance's methods. */
+        String on() {
+            return owned == null ? null : owned.on();
+        }
+
+        /** M3a: the owned type an {@code admits T} action admits, or null. */
+        String admits() {
+            for (Mod m : mods) if (m.name().equals("admits")) return m.field();
+            return null;
         }
 
         /** M2c: the memo type of {@code receives T}; null when the action does not receive or reads no memo. */

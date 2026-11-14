@@ -1,0 +1,699 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "606b2ebb20ca470c0e6eb7c6fe930aedaf528409a035c32e37d1763fe3377863",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Members",
+  "source": "Members.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "640" }],
+  "records": [
+    { "name": "Note", "fields": [{ "name": "by", "type": "Key" }, { "name": "text", "type": "Bytes" }], "at": [15, 3] },
+    {
+      "name": "Member",
+      "fields": [
+        { "name": "owner", "type": "Key" },
+        { "name": "guardians", "type": { "list": "Key" } },
+        { "name": "needed", "type": "Int" },
+        { "name": "notes", "type": { "map": ["Key", "Int"] } },
+        { "name": "tier", "type": { "enum": "Tier" } },
+        { "name": "best", "type": { "option": { "record": "Note" } } },
+        { "name": "until", "type": "Int" }
+      ],
+      "at": [17, 9]
+    }
+  ],
+  "enums": [
+    {
+      "name": "Tier",
+      "variants": [
+        { "name": "Basic", "fields": [], "at": [14, 15] },
+        { "name": "Gold", "fields": [{ "name": "since", "type": "Int" }], "at": [14, 22] }
+      ],
+      "at": [14, 3]
+    },
+    {
+      "name": "Event",
+      "variants": [
+        {
+          "name": "Noted",
+          "fields": [{ "name": "by", "type": "Key" }, { "name": "score", "type": "Int" }],
+          "at": [11, 9]
+        },
+        {
+          "name": "Left",
+          "fields": [{ "name": "who", "type": "Key" }, { "name": "notes", "type": "Int" }],
+          "at": [12, 9]
+        }
+      ],
+      "at": [11, 9]
+    }
+  ],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "owner", "type": "Key" }, { "name": "isOpen", "type": "Bool" }, { "name": "joined", "type": "Int" }],
+    "at": [7, 1]
+  },
+  "owned": ["Member"],
+  "params": { "name": "Config", "fields": [{ "name": "fee", "type": "Int" }], "at": [8, 3] },
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [20, 21] },
+            { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [20, 37] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [20, 51] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [20, 12]
+        },
+        "at": [19, 10]
+      },
+      "at": [19, 3]
+    },
+    {
+      "kind": "action",
+      "name": "setOpen",
+      "params": [{ "id": 1, "name": "nowOpen", "type": "Bool", "taint": 0, "at": [23, 18] }],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [24, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [24, 12]
+            },
+            { "node": "LocalRef", "local": 1, "type": "Bool", "taint": 0, "at": [24, 32] },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [24, 17] },
+              "record": "State",
+              "field": "joined",
+              "type": "Int",
+              "taint": 0,
+              "at": [24, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [24, 12]
+        },
+        "at": [23, 44]
+      },
+      "at": [23, 3]
+    },
+    {
+      "kind": "ownedInit",
+      "name": "join",
+      "on": "Member",
+      "shared": {
+        "id": 2,
+        "name": "club",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [29, 26],
+        "fieldTaints": { "isOpen": 0, "joined": 0, "owner": 0 }
+      },
+      "params": [
+        { "id": 3, "name": "guardians", "type": { "list": "Key" }, "taint": 0, "at": [29, 40] },
+        { "id": 4, "name": "needed", "type": "Int", "taint": 0, "at": [29, 62] },
+        { "id": 5, "name": "until", "type": "Int", "taint": 0, "at": [29, 75] },
+        { "id": 6, "name": "tier", "type": { "enum": "Tier" }, "taint": 0, "at": [29, 87] }
+      ],
+      "mods": [{ "name": "payable" }],
+      "checked": [3],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Member" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 2, "type": { "record": "State" }, "taint": 0, "at": [30, 13] },
+              "record": "State",
+              "field": "isOpen",
+              "type": "Bool",
+              "taint": 0,
+              "at": [30, 13]
+            },
+            "message": "the club is closed",
+            "at": [30, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [31, 13] },
+              "right": { "node": "ParamsRef", "field": "fee", "type": "Int", "taint": 0, "at": [31, 25] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [31, 13]
+            },
+            "message": "pay the fee",
+            "at": [31, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Member",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [32, 21] },
+            { "node": "LocalRef", "local": 3, "type": { "list": "Key" }, "taint": 0, "at": [32, 29] },
+            { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [32, 40] },
+            { "node": "MapEmpty", "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [32, 55] },
+            { "node": "LocalRef", "local": 6, "type": { "enum": "Tier" }, "taint": 0, "at": [32, 68] },
+            { "node": "NoneLit", "type": { "option": { "record": "Note" } }, "taint": 0, "at": [32, 80] },
+            { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [32, 86] }
+          ],
+          "type": { "record": "Member" },
+          "taint": 0,
+          "at": [32, 12]
+        },
+        "at": [29, 107]
+      },
+      "at": [29, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "score",
+      "on": "Member",
+      "params": [
+        { "id": 7, "name": "by", "type": "Key", "taint": 0, "at": [36, 29] },
+        { "id": 8, "name": "points", "type": "Int", "taint": 0, "at": [36, 38] }
+      ],
+      "mods": [{ "name": "only", "field": "owner" }, { "name": "before", "field": "until" }],
+      "checked": [7],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Member" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [37, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [37, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [37, 13]
+            },
+            "message": "a score is positive",
+            "at": [37, 5]
+          },
+          {
+            "stmt": "Emit",
+            "event": {
+              "node": "Variant",
+              "enum": "Event",
+              "variant": "Noted",
+              "values": [
+                { "node": "LocalRef", "local": 7, "type": "Key", "taint": 0, "at": [38, 18] },
+                { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [38, 29] }
+              ],
+              "type": { "enum": "Event" },
+              "taint": 0,
+              "at": [38, 10]
+            },
+            "at": [38, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 9, "name": "prior", "type": "Int", "taint": 0, "at": [39, 5] },
+            "value": {
+              "node": "Coalesce",
+              "option": {
+                "node": "MapOp",
+                "op": "get",
+                "map": {
+                  "node": "StateField",
+                  "field": "notes",
+                  "type": { "map": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [39, 19]
+                },
+                "args": [{ "node": "LocalRef", "local": 7, "type": "Key", "taint": 0, "at": [39, 29] }],
+                "type": { "option": "Int" },
+                "taint": 0,
+                "at": [39, 19]
+              },
+              "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [39, 36] },
+              "type": "Int",
+              "taint": 0,
+              "at": [39, 19]
+            },
+            "at": [39, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Member",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [40, 17] },
+              "record": "Member",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [40, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [40, 17] },
+              "record": "Member",
+              "field": "guardians",
+              "type": { "list": "Key" },
+              "taint": 0,
+              "at": [40, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [40, 17] },
+              "record": "Member",
+              "field": "needed",
+              "type": "Int",
+              "taint": 0,
+              "at": [40, 12]
+            },
+            {
+              "node": "MapOp",
+              "op": "set",
+              "map": { "node": "StateField", "field": "notes", "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [40, 31] },
+              "args": [
+                { "node": "LocalRef", "local": 7, "type": "Key", "taint": 0, "at": [40, 41] },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [40, 45] },
+                  "right": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [40, 53] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [40, 45]
+                }
+              ],
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [40, 31]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [40, 17] },
+              "record": "Member",
+              "field": "tier",
+              "type": { "enum": "Tier" },
+              "taint": 0,
+              "at": [40, 12]
+            },
+            {
+              "node": "SomeOf",
+              "value": {
+                "node": "New",
+                "record": "Note",
+                "values": [
+                  { "node": "LocalRef", "local": 7, "type": "Key", "taint": 0, "at": [40, 80] },
+                  { "node": "Lit", "value": "6e6f746564", "type": "Bytes", "taint": 0, "at": [40, 90] }
+                ],
+                "type": { "record": "Note" },
+                "taint": 0,
+                "at": [40, 73]
+              },
+              "type": { "option": { "record": "Note" } },
+              "taint": 0,
+              "at": [40, 68]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [40, 17] },
+              "record": "Member",
+              "field": "until",
+              "type": "Int",
+              "taint": 0,
+              "at": [40, 12]
+            }
+          ],
+          "type": { "record": "Member" },
+          "taint": 0,
+          "at": [40, 12]
+        },
+        "at": [36, 75]
+      },
+      "at": [36, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "promote",
+      "on": "Member",
+      "params": [{ "id": 10, "name": "since", "type": "Int", "taint": 0, "at": [44, 31] }],
+      "mods": [{ "name": "quorum", "keys": "guardians", "threshold": "needed" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "Member" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "Member",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [45, 17] },
+              "record": "Member",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [45, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [45, 17] },
+              "record": "Member",
+              "field": "guardians",
+              "type": { "list": "Key" },
+              "taint": 0,
+              "at": [45, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [45, 17] },
+              "record": "Member",
+              "field": "needed",
+              "type": "Int",
+              "taint": 0,
+              "at": [45, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [45, 17] },
+              "record": "Member",
+              "field": "notes",
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [45, 12]
+            },
+            {
+              "node": "Variant",
+              "enum": "Tier",
+              "variant": "Gold",
+              "values": [{ "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [45, 37] }],
+              "type": { "enum": "Tier" },
+              "taint": 0,
+              "at": [45, 30]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [45, 17] },
+              "record": "Member",
+              "field": "best",
+              "type": { "option": { "record": "Note" } },
+              "taint": 0,
+              "at": [45, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [45, 17] },
+              "record": "Member",
+              "field": "until",
+              "type": "Int",
+              "taint": 0,
+              "at": [45, 12]
+            }
+          ],
+          "type": { "record": "Member" },
+          "taint": 0,
+          "at": [45, 12]
+        },
+        "at": [44, 67]
+      },
+      "at": [44, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "extend",
+      "on": "Member",
+      "params": [{ "id": 11, "name": "by", "type": "Int", "taint": 0, "at": [49, 30] }],
+      "mods": [{ "name": "only", "field": "owner" }, { "name": "after", "field": "until" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Member" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 11, "type": "Int", "taint": 0, "at": [50, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [50, 18] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [50, 13]
+            },
+            "message": "extend by a positive amount",
+            "at": [50, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 13, "name": "bonus", "type": "Int", "taint": 0, "at": [51, 5] },
+            "value": {
+              "node": "Match",
+              "scrutinee": { "node": "StateField", "field": "tier", "type": { "enum": "Tier" }, "taint": 0, "at": [51, 25] },
+              "arms": [
+                {
+                  "ctors": ["Basic"],
+                  "fields": [],
+                  "binds": [],
+                  "body": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [51, 41] },
+                    "at": [51, 41]
+                  },
+                  "at": [51, 32]
+                },
+                {
+                  "ctors": ["Gold"],
+                  "fields": ["since"],
+                  "binds": [{ "id": 12, "name": "since", "type": "Int", "taint": 0, "at": [51, 51] }],
+                  "body": {
+                    "stmts": [],
+                    "result": {
+                      "node": "Cond",
+                      "cond": {
+                        "node": "Compare",
+                        "op": ">",
+                        "left": { "node": "LocalRef", "local": 12, "type": "Int", "taint": 0, "at": [51, 62] },
+                        "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [51, 70] },
+                        "type": "Bool",
+                        "taint": 0,
+                        "at": [51, 62]
+                      },
+                      "then": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [51, 74] },
+                      "otherwise": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [51, 78] },
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [51, 62]
+                    },
+                    "at": [51, 62]
+                  },
+                  "at": [51, 44]
+                }
+              ],
+              "type": "Int",
+              "taint": 0,
+              "at": [51, 19]
+            },
+            "at": [51, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Member",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [52, 17] },
+              "record": "Member",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [52, 17] },
+              "record": "Member",
+              "field": "guardians",
+              "type": { "list": "Key" },
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [52, 17] },
+              "record": "Member",
+              "field": "needed",
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [52, 17] },
+              "record": "Member",
+              "field": "notes",
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [52, 17] },
+              "record": "Member",
+              "field": "tier",
+              "type": { "enum": "Tier" },
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Member" }, "taint": 0, "at": [52, 17] },
+              "record": "Member",
+              "field": "best",
+              "type": { "option": { "record": "Note" } },
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": {
+                "node": "Arith",
+                "op": "+",
+                "left": { "node": "StateField", "field": "until", "type": "Int", "taint": 0, "at": [52, 31] },
+                "right": { "node": "LocalRef", "local": 11, "type": "Int", "taint": 0, "at": [52, 39] },
+                "type": "Int",
+                "taint": 0,
+                "at": [52, 31]
+              },
+              "right": { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [52, 44] },
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 31]
+            }
+          ],
+          "type": { "record": "Member" },
+          "taint": 0,
+          "at": [52, 12]
+        },
+        "at": [49, 62]
+      },
+      "at": [49, 3]
+    },
+    {
+      "kind": "ownedDestroy",
+      "name": "leave",
+      "on": "Member",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Emit",
+            "event": {
+              "node": "Variant",
+              "enum": "Event",
+              "variant": "Left",
+              "values": [
+                { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [57, 22] },
+                {
+                  "node": "MapOp",
+                  "op": "size",
+                  "map": {
+                    "node": "StateField",
+                    "field": "notes",
+                    "type": { "map": ["Key", "Int"] },
+                    "taint": 0,
+                    "at": [57, 36]
+                  },
+                  "args": [],
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [57, 36]
+                }
+              ],
+              "type": { "enum": "Event" },
+              "taint": 0,
+              "at": [57, 10]
+            },
+            "at": [57, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [58, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [58, 16] },
+            "at": [58, 5]
+          }
+        ],
+        "result": null,
+        "at": [56, 43]
+      },
+      "at": [56, 3]
+    },
+    {
+      "kind": "view",
+      "name": "isOpen",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateField", "field": "isOpen", "type": "Bool", "taint": 0, "at": [61, 25] },
+        "at": [61, 25]
+      },
+      "at": [61, 3]
+    }
+  ],
+  "warnings": []
+}

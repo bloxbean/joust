@@ -233,11 +233,34 @@ public final class Interpreter {
      * transaction whose approval names this contract, instance and action, ADR-0009 D3), which {@code authorized} reads.
      */
     public record Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
-                     FundsV funds, List<Bytes> approvers, java.util.Map<String, Object> reads) {
+                     FundsV funds, List<Bytes> approvers, java.util.Map<String, Object> reads, Rec shared, Rec into, Rec arriving) {
         public Tx {
             signers = List.copyOf(signers);
             approvers = List.copyOf(approvers);
             reads = java.util.Map.copyOf(reads);
+        }
+
+        public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
+                  FundsV funds, List<Bytes> approvers, java.util.Map<String, Object> reads) {
+            this(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, null, null, null);
+        }
+
+        /**
+         * M3a (semantics §2.8): the instance's state as the transaction's reference input holds it, which an owned method's
+         * {@code shared} parameter reads (ADR-0003 D1).
+         */
+        public Tx withShared(Rec state) {
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, state, into, arriving);
+        }
+
+        /** M3a: a move's destination instance's state, as its input holds it ({@code into}, ADR-0012 D3). */
+        public Tx withInto(Rec state) {
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, state, arriving);
+        }
+
+        /** M3a: the object arriving through an admits action, as its input holds it before the move (ADR-0012 r4). */
+        public Tx withArriving(Rec object) {
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, object);
         }
 
         public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
@@ -261,17 +284,17 @@ public final class Interpreter {
 
         /** The same transaction, signed by {@code keys}. */
         public Tx signedBy(List<Bytes> keys) {
-            return new Tx(caller, received, balance, validFrom, validTo, keys, funds, approvers, reads);
+            return new Tx(caller, received, balance, validFrom, validTo, keys, funds, approvers, reads, shared, into, arriving);
         }
 
         /** The same transaction, with the native assets the call sees (M2). */
         public Tx withFunds(FundsV f) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, f, approvers, reads);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, f, approvers, reads, shared, into, arriving);
         }
 
         /** The same transaction, approved by these scripts (M2b, ADR-0009 D3). */
         public Tx approvedBy(List<Bytes> scripts) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, scripts, reads);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, scripts, reads, shared, into, arriving);
         }
 
         /**
@@ -279,7 +302,7 @@ public final class Interpreter {
          * params field naming each instance ({@code oracle} for {@code reads params.oracle}).
          */
         public Tx withReads(java.util.Map<String, Object> states) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, states);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, states, shared, into, arriving);
         }
     }
 
@@ -517,9 +540,32 @@ public final class Interpreter {
         return p.record(record).fieldNames();
     }
 
-    /** The method's kind: {@code init}, {@code action}, {@code destroy} or {@code view}. */
+    /**
+     * The method's kind: {@code init}, {@code action}, {@code destroy} or {@code view}; M3a: {@code ownedInit},
+     * {@code ownedAction}, {@code ownedDestroy} (as the IR writes them).
+     */
     public String kind(String method) {
-        return method(method).kind().name().toLowerCase();
+        return IrJson.kindName(method(method).kind());
+    }
+
+    /** M3a: an owned method's type, or null. */
+    public String ownedType(String method) {
+        return method(method).on();
+    }
+
+    /** M3a: whether the method reads the instance's state by reference ({@code shared}). */
+    public boolean takesShared(String method) {
+        return method(method).owned() != null && method(method).owned().shared() != null;
+    }
+
+    /** M3a: whether the method moves its object ({@code into}). */
+    public boolean takesInto(String method) {
+        return method(method).owned() != null && method(method).owned().into() != null;
+    }
+
+    /** M3a: the contract's owned types, in declaration order. */
+    public List<String> ownedTypes() {
+        return p.owned();
     }
 
     /** Whether the method takes the transaction (Ctx). */
@@ -567,7 +613,11 @@ public final class Interpreter {
     private Outcome call(String name, Rec state, List<Object> args, Tx tx, boolean modifiers) {
         Ir.Method m = method(name);
         if (args.size() != m.params().size()) throw new IllegalArgumentException(name + " takes " + m.params().size() + " arguments");
-        if ((m.kind() == Ir.Kind.INIT) != (state == null)) throw new IllegalArgumentException("an init has no input state; others do");
+        if (m.kind().creates() != (state == null)) throw new IllegalArgumentException("an init has no input state; others do");
+        // M3a (§2.8): an owned action's or destroy's input is an object of its type; another type is the caller's error.
+        if (m.on() != null && state != null && !state.type().equals(m.on())) {
+            throw new IllegalArgumentException(name + " runs on a " + m.on() + ", not a " + state.type());
+        }
         // Semantics §2: τ.signers holds the caller (review S6 on #76). A τ whose caller did not sign is the caller's
         // error, like a missing τ: no answer, never an agreement with a validator that requires the caller's signature.
         if (tx != null && !tx.signers().contains(tx.caller())) {
@@ -583,25 +633,35 @@ public final class Interpreter {
 
     /**
      * Semantics §2.7 (M2b): what the validator checks of every state it accepts as an output (ADR-0009 D2, D4), after the
-     * body, so the reference refuses where the validator does, as it does for the modifiers. At a creation, each quorum
-     * that names params is well formed; then, for an init's or action's next state, each quorum that names state fields
+     * body, so the reference refuses where the validator does, as it does for the modifiers. At the instance's init, each
+     * quorum that names params (any method's, an owned one's too) is well formed; then, for an init's or action's next state
+     * (or object), each quorum that names its fields
      * (every pair any method's quorum names, once, in source order) is well formed; then each invariant holds, in
      * declaration order. Well formed: keys strictly ascending (so distinct), each 28 bytes, and 1 <= threshold <= keys.
      */
     private void outputs(Ir.Method m, Outcome o) {
-        if (m.kind() != Ir.Kind.INIT && m.kind() != Ir.Kind.ACTION) return;
+        if (!m.kind().creates() && !m.kind().continues()) return;
         Rec next = (Rec) o.value();
+        // M3a (§2.8): an object's output checks are its type's: the quorums over fields its type's methods name, its type's
+        // invariants. The params are the deployment's (#101 review S1, C1): every params quorum any method names, an owned
+        // one's too, is checked at the instance's init, and at no other creation, as the validator checks them.
+        String on = m.on();
         var pairs = new java.util.LinkedHashSet<String>();
-        for (Ir.Method x : p.methods()) for (Ir.Mod mod : x.mods()) if (mod.name().equals("quorum")) pairs.add(mod.field());
+        for (Ir.Method x : p.methods()) {
+            for (Ir.Mod mod : x.mods()) {
+                if (!mod.name().equals("quorum")) continue;
+                boolean ofParams = mod.field().startsWith("params.");
+                if (ofParams ? m.kind() == Ir.Kind.INIT : java.util.Objects.equals(x.on(), on)) pairs.add(mod.field());
+            }
+        }
         for (String pair : pairs) {
             String[] kt = pair.split(" ");
-            boolean ofParams = kt[0].startsWith("params.");
-            if (ofParams && m.kind() != Ir.Kind.INIT) continue;
             if (!wellFormed(modField(next, kt[0]), modField(next, kt[1]))) {
                 throw new Refused("the quorum " + pair + " is not well formed", "invariant", "quorum " + pair);
             }
         }
         for (Ir.Invariant inv : p.invariants()) {
+            if (!java.util.Objects.equals(inv.on(), on)) continue;
             boolean holds;
             try {
                 holds = bool(block(inv.body(), null, new Frame(next, null)));
@@ -735,7 +795,24 @@ public final class Interpreter {
     private Outcome run(Ir.Method m, Rec state, List<Object> args, Tx tx) {
         var f = new Frame(state, tx);
         Env env = null;
-        for (int i = 0; i < args.size(); i++) env = new Env(m.params().get(i), args.get(i), env);
+        // M3a (§2.8): an owned method's shared state and a move's destination come first, from the transaction; an admits
+        // action's arriving object after its first argument.
+        Ir.Owned ow = m.owned();
+        if (ow != null && ow.shared() != null) {
+            if (tx == null || tx.shared() == null) throw new IllegalArgumentException(m.name() + " reads the instance (shared): its transaction needs it (withShared)");
+            env = new Env(ow.shared(), tx.shared(), env);
+        }
+        if (ow != null && ow.into() != null) {
+            if (tx == null || tx.into() == null) throw new IllegalArgumentException(m.name() + " moves its object (into): its transaction needs the destination (withInto)");
+            env = new Env(ow.into(), tx.into(), env);
+        }
+        for (int i = 0; i < args.size(); i++) {
+            env = new Env(m.params().get(i), args.get(i), env);
+            if (i == 0 && ow != null && ow.arriving() != null) {
+                if (tx == null || tx.arriving() == null) throw new IllegalArgumentException(m.name() + " reads the arriving object: its transaction needs it (withArriving)");
+                env = new Env(ow.arriving(), tx.arriving(), env);
+            }
+        }
         // M2c (ADR-0011 D2): each read state, from the transaction's reference inputs by the params field naming it; a
         // checked input like an argument (§4), after them.
         for (Ir.Read r : m.reads()) {
@@ -749,7 +826,7 @@ public final class Interpreter {
             if (!checked(lookup(env, l), l.type)) throw new Refused(l.name + " is not a well-formed input", "input", l.name);
         }
         // M2c (review r3, C7): an init checks the params it is made under (the deployment's), as the generated code does.
-        if (m.kind() == Ir.Kind.INIT && params != null && !fieldsChecked(params, Ir.PARAMS)) {
+        if (m.kind() == Ir.Kind.INIT && params != null && !fieldsChecked(params, Ir.PARAMS)) {   // the instance's creation
             throw new Refused("the params are not well formed", "input", "params");
         }
         for (Ir.Read r : m.reads()) {
