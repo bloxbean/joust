@@ -176,6 +176,8 @@ public final class ClientGenerator {
         // ---- views
         for (ViewIR v : c.views()) {
             var args = new ArrayList<String>(List.of("s"));
+            // ADR-0009 D1 (#84 review C3): a view that takes the params gets this deployment's.
+            if (v.takesParams()) args.add("this.params");
             for (ParamIR p : v.params()) args.add(p.name());
             w.line("/** {@link " + X + "#" + v.method() + "} on the current state (off-chain, no transaction). */");
             w.open("public " + v.returnType() + " " + v.method() + "(" + String.join(", ", decls(v.params())) + ") {");
@@ -251,7 +253,8 @@ public final class ClientGenerator {
                     + ", " + (t.resultPayouts() ? "r.payouts()" : "org.julclang.core.types.JulcList.empty()") + ")"
                     + events(t) + "; })");
             case PAYOUTS -> w.line(".run((s, ctx) -> Transition.end(" + invoke + "))");
-            case SETTLE -> w.line(".run((s, ctx) -> { var r = " + invoke + "; return Transition.end("
+            // An explicit type argument: a chained withEvents leaves end() no target type to infer it from.
+            case SETTLE -> w.line(".run((s, ctx) -> { var r = " + invoke + "; return Transition.<" + S + ">end("
                     + (t.resultPayouts() ? "r.payouts()" : "org.julclang.core.types.JulcList.empty()") + ")" + events(t) + "; })");
         }
         extraCalls(t);
@@ -406,7 +409,7 @@ public final class ClientGenerator {
                 case STATE -> "Transition.of(" + st(invoke, R) + ")";
                 case RESULT -> null;
                 case PAYOUTS -> "Transition.end(" + invoke + ")";
-                case SETTLE -> "Transition.end(" + (t.resultPayouts() ? invoke + ".payouts()" : "org.julclang.core.types.JulcList.empty()")
+                case SETTLE -> "Transition.<" + R + ">end(" + (t.resultPayouts() ? invoke + ".payouts()" : "org.julclang.core.types.JulcList.empty()")
                         + ")" + (t.resultEvents() ? ".withEvents(" + invoke + ".events())" : "");
             };
             if (body == null) {
@@ -538,7 +541,7 @@ public final class ClientGenerator {
                 case STATE -> "Transition.of(" + st(invoke, R) + ")";
                 case RESULT -> "Transition.of(" + st(invoke + ".state()", R) + ", " + invoke + ".payouts())";
                 case PAYOUTS -> "Transition.end(" + invoke + ")";
-                case SETTLE -> "Transition.end(" + (t.resultPayouts() ? invoke + ".payouts()" : "org.julclang.core.types.JulcList.empty()")
+                case SETTLE -> "Transition.<" + R + ">end(" + (t.resultPayouts() ? invoke + ".payouts()" : "org.julclang.core.types.JulcList.empty()")
                         + ")" + (t.resultEvents() ? ".withEvents(" + invoke + ".events())" : "");
             };
             if (c.assetAware()) {

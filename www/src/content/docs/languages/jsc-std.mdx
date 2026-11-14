@@ -123,6 +123,21 @@ structural equality of `==`.
 | `nth` | `nth(List<T>, Int): Option<T>` | index >= 0, else a failure; None past the end | no | none (generated) |
 | `indexOf` | `indexOf(List<T>, T): Option<Int>` | any list and value (structural equality, D6); the first index, or None | yes | none (generated) |
 
+### `std/value`
+
+| Function | Signature | Domain | A time value as an argument | Target (policy) |
+|---|---|---|---|---|
+| `isEmpty` | `isEmpty(Value): Bool` | any value; true when it holds nothing | yes | `ValueAdapter.isEmpty` (direct) |
+| `withoutLovelace` | `withoutLovelace(Value): Value` | any value; its native assets | yes | `ValueAdapter.withoutLovelace` (direct) |
+| `scale` | `scale(Int, Value): Value` | every product within the 128-bit range, else a failure (the ledger's scaleValue); 0 gives the empty value | no | `ValueAdapter.scale` (adapter) |
+
+### `std/address`
+
+| Function | Signature | Domain | A time value as an argument | Target (policy) |
+|---|---|---|---|---|
+| `paymentKey` | `paymentKey(Address): Option<Key>` | any address; the key it is paid to, or None for a script's | no | `AddressAdapter.paymentKey` (direct) |
+| `paymentScript` | `paymentScript(Address): Option<Hash>` | any address; the script it is paid to, or None for a key's | no | `AddressAdapter.paymentScript` (direct) |
+
 ### `std/time`
 
 | Function | Signature | Domain | A time value as an argument | Target (policy) |

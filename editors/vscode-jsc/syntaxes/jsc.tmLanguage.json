@@ -60,8 +60,15 @@
           }
         },
         {
-          "match": "\\b(import)\\b",
-          "name": "keyword.control.import.jsc"
+          "match": "\\b(import)\\b(?:\\s+(contract)\\b)?",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.jsc"
+            },
+            "2": {
+              "name": "keyword.control.import.jsc"
+            }
+          }
         },
         {
           "match": "\\b(from)\\b",
@@ -72,7 +79,7 @@
     "declarations": {
       "patterns": [
         {
-          "match": "\\b(type|enum|contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(type|enum|contract|event)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
               "name": "storage.type.jsc"
@@ -83,7 +90,7 @@
           }
         },
         {
-          "match": "\\b(fn|action|destroy|view)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(fn|action|destroy|view|invariant)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
               "name": "storage.type.function.jsc"
@@ -98,7 +105,7 @@
           "name": "storage.type.function.jsc"
         },
         {
-          "match": "\\b(state)\\b(?=\\s*\\{|\\s+[A-Za-z_][A-Za-z0-9_]*\\s*:)",
+          "match": "\\b(state|params)\\b(?=\\s*\\{|\\s+[A-Za-z_][A-Za-z0-9_]*\\s*:)",
           "name": "storage.type.state.jsc"
         }
       ]
@@ -202,7 +209,7 @@
         },
         {
           "name": "keyword.other.effect.jsc",
-          "match": "\\b(require|pay|delete)\\b"
+          "match": "\\b(require|pay|send|mint|burn|accept|emit|deposit|delete)\\b"
         },
         {
           "name": "keyword.other.to.jsc",
@@ -210,7 +217,7 @@
         },
         {
           "name": "storage.modifier.jsc",
-          "match": "\\b(payable|open|only|batched)\\b"
+          "match": "\\b(payable|open|only|batched|quorum|authorized|receives|reads)\\b"
         },
         {
           "name": "storage.modifier.jsc",
@@ -245,7 +252,7 @@
           }
         },
         {
-          "match": "\\b(min|max|abs|utf8|asKey|asHash|range|after|before|has|isEmpty)\\s*(?=\\()",
+          "match": "\\b(min|max|abs|utf8|asKey|asHash|range|after|before|has|isEmpty|keyCred|scriptCred|wallet|script)\\s*(?=\\()",
           "captures": {
             "1": {
               "name": "support.function.builtin.jsc"
@@ -253,7 +260,7 @@
           }
         },
         {
-          "match": "\\b(sha2_256|sha3_256|blake2b_256|blake2b_224|verifyEd25519|length|concat|slice|take|drop|byteAt|toInt|toHex|div|mod|pow|expMod|sign|andBytes|orBytes|xorBytes|complement|readBit|shift|rotate|countSetBits|findFirstSetBit|last|nth|indexOf|elapsedSince|elapsedSinceAtMost|windowStart|windowEnd)\\s*(?=\\()",
+          "match": "\\b(sha2_256|sha3_256|blake2b_256|blake2b_224|verifyEd25519|length|concat|slice|take|drop|byteAt|toInt|toHex|div|mod|pow|expMod|sign|andBytes|orBytes|xorBytes|complement|readBit|shift|rotate|countSetBits|findFirstSetBit|last|nth|indexOf|elapsedSince|elapsedSinceAtMost|windowStart|windowEnd|withoutLovelace|scale|paymentKey|paymentScript)\\s*(?=\\()",
           "captures": {
             "1": {
               "name": "support.function.std.jsc"
@@ -290,7 +297,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.jsc",
-          "match": "\\b(Int|Bool|Bytes|Key|Hash|List|Option|Map|BigMap|Value|Address)\\b"
+          "match": "\\b(Int|Bool|Bytes|Key|Hash|List|Option|Map|BigMap|Value|Address|Credential|Instance)\\b"
         },
         {
           "name": "entity.name.type.jsc",

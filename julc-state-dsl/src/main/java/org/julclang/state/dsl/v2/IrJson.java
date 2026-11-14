@@ -29,7 +29,7 @@ final class IrJson {
     private IrJson() {}
 
     /** The version of this format. A change to the IR's shape or meaning gets a new version. */
-    static final int VERSION = 1;
+    static final int VERSION = 2;
 
     private static final HexFormat HEX = HexFormat.of();
 
@@ -72,6 +72,27 @@ final class IrJson {
         }
         out.put("enums", enums);
         out.put("state", w.record(p.state()));
+        // M2b (additive): the params record and the invariants, present only when the contract declares them.
+        if (p.params() != null) out.put("params", w.record(p.params()));
+        // M2c (additive): the contracts this one imports, present only when it imports any.
+        if (!p.contracts().isEmpty()) {
+            var cs = new ArrayList<Object>();
+            for (Ir.Foreign f : new java.util.TreeMap<>(p.contracts()).values()) {
+                var rs = new ArrayList<Object>();
+                for (Ir.RecordType r : f.records().values()) rs.add(w.record(r));
+                var es = new ArrayList<Object>();
+                for (Ir.EnumType e : f.enums().values()) {
+                    var vs = new ArrayList<Object>();
+                    for (Ir.RecordType v : e.variants().values()) vs.add(w.record(v));
+                    es.add(obj("name", e.name(), "variants", vs, "at", at(e.pos())));
+                }
+                var rv = new ArrayList<Object>();
+                for (Ty t : f.receives()) rv.add(t == null ? null : type(t));
+                cs.add(obj("name", f.name(), "package", f.pkg(), "state", w.record(f.state()), "records", rs, "enums", es,
+                        "timeFields", List.copyOf(new TreeSet<>(f.timeFields())), "receives", rv, "bigMaps", f.bigMaps()));
+            }
+            out.put("contracts", cs);
+        }
         out.put("timeFields", List.copyOf(new TreeSet<>(p.timeFields())));
         out.put("recursiveFns", List.copyOf(new TreeSet<>(p.recursiveFns())));
         var fns = new ArrayList<Object>();
@@ -82,13 +103,28 @@ final class IrJson {
         var methods = new ArrayList<Object>();
         for (Ir.Method m : p.methods()) {
             var mods = new ArrayList<Object>();
-            for (Ir.Mod mod : m.mods()) mods.add(mod.field() == null ? obj("name", mod.name()) : obj("name", mod.name(), "field", mod.field()));
+            for (Ir.Mod mod : m.mods()) {
+                if (mod.name().equals("quorum")) {
+                    String[] kt = mod.field().split(" ");
+                    mods.add(obj("name", mod.name(), "keys", kt[0], "threshold", kt[1]));
+                } else if (mod.type() != null) {
+                    mods.add(obj("name", mod.name(), "type", type(mod.type())));   // M2c: receives T
+                } else {
+                    mods.add(mod.field() == null ? obj("name", mod.name()) : obj("name", mod.name(), "field", mod.field()));
+                }
+            }
             var m2 = new LinkedHashMap<String, Object>();
             m2.put("kind", m.kind().name().toLowerCase());
             m2.put("name", m.name());
             m2.put("params", w.decls(m.params()));
             m2.put("mods", mods);
             m2.put("checked", m.checked().stream().<Object>map(l -> (long) w.ref(l)).toList());
+            // M2c (additive): the reads parameters, present only when the method reads another contract.
+            if (!m.reads().isEmpty()) {
+                var rs = new ArrayList<Object>();
+                for (Ir.Read r : m.reads()) rs.add(obj("local", w.decl(r.local()), "field", r.field()));
+                m2.put("reads", rs);
+            }
             m2.put("usesCtx", m.usesCtx());
             m2.put("pays", m.pays());
             m2.put("result", m.resultType() == null ? null : type(m.resultType()));
@@ -97,6 +133,11 @@ final class IrJson {
             methods.add(m2);
         }
         out.put("methods", methods);
+        if (!p.invariants().isEmpty()) {
+            var invariants = new ArrayList<Object>();
+            for (Ir.Invariant inv : p.invariants()) invariants.add(obj("name", inv.name(), "body", w.block(inv.body()), "at", at(inv.pos())));
+            out.put("invariants", invariants);
+        }
         var warnings = new ArrayList<Object>();
         for (Ir.Warning x : p.warnings()) warnings.add(obj("line", (long) x.line(), "col", (long) x.col(), "code", x.code(), "message", x.message()));
         out.put("warnings", warnings);
@@ -125,6 +166,9 @@ final class IrJson {
             case Ty.EnumT e -> obj("enum", e.name());
             case Ty.MapT m -> obj("map", List.of(type(m.key()), type(m.val())));
             case Ty.BigMapT b -> obj("bigmap", List.of(type(b.key()), type(b.val())));
+            case Ty.Ledger l -> l.name();
+            case Ty.Instance i -> obj("instance", i.contract());
+            case Ty.DepositT d -> obj("deposit", d.memo() == null ? null : type(d.memo()));
         };
     }
 
@@ -176,6 +220,12 @@ final class IrJson {
                 }
                 case Ir.Require r -> obj("stmt", "Require", "cond", expr(r.cond()), "message", r.message(), "at", at(r.pos()));
                 case Ir.Pay y -> obj("stmt", "Pay", "to", expr(y.to()), "amount", expr(y.amount()), "at", at(y.pos()));
+                case Ir.Send y -> y.datum() == null ? obj("stmt", "Send", "to", expr(y.to()), "value", expr(y.value()), "at", at(y.pos()))
+                        : obj("stmt", "Send", "to", expr(y.to()), "value", expr(y.value()), "datum", expr(y.datum()), "at", at(y.pos()));
+                case Ir.Deposit y -> obj("stmt", "Deposit", "target", expr(y.target()), "value", expr(y.value()), "memo", expr(y.memo()), "at", at(y.pos()));
+                case Ir.Mint y -> obj("stmt", "Mint", "burn", y.burn(), "name", expr(y.name()), "qty", expr(y.qty()), "at", at(y.pos()));
+                case Ir.Accept y -> obj("stmt", "Accept", "value", expr(y.value()), "at", at(y.pos()));
+                case Ir.Emit y -> obj("stmt", "Emit", "event", expr(y.event()), "at", at(y.pos()));
                 case Ir.If i -> {
                     Object branches = branches(i.branches());
                     yield obj("stmt", "If", "branches", branches, "otherwise", i.otherwise() == null ? null : block(i.otherwise()),
@@ -284,6 +334,10 @@ final class IrJson {
                 case Ir.BigOp o -> obj("node", "BigOp", "op", o.op(), "map", expr(o.map()), "args", exprs(o.args()));
                 case Ir.Range r -> obj("node", "Range", "from", expr(r.from()), "to", expr(r.to()));
                 case Ir.ListArg l -> obj("node", "ListArg", "op", l.op(), "list", expr(l.list()), "arg", expr(l.arg()));
+                case Ir.FundsRef f -> obj("node", "FundsRef", "field", f.field());
+                case Ir.LedgerOp o -> obj("node", "LedgerOp", "op", o.op(), "args", exprs(o.args()));
+                case Ir.ParamsRef r -> obj("node", "ParamsRef", "field", r.field());
+                case Ir.DepositField d -> obj("node", "DepositField", "target", expr(d.target()), "field", d.field());
             };
             node.put("type", type(e.type()));
             node.put("taint", (long) e.taint());
@@ -295,7 +349,7 @@ final class IrJson {
     // ------------------------------------------------------------------ printing
 
     /** Pretty JSON: an object or array stays on one line when that line is short, else one member per line. */
-    private static void print(Object v, StringBuilder out, String ind) {
+    static void print(Object v, StringBuilder out, String ind) {
         String flat = flat(v);
         if (flat.length() + ind.length() <= 120 || !(v instanceof Map<?, ?> || v instanceof List<?>)) {
             out.append(flat);
@@ -405,9 +459,86 @@ final class IrJson {
             return new Pos(i(l(o).get(0)), i(l(o).get(1)));
         }
 
+        /**
+         * #84 review C2: like the JavaScript reader, a field this reader does not know is refused, so a later addition to
+         * the format is refused rather than dropped (version 1's Java reader ignored unknown top-level fields).
+         */
+        static void known(Map<String, Object> o, Set<String> allowed, String where) {
+            for (String k : o.keySet()) if (!allowed.contains(k)) throw new IllegalArgumentException("unknown field \"" + k + "\" in " + where);
+        }
+
+
+        /** Each statement's fields (beside "stmt" and "at"), as {@link Writer#stmt} writes them (#84 review C8, F10). */
+        static final Map<String, Set<String>> STMT_FIELDS = Map.ofEntries(Map.entry("Let", Set.of("local", "value")),
+                Map.entry("Require", Set.of("cond", "message")), Map.entry("Pay", Set.of("to", "amount")), Map.entry("Send", Set.of("to", "value", "datum")),
+                Map.entry("Deposit", Set.of("target", "value", "memo")),
+                Map.entry("Mint", Set.of("burn", "name", "qty")), Map.entry("Accept", Set.of("value")), Map.entry("Emit", Set.of("event")),
+                Map.entry("If", Set.of("branches", "otherwise", "pays")), Map.entry("For", Set.of("var", "list", "body", "pays")),
+                Map.entry("Match", Set.of("scrutinee", "arms", "pays")));
+
+        /** Each node's fields (beside "node", "type", "taint" and "at"), as {@link Writer#expr} writes them. */
+        static final Map<String, Set<String>> NODE_FIELDS = Map.ofEntries(Map.entry("Lit", Set.of("value")), Map.entry("LocalRef", Set.of("local")),
+                Map.entry("StateRef", Set.of()), Map.entry("StateField", Set.of("field")), Map.entry("CtxRef", Set.of("name")),
+                Map.entry("NoneLit", Set.of()), Map.entry("SomeOf", Set.of("value")), Map.entry("GetField", Set.of("target", "record", "field")),
+                Map.entry("New", Set.of("record", "values")), Map.entry("CallFn", Set.of("fn", "args")), Map.entry("CallStd", Set.of("module", "name", "args")),
+                Map.entry("Prelude", Set.of("op", "args")), Map.entry("TimePred", Set.of("after", "threshold")), Map.entry("ListLit", Set.of("items", "rest")),
+                Map.entry("Neg", Set.of("operand")), Map.entry("Not", Set.of("operand")), Map.entry("Arith", Set.of("op", "left", "right")),
+                Map.entry("Compare", Set.of("op", "left", "right")), Map.entry("Equals", Set.of("negate", "left", "right", "operand")),
+                Map.entry("Logic", Set.of("op", "left", "right")), Map.entry("Cond", Set.of("cond", "then", "otherwise")),
+                Map.entry("Coalesce", Set.of("option", "default")), Map.entry("BlockValue", Set.of("block")), Map.entry("IfValue", Set.of("branches", "otherwise")),
+                Map.entry("ListProp", Set.of("op", "list")), Map.entry("Concat", Set.of("left", "right")), Map.entry("Contains", Set.of("list", "value", "elem")),
+                Map.entry("Hof", Set.of("kind", "list", "x", "body")), Map.entry("Fold", Set.of("list", "init", "acc", "x", "body")),
+                Map.entry("Variant", Set.of("enum", "variant", "values")), Map.entry("Match", Set.of("scrutinee", "arms")), Map.entry("MapEmpty", Set.of()),
+                Map.entry("MapOp", Set.of("op", "map", "args")), Map.entry("MapHof", Set.of("kind", "map", "k", "v", "body")),
+                Map.entry("MapFold", Set.of("map", "init", "acc", "k", "v", "body")), Map.entry("BigEmpty", Set.of()), Map.entry("BigOp", Set.of("op", "map", "args")),
+                Map.entry("Range", Set.of("from", "to")), Map.entry("ListArg", Set.of("op", "list", "arg")), Map.entry("FundsRef", Set.of("field")),
+                Map.entry("LedgerOp", Set.of("op", "args")), Map.entry("ParamsRef", Set.of("field")),
+                Map.entry("DepositField", Set.of("target", "field")));
+
+        static Set<String> with(Set<String> a, String... more) {
+            var out = new java.util.HashSet<>(a);
+            out.addAll(List.of(more));
+            return out;
+        }
+
         Ir.Program program(Map<String, Object> r) {
+            known(r, Set.of("ir", "language", "sourceSha256", "package", "contract", "source", "options", "records", "enums", "state", "params",
+                    "timeFields", "recursiveFns", "fns", "methods", "invariants", "warnings", "contracts"), "the program");
+            // M2c: the imported contracts first (their types are named by the program's).
+            var contracts = new LinkedHashMap<String, Ir.Foreign>();
+            if (r.get("contracts") != null) {
+                for (Object o : l(r.get("contracts"))) {
+                    var c = m(o);
+                    known(c, Set.of("name", "package", "state", "records", "enums", "timeFields", "receives", "bigMaps"), "an imported contract");
+                    var rs = new LinkedHashMap<String, Ir.RecordType>();
+                    for (Object x : l(c.get("records"))) {
+                        Ir.RecordType t = record(m(x));
+                        rs.put(t.name(), t);
+                    }
+                    var es = new LinkedHashMap<String, Ir.EnumType>();
+                    for (Object x : l(c.get("enums"))) {
+                        known(m(x), Set.of("name", "variants", "at"), "an enum");
+                        var vs = new LinkedHashMap<String, Ir.RecordType>();
+                        for (Object y : l(m(x).get("variants"))) {
+                            Ir.RecordType t = record(m(y));
+                            vs.put(t.name(), t);
+                        }
+                        es.put(s(m(x).get("name")), new Ir.EnumType(s(m(x).get("name")), vs, pos(m(x).get("at"))));
+                    }
+                    var tf = new LinkedHashSet<String>();
+                    for (Object x : l(c.get("timeFields"))) tf.add(s(x));
+                    var rv = new ArrayList<Ty>();
+                    for (Object x : l(c.get("receives"))) rv.add(x == null ? null : type(x));
+                    if (!(c.get("bigMaps") instanceof Boolean big)) throw new IllegalArgumentException("an imported contract's bigMaps is a boolean");
+                    contracts.put(s(c.get("name")), new Ir.Foreign(s(c.get("name")), s(c.get("package")), record(m(c.get("state"))), rs, es,
+                            Set.copyOf(tf), java.util.Collections.unmodifiableList(rv), big));
+                }
+            }
             var options = new ArrayList<Ir.ContractOption>();
-            for (Object o : l(r.get("options"))) options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
+            for (Object o : l(r.get("options"))) {
+                known(m(o), Set.of("name", "value"), "an option");
+                options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
+            }
             var records = new LinkedHashMap<String, Ir.RecordType>();
             for (Object o : l(r.get("records"))) {
                 Ir.RecordType t = record(m(o));
@@ -415,6 +546,7 @@ final class IrJson {
             }
             var enums = new LinkedHashMap<String, Ir.EnumType>();
             for (Object o : l(r.get("enums"))) {
+                known(m(o), Set.of("name", "variants", "at"), "an enum");
                 var vs = new LinkedHashMap<String, Ir.RecordType>();
                 for (Object x : l(m(o).get("variants"))) {
                     Ir.RecordType t = record(m(x));
@@ -426,25 +558,46 @@ final class IrJson {
             var fns = new ArrayList<Ir.Fn>();
             for (Object o : l(r.get("fns"))) {
                 var f = m(o);
+                known(f, Set.of("name", "params", "result", "body", "at"), "a fn");
                 noPayInExpressions(f.get("body"), true, "fn " + f.get("name"));   // a fn never pays (JSC0413)
                 fns.add(new Ir.Fn(s(f.get("name")), decls(f.get("params")), type(f.get("result")), block(f.get("body")), pos(f.get("at"))));
             }
+            // M2b: the params before the methods, whose modifiers may name params fields.
+            Ir.RecordType params0 = r.get("params") == null ? null : record(m(r.get("params")));
             var methods = new ArrayList<Ir.Method>();
             for (Object o : l(r.get("methods"))) {
                 var x = m(o);
+                known(x, Set.of("kind", "name", "params", "mods", "checked", "usesCtx", "pays", "result", "body", "at", "reads"), "a method");
                 var params = decls(x.get("params"));
+                var reads = new ArrayList<Ir.Read>();
+                if (x.get("reads") != null) {
+                    for (Object ro : l(x.get("reads"))) {
+                        known(m(ro), Set.of("local", "field"), "a read");
+                        reads.add(new Ir.Read(decl(m(ro).get("local")), s(m(ro).get("field"))));
+                    }
+                }
                 var mods = new ArrayList<Ir.Mod>();
                 if (!(x.get("mods") instanceof List<?> modList)) throw new IllegalArgumentException("method " + x.get("name") + ": mods is not a list");
                 for (Object mo : modList) {
                     // #80 review S6: a malformed modifier is a refusal, as in the JavaScript reader, never a crash.
                     if (!(mo instanceof Map<?, ?> mm)) throw new IllegalArgumentException("method " + x.get("name") + ": a modifier is not an object");
-                    for (Object k : mm.keySet()) {
-                        if (!"name".equals(k) && !"field".equals(k)) throw new IllegalArgumentException("a modifier has no field \"" + k + "\"");
-                    }
-                    if (!(mm.get("name") instanceof String name)) throw new IllegalArgumentException("method " + x.get("name") + ": a modifier's name is not a string: " + mm.get("name"));
-                    Object field = mm.get("field");
+                    var md = m(mo);
+                    known(md, Set.of("name", "field", "keys", "threshold", "type"), "a modifier");
+                    if (!(md.get("name") instanceof String name)) throw new IllegalArgumentException("method " + x.get("name") + ": a modifier's name is not a string: " + md.get("name"));
+                    Object field = md.get("field");
                     if (field != null && !(field instanceof String)) throw new IllegalArgumentException("a modifier's field is a name: " + field);
-                    mods.add(new Ir.Mod(name, (String) field));
+                    // M2b: a quorum names its keys and threshold (and no field); M2c: receives T names a memo type (and
+                    // no field). Every other modifier has neither (integration of #80 with #84/#90).
+                    boolean quorum = name.equals("quorum");
+                    if (quorum != (md.get("keys") != null) || quorum != (md.get("threshold") != null) || quorum && field != null) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": " + (quorum ? "a quorum names its keys and threshold, and no field"
+                                : "only a quorum names keys and a threshold, not " + name));
+                    }
+                    if (md.get("type") != null && !name.equals("receives") || name.equals("receives") && field != null) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": only receives names a type, and it names no field");
+                    }
+                    String arg = quorum ? s(md.get("keys")) + " " + s(md.get("threshold")) : (String) field;
+                    mods.add(new Ir.Mod(name, arg, md.get("type") == null ? null : type(md.get("type"))));
                 }
                 // #80 review S6: the kinds exactly as written (lower case), as the JavaScript reader reads them.
                 Ir.Kind kind = switch (String.valueOf(x.get("kind"))) {
@@ -454,28 +607,33 @@ final class IrJson {
                     case "view" -> Ir.Kind.VIEW;
                     default -> throw new IllegalArgumentException("method " + x.get("name") + ": unknown kind " + x.get("kind"));
                 };
-                modifiers(kind, s(x.get("name")), mods, state);
+                modifiers(kind, s(x.get("name")), mods, state, params0);
                 var checked = new ArrayList<Ir.Local>();
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
                 // #80 review C4, S7: a pay only in the method's statement blocks, never under an expression (JSC0413).
                 noPayInExpressions(x.get("body"), false, "method " + x.get("name"));
                 Ir.Block body = block(x.get("body"));
                 // #80 review S3: pays is recomputed from the body (a Pay statement in it, at any depth of if, for and match),
-                // and a method that pays says who may call it ('only f' or 'open'), as the checker requires (JSC0408).
+                // and a method that moves value says who may call it ('only f', 'open', or M2b's quorum or authorized), as
+                // the checker requires (JSC0408). M2a/M2c: send, mint, burn and deposit move value as a pay does.
                 boolean pays = paysIn(body);
                 if (!Boolean.valueOf(pays).equals(x.get("pays"))) {
                     throw new IllegalArgumentException("method " + x.get("name") + ": pays is " + x.get("pays") + ", but the body " + (pays ? "pays" : "does not pay"));
                 }
-                if (pays && mods.stream().noneMatch(md -> md.name().equals("open") || md.name().equals("only") && md.field() != null)) {
-                    throw new IllegalArgumentException("method " + x.get("name") + ": it pays, so it says who may call it ('only f' or 'open')");
+                boolean moves = pays || movesIn(body);
+                if (moves && mods.stream().noneMatch(md -> md.name().equals("open") || md.name().equals("quorum") || md.name().equals("authorized")
+                        || md.name().equals("only") && md.field() != null)) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": it pays, sends, mints, burns or deposits, so it says who may call it"
+                            + " ('only f', 'open', quorum or authorized)");
                 }
                 // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409).
-                if (kind == Ir.Kind.DESTROY && !pays) {
-                    throw new IllegalArgumentException("method " + x.get("name") + ": a destroy pays out what the instance holds: it has no pay");
+                if (kind == Ir.Kind.DESTROY && !moves) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": a destroy pays out what the instance holds: it has no pay, send,"
+                            + " mint, burn or deposit");
                 }
                 methods.add(new Ir.Method(kind, s(x.get("name")), params, mods, checked,
                         (Boolean) x.get("usesCtx"), pays, body,
-                        x.get("result") == null ? null : type(x.get("result")), pos(x.get("at"))));
+                        x.get("result") == null ? null : type(x.get("result")), pos(x.get("at")), List.copyOf(reads)));
             }
             var timeFields = new LinkedHashSet<String>();
             for (Object o : l(r.get("timeFields"))) timeFields.add(s(o));
@@ -484,10 +642,19 @@ final class IrJson {
             var warnings = new ArrayList<Ir.Warning>();
             for (Object o : l(r.get("warnings"))) {
                 var w = m(o);
+                known(w, Set.of("line", "col", "code", "message"), "a warning");
                 warnings.add(new Ir.Warning(i(w.get("line")), i(w.get("col")), s(w.get("code")), s(w.get("message"))));
             }
+            var invariants = new ArrayList<Ir.Invariant>();
+            if (r.get("invariants") != null) {
+                for (Object o : l(r.get("invariants"))) {
+                    var x = m(o);
+                    known(x, Set.of("name", "body", "at"), "an invariant");
+                    invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at"))));
+                }
+            }
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
-                    Set.copyOf(timeFields), recursive, warnings);
+                    Set.copyOf(timeFields), recursive, warnings, params0, invariants, contracts);
         }
 
         /**
@@ -497,7 +664,7 @@ final class IrJson {
          * action, with no {@code only}, {@code after} or {@code before} beside it; none twice; an init takes only
          * {@code payable}, a view none, and a destroy is never payable.
          */
-        static void modifiers(Ir.Kind kind, String method, List<Ir.Mod> mods, Ir.RecordType state) {
+        static void modifiers(Ir.Kind kind, String method, List<Ir.Mod> mods, Ir.RecordType state, Ir.RecordType params) {
             String where = "method " + method + ": ";
             var seen = new HashSet<String>();
             for (Ir.Mod mod : mods) {
@@ -518,6 +685,23 @@ final class IrJson {
                         if (t == null) throw new IllegalArgumentException(where + w + " " + f + ": the state has no field " + f);
                         if (!t.equals(want)) throw new IllegalArgumentException(where + w + " " + f + ": " + f + " is of type " + Ty.show(t) + ", not " + Ty.show(want));
                     }
+                    case "quorum" -> {
+                        // M2b (ADR-0009 D2, JSC0439): keys a List<Key>, the threshold an Int, both state fields or both
+                        // params fields.
+                        String[] kt = f.split(" ");
+                        if (kt.length != 2) throw new IllegalArgumentException(where + "quorum names keys and a threshold, not " + f);
+                        if (kt[0].startsWith("params.") != kt[1].startsWith("params.")) {
+                            throw new IllegalArgumentException(where + "quorum " + f + ": the keys and the threshold are both state fields or both params fields");
+                        }
+                        modField(where, "quorum", kt[0], new Ty.ListT(Ty.KEY), state, params);
+                        modField(where, "quorum", kt[1], Ty.INT, state, params);
+                    }
+                    case "authorized" -> modField(where, "authorized", f, Ty.CREDENTIAL, state, params);   // M2b (ADR-0009 D3)
+                    case "receives" -> {
+                        // M2c (ADR-0011 D3, JSC0447): an action that continues, never batched.
+                        if (kind != Ir.Kind.ACTION) throw new IllegalArgumentException(where + "only an action receives deposits, not a " + kind.name().toLowerCase());
+                        if (f != null) throw new IllegalArgumentException(where + "receives names no field, not " + f);
+                    }
                     default -> {   // batched
                         if (f != null && !f.equals("only")) throw new IllegalArgumentException(where + "batched is plain or batched only, not " + f);
                         if (kind != Ir.Kind.ACTION) throw new IllegalArgumentException(where + "only an action can be batched, not a " + kind.name().toLowerCase());
@@ -529,10 +713,26 @@ final class IrJson {
                 }
             }
             if (seen.contains("batched")) {
-                for (String w : List.of("only", "after", "before")) {
+                // JSC0417 (and M2b's quorum and authorized), JSC0447 (receives).
+                for (String w : List.of("only", "after", "before", "quorum", "authorized", "receives")) {
                     if (seen.contains(w)) throw new IllegalArgumentException(where + "a batched action cannot use " + w);
                 }
             }
+        }
+
+        /** A quorum's or authorized's field: a state field, or {@code params.f}, of type {@code want} (M2b, JSC0439). */
+        static void modField(String where, String w, String f, Ty want, Ir.RecordType state, Ir.RecordType params) {
+            if (f == null) throw new IllegalArgumentException(where + w + " names a field, not null");
+            Ty t;
+            if (f.startsWith("params.")) {
+                if (params == null) throw new IllegalArgumentException(where + w + " " + f + ": the contract has no params");
+                t = params.fields().get(f.substring("params.".length()));
+                if (t == null) throw new IllegalArgumentException(where + w + " " + f + ": the params have no field " + f.substring("params.".length()));
+            } else {
+                t = state.fields().get(f);
+                if (t == null) throw new IllegalArgumentException(where + w + " " + f + ": the state has no field " + f);
+            }
+            if (!t.equals(want)) throw new IllegalArgumentException(where + w + " " + f + ": " + f + " is of type " + Ty.show(t) + ", not " + Ty.show(want));
         }
 
         /**
@@ -575,11 +775,36 @@ final class IrJson {
             return false;
         }
 
-        static final Set<String> MODIFIERS = Set.of("payable", "open", "only", "after", "before", "batched");
+        /**
+         * Whether a block sends, mints, burns or deposits (M2a, M2c): such a statement in it, or in an if's, a for's or a
+         * match's block. With {@link #paysIn}, what the checker calls moving value (JSC0408, JSC0409).
+         */
+        static boolean movesIn(Ir.Block b) {
+            for (Ir.Stmt st : b.stmts()) {
+                boolean p = switch (st) {
+                    case Ir.Pay x -> true;
+                    case Ir.Send x -> true;
+                    case Ir.Mint x -> true;
+                    case Ir.Deposit x -> true;
+                    case Ir.If x -> x.branches().stream().anyMatch(br -> movesIn(br.then())) || x.otherwise() != null && movesIn(x.otherwise());
+                    case Ir.For x -> movesIn(x.body());
+                    case Ir.MatchStmt x -> x.arms().stream().anyMatch(a -> movesIn(a.body()));
+                    default -> false;
+                };
+                if (p) return true;
+            }
+            return false;
+        }
+
+        static final Set<String> MODIFIERS = Set.of("payable", "open", "only", "after", "before", "batched", "quorum", "authorized", "receives");
 
         Ir.RecordType record(Map<String, Object> r) {
+            known(r, Set.of("name", "fields", "at"), "a record");
             var fields = new LinkedHashMap<String, Ty>();
-            for (Object o : l(r.get("fields"))) fields.put(s(m(o).get("name")), type(m(o).get("type")));
+            for (Object o : l(r.get("fields"))) {
+                known(m(o), Set.of("name", "type"), "a record's field");
+                fields.put(s(m(o).get("name")), type(m(o).get("type")));
+            }
             return new Ir.RecordType(s(r.get("name")), fields, pos(r.get("at")));
         }
 
@@ -591,6 +816,9 @@ final class IrJson {
                     case "Bytes" -> Ty.BYTES;
                     case "Key" -> Ty.KEY;
                     case "Hash" -> Ty.HASH;
+                    case "Value" -> Ty.VALUE;
+                    case "Address" -> Ty.ADDRESS;
+                    case "Credential" -> Ty.CREDENTIAL;
                     default -> throw new IllegalArgumentException("unknown type " + p);
                 };
             }
@@ -604,12 +832,15 @@ final class IrJson {
                 case "enum" -> new Ty.EnumT(s(e.getValue()));
                 case "map" -> new Ty.MapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
                 case "bigmap" -> new Ty.BigMapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
+                case "instance" -> new Ty.Instance(s(e.getValue()));
+                case "deposit" -> new Ty.DepositT(e.getValue() == null ? null : type(e.getValue()));
                 default -> throw new IllegalArgumentException("unknown type " + e.getKey());
             };
         }
 
         Ir.Local decl(Object o) {
             var d = m(o);
+            known(d, Set.of("id", "name", "type", "taint", "at", "fieldTaints"), "a local");
             Map<String, Integer> ft = null;
             if (d.containsKey("fieldTaints")) {
                 ft = new HashMap<>();
@@ -634,15 +865,20 @@ final class IrJson {
 
         Ir.Block block(Object o) {
             var b = m(o);
+            known(b, Set.of("stmts", "result", "at"), "a block");
             var stmts = new ArrayList<Ir.Stmt>();
             for (Object x : l(b.get("stmts"))) stmts.add(stmt(m(x)));
             return new Ir.Block(stmts, b.get("result") == null ? null : expr(b.get("result")), pos(b.get("at")));
         }
 
         Ir.Stmt stmt(Map<String, Object> x) {
+            // #80 review r3 note: a null or non-string kind is a refusal (Map.ofEntries refuses a null key).
+            if (!(x.get("stmt") instanceof String)) throw new IllegalArgumentException("unknown statement " + x.get("stmt"));
+            Set<String> fs = STMT_FIELDS.get(s(x.get("stmt")));
+            if (fs == null) throw new IllegalArgumentException("unknown statement " + x.get("stmt"));
+            known(x, with(fs, "stmt", "at"), "a " + x.get("stmt") + " statement");
             Pos at = pos(x.get("at"));
             // #80 review r3 note: a missing or non-string kind is a refusal, never a NullPointerException.
-            if (!(x.get("stmt") instanceof String)) throw new IllegalArgumentException("unknown statement " + x.get("stmt"));
             return switch (s(x.get("stmt"))) {
                 case "Let" -> {
                     Ir.Expr value = expr(x.get("value"));
@@ -650,6 +886,14 @@ final class IrJson {
                 }
                 case "Require" -> new Ir.Require(expr(x.get("cond")), s(x.get("message")), at);
                 case "Pay" -> new Ir.Pay(expr(x.get("to")), expr(x.get("amount")), at);
+                case "Send" -> new Ir.Send(expr(x.get("to")), expr(x.get("value")), x.get("datum") == null ? null : expr(x.get("datum")), at);
+                case "Deposit" -> new Ir.Deposit(expr(x.get("target")), expr(x.get("value")), expr(x.get("memo")), at);
+                case "Mint" -> {
+                    if (!(x.get("burn") instanceof Boolean burn)) throw new IllegalArgumentException("Mint's burn is a boolean");
+                    yield new Ir.Mint(burn, expr(x.get("name")), expr(x.get("qty")), at);
+                }
+                case "Accept" -> new Ir.Accept(expr(x.get("value")), at);
+                case "Emit" -> new Ir.Emit(expr(x.get("event")), at);
                 case "If" -> {
                     var branches = branches(x.get("branches"));
                     var st = new Ir.If(branches, x.get("otherwise") == null ? null : block(x.get("otherwise")), (Boolean) x.get("pays"), at);
@@ -674,6 +918,7 @@ final class IrJson {
             var out = new ArrayList<Ir.Branch>();
             for (Object x : l(o)) {
                 var b = m(x);
+                known(b, Set.of("cond", "then", "at"), "a branch");
                 Ir.Expr cond = expr(b.get("cond"));
                 out.add(new Ir.Branch(cond, block(b.get("then")), pos(b.get("at"))));
             }
@@ -685,6 +930,7 @@ final class IrJson {
             var out = new ArrayList<Ir.Arm>();
             for (Object x : l(o)) {
                 var a = m(x);
+                known(a, Set.of("ctors", "fields", "binds", "body", "at"), "an arm");
                 var ctors = l(a.get("ctors")).stream().map(Reader::s).toList();
                 var fields = l(a.get("fields")).stream().map(Reader::s).toList();
                 var binds = decls(a.get("binds"));
@@ -701,10 +947,14 @@ final class IrJson {
 
         Ir.Expr expr(Object o) {
             var x = m(o);
+            // #80 review r3 note: a null or non-string kind is a refusal (Map.ofEntries refuses a null key).
+            if (!(x.get("node") instanceof String)) throw new IllegalArgumentException("unknown node " + x.get("node"));
+            Set<String> fs = NODE_FIELDS.get(s(x.get("node")));
+            if (fs == null) throw new IllegalArgumentException("unknown node " + x.get("node"));
+            known(x, with(fs, "node", "type", "taint", "at"), "a " + x.get("node") + " node");
             Ty t = type(x.get("type"));
             int taint = i(x.get("taint"));
             Pos at = pos(x.get("at"));
-            if (!(x.get("node") instanceof String)) throw new IllegalArgumentException("unknown node " + x.get("node"));
             return switch (s(x.get("node"))) {
                 case "Lit" -> {
                     Object v = x.get("value");
@@ -778,6 +1028,24 @@ final class IrJson {
                 case "BigOp" -> new Ir.BigOp(s(x.get("op")), expr(x.get("map")), exprs(x.get("args")), t, taint, at);
                 case "Range" -> new Ir.Range(expr(x.get("from")), expr(x.get("to")), t, taint, at);
                 case "ListArg" -> new Ir.ListArg(s(x.get("op")), expr(x.get("list")), expr(x.get("arg")), t, taint, at);
+                case "ParamsRef" -> new Ir.ParamsRef(s(x.get("field")), t, at);
+                case "DepositField" -> {
+                    String f = s(x.get("field"));
+                    if (!Set.of("value", "memo").contains(f)) throw new IllegalArgumentException("unknown deposit field " + f);
+                    yield new Ir.DepositField(expr(x.get("target")), f, t, taint, at);
+                }
+                case "FundsRef" -> {
+                    String f = s(x.get("field"));
+                    if (!Set.of("received", "held", "policy", "self", "deposits").contains(f)) throw new IllegalArgumentException("unknown funds field " + f);
+                    yield new Ir.FundsRef(f, t, at);
+                }
+                case "LedgerOp" -> {
+                    String op = s(x.get("op"));
+                    var args = exprs(x.get("args"));
+                    Integer n = Ir.LEDGER_OPS.get(op);
+                    if (n == null || n != args.size()) throw new IllegalArgumentException("unknown ledger op " + op + "/" + args.size());
+                    yield new Ir.LedgerOp(op, args, t, taint, at);
+                }
                 default -> throw new IllegalArgumentException("unknown node " + x.get("node"));
             };
         }

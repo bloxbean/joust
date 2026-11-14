@@ -52,7 +52,7 @@ class JscV2MessagesTest {
         int keys = 0;
         for (Path f : examples()) {
             String name = f.getFileName().toString();
-            var lowered = JscV2.lower(Files.readString(f), name);
+            var lowered = DslExamples.lower(Files.readString(f), name);
             var counts = new HashMap<String, Integer>();
             for (String lit : messages(lowered.java())) {
                 assertFalse(lit.contains(".jsc"), name + ": a message names a file: " + lit);
@@ -65,9 +65,11 @@ class JscV2MessagesTest {
                 // J20: a generated key is written once in the script and names one construct.
                 assertEquals(1, counts.getOrDefault("\"" + s.message() + "\"", 0), name + ": " + s.message());
                 assertEquals(1, lowered.messages().stream().filter(x -> x.message().equals(s.message())).count(), name + ": " + s.message());
-                // No parameter, method or fn name is in it.
-                assertFalse(s.message().contains(s.in()), s.message());
-                if (s.what() != null) assertFalse(s.message().contains(s.what()), s.message());
+                // No parameter, method or fn name is in it: after its fixed words (the kind, "#pay:", and the redeemer's,
+                // "spend", which methods named pay and spend share: treasury's, Council's; M2b), only numbers.
+                String rest = s.message().replaceFirst("^#[a-z]+:(spend|mint|intent)", "");
+                assertFalse(rest.contains(s.in()), s.message());
+                if (s.what() != null) assertFalse(rest.contains(s.what()), s.message());
             }
             // Every message the Java can trace is recorded in the source map (generated, the author's, an operation's),
             // except the empty one of a require that keeps an arm's call and cannot fail.
@@ -93,7 +95,7 @@ class JscV2MessagesTest {
         sources.put("Order.jsc", ORDER);
         int checked = 0, intents = 0;
         for (var e : sources.entrySet()) {
-            var lowered = JscV2.lower(e.getValue(), e.getKey());
+            var lowered = DslExamples.lower(e.getValue(), e.getKey());
             @SuppressWarnings("unchecked")
             var abi = (Map<String, Object>) AbiCheck.Json.parse(lowered.abiJson());
             @SuppressWarnings("unchecked")

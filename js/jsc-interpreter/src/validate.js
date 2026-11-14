@@ -9,10 +9,12 @@
 
 import { ROWS } from './std.js';
 
-const PRIMS = new Set(['Int', 'Bool', 'Bytes', 'Key', 'Hash']);
+const PRIMS = new Set(['Int', 'Bool', 'Bytes', 'Key', 'Hash', 'Value', 'Address', 'Credential']);
 const INT_RE = /^-?(0|[1-9][0-9]*)$/;
 const HEX_RE = /^(?:[0-9a-f]{2})*$/;
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// M2c: an imported contract's type, qualified by the contract (Oracle.State, Tips.Note).
+const QUALIFIED = /^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$/;
 
 // Each node's own fields: e expression, e? expression or null, es expressions, b block, b? block or null, l a local's
 // declaration, t a type, s a string, z a boolean, arms match arms, and a Set for a string from a fixed list.
@@ -57,26 +59,49 @@ export const NODES = {
   BigOp: { op: set('get', 'has', 'at', 'set', 'delete', 'isEmpty'), map: 'e', args: 'es' },
   Range: { from: 'e', to: 'e' },
   ListArg: { op: set('take', 'drop'), list: 'e', arg: 'e' },
+  // M2: funds, and the operations on values, credentials and addresses (additive in version 1).
+  FundsRef: { field: set('received', 'held', 'policy', 'self', 'deposits') },
+  LedgerOp: { op: set('none', 'lovelace', 'asset', 'add', 'sub', 'lovelaceOf', 'of', 'covers', 'keyCred', 'scriptCred', 'wallet',
+    'walletStaked', 'script', 'scriptStaked', 'payment'), args: 'es' },
+  // M2b: a field of the deploy-time params (additive in version 1).
+  ParamsRef: { field: 's' },
+  // M2c: a deposit's value, or its memo (a receiving action's funds.deposits elements).
+  DepositField: { target: 'e', field: set('value', 'memo') },
 };
 // Fields are validated in this order: an initializer or collection before the binding it introduces (review C4).
 export const STMTS = {
   Let: { value: 'e', local: 'let' },
   Require: { cond: 'e', message: 's' },
   Pay: { to: 'e', amount: 'e' },
+  Send: { to: 'e', value: 'e' },
+  Mint: { burn: 'z', name: 'e', qty: 'e' },
+  Accept: { value: 'e' },
+  Emit: { event: 'e' },
+  // M2c: deposit(target, value, memo); Send's datum is optional (validated by SEND_DATUM when present).
+  Deposit: { target: 'e', value: 'e', memo: 'e' },
   If: { branches: 'branches', otherwise: 'b?', pays: 'z' },
   For: { list: 'e', var: 'l', body: 'b', pays: 'z' },
   Match: { scrutinee: 'e', arms: 'arms', pays: 'z' },
 };
 // batched is M1c's (#67): known here so that its IR loads; like every modifier but open and only, it makes a method
 // read the transaction (review F11).
-const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched');
+const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched', 'quorum', 'authorized', 'receives');
+// M2b: quorum and authorized read the signatories and withdrawals in the validator, so like open and only they do not
+// make a method read the transaction (Ctx).
+const NO_CTX = set('open', 'only', 'quorum', 'authorized');
 // Argument counts of the std rows, the prelude and the map operations (review S7).
 const STD_ARITY = {
   sha2_256: 1, sha3_256: 1, blake2b_256: 1, blake2b_224: 1, verifyEd25519: 3, length: 1, concat: 2, slice: 3, take: 2, drop: 2,
   byteAt: 2, toInt: 1, toHex: 1, div: 2, mod: 2, pow: 2, expMod: 3, sign: 1, andBytes: 3, orBytes: 3, xorBytes: 3, complement: 1,
   readBit: 2, shift: 2, rotate: 2, countSetBits: 1, findFirstSetBit: 1, last: 1, nth: 2, indexOf: 2, elapsedSince: 1,
-  elapsedSinceAtMost: 1, windowStart: 0, windowEnd: 0,
+  elapsedSinceAtMost: 1, windowStart: 0, windowEnd: 0, isEmpty: 1, withoutLovelace: 1, scale: 2, paymentKey: 1, paymentScript: 1,
 };
+const LEDGER_ARITY = {
+  none: 0, lovelace: 1, asset: 3, add: 2, sub: 2, lovelaceOf: 1, of: 3, covers: 2, keyCred: 1, scriptCred: 1, wallet: 1, walletStaked: 2,
+  script: 1, scriptStaked: 2, payment: 1,
+};
+// A credential's constructors (M2), matched like an enum's variants: KeyCred { key }, ScriptCred { hash }.
+const CRED_FIELDS = { KeyCred: 'key', ScriptCred: 'hash' };
 const PRELUDE_ARITY = { min: 2, max: 2, abs: 1, asKey: 1, asHash: 1 };
 const MAP_ARITY = { get: 1, has: 1, set: 2, delete: 1, size: 0, keys: 0, values: 0, isEmpty: 0, at: 1 };
 const KINDS = set('init', 'action', 'destroy', 'view');
@@ -102,9 +127,12 @@ export function validate(p) {
   };
 
   // ---- top level and declarations
+  // M2b (additive): "params" and "invariants" appear only when the contract declares them.
+  // M2c (additive): "contracts" appears only when the contract imports another.
+  const optional = ['params', 'invariants', 'contracts'].filter((k) => k in p);
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
-    'recursiveFns', 'fns', 'methods', 'warnings'], 'program');
-  if (p.ir !== 1 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 1, not ${JSON.stringify(p.ir)}`);
+    'recursiveFns', 'fns', 'methods', 'warnings', ...optional], 'program');
+  if (p.ir !== 2 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 2, not ${JSON.stringify(p.ir)}`);
   if (p.language !== 'jsc 2') fail('program', `not a .jsc 2 program: ${p.language}`);
   if (typeof p.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(p.sourceSha256)) fail('program', 'sourceSha256 must be 64 hex digits');
   for (const k of ['package', 'contract', 'source']) str(p[k], k);
@@ -113,9 +141,9 @@ export function validate(p) {
     if (!INT_RE.test(str(o.value, 'option'))) fail('option', `not an integer: ${o.value}`);
   }
   const shapes = new Map();
-  const record = (r, where) => {
+  const record = (r, where, qualified = false) => {
     keys(r, ['name', 'fields', 'at'], where);
-    if (!IDENT.test(str(r.name, where))) fail(where, `a bad name ${r.name}`);
+    if (!(qualified ? QUALIFIED : IDENT).test(str(r.name, where))) fail(where, `a bad name ${r.name}`);
     if (shapes.has(r.name)) fail(where, `two declarations named ${r.name} (records, variants and the state share one namespace)`);
     for (const f of r.fields) keys(f, ['name', 'type'], `${r.name}'s field`);
     shapes.set(r.name, r.fields);
@@ -129,8 +157,44 @@ export function validate(p) {
     enums.set(e.name, e.variants.map((v) => v.name));
     for (const v of e.variants) record(v, `variant of ${e.name}`);
   }
+  // M2c: each imported contract's state and types, under its qualified names; checked like the contract's own.
+  const contracts = new Map();
+  if ('contracts' in p) {
+    if (!Array.isArray(p.contracts)) fail('contracts', 'not a list');
+    for (const c of p.contracts) {
+      const where = `imported contract ${c?.name}`;
+      keys(c, ['name', 'package', 'state', 'records', 'enums', 'timeFields', 'receives', 'bigMaps'], where);
+      if (!IDENT.test(str(c.name, where)) || contracts.has(c.name)) fail(where, 'a bad or repeated name');
+      str(c.package, where);
+      const q = (n) => typeof n === 'string' && n.startsWith(`${c.name}.`) && QUALIFIED.test(n);
+      if (c.state.name !== `${c.name}.State`) fail(where, `its state is named ${c.name}.State`);
+      record(c.state, where, true);
+      for (const r of c.records) {
+        if (!q(r.name)) fail(where, `a type not qualified by ${c.name}: ${r.name}`);
+        record(r, where, true);
+      }
+      for (const e of c.enums) {
+        keys(e, ['name', 'variants', 'at'], where);
+        if (!q(e.name) || enums.has(e.name) || shapes.has(e.name)) fail(where, `a bad enum name ${e.name}`);
+        enums.set(e.name, e.variants.map((v) => v.name));
+        for (const v of e.variants) {
+          if (!q(v.name)) fail(where, `a variant not qualified by ${c.name}: ${v.name}`);
+          record(v, where, true);
+        }
+        at(e.at, where);
+      }
+      for (const x of c.timeFields) str(x, where);
+      if (!Array.isArray(c.receives)) fail(where, 'receives is not a list');
+      if (typeof c.bigMaps !== 'boolean') fail(where, 'bigMaps is not a boolean');
+      contracts.set(c.name, c);
+    }
+  }
   if (p.state.name !== 'State') fail('state', 'the state record is named State');
   record(p.state, 'state');
+  if ('params' in p) {
+    if (p.params.name !== 'Config') fail('params', 'the params record is named Config');
+    record(p.params, 'params');
+  }
   const type = (t, where) => {
     if (typeof t === 'string') {
       if (!PRIMS.has(t)) fail(where, `unknown type ${t}`);
@@ -147,8 +211,15 @@ export function validate(p) {
       if (!shapes.has(v) || [...enums.values()].some((vs) => vs.includes(v))) fail(where, `no record ${v}`);
     } else if (k === 'enum') {
       if (!enums.has(v)) fail(where, `no enum ${v}`);
+    } else if (k === 'instance') {
+      // M2c: an imported contract's instance.
+      if (!contracts.has(v)) fail(where, `no imported contract ${v}`);
+    } else if (k === 'deposit') {
+      // M2c: a deposit a receiving action sees; its memo's type, or null when it reads none.
+      if (v !== null) type(v, where);
     } else fail(where, `unknown type ${k}`);
   };
+  for (const c of contracts.values()) for (const t of c.receives) if (t !== null) type(t, `imported contract ${c.name}`);
   for (const [name, fields] of shapes) for (const f of fields) type(f.type, `${name}.${f.name}`);
   for (const k of ['timeFields', 'recursiveFns']) for (const x of p[k]) str(x, k);
   for (const w of p.warnings) keys(w, ['line', 'col', 'code', 'message'], 'warning');
@@ -182,12 +253,12 @@ export function validate(p) {
       if (a.binds.length !== a.fields.length) fail(where, 'binds and fields differ in length');
       if (a.binds.length > 0 && a.ctors.length !== 1) fail(where, 'only a single-constructor arm binds');
       for (const c of a.ctors) {
-        if (c === 'Some' || c === 'None') continue;
+        if (c === 'Some' || c === 'None' || c in CRED_FIELDS) continue;
         if (!(shapes.has(c) && [...enums.values()].some((vs) => vs.includes(c)))) fail(where, `no variant ${c}`);
       }
       for (const f of a.fields) {
         const c = a.ctors[0];
-        const known = c === 'Some' ? f === 'value' : (shapes.get(c) ?? []).some((x) => x.name === f);
+        const known = c === 'Some' ? f === 'value' : c in CRED_FIELDS ? f === CRED_FIELDS[c] : (shapes.get(c) ?? []).some((x) => x.name === f);
         if (!known) fail(where, `${c} has no field ${f}`);
       }
       const inner = new Set(scope);
@@ -205,6 +276,14 @@ export function validate(p) {
       block(b.then, where, scope);
       at(b.at, where);
     }
+  };
+  /** M2b: a quorum's or authorized's field, a state field or params.f, of the type its check reads. */
+  const modField = (ref, want, where) => {
+    const params = typeof ref === 'string' && ref.startsWith('params.');
+    const fs = shapes.get(params ? 'Config' : 'State') ?? [];
+    const f = fs.find((x) => x.name === (params ? ref.slice(7) : ref));
+    if (!f) fail(where, `no field ${JSON.stringify(ref)}`);
+    if (JSON.stringify(f.type) !== JSON.stringify(want)) fail(where, `${ref} is not ${JSON.stringify(want)}`);
   };
   /** A condition or a boolean operand is of type Bool (review S3 on #76): the interpreter never tests truthiness. */
   const bool = (e, where, what) => {
@@ -267,15 +346,18 @@ export function validate(p) {
       arity(where, `fn ${e.fn}`, e.args.length, fnArity.get(e.fn));
     }
     if (e.node === 'CallStd') arity(where, e.name, e.args.length, STD_ARITY[e.name]);
+    if (e.node === 'LedgerOp') arity(where, e.op, e.args.length, LEDGER_ARITY[e.op]);
     if (e.node === 'Prelude') arity(where, e.op, e.args.length, PRELUDE_ARITY[e.op]);
     if (e.node === 'MapOp' || e.node === 'BigOp') arity(where, `${e.node}.${e.op}`, e.args.length, MAP_ARITY[e.op]);
     if (e.node === 'New') arity(where, `the record ${e.record}`, e.values.length, shapes.get(e.record).length);
     if (e.node === 'Variant') arity(where, `the variant ${e.variant}`, e.values.length, shapes.get(e.variant).length);
     if (e.node === 'GetField' && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${e.record} has no field ${e.field}`);
     if (e.node === 'StateField' && !shapes.get('State').some((f) => f.name === e.field)) fail(where, `the state has no field ${e.field}`);
+    if (e.node === 'ParamsRef' && !(shapes.get('Config') ?? []).some((f) => f.name === e.field)) fail(where, `the params have no field ${e.field}`);
   }
   function stmt(s, scope) {
-    const spec = s && STMTS[s.stmt];
+    // M2c: a send with a datum.
+    const spec = s && s.stmt === 'Send' && 'datum' in s ? { ...STMTS.Send, datum: 'e' } : s && STMTS[s.stmt];
     if (!spec) fail('statement', `unknown statement ${JSON.stringify(s?.stmt)}`);
     const where = `${s.stmt} at ${s.at}`;
     keys(s, ['stmt', ...Object.keys(spec), 'at'], where);
@@ -285,6 +367,7 @@ export function validate(p) {
     if (s.stmt === 'If' || s.stmt === 'For' || s.stmt === 'Match') {
       if (s.pays !== paysIn({ stmts: [{ ...s, pays: undefined }] })) fail(where, `pays is ${s.pays}, but its blocks ${s.pays ? 'do not pay' : 'pay'}`);
     }
+    if (s.stmt === 'Emit' && JSON.stringify(s.event.type) !== JSON.stringify({ enum: 'Event' })) fail(where, 'an emitted value is an Event');
     at(s.at, where);
   }
   const fnNames = new Set();
@@ -302,14 +385,23 @@ export function validate(p) {
   const stateFields = new Map(p.state.fields.map((f) => [f.name, f.type]));
   for (const m of p.methods) {
     const where = `method ${m.name}`;
-    keys(m, ['kind', 'name', 'params', 'mods', 'checked', 'usesCtx', 'pays', 'result', 'body', 'at'], where);
+    // M2c (additive): "reads" appears only when the method reads another contract.
+    keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...('reads' in m ? ['reads'] : []), 'usesCtx', 'pays', 'result', 'body', 'at'], where);
     if (!Array.isArray(m.mods)) fail(where, 'mods is not a list');
     if (!KINDS.has(m.kind)) fail(where, `unknown kind ${m.kind}`);
     if (methodNames.has(m.name)) fail(where, 'two methods of that name');
     methodNames.add(m.name);
     const scope = new Set();
     m.params.forEach((l) => decl(l, where, scope));
-    modifiers(m, where, fail, keys, stateFields);
+    // M2c: each read: a local of the instance's state type, named by a params field Instance<C>.
+    for (const r of m.reads ?? []) {
+      keys(r, ['local', 'field'], where);
+      const f = (shapes.get('Config') ?? []).find((x) => x.name === str(r.field, where));
+      if (!f || typeof f.type !== 'object' || !('instance' in f.type)) fail(where, `reads params.${r.field}, which is not an Instance<C>`);
+      decl(r.local, where, scope);
+      if (JSON.stringify(r.local.type) !== JSON.stringify({ record: `${f.type.instance}.State` })) fail(where, `a read of ${f.type.instance} has its state's type`);
+    }
+    modifiers(m, where, fail, keys, stateFields, modField, type);
     if (m.result !== null) type(m.result, where);
     block(m.body, where, scope);
     // #80 review C4, S7: a pay only where the checker allows one (JSC0413): in the method's statement blocks, never in
@@ -318,21 +410,38 @@ export function validate(p) {
     // #80 review S3: pays is recomputed from the body, and a method that pays says who may call it (JSC0408, JSC0420).
     const pays = paysIn(m.body);
     if (m.pays !== pays) fail(where, `pays is ${JSON.stringify(m.pays)}, but the body ${pays ? 'pays' : 'does not pay'}`);
-    if (pays && !m.mods.some((x) => x.name === 'open' || (x.name === 'only' && typeof x.field === 'string'))) {
-      fail(where, 'it pays, so it says who may call it (only f or open)');
+    // M2a/M2c: send, mint, burn and deposit move value as a pay does; M2b: quorum and authorized are audiences too.
+    const moves = pays || movesIn(m.body);
+    if (moves && !m.mods.some((x) => x.name === 'open' || x.name === 'quorum' || x.name === 'authorized'
+      || (x.name === 'only' && typeof x.field === 'string'))) {
+      fail(where, 'it pays, sends, mints, burns or deposits, so it says who may call it (only f, open, quorum or authorized)');
     }
     // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409).
-    if (m.kind === 'destroy' && !pays) fail(where, 'a destroy pays out what the instance holds: it has no pay');
+    if (m.kind === 'destroy' && !moves) fail(where, 'a destroy pays out what the instance holds: it has no pay, send, mint, burn or deposit');
     // F7: the checker's two decisions, recomputed from their definitions.
     const checked = m.kind === 'view' ? [] : m.params.filter((l) => needsCheck(l.type, shapes, enums)).map((l) => l.id);
     if (JSON.stringify(checked) !== JSON.stringify(m.checked)) {
       fail(where, `checked is ${JSON.stringify(m.checked)}, but the parameters whose types hold a Key, a Hash or a Map are ${JSON.stringify(checked)}`);
     }
     const usesCtx = m.kind === 'destroy' || (m.kind !== 'view'
-      && (m.mods.some((x) => x.name !== 'open' && x.name !== 'only') || readsTx(m.body)));
+      && (m.mods.some((x) => !NO_CTX.has(x.name)) || readsTx(m.body)));
     if (usesCtx !== m.usesCtx) fail(where, `usesCtx is ${m.usesCtx}, but the method ${usesCtx ? 'reads' : 'does not read'} the transaction`);
   }
   for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${n}`);
+  // M2b: invariants, each a Bool over the state and the params, with names of their own.
+  if ('invariants' in p) {
+    const names = new Set();
+    for (const inv of p.invariants) {
+      const where = `invariant ${inv.name}`;
+      keys(inv, ['name', 'body', 'at'], where);
+      if (names.has(inv.name) || methodNames.has(inv.name) || fnNames.has(inv.name)) fail(where, 'a name taken by another method, fn or invariant');
+      names.add(inv.name);
+      block(inv.body, where, new Set());
+      if (inv.body.result === null) fail(where, 'an invariant has a value');
+      bool(inv.body.result, where, 'an invariant');
+      at(inv.at, where);
+    }
+  }
 }
 
 /**
@@ -342,12 +451,17 @@ export function validate(p) {
  * only `payable`, a view none, a destroy is never payable. A reader that took any other shape on trust would decide on
  * its own who may call a method (an `only` with no field was skipped, and the call accepted unsigned).
  */
-function modifiers(m, where, fail, keys, state) {
+function modifiers(m, where, fail, keys, state, modField, type) {
   const seen = new Set();
   const names = m.mods.map((x) => x?.name);
   for (const mod of m.mods) {
-    keys(mod, ['name', 'field'], where);
+    if (!mod || typeof mod !== 'object' || Array.isArray(mod)) fail(where, 'a modifier is not an object');
     const w = mod.name;
+    // M2b: a quorum names its keys and threshold; M2c: receives may name a memo type; every other modifier a field at
+    // most (the integration of #80 with #84 and #90: the strict shapes of both).
+    if (w === 'quorum') keys(mod, ['name', 'keys', 'threshold'], where);
+    else if (w === 'receives') keys(mod, ['name', ...('type' in mod ? ['type'] : [])], where);
+    else keys(mod, ['name', 'field'], where);
     if (!MODS.has(w)) fail(where, `unknown modifier ${w}`);
     const field = mod.field ?? null;
     if (seen.has(w)) fail(where, `the modifier ${w} is given twice`);
@@ -362,6 +476,21 @@ function modifiers(m, where, fail, keys, state) {
       if (typeof field !== 'string') fail(where, `${w} names a state field, not ${JSON.stringify(field)}`);
       if (!state.has(field)) fail(where, `${w} ${field}: the state has no field ${field}`);
       if (state.get(field) !== want) fail(where, `${w} ${field}: ${field} is of type ${JSON.stringify(state.get(field))}, not ${want}`);
+    } else if (w === 'quorum') {
+      // M2b (ADR-0009 D2, JSC0439): keys a List<Key> and the threshold an Int, both state fields or both params fields.
+      if (typeof mod.keys !== 'string' || typeof mod.threshold !== 'string') fail(where, 'a quorum names its keys and threshold');
+      if (mod.keys.startsWith('params.') !== mod.threshold.startsWith('params.')) {
+        fail(where, `quorum ${mod.keys} ${mod.threshold}: the keys and the threshold are both state fields or both params fields`);
+      }
+      modField(mod.keys, { list: 'Key' }, where);
+      modField(mod.threshold, 'Int', where);
+    } else if (w === 'authorized') {
+      if (typeof field !== 'string') fail(where, `authorized names a field, not ${JSON.stringify(field)}`);
+      modField(field, 'Credential', where);   // M2b (ADR-0009 D3)
+    } else if (w === 'receives') {
+      // M2c (ADR-0011 D3, JSC0447): receives, or receives T (the memo type), on an action.
+      if ('type' in mod) type(mod.type, where);
+      if (m.kind !== 'action') fail(where, 'only an action receives');
     } else if (w === 'batched') {
       if (field !== null && field !== 'only') fail(where, `batched is plain or "batched only", not ${JSON.stringify(field)}`);
       if (m.kind !== 'action') fail(where, `only an action can be batched, not a${m.kind === 'init' ? 'n' : ''} ${m.kind}`);
@@ -370,7 +499,8 @@ function modifiers(m, where, fail, keys, state) {
     }
   }
   if (names.includes('batched')) {
-    for (const w of ['only', 'after', 'before']) if (names.includes(w)) fail(where, `a batched action cannot use ${w}`);
+    // JSC0417 (with M2b's quorum and authorized), JSC0447 (receives).
+    for (const w of ['only', 'after', 'before', 'quorum', 'authorized', 'receives']) if (names.includes(w)) fail(where, `a batched action cannot use ${w}`);
   }
 }
 /**
@@ -396,10 +526,20 @@ function paysIn(block) {
     || (s.stmt === 'Match' && s.arms.some((a) => paysIn(a.body))));
 }
 
+/** Whether a block pays, sends, mints, burns or deposits (M2a, M2c): what the checker calls moving value (JSC0408, JSC0409). */
+function movesIn(block) {
+  return (block?.stmts ?? []).some((s) => s.stmt === 'Pay' || s.stmt === 'Send' || s.stmt === 'Mint' || s.stmt === 'Deposit'
+    || (s.stmt === 'If' && (s.branches.some((b) => movesIn(b.then)) || (s.otherwise !== null && movesIn(s.otherwise))))
+    || (s.stmt === 'For' && movesIn(s.body))
+    || (s.stmt === 'Match' && s.arms.some((a) => movesIn(a.body))));
+}
+
 /** §4: a type holds a Key, a Hash or a Map somewhere (records and variants through their fields). */
 function needsCheck(t, shapes, enums) {
-  if (typeof t === 'string') return t === 'Key' || t === 'Hash';
+  // M2c (review r1, C4): a Value too (it crosses only stored in a read state; an argument never holds one).
+  if (typeof t === 'string') return t === 'Key' || t === 'Hash' || t === 'Address' || t === 'Credential' || t === 'Value';
   const [k, v] = Object.entries(t)[0];
+  if (k === 'instance' || k === 'deposit') return false;   // M2c: the deployer's; memos are checked where the action starts
   if (k === 'list' || k === 'option') return needsCheck(v, shapes, enums);
   if (k === 'map') return true;
   if (k === 'bigmap') return false;

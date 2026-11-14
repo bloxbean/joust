@@ -46,7 +46,35 @@ final class Abi {
             case Ty.BigMapT b -> "merkleMap<" + shape(b.val()) + ">";
             case Ty.Rec r -> r.name();
             case Ty.EnumT e -> e.name();
+            // M2: the ledger's schemas; a Value only as the native assets a redeemer carries (assetsIn).
+            case Ty.Ledger l -> l.equals(Ty.VALUE) ? VALUE_SHAPE : l.name();
+            // M2c: an instance of another contract (a params field), the API's ForeignInstance.
+            case Ty.Instance i -> "ForeignInstance";
+            case Ty.DepositT d -> throw new IllegalStateException("a deposit is never encoded by this contract");
         };
+    }
+
+    /** A value as data: policy → token name → quantity (ADR-0007; the redeemer's {@code assetsIn}). */
+    static final String VALUE_SHAPE = "map<bytes, map<bytes, int>>";
+
+    /** Whether a type names an address or a credential anywhere (the ledger schemas are then stated). */
+    private static boolean ledger(Ty t) {
+        return switch (t) {
+            case Ty.Ledger l -> !l.equals(Ty.VALUE);
+            case Ty.ListT l -> ledger(l.elem());
+            case Ty.OptT o -> ledger(o.elem());
+            case Ty.MapT m -> ledger(m.val());
+            default -> false;
+        };
+    }
+
+    private static boolean usesLedger(Ir.Program p) {
+        var all = new ArrayList<Ty>(p.state().fields().values());
+        p.records().values().forEach(r -> all.addAll(r.fields().values()));
+        p.enums().values().forEach(e -> e.variants().values().forEach(v -> all.addAll(v.fields().values())));
+        for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) all.add(l.type);
+        if (p.params() != null) all.addAll(p.params().fields().values());
+        return all.stream().anyMatch(Abi::ledger);
     }
 
     private static String field(String name, String type, String data, String ind) {
@@ -73,6 +101,8 @@ final class Abi {
         w.append("  \"contract\": ").append(str(p.pkg() + "." + p.name())).append(",\n");
         w.append("  \"source\": ").append(str(p.fileName())).append(",\n");
         w.append("  \"datum\": ").append(ctor("State", 0, fields(p.state(), "      "), "    ")).append(",\n");
+        // M2b (ADR-0009 D1): the params the script is applied to (not in any redeemer).
+        if (p.params() != null) w.append("  \"params\": ").append(ctor(Ir.PARAMS, 0, fields(p.params(), "      "), "    ")).append(",\n");
         // Redeemers, as the processor lays them out (ContractIR.spendTransitions; the Lifecycle of the mint validator).
         boolean ctx = false;
         var spend = new ArrayList<String>();
@@ -80,6 +110,10 @@ final class Abi {
             var fs = new ArrayList<String>();
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            // M2: a payable method with Funds carries the native assets the caller offers (ADR-0007 r2).
+            if (Effects.takesAssets(m)) fs.add(field("assetsIn", "Value", VALUE_SHAPE, ind));
+            // M2b (ADR-0009 D5): a method whose result record has events carries them last.
+            if (Effects.events(p, m)) fs.add(field("events", "List<" + Ir.EVENT + ">", "list<" + Ir.EVENT + ">", ind));
             ctx |= m.usesCtx();
             spend.add("      " + ctor(Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1), spend.size(), fs, "        "));
         }
@@ -97,10 +131,13 @@ final class Abi {
             fs.add(field("seed", "TxOutRef", "TxOutRef", ind));
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            if (Effects.takesAssets(m)) fs.add(field("assetsIn", "Value", VALUE_SHAPE, ind));
             ctx |= m.usesCtx();
             mint.add("      " + ctor("CreateInstance", 0, fs, "        "));
         }
         mint.add("      " + ctor("BurnInstance", 1, List.of(), "        "));
+        // M2: methods that mint user tokens; the mint validator's ByAction names the input whose spend checks it (ADR-0007 D4).
+        if (Effects.mints(p)) mint.add("      " + ctor("ByAction", 2, List.of(field("by", "TxOutRef", "TxOutRef", ind)), "        "));
         if (!batched.isEmpty()) {
             mint.add("      " + ctor("CreateIntent", 2, List.of(field("seed", "TxOutRef", "TxOutRef", ind), field("intent", "Intent", "Intent", ind)),
                     "        "));
@@ -134,6 +171,8 @@ final class Abi {
             types.add("    \"IntentCall\": { \"kind\": \"validator\", \"constructors\": [\n" + String.join(",\n", calls) + "\n    ] }");
             types.add("    \"IntentRefund\": { \"kind\": \"validator\", \"constructors\": [" + ctor("IntentRefund", 0, List.of(
                     field("intent", "TxOutRef", "TxOutRef", "        ")), "      ") + "] }");
+        }
+        if (!batched.isEmpty() || usesLedger(p)) {
             types.add("    \"Address\": { \"kind\": \"ledger\", \"constructors\": [" + ctor("Address", 0, List.of(
                     field("credential", "Credential", "Credential", "        "),
                     field("stakingCredential", "Option<StakingCredential>", "option<StakingCredential>", "        ")), "      ") + "] }");
@@ -156,6 +195,11 @@ final class Abi {
                     field("present", "Bool", "bool", "        "), field("value", "Bytes", "bytes", "        ")), "      ") + "] }");
             types.add("    \"MerkleMap\": { \"kind\": \"api\", \"constructors\": [" + ctor("MerkleMap", 0, List.of(field("root", "Bytes", "bytes", "        "),
                     field("reads", "List<MapEntry>", "list<MapEntry>", "        "), field("writes", "List<MapEntry>", "list<MapEntry>", "        ")), "      ") + "] }");
+        }
+        // M2c: the params name another contract's instance (ADR-0011): the API's ForeignInstance (policy, instance id).
+        if (p.params() != null && p.params().fields().values().stream().anyMatch(t -> t instanceof Ty.Instance)) {
+            types.add("    \"ForeignInstance\": { \"kind\": \"api\", \"constructors\": [" + ctor("ForeignInstance", 0, List.of(
+                    field("policy", "Bytes", "bytes", "        "), field("instance", "Bytes", "bytes", "        ")), "      ") + "] }");
         }
         types.add("    \"TxOutRef\": { \"kind\": \"ledger\", \"constructors\": [" + ctor("TxOutRef", 0, List.of(field("txId", "Bytes", "bytes", "        "),
                 field("index", "Int", "int", "        ")), "      ") + "] }");

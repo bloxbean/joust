@@ -58,7 +58,7 @@ class JscV2ModifierShapeTest {
         refused(mods(vault, "action", "withdraw", x -> x.replace("\"after\", \"field\": \"unlockAt\"", "\"before\", \"field\": \"owner\"")),
                 "before owner: owner is of type Key, not Int");
         refused(mods(pool, "action", "withdraw", x -> x.replace("\"field\": \"admin\"", "\"field\": 7")), "a modifier's field is a name");
-        refused(mods(pool, "action", "withdraw", x -> x.replace("\"field\": \"admin\"", "\"field\": \"admin\", \"when\": 1")), "a modifier has no field \"when\"");
+        refused(mods(pool, "action", "withdraw", x -> x.replace("\"field\": \"admin\"", "\"field\": \"admin\", \"when\": 1")), "unknown field \"when\" in a modifier");
         // Duplicates; an init's, a view's and a destroy's modifiers; payable and open with a field.
         refused(mods(pool, "action", "withdraw", x -> "[{ \"name\": \"only\", \"field\": \"admin\" }, { \"name\": \"only\", \"field\": \"admin\" }]"),
                 "the modifier only is given twice");
@@ -82,9 +82,9 @@ class JscV2ModifierShapeTest {
         String pool = fixture("Pool"), counter = fixture("Counter2"), ledger = fixture("Ledger");
         IrJson.read(counter);
         IrJson.read(ledger);
-        refused(mods(pool, "action", "withdraw", x -> "[]"), "it pays, so it says who may call it ('only f' or 'open')");
-        refused(mods(pool, "action", "buy", x -> x.replace(", { \"name\": \"open\" }", "")), "it pays, so it says who may call it");
-        refused(mods(counter, "destroy", "close", x -> "[]"), "it pays, so it says who may call it");
+        refused(mods(pool, "action", "withdraw", x -> "[]"), "it pays, sends, mints, burns or deposits, so it says who may call it ('only f', 'open', quorum or authorized)");
+        refused(mods(pool, "action", "buy", x -> x.replace(", { \"name\": \"open\" }", "")), "so it says who may call it");
+        refused(mods(counter, "destroy", "close", x -> "[]"), "so it says who may call it");
         refused(withMethodField(pool, "withdraw", "\"pays\": true", "\"pays\": false"), "pays is false, but the body pays");
         refused(withMethodField(counter, "increment", "\"pays\": false", "\"pays\": true"), "pays is true, but the body does not pay");
         refused(mods(ledger, "action", "transfer", x -> "[{ \"name\": \"batched\" }]"), "a contract with BigMap state has no batched action");
@@ -183,5 +183,33 @@ class JscV2ModifierShapeTest {
         var both = tx(ANN).signedBy(List.of(Interpreter.Bytes.of(ANN), Interpreter.Bytes.of(OWNER)));
         var out = in.call("withdraw", vaultState(), List.of(BigInteger.ONE), both);
         assertEquals(BigInteger.valueOf(9_999_999), ((Interpreter.Rec) out.value()).fields().get(2));
+    }
+    /**
+     * The integration of #80 with M2 (#84, #90): the strict shapes cover M2b's quorum and authorized and M2c's receives,
+     * and a method that sends, mints, burns or deposits needs an audience as one that pays does (JSC0408), as the JavaScript
+     * reader refuses them (semantics.test.js, the same cases).
+     */
+    @Test
+    void theReader_takesM2sModifiersOnlyInTheCheckersShapes() throws Exception {
+        String treasury = fixture("Treasury"), tips = fixture("Tips"), coins = fixture("Coins");
+        for (String n : List.of("Treasury", "Council", "Tips", "Coins", "Dex", "Tipper")) IrJson.read(fixture(n));
+        String quorum = "{ \"name\": \"quorum\", \"keys\": \"council\", \"threshold\": \"quorum\" }";
+        refused(mods(treasury, "action", "pay", x -> x.replace("\"threshold\": \"quorum\"", "\"threshold\": \"params.guardian\"")),
+                "both state fields or both params fields");
+        refused(mods(treasury, "action", "pay", x -> x.replace("\"keys\": \"council\"", "\"keys\": \"quorum\"")), "quorum is of type Int, not List<Key>");
+        refused(mods(treasury, "action", "pay", x -> x.replace("\"threshold\": \"quorum\"", "\"threshold\": \"quorum\", \"field\": \"council\"")),
+                "a quorum names its keys and threshold, and no field");
+        refused(mods(treasury, "action", "pay", x -> x.replace(", \"threshold\": \"quorum\"", "")), "a quorum names its keys and threshold");
+        refused(mods(treasury, "action", "freeze", x -> x.replace("params.guardian", "council")), "council is of type List<Key>, not Credential");
+        refused(mods(treasury, "action", "freeze", x -> x.replace("params.guardian", "params.nothing")), "the params have no field nothing");
+        refused(mods(treasury, "action", "freeze", x -> x.replace("\"field\"", "\"keys\"")), "only a quorum names keys and a threshold");
+        refused(mods(treasury, "init", "init", x -> "[{ \"name\": \"payable\" }, " + quorum + "]"), "an init takes only payable, not quorum");
+        refused(mods(treasury, "action", "rotate", x -> "[" + quorum + ", { \"name\": \"batched\" }]"), "a batched action cannot use quorum");
+        refused(mods(tips, "action", "credit", x -> x.substring(0, x.length() - 1) + ", { \"name\": \"batched\" }]"), "a batched action cannot use receives");
+        refused(mods(tips, "destroy", "close", x -> x.substring(0, x.length() - 1) + ", { \"name\": \"receives\" }]"), "only an action receives deposits");
+        refused(mods(tips, "action", "credit", x -> x.replace("\"name\": \"receives\"", "\"name\": \"receives\", \"field\": \"x\"")),
+                "only receives names a type, and it names no field");
+        refused(mods(coins, "action", "forge", x -> "[]"), "so it says who may call it");
+        refused(mods(treasury, "action", "pay", x -> "[]"), "so it says who may call it");
     }
 }

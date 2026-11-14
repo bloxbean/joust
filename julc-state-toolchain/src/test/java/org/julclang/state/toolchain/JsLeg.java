@@ -8,6 +8,12 @@ import org.julclang.state.dsl.v2.Interpreter.MapV;
 import org.julclang.state.dsl.v2.Interpreter.Opt;
 import org.julclang.state.dsl.v2.Interpreter.Rec;
 import org.julclang.state.dsl.v2.Interpreter.Tx;
+import org.julclang.state.dsl.v2.Interpreter.AddrV;
+import org.julclang.state.dsl.v2.Interpreter.CredV;
+import org.julclang.state.dsl.v2.Interpreter.StakeHash;
+import org.julclang.state.dsl.v2.Interpreter.StakePtr;
+import org.julclang.state.dsl.v2.Interpreter.ValueV;
+import org.julclang.state.dsl.v2.Interpreter.InstV;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -56,7 +62,13 @@ final class JsLeg {
     /** A call, recorded from the Java interpreter's outcome (a refusal when {@code refused} is not null). */
     static Call call(String method, Rec state, List<Object> args, Tx t, String want, Interpreter.Outcome o, Interpreter.Refused refused,
                      String what) {
-        return new Call(method, call(method, state, args, t), want, refused != null ? refusedForm(refused.refusal()) : form(o), what);
+        return call(method, state, args, t, null, want, o, refused, what);
+    }
+
+    /** The same, for a contract deployed with {@code params} (M2b; null: none). */
+    static Call call(String method, Rec state, List<Object> args, Tx t, Rec params, String want, Interpreter.Outcome o,
+                     Interpreter.Refused refused, String what) {
+        return new Call(method, call(method, state, args, t, params), want, refused != null ? refusedForm(refused.refusal()) : form(o), what);
     }
 
     /** A call of the transition alone (semantics §2.6: no modifiers), recorded from the Java interpreter's {@code transition}. */
@@ -187,11 +199,26 @@ final class JsLeg {
         return "refused " + refusalClass;
     }
 
-    /** An outcome in the order-keeping tagged form: its value (null for a destroy) and payouts. */
+    /** An outcome in the order-keeping tagged form: its value (null for a destroy) and payouts; M2's effects when there are any. */
     static String form(Interpreter.Outcome o) {
         var ps = new ArrayList<String>();
         for (var p : o.payouts()) ps.add("[" + json(p.to()) + ", " + json(p.lovelace()) + "]");
-        return "ok " + json(o.value()) + " pays [" + String.join(", ", ps) + "]";
+        String out = "ok " + json(o.value()) + " pays [" + String.join(", ", ps) + "]";
+        if (!o.sends().isEmpty()) {
+            var ss = new ArrayList<String>();
+            // M2c: a send's datum, when it has one.
+            for (var x : o.sends()) ss.add("[" + json(x.to()) + ", " + json(x.value()) + (x.datum() == null ? "" : ", " + json(x.datum())) + "]");
+            out += " sends [" + String.join(", ", ss) + "]";
+        }
+        if (!o.deposits().isEmpty()) {
+            var ds = new ArrayList<String>();
+            for (var d : o.deposits()) ds.add("[" + json(d.target()) + ", " + json(d.value()) + ", " + json(d.memo()) + "]");
+            out += " deposits [" + String.join(", ", ds) + "]";
+        }
+        if (!o.mint().entries().isEmpty()) out += " mints " + json(o.mint());
+        if (!o.accepted().entries().isEmpty()) out += " accepts " + json(o.accepted());
+        if (!o.events().isEmpty()) out += " emits " + json(o.events());
+        return out;
     }
 
     /** An answer as an interpreter outcome; every inline map in it must be canonical (F1). */
@@ -203,7 +230,29 @@ final class JsLeg {
             var m = (Map<String, Object>) p;
             payouts.add(new Interpreter.Payment(Bytes.hex((String) m.get("to")), new BigInteger((String) m.get("lovelace"))));
         }
-        return new Interpreter.Outcome(ok.get("value") == null ? null : value(ok.get("value"), true), List.copyOf(payouts));
+        var sends = new ArrayList<Interpreter.SendV>();
+        if (ok.get("sends") instanceof List<?> l) {
+            for (Object x : l) {
+                var m = (Map<String, Object>) x;
+                // M2c: a datum when the send has one (its type is the Java interpreter's business; the form compares values).
+                sends.add(new Interpreter.SendV((AddrV) value(m.get("to"), true), (ValueV) value(m.get("value"), true),
+                        m.containsKey("datum") ? value(m.get("datum"), true) : null, null));
+            }
+        }
+        ValueV mint = ok.containsKey("mint") ? (ValueV) value(ok.get("mint"), true) : ValueV.NONE;
+        ValueV accepted = ok.containsKey("accepted") ? (ValueV) value(ok.get("accepted"), true) : ValueV.NONE;
+        var events = new ArrayList<Object>();
+        if (ok.get("events") instanceof List<?> l) for (Object x : l) events.add(value(x, true));
+        var deposits = new ArrayList<Interpreter.DepositOut>();
+        if (ok.get("deposits") instanceof List<?> l) {
+            for (Object x : l) {
+                var m = (Map<String, Object>) x;
+                deposits.add(new Interpreter.DepositOut((InstV) value(m.get("target"), true), (ValueV) value(m.get("value"), true),
+                        value(m.get("memo"), true), null));
+            }
+        }
+        return new Interpreter.Outcome(ok.get("value") == null ? null : value(ok.get("value"), true), List.copyOf(payouts), List.copyOf(sends),
+                mint, accepted, List.copyOf(events), List.copyOf(deposits));
     }
 
     // ------------------------------------------------------------------ values as tagged JSON
@@ -236,6 +285,39 @@ final class JsLeg {
                 vs.add(value(((List<Object>) e).get(1), canonical));
             }
             return new MapV(ks, vs);
+        }
+        // M2's values, credentials and addresses (jsc-2-ir.md, "Values in vectors").
+        if (m.containsKey("value")) {
+            var es = new TreeMap<String, TreeMap<String, BigInteger>>();
+            String prevPolicy = null, prevName = null;
+            for (Object e : (List<Object>) m.get("value")) {
+                var x = (List<Object>) e;
+                // The ledger's order: by policy, then by token name (lower-case hex orders as the bytes do, a prefix first).
+                String p = (String) x.get(0), nm = (String) x.get(1);
+                int c = prevPolicy == null ? 1 : p.compareTo(prevPolicy) != 0 ? p.compareTo(prevPolicy) : nm.compareTo(prevName);
+                if (canonical && (c <= 0 || new BigInteger((String) x.get(2)).signum() == 0)) {
+                    throw new IllegalArgumentException("a value whose entries are not strictly ascending, or hold a zero quantity: " + j);
+                }
+                prevPolicy = p;
+                prevName = nm;
+                es.computeIfAbsent((String) x.get(0), k -> new TreeMap<>()).put((String) x.get(1), new BigInteger((String) x.get(2)));
+            }
+            return new ValueV(es);
+        }
+        // M2c: an instance of another contract.
+        if (m.containsKey("instance")) {
+            var pi = (List<Object>) m.get("instance");
+            return new InstV(Bytes.hex((String) pi.get(0)), Bytes.hex((String) pi.get(1)));
+        }
+        if (m.containsKey("keyCred")) return new CredV(false, Bytes.hex((String) m.get("keyCred")));
+        if (m.containsKey("scriptCred")) return new CredV(true, Bytes.hex((String) m.get("scriptCred")));
+        if (m.containsKey("address")) {
+            var a = (List<Object>) m.get("address");
+            var st = (Map<String, Object>) a.get(1);
+            Opt stake = st == null ? Opt.NONE : st.containsKey("stakeHash") ? Opt.some(new StakeHash((CredV) value(st.get("stakeHash"), canonical)))
+                    : Opt.some(new StakePtr(new BigInteger((String) ((List<Object>) st.get("stakePtr")).get(0)),
+                    new BigInteger((String) ((List<Object>) st.get("stakePtr")).get(1)), new BigInteger((String) ((List<Object>) st.get("stakePtr")).get(2))));
+            return new AddrV((CredV) value(a.get(0), canonical), stake);
         }
         if (m.containsKey("bigmap")) {
             var contents = new LinkedHashMap<Bytes, Object>();
@@ -278,16 +360,46 @@ final class JsLeg {
                 for (Object x : r.fields()) parts.add(json(x));
                 yield "{\"rec\": \"" + r.type() + "\", \"fields\": [" + String.join(", ", parts) + "]}";
             }
+            case ValueV x -> {
+                var parts = new ArrayList<String>();
+                x.entries().forEach((p, ts) -> ts.forEach((n, q) -> parts.add("[\"" + p + "\", \"" + n + "\", \"" + q + "\"]")));
+                yield "{\"value\": [" + String.join(", ", parts) + "]}";
+            }
+            case InstV x -> "{\"instance\": [\"" + HEX.formatHex(x.policy().bytes()) + "\", \"" + HEX.formatHex(x.id().bytes()) + "\"]}";
+            case CredV x -> "{\"" + (x.script() ? "scriptCred" : "keyCred") + "\": \"" + HEX.formatHex(x.hash().bytes()) + "\"}";
+            case AddrV x -> {
+                String stake = !x.stake().present() ? "null" : x.stake().value() instanceof StakeHash h ? "{\"stakeHash\": " + json(h.credential()) + "}"
+                        : "{\"stakePtr\": [\"" + ((StakePtr) x.stake().value()).slot() + "\", \"" + ((StakePtr) x.stake().value()).txIndex() + "\", \""
+                        + ((StakePtr) x.stake().value()).certIndex() + "\"]}";
+                yield "{\"address\": [" + json(x.payment()) + ", " + stake + "]}";
+            }
             default -> throw new IllegalArgumentException("no vector form for " + v);
         };
     }
 
     static String call(String method, Rec state, List<Object> args, Tx t) {
+        return call(method, state, args, t, null);
+    }
+
+    /** A call's JSON; M2b: the params it is deployed with (top level), the scripts approving it (in the transaction). */
+    static String call(String method, Rec state, List<Object> args, Tx t, Rec params) {
         var parts = new ArrayList<String>();
         for (Object a : args) parts.add(json(a));
         String tx = t == null ? "null" : "{\"caller\": \"" + HEX.formatHex(t.caller().bytes()) + "\", \"received\": \"" + t.received()
                 + "\", \"balance\": \"" + t.balance() + "\", \"validFrom\": \"" + t.validFrom() + "\", \"validTo\": \"" + t.validTo()
-                + "\", \"signers\": [" + String.join(", ", t.signers().stream().map(k -> "\"" + HEX.formatHex(k.bytes()) + "\"").toList()) + "]}";
-        return "{\"method\": \"" + method + "\", \"state\": " + json(state) + ", \"args\": [" + String.join(", ", parts) + "], \"tx\": " + tx + "}";
+                + "\", \"signers\": [" + String.join(", ", t.signers().stream().map(k -> "\"" + HEX.formatHex(k.bytes()) + "\"").toList()) + "]"
+                // M2: the native assets the call sees.
+                + (t.funds() == null ? "" : ", \"funds\": {\"received\": " + json(t.funds().received()) + ", \"held\": " + json(t.funds().held())
+                        + ", \"policy\": \"" + HEX.formatHex(t.funds().policy().bytes()) + "\", \"self\": \"" + HEX.formatHex(t.funds().self().bytes()) + "\""
+                        // M2c: the deposits claimed on a receiving action's output.
+                        + (t.funds().deposits().isEmpty() ? "" : ", \"deposits\": [" + String.join(", ", t.funds().deposits().stream()
+                                .map(d -> "{\"value\": " + json(d.value()) + ", \"memo\": " + json(d.memo()) + "}").toList()) + "]") + "}")
+                // M2c: the states of other contracts' instances the call reads, by the params field naming each.
+                + (t.reads().isEmpty() ? "" : ", \"reads\": {" + String.join(", ", new TreeMap<>(t.reads()).entrySet().stream()
+                        .map(e -> "\"" + e.getKey() + "\": " + json(e.getValue())).toList()) + "}")
+                + (t.approvers().isEmpty() ? "" : ", \"approvers\": [" + String.join(", ", t.approvers().stream().map(k -> "\"" + HEX.formatHex(k.bytes()) + "\"").toList()) + "]")
+                + "}";
+        return "{\"method\": \"" + method + "\", \"state\": " + json(state) + ", \"args\": [" + String.join(", ", parts) + "], \"tx\": " + tx
+                + (params == null ? "" : ", \"params\": " + json(params)) + "}";
     }
 }

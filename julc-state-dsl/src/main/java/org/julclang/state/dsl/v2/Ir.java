@@ -23,20 +23,53 @@ final class Ir {
 
     record Program(String pkg, String fileName, String name, List<ContractOption> options,
                    Map<String, RecordType> records, Map<String, EnumType> enums, RecordType state, List<Method> methods,
-                   List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings) {
+                   List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings, RecordType params,
+                   List<Invariant> invariants, Map<String, Foreign> contracts) {
 
-        /** A record type, the state, or an enum variant (variant names are unique in a file). */
+        /** M2b's shape: no imported contracts. */
+        Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
+                Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
+                Set<String> recursiveFns, List<Warning> warnings, RecordType params, List<Invariant> invariants) {
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, params, invariants,
+                    Map.of());
+        }
+
+        /** M1's shape: no params and no invariants. */
+        Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
+                Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
+                Set<String> recursiveFns, List<Warning> warnings) {
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, null, List.of(),
+                    Map.of());
+        }
+
+        /** A record type, the state, the params ({@code Config}), or an enum variant (variant names are unique in a file). */
         RecordType record(String name) {
             if (name.equals("State")) return state;
+            if (name.equals(PARAMS) && params != null) return params;
             RecordType r = records.get(name);
             if (r != null) return r;
             for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return e.variants().get(name);
+            // M2c: an imported contract's type, by its qualified name (Oracle.State, Oracle.Share, a variant Oracle.Open).
+            for (Foreign f : contracts.values()) {
+                if (f.state().name().equals(name)) return f.state();
+                if (f.records().containsKey(name)) return f.records().get(name);
+                for (EnumType e : f.enums().values()) if (e.variants().containsKey(name)) return e.variants().get(name);
+            }
             return null;
         }
 
         /** The enum a variant belongs to, or null. */
         EnumType enumOf(String variant) {
             for (EnumType e : enums.values()) if (e.variants().containsKey(variant)) return e;
+            for (Foreign f : contracts.values()) for (EnumType e : f.enums().values()) if (e.variants().containsKey(variant)) return e;
+            return null;
+        }
+
+        /** An enum by name: the contract's own, or (M2c) an imported contract's ({@code Oracle.Phase}). */
+        EnumType enumType(String name) {
+            EnumType e = enums.get(name);
+            if (e != null) return e;
+            for (Foreign f : contracts.values()) if (f.enums().containsKey(name)) return f.enums().get(name);
             return null;
         }
 
@@ -52,6 +85,24 @@ final class Ir {
     }
 
     record ContractOption(String name, BigInteger value) {}
+
+    /**
+     * M2c (ADR-0018 D9): a contract this one imports ({@code import contract { C } from "./C.jsc"}), as its own checked IR
+     * states it: its package, its state and its declared types under qualified names ({@code C.State}, {@code C.Share},
+     * variants {@code C.Open}), its time fields (D11: reading one gives a time value) and the memo types its receiving
+     * actions read ({@code receives T}; null for an action that reads none).
+     */
+    record Foreign(String name, String pkg, RecordType state, Map<String, RecordType> records, Map<String, EnumType> enums,
+                   Set<String> timeFields, List<Ty> receives, boolean bigMaps) {}
+
+    /** The params record's name (M2b, ADR-0009 D1): reserved, so no declared type takes it. */
+    static final String PARAMS = "Config";
+
+    /** The events' sum type (M2b, ADR-0009 D5): its variants are the contract's {@code event} declarations. */
+    static final String EVENT = "Event";
+
+    /** {@code invariant name = body} (ADR-0009 D4): a Bool over the state ({@code StateRef}/{@code StateField}) and the params. */
+    record Invariant(String name, Block body, Pos pos) {}
 
     /** A record type: a {@code type} declaration or the state; fields in declaration order. */
     record RecordType(String name, LinkedHashMap<String, Ty> fields, Pos pos) {
@@ -77,7 +128,14 @@ final class Ir {
     enum Kind { INIT, ACTION, DESTROY, VIEW }
 
     /** A modifier in source order: {@code payable}, {@code open}, {@code only f}, {@code after f}, {@code before f}. */
-    record Mod(String name, String field) {}
+    record Mod(String name, String field, Ty type) {
+        Mod(String name, String field) {
+            this(name, field, null);
+        }
+    }
+
+    /** M2c: a {@code reads} parameter: {@code local} holds the state of the instance the params field {@code field} names. */
+    record Read(Local local, String field) {}
 
     /**
      * A contract method. {@code checked} are the parameters holding keys, checked before the body runs (D5, J15);
@@ -85,7 +143,18 @@ final class Ir {
      * whether the method takes the transaction.
      */
     record Method(Kind kind, String name, List<Local> params, List<Mod> mods, List<Local> checked, boolean usesCtx,
-                  boolean pays, Block body, Ty resultType, Pos pos) {}
+                  boolean pays, Block body, Ty resultType, Pos pos, List<Read> reads) {
+        Method(Kind kind, String name, List<Local> params, List<Mod> mods, List<Local> checked, boolean usesCtx, boolean pays,
+               Block body, Ty resultType, Pos pos) {
+            this(kind, name, params, mods, checked, usesCtx, pays, body, resultType, pos, List.of());
+        }
+
+        /** M2c: the memo type of {@code receives T}; null when the action does not receive or reads no memo. */
+        Mod receives() {
+            for (Mod m : mods) if (m.name().equals("receives")) return m;
+            return null;
+        }
+    }
 
     record Fn(String name, List<Local> params, Ty ret, Block body, Pos pos) {}
 
@@ -121,7 +190,7 @@ final class Ir {
 
     // ------------------------------------------------------------------ statements
 
-    sealed interface Stmt permits Let, Require, Pay, If, For, MatchStmt {
+    sealed interface Stmt permits Let, Require, Pay, Send, Mint, Accept, Emit, Deposit, If, For, MatchStmt {
         Pos pos();
     }
 
@@ -130,6 +199,25 @@ final class Ir {
     record Require(Expr cond, String message, Pos pos) implements Stmt {}
 
     record Pay(Expr to, Expr amount, Pos pos) implements Stmt {}
+
+    /** {@code send(to, value[, datum])} (M2; the datum M2c's): an output of {@code value} to {@code to}, in source order. */
+    record Send(Expr to, Expr value, Expr datum, Pos pos) implements Stmt {
+        Send(Expr to, Expr value, Pos pos) {
+            this(to, value, null, pos);
+        }
+    }
+
+    /** {@code deposit(target, value, memo)} (M2c, ADR-0011 D3): {@code value} into the instance {@code target}, in source order. */
+    record Deposit(Expr target, Expr value, Expr memo, Pos pos) implements Stmt {}
+
+    /** {@code mint(name, qty)} / {@code burn(name, qty)} (M2): {@code qty} more (or fewer) of the own policy's {@code name}. */
+    record Mint(boolean burn, Expr name, Expr qty, Pos pos) implements Stmt {}
+
+    /** {@code accept(value)} (M2): native assets the method takes in, summed. */
+    record Accept(Expr value, Pos pos) implements Stmt {}
+
+    /** {@code emit(e)} (M2b): an event (a value of the contract's {@code Event}), in source order. */
+    record Emit(Expr event, Pos pos) implements Stmt {}
 
     /** One test of an if or else-if chain: its condition and its arm. */
     record Branch(Expr cond, Block then, Pos pos) {}
@@ -157,7 +245,7 @@ final class Ir {
     sealed interface Expr permits Lit, LocalRef, StateRef, StateField, CtxRef, NoneLit, SomeOf, GetField, New, CallFn,
             CallStd, Prelude, TimePred, ListLit, Neg, Not, Arith, Compare, Equals, Logic, Cond, Coalesce, BlockValue,
             IfValue, ListProp, Concat, Contains, Hof, Fold, Variant, Match, MapEmpty, MapOp, MapHof, MapFold, BigEmpty, BigOp,
-            Range, ListArg {
+            Range, ListArg, FundsRef, LedgerOp, ParamsRef, DepositField {
         Ty type();
 
         int taint();
@@ -296,4 +384,38 @@ final class Ir {
 
     /** {@code xs.take(n)} / {@code xs.drop(n)}: {@code n} negative fails on both sides (D7). */
     record ListArg(String op, Expr list, Expr arg, Ty type, int taint, Pos pos) implements Expr {}
+
+    /**
+     * {@code funds.received}, {@code funds.held} (Values), {@code funds.policy} (a Hash) or {@code funds.self} (Bytes): the
+     * native assets a call sees (M2, ADR-0007 D1). Never a time value.
+     */
+    record FundsRef(String field, Ty type, Pos pos) implements Expr {
+        public int taint() {
+            return 0;
+        }
+    }
+
+    /**
+     * An operation on the ledger types of M2 (D5). Values: {@code none}, {@code lovelace} (Int), {@code asset} (Hash,
+     * Bytes, Int), {@code add}, {@code sub}, {@code lovelaceOf}, {@code of} (Value, Hash, Bytes), {@code covers}.
+     * Credentials and addresses: {@code keyCred} (Key), {@code scriptCred} (Hash), {@code wallet} (Key),
+     * {@code walletStaked} (Key, Key), {@code script} (Hash), {@code scriptStaked} (Hash, Key), {@code payment} (Address).
+     */
+    record LedgerOp(String op, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** {@code params.f} (M2b, ADR-0009 D1): a field of the deploy-time parameters. Never a time value. */
+    record ParamsRef(String field, Ty type, Pos pos) implements Expr {
+        public int taint() {
+            return 0;
+        }
+    }
+
+    /** {@code d.value} (a Value) or {@code d.memo} (the action's memo type) of a deposit (M2c, ADR-0011 D3). Never a time value. */
+    record DepositField(Expr target, String field, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** The ops of {@link LedgerOp} with their argument counts. */
+    static final Map<String, Integer> LEDGER_OPS = Map.ofEntries(Map.entry("none", 0), Map.entry("lovelace", 1), Map.entry("asset", 3),
+            Map.entry("add", 2), Map.entry("sub", 2), Map.entry("lovelaceOf", 1), Map.entry("of", 3), Map.entry("covers", 2),
+            Map.entry("keyCred", 1), Map.entry("scriptCred", 1), Map.entry("wallet", 1), Map.entry("walletStaked", 2),
+            Map.entry("script", 1), Map.entry("scriptStaked", 2), Map.entry("payment", 1));
 }

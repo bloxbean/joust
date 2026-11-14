@@ -82,7 +82,7 @@ class JscV2IrTest {
     void theExport_roundTrips_toTheSameTextJavaAndManifest() throws Exception {
         var nodes = new TreeSet<String>();
         for (var e : sources().entrySet()) {
-            var lowered = JscV2.lower(e.getValue(), e.getKey());
+            var lowered = DslExamples.lower(e.getValue(), e.getKey());
             String json = lowered.irJson();
             assertTrue(json.startsWith("{\n  \"ir\": " + IrJson.VERSION + ",\n"), json.substring(0, 40));
             Ir.Program back = IrJson.read(json);
@@ -120,16 +120,16 @@ class JscV2IrTest {
     @Test
     void aReader_refusesAnotherVersion_anUnknownNode_andAnUndeclaredLocal() {
         String json = JscV2.lower(FORMS, "Forms.jsc").irJson();
-        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 2,")));
-        assertTrue(e.getMessage().contains("not a version 1"), e.getMessage());
+        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 2,", "\"ir\": 1,")));
+        assertTrue(e.getMessage().contains("not a version 2"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"node\": \"Arith\"", "\"node\": \"Arith2\"")));
         assertTrue(e.getMessage().contains("unknown node Arith2"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"local\": (\\d+)", "\"local\": 9999")));
         assertTrue(e.getMessage().contains("undeclared local 9999"), e.getMessage());
         // Review S3: the reader is strict, like the JavaScript one.
-        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 1.0,")));
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 2,", "\"ir\": 2.0,")));
         assertTrue(e.getMessage().contains("not a plain integer"), e.getMessage());
-        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 1, \"ir\": 1,")));
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 2,", "\"ir\": 2, \"ir\": 2,")));
         assertTrue(e.getMessage().contains("duplicate key"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"value\": \"(\\d+)\"", "\"value\": \"0x10\"")));
         assertTrue(e.getMessage().contains("not a decimal integer: 0x10"), e.getMessage());
@@ -191,7 +191,7 @@ class JscV2IrTest {
             String name = e.getKey().replace(".jsc", ".ir.json");
             names.add(name);
             Path f = JS_FIXTURES.resolve(name);
-            String now = JscV2.lower(e.getValue(), e.getKey()).irJson();
+            String now = DslExamples.lower(e.getValue(), e.getKey()).irJson();
             if (write) Files.writeString(f, now);
             else if (!Files.exists(f) || !Files.readString(f).equals(now)) stale.add(name);
         }
@@ -203,5 +203,69 @@ class JscV2IrTest {
             assertEquals(expected, present, "every example's IR, and nothing else");
         }
         assertFalse(Arrays.asList(names.toArray()).isEmpty());
+    }
+
+    /**
+     * #84 review C8, F10: the Java reader refuses a field it does not know at every level, as the JavaScript reader does,
+     * so a later addition is refused rather than dropped: the program, a record and its fields, a method, a modifier, an
+     * invariant, a block, every statement and every node (each kind's fields from the writer).
+     */
+    @Test
+    void theReader_refusesAnUnknownField_atEveryLevel() throws Exception {
+        String json = JscV2.lower(java.nio.file.Files.readString(java.nio.file.Path.of(
+                "../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Council.jsc")), "Council.jsc").irJson();
+        IrJson.read(json);
+        var where = new java.util.ArrayList<String>();
+        var root = (java.util.Map<String, Object>) AbiCheck.Json.parseStrict(json);
+        // Every object of the export, each in its own copy with an extra field: every one is refused.
+        var paths = new java.util.ArrayList<java.util.List<Object>>();
+        collect(root, new java.util.ArrayList<>(), paths);
+        int refused = 0;
+        for (var path : paths) {
+            String mutated = withExtra(json, path);
+            try {
+                IrJson.read(mutated);
+                where.add(path.toString());
+            } catch (IllegalArgumentException e) {
+                assertTrue(e.getMessage().contains("unknown field \"futureCheck\""), path + ": " + e.getMessage());
+                refused++;
+            }
+        }
+        assertEquals(java.util.List.of(), where, "objects whose unknown field the reader dropped");
+        assertTrue(refused > 100, "objects checked: " + refused);
+        System.out.println("[ir] an unknown field is refused in each of the " + refused + " objects of Council's export");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void collect(Object node, java.util.List<Object> path, java.util.List<java.util.List<Object>> out) {
+        if (node instanceof java.util.Map<?, ?> m) {
+            // A type ({"list": …}) and a local's fieldTaints are maps of their own kind, not objects with fields.
+            boolean typeOrTaints = !path.isEmpty() && path.getLast().equals("fieldTaints")
+                    || m.size() == 1 && java.util.Set.of("list", "option", "record", "enum", "map", "bigmap").containsAll(m.keySet());
+            if (!typeOrTaints) out.add(java.util.List.copyOf(path));
+            for (var e : ((java.util.Map<String, Object>) m).entrySet()) {
+                var p = new java.util.ArrayList<>(path);
+                p.add(e.getKey());
+                if (!typeOrTaints) collect(e.getValue(), p, out);
+            }
+        } else if (node instanceof java.util.List<?> l) {
+            for (int i = 0; i < l.size(); i++) {
+                var p = new java.util.ArrayList<>(path);
+                p.add(i);
+                collect(l.get(i), p, out);
+            }
+        }
+    }
+
+    /** The export with {@code "futureCheck": false} added to the object at {@code path}, written back as JSON. */
+    @SuppressWarnings("unchecked")
+    private static String withExtra(String json, java.util.List<Object> path) {
+        var root = (java.util.Map<String, Object>) AbiCheck.Json.parseStrict(json);
+        Object at = root;
+        for (Object k : path) at = k instanceof Integer i ? ((java.util.List<Object>) at).get(i) : ((java.util.Map<String, Object>) at).get(k);
+        ((java.util.Map<String, Object>) at).put("futureCheck", false);
+        var sb = new StringBuilder();
+        IrJson.print(root, sb, "");
+        return sb.toString();
     }
 }

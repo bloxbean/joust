@@ -1,0 +1,54 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/treasury in .jsc 2 (ADR-0018 M2b, J11; ADR-0009): a multisig treasury. A council of keys decides by quorum;
+// a guardian credential fixed at deploy (params) can freeze it, here a script that approves through a zero withdrawal;
+// every state keeps a reachable quorum (an invariant, beside the generated check that the council's keys are sorted,
+// distinct and 28 bytes); payouts, council changes and freezes emit authenticated events.
+contract Treasury(maxDatumBytes = 640) {
+  params { guardian: Credential, maxPayout: Int }
+  state { council: List<Key>, quorum: Int, frozen: Bool }
+
+  event Paid { to: Key, amount: Int }
+  event CouncilChanged { members: Int, quorum: Int }
+  event Frozen { frozen: Bool }
+
+  init(council: List<Key>, quorum: Int) payable {
+    return { council, quorum, frozen: false }
+  }
+
+  action fund() payable {
+    require(received > 0, "fund with some ADA")
+    return state
+  }
+
+  // Pays amount to to; needs a quorum of the council.
+  action pay(to: Key, amount: Int) quorum council quorum {
+    require(!frozen, "the treasury is frozen")
+    require(amount > 0 && amount <= params.maxPayout, "amount out of range")
+    require(amount <= balance, "not enough funds")
+    pay(to, amount)
+    emit(Paid { to, amount })
+    return state
+  }
+
+  // Replaces the council; needs a quorum of the current one. The new council must keep a reachable quorum.
+  action rotate(newCouncil: List<Key>, newQuorum: Int) quorum council quorum {
+    emit(CouncilChanged { members: newCouncil.length, quorum: newQuorum })
+    return { ...state, council: newCouncil, quorum: newQuorum }
+  }
+
+  // The guardian freezes or unfreezes the treasury.
+  action freeze(on: Bool) authorized params.guardian {
+    emit(Frozen { frozen: on })
+    return { ...state, frozen: on }
+  }
+
+  // Ends the treasury, paying everything to to; needs a quorum.
+  destroy close(to: Key) quorum council quorum {
+    pay(to, balance)
+  }
+
+  // A quorum the council can reach.
+  invariant reachable = quorum > 0 && quorum <= council.length
+}

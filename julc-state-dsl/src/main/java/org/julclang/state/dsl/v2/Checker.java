@@ -26,7 +26,11 @@ final class Checker {
 
     static final Set<String> BUILTINS = Set.of("caller", "received", "balance", "validFrom", "validTo", "state", "params",
             "funds");
-    static final Set<String> PRELUDE = Set.of("min", "max", "abs", "utf8", "asKey", "asHash", "range", "Some", "after", "before");
+    static final Set<String> PRELUDE = Set.of("min", "max", "abs", "utf8", "asKey", "asHash", "range", "Some", "after", "before",
+            // M2: credentials and addresses (D8's prelude)
+            "keyCred", "scriptCred", "wallet", "script");
+    /** The effect statements (D4): a fn of the same name would read like one. */
+    static final Set<String> EFFECTS = Set.of("pay", "send", "mint", "burn", "accept", "deposit", "emit");
     /** Names no binding, field or declaration may take. */
     static final Set<String> RESERVED = Set.of(
             // Java keywords and literals
@@ -48,6 +52,14 @@ final class Checker {
             "ByteStringLib", "CryptoLib", "BytesAdapter", "Builtins", "Ctx", "Init", "Action", "Destroy", "View",
             "MathLib", "BitwiseLib", "MathAdapter", "BitsAdapter", "CryptoAdapter", "JulcMap", "SortedMaps", "MerkleMap",
             "MerkleMaps", "MapEntry",
+            // M2: the API classes values, addresses and effects lower to, and the generated result records
+            "ValueAdapter", "AddressAdapter", "Assets", "Funds", "Send", "Sends", "Datum", "PubKeyHash", "ScriptHash",
+            "KeyCred", "ScriptCred", "Received", "Settled",
+            // M2b: the batched actions' result record (beside a direct action's that holds events), the annotations
+            // invariants, params, quorum and authorized lower to (#84 review C6: a type of the name would shadow them)
+            "Stepped", "Invariant", "Params", "Quorum", "AuthorizedBy",
+            // M2c: the API names composition lowers to (reads, deposits, receives, instances)
+            "ForeignInstance", "Deposit", "Deposits", "Reads", "Receives", "Instance",
             "Payable", "SignedBy", "ValidAfter", "ValidBefore", "Batched", "StateContract", "String", "Object", "Boolean",
             "Integer", "Long", "Byte", "Math", "System", "Record", "Override",
             // .jsc 2 type names and helper-name fragments: a declared type of the same name would share a helper (C6)
@@ -104,6 +116,8 @@ final class Checker {
     private final Map<String, String> variantEnum = new HashMap<>();
     private final Map<String, Syntax.Fn> fns = new LinkedHashMap<>();
     private final Set<String> imported = new HashSet<>();
+    /** M2b: the params' fields (ADR-0009 D1), read as {@code params.f}; null when the contract declares none. */
+    private LinkedHashMap<String, Ty> paramsFields;
 
     /** State fields that hold time values (D11), contract-wide; grown to a fixed point. */
     private Set<String> timeFields = new TreeSet<>();
@@ -115,21 +129,41 @@ final class Checker {
     private final Set<Ir.Local> used = Collections.newSetFromMap(new IdentityHashMap<>());
     private int seq;
 
-    private Checker(File file, String fileName) {
+    /** M2c: where this file's {@code import contract} imports resolve, its module id, and the ids being checked (cycles). */
+    private final JscModules modules;
+    private final String id;
+    private final List<String> loading;
+    /** M2c: the contracts this one imports, by name (ADR-0018 D9), each as its own checked IR states it. */
+    private final LinkedHashMap<String, Ir.Foreign> contracts = new LinkedHashMap<>();
+
+    private Checker(File file, String fileName, String id, JscModules modules, List<String> loading) {
         this.file = file;
         this.fileName = fileName;
+        this.id = id;
+        this.modules = modules;
+        this.loading = loading;
     }
 
     static Ir.Program check(File file, String fileName) {
+        return check(file, fileName, null, JscModules.NONE);
+    }
+
+    /** Checks {@code file}, the module {@code id} of a build whose {@code import contract} imports {@code modules} resolves (M2c). */
+    static Ir.Program check(File file, String fileName, String id, JscModules modules) {
+        return check(file, fileName, id, modules, List.of());
+    }
+
+    private static Ir.Program check(File file, String fileName, String id, JscModules modules, List<String> loading) {
         try {
-            return checkFile(file, fileName);
+            return checkFile(file, fileName, id, modules, loading);
         } catch (JscException e) {
             throw Parser.hinted(e, file.leadingMinus(), file.members());
         }
     }
 
-    private static Ir.Program checkFile(File file, String fileName) {
-        var c = new Checker(file, fileName);
+    private static Ir.Program checkFile(File file, String fileName, String id, JscModules modules, List<String> loading) {
+        var c = new Checker(file, fileName, id, modules, loading);
+        c.importContracts();
         c.declare();
         Ir.Program p;
         int round = 0;
@@ -147,7 +181,7 @@ final class Checker {
                     + " if the line is meant to stand alone, end the line above with ';'");
         }
         return new Ir.Program(p.pkg(), p.fileName(), p.name(), p.options(), p.records(), p.enums(), p.state(), p.methods(), p.fns(),
-                Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings));
+                Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings), p.params(), p.invariants(), Map.copyOf(c.contracts));
     }
 
     private void resetRound() {
@@ -161,6 +195,139 @@ final class Checker {
         nextTimeFields = new TreeSet<>(timeFields);
     }
 
+    // ------------------------------------------------------------------ imported contracts (M2c, ADR-0018 D9)
+
+    /**
+     * {@code import contract { C } from "./C.jsc"}: the file is found in the build ({@link JscModules}), parsed and checked
+     * on its own (its time fields its own fixed point), and its state and declared types become {@code C.State},
+     * {@code C.T} here, with {@code Instance<C>}. A cycle of contract imports is refused; so is a {@code java:} contract,
+     * which needs javac attribution of its source (M4b's {@code java:} imports).
+     */
+    private void importContracts() {
+        for (Import im : file.imports()) {
+            if (!im.contract()) continue;
+            String name = im.names().get(0);
+            if (im.from().startsWith("java:")) {
+                throw im.pos().error("JSC0741", "import contract from a Java contract (" + im.from() + ") is not supported yet: it needs the"
+                        + " attribution of its source that java: library imports bring (ADR-0018 M4b); write the contract in .jsc, or read it from Java");
+            }
+            if (!JscModules.isRelative(im.from())) {
+                throw im.pos().error("JSC0742", "'" + im.from() + "' is not a contract file: import a .jsc contract by its path relative to this"
+                        + " file (import contract { " + name + " } from \"./" + name + ".jsc\")");
+            }
+            JscModules.Source src = modules.resolve(id, im.from());
+            if (src == null) {
+                throw im.pos().error("JSC0742", "no contract " + im.from() + (id == null ? " (this file is lowered on its own, so it imports no"
+                        + " contracts)" : " beside " + id + " under the sources"));
+            }
+            if (src.id().equals(id) || loading.contains(src.id())) {
+                throw im.pos().error("JSC0743", "the contract imports form a cycle (" + String.join(" -> ", loading) + (loading.isEmpty() ? "" : " -> ")
+                        + id + " -> " + src.id() + "): a contract may read or deposit into another only one way");
+            }
+            if (contracts.containsKey(name)) throw im.pos().error("JSC0744", "the contract " + name + " is imported twice");
+            if (name.equals(file.contract().name())) {
+                throw im.pos().error("JSC0744", "the imported contract " + name + " has this contract's name; a contract cannot import itself");
+            }
+            File other;
+            Ir.Program op;
+            var deeper = new ArrayList<>(loading);
+            deeper.add(id == null ? fileName : id);
+            try {
+                other = Parser.parse(src.text());
+                op = check(other, src.fileName(), src.id(), modules, deeper);
+            } catch (JscException e) {
+                throw im.pos().error("JSC0745", "the contract " + im.from() + " does not check: " + src.fileName() + ":" + e.line + ":" + e.col
+                        + ": " + e.getMessage());
+            }
+            if (!op.name().equals(name)) {
+                throw im.pos().error("JSC0742", im.from() + " declares the contract " + op.name() + ", not " + name
+                        + ": import contract { " + op.name() + " } from \"" + im.from() + "\"");
+            }
+            contracts.put(name, foreign(op));
+        }
+    }
+
+    /** An imported contract's IR as this file sees it: each of its types under {@code C.} (D9, M2c). */
+    private static Ir.Foreign foreign(Ir.Program op) {
+        String q = op.name() + ".";
+        java.util.function.UnaryOperator<Ty> qual = new java.util.function.UnaryOperator<>() {
+            @Override
+            public Ty apply(Ty t) {
+                return switch (t) {
+                    case Ty.Rec r -> new Ty.Rec(q + r.name());
+                    case Ty.EnumT e -> new Ty.EnumT(q + e.name());
+                    case Ty.ListT l -> new Ty.ListT(apply(l.elem()));
+                    case Ty.OptT o -> new Ty.OptT(apply(o.elem()));
+                    case Ty.MapT m -> new Ty.MapT(m.key(), apply(m.val()));
+                    case Ty.BigMapT b -> b;
+                    case Ty.DepositT d -> d.memo() == null ? d : new Ty.DepositT(apply(d.memo()));
+                    default -> t;
+                };
+            }
+        };
+        java.util.function.Function<Ir.RecordType, Ir.RecordType> rec = r -> {
+            var fs = new LinkedHashMap<String, Ty>();
+            r.fields().forEach((n, t) -> fs.put(n, qual.apply(t)));
+            return new Ir.RecordType(q + r.name(), fs, r.pos());
+        };
+        var records = new LinkedHashMap<String, Ir.RecordType>();
+        op.records().values().forEach(r -> records.put(q + r.name(), rec.apply(r)));
+        var enums = new LinkedHashMap<String, Ir.EnumType>();
+        for (Ir.EnumType e : op.enums().values()) {
+            var vs = new LinkedHashMap<String, Ir.RecordType>();
+            e.variants().values().forEach(v -> vs.put(q + v.name(), rec.apply(v)));
+            enums.put(q + e.name(), new Ir.EnumType(q + e.name(), vs, e.pos()));
+        }
+        var receives = new ArrayList<Ty>();
+        for (Ir.Method m : op.methods()) {
+            Ir.Mod r = m.receives();
+            if (r != null) receives.add(r.type() == null ? null : qual.apply(r.type()));
+        }
+        boolean big = op.state().fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT);
+        return new Ir.Foreign(op.name(), op.pkg(), rec.apply(op.state()), records, enums, Set.copyOf(op.timeFields()),
+                java.util.Collections.unmodifiableList(receives), big);
+    }
+
+    /** An imported contract's record (its state or a declared type), by qualified name, or null. */
+    private Ir.RecordType foreignRecord(String name) {
+        for (Ir.Foreign f : contracts.values()) {
+            if (f.state().name().equals(name)) return f.state();
+            if (f.records().containsKey(name)) return f.records().get(name);
+            for (Ir.EnumType e : f.enums().values()) if (e.variants().containsKey(name)) return e.variants().get(name);
+        }
+        return null;
+    }
+
+    private Ir.EnumType foreignEnum(String name) {
+        for (Ir.Foreign f : contracts.values()) if (f.enums().containsKey(name)) return f.enums().get(name);
+        return null;
+    }
+
+    /**
+     * M2c: an imported contract's type is read, not built or stored: it may be a const's, a fn's or a lambda's type, never a
+     * state, params, record, variant or event field, a method parameter, a view's result, a memo or a datum (JSC0446); its
+     * ABI is its own contract's.
+     */
+    private static void noForeign(Ty t, Pos p, String what) {
+        if (holdsForeign(t)) {
+            throw p.error("JSC0446", Ty.show(t) + " is another contract's type: it can be read (from reads) and passed to fns, but not be " + what
+                    + " (ADR-0018 D9, M2c)");
+        }
+    }
+
+    private static boolean holdsForeign(Ty t) {
+        return switch (t) {
+            case Ty.Rec r -> Ty.foreign(r.name());
+            case Ty.EnumT e -> Ty.foreign(e.name());
+            case Ty.ListT l -> holdsForeign(l.elem());
+            case Ty.OptT o -> holdsForeign(o.elem());
+            case Ty.MapT m -> holdsForeign(m.val());
+            case Ty.DepositT d -> true;
+            case Ty.Instance i -> true;
+            default -> false;
+        };
+    }
+
     // ------------------------------------------------------------------ declarations
 
     private void declare() {
@@ -168,8 +335,15 @@ final class Checker {
         checkUserName(c.name(), c.pos(), "contract");
         var allTypes = new ArrayList<TypeDecl>(file.types());
         allTypes.addAll(c.types());
-        var allEnums = new ArrayList<EnumDecl>(file.enums());
-        allEnums.addAll(c.enums());
+        var allEnums = allEnums(c);
+        // M2b: the generated names of the params record (Config) and the events' sum type (Event) are taken when the
+        // contract has params or events: a declared type of that name would be the same Java class.
+        for (TypeDecl t : allTypes) generatedTypeName(t.name(), t.pos(), c);
+        for (EnumDecl e : allEnums) {
+            // The events' own Event is generated; its variants (each event) are declared names like any other.
+            if (!(e.name().equals(Ir.EVENT) && e.variants() == c.events())) generatedTypeName(e.name(), e.pos(), c);
+            for (VariantDecl v : e.variants()) generatedTypeName(v.name(), v.pos(), c);
+        }
         // Records, enums and variants share one namespace: each becomes a class of the contract (D5).
         for (TypeDecl t : allTypes) {
             typeName(t.name(), t.pos(), "type", c);
@@ -191,6 +365,12 @@ final class Checker {
             for (VariantDecl v : e.variants()) fillFields(enums.get(e.name()).get(v.name()), v.fields(), v.name(), false);
         }
         fillFields(stateFields, c.state(), "state", true);
+        if (c.params() != null) {
+            // M2b (ADR-0009 D1): the deploy-time parameters, a record named Config, read as params.f.
+            if (c.params().isEmpty()) throw c.paramsPos().error("JSC0432", "the params need at least one field: params { fee: Int }");
+            paramsFields = new LinkedHashMap<>();
+            fillFields(paramsFields, c.params(), "params", false);
+        }
         for (TypeDecl t : allTypes) {
             if (cyclic(t.name())) {
                 throw t.pos().error("JSC0301", "the type " + t.name() + " contains itself; recursive types are not supported");
@@ -205,8 +385,9 @@ final class Checker {
         for (TypeDecl t : allTypes) declaredAt.put(t.name(), t.pos());
         for (EnumDecl e : allEnums) declaredAt.put(e.name(), e.pos());
         typeDepths(declaredAt);
-        // The state is a root too: each field's type nests at most MAX_DEPTH levels (J18).
+        // The state is a root too: each field's type nests at most MAX_DEPTH levels (J18); so are the params.
         for (FieldDecl f : c.state()) measured(stateFields.get(f.name()), f.type().pos());
+        if (c.params() != null) for (FieldDecl f : c.params()) measured(paramsFields.get(f.name()), f.type().pos());
         if (stateFields.isEmpty()) throw c.pos().error("JSC0303", "the state needs at least one field");
 
         var methodNames = new HashSet<String>();
@@ -218,7 +399,7 @@ final class Checker {
             if (records.containsKey(f.name()) || enums.containsKey(f.name()) || variantEnum.containsKey(f.name())) {
                 throw f.pos().error("JSC0221", "the fn " + f.name() + " has the name of a declared type or variant; rename one");
             }
-            if (fns.containsKey(f.name()) || PRELUDE.contains(f.name()) || Std.ROWS.containsKey(f.name())) {
+            if (fns.containsKey(f.name()) || PRELUDE.contains(f.name()) || Std.ROWS.containsKey(f.name()) || EFFECTS.contains(f.name())) {
                 throw f.pos().error("JSC0201", "the function " + f.name() + " is declared twice or shadows a built-in");
             }
             if (methodNames.contains(f.name())) {
@@ -226,17 +407,28 @@ final class Checker {
             }
             fns.put(f.name(), f);
         }
+        // M2b: an invariant is a static method of the contract's class beside its methods and fns (ADR-0009 D4).
+        var invariantNames = new HashSet<String>();
+        for (Syntax.InvariantDecl inv : c.invariants()) {
+            checkUserName(inv.name(), inv.pos(), "invariant");
+            if (methodNames.contains(inv.name()) || fns.containsKey(inv.name()) || !invariantNames.add(inv.name())) {
+                throw inv.pos().error("JSC0224", "the invariant " + inv.name() + " has the name of a method, fn or other invariant; rename"
+                        + " it (each becomes a method of one Java class)");
+            }
+            if (records.containsKey(inv.name()) || enums.containsKey(inv.name()) || variantEnum.containsKey(inv.name())
+                    || PRELUDE.contains(inv.name()) || Std.ROWS.containsKey(inv.name()) || EFFECTS.contains(inv.name())) {
+                throw inv.pos().error("JSC0224", "the invariant " + inv.name() + " has the name of a declared type, variant or built-in; rename it");
+            }
+        }
         // Security S7: a state field is read by its bare name, so it never takes a declared type's, enum's, variant's
         // or fn's name, which it would hide in every method (a field Open would replace the variant Open).
         for (FieldDecl f : c.state()) declaredName(f.name(), f.pos());
         for (Import im : file.imports()) {
+            if (im.contract()) continue;   // M2c: import contract, loaded first (importContracts)
             for (String n : im.names()) {
                 Std.Binding b = Std.ROWS.get(n);
                 String module = b != null ? b.module() : Std.ALSO_EXPORTED.get(n);
                 if (module == null || !module.equals(im.from())) {
-                    if (im.from().equals("std/value") || im.from().equals("std/address")) {
-                        throw im.pos().error("JSC0304", im.from() + " comes with Value and Address in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
-                    }
                     throw im.pos().error("JSC0702", "'" + n + "' is not in " + im.from() + (module != null ? " (it is in " + module + ")" : ""));
                 }
                 if (b == null) continue;   // after/before: the prelude's
@@ -248,7 +440,9 @@ final class Checker {
         // The processor names redeemer variants after methods (capitalised): they must not clash with generated or
         // declared types.
         var generated = new HashSet<>(Set.of("Payout", "State", "Outcome", "CreateInstance", "BurnInstance", "Batch", "InBatch",
-                "CancelIntent", "Adopt", "Calls", "Step"));
+                "CancelIntent", "Adopt", "Calls", "Step",
+                // M2: the result records of methods with sends, mints or accepted assets, and the mint redeemer ByAction
+                "Received", "Settled", "ByAction", "Stepped"));
         generated.addAll(records.keySet());
         generated.addAll(enums.keySet());
         generated.addAll(variantEnum.keySet());
@@ -278,6 +472,29 @@ final class Checker {
         if (c.methods().stream().noneMatch(m -> m.kind() == Kind.INIT)) throw c.pos().error("JSC0401", "the contract needs an init(…)");
     }
 
+    /**
+     * The contract's enums: the file's and the contract's, then (M2b, ADR-0009 D5) {@code Event}, whose variants are the
+     * contract's {@code event} declarations, when it has any.
+     */
+    private List<EnumDecl> allEnums(Contract c) {
+        var out = new ArrayList<EnumDecl>(file.enums());
+        out.addAll(c.enums());
+        if (!c.events().isEmpty()) out.add(new EnumDecl(Ir.EVENT, c.events(), c.events().get(0).pos()));
+        return out;
+    }
+
+    /** M2b: {@code Config} names the params record and {@code Event} the events' type, when the contract has them. */
+    private static void generatedTypeName(String n, Pos p, Contract c) {
+        if (n.equals(Ir.PARAMS) && c.params() != null) {
+            throw p.error("JSC0225", "'Config' is the name of the params record (ADR-0009 D1): a contract with params cannot declare a"
+                    + " type, enum, variant or event named Config; rename it");
+        }
+        if (n.equals(Ir.EVENT) && !c.events().isEmpty()) {
+            throw p.error("JSC0225", "'Event' is the type of the contract's events (each 'event X { … }' is one of its variants,"
+                    + " ADR-0009 D5): a contract with events cannot declare a type, enum, variant or event named Event; rename it");
+        }
+    }
+
     /** A declared type, enum or variant name: capitalised, without '_', not reserved, not taken (D5, J10). */
     private void typeName(String n, Pos p, String what, Contract c) {
         if (!Character.isUpperCase(n.charAt(0))) throw p.error("JSC0205", what + " names start with a capital: " + n);
@@ -288,6 +505,10 @@ final class Checker {
         }
         if (n.equals(c.name())) {
             throw p.error("JSC0207", "the " + what + " " + n + " has the contract's name; rename one (it is generated inside the contract's class)");
+        }
+        if (contracts.containsKey(n)) {
+            throw p.error("JSC0744", "the " + what + " " + n + " has the name of an imported contract; rename it (the contract's class is"
+                    + " imported by that name)");
         }
         if (records.containsKey(n) || enums.containsKey(n) || variantEnum.containsKey(n)) {
             throw p.error("JSC0910", "the name " + n + " is declared twice: types, enums and variants share one namespace (each becomes a Java class)");
@@ -302,7 +523,18 @@ final class Checker {
             if (state && (BUILTINS.contains(f.name()) || PRELUDE.contains(f.name()))) {
                 throw f.pos().error("JSC0208", "'" + f.name() + "' is a built-in name, so it cannot be a state field: choose another name");
             }
-            if (into.put(f.name(), resolve(f.type(), state)) != null) throw f.pos().error("JSC0209", owner + " declares " + f.name() + " twice");
+            // M2c: an Instance<C> is a params field's own type only (D5); another contract's types are never stored (JSC0446).
+            instanceOk = owner.equals("params");
+            Ty t;
+            try {
+                t = resolve(f.type(), state);
+            } finally {
+                instanceOk = false;
+            }
+            if (!(t instanceof Ty.Instance)) noForeign(t, f.type().pos(), state ? "a state field" : "a field of " + owner);
+            // M2c (D5): a Value may be a field of the state, the params, a record or a variant (stored in its wire form,
+            // converted where it is read and built); still never inside a List, an Option or a Map (nested()).
+            if (into.put(f.name(), t) != null) throw f.pos().error("JSC0209", owner + " declares " + f.name() + " twice");
         }
     }
 
@@ -312,6 +544,19 @@ final class Checker {
 
     /** A written type; {@code stateField}: the type of a state field, the only place a BigMap may be (D7). */
     Ty resolve(TypeRef t, boolean stateField) {
+        boolean inst = instanceOk;
+        instanceOk = false;   // only the field's own type may be an Instance, not a type nested in it
+        try {
+            return resolveIn(t, stateField, inst);
+        } finally {
+            instanceOk = inst;
+        }
+    }
+
+    /** M2c: whether the type being resolved may be {@code Instance<C>} (a params field's own type). */
+    private boolean instanceOk;
+
+    private Ty resolveIn(TypeRef t, boolean stateField, boolean inst) {
         int n = t.args().size();
         Ty ty = switch (t.name()) {
             case "Int" -> Ty.INT;
@@ -319,16 +564,16 @@ final class Checker {
             case "Bytes" -> Ty.BYTES;
             case "Key" -> Ty.KEY;
             case "Hash" -> Ty.HASH;
-            case "List" -> n == 1 ? new Ty.ListT(resolve(t.args().get(0))) : null;
+            case "List" -> n == 1 ? new Ty.ListT(nested(resolve(t.args().get(0)), t.args().get(0).pos(), "an element of a List")) : null;
             case "Option" -> {
                 if (n != 1) yield null;
-                Ty e = resolve(t.args().get(0));
+                Ty e = nested(resolve(t.args().get(0)), t.args().get(0).pos(), "held in an Option");
                 if (e instanceof Ty.OptT) throw t.pos().error("JSC0305", "Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None");
                 yield new Ty.OptT(e);
             }
             case "Map" -> {
                 if (n != 2) throw t.pos().error("JSC0801", "a Map has a key and a value type: Map<Key, Int>");
-                yield new Ty.MapT(mapKey(t.args().get(0), "Map"), resolve(t.args().get(1)));
+                yield new Ty.MapT(mapKey(t.args().get(0), "Map"), nested(resolve(t.args().get(1)), t.args().get(1).pos(), "a Map's value"));
             }
             case "BigMap" -> {
                 if (n != 2) throw t.pos().error("JSC0802", "a BigMap has a key and a value type: BigMap<Key, Int>");
@@ -343,18 +588,80 @@ final class Checker {
                 }
                 yield new Ty.BigMapT(k, v);
             }
-            case "Value", "Address", "Credential" ->
-                    throw t.pos().error("JSC0306", t.name() + " comes in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
-            default -> records.containsKey(t.name()) ? new Ty.Rec(t.name()) : enums.containsKey(t.name()) ? new Ty.EnumT(t.name()) : null;
+            case "Value" -> n == 0 ? Ty.VALUE : null;
+            case "Instance" -> {
+                // M2c (D5): another contract's instance, a params field only (instanceOk), typed by an imported contract.
+                if (n != 1 || !t.args().get(0).args().isEmpty() || !contracts.containsKey(t.args().get(0).name())) {
+                    throw t.pos().error("JSC0445", "Instance<C> names an imported contract C (import contract { C } from \"./C.jsc\")");
+                }
+                if (!inst) {
+                    throw t.pos().error("JSC0445", "an Instance<C> is a params field only: the deployer fixes which script it trusts"
+                            + " (ADR-0011 r2, ADR-0018 D5); deposit and reads take params.f");
+                }
+                yield new Ty.Instance(t.args().get(0).name());
+            }
+            case "Address" -> n == 0 ? Ty.ADDRESS : null;
+            case "Credential" -> n == 0 ? Ty.CREDENTIAL : null;
+            default -> {
+                if (Ty.foreign(t.name())) {
+                    // M2c: an imported contract's type, C.State or C.T.
+                    String c = t.name().substring(0, t.name().indexOf('.'));
+                    if (!contracts.containsKey(c)) {
+                        throw t.pos().error("JSC0307", "unknown type '" + t.name() + "': " + c + " is not an imported contract (import contract { " + c
+                                + " } from \"./" + c + ".jsc\")");
+                    }
+                    Ir.Foreign f = contracts.get(c);
+                    if (f.state().name().equals(t.name()) || f.records().containsKey(t.name())) yield new Ty.Rec(t.name());
+                    if (f.enums().containsKey(t.name())) yield new Ty.EnumT(t.name());
+                    throw t.pos().error("JSC0307", "the contract " + c + " declares no type " + t.name().substring(c.length() + 1));
+                }
+                yield records.containsKey(t.name()) ? new Ty.Rec(t.name()) : enums.containsKey(t.name()) ? new Ty.EnumT(t.name()) : null;
+            }
         };
         if (ty == null && variantEnum.containsKey(t.name())) {
             throw t.pos().error("JSC0911", t.name() + " is a variant of " + variantEnum.get(t.name()) + ", not a type: write " + variantEnum.get(t.name()));
         }
-        if (ty == null || (n > 0 && !(ty instanceof Ty.ListT || ty instanceof Ty.OptT || ty instanceof Ty.MapT || ty instanceof Ty.BigMapT))) {
-            throw t.pos().error("JSC0307", "unknown type '" + t.name() + "' (Int, Bool, Bytes, Key, Hash, List<T>, Option<T>, Map<K, V>, BigMap<K, V>,"
-                    + " or a declared type or enum)");
+        if (ty == null || (n > 0 && !(ty instanceof Ty.ListT || ty instanceof Ty.OptT || ty instanceof Ty.MapT || ty instanceof Ty.BigMapT
+                || ty instanceof Ty.Instance))) {
+            throw t.pos().error("JSC0307", "unknown type '" + t.name() + "' (Int, Bool, Bytes, Key, Hash, Value, Address, Credential, List<T>,"
+                    + " Option<T>, Map<K, V>, BigMap<K, V>, or a declared type or enum)");
         }
         return measured(ty, t.pos());
+    }
+
+    /**
+     * A Value is a local's, a fn parameter's or a fn result's type, never stored or passed (D5, M2): until the wire
+     * conversion of stored values exists, it is not a state, record or variant field, a method parameter, a view's
+     * result, nor inside a List, an Option or a Map.
+     */
+    private static void noValue(Ty t, Pos p, String what) {
+        if (t.equals(Ty.VALUE)) {
+            throw p.error("JSC0341", "a Value cannot be " + what + ": it is a local's, a fn's, an effect's or (M2c) a field of the state,"
+                    + " the params, a record or a variant; to keep values in a list, an option or a map, wrap each in a record"
+                    + " (type Entry = { v: Value }) (ADR-0018 D5)");
+        }
+    }
+
+    /** Whether a value of this type holds a Value anywhere (M2c: a record or variant field). */
+    private boolean holdsValue(Ty t) {
+        return holdsValue(t, new HashSet<>());
+    }
+
+    private boolean holdsValue(Ty t, Set<String> seen) {
+        return switch (t) {
+            case Ty.Ledger l -> l.equals(Ty.VALUE);
+            case Ty.ListT l -> holdsValue(l.elem(), seen);
+            case Ty.OptT o -> holdsValue(o.elem(), seen);
+            case Ty.MapT m -> holdsValue(m.val(), seen);
+            case Ty.Rec r -> seen.add(r.name()) && components(r.name()).stream().anyMatch(x -> holdsValue(x, seen));
+            case Ty.EnumT e -> seen.add(e.name()) && components(e.name()).stream().anyMatch(x -> holdsValue(x, seen));
+            default -> false;
+        };
+    }
+
+    private static Ty nested(Ty t, Pos p, String what) {
+        noValue(t, p, what);
+        return t;
     }
 
     /** A map key type: Bytes, Key or Hash, at most 64 bytes (D5, F19). */
@@ -403,6 +710,11 @@ final class Checker {
             case Ty.BigMapT m -> named(m.val(), out);
             case Ty.Rec r -> out.add(r.name());
             case Ty.EnumT e -> out.add(e.name());
+            case Ty.Ledger l -> { }
+            case Ty.Instance i -> { }
+            case Ty.DepositT d -> {
+                if (d.memo() != null) named(d.memo(), out);
+            }
         }
     }
 
@@ -458,6 +770,10 @@ final class Checker {
             case Ty.BigMapT m -> 1 + structuralDepth(m.val(), named);
             case Ty.Rec r -> named.getOrDefault(r.name(), 0);
             case Ty.EnumT e -> named.getOrDefault(e.name(), 0);
+            // An address nests its credential and its optional staking credential's (Constr, Option, Constr, Constr).
+            case Ty.Ledger l -> l.equals(Ty.ADDRESS) ? 4 : 2;
+            case Ty.Instance i -> 1;
+            case Ty.DepositT d -> 1 + (d.memo() == null ? 0 : structuralDepth(d.memo(), named));
         };
     }
 
@@ -476,6 +792,10 @@ final class Checker {
     /** The fields of a record, the state or a variant. */
     private LinkedHashMap<String, Ty> fieldsOf(String rec) {
         if (rec.equals("State")) return stateFields;
+        if (Ty.foreign(rec)) {
+            Ir.RecordType r = foreignRecord(rec);
+            return r == null ? null : r.fields();
+        }
         if (records.containsKey(rec)) return records.get(rec);
         String e = variantEnum.get(rec);
         return e == null ? null : enums.get(e).get(rec);
@@ -488,6 +808,11 @@ final class Checker {
 
     /** The component types of a record, or of every variant of an enum (for checks and BigMap containment). */
     private List<Ty> components(String name) {
+        if (Ty.foreign(name) && foreignEnum(name) != null) {
+            var out = new ArrayList<Ty>();
+            foreignEnum(name).variants().values().forEach(v -> out.addAll(v.fields().values()));
+            return out;
+        }
         if (enums.containsKey(name)) {
             var out = new ArrayList<Ty>();
             enums.get(name).values().forEach(v -> out.addAll(v.values()));
@@ -532,8 +857,13 @@ final class Checker {
             this.parent = parent;
         }
 
+        /** In an invariant's body (M2b): a Bool, so no require (JSC0441). */
+        boolean invariant;
+
         Sc child(boolean effects, boolean lambda) {
-            return new Sc(kind, owner, hasState, hasCtx, effects, inLambda || lambda, helperDepth + 1, this);
+            Sc c = new Sc(kind, owner, hasState, hasCtx, effects, inLambda || lambda, helperDepth + 1, this);
+            c.invariant = invariant;
+            return c;
         }
 
         Ir.Local lookup(String n) {
@@ -571,6 +901,9 @@ final class Checker {
      * {@code phase == Open} into a check that always holds.
      */
     private void declaredName(String n, Pos p) {
+        if (contracts.containsKey(n)) {
+            throw p.error("JSC0222", "'" + n + "' would hide the imported contract " + n + "; a name is bound once and never replaces a declaration");
+        }
         String what = records.containsKey(n) ? "the type" : enums.containsKey(n) ? "the enum" : variantEnum.containsKey(n)
                 ? "the variant " + n + " of " + variantEnum.get(n) + "," : fns.containsKey(n) ? "the fn" : null;
         if (what == null) return;
@@ -596,9 +929,20 @@ final class Checker {
                     if (o.value().signum() < 0 || o.value().bitLength() > 62) throw o.pos().error("JSC0402", o.name() + " is out of range");
                     options.add(new Ir.ContractOption(o.name(), o.value()));
                 }
-                default -> throw o.pos().error("JSC0403", "unknown contract option '" + o.name() + "' (minAda, maxDatumBytes, maxValidityMs)");
+                // M2 (ADR-0007 D2): the native assets a state UTxO is sized for (its min-ADA deposit).
+                case "assetSlots" -> {
+                    if (o.value().signum() < 0 || o.value().compareTo(BigInteger.valueOf(64)) > 0) {
+                        throw o.pos().error("JSC0402", "assetSlots is out of range (0 to 64)");
+                    }
+                    options.add(new Ir.ContractOption(o.name(), o.value()));
+                }
+                default -> throw o.pos().error("JSC0403", "unknown contract option '" + o.name() + "' (minAda, maxDatumBytes, maxValidityMs, assetSlots)");
             }
         }
+        // M2: a contract is asset-aware when a method uses funds, send, mint, burn or accept (D10); the processor refuses
+        // batched actions in one (ADR-0007 r2), so the checker does, at the batched modifier.
+        // M2c: deposits and receives make a contract asset-aware too (D10; ADR-0011 D3).
+        assetAware = c.methods().stream().anyMatch(m -> usesFunds(m.body()) || effectsIn(m.body()).contains("deposit") || receives(m));
         var methods = new ArrayList<Ir.Method>();
         for (Syntax.Method m : c.methods()) methods.add(method(m));
         var irFns = new ArrayList<Ir.Fn>();
@@ -608,15 +952,41 @@ final class Checker {
         allTypes.addAll(c.types());
         for (TypeDecl t : allTypes) recs.put(t.name(), new Ir.RecordType(t.name(), records.get(t.name()), t.pos()));
         var ens = new LinkedHashMap<String, Ir.EnumType>();
-        var allEnums = new ArrayList<EnumDecl>(file.enums());
-        allEnums.addAll(c.enums());
-        for (EnumDecl e : allEnums) {
+        for (EnumDecl e : allEnums(c)) {
             var vs = new LinkedHashMap<String, Ir.RecordType>();
             for (VariantDecl v : e.variants()) vs.put(v.name(), new Ir.RecordType(v.name(), enums.get(e.name()).get(v.name()), v.pos()));
             ens.put(e.name(), new Ir.EnumType(e.name(), vs, e.pos()));
         }
+        var invariants = new ArrayList<Ir.Invariant>();
+        for (Syntax.InvariantDecl inv : c.invariants()) invariants.add(invariant(inv, c));
         return new Ir.Program(file.pkg(), fileName, c.name(), options, recs, ens, new Ir.RecordType("State", stateFields, c.pos()),
-                methods, irFns, Set.of(), Set.of(), List.of());
+                methods, irFns, Set.of(), Set.of(), List.of(), paramsFields == null ? null : new Ir.RecordType(Ir.PARAMS, paramsFields,
+                c.paramsPos()), invariants);
+    }
+
+    /**
+     * An invariant (M2b, ADR-0009 D4): a Bool over the state and the params, which the validator checks on every state it
+     * accepts as an output. Checked like a view's body (no transaction, no effects). Not on BigMap state (only the opened
+     * reads are visible on chain), and never a time value (D11): whether a state is acceptable would move with a window.
+     */
+    private Ir.Invariant invariant(Syntax.InvariantDecl inv, Contract c) {
+        if (stateFields.values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+            throw inv.pos().error("JSC0435", "a contract with BigMap state cannot have invariants: on chain only the opened reads are"
+                    + " visible, so the JVM and the chain would disagree (ADR-0009 D4)");
+        }
+        var sc = new Sc(Ir.Kind.VIEW, inv.name(), true, false, false, false, 0, null);
+        sc.invariant = true;
+        Syntax.Block b = inv.body();
+        var stmts = stmts(b.stmts(), sc);
+        if (b.result() == null) throw b.pos().error("JSC0412", "an invariant evaluates to a Bool");
+        Ir.Expr r = expr(b.result(), sc, Ty.BOOL);
+        expectType(Ty.BOOL, r, b.result().pos());
+        if ((r.taint() & TIME) != 0) {
+            throw b.result().pos().error("JSC0525", "an invariant cannot depend on a time value: whether a state is accepted would then"
+                    + " move with a validity window (ADR-0018 D11)");
+        }
+        unusedConsts(sc);
+        return new Ir.Invariant(inv.name(), new Ir.Block(stmts, r, b.pos()), inv.pos());
     }
 
     private static Ir.Kind kind(Kind k) {
@@ -631,16 +1001,61 @@ final class Checker {
     private boolean usesCtx(Syntax.Method m) {
         if (m.kind() == Kind.DESTROY) return true;
         if (m.kind() == Kind.VIEW) return false;
-        for (Mod mod : m.mods()) if (!mod.name().equals("open") && !mod.name().equals("only")) return true;
+        // quorum and authorized (M2b) read the transaction's signatories and withdrawals in the validator, not Ctx.
+        for (Mod mod : m.mods()) {
+            if (!Set.of("open", "only", "quorum", "authorized").contains(mod.name())) return true;
+        }
         return mentionsCtx(m.body());
+    }
+
+    /** Whether any method of the contract takes native assets (M2): it is then asset-aware (D10). */
+    private boolean assetAware;
+
+    /**
+     * Whether a method body is lowered with the {@code Funds} parameter (M2, D4): it reads {@code funds}, or sends, mints,
+     * burns or accepts (each needs the own policy, or states what the method takes in).
+     */
+    private static boolean usesFunds(Syntax.Block b) {
+        var fx = effectsIn(b);
+        return fx.contains("send") || fx.contains("mint") || fx.contains("accept") || mentions(b, "funds");
+    }
+
+    /** M2c: whether a method says {@code receives} (ADR-0011 D3). */
+    private static boolean receives(Syntax.Method m) {
+        return m.mods().stream().anyMatch(x -> x.name().equals("receives"));
     }
 
     private Ir.Method method(Syntax.Method m) {
         boolean hasState = m.kind() != Kind.INIT;
         boolean ctx = usesCtx(m);
-        boolean pays = paysIn(m.body());
-        if (pays && (m.kind() == Kind.INIT || m.kind() == Kind.VIEW)) {
-            throw firstPay(m.body()).error("JSC0404", (m.kind() == Kind.INIT ? "an init" : "a view") + " cannot pay (ADR-0018 D4)");
+        var fx = effectsIn(m.body());
+        boolean pays = fx.contains("pay");
+        // M2c: a deposit moves value out too (an audience, D4; a destroy may end by depositing).
+        boolean moves = pays || fx.contains("send") || fx.contains("mint") || fx.contains("deposit");
+        // M2c: a receiving action takes Funds (it sees the deposits in funds.deposits; ADR-0011 D3).
+        boolean funds = usesFunds(m.body()) || receives(m);
+        boolean payable = m.mods().stream().anyMatch(x -> x.name().equals("payable"));
+        if (moves && (m.kind() == Kind.INIT || m.kind() == Kind.VIEW)) {
+            throw firstEffect(m.body(), Set.of("pay", "send", "mint", "deposit")).error("JSC0404", (m.kind() == Kind.INIT ? "an init" : "a view")
+                    + " cannot pay, send, mint, burn or deposit (ADR-0018 D4, ADR-0007 D1, ADR-0011 D3)");
+        }
+        if (fx.contains("accept")) {
+            Pos at = firstEffect(m.body(), Set.of("accept"));
+            if (m.kind() == Kind.INIT) {
+                throw at.error("JSC0426", "accept in an init is not supported yet: the transition program of a creation that takes native"
+                        + " assets is not generated correctly (ADR-0018 M2, deferred); create the instance, then take the assets in an action");
+            }
+            if (!payable) {
+                throw at.error("JSC0422", "accept states the native assets a method takes in, so the method must be payable (ADR-0007 D1)");
+            }
+        }
+        if (payable && funds && !fx.contains("accept")) {
+            if (m.kind() == Kind.INIT) {
+                throw m.pos().error("JSC0426", "a payable init that uses funds would take native assets, which needs accept in an init: not"
+                        + " supported yet (ADR-0018 M2, deferred); drop payable, or create the instance and take the assets in an action");
+            }
+            throw m.pos().error("JSC0423", m.name() + " is payable and uses funds, send, mint or burn, so it can take native assets: state"
+                    + " exactly which with accept(…), or accept(Value.none()) for none (ADR-0007 r2, ADR-0018 D4)");
         }
         var sc = new Sc(kind(m.kind()), m.name(), hasState, ctx, m.kind() == Kind.ACTION || m.kind() == Kind.DESTROY, false, 0, null);
         var mods = new ArrayList<Ir.Mod>();
@@ -650,6 +1065,10 @@ final class Checker {
         for (Mod mod : m.mods()) {
             if (!modNames.add(mod.name())) throw mod.pos().error("JSC0416", "the modifier '" + mod.name() + "' is given twice");
             if (m.kind() == Kind.INIT && !mod.name().equals("payable")) throw mod.pos().error("JSC0405", "an init takes only 'payable'");
+            if (batched && (mod.name().equals("quorum") || mod.name().equals("authorized"))) {
+                throw mod.pos().error("JSC0417", "a batched action cannot use '" + mod.name() + "': an intent's owner is its caller, and the"
+                        + " batcher, not the caller, signs a batch (ADR-0009, ADR-0004 D1). " + INTENT_CAVEAT);
+            }
             if (batched && (mod.name().equals("only") || mod.name().equals("after") || mod.name().equals("before"))) {
                 // Review F4: the hint names the check that replaces this modifier; S6: with ADR-0004's caveat.
                 String instead = mod.name().equals("only")
@@ -667,9 +1086,71 @@ final class Checker {
                     audience = true;
                 }
                 case "after", "before" -> stateField(mod.arg(), Ty.INT, mod.pos(), mod.name());
+                case "quorum" -> {
+                    // M2b (ADR-0009 D2): at least threshold of the transaction's signatories are in keys, read from the
+                    // input state (or the params); each a state field or params.f.
+                    String[] kt = mod.arg().split(" ");
+                    if (kt[0].startsWith("params.") != kt[1].startsWith("params.")) {
+                        // The validator checks a state pair's shape on every output and a params pair's at creation
+                        // (ADR-0009 D2): a pair is one or the other.
+                        throw mod.pos().error("JSC0439", "'quorum " + mod.arg() + "': the keys and the threshold are both state fields or"
+                                + " both params fields (ADR-0009 D2)");
+                    }
+                    modField(kt[0], new Ty.ListT(Ty.KEY), mod.pos(), "quorum");
+                    modField(kt[1], Ty.INT, mod.pos(), "quorum " + kt[0]);
+                    audience = true;
+                }
+                case "authorized" -> {
+                    // M2b (ADR-0009 D3): the credential signed (a key) or approved this action (a script's withdrawal).
+                    modField(mod.arg(), Ty.CREDENTIAL, mod.pos(), "authorized");
+                    audience = true;
+                }
+                case "receives" -> {
+                    // M2c (ADR-0011 D3): @Receives. An action that continues takes the deposits claimed on its output.
+                    if (m.kind() != Kind.ACTION) {
+                        throw mod.pos().error("JSC0447", "only an action receives deposits: it continues, and its output takes them (ADR-0011 D3)");
+                    }
+                    if (batched) throw mod.pos().error("JSC0447", "a batched action cannot receive deposits: a deposit needs its receiver in the"
+                            + " depositor's transaction (ADR-0011 D3)");
+                    Ty memo = null;
+                    if (mod.type() != null) {
+                        memo = resolve(mod.type());
+                        noForeign(memo, mod.type().pos(), "a memo type");
+                        measured(memo, mod.type().pos());
+                    }
+                    mods.add(new Ir.Mod("receives", null, memo));
+                    continue;
+                }
                 case "batched" -> {
                     // ADR-0018 D10 (gated by pool, M1c): @Batched, or @Batched(only = true) for 'batched only'.
                     if (m.kind() != Kind.ACTION) throw mod.pos().error("JSC0418", "only an action can be batched (ADR-0004 D1)");
+                    if (assetAware) {
+                        throw mod.pos().error("JSC0424", "a contract with native assets (a method uses funds, send, mint, burn or accept) cannot"
+                                + " have batched actions: intents carry only lovelace (ADR-0007 r2, ADR-0018 D4)");
+                    }
+                    if (!file.contract().invariants().isEmpty()) {
+                        throw mod.pos().error("JSC0436", "a contract with invariants cannot have batched actions: a batch passes through"
+                                + " intermediate states the validator does not check (ADR-0009 D4)");
+                    }
+                    // #84 review S1/C1 (ADR-0009 r3): a quorum over state fields has its shape checked on every output
+                    // (as an invariant is), but a batch's states are not checked, so a batched action could make the
+                    // quorum unreachable and lock the contract. A params quorum cannot change.
+                    for (Syntax.Method x : file.contract().methods()) {
+                        for (Mod q : x.mods()) {
+                            if (q.name().equals("quorum") && !q.arg().startsWith("params.")) {
+                                throw mod.pos().error("JSC0440", "a contract with a quorum over state fields ('quorum " + q.arg() + "' in "
+                                        + x.name() + ") cannot have batched actions: a batch's states are not checked, so a batched"
+                                        + " action could make the quorum unreachable (ADR-0009 r3); use a params quorum, or no batched actions");
+                            }
+                        }
+                    }
+                    if (mentions(m.body(), "params")) {
+                        throw mod.pos().error("JSC0437", "a batched action cannot read params yet (ADR-0009 D1): pass the value as an argument");
+                    }
+                    if (fx.contains("emit")) {
+                        throw firstEffect(m.body(), Set.of("emit")).error("JSC0425", "a batched action cannot emit events: an intent's owner"
+                                + " is its caller, not an authenticated signer of the batch (ADR-0009 D5)");
+                    }
                     if (stateFields.values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
                         throw mod.pos().error("JSC0419", "a contract with BigMap state cannot have batched actions: each step of a batch"
                                 + " would need its own map proofs (ADR-0004 D1, ADR-0018 D7)");
@@ -679,20 +1160,27 @@ final class Checker {
             }
             mods.add(new Ir.Mod(mod.name(), mod.arg()));
         }
-        if (pays && !audience && batched) {
+        if (moves && !audience && batched) {
             throw m.pos().error("JSC0420", m.name() + " can pay out, so it must say who may call it; a batched action cannot use"
                     + " 'only' (any intent's owner is its caller), so write 'open' and check the caller in the body (ADR-0018 D4). " + INTENT_CAVEAT);
         }
-        if (pays && !audience) {
-            throw m.pos().error("JSC0408", m.name() + " can pay out, so it must say who may call it: add 'only <field>' or 'open' (ADR-0018 D4)");
+        if (moves && !audience) {
+            throw m.pos().error("JSC0408", m.name() + " can pay out, send, mint, burn or deposit, so it must say who may call it: add 'only"
+                    + " <field>' or 'open' (ADR-0018 D4)");
         }
-        if (m.kind() == Kind.DESTROY && !pays) {
-            throw m.pos().error("JSC0409", "a destroy ends the instance, so it must pay out what it holds: pay(…) at least once (ADR-0018 D4)");
+        if (m.kind() == Kind.DESTROY && !moves) {
+            throw m.pos().error("JSC0409", "a destroy ends the instance, so it must pay out what it holds: pay(…), send(…), mint(…), burn(…)"
+                    + " or deposit(…) at least once (ADR-0018 D4)");
         }
 
         var params = new ArrayList<Ir.Local>();
         var checked = new ArrayList<Ir.Local>();
+        var reads = new ArrayList<Ir.Read>();
         for (Param p : m.params()) {
+            if (p.reads() != null) {
+                reads.add(read(m, p, sc, batched));
+                continue;
+            }
             if (clientLocals(m.kind()).contains(p.name())) {
                 throw p.pos().error("JSC0216", "'" + p.name() + "' is a name the generated client uses for its own values; rename the parameter");
             }
@@ -703,6 +1191,13 @@ final class Checker {
                         + m.name() + "Intent(…, deadline)); rename the parameter");
             }
             Ty t = resolve(p.type());
+            noValue(t, p.type().pos(), "a method parameter");
+            noForeign(t, p.type().pos(), "a method parameter (read another contract's state with name: reads params.f)");
+            if (holdsValue(t)) {
+                throw p.type().pos().error("JSC0341", "a method parameter cannot hold a Value (" + Ty.show(t) + "): what a caller offers"
+                        + " reaches a method as funds.received (payable), and a redeemer field typed Value is not decoded alike on every leg yet"
+                        + " (ADR-0018 D5, M2c)");
+            }
             Ir.Local l;
             if (m.kind() == Kind.INIT) {
                 // An init has no input state: its parameters may share the names of the fields it creates (D3).
@@ -743,6 +1238,7 @@ final class Checker {
             case VIEW -> {
                 if (b.result() == null) throw b.pos().error("JSC0412", "a view evaluates to its value");
                 resultType = resolve(m.viewType());
+                noValue(resultType, m.viewType().pos(), "a view's result");
                 result = expr(b.result(), sc, resultType);
                 expectType(resultType, result, b.result().pos());
             }
@@ -750,7 +1246,60 @@ final class Checker {
         }
         unusedConsts(sc);
         return new Ir.Method(kind(m.kind()), m.name(), params, mods, checked, ctx, pays, new Ir.Block(stmts, result, b.pos()),
-                resultType, m.pos());
+                resultType, m.pos(), List.copyOf(reads));
+    }
+
+    /**
+     * M2c (ADR-0011 D2): {@code name: reads params.f}, the state of the instance the params field {@code f} (an
+     * {@code Instance<C>}) names, read from the transaction's reference inputs: a value of {@code C.State}. In an action
+     * or destroy (the processor reads none in a creation, a view or a batch); never of a contract with BigMap state (no
+     * proof path). Each field the other contract can set from its own window is a time value (D11).
+     */
+    private Ir.Read read(Syntax.Method m, Param p, Sc sc, boolean batched) {
+        if (m.kind() != Kind.ACTION && m.kind() != Kind.DESTROY) {
+            throw p.pos().error("JSC0443", "reads is for an action or destroy: an init, a view or a fn reads no other contract (ADR-0011 D2)");
+        }
+        if (batched) throw p.pos().error("JSC0443", "a batched action cannot read another contract yet (ADR-0009, ADR-0011 D2)");
+        if (paramsFields == null) {
+            throw p.pos().error("JSC0444", "reads params." + p.reads() + ": the contract declares no params { … }; the instance it reads is a"
+                    + " params field Instance<C> (ADR-0011 r2)");
+        }
+        Ty it = paramsFields.get(p.reads());
+        if (!(it instanceof Ty.Instance inst)) {
+            throw p.pos().error("JSC0444", "reads params." + p.reads() + ": " + (it == null ? "the params have no field " + p.reads()
+                    : "params." + p.reads() + " is " + Ty.show(it)) + "; reads names a params field Instance<C>");
+        }
+        Ir.Foreign f = contracts.get(inst.contract());
+        if (f.bigMaps()) {
+            throw p.pos().error("JSC0451", "the contract " + f.name() + " keeps BigMap state, which cannot be read (no proof path for its maps:"
+                    + " ADR-0011 r2)");
+        }
+        // Each field's taint: a time field of the other contract is a time value here (D11); the whole value is one if any is.
+        var fts = new LinkedHashMap<String, Integer>();
+        for (String fld : f.state().fields().keySet()) fts.put(fld, f.timeFields().contains(fld) ? TIME : 0);
+        int whole = f.timeFields().isEmpty() ? 0 : TIME;
+        Ir.Local l = sc.declare(p.name(), new Ty.Rec(f.state().name()), whole, p.pos(), false, fts);
+        return new Ir.Read(l, p.reads());
+    }
+
+    /**
+     * The field a quorum or authorized modifier names (M2b): a state field or {@code params.f}, of the type the check
+     * reads. Never a time field (D11): who may call would then move with a validity window.
+     */
+    private void modField(String ref, Ty want, Pos p, String mod) {
+        if (ref.startsWith("params.")) {
+            String f = ref.substring("params.".length());
+            if (paramsFields == null) throw p.error("JSC0434", "'" + mod + " " + ref + "': the contract declares no params { … }");
+            Ty t = paramsFields.get(f);
+            if (t == null) throw p.error("JSC0310", "'" + mod + " " + ref + "': the params have no field " + f);
+            if (!t.equals(want)) throw p.error("JSC0311", "'" + mod + " " + ref + "' needs a " + Ty.show(want) + "; " + ref + " is " + Ty.show(t));
+            return;
+        }
+        stateField(ref, want, p, mod);
+        if (timeFields.contains(ref)) {
+            throw p.error("JSC0524", "'" + mod + " " + ref + "': " + ref + " holds a time value, so who may call would depend on a validity"
+                    + " window; a quorum or authorized field is never a time value (ADR-0018 D11)");
+        }
     }
 
     private void stateField(String name, Ty want, Pos p, String mod) {
@@ -958,6 +1507,10 @@ final class Checker {
                     out.add(new Ir.Let(local, v, c.pos()));
                 }
                 case Syntax.Require r -> {
+                    if (sc.invariant) {
+                        throw r.pos().error("JSC0441", "an invariant is a Bool, so it holds no require (ADR-0009 D4): write the condition into"
+                                + " its value (invariant ok = a && b)");
+                    }
                     // A generated check's key ("#input:spend2.1", D12) names one construct: an author's message never
                     // holds that form, anywhere, so no trace of it can be taken for a generated check (review r1 S2, C3).
                     if (GENERATED_KEY.matcher(r.message()).find()) {
@@ -984,6 +1537,94 @@ final class Checker {
                                 + " amount moves with it (ADR-0018 D11)");
                     }
                     out.add(new Ir.Pay(to, amount, p.pos()));
+                }
+                case Syntax.Send sd -> {
+                    effectAllowed(sd.pos(), sc, "send(…)");
+                    Ir.Expr to = expr(sd.to(), sc, Ty.ADDRESS);
+                    expectType(Ty.ADDRESS, to, sd.to().pos());
+                    Ir.Expr value = expr(sd.value(), sc, Ty.VALUE);
+                    expectType(Ty.VALUE, value, sd.value().pos());
+                    if ((value.taint() & TIME) != 0) {
+                        throw sd.value().pos().error("JSC0520", "a time value cannot be any part of a send's value: a send must hold a"
+                                + " non-negative value, so its sign would decide whether the call fails (ADR-0018 D11)");
+                    }
+                    // M2c: send(to, value, datum): an inline datum, encoded by a generated encoder (D5, J17).
+                    Ir.Expr datum = sd.datum() == null ? null : encodable(sd.datum(), sc, "a send's datum");
+                    out.add(new Ir.Send(to, value, datum, sd.pos()));
+                }
+                case Syntax.Deposit dp -> {
+                    // M2c (ADR-0011 D3): value into another contract's instance, which must take it in the same transaction.
+                    effectAllowed(dp.pos(), sc, "deposit(…)");
+                    Ir.Expr target = expr(dp.target(), sc, null);
+                    if (!(target.type() instanceof Ty.Instance inst)) {
+                        throw dp.target().pos().error("JSC0449", "a deposit's target is another contract's instance: a params field Instance<C>"
+                                + " (deposit(params.pot, …)), not " + Ty.show(target.type()));
+                    }
+                    Ir.Expr value = expr(dp.value(), sc, Ty.VALUE);
+                    expectType(Ty.VALUE, value, dp.value().pos());
+                    if ((value.taint() & TIME) != 0) {
+                        throw dp.value().pos().error("JSC0526", "a time value cannot be any part of a deposit's value: a deposit must be"
+                                + " non-empty and strictly positive, so even a clamped 0 would fail (ADR-0018 D11)");
+                    }
+                    Ir.Expr memo = encodable(dp.memo(), sc, "a deposit's memo");
+                    Ir.Foreign f = contracts.get(inst.contract());
+                    if (f.receives().isEmpty()) {
+                        throw dp.target().pos().error("JSC0449", "the contract " + f.name() + " has no receiving action (receives), so nothing could take this"
+                                + " deposit: a deposit's target must say receives (ADR-0011 r3)");
+                    }
+                    boolean fits = false;
+                    for (Ty want : f.receives()) fits |= want == null || encodesAs(memo.type(), want, new HashSet<>());
+                    if (!fits) {
+                        var wants = new ArrayList<String>();
+                        for (Ty want : f.receives()) wants.add(Ty.show(want));
+                        throw dp.memo().pos().error("JSC0450", "the memo is " + Ty.show(memo.type()) + ", but " + f.name() + "'s receiving actions read"
+                                + " memos of " + String.join(", ", wants) + ": no receiver could decode it, so the transaction would always fail");
+                    }
+                    out.add(new Ir.Deposit(target, value, memo, dp.pos()));
+                }
+                case Syntax.Mint mt -> {
+                    effectAllowed(mt.pos(), sc, (mt.burn() ? "burn" : "mint") + "(…)");
+                    Ir.Expr name = expr(mt.name(), sc, Ty.BYTES);
+                    expectType(Ty.BYTES, name, mt.name().pos());
+                    Ir.Expr qty = expr(mt.qty(), sc, Ty.INT);
+                    expectType(Ty.INT, qty, mt.qty().pos());
+                    if ((qty.taint() & TIME) != 0) {
+                        throw mt.qty().pos().error("JSC0521", "a time value cannot be a " + (mt.burn() ? "burn" : "mint") + " quantity: it must"
+                                + " be positive, so its sign would decide whether the call fails (ADR-0018 D11)");
+                    }
+                    if ((name.taint() & TIME) != 0) {
+                        // Review S5: a name over 32 bytes or of a reserved kind fails the call, so time would decide that too.
+                        throw mt.name().pos().error("JSC0521", "a time value cannot decide a " + (mt.burn() ? "burn" : "mint") + "'s token name:"
+                                + " a name over 32 bytes or of a reserved kind fails the call, so the window would decide whether it fails"
+                                + " (ADR-0018 D11)");
+                    }
+                    out.add(new Ir.Mint(mt.burn(), name, qty, mt.pos()));
+                }
+                case Syntax.Accept ac -> {
+                    effectAllowed(ac.pos(), sc, "accept(…)");
+                    Ir.Expr value = expr(ac.value(), sc, Ty.VALUE);
+                    expectType(Ty.VALUE, value, ac.value().pos());
+                    if ((value.taint() & TIME) != 0) {
+                        throw ac.value().pos().error("JSC0522", "a time value cannot be any part of an accepted value: it must equal exactly"
+                                + " the native assets the call receives (ADR-0018 D11)");
+                    }
+                    out.add(new Ir.Accept(value, ac.pos()));
+                }
+                case Syntax.Emit em -> {
+                    // M2b (ADR-0009 D5): an event of the call, in source order; the validator checks the redeemer
+                    // carries exactly these. Events are the contract's Event (each 'event X { … }').
+                    effectAllowed(em.pos(), sc, "emit(…)");
+                    if (!enums.containsKey(Ir.EVENT) || file.contract().events().isEmpty()) {
+                        throw em.pos().error("JSC0438", "the contract declares no events: declare one with event Name { field: Type } (ADR-0009 D5)");
+                    }
+                    Ty et = new Ty.EnumT(Ir.EVENT);
+                    Ir.Expr ev = expr(em.event(), sc, et);
+                    expectType(et, ev, em.event().pos());
+                    if ((ev.taint() & TIME) != 0) {
+                        warn(em.event().pos(), "JSC9008", "this event carries a time value: whoever submits the transaction chooses the"
+                                + " window, so a value of it can be up to maxValidityMs early or late (ADR-0018 D11)");
+                    }
+                    out.add(new Ir.Emit(ev, em.pos()));
                 }
                 case IfStmt i -> {
                     // An else-if chain is one node: its branches are checked in order, in a loop (J18).
@@ -1014,6 +1655,77 @@ final class Checker {
             }
         }
         return out;
+    }
+
+    /**
+     * M2c: a value that becomes data inside a method (a send's datum, a deposit's memo; D5): any type the language can encode
+     * (not another contract's, an instance or a deposit, JSC0452). A time value may be one, with a warning (JSC9009): the
+     * receiver reads it as a checked input, not as a time value (semantics §6).
+     */
+    private Ir.Expr encodable(Expr e, Sc sc, String what) {
+        Ir.Expr v = expr(e, sc, null);
+        if (holdsForeign(v.type()) || v.type() instanceof Ty.BigMapT || v.type().equals(Ty.STATE) && stateFields.values().stream()
+                .anyMatch(t -> t instanceof Ty.BigMapT)) {
+            throw e.pos().error("JSC0452", Ty.show(v.type()) + " cannot be " + what + ": it is encoded as data, and only this contract's own"
+                    + " values without BigMaps are (ADR-0018 D5)");
+        }
+        if ((v.taint() & TIME) != 0) {
+            warn(e.pos(), "JSC9009", what + " carries a time value: whoever submits the transaction chooses the window, so it can be up to"
+                    + " maxValidityMs early or late (ADR-0018 D11)");
+        }
+        return v;
+    }
+
+    /**
+     * M2c: whether data encoded from a value of {@code from} (this contract's type) always decodes as {@code to} (a receiving
+     * contract's memo type): the same shapes, constructor by constructor; a Key or Hash may go where Bytes is read.
+     */
+    private boolean encodesAs(Ty from, Ty to, Set<String> seen) {
+        if (from.equals(to) && !(from instanceof Ty.Rec) && !(from instanceof Ty.EnumT)) return true;
+        return switch (to) {
+            case Ty.Prim pt -> from instanceof Ty.Prim pf && (pf.equals(pt) || pt.equals(Ty.BYTES) && Ty.isBytes(pf)
+                    || Ty.isBytes(pt) && !pt.equals(Ty.BYTES) && Ty.isBytes(pf) && !pf.equals(Ty.BYTES));
+            case Ty.ListT lt -> from instanceof Ty.ListT lf && encodesAs(lf.elem(), lt.elem(), seen);
+            case Ty.OptT ot -> from instanceof Ty.OptT of && encodesAs(of.elem(), ot.elem(), seen);
+            case Ty.MapT mt -> from instanceof Ty.MapT mf && encodesAs(mf.key(), mt.key(), seen) && encodesAs(mf.val(), mt.val(), seen);
+            case Ty.Rec rt -> {
+                if (!(from instanceof Ty.Rec rf)) yield false;
+                if (!seen.add(rf.name() + ">" + rt.name())) yield true;
+                var a = List.copyOf(fieldsOf(rf.name()).values());
+                var b = List.copyOf(fieldsOf(rt.name()).values());
+                if (a.size() != b.size()) yield false;
+                for (int i = 0; i < a.size(); i++) if (!encodesAs(a.get(i), b.get(i), seen)) yield false;
+                yield true;
+            }
+            case Ty.EnumT et -> {
+                if (!(from instanceof Ty.EnumT ef)) yield false;
+                if (!seen.add(ef.name() + ">" + et.name())) yield true;
+                var va = variantFields(ef.name());
+                var vb = variantFields(et.name());
+                if (va.size() != vb.size()) yield false;
+                for (int i = 0; i < va.size(); i++) {
+                    if (va.get(i).size() != vb.get(i).size()) yield false;
+                    for (int k = 0; k < va.get(i).size(); k++) if (!encodesAs(va.get(i).get(k), vb.get(i).get(k), seen)) yield false;
+                }
+                yield true;
+            }
+            default -> from.equals(to);
+        };
+    }
+
+    /** Each variant's field types, in tag order: this contract's enum or an imported one's. */
+    private List<List<Ty>> variantFields(String en) {
+        var out = new ArrayList<List<Ty>>();
+        if (enums.containsKey(en)) enums.get(en).values().forEach(v -> out.add(List.copyOf(v.values())));
+        else foreignEnum(en).variants().values().forEach(v -> out.add(List.copyOf(v.fields().values())));
+        return out;
+    }
+
+    /** An effect statement (D4) is allowed in an action's or destroy's body, arms and loops; never in a fn, view, lambda or value. */
+    private static void effectAllowed(Pos p, Sc sc, String what) {
+        if (!sc.effects) {
+            throw p.error("JSC0413", what + " is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4)");
+        }
     }
 
     /** An arm of an if statement: statements only, checked in their own scope. */
@@ -1174,12 +1886,58 @@ final class Checker {
                 }
                 return new Ir.NoneLit(expected, n.pos());
             }
-            case "params", "funds" -> throw n.pos().error("JSC0319", "'" + n.name() + "' comes in a later milestone of .jsc 2 (ADR-0018 §8)");
+            case "params" -> throw n.pos().error("JSC0319", "params is read by its fields: params.f (ADR-0009 D1)");
+            case "funds" -> throw n.pos().error("JSC0343", "funds is read by its fields: funds.received, funds.held (Values), funds.policy (a"
+                    + " Hash) and funds.self (Bytes)");
+            case "Value" -> throw n.pos().error("JSC0344", "a Value is built with Value.none(), Value.lovelace(n) or Value.asset(policy, name, n)");
             case "Map", "BigMap" -> throw n.pos().error("JSC0805", "an empty map is " + n.name() + ".empty()");
             default -> {
             }
         }
         throw n.pos().error("JSC0217", "unknown name '" + n.name() + "'");
+    }
+
+    /** {@code funds.received}, {@code funds.held}, {@code funds.policy}, {@code funds.self} (M2, ADR-0007 D1). */
+    private Ir.Expr fundsRef(Field f, Sc sc) {
+        if (sc.kind == null || sc.kind == Ir.Kind.VIEW) {
+            throw f.pos().error("JSC0427", "funds is part of the transaction: it is not available in a view or fn (pass what you need as an"
+                    + " argument)");
+        }
+        Ty t = switch (f.name()) {
+            case "received", "held" -> Ty.VALUE;
+            case "policy" -> Ty.HASH;
+            case "self" -> Ty.BYTES;
+            case "deposits" -> {
+                // M2c (ADR-0011 D3): the deposits claimed on a receiving action's output, in registry order.
+                Syntax.Mod r = receivingMod(sc.owner);
+                if (sc.kind != Ir.Kind.ACTION || r == null) {
+                    throw f.pos().error("JSC0448", "funds.deposits is read in a receiving action (action name(…) receives { … }): any other"
+                            + " method takes no deposits (ADR-0011 D3)");
+                }
+                yield new Ty.ListT(new Ty.DepositT(r.type() == null ? null : resolve(r.type())));
+            }
+            default -> throw f.pos().error("JSC0343", "funds has no field '" + f.name() + "' (received, held, policy, self, deposits)");
+        };
+        return new Ir.FundsRef(f.name(), t, f.pos());
+    }
+
+    /** The receives modifier of the method {@code name}, or null (M2c). */
+    private Syntax.Mod receivingMod(String name) {
+        for (Syntax.Method m : file.contract().methods()) {
+            if (m.name().equals(name)) for (Syntax.Mod x : m.mods()) if (x.name().equals("receives")) return x;
+        }
+        return null;
+    }
+
+    /** {@code params.f} (M2b, ADR-0009 D1): in a method or invariant of a contract with params; never a time value. */
+    private Ir.Expr paramsRef(Field f, Sc sc) {
+        if (paramsFields == null) throw f.pos().error("JSC0434", "the contract declares no params { … }, so there is no params." + f.name());
+        if (sc.kind == null) {
+            throw f.pos().error("JSC0433", "params is not available in a fn: pass params." + f.name() + " as an argument");
+        }
+        Ty t = paramsFields.get(f.name());
+        if (t == null) throw f.pos().error("JSC0320", "the params have no field " + f.name() + " (" + String.join(", ", paramsFields.keySet()) + ")");
+        return new Ir.ParamsRef(f.name(), t, f.pos());
     }
 
     private static void needCtx(Name n, Sc sc) {
@@ -1190,8 +1948,34 @@ final class Checker {
 
     /** {@code t.name}: a record field, or a list property; which one is decided by the target's type (C7). */
     private Ir.Expr field(Field f, Sc sc) {
+        if (f.target() instanceof Name n && n.name().equals("funds") && sc.lookup("funds") == null) return fundsRef(f, sc);
+        if (f.target() instanceof Name n && n.name().equals("params") && sc.lookup("params") == null) return paramsRef(f, sc);
         Ir.Expr target = expr(f.target(), sc, null);
+        if (target.type() instanceof Ty.Ledger l) {
+            if (l.equals(Ty.VALUE) && f.name().equals("lovelace")) return new Ir.LedgerOp("lovelaceOf", List.of(target), Ty.INT, target.taint(), f.pos());
+            if (l.equals(Ty.ADDRESS) && f.name().equals("payment")) return new Ir.LedgerOp("payment", List.of(target), Ty.CREDENTIAL, target.taint(), f.pos());
+            throw f.pos().error("JSC0342", l.name() + " has no property '" + f.name() + "' (" + switch (l.name()) {
+                case "Value" -> "v.lovelace; v.of(policy, name), v.covers(w)";
+                case "Address" -> "a.payment";
+                default -> "match it: KeyCred { key } or ScriptCred { hash }";
+            } + ")");
+        }
         if (target instanceof Ir.Range) throw f.target().pos().error("JSC1009", RANGE_ONLY);
+        if (target.type() instanceof Ty.DepositT d) {
+            // M2c (ADR-0011 D3): a deposit's value, and its memo when the action reads one (receives T).
+            if (f.name().equals("value")) return new Ir.DepositField(target, "value", Ty.VALUE, 0, f.pos());
+            if (f.name().equals("memo")) {
+                if (d.memo() == null) {
+                    throw f.pos().error("JSC0448", "this action reads no memos: say which type they are, action name(…) receives T, to read d.memo"
+                            + " (each memo is then a checked input of type T)");
+                }
+                return new Ir.DepositField(target, "memo", d.memo(), 0, f.pos());
+            }
+            throw f.pos().error("JSC0448", "a deposit has value and memo, not '" + f.name() + "'");
+        }
+        if (target.type() instanceof Ty.Instance) {
+            throw f.pos().error("JSC0445", "an Instance<C> is used whole, as a deposit's target or by reads, and has no field '" + f.name() + "'");
+        }
         if (target.type() instanceof Ty.MapT mt) {
             return switch (f.name()) {
                 // The key set of a map never depends on a time value (every key position refuses one), so these are
@@ -1256,6 +2040,7 @@ final class Checker {
                 Ty inner = expected instanceof Ty.OptT o ? o.elem() : null;
                 Ir.Expr v = expr(a, sc, inner);
                 noBigMap(v.type(), a.pos(), "held in an Option");
+                noValue(v.type(), a.pos(), "held in an Option");
                 if (v.type() instanceof Ty.OptT) throw c.pos().error("JSC0305", "Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None");
                 return new Ir.SomeOf(v, new Ty.OptT(v.type()), v.taint(), c.pos());
             }
@@ -1290,6 +2075,25 @@ final class Checker {
                     throw c.pos().error("JSC0507", fn + " can fail, so a time value cannot become " + (fn.equals("asKey") ? "a key" : "a hash") + " (ADR-0018 D11)");
                 }
                 return new Ir.Prelude(fn, List.of(a), to, a.taint(), c.pos());
+            }
+            case "keyCred", "scriptCred" -> {
+                arity(c, 1);
+                Ty want = fn.equals("keyCred") ? Ty.KEY : Ty.HASH;
+                Ir.Expr h = expr(c.args().get(0), sc, want);
+                expectType(want, h, c.args().get(0).pos());
+                return new Ir.LedgerOp(fn, List.of(h), Ty.CREDENTIAL, h.taint(), c.pos());
+            }
+            case "wallet", "script" -> {
+                if (c.args().size() != 1 && c.args().size() != 2) {
+                    throw c.pos().error("JSC0325", fn + " takes " + (fn.equals("wallet") ? "a key" : "a script hash") + ", and optionally a staking key");
+                }
+                Ty want = fn.equals("wallet") ? Ty.KEY : Ty.HASH;
+                Ir.Expr h = expr(c.args().get(0), sc, want);
+                expectType(want, h, c.args().get(0).pos());
+                if (c.args().size() == 1) return new Ir.LedgerOp(fn, List.of(h), Ty.ADDRESS, h.taint(), c.pos());
+                Ir.Expr stake = expr(c.args().get(1), sc, Ty.KEY);
+                expectType(Ty.KEY, stake, c.args().get(1).pos());
+                return new Ir.LedgerOp(fn + "Staked", List.of(h, stake), Ty.ADDRESS, h.taint() | stake.taint(), c.pos());
             }
             default -> throw c.pos().error("JSC0324", "unknown function '" + fn + "'");
         }
@@ -1345,6 +2149,10 @@ final class Checker {
             Ir.Expr a = expr(c.args().get(i), sc, b.params().get(i));
             expectType(b.params().get(i), a, c.args().get(i).pos());
             if ((a.taint() & TIME) != 0 && !b.timeTotal()) {
+                if (b.result() instanceof Ty.OptT) {
+                    // D11 (r7): the shape of a value is never a time value; no std row lets one decide whether it is Some.
+                    throw c.args().get(i).pos().error("JSC0523", "a time value cannot decide whether " + b.name() + " is Some or None (ADR-0018 D11)");
+                }
                 throw c.args().get(i).pos().error("JSC0509", b.name() + " can fail for some arguments, so a time value cannot reach it (ADR-0018 D11)");
             }
             args.add(a);
@@ -1385,13 +2193,82 @@ final class Checker {
         }
     }
 
+    // ------------------------------------------------------------------ values, credentials and addresses (M2, D5)
+
+    /** {@code Value.none()}, {@code Value.lovelace(n)}, {@code Value.asset(policy, name, n)}. */
+    private Ir.Expr valueCtor(MethodCall m, Sc sc) {
+        List<Expr> a = m.args();
+        return switch (m.method()) {
+            case "none" -> {
+                if (!a.isEmpty()) throw m.pos().error("JSC0344", "Value.none() takes no arguments");
+                yield new Ir.LedgerOp("none", List.of(), Ty.VALUE, 0, m.pos());
+            }
+            case "lovelace" -> {
+                if (a.size() != 1) throw m.pos().error("JSC0344", "Value.lovelace takes one Int: Value.lovelace(n)");
+                yield new Ir.LedgerOp("lovelace", List.of(quantity(a.get(0), sc)), Ty.VALUE, 0, m.pos());
+            }
+            case "asset" -> {
+                if (a.size() != 3) throw m.pos().error("JSC0344", "Value.asset takes a policy (Hash), a token name (Bytes) and an Int");
+                Ir.Expr policy = expr(a.get(0), sc, Ty.HASH);
+                expectType(Ty.HASH, policy, a.get(0).pos());
+                Ir.Expr name = expr(a.get(1), sc, Ty.BYTES);
+                expectType(Ty.BYTES, name, a.get(1).pos());
+                yield new Ir.LedgerOp("asset", List.of(policy, name, quantity(a.get(2), sc)), Ty.VALUE, policy.taint() | name.taint(), m.pos());
+            }
+            default -> throw m.pos().error("JSC0344", "Value has no function '" + m.method() + "' (none, lovelace, asset)");
+        };
+    }
+
+    /**
+     * A Value's quantity: an Int, never a time value. Building a value fails for a quantity outside the 128-bit range
+     * (the ledger's builtins), so a time value there would let the window decide whether the call fails (D11).
+     */
+    private Ir.Expr quantity(Expr e, Sc sc) {
+        Ir.Expr q = expr(e, sc, Ty.INT);
+        expectType(Ty.INT, q, e.pos());
+        if ((q.taint() & TIME) != 0) {
+            throw e.pos().error("JSC0519", "a time value cannot be a Value's quantity: building a value fails outside the 128-bit range,"
+                    + " so the window would decide whether the call fails (ADR-0018 D11)");
+        }
+        return q;
+    }
+
+    /** {@code v.of(policy, name)} (Int) and {@code v.covers(w)} (Bool). */
+    private Ir.Expr valueMethod(MethodCall m, Ir.Expr v, Sc sc) {
+        List<Expr> a = m.args();
+        switch (m.method()) {
+            case "of" -> {
+                if (a.size() != 2) throw m.pos().error("JSC0342", "v.of takes a policy (Hash) and a token name (Bytes): v.of(policy, name)");
+                Ir.Expr policy = expr(a.get(0), sc, Ty.HASH);
+                expectType(Ty.HASH, policy, a.get(0).pos());
+                Ir.Expr name = expr(a.get(1), sc, Ty.BYTES);
+                expectType(Ty.BYTES, name, a.get(1).pos());
+                return new Ir.LedgerOp("of", List.of(v, policy, name), Ty.INT, v.taint() | policy.taint() | name.taint(), m.pos());
+            }
+            case "covers" -> {
+                if (a.size() != 1) throw m.pos().error("JSC0342", "v.covers takes one Value: v.covers(w)");
+                Ir.Expr w = expr(a.get(0), sc, Ty.VALUE);
+                expectType(Ty.VALUE, w, a.get(0).pos());
+                // The operands' taint carries over (review S5): a time value in either decides the result.
+                return new Ir.LedgerOp("covers", List.of(v, w), Ty.BOOL, v.taint() | w.taint(), m.pos());
+            }
+            case "lovelace" -> throw m.pos().error("JSC0342", "v.lovelace is a property: write it without parentheses");
+            default -> throw m.pos().error("JSC0342", "Value has no method '" + m.method() + "' (of, covers; the property lovelace)");
+        }
+    }
+
     // ------------------------------------------------------------------ list methods
 
     private Ir.Expr methodCall(MethodCall m, Sc sc, Ty expected) {
         if (m.target() instanceof Name n && sc.lookup(n.name()) == null && (n.name().equals("Map") || n.name().equals("BigMap"))) {
             return emptyMap(n.name(), m, sc, expected);
         }
+        if (m.target() instanceof Name n && sc.lookup(n.name()) == null && n.name().equals("Value")) return valueCtor(m, sc);
         Ir.Expr target = isRange(m.target(), sc) ? range((Call) m.target(), sc) : expr(m.target(), sc, null);
+        if (target.type().equals(Ty.VALUE)) return valueMethod(m, target, sc);
+        if (target.type() instanceof Ty.Ledger l) {
+            throw m.pos().error("JSC0342", l.name() + " has no methods: " + (l.equals(Ty.ADDRESS) ? "read a.payment" : "match it: KeyCred { key } or ScriptCred { hash }"));
+        }
         if (target.type() instanceof Ty.MapT mt) return mapMethod(m, target, mt, sc, expected);
         if (target.type() instanceof Ty.BigMapT bt) return bigMethod(m, target, bt, sc);
         if (!(target.type() instanceof Ty.ListT lt)) {
@@ -1430,6 +2307,7 @@ final class Checker {
                 if (((v.taint() | t) & TIME) != 0) {
                     throw m.pos().error("JSC0513", "a time value cannot decide here: contains compares it (ADR-0018 D11)");
                 }
+                notComparable(e, m.pos());
                 return new Ir.Contains(target, v, e, Ty.BOOL, 0, m.pos());
             }
             case "concat" -> {
@@ -1474,6 +2352,8 @@ final class Checker {
             if ((r.taint() & TIME) != 0) throw l.pos().error("JSC0514", "a time value cannot decide " + kind + "'s predicate (ADR-0018 D11)");
         } else if (want != null) {
             expectType(want, r, r.pos());
+        } else {
+            noValue(r.type(), r.pos(), "an element of a List");
         }
         return switch (kind) {
             case "any", "all" -> new Ir.Hof(kind, list, x, body, Ty.BOOL, 0, pos);
@@ -1680,6 +2560,7 @@ final class Checker {
         }
         if (elem == null) throw l.pos().error("JSC1028", "the type of this list is unknown here: give it one (const xs: List<Int> = [])");
         noBigMap(elem, l.pos(), "an element of a list");
+        noValue(elem, l.pos(), "an element of a List");
         var items = new ArrayList<Ir.Expr>();
         int taint = 0;
         for (Expr x : l.items()) {
@@ -1729,7 +2610,17 @@ final class Checker {
             r = expr(b.right(), sc, l.type());
         }
         switch (op) {
-            case "+", "-", "*", "/", "%" -> {
+            case "+", "-" -> {
+                if (l.type().equals(Ty.VALUE) || r.type().equals(Ty.VALUE)) {
+                    expectType(Ty.VALUE, l, b.left().pos());
+                    expectType(Ty.VALUE, r, b.right().pos());
+                    return new Ir.LedgerOp(op.equals("+") ? "add" : "sub", List.of(l, r), Ty.VALUE, l.taint() | r.taint(), b.pos());
+                }
+                expectType(Ty.INT, l, b.left().pos());
+                expectType(Ty.INT, r, b.right().pos());
+                return new Ir.Arith(op, l, r, Ty.INT, l.taint() | r.taint(), b.pos());
+            }
+            case "*", "/", "%" -> {
                 expectType(Ty.INT, l, b.left().pos());
                 expectType(Ty.INT, r, b.right().pos());
                 if ((op.equals("/") || op.equals("%")) && (r.taint() & TIME) != 0) {
@@ -1752,10 +2643,30 @@ final class Checker {
                 if (Ty.hasBigMap(t, this::components) || t.equals(Ty.STATE) && stateFields.values().stream().anyMatch(x -> x instanceof Ty.BigMapT)) {
                     throw b.pos().error("JSC0812", "a BigMap is not comparable: it is a witness of a Merkle root, not its contents (ADR-0018 D6)");
                 }
+                notComparable(t, b.pos());
                 return new Ir.Equals(op.equals("!="), l, r, t, Ty.BOOL, 0, b.pos());
             }
             default -> throw b.pos().error("JSC0335", "unknown operator " + op);
         }
+    }
+
+    /** M2c: an instance and a deposit are not comparable (D6): an instance is the deployer's, a deposit a registry claim. */
+    private static void notComparable(Ty t, Pos p) {
+        if (holdsInstanceOrDeposit(t)) {
+            throw p.error("JSC0446", Ty.show(t) + " is not comparable: an Instance<C> is used whole (a deposit's target, reads), and a deposit is"
+                    + " compared by its value and memo (d.value, d.memo) (ADR-0018 D6, M2c)");
+        }
+    }
+
+    private static boolean holdsInstanceOrDeposit(Ty t) {
+        return switch (t) {
+            case Ty.Instance i -> true;
+            case Ty.DepositT d -> true;
+            case Ty.ListT l -> holdsInstanceOrDeposit(l.elem());
+            case Ty.OptT o -> holdsInstanceOrDeposit(o.elem());
+            case Ty.MapT m -> holdsInstanceOrDeposit(m.val());
+            default -> false;
+        };
     }
 
     private static void timeCompare(Binary b, Ir.Expr l, Ir.Expr r) {
@@ -2108,9 +3019,14 @@ final class Checker {
 
     /** The constructors a scrutinee's type can have, in tag order: an enum's variants, or Some and None. */
     private List<String> constructors(Ty t, Pos p) {
+        if (t instanceof Ty.EnumT e && Ty.foreign(e.name())) {
+            throw p.error("JSC0446", Ty.show(t) + " is another contract's enum: compare it with == (its variants are " + e.name().substring(0,
+                    e.name().indexOf('.')) + "'s), matching on it is not supported yet (ADR-0018 D9, M2c)");
+        }
         if (t instanceof Ty.EnumT e) return List.copyOf(enums.get(e.name()).keySet());
         if (t instanceof Ty.OptT) return List.of("Some", "None");
-        throw p.error("JSC0916", "match needs an enum or an Option, not " + Ty.show(t));
+        if (t.equals(Ty.CREDENTIAL)) return List.of("KeyCred", "ScriptCred");
+        throw p.error("JSC0916", "match needs an enum, an Option or a Credential, not " + Ty.show(t));
     }
 
     /** The fields a constructor binds: a variant's, or Some's one value. */
@@ -2118,6 +3034,11 @@ final class Checker {
         if (t instanceof Ty.OptT o) {
             var f = new LinkedHashMap<String, Ty>();
             if (ctor.equals("Some")) f.put("value", o.elem());
+            return f;
+        }
+        if (t.equals(Ty.CREDENTIAL)) {
+            var f = new LinkedHashMap<String, Ty>();
+            f.put(ctor.equals("KeyCred") ? "key" : "hash", ctor.equals("KeyCred") ? Ty.KEY : Ty.HASH);
             return f;
         }
         return enums.get(((Ty.EnumT) t).name()).get(ctor);
@@ -2327,19 +3248,67 @@ final class Checker {
         return false;
     }
 
-    private static Pos firstPay(Syntax.Block b) {
-        for (Stmt s : b.stmts()) {
-            if (s instanceof Syntax.Pay p) return p.pos();
-            if (s instanceof IfStmt i) {
-                for (Syntax.Branch br : i.branches()) if (paysIn(br.then())) return firstPay(br.then());
-                if (i.otherwise() != null && paysIn(i.otherwise())) return firstPay(i.otherwise());
-            }
-            if (s instanceof For f && paysIn(f.body())) return firstPay(f.body());
-            if (s instanceof MatchStmt ms) {
-                for (Syntax.Arm a : ms.match().arms()) if (paysIn(a.body())) return firstPay(a.body());
+    /** The effect kinds a block can reach, in any arm or loop: pay, send, mint (burn too), accept (D4, M2) and emit (M2b). */
+    static Set<String> effectsIn(Syntax.Block b) {
+        var out = new TreeSet<String>();
+        var work = new ArrayDeque<Syntax.Block>();
+        work.push(b);
+        while (!work.isEmpty()) {
+            Syntax.Block x = work.pop();
+            for (Stmt s : x.stmts()) {
+                switch (s) {
+                    case Syntax.Pay p -> out.add("pay");
+                    case Syntax.Send d -> out.add("send");
+                    case Syntax.Mint m -> out.add("mint");
+                    case Syntax.Accept a -> out.add("accept");
+                    case Syntax.Emit em -> out.add("emit");
+                    case Syntax.Deposit d -> out.add("deposit");
+                    case IfStmt i -> {
+                        for (Syntax.Branch br : i.branches()) work.push(br.then());
+                        if (i.otherwise() != null) work.push(i.otherwise());
+                    }
+                    case For f -> work.push(f.body());
+                    case MatchStmt ms -> ms.match().arms().forEach(a -> work.push(a.body()));
+                    default -> {
+                    }
+                }
             }
         }
-        return b.pos();
+        return out;
+    }
+
+    /** The first statement (in source order) of one of these kinds, for a located error. */
+    private static Pos firstEffect(Syntax.Block b, Set<String> kinds) {
+        Pos best = null;
+        var work = new ArrayDeque<Syntax.Block>();
+        work.push(b);
+        while (!work.isEmpty()) {
+            Syntax.Block x = work.pop();
+            for (Stmt s : x.stmts()) {
+                String k = switch (s) {
+                    case Syntax.Pay p -> "pay";
+                    case Syntax.Send d -> "send";
+                    case Syntax.Mint m -> "mint";
+                    case Syntax.Accept a -> "accept";
+                    case Syntax.Emit em -> "emit";
+                    case Syntax.Deposit d -> "deposit";
+                    default -> null;
+                };
+                if (k != null && kinds.contains(k) && (best == null || s.pos().line() < best.line()
+                        || s.pos().line() == best.line() && s.pos().col() < best.col())) best = s.pos();
+                switch (s) {
+                    case IfStmt i -> {
+                        for (Syntax.Branch br : i.branches()) work.push(br.then());
+                        if (i.otherwise() != null) work.push(i.otherwise());
+                    }
+                    case For f -> work.push(f.body());
+                    case MatchStmt ms -> ms.match().arms().forEach(a -> work.push(a.body()));
+                    default -> {
+                    }
+                }
+            }
+        }
+        return best == null ? b.pos() : best;
     }
 
     private static boolean mentionsCtx(Syntax.Block b) {
@@ -2363,6 +3332,11 @@ final class Checker {
                 case Const c -> walk(c.value(), p);
                 case Syntax.Require r -> walk(r.cond(), p);
                 case Syntax.Pay y -> walk(y.to(), p) || walk(y.amount(), p);
+                case Syntax.Send d -> walk(d.to(), p) || walk(d.value(), p) || (d.datum() != null && walk(d.datum(), p));
+                case Syntax.Deposit d -> walk(d.target(), p) || walk(d.value(), p) || walk(d.memo(), p);
+                case Syntax.Mint m -> walk(m.name(), p) || walk(m.qty(), p);
+                case Syntax.Accept a -> walk(a.value(), p);
+                case Syntax.Emit em -> walk(em.event(), p);
                 case For f -> walk(f.list(), p) || walk(f.body(), p);
                 case IfStmt i -> i.branches().stream().anyMatch(br -> walk(br.cond(), p) || walk(br.then(), p))
                         || (i.otherwise() != null && walk(i.otherwise(), p));

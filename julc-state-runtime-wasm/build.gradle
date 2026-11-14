@@ -13,6 +13,8 @@ dependencies {
 // I3 on the JVM, and the vectors for I3 in Wasm (build/prepare-vectors.json).
 tasks.named('test') {
     dependsOn ':examples:counter:classes', ':examples:bank:classes'
+    // EngineFixturesTest replays fixtures/m3 (M2c review r2, F9): a change to it alone runs the test again.
+    inputs.dir(rootProject.file('fixtures/m3')).withPropertyName('fixturesM3').withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // ---- The runtime engine: a GraalVM Web Image embedding julc-wasm (JuLC ADR-064).

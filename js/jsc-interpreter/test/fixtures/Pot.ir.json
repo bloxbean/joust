@@ -1,0 +1,244 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "87f5d4ac36f8624c385419bc2d913bdb665d9ab318fe3b13c30eef88122f68b8",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Pot",
+  "source": "Pot.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "owner", "type": "Key" }, { "name": "collected", "type": "Int" }, { "name": "deposits", "type": "Int" }],
+    "at": [7, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [11, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [11, 40] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [11, 53] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [11, 12]
+        },
+        "at": [10, 10]
+      },
+      "at": [10, 3]
+    },
+    {
+      "kind": "action",
+      "name": "collect",
+      "params": [],
+      "mods": [{ "name": "receives" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 3, "name": "got", "type": "Int", "taint": 0, "at": [16, 5] },
+            "value": {
+              "node": "Fold",
+              "list": {
+                "node": "FundsRef",
+                "field": "deposits",
+                "type": { "list": { "deposit": null } },
+                "taint": 0,
+                "at": [16, 17]
+              },
+              "init": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [16, 37] },
+              "acc": { "id": 1, "name": "acc", "type": "Int", "taint": 0, "at": [16, 40] },
+              "x": { "id": 2, "name": "d", "type": { "deposit": null }, "taint": 0, "at": [16, 40] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [16, 52] },
+                  "right": {
+                    "node": "LedgerOp",
+                    "op": "lovelaceOf",
+                    "args": [
+                      {
+                        "node": "DepositField",
+                        "target": { "node": "LocalRef", "local": 2, "type": { "deposit": null }, "taint": 0, "at": [16, 58] },
+                        "field": "value",
+                        "type": "Value",
+                        "taint": 0,
+                        "at": [16, 58]
+                      }
+                    ],
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [16, 58]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [16, 52]
+                },
+                "at": [16, 40]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [16, 17]
+            },
+            "at": [16, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [17, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [17, 19] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [17, 13]
+            },
+            "message": "nothing deposited",
+            "at": [17, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [18, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [18, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "collected", "type": "Int", "taint": 0, "at": [18, 35] },
+              "right": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [18, 47] },
+              "type": "Int",
+              "taint": 0,
+              "at": [18, 35]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "deposits", "type": "Int", "taint": 0, "at": [18, 62] },
+              "right": {
+                "node": "ListProp",
+                "op": "length",
+                "list": {
+                  "node": "FundsRef",
+                  "field": "deposits",
+                  "type": { "list": { "deposit": null } },
+                  "taint": 0,
+                  "at": [18, 73]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [18, 73]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [18, 62]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [18, 12]
+        },
+        "at": [15, 29]
+      },
+      "at": [15, 3]
+    },
+    {
+      "kind": "action",
+      "name": "handOver",
+      "params": [{ "id": 4, "name": "newOwner", "type": "Key", "taint": 0, "at": [22, 19] }],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [4],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "LocalRef", "local": 4, "type": "Key", "taint": 0, "at": [23, 31] },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "collected",
+              "type": "Int",
+              "taint": 0,
+              "at": [23, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "deposits",
+              "type": "Int",
+              "taint": 0,
+              "at": [23, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [23, 12]
+        },
+        "at": [22, 45]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [27, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [27, 16] },
+            "at": [27, 5]
+          }
+        ],
+        "result": null,
+        "at": [26, 30]
+      },
+      "at": [26, 3]
+    }
+  ],
+  "warnings": []
+}

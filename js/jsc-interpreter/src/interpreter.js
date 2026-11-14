@@ -5,12 +5,13 @@
 
 import {
   NONE, Some, some, Rec, MapV, BigMapV, Range, Refused, Limit, bytesEqual, bytesCompare, keyCompare, hex, unsignedBytes,
+  ValueV, CredV, AddrV, StakeHash, StakePtr, inRange, reserved,
 } from './values.js';
 import { parseStrict } from './strict-json.js';
 import { validate } from './validate.js';
 import { applyStd } from './std.js';
 
-export const IR_VERSION = 1;
+export const IR_VERSION = 2;
 
 /**
  * Reads an IR export from its JSON text and returns the program, ready to call. The text is read strictly (no
@@ -52,8 +53,18 @@ class Program {
     for (const r of p.records) add(r);
     for (const e of p.enums) for (const v of e.variants) add(v);
     add(p.state);
+    if (p.params) add(p.params);   // M2b: the params record, Config
+    // M2c: each imported contract's state and types, under their qualified names (Oracle.State).
+    for (const c of p.contracts ?? []) {
+      add(c.state);
+      for (const r of c.records) add(r);
+      for (const e of c.enums) for (const v of e.variants) add(v);
+    }
+    this.invariants = p.invariants ?? [];
+    this.params = null;
     this.variantTag = new Map();
     for (const e of p.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
+    for (const c of p.contracts ?? []) for (const e of c.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
     this.fns = new Map(p.fns.map((f) => [f.name, f]));
     this.methods = new Map(p.methods.map((m) => [m.name, m]));
   }
@@ -72,6 +83,20 @@ class Program {
 
   stateFields() {
     return this.shapes.get('State').names;
+  }
+
+  /**
+   * M2b (§2.7): the same contract deployed with these params (a Config record), which params.f reads: a new program
+   * over the same IR.
+   */
+  withParams(params) {
+    if (!this.ir.params) throw new Error('the contract declares no params');
+    if (!(params instanceof Rec) || params.type !== 'Config' || params.fields.length !== this.ir.params.fields.length) {
+      throw new Error(`params are a Config record of ${this.ir.params.fields.length} fields`);
+    }
+    const d = new Program(this.ir);
+    d.params = params;
+    return d;
   }
 
   /** A variant's tag (its index in its enum, §1), or 0 for a record. */
@@ -100,6 +125,16 @@ class Program {
     return this.#call(name, state, args, tx, false);
   }
 
+  #paramsField(name) {
+    if (!this.params) throw new Error('this contract reads its params: supply them (withParams)');
+    return this.#field(this.params, name);
+  }
+
+  /** A modifier's field: f of the state, or params.f. */
+  #modField(state, ref) {
+    return ref.startsWith('params.') ? this.#paramsField(ref.slice(7)) : this.#field(state, ref);
+  }
+
   #call(name, state, args, tx, modifiers) {
     const m = this.#method(name);
     if (args.length !== m.params.length) throw new Error(`${name} takes ${m.params.length} arguments`);
@@ -111,18 +146,88 @@ class Program {
     }
     return depthGuard(() => {
       if (modifiers) this.#modifiers(m, state, tx);
-      const frame = { state, tx, payouts: [] };
+      const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [], deposits: [] };
       let env = null;
       m.params.forEach((l, i) => (env = bind(env, l, args[i])));
+      // M2c (ADR-0011 D2): each read state, from the transaction's reference inputs by the params field naming it.
+      const reads = m.reads ?? [];
+      for (const r of reads) {
+        if (!tx || !tx.reads || !(r.field in tx.reads)) throw new Error(`${m.name} reads params.${r.field}: its transaction needs that state`);
+        env = bind(env, r.local, tx.reads[r.field]);
+      }
       // §4: every checked parameter is well formed before any statement runs.
       for (const id of m.checked) {
         const l = m.params.find((x) => x.id === id);
         if (!this.wellFormed(lookup(env, id), l.type)) throw new Refused(`${l.name} is not a well-formed input`, 'input', l.name);
       }
+      // §4 (M2c, review r3 C7): an init checks the params it is made under (the deployment's).
+      if (m.kind === 'init' && this.params && !this.#fieldsWellFormed(this.params, 'Config')) {
+        throw new Refused('the params are not well formed', 'input', 'params');
+      }
+      // §4 (M2c): then each read state, a checked input too.
+      for (const r of reads) {
+        if (!this.wellFormed(lookup(env, r.local.id), r.local.type)) {
+          throw new Refused(`${r.local.name} is not a well-formed state of ${r.field}`, 'input', r.local.name);
+        }
+      }
+      // §4 (M2c, ADR-0011 D3): receives T: every deposit's memo is a well-formed T, before the body runs.
+      const rv = m.mods.find((x) => x.name === 'receives');
+      if (rv && 'type' in rv) {
+        for (const d of funds(frame).deposits ?? []) {
+          if (d.memo === null || d.memo === undefined || !this.wellFormed(d.memo, rv.type)) {
+            throw new Refused(`a deposit's memo is not a well-formed ${JSON.stringify(rv.type)}`, 'input', 'deposits');
+          }
+        }
+      }
       env = this.#exec(m.body.stmts, env, frame);
       const value = m.body.result === null ? null : this.#eval(m.body.result, env, frame);
-      return { value, payouts: frame.payouts };
+      // §5.4: a method that accepts takes in exactly what the caller offers, checked last.
+      if (accepts(m.body) && !frame.accepted.equals(funds(frame).received)) {
+        throw new Refused('the method accepts other native assets than the caller offers', 'domain', 'accepted');
+      }
+      const out = {
+        value, payouts: frame.payouts, sends: frame.sends, mint: frame.mint, accepted: frame.accepted, events: frame.events, deposits: frame.deposits,
+      };
+      if (modifiers) this.#outputs(m, value);
+      return out;
     });
+  }
+
+  /**
+   * §2.7 (M2b): what the validator checks of every state it accepts as an output, after the body. At a creation, each
+   * quorum naming params is well formed; then for an init's or action's next state each quorum naming state fields
+   * (every pair any method's quorum names, once, in source order) is well formed, class invariant:quorum <keys>
+   * <threshold>; then each invariant holds, in declaration order, class invariant:<name>.
+   */
+  #outputs(m, next) {
+    if (m.kind !== 'init' && m.kind !== 'action') return;
+    const pairs = [];
+    for (const x of this.ir.methods) {
+      for (const mod of x.mods) {
+        if (mod.name !== 'quorum') continue;
+        const pair = `${mod.keys} ${mod.threshold}`;
+        if (!pairs.includes(pair)) pairs.push(pair);
+      }
+    }
+    for (const pair of pairs) {
+      const [k, t] = pair.split(' ');
+      if (k.startsWith('params.') && m.kind !== 'init') continue;
+      if (!wellFormedQuorum(this.#modField(next, k), this.#modField(next, t))) {
+        throw new Refused(`the quorum ${pair} is not well formed`, 'invariant', `quorum ${pair}`);
+      }
+    }
+    for (const inv of this.invariants) {
+      const frame = { state: next, tx: null, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [] };
+      let holds;
+      try {
+        holds = this.#block(inv.body, null, frame);
+      } catch (e) {
+        // #84 review S2: an invariant that fails (a domain error) does not hold; the refusal is the validator's (§2.7).
+        if (e instanceof Refused) throw new Refused(`the invariant ${inv.name} fails: ${e.message}`, 'invariant', inv.name);
+        throw e;
+      }
+      if (holds !== true) throw new Refused(`the invariant ${inv.name} does not hold`, 'invariant', inv.name);
+    }
   }
 
   /**
@@ -133,17 +238,34 @@ class Program {
   #modifiers(m, state, tx) {
     for (const mod of m.mods) {
       const w = mod.name;
-      if (w !== 'only' && w !== 'after' && w !== 'before') continue;
+      const field = w === 'quorum' ? (mod.keys == null || mod.threshold == null ? null : `${mod.keys} ${mod.threshold}`) : mod.field;
+      if (!['only', 'after', 'before', 'quorum', 'authorized'].includes(w)) continue;   // 'batched only' is batched
       // Never skipped (review S5 on #76): the reader refuses a modifier without its field, and so does this.
-      if (typeof mod.field !== 'string') throw new Error(`${m.name} has '${w}' without a state field: not a checked program`);
-      if (!tx) throw new Error(`${m.name} has '${w} ${mod.field}': its call needs the transaction`);
-      const v = this.#field(state, mod.field);
+      if (typeof field !== 'string') throw new Error(`${m.name} has '${w}' without a ${w === 'quorum' || w === 'authorized' ? '' : 'state '}field: not a checked program`);
+      if (!tx) throw new Error(`${m.name} has '${w} ${field}': its call needs the transaction`);
       const signers = tx.signers ?? [tx.caller];
-      const holds = w === 'only' ? signers.some((k) => bytesEqual(k, v)) : w === 'after' ? tx.validFrom >= v : tx.validTo <= v;
+      const signed = (k) => signers.some((x) => bytesEqual(x, k));
+      let holds;
+      if (w === 'only') holds = signed(this.#field(state, field));
+      else if (w === 'after') holds = tx.validFrom >= this.#field(state, field);
+      else if (w === 'before') holds = tx.validTo <= this.#field(state, field);
+      else if (w === 'quorum') {
+        // M2b: at least threshold >= 1 distinct signers among the keys (each read from the input state or the params).
+        const keys = this.#modField(state, mod.keys), t = this.#modField(state, mod.threshold);
+        const distinct = signers.filter((x, i) => signers.findIndex((y) => bytesEqual(x, y)) === i);
+        const n = distinct.filter((x) => keys.some((k) => bytesEqual(k, x))).length;
+        holds = t >= 1n && BigInt(n) >= t;
+      } else {
+        // M2b: a key credential signed; a script credential is among the transaction's approvers.
+        const c = this.#modField(state, field);
+        holds = c.script ? (tx.approvers ?? []).some((h) => bytesEqual(h, c.hash)) : signed(c.hash);
+      }
       if (!holds) {
-        const what = w === 'only' ? `the transaction is not signed by ${mod.field}`
-          : w === 'after' ? `the validity window starts before ${mod.field}` : `the validity window ends after ${mod.field}`;
-        throw new Refused(what, 'modifier', `${w} ${mod.field}`);
+        const what = w === 'only' ? `the transaction is not signed by ${field}`
+          : w === 'after' ? `the validity window starts before ${field}`
+            : w === 'before' ? `the validity window ends after ${field}`
+              : w === 'quorum' ? `too few of ${mod.keys} signed the transaction` : `${field} did not authorize the transaction`;
+        throw new Refused(what, 'modifier', `${w} ${field}`);
       }
     }
   }
@@ -155,7 +277,7 @@ class Program {
 
   /** Evaluates one expression node in an empty scope (for the hand-written vectors of §6). */
   evalExpr(expr, { state = null, tx = null } = {}) {
-    return depthGuard(() => this.#eval(expr, null, { state, tx, payouts: [] }));
+    return depthGuard(() => this.#eval(expr, null, { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE }));
   }
 
   // ------------------------------------------------------------------ statements (§2.2, §2.3)
@@ -176,6 +298,56 @@ class Program {
           if (amount > 0n) f.payouts.push({ to, lovelace: amount });
           break;
         }
+        case 'Send': {
+          // §5.1: both arguments, left to right; no negative quantity, no reserved name of the own policy; never to the
+          // contract's own script (I30).
+          const to = this.#eval(s.to, env, f);
+          const value = this.#eval(s.value, env, f);
+          if (!sendable(value, funds(f).policy, false)) throw new Refused('this value cannot be sent', 'domain', 'send');
+          if (to.payment.script && bytesEqual(to.payment.hash, funds(f).policy)) {
+            throw new Refused("a send cannot go to the contract's own script", 'domain', 'send');
+          }
+          // M2c: the datum, evaluated after the value's checks (§5.1).
+          const datum = s.datum ? this.#eval(s.datum, env, f) : null;
+          f.sends.push({ to, value, datum });
+          break;
+        }
+        case 'Deposit': {
+          // §5.7 (M2c): target, value and memo, left to right; the value is not empty, every quantity strictly positive,
+          // and no token name of a reserved kind under any policy but lovelace's (the output verifier's rule).
+          const target = this.#eval(s.target, env, f);
+          const value = this.#eval(s.value, env, f);
+          const memo = this.#eval(s.memo, env, f);
+          if (!depositable(value)) throw new Refused('this value cannot be deposited', 'domain', 'deposit');
+          f.deposits.push({ target, value, memo });
+          break;
+        }
+        case 'Mint': {
+          // §5.2: a positive quantity of a user token name (at most 32 bytes, not a reserved kind); the net stays in range.
+          const name = this.#eval(s.name, env, f);
+          const q = this.#eval(s.qty, env, f);
+          if (q <= 0n || name.length > 32 || reserved(name)) {
+            throw new Refused(`${s.burn ? 'burn' : 'mint'}: a positive quantity of a user token name`, 'domain', 'mint');
+          }
+          const policy = funds(f).policy, d = s.burn ? -q : q;
+          const total = f.mint.quantity(policy, name) + d;
+          if (total !== 0n && !inRange(total)) throw new Refused('mint: a quantity out of the 128-bit range', 'domain', 'mint');
+          f.mint = f.mint.plus(ValueV.of(policy, name, d), 1n);
+          break;
+        }
+        case 'Accept': {
+          // §5.3: native assets only, every quantity positive, no reserved name of the own policy; summed.
+          const v = this.#eval(s.value, env, f);
+          if (!sendable(v, funds(f).policy, true)) throw new Refused('this value cannot be accepted', 'domain', 'accept');
+          const sum = f.accepted.plus(v, 1n);
+          if (!sum.quantities().every(inRange)) throw new Refused('accept: a quantity out of the 128-bit range', 'domain', 'accept');
+          f.accepted = sum;
+          break;
+        }
+        case 'Emit':
+          // §5.6 (M2b): an event joins the call's events, in source order.
+          f.events.push(this.#eval(s.event, env, f));
+          break;
         case 'If': {
           // §3: the first branch whose condition holds runs, else the otherwise block (an else-if chain is one node).
           const taken = this.#branch(s.branches, s.otherwise, env, f);
@@ -311,6 +483,13 @@ class Program {
       }
       case 'BigEmpty': return BigMapV.EMPTY;
       case 'BigOp': return this.#bigOp(e, env, f);
+      case 'FundsRef': return e.field === 'deposits' ? Object.freeze([...(funds(f).deposits ?? [])]) : funds(f)[e.field];
+      case 'DepositField': {
+        const d = this.#eval(e.target, env, f);
+        return e.field === 'value' ? d.value : d.memo;
+      }
+      case 'ParamsRef': return this.#paramsField(e.field);
+      case 'LedgerOp': return ledger(e.op, e.args.map((x) => this.#eval(x, env, f)));
       default:
         throw new Error(`unknown node ${e.node}`);
     }
@@ -351,14 +530,14 @@ class Program {
 
   /** §3.5: the first arm whose constructors include the value's. */
   #arm(arms, v) {
-    const ctor = v === NONE ? 'None' : v instanceof Some ? 'Some' : v.type;
+    const ctor = v === NONE ? 'None' : v instanceof Some ? 'Some' : v instanceof CredV ? (v.script ? 'ScriptCred' : 'KeyCred') : v.type;
     for (const a of arms) if (a.ctors.includes(ctor)) return a;
     throw new Error(`no arm for ${ctor}`);
   }
 
   #bindArm(arm, v, env) {
     arm.binds.forEach((l, i) => {
-      env = bind(env, l, v instanceof Some ? v.value : this.#field(v, arm.fields[i]));
+      env = bind(env, l, v instanceof Some ? v.value : v instanceof CredV ? v.hash : this.#field(v, arm.fields[i]));
     });
     return env;
   }
@@ -376,7 +555,7 @@ class Program {
     if (!fn) throw new Error(`no fn ${name}`);
     let env = null;
     fn.params.forEach((l, i) => (env = bind(env, l, args[i])));
-    return this.#block(fn.body, env, { state: null, tx: null, payouts: [] });
+    return this.#block(fn.body, env, { state: null, tx: null, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE });
   }
 
   #prelude(op, args) {
@@ -468,6 +647,13 @@ class Program {
         case 'Key':
         case 'Hash':
           return bytesEqual(a, b);
+        // §3.4 (M2): values are canonical, so equal values have equal entries; credentials and addresses by structure.
+        case 'Value':
+          return a.equals(b);
+        case 'Credential':
+          return sameCred(a, b);
+        case 'Address':
+          return sameCred(a.payment, b.payment) && sameStake(a.stake, b.stake);
         default:
           throw new Error(`unknown type ${t}`);
       }
@@ -496,7 +682,18 @@ class Program {
 
   /** Whether `v` is well formed at type `t` (§4). */
   wellFormed(v, t) {
-    if (typeof t === 'string') return t === 'Key' || t === 'Hash' ? v.length === 28 : true;
+    if (typeof t === 'string') {
+      if (t === 'Key' || t === 'Hash') return v.length === 28;
+      // §4 (M2): every hash of a credential or an address (its payment credential, a staking hash) is 28 bytes.
+      if (t === 'Credential') return v.hash.length === 28;
+      // A staking part is none or a hash: a pointer is refused (review S1).
+      if (t === 'Address') return v.payment.hash.length === 28 && (v.stake === NONE || (v.stake.value instanceof StakeHash && v.stake.value.credential.hash.length === 28));
+      // §4 (M2c, review r1 C2, r2 C6): a Value that arrives (a memo, a read state) is in the decoder's domain: every
+      // policy lovelace's (empty) or 28 bytes, every token name at most 32 bytes, every quantity in the signed 128-bit
+      // range (a ValueV keeps no zero).
+      if (t === 'Value') return v.entries.every(([p, n, q]) => (p.length === 0 || p.length === 56) && n.length <= 64 && inRange(q));
+      return true;
+    }
     if ('list' in t) return v.every((x) => this.wellFormed(x, t.list));
     if ('option' in t) return v === NONE || this.wellFormed(v.value, t.option);
     if ('record' in t) return this.#fieldsWellFormed(v, t.record);
@@ -511,6 +708,7 @@ class Program {
       return true;
     }
     if ('bigmap' in t) return true;
+    if ('instance' in t || 'deposit' in t) return true;   // M2c: never a checked input (§4)
     throw new Error(`unknown type ${JSON.stringify(t)}`);
   }
 
@@ -518,6 +716,112 @@ class Program {
     const { types } = this.shapes.get(type);
     return types.every((ft, i) => this.wellFormed(v.fields[i], ft));
   }
+}
+
+// ------------------------------------------------------------------ values, credentials, addresses (M2, §1.3, §5)
+
+function funds(f) {
+  if (!f.tx || !f.tx.funds) throw new Error('this call reads funds: its transaction needs them');
+  return f.tx.funds;
+}
+
+/** ADR-0009 D2: keys strictly ascending (so distinct), each 28 bytes, and 1 <= threshold <= their number. */
+function wellFormedQuorum(keys, threshold) {
+  for (let i = 0; i < keys.length; i++) {
+    if (keys[i].length !== 28) return false;
+    if (i > 0 && bytesCompare(keys[i - 1], keys[i]) >= 0) return false;
+  }
+  return threshold >= 1n && threshold <= BigInt(keys.length);
+}
+
+/** Whether a block holds an accept statement, in any arm or loop. */
+function accepts(b) {
+  if (!b) return false;
+  return b.stmts.some((s) => s.stmt === 'Accept'
+    || (s.stmt === 'If' && (s.branches.some((br) => accepts(br.then)) || accepts(s.otherwise)))
+    || (s.stmt === 'For' && accepts(s.body))
+    || (s.stmt === 'Match' && s.arms.some((a) => accepts(a.body))));
+}
+
+/** §5.7 (M2c): a deposit's value is not empty; every quantity strictly positive, no reserved-kind name under any policy but lovelace's. */
+function depositable(v) {
+  if (v.entries.length === 0) return false;
+  for (const [p, n, q] of v.entries) {
+    if (q <= 0n) return false;
+    if (p !== '' && reserved(fromHexBytes(n))) return false;
+  }
+  return true;
+}
+
+/** §5.1, §5.3: every quantity positive, no reserved name under the own policy, and, accepting, no lovelace. */
+function sendable(v, policy, accepting) {
+  const own = hex(policy);
+  for (const [p, n, q] of v.entries) {
+    if (accepting && p === '') return false;
+    if (q <= 0n) return false;
+    if (p === own && reserved(fromHexBytes(n))) return false;
+  }
+  return true;
+}
+
+function fromHexBytes(s) {
+  const out = new Uint8Array(s.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(2 * i, 2 * i + 2), 16);
+  return out;
+}
+
+function inRangeValue(v, op) {
+  if (!v.quantities().every(inRange)) throw new Refused(`${op}: a quantity out of the 128-bit range`, 'domain', op);
+  return v;
+}
+
+const EMPTY = new Uint8Array(0);
+
+/** §1.3: the operations on values, credentials and addresses, each failing exactly outside its domain. */
+function ledger(op, a) {
+  switch (op) {
+    case 'none': return ValueV.NONE;
+    case 'lovelace':
+      if (a[0] !== 0n && !inRange(a[0])) throw new Refused('Value.lovelace: a quantity out of the 128-bit range', 'domain', 'Value.lovelace');
+      return ValueV.of(EMPTY, EMPTY, a[0]);
+    case 'asset':
+      if (a[2] !== 0n && (a[1].length > 32 || !inRange(a[2]))) {
+        throw new Refused('Value.asset: a token name over 32 bytes, or a quantity out of the 128-bit range', 'domain', 'Value.asset');
+      }
+      return ValueV.of(a[0], a[1], a[2]);
+    case 'add': return inRangeValue(a[0].plus(a[1], 1n), 'Value +');
+    case 'sub':
+      // a - b is a + (-1)·b: every negated quantity of b is in range too.
+      if (!a[1].quantities().every((q) => inRange(-q))) throw new Refused('Value -: a quantity out of the 128-bit range', 'domain', 'Value -');
+      return inRangeValue(a[0].plus(a[1], -1n), 'Value -');
+    case 'lovelaceOf': return a[0].quantity(EMPTY, EMPTY);
+    case 'of': return a[0].quantity(a[1], a[2]);
+    case 'covers': {
+      if (a[0].quantities().some((q) => q < 0n) || a[1].quantities().some((q) => q < 0n)) {
+        throw new Refused('covers: a negative quantity', 'domain', 'covers');
+      }
+      return a[1].entries.every(([p, n, q]) => a[0].quantity(fromHexBytes(p), fromHexBytes(n)) >= q);
+    }
+    case 'keyCred': return new CredV(false, a[0]);
+    case 'scriptCred': return new CredV(true, a[0]);
+    case 'wallet': return new AddrV(new CredV(false, a[0]), NONE);
+    case 'script': return new AddrV(new CredV(true, a[0]), NONE);
+    case 'walletStaked': return new AddrV(new CredV(false, a[0]), some(new StakeHash(new CredV(false, a[1]))));
+    case 'scriptStaked': return new AddrV(new CredV(true, a[0]), some(new StakeHash(new CredV(false, a[1]))));
+    case 'payment': return a[0].payment;
+    default: throw new Error(`unknown ledger operation ${op}`);
+  }
+}
+
+function sameCred(a, b) {
+  return a.script === b.script && bytesEqual(a.hash, b.hash);
+}
+
+function sameStake(a, b) {
+  if (a === NONE || b === NONE) return a === b;
+  const x = a.value, y = b.value;
+  if (x instanceof StakeHash) return y instanceof StakeHash && sameCred(x.credential, y.credential);
+  return y instanceof StakePtr && x.slot === y.slot && x.txIndex === y.txIndex && x.certIndex === y.certIndex;
 }
 
 // ------------------------------------------------------------------ operations

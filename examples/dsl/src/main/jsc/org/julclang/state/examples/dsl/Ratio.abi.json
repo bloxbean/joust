@@ -1,0 +1,30 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Ratio",
+  "source": "Ratio.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "total", "type": "Int", "data": "int" },
+      { "name": "count", "type": "Int", "data": "int" }
+    ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Set", "constr": 0, "fields": [
+          { "name": "t", "type": "Int", "data": "int" },
+          { "name": "c", "type": "Int", "data": "int" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

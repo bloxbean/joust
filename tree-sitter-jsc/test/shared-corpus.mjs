@@ -213,7 +213,9 @@ function shape(file) {
     out.push(where + 'enums: ' + join(kids(n, 'enum_declaration').map((d) => `${text(fieldOf(d, 'name'))}(${join(kids(d, 'variant_declaration').map((v) => text(fieldOf(v, 'name'))))})`)));
     out.push(where + 'fns: ' + join(kids(n, 'function_declaration').map((d) => `${text(fieldOf(d, 'name'))}(${params(fieldOf(d, 'parameters'))})`)));
   };
-  out.push('imports: ' + join(kids(t, 'import_declaration').map((i) => `${text(fieldOf(i, 'source')).slice(1, -1)}{${join(fieldsOf(i, 'name').map(text))}}`)));
+  // M2c: a contract import reads 'contract <source>{<name>}', in source order with the other imports (as CorpusParse.shape).
+  out.push('imports: ' + join(t.children.filter((i) => i.kind === 'import_declaration' || i.kind === 'contract_import')
+    .map((i) => `${i.kind === 'contract_import' ? 'contract ' : ''}${text(fieldOf(i, 'source')).slice(1, -1)}{${join(fieldsOf(i, 'name').map(text))}}`)));
   decls(t, '');
   const c = kids(t, 'contract_declaration')[0];
   const opts = fieldOf(c, 'options');
@@ -221,6 +223,15 @@ function shape(file) {
   const body = fieldOf(c, 'body');
   const state = kids(body, 'state_declaration')[0];
   out.push('state: ' + join(kids(fieldOf(state, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name')))));
+  // M2b: the params, events and invariants, each only when the contract declares some (as CorpusParse.shape).
+  const paramsDecl = kids(body, 'params_declaration')[0];
+  if (paramsDecl) out.push('params: ' + join(kids(fieldOf(paramsDecl, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name')))));
+  const events = kids(body, 'event_declaration');
+  if (events.length) {
+    out.push('events: ' + join(events.map((e) => `${text(fieldOf(e, 'name'))}(${join(kids(fieldOf(e, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name'))))})`)));
+  }
+  const invariants = kids(body, 'invariant_declaration');
+  if (invariants.length) out.push('invariants: ' + join(invariants.map((i) => text(fieldOf(i, 'name')))));
   const KINDS = { init_declaration: 'init', action_declaration: 'action', destroy_declaration: 'destroy', view_declaration: 'view' };
   out.push('methods: ' + body.children.filter((m) => KINDS[m.kind]).map((m) => {
     const kind = KINDS[m.kind];

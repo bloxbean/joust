@@ -1,0 +1,24 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/oracle's Oracle in .jsc 2 (ADR-0018 M2c, J11; ADR-0011 D2): a price feed. The publisher posts a price with
+// the time it was set, the start of the posting call's validity window, so updatedAt is a time field (D11): a reader
+// (Kiosk.jsc) checks its freshness with before(updatedAt + maxAge), never by comparing it.
+contract Oracle {
+  state { publisher: Key, price: Int, updatedAt: Int }
+
+  init(price: Int) {
+    require(price > 0, "price must be positive")
+    return { publisher: caller, price, updatedAt: validFrom }
+  }
+
+  // A new price, stamped with this call's window start.
+  action post(newPrice: Int) only publisher {
+    require(newPrice > 0, "price must be positive")
+    return { ...state, price: newPrice, updatedAt: validFrom }
+  }
+
+  destroy close() only publisher {
+    pay(publisher, balance)
+  }
+}

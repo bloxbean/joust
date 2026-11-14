@@ -189,3 +189,110 @@ export class BigMapV {
   }
 }
 BigMapV.EMPTY = BigMapV.of(new Map());
+
+// ------------------------------------------------------------------ values, credentials, addresses (M2, §1.3)
+
+const MAX_Q = (1n << 127n) - 1n;
+const MIN_Q = -(1n << 127n);
+
+/** Whether a quantity fits the ledger's signed 128-bit range (CIP-153). */
+export function inRange(q) {
+  return q <= MAX_Q && q >= MIN_Q;
+}
+
+/**
+ * A multi-asset value (§1.3): entries [policy hex, token name hex, quantity], sorted by policy, then token name, in the
+ * ledger's order (unsigned bytewise, a proper prefix first: what comparing lower-case hex strings gives), with no zero
+ * quantity. Built only through ValueV.of and plus, which keep it so.
+ */
+export class ValueV {
+  constructor(entries) {
+    const sums = new Map();
+    for (const [p, n, q] of entries) {
+      const k = `${p}:${n}`;
+      sums.set(k, (sums.get(k) ?? 0n) + q);
+    }
+    const out = [];
+    for (const [k, q] of sums) if (q !== 0n) out.push([k.slice(0, k.indexOf(':')), k.slice(k.indexOf(':') + 1), q]);
+    out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+    this.entries = Object.freeze(out.map((e) => Object.freeze(e)));
+    Object.freeze(this);
+  }
+
+  static of(policy, name, q) {
+    return new ValueV([[hex(policy), hex(name), q]]);
+  }
+
+  quantity(policy, name) {
+    const p = hex(policy), n = hex(name);
+    for (const [ep, en, q] of this.entries) if (ep === p && en === n) return q;
+    return 0n;
+  }
+
+  /** this + k·w, entry by entry; the caller checks the range. */
+  plus(w, k) {
+    return new ValueV([...this.entries, ...w.entries.map(([p, n, q]) => [p, n, q * k])]);
+  }
+
+  quantities() {
+    return this.entries.map((e) => e[2]);
+  }
+
+  equals(w) {
+    return this.entries.length === w.entries.length
+      && this.entries.every((e, i) => e[0] === w.entries[i][0] && e[1] === w.entries[i][1] && e[2] === w.entries[i][2]);
+  }
+}
+ValueV.NONE = new ValueV([]);
+
+/** A credential: a key's (KeyCred) or a script's (ScriptCred) hash. */
+export class CredV {
+  constructor(script, hash) {
+    this.script = script;
+    this.hash = hash;
+    Object.freeze(this);
+  }
+}
+
+/** A staking credential: a hash (StakeHash) or a pointer (StakePtr). */
+export class StakeHash {
+  constructor(credential) {
+    this.credential = credential;
+    Object.freeze(this);
+  }
+}
+
+export class StakePtr {
+  constructor(slot, txIndex, certIndex) {
+    this.slot = slot;
+    this.txIndex = txIndex;
+    this.certIndex = certIndex;
+    Object.freeze(this);
+  }
+}
+
+/** An address: a payment credential and NONE or Some(StakeHash | StakePtr). */
+export class AddrV {
+  constructor(payment, stake) {
+    this.payment = payment;
+    this.stake = stake;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Another contract's instance (M2c, Instance<C>, ADR-0011 D2): its policy (script hash) and its 32-byte id. It appears in
+ * the params; a deposit names it as its target.
+ */
+export class InstV {
+  constructor(policy, id) {
+    this.policy = policy;
+    this.id = id;
+    Object.freeze(this);
+  }
+}
+
+/** A reserved token kind under a contract's policy (ADR-0007 D3): 32 bytes, or 29 bytes starting 0x4F or 0x49. */
+export function reserved(n) {
+  return n.length === 32 || (n.length === 29 && (n[0] === 0x4f || n[0] === 0x49));
+}

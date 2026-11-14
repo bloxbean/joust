@@ -332,8 +332,57 @@ public final class StateHarness<S> {
         }
     }
 
+    /** The largest quantity a transaction output may hold (the ledger's Word64). */
+    public static final BigInteger MAX_OUTPUT_QUANTITY = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+    /** The range of a mint entry (the ledger's Int64). */
+    public static final BigInteger MIN_MINT = BigInteger.ONE.shiftLeft(63).negate(), MAX_MINT = BigInteger.ONE.shiftLeft(63).subtract(BigInteger.ONE);
+
+    /**
+     * What the ledger refuses in a transaction's values before any script runs (implementation review r1, S2 and F1): an
+     * output holding a negative quantity or one above 2^64 - 1, a mint entry of zero or outside Int64. A script sees such
+     * a transaction (its value equation may even balance: a send of more than the instance holds leaves a negative
+     * continuing output), but no such transaction exists, so the harness refuses it as the ledger would. Null when the
+     * values are well formed. The ledger's other rules (the minimum lovelace of an output, fees, balance) are not modelled.
+     */
+    public static String ledgerProblem(TxModel tx) {
+        for (int i = 0; i < tx.outputs.size(); i++) {
+            for (var p : org.julclang.state.api.Assets.read(tx.outputs.get(i).value()).entrySet()) {
+                for (var t : p.getValue().entrySet()) {
+                    BigInteger q = t.getValue();
+                    if (q.signum() < 0) return "output " + i + " holds a negative quantity of " + p.getKey() + "." + t.getKey() + ": " + q;
+                    if (q.compareTo(MAX_OUTPUT_QUANTITY) > 0) {
+                        return "output " + i + " holds more than 2^64 - 1 of " + p.getKey() + "." + t.getKey() + ": " + q;
+                    }
+                }
+            }
+        }
+        for (var e : tx.mint.toPlutusData().entries()) {
+            for (var t : ((PlutusData.MapData) e.value()).entries()) {
+                BigInteger q = ((PlutusData.IntData) t.value()).value();
+                if (q.signum() == 0 || q.compareTo(MIN_MINT) < 0 || q.compareTo(MAX_MINT) > 0) return "a mint entry of zero or outside Int64: " + q;
+            }
+        }
+        return null;
+    }
+
+    private boolean ledgerRules = true;
+
+    /**
+     * Whether {@link #evaluate} refuses what {@link #ledgerProblem} names (on by default). A budget measurement at quantities
+     * no ledger holds (the worst case of the scripts' integer costs) turns it off; nothing else should.
+     */
+    public StateHarness<S> ledgerRules(boolean on) {
+        this.ledgerRules = on;
+        return this;
+    }
+
     public Verdict evaluate(TxModel tx) {
         var results = new LinkedHashMap<String, EvalResult>();
+        String ledger = ledgerRules ? ledgerProblem(tx) : null;
+        if (ledger != null) {
+            results.put("LEDGER", new EvalResult.Failure("the ledger refuses this transaction: " + ledger, new org.julclang.vm.ExBudget(0, 0), List.of()));
+            return new Verdict(results);
+        }
         for (var e : tx.spendRedeemers.entrySet()) {
             TxInInfo in = tx.inputs.stream().filter(i -> i.outRef().equals(e.getKey())).findFirst()
                     .orElseThrow(() -> new IllegalStateException("spend redeemer for a missing input"));

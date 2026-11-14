@@ -31,7 +31,15 @@ final class Syntax {
     record File(String pkg, List<Import> imports, List<TypeDecl> types, List<EnumDecl> enums, List<Fn> fns, Contract contract,
                 List<Pos> leadingMinus, List<int[]> members) {}
 
-    record Import(List<String> names, String from, Pos pos) {}
+    /**
+     * {@code import { a, b } from "std/x"}; or (M2c, ADR-0018 D9) {@code import contract { C } from "./C.jsc"} ({@code contract}
+     * true, one name): another contract's state type {@code C.State} and its instances {@code Instance<C>}.
+     */
+    record Import(List<String> names, String from, Pos pos, boolean contract) {
+        Import(List<String> names, String from, Pos pos) {
+            this(names, from, pos, false);
+        }
+    }
 
     record TypeDecl(String name, List<FieldDecl> fields, Pos pos) {}
 
@@ -47,14 +55,33 @@ final class Syntax {
 
     record Option(String name, BigInteger value, Pos pos) {}
 
+    /**
+     * A contract. M2b: {@code params} (the deploy-time parameters' fields, null when none: ADR-0009 D1), {@code events}
+     * (each {@code event Name { … }}, in declaration order: the variants of the contract's {@code Event}) and
+     * {@code invariants}.
+     */
     record Contract(String name, List<Option> options, List<FieldDecl> state, List<Method> methods, List<Fn> fns,
-                    List<TypeDecl> types, List<EnumDecl> enums, Pos pos) {}
+                    List<TypeDecl> types, List<EnumDecl> enums, Pos pos, List<FieldDecl> params, Pos paramsPos,
+                    List<VariantDecl> events, List<InvariantDecl> invariants) {}
+
+    /** {@code invariant name = e} (ADR-0009 D4): a Bool over the state and the params, checked on every new state. */
+    record InvariantDecl(String name, Block body, Pos pos) {}
 
     enum Kind { INIT, ACTION, DESTROY, VIEW }
 
-    record Param(String name, TypeRef type, Pos pos) {}
+    /** A parameter; {@code reads} (M2c): {@code name: reads params.f}, the params field it reads (its type is then null). */
+    record Param(String name, TypeRef type, Pos pos, String reads) {
+        Param(String name, TypeRef type, Pos pos) {
+            this(name, type, pos, null);
+        }
+    }
 
-    record Mod(String name, String arg, Pos pos) {}
+    /** A modifier; {@code type} (M2c): the memo type of {@code receives T}, else null. */
+    record Mod(String name, String arg, Pos pos, TypeRef type) {
+        Mod(String name, String arg, Pos pos) {
+            this(name, arg, pos, null);
+        }
+    }
 
     record Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos) {}
 
@@ -70,7 +97,7 @@ final class Syntax {
         }
     }
 
-    sealed interface Stmt permits Const, Require, Pay, For, IfStmt, MatchStmt {
+    sealed interface Stmt permits Const, Require, Pay, Send, Mint, Accept, Emit, Deposit, For, IfStmt, MatchStmt {
         Pos pos();
     }
 
@@ -79,6 +106,25 @@ final class Syntax {
     record Require(Expr cond, String message, Pos pos) implements Stmt {}
 
     record Pay(Expr to, Expr amount, Pos pos) implements Stmt {}
+
+    /** {@code send(to, value[, datum])}: an output of {@code value} to the address {@code to} (D4, M2); M2c: with an inline datum. */
+    record Send(Expr to, Expr value, Expr datum, Pos pos) implements Stmt {
+        Send(Expr to, Expr value, Pos pos) {
+            this(to, value, null, pos);
+        }
+    }
+
+    /** {@code deposit(target, value, memo)} (M2c, ADR-0011 D3): {@code value} into another contract's instance. */
+    record Deposit(Expr target, Expr value, Expr memo, Pos pos) implements Stmt {}
+
+    /** {@code mint(name, qty)} or {@code burn(name, qty)}: the own policy's tokens (D4, M2). */
+    record Mint(boolean burn, Expr name, Expr qty, Pos pos) implements Stmt {}
+
+    /** {@code accept(value)}: native assets the method takes in (D4, M2). */
+    record Accept(Expr value, Pos pos) implements Stmt {}
+
+    /** {@code emit(Ev { … })}: an event of the call (D4, M2b; ADR-0009 D5). */
+    record Emit(Expr event, Pos pos) implements Stmt {}
 
     record For(String var, Expr list, Block body, Pos pos) implements Stmt {}
 

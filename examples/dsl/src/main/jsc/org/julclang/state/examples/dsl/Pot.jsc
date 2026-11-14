@@ -1,0 +1,29 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/fees' Pot in .jsc 2 (ADR-0018 M2c, J11; ADR-0011 D3): a fee pot. Other contracts deposit into it in the same
+// transaction, and collect takes their deposits in: its validator adds exactly the claimed deposits to its value, and the
+// method credits them.
+contract Pot {
+  state { owner: Key, collected: Int, deposits: Int }
+
+  init() {
+    return { owner: caller, collected: 0, deposits: 0 }
+  }
+
+  // Takes in every deposit made to this pot in the transaction; anyone may call it, but only with deposits.
+  action collect() receives {
+    const got = funds.deposits.fold(0, (acc, d) => acc + d.value.lovelace)
+    require(got > 0, "nothing deposited")
+    return { ...state, collected: collected + got, deposits: deposits + funds.deposits.length }
+  }
+
+  // Hands the pot to a new owner. It does not receive: a deposit claimed on its output makes it fail (I40).
+  action handOver(newOwner: Key) only owner {
+    return { ...state, owner: newOwner }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+}

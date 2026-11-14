@@ -1,4 +1,4 @@
-# `.jsc` 2 IR export (format 1)
+# `.jsc` 2 IR export (format 2)
 
 The checker's typed IR of a `.jsc` 2 contract, as JSON (ADR-0018 D15, M1b). The JavaScript reference interpreter
 (`js/jsc-interpreter`) evaluates it. Its meaning is defined in [`jsc-2-semantics.md`](jsc-2-semantics.md).
@@ -33,8 +33,20 @@ disagrees (below).
 
 ## Stability
 
-`"ir"` is the format version, exactly the integer 1 here. Readers refuse versions they do not know (`IrJson.read`,
+`"ir"` is the format version, exactly the integer 2 here. Readers refuse versions they do not know (`IrJson.read`,
 and the JavaScript `load`).
+
+**Version 2 (M2b, #84 review C2).** Version 1's Java reader ignored top-level fields it did not know, so it read an
+M2b export and silently dropped its `params` and `invariants` (an invariant-only contract loaded, called and re-emitted
+without its invariant). M2b's additions therefore take a new version, which every version-1 reader refuses, and both
+readers of version 2 refuse any field they do not know, at every level (the Java reader now as the JavaScript one), so a
+later addition cannot be dropped either (the Java reader checks each object's fields, each statement's and node's from
+the writer's own lists: `JscV2IrTest.theReader_refusesAnUnknownField_atEveryLevel`). ADR-0018 M4a (libraries) also moves
+the format to 2 on its branch; the integration of M2 and M4 joins both sets of additions in one version 2, under two
+conditions (#84 review F11): neither branch's version 2 is published (npm, snapshots) before the join, and the joined
+Java reader keeps this strictness at every level (M4a's version-2 reader, without it, would drop `params` and
+`invariants`). The integration adds a test that an export with `params`, `invariants` and `libraries` reads back with all
+three, and that an unknown field is refused.
 
 **Version 1 is the format as of the M1 integration** (#76): `If` and `IfValue` hold a `branches` list (M1e's flat
 else-if chains). M1b's pre-release shape (`cond`, `then`, `otherwise` on those nodes) was never released and is not
@@ -46,17 +58,33 @@ local referenced before it is declared or declared twice. The JavaScript reader 
 load, before anything runs: an unknown node or statement kind, field, operator, modifier name (`payable`, `open`,
 `only`, `after`, `before`, `batched`), method kind, `std` row or type is refused there. So a change is **additive** when an old
 reader refuses every program that uses it, at load, rather than misreading it: a new node kind, a new modifier (M1c's
-`batched`), a new `std` row or a new type, each with fields of its own. The JavaScript reader also refuses a condition or a
+`batched`), a new `std` row or a new type, each with fields of its own. **M2a's additions are of this kind**: the types
+`Value`, `Address` and `Credential`, the nodes `FundsRef` and `LedgerOp`, the statements `Send`, `Mint` and `Accept`, the
+`std/value` and `std/address` rows, and the arms `KeyCred`/`ScriptCred` of a match on a credential; they keep version 1.
+**M2b's are version 2's** (above): the top-level `params` (a Record named `Config`) and `invariants`, each present only
+when the contract declares them, the node `ParamsRef`, the statement `Emit`, and the modifiers `quorum` (with `keys` and
+`threshold` instead of `field`) and `authorized`. **M2c's are additive within version 2** (each refused at load by a
+reader without it, since both readers refuse unknown fields, kinds and modifiers, so none is dropped): the top-level
+`contracts` (present only when the contract imports another), a method's `reads` (present only when it has one), the
+modifier `receives` with an optional `type`, the types `{ "instance": C }` and `{ "deposit": T|null }`, the statement
+`Deposit`, a `Send`'s optional `datum`, the node `DepositField`, and `FundsRef`'s field `deposits`. A program without them
+exports byte for byte as before (examples/dsl's 25 earlier files: identical IR). The integration with M4a's version 2
+joins these too (the test it adds reads back an export with `contracts`, `reads` and a `receives` type as well). The JavaScript reader also refuses a condition or a
 boolean operand that is not of type `Bool` (a `Branch`'s, `Require`'s or `Cond`'s condition; `Logic`'s and `Not`'s
 operands), and an empty `branches` list. **Both readers** (the JavaScript one and the Java `IrJson.read`) take a
 method's modifiers only in the shapes the checker emits (#76 review S5): `payable` and `open` with no field; `only f`
 with `f` a `Key` field of the state; `after f` and `before f` with `f` an `Int` field; `batched` with no field or the
 field `"only"` (`batched only`), on an action only, never beside `only`, `after` or `before` and never in a contract with
-`BigMap` state; no modifier twice; an init with `payable` only, a view with none, and no `payable` destroy. They
-recompute `pays` (a method's, and each `If`'s, `For`'s and `Match`'s) from the `Pay` statements in its blocks, and
-refuse a paying method without `only f` or `open` (#80 review S3); they refuse a `Pay` under any expression (a
-value block, value `if` or `match`, a lambda) or in a `fn` (JSC0413), so the statement blocks hold every payout, and a
-destroy without a `Pay` (JSC0409). These checks keep a reader from deciding what the
+`BigMap` state; no modifier twice; an init with `payable` only, a view with none, and no `payable` destroy. M2b's
+`quorum` names `keys` (a `List<Key>`) and `threshold` (an `Int`), both state fields or both `params.f` (JSC0439), and no
+`field`; `authorized f` names a `Credential` state field or `params.f`; M2c's `receives` names no field, may name a
+`type`, and is on an action only; a batched action has none of `quorum`, `authorized` and `receives` (JSC0417,
+JSC0447). They recompute `pays` (a method's, and each `If`'s, `For`'s and `Match`'s) from the `Pay` statements in its
+blocks, and refuse a method that moves value (a `Pay`, `Send`, `Mint` (a burn too) or `Deposit` in its statement
+blocks) without an audience: `only f`, `open`, `quorum` or `authorized` (#80 review S3, JSC0408; joined with M2's
+modifiers and effects in the `.jsc` 2 integration, `feat/jsc-2-int2`); they refuse a `Pay` under any expression (a value block, value
+`if` or `match`, a lambda) or in a `fn` (JSC0413), so the statement blocks hold every payout, and a destroy that moves
+no value (JSC0409). These checks keep a reader from deciding what the
 checker did not; they do not authenticate an IR (swapping `only admin` for `open` is well formed). What binds an IR to
 its contract is the build that produced it: `sourceSha256` and the build's own outputs. Additive changes keep version 1. A change to
 an existing node's fields, to the meaning of an existing node, operator, modifier or row, or to the program's top-level
@@ -64,8 +92,8 @@ fields gets a new version.
 
 **Two checker decisions are checked again.** The JavaScript reader recomputes each method's `checked` list (§4 of the
 semantics: the parameters, of an init, action or destroy, whose types hold a `Key`, a `Hash` or a `Map` anywhere) and
-its `usesCtx` (a destroy; a modifier other than `open` and `only`; or a `CtxRef`, `TimePred` or `std/time` call in the
-body), and refuses an IR that disagrees: a checker defect there becomes a refused load, not an agreement of every leg.
+its `usesCtx` (a destroy; a modifier other than `open`, `only`, `quorum` and `authorized`; or a `CtxRef`, `TimePred` or
+`std/time` call in the body), and refuses an IR that disagrees: a checker defect there becomes a refused load, not an agreement of every leg.
 
 **The source it came from.** `sourceSha256` is the SHA-256 of the `.jsc` file's UTF-8 text. A consumer that holds the
 source (M1d's `joust check`) should lower it in process or compare the hash, and refuse a stale export.
@@ -83,7 +111,7 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 
 ```json
 {
-  "ir": 1,
+  "ir": 2,
   "language": "jsc 2",
   "sourceSha256": "<64 hex digits>",
   "package": "org.example",
@@ -93,19 +121,38 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   "records": [Record…],
   "enums": [{ "name": "Phase", "variants": [Record…], "at": [3, 1] }],
   "state": Record,
+  "params": Record,
+  "contracts": [{ "name", "package", "state": Record, "records": [Record…], "enums": [Enum…], "timeFields": [name…],
+                  "receives": [Type|null…], "bigMaps" }],
   "timeFields": ["lastSeen"],
   "recursiveFns": ["fact"],
   "fns": [{ "name", "params": [Local…], "result": Type, "body": Block, "at" }],
   "methods": [{ "kind": "init|action|destroy|view", "name", "params": [Local…], "mods": [{ "name", "field"? }],
-                "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at" }],
+                "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at", "reads"? }],
+  "invariants": [{ "name", "body": Block, "at" }],
   "warnings": [{ "line", "col", "code", "message" }]
 }
 ```
 
 - **Record:** `{ "name", "fields": [{ "name", "type": Type }], "at" }`, with the fields in declaration order. An enum's
   variants are records in declaration order, so a variant's tag is its index.
-- **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `{ "list": T }`, `{ "option": T }`, `{ "record": name }`
-  (`"State"` for the state), `{ "enum": name }`, `{ "map": [K, V] }`, `{ "bigmap": [K, V] }`.
+- **M2b.** `params` (present only when declared) is the params record, named `Config`. The contract's events are the
+  enum `Event` in `enums`, its variants in declaration order. `invariants` (present only when declared) are Bools over
+  the state (`StateRef`, `StateField`) and the params (`ParamsRef`), checked like a view's body. A modifier is
+  `{ "name", "field"? }`; `quorum`'s is `{ "name": "quorum", "keys", "threshold" }`; `authorized`'s `field`, like
+  `quorum`'s `keys` and `threshold`, is a state field or `params.f`.
+- **M2c.** `contracts` (present only when the contract imports another: `import contract { C } from "./C.jsc"`) states
+  each imported contract as its own checked IR does, sorted by name: its package, its state and declared records and
+  enums under qualified names (`C.State`, `C.Share`, variants `C.Open`), its time fields (a read state's field among them
+  is a time value), the memo type of each receiving action (`null` for one that reads none) and whether its state holds a
+  BigMap. A method's `reads` (present only when it reads another contract) lists `{ "local": Local, "field" }`: the
+  local holding the state the params field `field` (an `Instance<C>`) names, declared before the body. The modifier
+  `receives` is `{ "name": "receives" }`, or `{ "name": "receives", "type": T }` for `receives T`.
+- **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),
+  `{ "instance": C }` (M2c, `Instance<C>`), `{ "deposit": T|null }` (M2c, an element of `funds.deposits`: its memo type,
+  or null),
+  `{ "list": T }`, `{ "option": T }`, `{ "record": name }` (`"State"` for the state), `{ "enum": name }`,
+  `{ "map": [K, V] }`, `{ "bigmap": [K, V] }`.
 - **Local** (where it is bound): `{ "id", "name", "type", "taint", "at", "fieldTaints"? }`. A reference to it is
   `{ "node": "LocalRef", "local": id, … }`. `fieldTaints` is present only for a value of the state's type: each field's
   taint.
@@ -120,6 +167,11 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `Let` | `local` (Local), `value` |
   | `Require` | `cond`, `message` |
   | `Pay` | `to`, `amount` |
+  | `Send` (M2) | `to`, `value`, `datum` (M2c; present only when the send has one) |
+  | `Deposit` (M2c) | `target` (an `Instance`), `value`, `memo` |
+  | `Mint` (M2) | `burn` (boolean: `burn(…)`), `name`, `qty` |
+  | `Accept` (M2) | `value` |
+  | `Emit` (M2b) | `event` (an `Event` value) |
   | `If` | `branches` (Branch…, at least one), `otherwise` (Block or null), `pays` |
   | `For` | `var` (Local), `list`, `body` (Block), `pays` |
   | `Match` | `scrutinee`, `arms`, `pays` |
@@ -127,8 +179,8 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 - **Branch:** `{ "cond": Expr, "then": Block, "at" }`, one test of an `if` and its else-if chain (`If`, `IfValue`).
   An else-if chain is one node with a branch per test (ADR-0018 J18, M1e), so its depth does not grow with its length.
 - **Arm:** `{ "ctors": [name…], "fields": [name…], "binds": [Local…], "body": Block, "at" }`. `ctors` lists the
-  variants it covers (`Some`/`None` for an option), and `fields[i]` is the field that `binds[i]` takes (`value` for
-  `Some(x)`).
+  variants it covers (`Some`/`None` for an option, `KeyCred`/`ScriptCred` for a credential), and `fields[i]` is the
+  field that `binds[i]` takes (`value` for `Some(x)`; `key` or `hash` for a credential).
 - **Expr:** `{ "node": kind, …, "type": Type, "taint": n, "at" }`. `taint` is a bit set: 1 means the value depends on
   time, 2 on the current call's window (D11). Evaluation ignores it. The kinds and their own fields:
 
@@ -153,6 +205,12 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `Compare` | `op` (`< <= > >=`), `left`, `right` | | `Coalesce` | `option`, `default` |
   | `Equals` | `negate`, `left`, `right`, `operand` (Type) | | `BlockValue` | `block` |
   | `Logic` | `op` (`&& \|\|`), `left`, `right` | | `IfValue` | `branches`, `otherwise` (Block) |
+  | `FundsRef` (M2) | `field` (`received held policy self`; M2c `deposits`) | | `LedgerOp` (M2) | `op`, `args` (below) |
+  | `ParamsRef` (M2b) | `field` (of `Config`) | | `DepositField` (M2c) | `target` (a deposit), `field` (`value memo`) |
+
+  `LedgerOp`'s ops and argument counts: `none` 0, `lovelace` 1, `asset` 3 (policy, name, quantity), `add` 2, `sub` 2,
+  `lovelaceOf` 1, `of` 3 (value, policy, name), `covers` 2; `keyCred` 1, `scriptCred` 1, `wallet` 1, `walletStaked` 2,
+  `script` 1, `scriptStaked` 2, `payment` 1.
 
 A local is always bound before it is referenced in document order. That holds for a method's or `fn`'s parameters
 before its body, a `Let`'s local after its value, and lambda and arm bindings after the collection or scrutinee and
@@ -172,11 +230,24 @@ The differential tests pass calls to the JavaScript interpreter as JSON, in a ta
 | record or variant | `{ "rec": "Name", "fields": [v…] }` (the state is `"State"`) |
 | `Map` | `{ "map": [[k, v]…] }`, in the value's own order. An input may be out of order; the checked-input rule refuses it |
 | `BigMap` | `{ "bigmap": [[k, v]…] }`: its contents (*now*), in canonical order |
+| `Value` (M2) | `{ "value": [[policy, name, "q"]…] }`: policy and name as hex, the quantity as a decimal string, in the ledger's order (semantics §1.3) |
+| `Credential` (M2) | `{ "keyCred": hex }`, `{ "scriptCred": hex }` |
+| `Instance<C>` (M2c) | `{ "instance": [policy, id] }`, both hex |
+| `Address` (M2) | `{ "address": [credential, stake] }`, `stake` `null`, `{ "stakeHash": credential }` or `{ "stakePtr": ["slot", "tx", "cert"] }`. A pointer can be written (a vector may offer one) but is never a checked input's (semantics §4, r15) |
 
 A call is `{ "method", "state": v|null, "args": [v…], "tx": { "caller", "received", "balance", "validFrom",
-"validTo", "signers" }|null, "transition"? }`, with `caller` and each of `signers` as hex and the other fields as
-decimal strings. `signers` (semantics §2.6) may be left out: the caller alone signs. `"transition": true` runs the
+"validTo", "signers", "funds"?, "approvers"? }|null, "transition"?, "params"? }`, with `caller` and each of `signers` as hex and the other fields as
+decimal strings. `signers` (semantics §2.6) may be left out: the caller alone signs. `funds` (M2) is
+`{ "received": Value, "held": Value, "policy": hex, "self": hex, "deposits"? }`, for a call that reads funds or moves
+native assets; `deposits` (M2c) lists `{ "value": Value, "memo": v|null }` for a receiving action. The tx's `reads` (M2c)
+maps each params field a method reads by to the state read, `{ "oracle": { "rec": "Oracle.State", … } }`.
+`approvers` (M2b, semantics §2.6) lists the scripts that approve the call, as hex (none when left out); `params` (M2b) is
+the `Config` record the contract is deployed with (§2). `"transition": true` runs the
 transition alone, without the modifiers (§2.6). An answer is
 `{ "refused": message, "class": "kind:detail" }` (semantics §2.5),
-`{ "ok": { "value": v|null, "payouts": [{ "to": hex, "lovelace": "n" }…] } }`, or `{ "limit": message }` when the
+`{ "ok": { "value": v|null, "payouts": [{ "to": hex, "lovelace": "n" }…], "sends"?, "mint"?, "accepted"?, "events"? } }`
+(M2: the sends `[{ "to": Address, "value": Value, "datum"? }…]`, the net mint and the accepted sum; M2b: the events
+`[v…]`; M2c: a send's `datum` when it has one, and the deposits `[{ "target": Instance, "value": Value, "memo": v }…]`;
+each present only when not empty), or
+`{ "limit": message }` when the
 interpreter could not finish (semantics §2.4: no answer, a failure of that leg).

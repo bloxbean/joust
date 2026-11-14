@@ -591,6 +591,17 @@ final class ContractReader {
             error(type, "@Invariant cannot be combined with @Batched yet: a batch passes through intermediate states that"
                     + " the validator does not check (ADR-0009 r2)");
         }
+        // ADR-0009 r3 (#84 review S1/C1): a quorum over state fields is an output check like an invariant (its shape,
+        // quorumWellFormed, on every output), and a batch's states are not checked: a batched action could break the
+        // shape and lock the contract. A params quorum cannot change, so it stays allowed.
+        boolean stateQuorum = java.util.stream.Stream.concat(actionIRs.stream(), destroyIRs.stream())
+                .anyMatch(t -> t.quorumKeys() != null && (!t.quorumKeys().startsWith("params.")
+                        || t.quorumThreshold() == null || !t.quorumThreshold().startsWith("params.")));
+        if (stateQuorum && anyBatched) {
+            error(type, "@Quorum over state fields cannot be combined with @Batched yet: a batch passes through states whose"
+                    + " quorum shape the validator does not check, so a batched action could make the quorum unreachable"
+                    + " (ADR-0009 r3); use a @Params quorum, or no batched actions");
+        }
         if (failed) return Optional.empty();
         return Optional.of(new ContractIR(pkg, type.getSimpleName().toString(), stateText, stateComponents, minAda,
                 maxDatumBytes, maxValidityMs,
@@ -1112,6 +1123,12 @@ final class ContractReader {
                 error(m, "@Quorum(keys) names \"" + quorumKeys + "\", which must be JulcList<byte[]> but is " + k.type());
             }
             ParamIR t = fieldOf(m, r, quorumThreshold, "@Quorum(threshold)");
+            // #84 review S3: the validator checks a state pair's shape on every output and a params pair's at creation;
+            // a mixed pair would be neither (as .jsc 2's JSC0439 refuses).
+            if (quorumThreshold != null && quorumKeys.startsWith("params.") != quorumThreshold.startsWith("params.")) {
+                error(m, "@Quorum(keys = \"" + quorumKeys + "\", threshold = \"" + quorumThreshold + "\"): the keys and the threshold are"
+                        + " both state components or both params.* (ADR-0009 D2)");
+            }
             if (t != null && t.kind() != ParamIR.TypeKind.INTEGER) {
                 error(m, "@Quorum(threshold) names \"" + quorumThreshold + "\", which must be BigInteger but is " + t.type());
             }
@@ -1308,12 +1325,14 @@ final class ContractReader {
         }
         if (m.getReturnType().getKind() == TypeKind.VOID) error(m, "@View must return a value");
         List<ParamIR> params = new ArrayList<>();
-        for (int i = 1; i < ps.size(); i++) {
+        // ADR-0009 D1: a view may take the @Params record right after the state; it is the deployment's (#84 review C3).
+        boolean takesParams = r.paramsType() != null && ps.size() > 1 && same(ps.get(1).asType(), r.paramsType());
+        for (int i = takesParams ? 2 : 1; i < ps.size(); i++) {
             var p = ps.get(i);
             if (isNamed(p.asType(), CTX)) error(p, "@View cannot take Ctx: views run off-chain, without a transaction");
             params.add(new ParamIR(p.getSimpleName().toString(), r.types().render(p.asType()), kindOf(p.asType())));
         }
-        return new ViewIR(m.getSimpleName().toString(), List.copyOf(params), r.types().render(m.getReturnType()));
+        return new ViewIR(m.getSimpleName().toString(), List.copyOf(params), r.types().render(m.getReturnType()), takesParams);
     }
 
     /** A purpose handler's shape and authorization (ADR-0010 D1). */

@@ -91,6 +91,7 @@ module.exports = grammar({
 
     _item: $ => choice(
       $.import_declaration,
+      $.contract_import,
       $.type_declaration,
       $.enum_declaration,
       $.function_declaration,
@@ -99,6 +100,10 @@ module.exports = grammar({
     import_declaration: $ => seq(
       'import', '{', sep1(field('name', $.identifier), ','), '}', 'from', field('source', $.string),
     ),
+
+    // M2c (ADR-0018 D9): another contract, for its state type (Name.State), Instance<Name>, reads and deposits. Exactly
+    // one name: a file holds one contract.
+    contract_import: $ => seq('import', 'contract', '{', field('name', $.identifier), '}', 'from', field('source', $.string)),
 
     type_declaration: $ => seq('type', field('name', $.identifier), '=', field('fields', $.field_list)),
 
@@ -113,8 +118,10 @@ module.exports = grammar({
 
     variant_declaration: $ => seq(field('name', $.identifier), optional(field('fields', $.field_list))),
 
+    // M2c: a qualified name reads an imported contract's type (Oracle.State).
     type: $ => seq(
       field('name', $.identifier),
+      optional(seq('.', field('member', $.identifier))),
       optional(seq('<', sep1(field('argument', $.type), ','), '>')),
     ),
 
@@ -125,7 +132,10 @@ module.exports = grammar({
 
     parameters: $ => seq('(', optional(sep1($.parameter, ',')), ')'),
 
-    parameter: $ => seq(field('name', $.identifier), ':', field('type', $.type)),
+    parameter: $ => seq(field('name', $.identifier), ':', choice(field('type', $.type), field('reads', $.reads_clause))),
+
+    // M2c (ADR-0011 D2): a parameter that reads another contract's state, through an Instance<C> of the params.
+    reads_clause: $ => seq('reads', $.params_field),
 
     contract_declaration: $ => seq(
       'contract', field('name', $.identifier),
@@ -155,9 +165,23 @@ module.exports = grammar({
       $.function_declaration,
       $.type_declaration,
       $.enum_declaration,
+      $.params_declaration,
+      $.event_declaration,
+      $.invariant_declaration,
     ),
 
     state_declaration: $ => seq('state', field('fields', $.field_list)),
+
+    // M2b (ADR-0009 via ADR-0018): the deploy-time parameters (read as params.f; once, JSC0431), the contract's events
+    // (the variants of its Event) and its invariants.
+    params_declaration: $ => seq('params', field('fields', $.field_list)),
+
+    event_declaration: $ => seq('event', field('name', $.identifier), optional(field('fields', $.field_list))),
+
+    invariant_declaration: $ => seq(
+      'invariant', field('name', $.identifier),
+      choice(seq('=', field('value', $._expression)), field('body', $.block)),
+    ),
 
     init_declaration: $ => seq(
       'init', field('parameters', $.parameters), repeat($.modifier), field('body', $.block),
@@ -184,7 +208,16 @@ module.exports = grammar({
       'batched',
       seq('batched', 'only'),
       seq(choice('only', 'after', 'before'), field('field', $.identifier)),
+      // M2b: quorum <keys> <threshold> and authorized <credential>, each a state field or params.f.
+      seq('quorum', field('keys', $._field_ref), field('threshold', $._field_ref)),
+      seq('authorized', field('field', $._field_ref)),
+      // M2c (ADR-0011 D3): the action takes deposits; the type, when given, is the memos'.
+      seq('receives', optional(field('memo', $.type))),
     ),
+
+    _field_ref: $ => choice($.identifier, $.params_field),
+
+    params_field: $ => seq('params', '.', field('name', $.identifier)),
 
     // ------------------------------------------------------------------ blocks and statements
 
@@ -229,6 +262,11 @@ module.exports = grammar({
       $.const_declaration,
       $.require_statement,
       $.pay_statement,
+      $.send_statement,
+      $.mint_statement,
+      $.accept_statement,
+      $.emit_statement,
+      $.deposit_statement,
       $.for_statement,
       prec.dynamic(1, $.if_statement),
       prec.dynamic(1, $.match_statement),
@@ -243,6 +281,23 @@ module.exports = grammar({
     ),
 
     pay_statement: $ => seq('pay', '(', field('to', $._expression), ',', field('amount', $._expression), ')'),
+
+    // ADR-0018 M2 (D4): the effects on native assets; M2c: send's datum, encoded by a generated encoder.
+    send_statement: $ => seq(
+      'send', '(', field('to', $._expression), ',', field('value', $._expression), optional(seq(',', field('datum', $._expression))), ')',
+    ),
+
+    mint_statement: $ => seq(choice('mint', 'burn'), '(', field('name', $._expression), ',', field('quantity', $._expression), ')'),
+
+    accept_statement: $ => seq('accept', '(', field('value', $._expression), ')'),
+
+    // M2b: an event of the call (a value of the contract's Event), in source order.
+    emit_statement: $ => seq('emit', '(', field('event', $._expression), ')'),
+
+    // M2c (ADR-0011 D3): value into another contract's instance, with a memo the receiver may read.
+    deposit_statement: $ => seq(
+      'deposit', '(', field('target', $._expression), ',', field('value', $._expression), ',', field('memo', $._expression), ')',
+    ),
 
     for_statement: $ => seq(
       'for', '(', 'const', field('name', $.identifier), 'of', field('iterable', $._expression), ')', field('body', $.block),
@@ -263,7 +318,8 @@ module.exports = grammar({
 
     match_arm: $ => seq(
       field('pattern', $._pattern), '=>',
-      field('body', choice(alias($._arm_block, $.block), $.require_statement, $.pay_statement, $._expression)),
+      field('body', choice(alias($._arm_block, $.block), $.require_statement, $.pay_statement, $.send_statement, $.mint_statement,
+        $.accept_statement, $.emit_statement, $.deposit_statement, $._expression)),
     ),
 
     _pattern: $ => choice($.some_pattern, $.variant_pattern),
@@ -405,7 +461,7 @@ module.exports = grammar({
 
     // A require or pay arm in a match used as a value: the Java parser reads it as a statement arm and then refuses the
     // match (JSC0907), so here it is always an error.
-    _statement_arm: $ => seq(choice('require', 'pay'), $.refused),
+    _statement_arm: $ => seq(choice('require', 'pay', 'send', 'mint', 'burn', 'accept'), $.refused),
 
     call_expression: $ => prec(PREC.CALL, seq(field('function', $.identifier), field('arguments', $.arguments))),
 

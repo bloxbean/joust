@@ -1,0 +1,82 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "9b2b209d1ec4d88b297cf822ca6ce0ff299735827dbba505cb16453f716038b7",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Stash",
+  "source": "Stash.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": { "name": "State", "fields": [{ "name": "n", "type": "Int" }, { "name": "held", "type": "Value" }], "at": [8, 1] },
+  "params": { "name": "Config", "fields": [{ "name": "v", "type": "Value" }, { "name": "h", "type": "Hash" }], "at": [9, 3] },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "Lit", "value": "7", "type": "Int", "taint": 0, "at": [13, 17] },
+            {
+              "node": "LedgerOp",
+              "op": "add",
+              "args": [
+                { "node": "ParamsRef", "field": "v", "type": "Value", "taint": 0, "at": [13, 26] },
+                {
+                  "node": "LedgerOp",
+                  "op": "asset",
+                  "args": [
+                    { "node": "ParamsRef", "field": "h", "type": "Hash", "taint": 0, "at": [13, 49] },
+                    { "node": "Lit", "value": "01", "type": "Bytes", "taint": 0, "at": [13, 59] },
+                    { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [13, 64] }
+                  ],
+                  "type": "Value",
+                  "taint": 0,
+                  "at": [13, 37]
+                }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [13, 26]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [13, 12]
+        },
+        "at": [12, 10]
+      },
+      "at": [12, 3]
+    },
+    {
+      "kind": "action",
+      "name": "stay",
+      "params": [],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [17, 12] },
+        "at": [16, 22]
+      },
+      "at": [16, 3]
+    }
+  ],
+  "warnings": []
+}

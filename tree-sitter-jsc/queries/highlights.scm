@@ -69,16 +69,16 @@
 (version) @keyword.directive
 
 [
-  "package" "import" "from" "type" "enum" "fn" "contract" "state" "init" "action" "destroy" "view"
+  "package" "import" "from" "type" "enum" "fn" "contract" "state" "init" "action" "destroy" "view" "params" "event" "invariant"
 ] @keyword
 
 [
-  "const" "let" "for" "of" "return" "require" "pay" "to" "delete" "this" "match"
+  "const" "let" "for" "of" "return" "require" "pay" "send" "mint" "burn" "accept" "emit" "deposit" "reads" "to" "delete" "this" "match"
 ] @keyword
 
 [ "if" "else" ] @keyword.conditional
 
-[ "payable" "open" "only" "after" "before" "batched" "ada" ] @keyword.modifier
+[ "payable" "open" "only" "after" "before" "batched" "quorum" "authorized" "receives" "ada" ] @keyword.modifier
 
 ; Operators and punctuation
 

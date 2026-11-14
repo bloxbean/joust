@@ -1,0 +1,78 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { blake2b_224 } from "std/crypto"
+import { isEmpty } from "std/value"
+
+// examples/dex in .jsc 2 (ADR-0018 M2, J11; ADR-0007): a constant-product AMM for one ADA/token pair. The reserves are
+// what the pool's UTxO holds: lovelace above the deposit (balance) and the token (funds.held), so the state cannot drift
+// from the funds. Liquidity providers get LP tokens minted under this contract's own policy, named blake2b_224 of the
+// pool's id: one name per pool, so one pool's LP tokens never redeem another's reserves. Swaps pay a 0.3% fee to the pool.
+contract Dex(maxDatumBytes = 256, assetSlots = 2) {
+  state { admin: Key, tokenPolicy: Hash, tokenName: Bytes, lpName: Bytes, lpSupply: Int }
+
+  // Opens an empty pool for (tokenPolicy, tokenName); its LP token is named after the pool id.
+  init(tokenPolicy: Hash, tokenName: Bytes) {
+    return { admin: caller, tokenPolicy, tokenName, lpName: blake2b_224(funds.self), lpSupply: 0 }
+  }
+
+  // The output of a swap of amount into reserves (reserveIn, reserveOut), after the 0.3% fee.
+  fn amountOut(amount: Int, reserveIn: Int, reserveOut: Int): Int {
+    const withFee = amount * 997
+    reserveOut * withFee / (reserveIn * 1000 + withFee)
+  }
+
+  // Adds the received lovelace and tokenIn tokens; mints LP tokens to the caller.
+  action addLiquidity(tokenIn: Int) payable open {
+    require(received > 0 && tokenIn > 0, "add both ADA and tokens")
+    const reserveToken = funds.held.of(tokenPolicy, tokenName)
+    const minted = lpSupply == 0 ? received : min(received * lpSupply / balance, tokenIn * lpSupply / reserveToken)
+    require(minted > 0, "deposit too small")
+    mint(lpName, minted)
+    send(wallet(caller), Value.asset(funds.policy, lpName, minted))
+    accept(Value.asset(tokenPolicy, tokenName, tokenIn))
+    return { ...state, lpSupply: lpSupply + minted }
+  }
+
+  // Burns lp LP tokens (offered by the caller); pays the provider its share of both reserves.
+  action removeLiquidity(lp: Int) payable open {
+    require(lp > 0 && lp <= lpSupply, "bad LP amount")
+    const adaOut = balance * lp / lpSupply
+    const tokenOut = funds.held.of(tokenPolicy, tokenName) * lp / lpSupply
+    burn(lpName, lp)
+    accept(Value.asset(funds.policy, lpName, lp))
+    pay(caller, adaOut)
+    send(wallet(caller), Value.asset(tokenPolicy, tokenName, tokenOut))
+    return { ...state, lpSupply: lpSupply - lp }
+  }
+
+  // Swaps the received lovelace for at least minOut tokens.
+  action swapAdaForToken(minOut: Int) payable open {
+    const out = amountOut(received, balance, funds.held.of(tokenPolicy, tokenName))
+    require(out > 0 && out >= minOut, "slippage: output below minOut")
+    send(wallet(caller), Value.asset(tokenPolicy, tokenName, out))
+    accept(Value.none())
+    return state
+  }
+
+  // Swaps tokenIn tokens for at least minOut lovelace.
+  action swapTokenForAda(tokenIn: Int, minOut: Int) payable open {
+    require(received == 0, "pay tokens, not ADA")
+    const out = amountOut(tokenIn, funds.held.of(tokenPolicy, tokenName), balance)
+    require(out > 0 && out >= minOut, "slippage: output below minOut")
+    pay(caller, out)
+    accept(Value.asset(tokenPolicy, tokenName, tokenIn))
+    return state
+  }
+
+  // Closes an empty pool: the admin gets the deposit and any dust.
+  destroy close() only admin {
+    require(lpSupply == 0, "liquidity is still in the pool")
+    pay(admin, balance)
+    if !isEmpty(funds.held) {
+      send(wallet(admin), funds.held)
+    }
+  }
+
+  view lpSupply(): Int = lpSupply
+}

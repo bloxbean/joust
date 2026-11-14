@@ -1,0 +1,30 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import contract { Pot } from "./Pot.jsc"
+
+// examples/fees' Stall in .jsc 2 (ADR-0018 M2c, J11; ADR-0011 D3): a market stall. Each sale pays the stall, and a fee
+// goes straight into the Pot instance fixed in the params, as a deposit whose memo names the buyer. The stall's validator
+// subtracts the fee from its own value and requires the pot to take it in the same transaction.
+contract Stall {
+  params { pot: Instance<Pot>, feeBps: Int }
+  state { owner: Key, sales: Int }
+
+  init() {
+    require(params.feeBps > 0 && params.feeBps < 10_000, "fee in (0, 100%)")
+    return { owner: caller, sales: 0 }
+  }
+
+  // Sells for price lovelace: the stall keeps the price less the fee, the pot gets the fee.
+  action sell(price: Int) payable open {
+    require(received == price && price >= 2_000_000, "pay exactly the price, at least 2 ADA")
+    const fee = price * params.feeBps / 10_000
+    require(fee >= 1, "the fee rounds to zero")
+    deposit(params.pot, Value.lovelace(fee), caller)
+    return { ...state, sales: sales + price - fee }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+}
