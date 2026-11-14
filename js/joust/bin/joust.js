@@ -27,7 +27,7 @@ const handedOver = deferredTo === SELF;
 
 const COMMANDS = {
   build: 'build [--accept-abi[=<Contract>@<committed>..<new>]] [--accept-lock] [--traces]   compile contracts/ (.java, .jsc) into build/joust/',
-  abi: 'abi diff <Contract> [--out <file>]   the committed ABI manifest and the one the build computes now, with their SHA-256',
+  abi: 'abi diff <Contract> [--out <file>]   (<Contract>: package.Name, or a Name only one contract has) the committed ABI manifest and the one the build computes now, with their SHA-256',
   test: 'test [-- <node --test args>]   build, then run test/*.test.js offline (an in-memory ledger: @julclang/joust/test)',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
   dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
@@ -151,6 +151,7 @@ async function project() {
         console.error(`joust abi diff: ${d.error}`);
         return 1;
       }
+      console.log(`${d.contract} (${d.file})`);
       console.log(`--- committed ${d.path} sha256 ${d.committed.sha256}`);
       console.log(d.committed.text ?? '(none)');
       console.log(`+++ now sha256 ${d.now.sha256}`);

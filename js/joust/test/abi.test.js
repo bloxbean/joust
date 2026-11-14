@@ -163,3 +163,29 @@ test('a bound acceptance is refused when the committed manifest changed (a git p
   assert.equal(parseBoundAcceptance('../x@none..' + 'a'.repeat(64)), null);
   assert.match(abiDiff({ generated: g(2), srcDir: 'contracts', root, contract: 'Nope' }).error, /no \.jsc 2 contract Nope/);
 });
+
+// #99 S5, F5: a contract is its package plus name. A simple name two contracts share is refused; the qualified one works.
+test('the bound acceptance and the diff name a contract by package; an ambiguous simple name accepts nothing', () => {
+  const root = project();
+  mkdirSync(join(root, 'contracts', 'other'), { recursive: true });
+  const two = [{ jscFile: 'app/Counter.jsc', javaFile: 'app/Counter.java', abi: abi(2) },
+    { jscFile: 'other/Counter.jsc', javaFile: 'other/Counter.java', abi: abi(3) }];
+  const amb = abiDiff({ generated: two, srcDir: 'contracts', root, contract: 'Counter' });
+  assert.match(amb.error, /Counter is ambiguous: app\.Counter \(app\/Counter\.jsc\), other\.Counter \(other\/Counter\.jsc\)/);
+  const d = abiDiff({ generated: two, srcDir: 'contracts', root, contract: 'other.Counter' });
+  assert.equal(d.contract, 'other.Counter');
+  assert.equal(d.file, 'other/Counter.jsc');
+  assert.equal(d.path, join('contracts', 'other', 'Counter.abi.json'));
+  const errors = abiGate({ generated: two, srcDir: 'contracts', root, acceptAbi: parseBoundAcceptance(`Counter@none..${d.now.sha256}`), log: () => {} });
+  assert.match(errors[0], /--accept-abi=Counter@…: Counter is ambiguous.*nothing accepted/);
+  assert.equal(existsSync(join(root, 'contracts', 'other', 'Counter.abi.json')), false);
+  assert.equal(existsSync(manifest(root)), false);
+  const ok = abiGate({ generated: two, srcDir: 'contracts', root, acceptAbi: parseBoundAcceptance(`other.Counter@none..${d.now.sha256}`), log: () => {} });
+  assert.equal(readFileSync(join(root, 'contracts', 'other', 'Counter.abi.json'), 'utf8'), abi(3));
+  assert.equal(existsSync(manifest(root)), false, 'app.Counter is not accepted');
+  assert.equal(ok.length, 1);
+  assert.match(ok[0], /JSC0003.*app\/Counter/);
+  // A unique simple name still works, and resolves to the qualified contract.
+  assert.equal(abiDiff({ generated: [two[0]], srcDir: 'contracts', root, contract: 'Counter' }).contract, 'app.Counter');
+  assert.equal(parseBoundAcceptance('app..Counter@none..' + 'a'.repeat(64)), null);
+});

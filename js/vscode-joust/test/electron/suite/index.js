@@ -289,6 +289,53 @@ async function hostileRestricted() {
     { ran: false, reason: 'restricted' });
 }
 
+/**
+ * F4 on #99: Accept ABI… with the project's own CLI. Unsaved buffers are refused (or saved); the diff names app.Counter
+ * and its files; a bound acceptance after the source changed is refused by the tool; a fresh diff then accepts.
+ */
+async function abi() {
+  const crypto = require('crypto');
+  const manifest = path.join(WS, 'contracts', 'app', 'Counter.abi.json');
+  const before = fs.readFileSync(manifest, 'utf8');
+  const doc = await open('contracts/app/Counter.jsc');
+  await analysed(doc);
+  await replace(doc, 'state { count: Int, owner: Key }', 'state { count: Int, owner: Key, extra: Int }');
+  await replace(doc, 'return { count: 0, owner: caller }', 'return { count: 0, owner: caller, extra: 0 }');
+  step('unsaved: refused');
+  const refused = await within(vscode.commands.executeCommand('joust.acceptAbi', { confirm: false }), 'Accept ABI… (unsaved)');
+  assert.equal(refused.reason, 'unsaved buffers', JSON.stringify(refused));
+  assert.ok(doc.isDirty);
+  step('saved, then the diff');
+  const first = await within(vscode.commands.executeCommand('joust.acceptAbi', { confirm: false, unsaved: 'save' }), 'Accept ABI… (diff)', 300000);
+  assert.ok(!doc.isDirty, 'saved');
+  assert.equal(first.reason, 'not confirmed', JSON.stringify(first));
+  assert.equal(first.diff.contract, 'app.Counter');
+  assert.equal(first.diff.file, 'app/Counter.jsc');
+  assert.equal(first.diff.path.split(path.sep).join('/'), 'contracts/app/Counter.abi.json');
+  assert.equal(first.diff.committed.sha256, crypto.createHash('sha256').update(before).digest('hex'));
+  assert.notEqual(first.diff.now.sha256, first.diff.committed.sha256);
+  const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  assert.match(tab ? tab.label : '', /app\.Counter: contracts\/app\/Counter\.abi\.json committed/, tab && tab.label);
+  assert.equal(fs.readFileSync(manifest, 'utf8'), before, 'nothing accepted');
+  step('the source changes after the diff: the bound acceptance is refused');
+  await replace(doc, 'extra: Int }', 'extra: Int, more: Int }');
+  await replace(doc, 'extra: 0 }', 'extra: 0, more: 0 }');
+  assert.ok(await doc.save());
+  await vscode.window.showTextDocument(doc);
+  const stale = await within(vscode.commands.executeCommand('joust.acceptAbi',
+    { contract: 'app.Counter', bound: { committed: first.diff.committed.sha256, now: first.diff.now.sha256 } }), 'Accept ABI… (stale)', 300000);
+  assert.equal(stale.accepted, false, JSON.stringify(stale));
+  assert.equal(stale.code, 1, JSON.stringify(stale));
+  assert.equal(fs.readFileSync(manifest, 'utf8'), before, 'the stale acceptance wrote nothing');
+  step('a new diff, confirmed: accepted');
+  await vscode.window.showTextDocument(doc);
+  const ok = await within(vscode.commands.executeCommand('joust.acceptAbi', { confirm: true }), 'Accept ABI… (accept)', 300000);
+  assert.equal(ok.accepted, true, JSON.stringify(ok));
+  const after = fs.readFileSync(manifest, 'utf8');
+  assert.equal(crypto.createHash('sha256').update(after).digest('hex'), ok.diff.now.sha256);
+  assert.match(after, /"more"/);
+}
+
 async function run() {
   const ext = vscode.extensions.getExtension(EXT);
   assert.ok(ext, `${EXT} is installed`);
@@ -297,6 +344,7 @@ async function run() {
   if (SCENARIO === 'smoke') await smoke();
   else if (SCENARIO === 'hostile-trusted') await hostileTrusted();
   else if (SCENARIO === 'hostile-restricted') await hostileRestricted();
+  else if (SCENARIO === 'abi') await abi();
   else throw new Error(`unknown scenario ${SCENARIO}`);
   await sleep(1000);
   assert.ok(!fs.existsSync(SENTINEL), `the sentinel appeared: ${fs.existsSync(SENTINEL) && fs.readFileSync(SENTINEL, 'utf8')}`);

@@ -124,26 +124,65 @@ function register(vscode, ctx, getClient) {
     return r;
   }));
 
-  /** Runs a task and resolves with its exit code. */
-  function runTask(folder, name, spec) {
+  /**
+   * Runs a task and resolves with its exit code, or null when it ended without one, or did not end within `timeoutMs`
+   * (then it is terminated). F4 on #99: the run is matched by its own definition (a nonce), not by the execution object
+   * executeTask resolves with (a fast task can end before that promise settles), and onDidEndTask covers a task whose
+   * process never started.
+   */
+  function runTask(folder, name, spec, timeoutMs = 10 * 60_000) {
+    const run = randomBytes(9).toString('hex');
     const exec = new vscode.ProcessExecution(spec.command, spec.args, { cwd: spec.cwd, env: spec.env });
-    const task = new vscode.Task({ type: 'joust', task: name }, folder, name, 'joust', exec, ['$joust']);
+    const task = new vscode.Task({ type: 'joust', task: name, run }, folder, name, 'joust', exec, ['$joust']);
+    const ours = (ev) => ev.execution && ev.execution.task && ev.execution.task.definition && ev.execution.task.definition.run === run;
     return new Promise((resolve, reject) => {
-      let execution;
-      const sub = vscode.tasks.onDidEndTaskProcess((ev) => {
-        if (execution && ev.execution === execution) {
-          sub.dispose();
-          resolve(ev.exitCode);
-        }
-      });
+      let code = null;
+      let execution = null;
+      let done = false;
+      const subs = [];
+      const finish = (v) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        for (const d of subs) d.dispose();
+        resolve(v);
+      };
+      subs.push(vscode.tasks.onDidEndTaskProcess((ev) => {
+        if (ours(ev)) code = typeof ev.exitCode === 'number' ? ev.exitCode : null;
+      }));
+      subs.push(vscode.tasks.onDidEndTask((ev) => {
+        if (ours(ev)) finish(code);
+      }));
+      const timer = setTimeout(() => {
+        if (execution) execution.terminate();
+        vscode.window.showWarningMessage(`JOUST: the ${name} task did not finish within ${Math.round(timeoutMs / 1000)} s; it was stopped.`);
+        finish(null);
+      }, timeoutMs);
       vscode.tasks.executeTask(task).then((x) => { execution = x; }, (err) => {
-        sub.dispose();
+        done = true;
+        clearTimeout(timer);
+        for (const d of subs) d.dispose();
         reject(err);
       });
     });
   }
 
-  // Accept ABI… (D7a). `args` (tests): { contract, confirm }.
+  /**
+   * The contract a .jsc document declares, by its full identity (S5 on #99): `package.Name`, from the first `package` and
+   * `contract` declarations at line starts (a library declares no contract: null). The tool resolves the name again
+   * and refuses one it cannot find.
+   */
+  function contractOfDocument(doc) {
+    const text = doc.getText().slice(0, 200_000);
+    const pkg = /^[ \t]*package[ \t]+([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)[ \t]*$/m.exec(text);
+    const c = /^[ \t]*(?:[a-z]+[ \t]+)*contract[ \t]+([A-Za-z_][A-Za-z0-9_]*)\b/m.exec(text);
+    if (!c) return null;
+    return pkg ? `${pkg[1]}.${c[1]}` : c[1];
+  }
+
+  // Accept ABI… (D7a). `args` (tests): { contract, confirm, unsaved: 'save' | 'continue', bound: { committed, now } }.
+  // `bound` skips the diff and runs the acceptance with those two hashes: the electron test edits the source between
+  // the two steps and sees the tool refuse (F4 on #99).
   ctx.subscriptions.push(vscode.commands.registerCommand('joust.acceptAbi', async (args) => {
     if (!vscode.workspace.isTrusted) {
       vscode.window.showWarningMessage('JOUST: Accept ABI… runs the project\'s own tool: trust the workspace first.');
@@ -157,9 +196,32 @@ function register(vscode, ctx, getClient) {
       return { ran: false, reason: 'no project tool' };
     }
     let contract = args && args.contract;
-    if (!contract && e) contract = path.basename(e.document.uri.fsPath).replace(/\.jsc$/, '');
-    if (!contract) contract = await vscode.window.showInputBox({ title: 'Accept ABI…', prompt: 'The contract whose ABI change to accept' });
-    if (!contract || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(contract)) return { ran: false, reason: 'no contract' };
+    if (!contract && e) contract = contractOfDocument(e.document);
+    if (!contract) {
+      contract = await vscode.window.showInputBox({ title: 'Accept ABI…', prompt: 'The contract whose ABI change to accept (package.Name)' });
+    }
+    if (!contract || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(contract)) return { ran: false, reason: 'no contract' };
+    // F5 on #99: the tool reads the saved files. Unsaved .jsc buffers in this folder are saved first, or the user goes on
+    // knowingly with what is on disk.
+    const dirty = vscode.workspace.textDocuments.filter((d) => d.isDirty && d.languageId === 'jsc'
+      && vscode.workspace.getWorkspaceFolder(d.uri) === folder);
+    if (dirty.length) {
+      const names = dirty.map((d) => vscode.workspace.asRelativePath(d.uri, false)).join('\n');
+      const pick = args ? args.unsaved
+        : await vscode.window.showWarningMessage(`${dirty.length} .jsc file${dirty.length === 1 ? ' has' : 's have'} unsaved changes.`,
+          { modal: true, detail: `The ABI diff and the acceptance read the saved files, not the editors:\n\n${names}` }, 'Save all', 'Use the saved files');
+      const choice = pick === 'save' || pick === 'Save all' ? 'save' : pick === 'continue' || pick === 'Use the saved files' ? 'continue' : null;
+      if (!choice) return { ran: false, reason: 'unsaved buffers', unsaved: dirty.map((d) => d.uri.toString()) };
+      if (choice === 'save') {
+        for (const d of dirty) {
+          if (!(await d.save())) return { ran: false, reason: 'not saved', uri: d.uri.toString() };
+        }
+      }
+    }
+    if (args && args.bound) {
+      const code = await runTask(folder, 'accept abi', cmds.accept(contract, args.bound.committed, args.bound.now));
+      return { ran: true, accepted: code === 0, code };
+    }
     fs.mkdirSync(ctx.globalStorageUri.fsPath, { recursive: true });
     const out = path.join(ctx.globalStorageUri.fsPath, `abi-diff-${randomBytes(9).toString('hex')}.json`);
     const code = await runTask(folder, 'abi diff', cmds.diff(contract, out));
@@ -171,29 +233,34 @@ function register(vscode, ctx, getClient) {
     } finally {
       fs.rmSync(out, { force: true });
     }
-    if (code !== 0 || !diff) {
+    if (code !== 0 || !diff || !diff.committed || !diff.now) {
       vscode.window.showWarningMessage(`JOUST: the ABI diff of ${contract} did not run (see the task's output).`);
       return { ran: false, reason: 'diff failed', code };
     }
+    // The tool's answer names the contract it resolved, and its files (S5 on #99).
+    const name = typeof diff.contract === 'string' ? diff.contract : contract;
+    const where = [diff.file, diff.path].filter((x) => typeof x === 'string');
     if (diff.committed.sha256 === diff.now.sha256) {
-      vscode.window.showInformationMessage(`JOUST: the ABI manifest of ${contract} is unchanged.`);
-      return { ran: true, accepted: false, unchanged: true };
+      vscode.window.showInformationMessage(`JOUST: the ABI manifest of ${name} is unchanged.`);
+      return { ran: true, accepted: false, unchanged: true, diff };
     }
     const nonce = randomBytes(6).toString('hex');
-    const left = `/${nonce}/committed/${contract}.abi.json`;
-    const right = `/${nonce}/new/${contract}.abi.json`;
+    const base = (typeof diff.path === 'string' ? diff.path : `${name}.abi.json`).split(/[\\/]/).filter(Boolean).join('/');
+    const left = `/${nonce}/committed/${base}`;
+    const right = `/${nonce}/new/${base}`;
     abiDocs.set(left, diff.committed.text ?? '');
     abiDocs.set(right, diff.now.text ?? '');
     await vscode.commands.executeCommand('vscode.diff', vscode.Uri.from({ scheme: ABI, path: left }), vscode.Uri.from({ scheme: ABI, path: right }),
-      `${contract}.abi.json: committed (${diff.committed.sha256.slice(0, 12)}) ↔ new (${diff.now.sha256.slice(0, 12)})`);
-    const detail = `${diff.committed.sha256 === 'none' ? 'No manifest is committed yet.' : `Committed: ${diff.committed.sha256}`}\nNew: ${diff.now.sha256}\n\n`
+      `${name}: ${base} committed (${diff.committed.sha256.slice(0, 12)}) ↔ new (${diff.now.sha256.slice(0, 12)})`);
+    const detail = `${where.length ? `${where.join(' → ')}\n\n` : ''}`
+      + `${diff.committed.sha256 === 'none' ? 'No manifest is committed yet.' : `Committed: ${diff.committed.sha256}`}\nNew: ${diff.now.sha256}\n\n`
       + 'A datum or redeemer encoding change strands deployed instances. The acceptance is refused if either manifest changes before it runs.';
     const ok = args && 'confirm' in args ? args.confirm === true
-      : (await vscode.window.showWarningMessage(`Accept the ABI change of ${contract}?`, { modal: true, detail }, 'Accept')) === 'Accept';
+      : (await vscode.window.showWarningMessage(`Accept the ABI change of ${name}?`, { modal: true, detail }, 'Accept')) === 'Accept';
     if (!ok) return { ran: true, accepted: false, reason: 'not confirmed', diff };
-    const accepted = await runTask(folder, 'accept abi', cmds.accept(contract, diff.committed.sha256, diff.now.sha256));
-    if (accepted !== 0) vscode.window.showWarningMessage(`JOUST: the ABI change of ${contract} was not accepted (see the task's output).`);
-    else vscode.window.showInformationMessage(`JOUST: accepted the ABI manifest of ${contract}; review and commit it.`);
+    const accepted = await runTask(folder, 'accept abi', cmds.accept(name, diff.committed.sha256, diff.now.sha256));
+    if (accepted !== 0) vscode.window.showWarningMessage(`JOUST: the ABI change of ${name} was not accepted (see the task's output).`);
+    else vscode.window.showInformationMessage(`JOUST: accepted the ABI manifest of ${name} (${diff.path ?? ''}); review and commit it.`);
     return { ran: true, accepted: accepted === 0, diff };
   }));
 }

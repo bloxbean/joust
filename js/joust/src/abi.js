@@ -26,7 +26,7 @@ export const sha256 = (text) => createHash('sha256').update(text).digest('hex');
  * committed) and to the new one. `{ contract, committed, now }`, or null when `arg` is not of that form.
  */
 export function parseBoundAcceptance(arg) {
-  const m = /^([A-Za-z_][A-Za-z0-9_]*)@(none|[0-9a-f]{64})\.\.([0-9a-f]{64})$/.exec(String(arg ?? ''));
+  const m = /^([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)@(none|[0-9a-f]{64})\.\.([0-9a-f]{64})$/.exec(String(arg ?? ''));
   return m ? { contract: m[1], committed: m[2], now: m[3] } : null;
 }
 
@@ -38,20 +38,38 @@ export function manifestPath(g, srcDir, root = process.cwd()) {
 /** The contract a generated file is (its Java class's simple name). */
 export const contractOf = (g) => g.javaFile.split('/').pop().replace(/\.java$/, '');
 
+/** Its full identity (#99 S5): package plus name, `app.A` for app/A.java. */
+export const qualifiedOf = (g) => g.javaFile.replace(/\.java$/, '').split('/').join('.');
+
+/**
+ * The one .jsc 2 contract `name` names (#99 S5): its qualified name, or a simple name that only one contract has.
+ * `{ g }`, or `{ error }` (none, or ambiguous: the qualified candidates with their files).
+ */
+export function resolveContract(generated, name) {
+  const all = generated.filter((x) => x.abi);
+  const exact = all.filter((x) => qualifiedOf(x) === name);
+  if (exact.length === 1) return { g: exact[0] };
+  const simple = name.includes('.') ? [] : all.filter((x) => contractOf(x) === name);
+  if (simple.length === 1) return { g: simple[0] };
+  if (simple.length > 1) {
+    return { error: `${name} is ambiguous: ${simple.map((x) => `${qualifiedOf(x)} (${x.jscFile})`).join(', ')}; name it by package` };
+  }
+  const known = all.map(qualifiedOf);
+  return { error: `no .jsc 2 contract ${name} in this build${known.length ? ` (contracts: ${known.join(', ')})` : ''}` };
+}
+
 /**
  * `joust abi diff <Contract>` (D7a): the committed manifest and the one the build computes now, each with its SHA-256
  * (`none` when nothing is committed). `{ contract, path, committed: { sha256, text }, now: { sha256, text } }`, or
  * `{ error }`.
  */
 export function abiDiff({ generated = [], srcDir, root = process.cwd(), contract }) {
-  const g = generated.find((x) => x.abi && contractOf(x) === contract);
-  if (!g) {
-    const known = generated.filter((x) => x.abi).map(contractOf);
-    return { error: `no .jsc 2 contract ${contract} in this build${known.length ? ` (contracts: ${known.join(', ')})` : ''}` };
-  }
+  const { g, error } = resolveContract(generated, contract);
+  if (error) return { error };
   const path = manifestPath(g, srcDir, root);
   const old = existsSync(path) ? readFileSync(path, 'utf8') : null;
-  return { contract, path: relative(root, path), committed: { sha256: old === null ? 'none' : sha256(old), text: old }, now: { sha256: sha256(g.abi), text: g.abi } };
+  return { contract: qualifiedOf(g), file: g.jscFile, path: relative(root, path),
+    committed: { sha256: old === null ? 'none' : sha256(old), text: old }, now: { sha256: sha256(g.abi), text: g.abi } };
 }
 
 /**
@@ -65,9 +83,9 @@ export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAb
   refused = new Set() }) {
   const errors = [];
   const bound = acceptAbi && typeof acceptAbi === 'object' ? acceptAbi : null;
-  if (bound && !generated.some((g) => g.abi && contractOf(g) === bound.contract)) {
-    errors.push(`error[JSC0002]: --accept-abi=${bound.contract}@…: no .jsc 2 contract ${bound.contract} in this build; nothing accepted`);
-  }
+  // #99 S5: the bound names one contract (qualified, or a unique simple name); else nothing is accepted.
+  const target = bound ? resolveContract(generated, bound.contract) : null;
+  if (target?.error) errors.push(`error[JSC0002]: --accept-abi=${bound.contract}@…: ${target.error}; nothing accepted`);
   for (const g of generated) {
     if (!g.abi) continue;   // .jsc v1: no manifest
     const committed = manifestPath(g, srcDir, root);
@@ -79,7 +97,7 @@ export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAb
       log(`${relative(root, committed)}: ${exists ? 'accepted the changed' : 'created the'} ABI manifest; commit it beside the .jsc file`);
       continue;
     }
-    if (bound && contractOf(g) === bound.contract) {
+    if (bound && target.g === g) {
       const was = old === null ? 'none' : sha256(old);
       const now = sha256(g.abi);
       if (was !== bound.committed) {

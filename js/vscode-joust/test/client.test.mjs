@@ -118,7 +118,7 @@ test('the build task: the project\'s own CLI or gradlew, inside the folder, by a
   writeFileSync(join(npm, 'node_modules', '@julclang', 'joust', 'bin', 'joust.js'), '');
   const b = buildCommand(npm, 'linux', '/abs/node');
   assert.deepEqual(b, { kind: 'npm', command: '/abs/node', args: [join(npm, 'node_modules', '@julclang', 'joust', 'bin', 'joust.js'), 'build'],
-    cwd: npm, env: { ELECTRON_RUN_AS_NODE: '1' } });
+    cwd: npm, env: { ELECTRON_RUN_AS_NODE: '1', ...(process.env.JOUST_ENGINE_MEMORY_MB ? {} : { JOUST_ENGINE_MEMORY_MB: '3072' }) } });
   // The package reached through a symlink that leaves the folder: no task.
   const outside = join(tmp, 'outside');
   mkdirSync(join(outside, '@julclang', 'joust', 'bin'), { recursive: true });

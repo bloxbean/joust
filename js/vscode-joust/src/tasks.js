@@ -4,6 +4,9 @@
 const fs = require('fs');
 const path = require('path');
 
+/** The engine heap (MB) for the project's CLI run on Electron as Node (below Electron's 4 GB worker heap cap). */
+const ELECTRON_ENGINE_MB = 3072;
+
 function inside(child, parent) {
   const c = path.resolve(child).split(path.sep).filter(Boolean);
   const p = path.resolve(parent).split(path.sep).filter(Boolean);
@@ -57,8 +60,11 @@ function buildCommand(folderPath, platform = process.platform, execPath = proces
     const rel = meta && (typeof meta.bin === 'string' ? meta.bin : meta.bin && meta.bin.joust);
     const bin = typeof rel === 'string' ? realOrNull(path.join(dir, rel)) : null;
     if (!bin || !inside(bin, dir)) return null;
-    // The project's CLI on the extension host's Node (an absolute path), run as Node.
-    return { kind: 'npm', command: execPath, args: [bin, 'build'], cwd: folder, env: { ELECTRON_RUN_AS_NODE: '1' } };
+    // The project's CLI on the extension host's Node (an absolute path), run as Node. Electron's V8 caps a worker's heap
+    // below the CLI's default 4096 MB (its heap check then refuses to build: found by the abi scenario, F4 on #99), so
+    // the engine gets 3072 MB unless the user's environment sets JOUST_ENGINE_MEMORY_MB.
+    return { kind: 'npm', command: execPath, args: [bin, 'build'], cwd: folder,
+      env: { ELECTRON_RUN_AS_NODE: '1', ...(process.env.JOUST_ENGINE_MEMORY_MB ? {} : { JOUST_ENGINE_MEMORY_MB: String(ELECTRON_ENGINE_MB) }) } };
   }
   const gradlew = realOrNull(path.join(folder, platform === 'win32' ? 'gradlew.bat' : 'gradlew'));
   if (gradlew && inside(gradlew, folder)) return { kind: 'gradle', command: gradlew, args: ['build'], cwd: folder, env: {} };
