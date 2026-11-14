@@ -196,15 +196,16 @@ class JscV2HashStabilityTest {
             while (f.find()) fields.add(f.group(1));
         }
         Set<String> declared = new java.util.TreeSet<>();
-        for (String re : List.of("\\bconst\\s+([a-z][A-Za-z0-9_]*)", "\\bfn\\s+([a-z][A-Za-z0-9_]*)", "\\b(?:action|destroy|view)\\s+([a-z][A-Za-z0-9_]*)",
+        for (String re : List.of("\\bconst\\s+([a-z][A-Za-z0-9_]*)", "\\bfn\\s+([a-z][A-Za-z0-9_]*)", "\\b(?:action|destroy|view)\\s+(?:[A-Z][A-Za-z0-9_]*\\s*\\.\\s*)?([a-z][A-Za-z0-9_]*)",
+                "\\binit\\s+[A-Z][A-Za-z0-9_]*\\s*\\.\\s*([a-z][A-Za-z0-9_]*)",
                 "\\bfor\\s*\\(\\s*const\\s+([a-z][A-Za-z0-9_]*)", "\\b([a-z][A-Za-z0-9_]*)\\s*=>", "Some\\(([a-z][A-Za-z0-9_]*)\\)")) {
             Matcher m = Pattern.compile(re).matcher(code);
             while (m.find()) declared.add(m.group(1));
         }
         Matcher lambdas = Pattern.compile("\\(([a-z][A-Za-z0-9_]*(?:\\s*,\\s*[a-z][A-Za-z0-9_]*)+)\\)\\s*=>").matcher(code);
         while (lambdas.find()) for (String p : lambdas.group(1).split("\\s*,\\s*")) declared.add(p);
-        // parameters: name(p: T, q: T) after fn/action/destroy/view/init
-        Matcher sig = Pattern.compile("\\b(?:fn|action|destroy|view|init)\\s*[a-zA-Z0-9_]*\\s*\\(([^()]*)\\)").matcher(code);
+        // parameters: name(p: T, q: T) after fn/action/destroy/view/init (and an owned method's T.name, M3a)
+        Matcher sig = Pattern.compile("\\b(?:fn|action|destroy|view|init)\\s*(?:[A-Z][A-Za-z0-9_]*\\s*\\.\\s*)?[a-zA-Z0-9_]*\\s*\\(([^()]*)\\)").matcher(code);
         while (sig.find()) {
             Matcher p = Pattern.compile("([a-z][A-Za-z0-9_]*)\\s*:").matcher(sig.group(1));
             while (p.find()) declared.add(p.group(1));
@@ -226,7 +227,7 @@ class JscV2HashStabilityTest {
             "ada", "Int", "Bool", "Bytes", "Key", "Hash", "List", "Option", "Map", "BigMap", "State", "maxDatumBytes", "minAda",
             "maxValidityMs", "min", "max", "abs", "asKey", "asHash", "range", "length", "isEmpty", "head", "sum", "reverse", "contains",
             "any", "all", "find", "filter", "map", "fold", "concat", "take", "drop", "get", "has", "set", "delete", "size", "keys",
-            "values", "empty", "_", "utf8",
+            "values", "empty", "_", "utf8", "owned", "shared", "into", "admits",
             // M2: funds' fields, the members of Value and Address, a credential's patterns and their fields, the effects,
             // the prelude's constructors and the option assetSlots. A parameter may share a member's name (a Coins
             // parameter is called policy, as funds.policy is): such a name is not renamed, since a member is not.
