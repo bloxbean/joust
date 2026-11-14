@@ -21,12 +21,18 @@ test('where exnref is already on, the flag is never set', () => {
 });
 
 test('where it is off, the flag is set once and the probe module then validates', () => {
+  // Off, whatever this Node has: the flag is set exactly once, and then the module validates.
+  const flags = [];
+  let on = false;
+  assert.equal(enableExnref({ validate: () => on, setFlags: (f) => { flags.push(f); on = true; } }), 'flag');
+  assert.deepEqual(flags, ['--experimental-wasm-exnref']);
+  // This Node, in a fresh process: branched on what the probe finds (#98 r3: not on Node's major version; a Node 22
+  // build may have exnref on by default, as CI's has), so each case is checked where it applies.
   const r = JSON.parse(probe([]));
   assert.equal(r.after, true);
   assert.equal(r.again, 'native', 'a second load does not set it again');
-  // Node 22 has exnref behind the flag; from Node 24 it is on by default.
-  if (Number(process.versions.node.split('.')[0]) < 24) assert.deepEqual(r, { before: false, how: 'flag', after: true, again: 'native' });
-  else assert.equal(r.how, 'native');
+  if (r.before) assert.deepEqual(r, { before: true, how: 'native', after: true, again: 'native' });
+  else assert.deepEqual(r, { before: false, how: 'flag', after: true, again: 'native' });
 });
 
 test('a Node without exnref even with the flag is refused clearly', () => {
