@@ -394,4 +394,70 @@ class JscV2IrTest {
         if (Boolean.getBoolean("joust.writeIrFixtures")) java.nio.file.Files.writeString(fixture, json);
         assertEquals(json, java.nio.file.Files.readString(fixture), "stale fixture Joined.ir.json: rerun with -Pjoust.writeIrFixtures");
     }
+    /**
+     * #98 review F2, C5: the same sweep over a program with {@code javaLibraries} and {@code CallJava} (Guarded's export,
+     * which julc-state-toolchain's JscV2JavaLibraryTest writes): every object, type objects and the java: fns' signatures
+     * included, with a field more is refused. semantics.test.js runs the same sweep on the JavaScript reader.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void guardedsExport_withJavaLibraries_refusesAnUnknownFieldInEveryObject() throws Exception {
+        String json = Files.readString(JS_FIXTURES.resolve("java/Guarded.ir.json"));
+        IrJson.read(json);
+        var root = (java.util.Map<String, Object>) AbiCheck.Json.parseStrict(json);
+        var paths = new java.util.ArrayList<java.util.List<Object>>();
+        collectAll(root, new java.util.ArrayList<>(), paths);
+        var taken = new java.util.ArrayList<String>();
+        for (var path : paths) {
+            try {
+                IrJson.read(withExtra(json, path));
+                taken.add(path.toString());
+            } catch (IllegalArgumentException e) {
+                assertTrue(e.getMessage().contains("futureCheck"), path + ": " + e.getMessage());
+            }
+        }
+        assertEquals(List.of(), taken, "objects whose unknown field the reader took");
+        assertTrue(paths.stream().anyMatch(x -> !x.isEmpty() && x.get(0).equals("javaLibraries")), "javaLibraries reached");
+        assertTrue(json.contains("\"CallJava\""), "CallJava reached");
+        System.out.println("[ir] Guarded's export (javaLibraries, CallJava): an unknown field is refused in each of its " + paths.size() + " objects");
+    }
+
+    /** #98 review C11: a java: fn listed twice is refused (a valid copy cannot hide a malformed one), as in the JS reader. */
+    @Test
+    void aJavaFnListedTwice_isRefused() throws Exception {
+        String json = Files.readString(JS_FIXTURES.resolve("java/Guarded.ir.json"));
+        int i = json.indexOf("\"fns\": [", json.indexOf("\"javaLibraries\""));
+        int start = json.indexOf('{', i), depth = 0, end = start;
+        for (int k = start; k < json.length(); k++) {
+            char c = json.charAt(k);
+            if (c == '{') depth++;
+            if (c == '}' && --depth == 0) {
+                end = k + 1;
+                break;
+            }
+        }
+        String first = json.substring(start, end);
+        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.substring(0, start) + first + ", " + json.substring(start)));
+        assertTrue(e.getMessage().contains("is listed twice"), e.getMessage());
+    }
+
+    /** Every JSON object below {@code node}, type objects included; a local's fieldTaints (a map of its own kind) aside. */
+    @SuppressWarnings("unchecked")
+    private static void collectAll(Object node, java.util.List<Object> path, java.util.List<java.util.List<Object>> out) {
+        if (node instanceof java.util.Map<?, ?> m) {
+            if (!path.isEmpty() && path.getLast().equals("fieldTaints")) return;
+            out.add(java.util.List.copyOf(path));
+            for (var e : ((java.util.Map<String, Object>) m).entrySet()) {
+                var p = new java.util.ArrayList<>(path);
+                p.add(e.getKey());
+                collectAll(e.getValue(), p, out);
+            }
+        } else if (node instanceof java.util.List<?> l) {
+            for (int i = 0; i < l.size(); i++) {
+                var p = new java.util.ArrayList<>(path);
+                p.add(i);
+                collectAll(l.get(i), p, out);
+            }
+        }
+    }
 }

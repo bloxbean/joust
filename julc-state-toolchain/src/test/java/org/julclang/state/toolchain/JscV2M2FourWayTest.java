@@ -261,6 +261,11 @@ class JscV2M2FourWayTest {
         ok(f.check("close", s0, List.of(), with(f, OWNER, 0, minAda, none, twoNames), OWNER));   // C1: held in the wire's order too
         assertEquals("refused", f.check("close", s5, List.of(), with(f, OWNER, 0, minAda, none, tokens(3)), OWNER));
         f.modifierRefused("close", s0, List.of(), with(f, STRANGER, 0, minAda, none, none), STRANGER);
+        // #98 review C7: an asset-aware call whose caller is not the signer: the caller signs too, on every leg (the
+        // interpreters' τ and the validator's transaction are the same keys); the owner calls, a stranger signs.
+        ok(f.check("close", s0, List.of(), with(f, OWNER, 0, minAda, none, none), STRANGER));
+        ok(f.as(List.of(STRANGER), null).check("close", s0, List.of(), with(f, OWNER, 0, minAda, none, none), STRANGER));
+        f.as(null, null);
 
         // Mutation rejection on every method that moves value.
         f.mutants("init", null, List.of(ben), with(f, OWNER, 0, 0, none, none), OWNER);

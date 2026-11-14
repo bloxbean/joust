@@ -55,7 +55,8 @@ fixture set:
   (M4, `unknownFields`). `JscV2IrTest.theReader_refusesAnUnknownField_atEveryLevel` covers the first, and
   `JscV2IrTest.anExportWithParamsInvariantsAndLibraries_readsBack_andRefusesUnknownFields` (the integration's) reads an
   export carrying `params`, `invariants`, `libraries`, `contracts`, `reads` and a `receives` type back on both readers
-  and adds an unknown field at each level; the JavaScript reader's twin is in `semantics.test.js`.
+  and adds an unknown field at each level; the JavaScript reader's twin is in `semantics.test.js`. A second sweep, over Guarded's export (`javaLibraries`, `CallJava`, the `java:` fns' signature types), refuses an
+  unknown field in each of its 149 objects in both readers (#98 review F2, C5: `JscV2IrTest.guardedsExport_withJavaLibraries_refusesAnUnknownFieldInEveryObject`).
 
 **Version 1 is the format as of the M1 integration** (#76): `If` and `IfValue` hold a `branches` list (M1e's flat
 else-if chains). M1b's pre-release shape (`cond`, `then`, `otherwise` on those nodes) was never released and is not
@@ -92,8 +93,8 @@ field `"only"` (`batched only`), on an action only, never beside `only`, `after`
 JSC0447). They recompute `pays` (a method's, and each `If`'s, `For`'s and `Match`'s) from the `Pay` statements in its
 blocks, and refuse a method that moves value (a `Pay`, `Send`, `Mint` (a burn too) or `Deposit` in its statement
 blocks) without an audience: `only f`, `open`, `quorum` or `authorized` (#80 review S3, JSC0408; joined with M2's
-modifiers and effects in the `.jsc` 2 integration, `feat/jsc-2-int2`); they refuse a `Pay` under any expression (a value block, value
-`if` or `match`, a lambda) or in a `fn` (JSC0413), so the statement blocks hold every payout, and a destroy that moves
+modifiers and effects in the `.jsc` 2 integration, `feat/jsc-2-int2`); they refuse an effect statement (`Pay`, `Send`, `Mint`, `Deposit`, `Accept`, `Emit`; #98 review F1) under any expression (a value block, value
+`if` or `match`, a lambda) or in a `fn`, an invariant, an init or a view (JSC0413, JSC0404), so the statement blocks hold every payout, and a destroy that moves
 no value (JSC0409). These checks keep a reader from deciding what the
 checker did not; they do not authenticate an IR (swapping `only admin` for `open` is well formed). What binds an IR to
 its contract is the build that produced it: `sourceSha256` and the build's own outputs. Additive changes keep version 1. A change to

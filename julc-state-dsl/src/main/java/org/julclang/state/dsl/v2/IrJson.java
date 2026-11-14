@@ -751,6 +751,8 @@ final class IrJson {
                     known(fm, Set.of("name", "params", "result"), "a Java library fn");
                     var ps = new ArrayList<Ty>();
                     for (Object pt : l(fm.get("params"))) ps.add(type(pt));
+                    // #98 review C11: a fn is listed once (a duplicate would hide the other).
+                    if (fs.containsKey(s(fm.get("name")))) throw new IllegalArgumentException("java:" + x.get("class") + "." + fm.get("name") + " is listed twice");
                     fs.put(s(fm.get("name")), new Ir.JavaFn(s(fm.get("name")), List.copyOf(ps), type(fm.get("result"))));
                 }
                 java.add(new Ir.JavaLib(s(x.get("class")), s(x.get("sourceSha256")), recs, fs));
@@ -781,22 +783,35 @@ final class IrJson {
                     // #80 review S6: a malformed modifier is a refusal, as in the JavaScript reader, never a crash.
                     if (!(mo instanceof Map<?, ?> mm)) throw new IllegalArgumentException("method " + x.get("name") + ": a modifier is not an object");
                     var md = m(mo);
-                    known(md, Set.of("name", "field", "keys", "threshold", "type"), "a modifier");
                     if (!(md.get("name") instanceof String name)) throw new IllegalArgumentException("method " + x.get("name") + ": a modifier's name is not a string: " + md.get("name"));
-                    Object field = md.get("field");
-                    if (field != null && !(field instanceof String)) throw new IllegalArgumentException("a modifier's field is a name: " + field);
-                    // M2b: a quorum names its keys and threshold (and no field); M2c: receives T names a memo type (and
-                    // no field). Every other modifier has neither (integration of #80 with #84/#90).
+                    // #98 review C6: each modifier's own fields, by presence (containsKey), never by value: a present null
+                    // is a malformed field, not an absent one. quorum: keys and threshold; receives: an optional type;
+                    // only, after, before, authorized: a field; batched: an optional field ("only"); payable, open: none.
+                    Set<String> allowed = switch (name) {
+                        case "quorum" -> Set.of("name", "keys", "threshold");
+                        case "receives" -> Set.of("name", "type");
+                        case "payable", "open" -> Set.of("name");
+                        default -> Set.of("name", "field");
+                    };
+                    known(md, allowed, "a modifier");
                     boolean quorum = name.equals("quorum");
-                    if (quorum != (md.get("keys") != null) || quorum != (md.get("threshold") != null) || quorum && field != null) {
-                        throw new IllegalArgumentException("method " + x.get("name") + ": " + (quorum ? "a quorum names its keys and threshold, and no field"
-                                : "only a quorum names keys and a threshold, not " + name));
+                    if (quorum && (!(md.get("keys") instanceof String) || !(md.get("threshold") instanceof String))) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": a quorum names its keys and threshold");
                     }
-                    if (md.get("type") != null && !name.equals("receives") || name.equals("receives") && field != null) {
-                        throw new IllegalArgumentException("method " + x.get("name") + ": only receives names a type, and it names no field");
+                    if (md.get("field") != null && !(md.get("field") instanceof String)) {
+                        throw new IllegalArgumentException("a modifier's field is a name: " + md.get("field"));
                     }
+                    // A null field: only, after, before and authorized refuse it below (they name a field); a batched
+                    // modifier's null field is not its plain form.
+                    if (md.containsKey("field") && md.get("field") == null && name.equals("batched")) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": batched names no field or \"only\", not null");
+                    }
+                    if (md.containsKey("type") && md.get("type") == null) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": receives names a type or none, not null");
+                    }
+                    Object field = md.get("field");
                     String arg = quorum ? s(md.get("keys")) + " " + s(md.get("threshold")) : (String) field;
-                    mods.add(new Ir.Mod(name, arg, md.get("type") == null ? null : type(md.get("type"))));
+                    mods.add(new Ir.Mod(name, arg, md.containsKey("type") ? type(md.get("type")) : null));
                 }
                 // #80 review S6: the kinds exactly as written (lower case), as the JavaScript reader reads them.
                 Ir.Kind kind = switch (String.valueOf(x.get("kind"))) {
@@ -830,7 +845,8 @@ final class IrJson {
                 var checked = new ArrayList<Ir.Local>();
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
                 // #80 review C4, S7: a pay only in the method's statement blocks, never under an expression (JSC0413).
-                noPayInExpressions(x.get("body"), false, "method " + x.get("name"));
+                // #98 review F1: an init and a view move nothing (JSC0404): their whole body is pure.
+                noPayInExpressions(x.get("body"), kind == Ir.Kind.INIT || kind == Ir.Kind.VIEW, "method " + x.get("name"));
                 Ir.Block body = block(x.get("body"));
                 // #80 review S3: pays is recomputed from the body (a Pay statement in it, at any depth of if, for and match),
                 // and a method that moves value says who may call it ('only f', 'open', or M2b's quorum or authorized), as
@@ -870,6 +886,7 @@ final class IrJson {
                 for (Object o : l(r.get("invariants"))) {
                     var x = m(o);
                     known(x, Set.of("name", "on", "body", "at"), "an invariant");
+                    noPayInExpressions(x.get("body"), true, "invariant " + x.get("name"));   // #98 F1: an invariant moves nothing
                     String on = x.get("on") == null ? null : s(x.get("on"));
                     if (on != null && !owned.contains(on)) throw new IllegalArgumentException("invariant " + x.get("name") + ": " + on + " is not an owned type");
                     invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at")), on));
@@ -963,17 +980,22 @@ final class IrJson {
             if (!t.equals(want)) throw new IllegalArgumentException(where + w + " " + f + ": " + f + " is of type " + Ty.show(t) + ", not " + Ty.show(want));
         }
 
+        /** The effect statements (ADR-0018 D4): only in an action's or a destroy's statement blocks (JSC0413, JSC0404). */
+        static final Set<String> EFFECTS = Set.of("Pay", "Send", "Mint", "Deposit", "Accept", "Emit");
+
         /**
-         * Refuses a Pay statement anywhere below an expression node (#80 review C4, S7; JSC0413), or anywhere when
-         * {@code pure} (a fn's body): statement blocks of if, for and match statements are not expressions.
+         * Refuses an effect statement (a pay, and since M2 a send, mint or burn, deposit, accept or emit; #98 review F1)
+         * anywhere below an expression node (#80 review C4, S7; JSC0413), or anywhere when {@code pure} (a fn's, an
+         * invariant's, an init's or a view's body: JSC0413, JSC0404): statement blocks of if, for and match statements are
+         * not expressions. So the statement walks (pays, movesIn) see every effect a method has.
          */
         static void noPayInExpressions(Object o, boolean pure, String where) {
             if (o instanceof List<?> list) {
                 for (Object x : list) noPayInExpressions(x, pure, where);
             } else if (o instanceof Map<?, ?> map) {
-                if (pure && "Pay".equals(map.get("stmt"))) {
-                    throw new IllegalArgumentException(where + ": a pay inside an expression or a fn, where the checker allows none (JSC0413), at "
-                            + map.get("at"));
+                if (pure && map.get("stmt") instanceof String k && EFFECTS.contains(k)) {
+                    throw new IllegalArgumentException(where + ": a " + k.toLowerCase() + " inside an expression or a fn, where the checker"
+                            + " allows none (JSC0413; in an init or a view, JSC0404), at " + map.get("at"));
                 }
                 boolean below = pure || map.get("node") instanceof String;
                 for (Object v : map.values()) noPayInExpressions(v, below, where);

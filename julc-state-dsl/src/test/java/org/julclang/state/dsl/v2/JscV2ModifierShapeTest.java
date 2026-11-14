@@ -65,8 +65,8 @@ class JscV2ModifierShapeTest {
         refused(mods(vault, "init", "init", x -> "[{ \"name\": \"payable\" }, { \"name\": \"only\", \"field\": \"owner\" }]"), "an init takes only payable, not only");
         refused(mods(vault, "view", "total", x -> "[{ \"name\": \"open\" }]"), "a view takes no modifiers, not open");
         refused(mods(vault, "destroy", "close", x -> x.replace("[", "[{ \"name\": \"payable\" }, ")), "a destroy cannot be payable");
-        refused(mods(vault, "action", "deposit", x -> "[{ \"name\": \"payable\", \"field\": \"owner\" }]"), "payable names no field, not owner");
-        refused(mods(pool, "action", "buy", x -> x.replace("{ \"name\": \"open\" }", "{ \"name\": \"open\", \"field\": \"admin\" }")), "open names no field, not admin");
+        refused(mods(vault, "action", "deposit", x -> "[{ \"name\": \"payable\", \"field\": \"owner\" }]"), "unknown field \"field\" in a modifier");
+        refused(mods(pool, "action", "buy", x -> x.replace("{ \"name\": \"open\" }", "{ \"name\": \"open\", \"field\": \"admin\" }")), "unknown field \"field\" in a modifier");
         refused(mods(pool, "action", "withdraw", x -> "[{ \"name\": \"sealed\" }]"), "unknown modifier sealed");
         // batched: plain or 'batched only', on an action, never beside only/after/before.
         refused(mods(pool, "destroy", "close", x -> x.replace("[", "[{ \"name\": \"batched\", \"field\": \"only\" }, ")), "only an action can be batched, not a destroy");
@@ -116,10 +116,16 @@ class JscV2ModifierShapeTest {
     void theReader_refusesAPayUnderAnExpressionOrInAFn_andADestroyWithoutPay() throws Exception {
         Path mutants = Path.of("../js/jsc-interpreter/test/mutants");
         refused(Files.readString(mutants.resolve("pay-in-value-block.json")),
-                "method withdraw: a pay inside an expression or a fn, where the checker allows none (JSC0413)");
+                "method withdraw: a pay inside an expression or a fn, where the checker allows none (JSC0413");
         refused(Files.readString(mutants.resolve("pay-in-value-if.json")), "method withdraw: a pay inside an expression or a fn");
         refused(Files.readString(mutants.resolve("pay-in-fn.json")), "fn total: a pay inside an expression or a fn");
         refused(Files.readString(mutants.resolve("destroy-without-pay.json")), "method close: a destroy pays out what the instance holds");
+        // #98 review F1: every effect statement, not only a pay (M2's send, mint, deposit), so no effect hides from the
+        // audience rule (JSC0408): Coins' give without its audience and its send in a value block was accepted before.
+        refused(Files.readString(mutants.resolve("send-in-value-block.json")), "method give: a send inside an expression or a fn");
+        refused(Files.readString(mutants.resolve("send-in-fn.json")), "fn total: a send inside an expression or a fn");
+        refused(Files.readString(mutants.resolve("mint-in-fn.json")), "fn tokens: a mint inside an expression or a fn");
+        refused(Files.readString(mutants.resolve("deposit-in-lambda.json")), "method sell: a deposit inside an expression or a fn");
     }
 
     /** {@code json} with {@code from} replaced by {@code to} in method {@code name}'s own fields (before its body). */
@@ -198,18 +204,28 @@ class JscV2ModifierShapeTest {
                 "both state fields or both params fields");
         refused(mods(treasury, "action", "pay", x -> x.replace("\"keys\": \"council\"", "\"keys\": \"quorum\"")), "quorum is of type Int, not List<Key>");
         refused(mods(treasury, "action", "pay", x -> x.replace("\"threshold\": \"quorum\"", "\"threshold\": \"quorum\", \"field\": \"council\"")),
-                "a quorum names its keys and threshold, and no field");
+                "unknown field \"field\" in a modifier");
         refused(mods(treasury, "action", "pay", x -> x.replace(", \"threshold\": \"quorum\"", "")), "a quorum names its keys and threshold");
         refused(mods(treasury, "action", "freeze", x -> x.replace("params.guardian", "council")), "council is of type List<Key>, not Credential");
         refused(mods(treasury, "action", "freeze", x -> x.replace("params.guardian", "params.nothing")), "the params have no field nothing");
-        refused(mods(treasury, "action", "freeze", x -> x.replace("\"field\"", "\"keys\"")), "only a quorum names keys and a threshold");
+        refused(mods(treasury, "action", "freeze", x -> x.replace("\"field\"", "\"keys\"")), "unknown field \"keys\" in a modifier");
         refused(mods(treasury, "init", "init", x -> "[{ \"name\": \"payable\" }, " + quorum + "]"), "an init takes only payable, not quorum");
         refused(mods(treasury, "action", "rotate", x -> "[" + quorum + ", { \"name\": \"batched\" }]"), "a batched action cannot use quorum");
         refused(mods(tips, "action", "credit", x -> x.substring(0, x.length() - 1) + ", { \"name\": \"batched\" }]"), "a batched action cannot use receives");
         refused(mods(tips, "destroy", "close", x -> x.substring(0, x.length() - 1) + ", { \"name\": \"receives\" }]"), "only an action receives deposits");
         refused(mods(tips, "action", "credit", x -> x.replace("\"name\": \"receives\"", "\"name\": \"receives\", \"field\": \"x\"")),
-                "only receives names a type, and it names no field");
+                "unknown field \"field\" in a modifier");
         refused(mods(coins, "action", "forge", x -> "[]"), "so it says who may call it");
+        // #98 review C6: a present null is malformed, never read as absent (the JavaScript reader refuses the same).
+        String joined = Files.readString(FIXTURES.resolve("joined/Joined.ir.json"));
+        refused(joined.replace("{ \"name\": \"receives\", \"type\": { \"record\": \"Tip\" } }", "{ \"name\": \"receives\", \"type\": null }"),
+                "receives names a type or none, not null");
+        refused(mods(treasury, "action", "pay", x -> x.replace("\"threshold\": \"quorum\"", "\"threshold\": \"quorum\", \"field\": null")),
+                "unknown field \"field\" in a modifier");
+        refused(mods(treasury, "action", "freeze", x -> x.replace("\"field\": \"params.guardian\"", "\"field\": \"params.guardian\", \"keys\": null")),
+                "unknown field \"keys\" in a modifier");
+        refused(mods(tips, "action", "claim", x -> x.replace("{ \"name\": \"open\" }", "{ \"name\": \"open\", \"field\": null }")),
+                "unknown field \"field\" in a modifier");
         refused(mods(treasury, "action", "pay", x -> "[]"), "so it says who may call it");
     }
 }

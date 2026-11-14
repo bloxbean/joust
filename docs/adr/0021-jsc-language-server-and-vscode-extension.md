@@ -1,7 +1,8 @@
 # ADR-0021: A language server and VS Code extension for `.jsc` 2
 
-**Status:** Proposed (r6). r5 was approved on #66 (design, security, Codex); r6 records the amendments that M5a's
-implementation (#83, draft) made, which its reviews asked for, and is to be reviewed with #83.
+**Status:** Proposed (r6, with r7a). r5 was approved on #66 (design, security, Codex); r6 records the amendments that M5a's
+implementation (#83, draft) made, which its reviews asked for, and is to be reviewed with #83. r7a records the project
+reading that the `.jsc` 2 integration (#98) brought forward from M5c; M5b's amendments are r7 (#99), a separate entry.
 **Date:** 2026-11-13
 **Builds on:** ADR-0018 (`.jsc` 2), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
 D3 (names), D9 (libraries and `java:` imports, built in M4), D12 (stable codes, source maps, generated Java, ABI
@@ -269,6 +270,25 @@ thread that loaded it (F8). So:
   resolves `.jsc` libraries, contracts and `java:` libraries itself, and the snapshot includes them (D4a). So
   project-matched analysis of an importing file is available as soon as the compiler supports the import; M5c adds
   navigation and rename **across** files, not correctness of single-file analysis.
+- *(r7a)* **The project files an analysis reads** (brought forward from M5c by the `.jsc` 2 integration, #98, for L1):
+  the server analyses a file in a project's contracts directory (the npm `joust.config.json`'s `contracts`, or Gradle's
+  `src/main/jsc`) together with the files its imports reach, by the build's module ids, so the engine resolves them as
+  the build does. It reads them as follows:
+  - **Which:** the specifiers of each file's imports, found by one linear pass by the lexer's rules (comments and strings
+    are never imports), at most 128 a file; relative `.jsc` imports and `import contract` inside the contracts
+    directory, and npm package libraries under `node_modules/<package>/joust-lib/`. `std/` imports are the engine's;
+    `java:` imports are not read.
+  - **How:** each target is resolved inside the workspace folder by D4b's reader before anything else, and an open
+    buffer is used only for that confined path. The build's walk rules apply: in an npm project no `node_modules` or
+    dot-directory segment and no link (as `joust build`'s source walk, ADR-0018 #92 S12); in a Gradle project no
+    directory link (as `generateJsc`'s walk); a package library follows no link (as the toolchain's package walk).
+  - **Bounds:** 64 files, 8 MB in all and 1 MB each, open buffers included.
+  - **Mode:** a file with a `java:` import (the build certifies the library's Java sources, which the server does not
+    read until M5c), or one whose imports reach a bound, is **advisory** with that reason, whatever its selection.
+  - **Freshness (D4a):** an analysis records the files it read; a change to one of them as a buffer, its close, or a
+    change on disk (the extension watches `**/*.jsc`) schedules the open files that read it, and only those.
+  - **Keys (D2a):** the quarantine key of such an analysis is its source with its module id and the files it read, so
+    an edit to an imported file frees an importer quarantined for it.
 
 ### D3b. Launch paths and confinement (new in r2; revised in r3)
 
@@ -344,7 +364,8 @@ thread that loaded it (F8). So:
   (two analysis workers and one build worker) is what L10 bounds (§1: 1,003–1,012 MB). Other editors start one server
   per editor session. *(r6)* M5a
   shares one analysis worker per compiler (engine id) between the projects that use it: an M5a analysis holds no
-  project state; M5c, whose libraries are per project, revisits the key. The bound of two live analysis workers is
+  project state (*(r7a)*: a project file's analysis posts the files it read with it, and the worker keeps none); M5c,
+  whose libraries are per project, revisits the key. The bound of two live analysis workers is
   unchanged, and a worker that is loading or busy is never evicted to admit another (the acquisition waits).
 - **Limits:** a per-file size cap (illustrative: 1 MiB), the watchdog caps (D2a), a cap on files per snapshot, and
   M1e's nesting limit (F13), which turns deep input into a catalogued error on every path. The toolchain's internal
@@ -436,6 +457,9 @@ thread that loaded it (F8). So:
 - From `joust.config.json` the server takes only `contracts` (where the sources are), under these rules; it never reads
   `networks`, URLs or `out`.
 - Library roots are enumerated explicitly by the toolchain's resolution rules (ADR-0018 D9), never from import text.
+  *(r7a)* What the integration's project reading takes from import text is a specifier, never a root: the contracts
+  directory and `node_modules/<package>/joust-lib/` are the roots, each target is confined under them by the rules above
+  (D3a's r7a bullet), and a specifier that would leave them is not read.
   In restricted mode a library root must have its real path inside the workspace folders; in trusted mode a linked
   package outside them (`npm link`) is read under the same file rules.
 - **Gradle projects:** the bundled server does not run Gradle and does not read `~/.gradle` or `~/.m2`, so a `java:`
@@ -1119,3 +1143,8 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
   C21–C24): note 18 corrected and extended. After round r5 (security S13, S14; Codex C25–C28): note 18 extended. After round r6 (design F11, F12;
   security S15; Codex C29–C32): note 18 extended, note 19. After round r7 (security S16; Codex C33, C34): note 18
   extended; note 19's stray last sentence removed.
+- **r7a** (2026-11-14; the `.jsc` 2 integration, #98, round r2: security S1–S3, Codex C3, C4, C8, design F3, F4; a
+  separate entry from M5b's r7 on #99): D3a's *(r7a)* bullet (the project files an analysis reads: which, how, bounds,
+  mode, freshness, keys), D4b's note on import text and roots, and D2a's note on worker state. This brings forward the
+  part of M5c that L1 needs for files with `.jsc` and contract imports; navigation and rename across files, and `java:`
+  imports, stay M5c's.
