@@ -39,6 +39,19 @@ test('owned mutants are refused (#101 review F2)', () => {
 });
 
 // #101 round-r2 review C3, C4, C5, as the Java reader's twin (reviewRound2_mutants_areRefused).
+// A copy of a method with its locals renumbered (ids, references and checked inputs), so it can sit beside the original.
+const renumber = (o, by) => {
+  if (Array.isArray(o)) return o.map((v) => renumber(v, by));
+  if (o === null || typeof o !== 'object') return o;
+  const c = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (k === 'id' && typeof v === 'number') c[k] = v + by;
+    else if (k === 'local' && o.node === 'LocalRef' && typeof v === 'number') c[k] = v + by;
+    else if (k === 'checked' && Array.isArray(v)) c[k] = v.map((x) => x + by);
+    else c[k] = renumber(v, by);
+  }
+  return c;
+};
 const replaceBalance = (o) => {
   if (Array.isArray(o)) { o.forEach(replaceBalance); return; }
   if (o === null || typeof o !== 'object') return;
@@ -52,10 +65,19 @@ test('round-r2 mutants are refused (#101 review C3, C4, C5)', () => {
   refused((ir) => {
     ir.records.push({ ...structuredClone(ir.records[0]), name: 'Account2' });
     ir.owned = ['Account', 'Account2'];
-    for (const n of ['open', 'close']) ir.methods.push({ ...structuredClone(method(ir, n)), name: `${n}2`, on: 'Account2' });
+    for (const n of ['open', 'close']) ir.methods.push({ ...renumber(method(ir, n), 1000), name: `${n}2`, on: 'Account2' });
   }, 'a second owned type (Account2) is not produced yet (M3a2; JSC1215)');
-  refused((ir) => { ir.records[0].fields.push({ name: 'entries', type: { bigmap: ['Key', 'Int'] } }); },
-    'a BigMap in the owned type Account is not produced yet (M3a2; JSC1215)');
+  refused((ir) => {
+    const map = { bigmap: ['Key', 'Int'] };
+    ir.records[0].fields.push({ name: 'entries', type: map });
+    const grow = (o) => {   // each New Account gains an empty map, so only the stage refuses the program
+      if (Array.isArray(o)) { o.forEach(grow); return; }
+      if (o === null || typeof o !== 'object') return;
+      if (o.node === 'New' && o.record === 'Account') o.values.push({ node: 'BigEmpty', type: map, taint: 0, at: o.at });
+      Object.values(o).forEach(grow);
+    };
+    grow(ir.methods);
+  }, 'a BigMap in the owned type Account is not produced yet (M3a2; JSC1215)');
   refused((ir) => replaceBalance(method(ir, 'close').body), "it is its type's escape hatch but never reads balance (JSC1216)");
   for (const k of ['into', 'arriving', 'shared', 'on', 'reads']) {
     refused((ir) => { method(ir, 'withdraw')[k] = null; }, `"${k}" is null: an absent field is not written`);
