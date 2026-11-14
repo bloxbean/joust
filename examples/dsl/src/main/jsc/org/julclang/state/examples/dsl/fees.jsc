@@ -1,0 +1,40 @@
+jsc 2
+library org.julclang.state.examples.dsl
+
+import { blake2b_224 } from "std/crypto"
+import { slice } from "std/bytes"
+
+// A .jsc library (ADR-0018 D9, M4): types, enums and fns, lowered to the @OnchainLibrary class Fees. Shop.jsc imports
+// it, and the Java contract JavaShop calls it as it calls any JuLC library.
+
+// A share of a sale: who is paid, in basis points.
+type Line = { to: Key, bps: Int }
+
+enum Tier { Basic, Gold { since: Int } }
+
+// The fee on an amount, in basis points (division truncates, as JavaScript's BigInt does).
+fn fee(amount: Int, bps: Int): Int = amount * bps / 10_000
+
+// The basis points of every line, summed.
+fn total(lines: List<Line>): Int = lines.fold(0, (acc, l) => acc + l.bps)
+
+// A tier's fee: Gold lowers it after ten sales.
+fn rate(t: Tier): Int = match t {
+  Basic => 100,
+  Gold { since } => since >= 10 ? 25 : 50
+}
+
+// Each line's cut of an amount, in order.
+fn cuts(amount: Int, lines: List<Line>): List<Int> = lines.map(l => fee(amount, l.bps))
+
+// A non-negative amount, or a failure with the library's own message.
+fn nonNegative(n: Int): Int {
+  require(n >= 0, "an amount is never negative")
+  n
+}
+
+// An 8-byte tag of a label (std bindings work in a library).
+fn tag(label: Bytes): Bytes = slice(blake2b_224(label), 0, 8)
+
+// Self-recursion in a library: the digits of n.
+fn digits(n: Int): Int = n < 10 ? 1 : 1 + digits(n / 10)

@@ -290,7 +290,7 @@ function settle(w, id) {
  * A failure of the engine (its stack or heap exhausted, the time limit) is a rejected promise, never a crash. Invalid
  * limits throw before any build.
  */
-export function buildInWorker({ files, options = {}, dir, limits } = {}) {
+export function buildInWorker({ files, options = {}, dir, limits, javaLibraries = {}, packages = {} } = {}) {
   const l = engineLimits(process.env, limits);
   const key = `${l.stackMb}/${l.memoryMb}`;
   if (!current || current.dead || current.key !== key) {
@@ -312,7 +312,7 @@ export function buildInWorker({ files, options = {}, dir, limits } = {}) {
     w.ready.then(() => {
       if (!w.pending.has(id)) return;
       try {
-        w.worker.postMessage({ id, files, options, dir });
+        w.worker.postMessage({ id, files, options, dir, javaLibraries, packages });
       } catch (e) {
         // Not sent (files that cannot be cloned, say): the build fails, and a worker left with nothing to do is stopped
         // rather than kept alive by its reference until a timer (#80 review S4).

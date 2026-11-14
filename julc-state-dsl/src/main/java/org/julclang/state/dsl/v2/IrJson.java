@@ -28,7 +28,11 @@ import java.util.TreeSet;
 final class IrJson {
     private IrJson() {}
 
-    /** The version of this format. A change to the IR's shape or meaning gets a new version. */
+    /**
+     * The version of this format. A change to the IR's shape or meaning gets a new version. 2: the program carries its
+     * params, invariants and imported contracts (ADR-0018 M2b, M2c) and the {@code .jsc} and Java libraries it imports
+     * ({@code libraries}, {@code javaLibraries}; M4): one version 2, joined in the .jsc 2 integration of M2 and M4.
+     */
     static final int VERSION = 2;
 
     private static final HexFormat HEX = HexFormat.of();
@@ -61,16 +65,8 @@ final class IrJson {
         var options = new ArrayList<Object>();
         for (Ir.ContractOption o : p.options()) options.add(obj("name", o.name(), "value", o.value().toString()));
         out.put("options", options);
-        var records = new ArrayList<Object>();
-        for (Ir.RecordType r : p.records().values()) records.add(w.record(r));
-        out.put("records", records);
-        var enums = new ArrayList<Object>();
-        for (Ir.EnumType e : p.enums().values()) {
-            var vs = new ArrayList<Object>();
-            for (Ir.RecordType v : e.variants().values()) vs.add(w.record(v));
-            enums.add(obj("name", e.name(), "variants", vs, "at", at(e.pos())));
-        }
-        out.put("enums", enums);
+        out.put("records", w.records(p.records()));
+        out.put("enums", w.enums(p.enums()));
         out.put("state", w.record(p.state()));
         // M2b (additive): the params record and the invariants, present only when the contract declares them.
         if (p.params() != null) out.put("params", w.record(p.params()));
@@ -95,11 +91,35 @@ final class IrJson {
         }
         out.put("timeFields", List.copyOf(new TreeSet<>(p.timeFields())));
         out.put("recursiveFns", List.copyOf(new TreeSet<>(p.recursiveFns())));
-        var fns = new ArrayList<Object>();
-        for (Ir.Fn f : p.fns()) {
-            fns.add(obj("name", f.name(), "params", w.decls(f.params()), "result", type(f.ret()), "body", w.block(f.body()), "at", at(f.pos())));
+        // Version 2 (M4): the .jsc libraries the program imports, transitively, in dependency order, with their
+        // declarations; the build's names are one namespace, so a name means one declaration across them.
+        var libraries = new ArrayList<Object>();
+        for (Ir.Library l : p.libraries()) {
+            libraries.add(obj("library", l.qualified(), "source", l.fileName(), "sourceSha256", l.sourceSha256(),
+                    "records", w.records(l.records()), "enums", w.enums(l.enums()), "fns", w.fns(l.fns())));
         }
-        out.put("fns", fns);
+        out.put("libraries", libraries);
+        // The certified Java libraries it imports (M4b): their records (fields only when verified) and imported fns'
+        // signatures. Their bodies are not here: the interpreters do not evaluate them (CallJava: no answer).
+        var java = new ArrayList<Object>();
+        for (Ir.JavaLib j : p.javaLibraries()) {
+            var recs = new ArrayList<Object>();
+            for (Ir.JavaRec r : j.records().values()) {
+                var m = w.record(r.type());
+                m.put("owner", r.canonicalOwner());
+                m.put("import", r.importClass());
+                m.put("javaName", r.sourceName());
+                m.put("verified", r.verified());
+                recs.add(m);
+            }
+            var fs = new ArrayList<Object>();
+            for (Ir.JavaFn f : j.fns().values()) {
+                fs.add(obj("name", f.name(), "params", f.params().stream().map(IrJson::type).toList(), "result", type(f.result())));
+            }
+            java.add(obj("class", j.fqcn(), "sourceSha256", j.sourceSha256(), "records", recs, "fns", fs));
+        }
+        out.put("javaLibraries", java);
+        out.put("fns", w.fns(p.fns()));
         var methods = new ArrayList<Object>();
         for (Ir.Method m : p.methods()) {
             var mods = new ArrayList<Object>();
@@ -176,6 +196,30 @@ final class IrJson {
     private static final class Writer {
         private final Set<Integer> declared = new java.util.HashSet<>();
         private final Map<Integer, Ir.Local> byId = new HashMap<>();
+
+        List<Object> records(Map<String, Ir.RecordType> rs) {
+            var out = new ArrayList<Object>();
+            for (Ir.RecordType r : rs.values()) out.add(record(r));
+            return out;
+        }
+
+        List<Object> enums(Map<String, Ir.EnumType> es) {
+            var out = new ArrayList<Object>();
+            for (Ir.EnumType e : es.values()) {
+                var vs = new ArrayList<Object>();
+                for (Ir.RecordType v : e.variants().values()) vs.add(record(v));
+                out.add(obj("name", e.name(), "variants", vs, "at", at(e.pos())));
+            }
+            return out;
+        }
+
+        List<Object> fns(List<Ir.Fn> fs) {
+            var out = new ArrayList<Object>();
+            for (Ir.Fn f : fs) {
+                out.add(obj("name", f.name(), "params", decls(f.params()), "result", type(f.ret()), "body", block(f.body()), "at", at(f.pos())));
+            }
+            return out;
+        }
 
         Map<String, Object> record(Ir.RecordType r) {
             var fs = new ArrayList<Object>();
@@ -285,6 +329,7 @@ final class IrJson {
                 case Ir.GetField g -> obj("node", "GetField", "target", expr(g.target()), "record", g.record(), "field", g.field());
                 case Ir.New n -> obj("node", "New", "record", n.record(), "values", exprs(n.values()));
                 case Ir.CallFn c -> obj("node", "CallFn", "fn", c.fn(), "args", exprs(c.args()));
+                case Ir.CallJava c -> obj("node", "CallJava", "library", c.library(), "fn", c.fn(), "args", exprs(c.args()));
                 case Ir.CallStd c -> obj("node", "CallStd", "module", c.binding().module(), "name", c.binding().name(), "args", exprs(c.args()));
                 case Ir.Prelude c -> obj("node", "Prelude", "op", c.op(), "args", exprs(c.args()));
                 case Ir.TimePred t -> obj("node", "TimePred", "after", t.after(), "threshold", expr(t.threshold()));
@@ -423,10 +468,18 @@ final class IrJson {
      */
     @SuppressWarnings("unchecked")
     static Ir.Program read(String json) {
-        var root = (Map<String, Object>) AbiCheck.Json.parseStrict(json);
-        Object v = root.get("ir");
-        if (!(v instanceof Long n) || n != VERSION) throw new IllegalArgumentException("not a version " + VERSION + " IR export: \"ir\": " + v);
-        return new Reader().program(root);
+        var raw = (Map<String, Object>) AbiCheck.Json.parseStrict(json);
+        Reader.READ.set(new java.util.IdentityHashMap<>());
+        try {
+            var root = Reader.m(raw);
+            Object v = root.get("ir");
+            if (!(v instanceof Long n) || n != VERSION) throw new IllegalArgumentException("not a version " + VERSION + " IR export: \"ir\": " + v);
+            Ir.Program p = new Reader().program(root);
+            Reader.unknownFields();
+            return p;
+        } finally {
+            Reader.READ.remove();
+        }
     }
 
     /** The source hash an export carries. */
@@ -439,8 +492,58 @@ final class IrJson {
     private static final class Reader {
         private final Map<Long, Ir.Local> locals = new HashMap<>();
 
+        /**
+         * Every JSON object the reader opened, with the fields it read. Review r2 (coordinator): the reader refuses an
+         * unknown field at every level (the program, methods, statements, expressions, records, types, libraries), as the
+         * JavaScript reader does (validate.js), so a field another format-2 addition writes (M2b's params, invariants)
+         * is refused rather than silently dropped.
+         */
+        static final ThreadLocal<java.util.IdentityHashMap<Object, Set<String>>> READ = new ThreadLocal<>();
+
         static Map<String, Object> m(Object o) {
-            return (Map<String, Object>) o;
+            var raw = (Map<String, Object>) o;
+            var read = READ.get();
+            if (read == null || raw == null) return raw;
+            Set<String> seen = read.computeIfAbsent(raw, k -> new java.util.HashSet<>());
+            return new java.util.AbstractMap<>() {
+                @Override
+                public Object get(Object key) {
+                    seen.add((String) key);
+                    return raw.get(key);
+                }
+
+                @Override
+                public boolean containsKey(Object key) {
+                    seen.add((String) key);
+                    return raw.containsKey(key);
+                }
+
+                @Override
+                public int size() {
+                    return raw.size();
+                }
+
+                @Override
+                public Set<Map.Entry<String, Object>> entrySet() {
+                    seen.addAll(raw.keySet());
+                    return raw.entrySet();
+                }
+            };
+        }
+
+        /** Refuses a field no reader read: an unknown field of the format. */
+        static void unknownFields() {
+            for (var e : READ.get().entrySet()) {
+                var unread = new TreeSet<>(((Map<String, Object>) e.getKey()).keySet());
+                unread.removeAll(e.getValue());
+                if (!unread.isEmpty()) {
+                    Map<String, Object> o = (Map<String, Object>) e.getKey();
+                    Object kind = o.containsKey("node") ? "the node " + o.get("node") : o.containsKey("stmt") ? "the statement " + o.get("stmt")
+                            : "an object with " + new TreeSet<>(o.keySet());
+                    throw new IllegalArgumentException("unknown field" + (unread.size() == 1 ? " " : "s ") + unread + " in " + kind
+                            + " (an IR of format " + VERSION + " has none)");
+                }
+            }
         }
 
         static List<Object> l(Object o) {
@@ -480,7 +583,8 @@ final class IrJson {
         static final Map<String, Set<String>> NODE_FIELDS = Map.ofEntries(Map.entry("Lit", Set.of("value")), Map.entry("LocalRef", Set.of("local")),
                 Map.entry("StateRef", Set.of()), Map.entry("StateField", Set.of("field")), Map.entry("CtxRef", Set.of("name")),
                 Map.entry("NoneLit", Set.of()), Map.entry("SomeOf", Set.of("value")), Map.entry("GetField", Set.of("target", "record", "field")),
-                Map.entry("New", Set.of("record", "values")), Map.entry("CallFn", Set.of("fn", "args")), Map.entry("CallStd", Set.of("module", "name", "args")),
+                Map.entry("New", Set.of("record", "values")), Map.entry("CallFn", Set.of("fn", "args")),
+                Map.entry("CallJava", Set.of("library", "fn", "args")), Map.entry("CallStd", Set.of("module", "name", "args")),
                 Map.entry("Prelude", Set.of("op", "args")), Map.entry("TimePred", Set.of("after", "threshold")), Map.entry("ListLit", Set.of("items", "rest")),
                 Map.entry("Neg", Set.of("operand")), Map.entry("Not", Set.of("operand")), Map.entry("Arith", Set.of("op", "left", "right")),
                 Map.entry("Compare", Set.of("op", "left", "right")), Map.entry("Equals", Set.of("negate", "left", "right", "operand")),
@@ -501,9 +605,57 @@ final class IrJson {
             return out;
         }
 
+        LinkedHashMap<String, Ir.RecordType> records(Object list) {
+            var records = new LinkedHashMap<String, Ir.RecordType>();
+            for (Object o : l(list)) {
+                Ir.RecordType t = record(m(o));
+                records.put(t.name(), t);
+            }
+            return records;
+        }
+
+        LinkedHashMap<String, Ir.EnumType> enums(Object list) {
+            var enums = new LinkedHashMap<String, Ir.EnumType>();
+            for (Object o : l(list)) {
+                known(m(o), Set.of("name", "variants", "at"), "an enum");
+                var vs = new LinkedHashMap<String, Ir.RecordType>();
+                for (Object x : l(m(o).get("variants"))) {
+                    Ir.RecordType t = record(m(x));
+                    vs.put(t.name(), t);
+                }
+                enums.put(s(m(o).get("name")), new Ir.EnumType(s(m(o).get("name")), vs, pos(m(o).get("at"))));
+            }
+            return enums;
+        }
+
+        List<Ir.Fn> fns(Object list) {
+            var fns = new ArrayList<Ir.Fn>();
+            for (Object o : l(list)) {
+                var f = m(o);
+                known(f, Set.of("name", "params", "result", "body", "at"), "a fn");
+                noPayInExpressions(f.get("body"), true, "fn " + f.get("name"));   // a fn never pays (JSC0413)
+                fns.add(new Ir.Fn(s(f.get("name")), decls(f.get("params")), type(f.get("result")), block(f.get("body")), pos(f.get("at"))));
+            }
+            return fns;
+        }
+
         Ir.Program program(Map<String, Object> r) {
+            // #84 review C2 and M4 review r2: every field of the program is known (both formats' additions, one version 2).
             known(r, Set.of("ir", "language", "sourceSha256", "package", "contract", "source", "options", "records", "enums", "state", "params",
-                    "timeFields", "recursiveFns", "fns", "methods", "invariants", "warnings", "contracts"), "the program");
+                    "timeFields", "recursiveFns", "libraries", "javaLibraries", "fns", "methods", "invariants", "warnings", "contracts"), "the program");
+            // M4: libraries and javaLibraries are always written ([] without any); M2b/M2c: params, invariants and contracts
+            // only when the contract has them, never as null (the integration of M2 and M4: refused, never a crash).
+            for (String k : List.of("libraries", "javaLibraries")) {
+                if (!(r.get(k) instanceof List)) throw new IllegalArgumentException("missing field \"" + k + "\" in the program (a list)");
+            }
+            for (String k : List.of("params", "invariants", "contracts")) {
+                if (r.containsKey(k) && r.get(k) == null) throw new IllegalArgumentException("\"" + k + "\" is null: an absent " + k + " is not written");
+            }
+            // Fields the program carries for its readers, checked here (the Java reader keeps no use for them).
+            if (!"jsc 2".equals(r.get("language"))) throw new IllegalArgumentException("not a .jsc 2 IR: \"language\": " + r.get("language"));
+            if (!(r.get("sourceSha256") instanceof String h) || !h.matches("[0-9a-f]{64}")) {
+                throw new IllegalArgumentException("\"sourceSha256\" is not a SHA-256: " + r.get("sourceSha256"));
+            }
             // M2c: the imported contracts first (their types are named by the program's).
             var contracts = new LinkedHashMap<String, Ir.Foreign>();
             if (r.get("contracts") != null) {
@@ -539,29 +691,38 @@ final class IrJson {
                 known(m(o), Set.of("name", "value"), "an option");
                 options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
             }
-            var records = new LinkedHashMap<String, Ir.RecordType>();
-            for (Object o : l(r.get("records"))) {
-                Ir.RecordType t = record(m(o));
-                records.put(t.name(), t);
-            }
-            var enums = new LinkedHashMap<String, Ir.EnumType>();
-            for (Object o : l(r.get("enums"))) {
-                known(m(o), Set.of("name", "variants", "at"), "an enum");
-                var vs = new LinkedHashMap<String, Ir.RecordType>();
-                for (Object x : l(m(o).get("variants"))) {
-                    Ir.RecordType t = record(m(x));
-                    vs.put(t.name(), t);
-                }
-                enums.put(s(m(o).get("name")), new Ir.EnumType(s(m(o).get("name")), vs, pos(m(o).get("at"))));
-            }
+            var records = records(r.get("records"));
+            var enums = enums(r.get("enums"));
             Ir.RecordType state = record(m(r.get("state")));
-            var fns = new ArrayList<Ir.Fn>();
-            for (Object o : l(r.get("fns"))) {
-                var f = m(o);
-                known(f, Set.of("name", "params", "result", "body", "at"), "a fn");
-                noPayInExpressions(f.get("body"), true, "fn " + f.get("name"));   // a fn never pays (JSC0413)
-                fns.add(new Ir.Fn(s(f.get("name")), decls(f.get("params")), type(f.get("result")), block(f.get("body")), pos(f.get("at"))));
+            var libraries = new ArrayList<Ir.Library>();
+            for (Object o : l(r.get("libraries"))) {
+                var x = m(o);
+                known(x, Set.of("library", "source", "sourceSha256", "records", "enums", "fns"), "a library");
+                libraries.add(new Ir.Library(s(x.get("library")), s(x.get("source")), s(x.get("sourceSha256")), records(x.get("records")),
+                        enums(x.get("enums")), fns(x.get("fns"))));
             }
+            var java = new ArrayList<Ir.JavaLib>();
+            for (Object o : l(r.get("javaLibraries"))) {
+                var x = m(o);
+                known(x, Set.of("class", "sourceSha256", "records", "fns"), "a Java library");
+                var recs = new LinkedHashMap<String, Ir.JavaRec>();
+                for (Object ro : l(x.get("records"))) {
+                    var rm = m(ro);
+                    known(rm, Set.of("name", "fields", "at", "owner", "import", "javaName", "verified"), "a Java library record");
+                    Ir.RecordType t = jrecord(rm);
+                    recs.put(t.name(), new Ir.JavaRec(t, s(rm.get("owner")), s(rm.get("import")), s(rm.get("javaName")), (Boolean) rm.get("verified")));
+                }
+                var fs = new LinkedHashMap<String, Ir.JavaFn>();
+                for (Object fo : l(x.get("fns"))) {
+                    var fm = m(fo);
+                    known(fm, Set.of("name", "params", "result"), "a Java library fn");
+                    var ps = new ArrayList<Ty>();
+                    for (Object pt : l(fm.get("params"))) ps.add(type(pt));
+                    fs.put(s(fm.get("name")), new Ir.JavaFn(s(fm.get("name")), List.copyOf(ps), type(fm.get("result"))));
+                }
+                java.add(new Ir.JavaLib(s(x.get("class")), s(x.get("sourceSha256")), recs, fs));
+            }
+            var fns = fns(r.get("fns"));
             // M2b: the params before the methods, whose modifiers may name params fields.
             Ir.RecordType params0 = r.get("params") == null ? null : record(m(r.get("params")));
             var methods = new ArrayList<Ir.Method>();
@@ -654,7 +815,7 @@ final class IrJson {
                 }
             }
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
-                    Set.copyOf(timeFields), recursive, warnings, params0, invariants, contracts);
+                    Set.copyOf(timeFields), recursive, warnings, params0, invariants, contracts, false, List.copyOf(libraries), List.copyOf(java));
         }
 
         /**
@@ -800,6 +961,15 @@ final class IrJson {
 
         Ir.RecordType record(Map<String, Object> r) {
             known(r, Set.of("name", "fields", "at"), "a record");
+            return recordFields(r);
+        }
+
+        /** A Java library record (M4b): a record's fields beside its own (checked by the caller). */
+        Ir.RecordType jrecord(Map<String, Object> r) {
+            return recordFields(r);
+        }
+
+        private Ir.RecordType recordFields(Map<String, Object> r) {
             var fields = new LinkedHashMap<String, Ty>();
             for (Object o : l(r.get("fields"))) {
                 known(m(o), Set.of("name", "type"), "a record's field");
@@ -973,6 +1143,7 @@ final class IrJson {
                 case "GetField" -> new Ir.GetField(expr(x.get("target")), s(x.get("record")), s(x.get("field")), t, taint, at);
                 case "New" -> new Ir.New(s(x.get("record")), exprs(x.get("values")), t, taint, at);
                 case "CallFn" -> new Ir.CallFn(s(x.get("fn")), exprs(x.get("args")), t, taint, at);
+                case "CallJava" -> new Ir.CallJava(s(x.get("library")), s(x.get("fn")), exprs(x.get("args")), t, taint, at);
                 case "CallStd" -> {
                     Std.Binding b = Std.ROWS.get(s(x.get("name")));
                     if (b == null || !b.module().equals(x.get("module"))) throw new IllegalArgumentException("unknown std row " + x.get("module") + "." + x.get("name"));

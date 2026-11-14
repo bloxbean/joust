@@ -33,12 +33,17 @@ class ProcessorDiagnosticsTest {
     }
 
     static Result compile(String body) {
+        return compileSource(HEADER + body);
+    }
+
+    /** Compiles a whole source of the class {@code t.C}. */
+    static Result compileSource(String source) {
         var compiler = ToolProvider.getSystemJavaCompiler();
         var diags = new DiagnosticCollector<JavaFileObject>();
         var src = new SimpleJavaFileObject(URI.create("string:///t/C.java"), JavaFileObject.Kind.SOURCE) {
             @Override
             public CharSequence getCharContent(boolean ignore) {
-                return HEADER + body;
+                return source;
             }
         };
         var out = new java.io.File(System.getProperty("java.io.tmpdir"), "joust-proc-test-" + System.nanoTime());
@@ -254,5 +259,39 @@ class ProcessorDiagnosticsTest {
         var r = compile(MAPPED.replace("@Action public static S put(S s, byte[] k)",
                 "@Action @Batched public static S put(S s, byte[] k, Ctx ctx)"));
         assertTrue(r.hasError("@Batched actions and MerkleMap state cannot be combined"), r.errors().toString());
+    }
+
+    /**
+     * ADR-0018 D1, D9 (M4): a library lowered from {@code .jsc} (julc-state-dsl marks the class it generates) is linted
+     * like a contract; a hand-written {@code @OnchainLibrary} is the project's own choice and is not.
+     */
+    @Test
+    void aJscLibrary_isLinted_aHandWrittenOneIsNot() {
+        String body = """
+                /**
+                 * GENERATED from fees.jsc by julc-state-dsl (ADR-0018, a .jsc 2 library). Do not edit: change the .jsc file.
+                 */
+                @OnchainLibrary
+                public class C {
+                    public static BigInteger twice(BigInteger x) {
+                        int k = 2;
+                        return x.multiply(BigInteger.valueOf(k * 1));
+                    }
+                }
+                """;
+        var r = compile(body);
+        assertTrue(!r.success(), "a fixed-width local in a generated library");
+        assertTrue(r.hasError("'int' in an on-chain library"), r.errors().toString());
+        var hand = compile(body.replace("GENERATED from fees.jsc by julc-state-dsl (ADR-0018, a .jsc 2 library).", "A hand-written library."));
+        assertTrue(hand.success(), hand.errors().toString());
+
+        // Design F2 (r2): the marker is the one the dsl writes. A real lowering of c.jsc, with a fixed-width local put
+        // into its fn, is linted; it compiles cleanly as lowered.
+        String lowered = org.julclang.state.dsl.v2.JscV2.lower("jsc 2\nlibrary t\nfn twice(x: Int): Int = x * 2\n", "c.jsc").java();
+        assertTrue(lowered.contains(JoustProcessor.JSC_LIBRARY_MARKER), lowered);
+        assertTrue(compileSource(lowered).success(), "the lowering as is");
+        int at = lowered.indexOf("return ", lowered.indexOf("twice("));
+        var linted = compileSource(lowered.substring(0, at) + "int k__ = 2;\n        " + lowered.substring(at));
+        assertTrue(linted.hasError("'int' in an on-chain library"), linted.errors().toString());
     }
 }

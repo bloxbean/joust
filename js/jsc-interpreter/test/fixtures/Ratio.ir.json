@@ -11,6 +11,8 @@
   "state": { "name": "State", "fields": [{ "name": "total", "type": "Int" }, { "name": "count", "type": "Int" }], "at": [7, 1] },
   "timeFields": [],
   "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
   "fns": [],
   "methods": [
     {

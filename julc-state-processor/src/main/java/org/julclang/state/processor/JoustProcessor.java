@@ -32,9 +32,29 @@ public class JoustProcessor extends AbstractProcessor {
         this.lint = new SubsetLint(processingEnv);
     }
 
+    /** JuLC's on-chain library annotation: a {@code .jsc} library's generated class is linted (ADR-0018 D1, D9; M4). */
+    static final String ONCHAIN_LIBRARY = "org.julclang.stdlib.annotation.OnchainLibrary";
+
     @Override
     public Set<String> getSupportedAnnotationTypes() {
-        return Set.of(ContractReader.STATE_CONTRACT);
+        return Set.of(ContractReader.STATE_CONTRACT, ONCHAIN_LIBRARY);
+    }
+
+    /**
+     * Whether {@code type} is a library lowered from a {@code .jsc} 2 file: julc-state-dsl marks the class it generates
+     * ("GENERATED from fees.jsc by julc-state-dsl (ADR-0018, a .jsc 2 library)"). Hand-written libraries are not linted
+     * here: their projects chose them, and a {@code java:} import certifies the ones {@code .jsc} calls (D9).
+     */
+    /**
+     * The words julc-state-dsl writes in the Javadoc of a library class it generates ({@code JavaEmitter.LIBRARY_MARKER}).
+     * The processor does not depend on the dsl, so the two constants are kept equal by a test that lints a real lowering
+     * ({@code ProcessorDiagnosticsTest.aJscLibrary_isLinted_aHandWrittenOneIsNot}; design F2, r2).
+     */
+    static final String JSC_LIBRARY_MARKER = "by julc-state-dsl (ADR-0018, a .jsc 2 library)";
+
+    private boolean isJscLibrary(TypeElement type) {
+        String doc = processingEnv.getElementUtils().getDocComment(type);
+        return doc != null && doc.strip().startsWith("GENERATED from ") && doc.contains(JSC_LIBRARY_MARKER);
     }
 
     @Override
@@ -54,7 +74,12 @@ public class JoustProcessor extends AbstractProcessor {
             return false;
         }
         for (TypeElement annotation : annotations) {
+            boolean library = annotation.getQualifiedName().contentEquals(ONCHAIN_LIBRARY);
             for (Element element : roundEnv.getElementsAnnotatedWith(annotation)) {
+                if (library) {
+                    if (element instanceof TypeElement type && isJscLibrary(type)) lint.check(type);
+                    continue;
+                }
                 if (element instanceof TypeElement type) {
                     boolean clean = lint.check(type);
                     reader.read(type).filter(ir -> clean).ifPresent(ir -> generate(ir, type));

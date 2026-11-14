@@ -19,11 +19,12 @@ parentPort.on('message', (m) => {
   queue = queue.then(() => run(m));
 });
 
-async function run({ id, files, options, dir }) {
+async function run({ id, files, options, dir, javaLibraries, packages }) {
   parentPort.postMessage({ id, started: true });
   try {
     const engine = await loadToolchain({ dir });
-    parentPort.postMessage({ id, result: plain(engine.joust.build({ files, options })) });
+    // ADR-0018 D9, D14 (M4): the npm packages' libraries (.jsc, by <package>/<path>) and Java library sources.
+    parentPort.postMessage({ id, result: plain(engine.joust.build({ files, options, javaLibraries: javaLibraries ?? {}, packages: packages ?? {} })) });
   } catch (e) {
     parentPort.postMessage({ id, error: String(e?.message ?? e) });
   }

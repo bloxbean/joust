@@ -64,6 +64,17 @@ public final class ClientGenerator {
         w.line(" * transaction through {@link StateRuntime}.");
         w.line(" */");
         w.open("public final class " + C + " {").blank();
+        if (!c.javaLibraries().isEmpty()) {
+            // ADR-0018 D9 (review r2: F1, F2, S1): built with java: libraries, so the client, before anything else of it,
+            // refuses to load unless the classes of those libraries have the bytes its build recorded (a resource per
+            // contract, beside this class), and the contract, its validator and this client come from one code source.
+            // It fails closed when the record is missing.
+            w.open("static {");
+            w.line("org.julclang.state.runtime.JavaLibraryCheck.verify(" + C + ".class, " + V + ".class, \"" + c.packageName()
+                    + (c.packageName().isEmpty() ? "" : ".") + X + "\", java.util.List.of(" + String.join(", ",
+                    c.javaLibraries().stream().map(n -> "\"" + n + "\"").toList()) + "));");
+            w.close("}").blank();
+        }
         if (c.hasKeyed()) {
             keyedTypes();
             var names = c.keyedTypes().stream().map(o -> typeConstant(o)).toList();

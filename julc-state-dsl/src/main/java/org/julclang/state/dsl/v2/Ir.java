@@ -21,10 +21,26 @@ final class Ir {
     /** Taint bits (D11): the value depends on a time value; on the current call's validity window. */
     static final int TIME = 1, WINDOW = 2;
 
+    /**
+     * A checked program: a contract, or a library ({@code library}: no options, state or methods; {@code name} is its
+     * class). {@code records}, {@code enums} and {@code fns} are the file's own; {@code libraries} holds the declarations
+     * of every {@code .jsc} library it imports, transitively, in dependency order (ADR-0018 D9, M4). A build's
+     * declarations share one namespace, so a name means one declaration across the program and its libraries.
+     */
     record Program(String pkg, String fileName, String name, List<ContractOption> options,
                    Map<String, RecordType> records, Map<String, EnumType> enums, RecordType state, List<Method> methods,
                    List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings, RecordType params,
-                   List<Invariant> invariants, Map<String, Foreign> contracts) {
+                   List<Invariant> invariants, Map<String, Foreign> contracts, boolean library, List<Library> libraries,
+                   List<JavaLib> javaLibraries) {
+
+        /** M2c's shape (params, invariants, imported contracts), without libraries. */
+        Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
+                Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
+                Set<String> recursiveFns, List<Warning> warnings, RecordType params, List<Invariant> invariants,
+                Map<String, Foreign> contracts) {
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, params, invariants,
+                    contracts, false, List.of(), List.of());
+        }
 
         /** M2b's shape: no imported contracts. */
         Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
@@ -34,7 +50,7 @@ final class Ir {
                     Map.of());
         }
 
-        /** M1's shape: no params and no invariants. */
+        /** M1's shape: no params, invariants, imported contracts or libraries. */
         Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
                 Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
                 Set<String> recursiveFns, List<Warning> warnings) {
@@ -42,13 +58,36 @@ final class Ir {
                     Map.of());
         }
 
-        /** A record type, the state, the params ({@code Config}), or an enum variant (variant names are unique in a file). */
+        /** A program with {@code .jsc} libraries only (M4a). */
+        Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
+                Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
+                Set<String> recursiveFns, List<Warning> warnings, boolean library, List<Library> libraries) {
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, null, List.of(),
+                    Map.of(), library, libraries, List.of());
+        }
+
+        /** The Java library record named {@code name} (its simple name), or null. */
+        JavaRec javaRecord(String name) {
+            for (JavaLib j : javaLibraries) if (j.records().containsKey(name)) return j.records().get(name);
+            return null;
+        }
+
+        /**
+         * A record type, the state, the params ({@code Config}), or an enum variant (variant names are unique in a build),
+         * own, a library's (M4) or an imported contract's (M2c).
+         */
         RecordType record(String name) {
-            if (name.equals("State")) return state;
+            if (name.equals("State") && state != null) return state;
             if (name.equals(PARAMS) && params != null) return params;
             RecordType r = records.get(name);
             if (r != null) return r;
+            JavaRec jr = javaRecord(name);
+            if (jr != null) return jr.type();
             for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return e.variants().get(name);
+            for (Library l : libraries) {
+                RecordType x = l.record(name);
+                if (x != null) return x;
+            }
             // M2c: an imported contract's type, by its qualified name (Oracle.State, Oracle.Share, a variant Oracle.Open).
             for (Foreign f : contracts.values()) {
                 if (f.state().name().equals(name)) return f.state();
@@ -61,14 +100,18 @@ final class Ir {
         /** The enum a variant belongs to, or null. */
         EnumType enumOf(String variant) {
             for (EnumType e : enums.values()) if (e.variants().containsKey(variant)) return e;
+            for (Library l : libraries) {
+                for (EnumType e : l.enums().values()) if (e.variants().containsKey(variant)) return e;
+            }
             for (Foreign f : contracts.values()) for (EnumType e : f.enums().values()) if (e.variants().containsKey(variant)) return e;
             return null;
         }
 
-        /** An enum by name: the contract's own, or (M2c) an imported contract's ({@code Oracle.Phase}). */
+        /** The enum named {@code name}: own, a library's (M4), or an imported contract's ({@code Oracle.Phase}, M2c); or null. */
         EnumType enumType(String name) {
             EnumType e = enums.get(name);
             if (e != null) return e;
+            for (Library l : libraries) if (l.enums().containsKey(name)) return l.enums().get(name);
             for (Foreign f : contracts.values()) if (f.enums().containsKey(name)) return f.enums().get(name);
             return null;
         }
@@ -80,7 +123,78 @@ final class Ir {
 
         Fn fn(String name) {
             for (Fn f : fns) if (f.name().equals(name)) return f;
+            for (Library l : libraries) for (Fn f : l.fns()) if (f.name().equals(name)) return f;
             return null;
+        }
+
+        /**
+         * The library declaring the type, enum, variant or fn {@code name}, or null when the program declares it (or
+         * nothing does).
+         */
+        Library libraryOf(String name) {
+            if (name.equals("State") && state != null) return null;
+            if (records.containsKey(name) || enums.containsKey(name)) return null;
+            for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return null;
+            for (Fn f : fns) if (f.name().equals(name)) return null;
+            for (Library l : libraries) if (l.declares(name)) return l;
+            return null;
+        }
+    }
+
+    /**
+     * A Java (JuLC) library the program imports with {@code java:} (ADR-0018 D9, M4b), certified: its class, the SHA-256
+     * of its on-chain sources, the records its imported fns reach (by {@code .jsc} name) and its imported fns.
+     */
+    record JavaLib(String fqcn, String sourceSha256, Map<String, JavaRec> records, Map<String, JavaFn> fns,
+                   List<JavaLibraries.Message> messages) {
+        JavaLib(String fqcn, String sourceSha256, Map<String, JavaRec> records, Map<String, JavaFn> fns) {
+            this(fqcn, sourceSha256, records, fns, List.of());
+        }
+
+        String simpleName() {
+            return fqcn.substring(fqcn.lastIndexOf('.') + 1);
+        }
+    }
+
+    /**
+     * A Java library record: its {@code .jsc} record type (no fields when opaque), the name the processor's description
+     * gives its owner ({@code com.acme.AllowList}), the top-level class to import and how the generated Java names it
+     * ({@code AllowList.Entry}); {@code verified}: fields readable and comparable (D9).
+     */
+    record JavaRec(RecordType type, String canonicalOwner, String importClass, String sourceName, boolean verified) {}
+
+    /** A Java library fn's signature, in {@code .jsc} types. */
+    record JavaFn(String name, List<Ty> params, Ty result) {}
+
+    /**
+     * A {@code .jsc} library a program imports (ADR-0018 D9, M4): its Java class ({@code app.Fees}), its file and the
+     * SHA-256 of its text, and its checked declarations.
+     */
+    record Library(String qualified, String fileName, String sourceSha256, Map<String, RecordType> records,
+                   Map<String, EnumType> enums, List<Fn> fns, String id) {
+        /** A library known by its declarations only (read from an IR export, which does not carry its module id). */
+        Library(String qualified, String fileName, String sourceSha256, Map<String, RecordType> records, Map<String, EnumType> enums,
+                List<Fn> fns) {
+            this(qualified, fileName, sourceSha256, records, enums, fns, null);
+        }
+
+        /** The class's simple name ({@code Fees}). */
+        String simpleName() {
+            return qualified.substring(qualified.lastIndexOf('.') + 1);
+        }
+
+        RecordType record(String name) {
+            RecordType r = records.get(name);
+            if (r != null) return r;
+            for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return e.variants().get(name);
+            return null;
+        }
+
+        boolean declares(String name) {
+            if (records.containsKey(name) || enums.containsKey(name)) return true;
+            for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return true;
+            for (Fn f : fns) if (f.name().equals(name)) return true;
+            return false;
         }
     }
 
@@ -243,7 +357,7 @@ final class Ir {
     // ------------------------------------------------------------------ expressions
 
     sealed interface Expr permits Lit, LocalRef, StateRef, StateField, CtxRef, NoneLit, SomeOf, GetField, New, CallFn,
-            CallStd, Prelude, TimePred, ListLit, Neg, Not, Arith, Compare, Equals, Logic, Cond, Coalesce, BlockValue,
+            CallStd, CallJava, Prelude, TimePred, ListLit, Neg, Not, Arith, Compare, Equals, Logic, Cond, Coalesce, BlockValue,
             IfValue, ListProp, Concat, Contains, Hof, Fold, Variant, Match, MapEmpty, MapOp, MapHof, MapFold, BigEmpty, BigOp,
             Range, ListArg, FundsRef, LedgerOp, ParamsRef, DepositField {
         Ty type();
@@ -287,6 +401,13 @@ final class Ir {
     record CallFn(String fn, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
 
     record CallStd(Std.Binding binding, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
+
+    /**
+     * A call of a certified Java library's public static method (ADR-0018 D9, M4b): {@code library} is its class. The
+     * reference interpreters do not evaluate it (no reference semantics: a Java body is certified on the two legs that
+     * run it, the JVM and UPLC, by its per-function vectors).
+     */
+    record CallJava(String library, String fn, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
 
     /** {@code min}, {@code max}, {@code abs}, {@code asKey} (a checked conversion). */
     record Prelude(String op, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}

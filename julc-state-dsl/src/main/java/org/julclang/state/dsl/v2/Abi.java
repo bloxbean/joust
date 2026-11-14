@@ -156,6 +156,28 @@ final class Abi {
             for (Ir.RecordType v : e.variants().values()) vs.add("      " + ctor(v.name(), e.tag(v.name()), fields(v, ind), "        "));
             types.add("    " + str(e.name()) + ": { \"kind\": \"enum\", \"constructors\": [\n" + String.join(",\n", vs) + "\n    ] }");
         }
+        // The .jsc libraries' types the datum and redeemers reach (D9, M4), with the library that declares each: the
+        // processor names them by its class (app.Fees.Line).
+        for (String n : libraryTypes(p)) {
+            Ir.JavaRec jr = p.javaRecord(n);
+            if (jr != null) {
+                // A Java library's record (D9, M4b): the processor names it by its canonical name.
+                types.add("    " + str(n) + ": { \"kind\": \"library\", \"library\": " + str(jr.canonicalOwner()) + ", \"constructors\": ["
+                        + ctor(n, 0, fields(jr.type(), "        "), "      ") + "] }");
+                continue;
+            }
+            Ir.Library l = p.libraryOf(n);
+            String from = ", \"library\": " + str(l.qualified());
+            if (l.records().containsKey(n)) {
+                Ir.RecordType r = l.records().get(n);
+                types.add("    " + str(n) + ": { \"kind\": \"library\"" + from + ", \"constructors\": [" + ctor(n, 0, fields(r, "        "), "      ") + "] }");
+            } else {
+                Ir.EnumType e = l.enums().get(n);
+                var vs = new ArrayList<String>();
+                for (Ir.RecordType v : e.variants().values()) vs.add("      " + ctor(v.name(), e.tag(v.name()), fields(v, ind), "        "));
+                types.add("    " + str(n) + ": { \"kind\": \"library\"" + from + ", \"constructors\": [\n" + String.join(",\n", vs) + "\n    ] }");
+            }
+        }
         if (!batched.isEmpty()) {
             // The intent's call: one variant per batched action, in source order, with the action's arguments (no Ctx).
             var calls = new ArrayList<String>();
@@ -215,6 +237,47 @@ final class Abi {
         w.append("  \"timeFields\": [").append(String.join(", ", time)).append("]\n");
         w.append("}\n");
         return w.toString();
+    }
+
+    /**
+     * The library types (records and enums of imported {@code .jsc} libraries) the encoded roots reach: the state, and
+     * the parameters of every method but views (the redeemers, the intents' calls), through every type they contain; in
+     * the order first reached.
+     */
+    static List<String> libraryTypes(Ir.Program p) {
+        var out = new java.util.LinkedHashSet<String>();
+        var seen = new java.util.HashSet<String>();
+        var work = new java.util.ArrayDeque<Ty>();
+        work.addAll(p.state().fields().values());
+        if (p.params() != null) work.addAll(p.params().fields().values());   // M2b: the params are encoded too
+        for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) work.add(l.type);
+        while (!work.isEmpty()) {
+            Ty t = work.removeFirst();
+            switch (t) {
+                case Ty.Prim x -> { }
+                case Ty.ListT l -> work.addFirst(l.elem());
+                case Ty.OptT o -> work.addFirst(o.elem());
+                case Ty.MapT m -> work.addFirst(m.val());
+                case Ty.BigMapT b -> work.addFirst(b.val());
+                // M2c: an instance holds no library type; a deposit's memo may.
+                case Ty.Instance x -> { }
+                case Ty.Ledger x -> { }   // M2a: Value, Address, Credential
+                case Ty.DepositT d -> {
+                    if (d.memo() != null) work.addFirst(d.memo());
+                }
+                case Ty.Rec r -> {
+                    if (!seen.add(r.name())) continue;
+                    if (p.libraryOf(r.name()) != null || p.javaRecord(r.name()) != null) out.add(r.name());
+                    work.addAll(p.record(r.name()).fields().values());
+                }
+                case Ty.EnumT e -> {
+                    if (!seen.add(e.name())) continue;
+                    if (p.libraryOf(e.name()) != null) out.add(e.name());
+                    for (Ir.RecordType v : p.enumType(e.name()).variants().values()) work.addAll(v.fields().values());
+                }
+            }
+        }
+        return List.copyOf(out);
     }
 
     /**
@@ -285,13 +348,17 @@ final class Abi {
         for (int[] e : sourceMap(java, fileName)) entries.add("[" + e[0] + ", " + e[1] + ", " + e[2] + "]");
         var byMessage = new java.util.TreeMap<String, java.util.TreeSet<String>>();
         for (JavaEmitter.Check c : checks) {
-            String site = String.format("{ \"line\": %d, \"col\": %d, \"kind\": %s, \"in\": %s%s }", c.pos().line(), c.pos().col(),
-                    str(c.kind()), str(c.in() == null ? "" : c.in()), c.what() == null ? "" : ", \"what\": " + str(c.what()));
-            // Sorted by position (zero-padded), then text: the same sites in the same order on every build.
-            byMessage.computeIfAbsent(c.message(), k -> new java.util.TreeSet<>()).add(String.format("%09d%09d", c.pos().line(), c.pos().col()) + site);
+            // A site in an imported library names its file (D9, M4); the map's own file is the default.
+            String site = String.format("{ \"line\": %d, \"col\": %d, \"kind\": %s, \"in\": %s%s%s }", c.pos().line(), c.pos().col(),
+                    str(c.kind()), str(c.in() == null ? "" : c.in()), c.what() == null ? "" : ", \"what\": " + str(c.what()),
+                    c.file() == null ? "" : ", \"file\": " + str(c.file()));
+            // Sorted by file (own first), position (zero-padded), then text: the same sites in the same order on every build.
+            byMessage.computeIfAbsent(c.message(), k -> new java.util.TreeSet<>()).add((c.file() == null ? " " : c.file())
+                    + "\u0000" + String.format("%09d%09d", c.pos().line(), c.pos().col()) + site);
         }
         var messages = new ArrayList<String>();
-        byMessage.forEach((m, sites) -> messages.add("    " + str(m) + ": [" + String.join(", ", sites.stream().map(x -> x.substring(18)).toList()) + "]"));
+        byMessage.forEach((m, sites) -> messages.add("    " + str(m) + ": [" + String.join(", ", sites.stream()
+                .map(x -> x.substring(x.indexOf('\u0000') + 19)).toList()) + "]"));
         return "{\n  \"version\": 2,\n  \"source\": " + str(fileName) + ",\n  \"java\": " + str(javaPath) + ",\n  \"lines\": ["
                 + String.join(", ", entries) + "],\n  \"messages\": {" + (messages.isEmpty() ? "" : "\n" + String.join(",\n", messages) + "\n  ")
                 + "}\n}\n";

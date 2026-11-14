@@ -28,6 +28,29 @@ public interface JscModules {
         return (spec.startsWith("./") || spec.startsWith("../")) && spec.endsWith(".jsc");
     }
 
+    /** The prefix of a module id in an npm library package ({@code pkg:@acme/fees/fees.jsc}): outside the sources. */
+    String PACKAGE = "pkg:";
+
+    /**
+     * Whether {@code spec} names a library of an npm package (ADR-0018 D14, M4c): {@code <package>/<path>.jsc}, the package
+     * an npm name ({@code fees}, {@code @acme/fees}), the path inside its {@code joust-lib/}, without {@code .} or
+     * {@code ..} segments.
+     */
+    static boolean isPackage(String spec) {
+        if (!spec.endsWith(".jsc") || spec.contains("\\") || spec.contains("//")) return false;
+        if (!spec.matches("(@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*/.+")) return false;
+        for (String seg : spec.split("/")) if (seg.equals(".") || seg.equals("..") || seg.isEmpty()) return false;
+        return true;
+    }
+
+    /** The package of a package specifier or id ({@code @acme/fees}), or null. */
+    static String packageOf(String spec) {
+        String s = spec.startsWith(PACKAGE) ? spec.substring(PACKAGE.length()) : spec;
+        String[] p = s.split("/");
+        if (p.length < 2) return null;
+        return p[0].startsWith("@") ? (p.length < 3 ? null : p[0] + "/" + p[1]) : p[0];
+    }
+
     /**
      * The id a relative {@code spec} names from the module {@code from}: its directory joined with the specifier, with
      * {@code .} and {@code ..} segments resolved; null when it would leave the root, or holds an empty segment or a
@@ -59,12 +82,35 @@ public interface JscModules {
      * separator is read as {@code '/'}). Relative specifiers only.
      */
     static JscModules of(Map<String, String> files) {
+        return of(files, Map.of());
+    }
+
+    /**
+     * The modules of a build: its own files (relative specifiers, from the source root), and the {@code .jsc} libraries of
+     * its npm packages ({@code packages}: by {@code <package>/<path>}, the path inside the package's {@code joust-lib/};
+     * ADR-0018 D14, M4c). A package's library is imported by a package specifier; inside a package, relative specifiers
+     * resolve within it and never leave it.
+     */
+    static JscModules of(Map<String, String> files, Map<String, String> packages) {
         var byId = new LinkedHashMap<String, String>();
         files.forEach((k, v) -> {
             if (k.endsWith(".jsc")) byId.put(k.replace('\\', '/'), v);
         });
+        packages.forEach((k, v) -> {
+            if (k.endsWith(".jsc")) byId.put(PACKAGE + k.replace('\\', '/'), v);
+        });
         return (from, spec) -> {
-            String id = join(from, spec);
+            String id;
+            if (isPackage(spec)) {
+                id = PACKAGE + spec;
+            } else if (from != null && from.startsWith(PACKAGE) && isRelative(spec)) {
+                // Within the importing package: its root is the package, which a relative path never leaves.
+                String pkg = packageOf(from);
+                String inner = join(from.substring(PACKAGE.length() + pkg.length() + 1), spec);
+                id = inner == null ? null : PACKAGE + pkg + "/" + inner;
+            } else {
+                id = join(from, spec);
+            }
             if (id == null || !byId.containsKey(id)) return null;
             return new Source(id, id.substring(id.lastIndexOf('/') + 1), byId.get(id));
         };

@@ -7,7 +7,7 @@ or GraalVM.
 npm install
 npm run build      # contracts/ -> build/joust/: the validator, its description, a typed JS client
 npm run deploy     # publishes the reference script on the network in joust.config.json (DevKit by default)
-npm test           # creates a counter and calls it, through @julclang/joust-runtime
+npm test           # joust test: builds, then creates a counter and calls it offline (an in-memory ledger)
 npm run dev        # builds, deploys and serves the page (page/) at http://127.0.0.1:5178; redeploys on save
 ```
 

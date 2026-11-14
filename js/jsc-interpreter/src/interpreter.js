@@ -50,8 +50,12 @@ class Program {
     // Field names and types of every record, the state and every variant (variant names are unique in a file).
     this.shapes = new Map();
     const add = (r) => this.shapes.set(r.name, { names: r.fields.map((f) => f.name), types: r.fields.map((f) => f.type) });
-    for (const r of p.records) add(r);
-    for (const e of p.enums) for (const v of e.variants) add(v);
+    // A build's declarations are one namespace (IR version 2, ADR-0018 M4): the .jsc libraries' records, enums and fns
+    // join the program's, and a library fn runs like the program's own.
+    const records = [...p.libraries.flatMap((l) => l.records), ...p.javaLibraries.flatMap((j) => j.records), ...p.records];
+    const enums = [...p.libraries.flatMap((l) => l.enums), ...p.enums];
+    for (const r of records) add(r);
+    for (const e of enums) for (const v of e.variants) add(v);
     add(p.state);
     if (p.params) add(p.params);   // M2b: the params record, Config
     // M2c: each imported contract's state and types, under their qualified names (Oracle.State).
@@ -63,9 +67,9 @@ class Program {
     this.invariants = p.invariants ?? [];
     this.params = null;
     this.variantTag = new Map();
-    for (const e of p.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
+    for (const e of enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
     for (const c of p.contracts ?? []) for (const e of c.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
-    this.fns = new Map(p.fns.map((f) => [f.name, f]));
+    this.fns = new Map([...p.libraries.flatMap((l) => l.fns), ...p.fns].map((f) => [f.name, f]));
     this.methods = new Map(p.methods.map((m) => [m.name, m]));
   }
 
@@ -399,6 +403,10 @@ class Program {
       case 'New': return new Rec(e.record, e.values.map((x) => this.#eval(x, env, f)));
       case 'Variant': return new Rec(e.variant, e.values.map((x) => this.#eval(x, env, f)));
       case 'CallFn': return this.#invoke(e.fn, e.args.map((x) => this.#eval(x, env, f)));
+      // ADR-0018 D9 (M4b): a Java library's body has no reference semantics here (its certification and per-function
+      // vectors cover it on the JVM and UPLC). No answer, never a refusal (semantics §2.4).
+      case 'CallJava': throw new Limit(`java:${e.library}.${e.fn} has no reference semantics: the interpreters do not evaluate Java`
+        + ' library calls (ADR-0018 D9, M4b; no answer)');
       case 'CallStd': {
         const args = e.args.map((x) => this.#eval(x, env, f));
         const listType = e.args[0]?.type;

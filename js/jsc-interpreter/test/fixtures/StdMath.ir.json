@@ -23,6 +23,8 @@
   },
   "timeFields": ["since", "upTo"],
   "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
   "fns": [],
   "methods": [
     {

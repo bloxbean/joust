@@ -32,10 +32,10 @@ const someOf = (v, t) => node('SomeOf', { value: v }, { option: t });
 const none = (t) => node('NoneLit', {}, { option: t });
 
 /** A program with the given records, enums and fns, and no methods: for evaluating expressions. */
-function program({ records = [], enums = [], fns = [] } = {}) {
+function program({ records = [], enums = [], fns = [], libraries = [] } = {}) {
   return load(JSON.stringify({
     ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
-    state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], fns, methods: [], warnings: [],
+    state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], libraries, javaLibraries: [], fns, methods: [], warnings: [],
   }));
 }
 
@@ -283,7 +283,7 @@ function deepProgram() {
     body: { stmts: [], at, result: node('CallFn', { fn: 'down', args: [node('LocalRef', { local: 2 }, INT)] }, INT) } };
   return JSON.stringify({
     ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'Deep', source: 'Deep.jsc', options: [], records: [],
-    enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], fns: [down], methods: [go], warnings: [],
+    enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], libraries: [], javaLibraries: [], fns: [down], methods: [go], warnings: [],
   });
 }
 
@@ -898,7 +898,7 @@ test('M2c deposits: an empty or a negative deposit value is refused (domain:depo
     ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records: [], enums: [],
     state: { name: 'State', fields: [{ name: 'n', type: 'Int' }], at },
     params: { name: 'Config', fields: [{ name: 'other', type: { instance: 'Other' } }], at },
-    contracts: [inst], timeFields: [], recursiveFns: [], fns: [], warnings: [],
+    contracts: [inst], timeFields: [], recursiveFns: [], libraries: [], javaLibraries: [], fns: [], warnings: [],
     methods: [{ kind: 'action', name: 'give', params: [], mods: [{ name: 'open' }], checked: [], usesCtx: false, pays: false, result: { record: 'State' },
       body: { stmts: [{ stmt: 'Deposit', target: node('ParamsRef', { field: 'other' }, { instance: 'Other' }), value: valueExpr, memo: lit(1n), at }],
         result: node('StateRef', {}, { record: 'State' }), at }, at }],
@@ -994,4 +994,69 @@ test('integration of #80 with M2: the strict modifier shapes cover quorum, autho
   // A method that only sends (no pay) still says who may call it (JSC0408); quorum is an audience.
   assert.throws(edit('Coins', (p, m) => { m('forge').mods = []; }), /so it says who may call it/);
   assert.throws(edit('Treasury', (p, m) => { m('pay').mods = []; }), /so it says who may call it/);
+});
+
+// ADR-0018 D9 (M4b): a java: library's body has no reference semantics here. A call that reaches one gets no answer (a
+// Limit, §2.4), never a refusal; the program's other code is evaluated as usual. The fixture is Guarded.jsc's export
+// (julc-state-toolchain's JscV2JavaLibraryTest writes it), with CallJava nodes and the library's records.
+test('§3.9 a java: library call has no answer; the rest of the program has one', () => {
+  const guarded = load(readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8'));
+  const ann = fromHex('a1'.repeat(28));
+  const s = new Rec('State', [fromHex('0a'.repeat(28)), [new Rec('Entry', [ann, 5n])], 0n]);
+  assert.throws(() => guarded.call('limit', s, [ann], null), (e) => e instanceof Limit && /no reference semantics/.test(e.message));
+  assert.equal(guarded.call('firstLimit', s, [], null).value, 5n);
+  // A CallJava naming a fn the program did not import is refused at load.
+  const text = readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8');
+  assert.throws(() => load(text.replace('"fn": "limitOf"', '"fn": "nowhere"')), /no fn nowhere imported/);
+});
+
+// The integration of M2 and M4: one IR format 2. Joined.ir.json (JscV2IrTest writes it) carries M2b's params and
+// invariants, M2c's contracts, reads and a receives type, and M4's libraries; it loads, and an unknown field added to any
+// one of its objects is refused, as the Java reader refuses it.
+test('format 2 joined: params, invariants, contracts, reads, receives T and libraries load; an unknown field anywhere is refused', () => {
+  const text = readFileSync(new URL('./fixtures/joined/Joined.ir.json', import.meta.url), 'utf8');
+  const p = JSON.parse(text);
+  for (const k of ['params', 'invariants', 'contracts', 'libraries', 'javaLibraries']) assert.ok(k in p, k);
+  assert.equal(p.libraries[0].library, 'org.julclang.state.examples.dsl.Fees');
+  assert.ok(p.methods.find((m) => m.name === 'look').reads.length === 1);
+  assert.ok(p.methods.find((m) => m.name === 'take').mods.find((x) => x.name === 'receives').type);
+  const joined = load(text);
+  assert.ok(joined);
+  // Every object of the export, each in its own copy with an extra field (types and a local's fieldTaints are maps of
+  // their own kind, not objects with fields).
+  const TYPE_KEYS = new Set(['list', 'option', 'record', 'enum', 'map', 'bigmap', 'instance', 'deposit']);
+  const paths = [];
+  const walk = (o, path) => {
+    if (Array.isArray(o)) o.forEach((x, i) => walk(x, [...path, i]));
+    else if (o && typeof o === 'object') {
+      const keys = Object.keys(o);
+      const isType = keys.length === 1 && TYPE_KEYS.has(keys[0]);
+      if (isType || path.at(-1) === 'fieldTaints') return;
+      paths.push(path);
+      for (const k of keys) walk(o[k], [...path, k]);
+    }
+  };
+  walk(p, []);
+  const dropped = [];
+  for (const path of paths) {
+    const copy = structuredClone(p);
+    let o = copy;
+    for (const k of path) o = o[k];
+    o.futureCheck = false;
+    try {
+      load(JSON.stringify(copy));
+      dropped.push(path.join('.'));
+    } catch (e) {
+      assert.match(e.message, /futureCheck/, path.join('.'));
+    }
+  }
+  assert.deepEqual(dropped, [], 'objects whose unknown field the reader took');
+  assert.ok(paths.length > 100, `objects checked: ${paths.length}`);
+  for (const k of ['params', 'invariants', 'contracts', 'libraries']) assert.ok(paths.some((x) => x[0] === k), `${k} was mutated`);
+  // An absent params is not written: null is refused.
+  for (const k of ['params', 'invariants', 'contracts']) {
+    const q = JSON.parse(text);
+    q[k] = null;
+    assert.throws(() => load(JSON.stringify(q)), /is null/, k);
+  }
 });

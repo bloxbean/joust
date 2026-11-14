@@ -71,10 +71,22 @@ class JscV2IrTest {
         try (Stream<Path> s = Files.list(EXAMPLES)) {
             for (Path p : s.filter(p -> p.toString().endsWith(".jsc")).sorted().toList()) {
                 String text = Files.readString(p);
-                if (JscV2.isV2(text)) out.put(p.getFileName().toString(), text);
+                if (Examples.isContract(text)) out.put(p.getFileName().toString(), text);
             }
         }
         out.put("Forms.jsc", FORMS);
+        // A java: import (M4b), against a hand-written library description: CallJava and a Java record in the state.
+        out.put("JavaForms.jsc", """
+                jsc 2
+                package forms
+                import { P, twice, mk, size } from "java:com.acme.L"
+                contract JavaForms {
+                  state { n: Int, ps: List<P> }
+                  init() { return { n: twice(1), ps: [mk(#01, 2)] } }
+                  action add(k: Bytes) open { return { ...state, n: size(ps), ps: [mk(k, n), ...ps] } }
+                  view first(): Int = match ps.head { Some(p) => p.v, None => 0 }
+                }
+                """);
         return out;
     }
 
@@ -82,7 +94,7 @@ class JscV2IrTest {
     void theExport_roundTrips_toTheSameTextJavaAndManifest() throws Exception {
         var nodes = new TreeSet<String>();
         for (var e : sources().entrySet()) {
-            var lowered = DslExamples.lower(e.getValue(), e.getKey());
+            var lowered = Examples.lower(e.getKey(), e.getValue());
             String json = lowered.irJson();
             assertTrue(json.startsWith("{\n  \"ir\": " + IrJson.VERSION + ",\n"), json.substring(0, 40));
             Ir.Program back = IrJson.read(json);
@@ -114,6 +126,34 @@ class JscV2IrTest {
             for (Object v : m.values()) collect(v, out);
         } else if (o instanceof List<?> l) {
             for (Object v : l) collect(v, out);
+        }
+    }
+
+    /**
+     * Review r2 (coordinator, with M2b #84): the Java reader refuses an unknown field at every level, as the JavaScript
+     * reader does, so a field another format-2 addition writes (M2b's program-level params, a method's invariants) is
+     * refused rather than silently dropped. Each case adds one field to a valid export.
+     */
+    @Test
+    void aReader_refusesAnUnknownField_atEveryLevel() {
+        String json = JscV2.lower(FORMS, "Forms.jsc").irJson();
+        IrJson.read(json);   // the export itself reads
+        var cases = new java.util.LinkedHashMap<String, String[]>();
+        // The integration of M2 and M4: params is a field of version 2 now (M2b), so the program's case is a field no
+        // version has; "params": null is refused too (an absent params is not written).
+        cases.put("the program", new String[]{"\"ir\": 2,", "\"ir\": 2, \"futureField\": null,"});
+        cases.put("a method", new String[]{"\"usesCtx\":", "\"invariants\": [], \"usesCtx\":"});
+        cases.put("a statement", new String[]{"\"stmt\": \"", "\"zz\": 1, \"stmt\": \""});
+        cases.put("an expression", new String[]{"\"node\": \"", "\"zz\": 1, \"node\": \""});
+        cases.put("a record", new String[]{"\"fields\": [", "\"zz\": 1, \"fields\": ["});
+        cases.put("a declaration", new String[]{"\"taint\": 0, \"at\"", "\"taint\": 0, \"zz\": 1, \"at\""});
+        cases.put("a block", new String[]{"\"stmts\": [", "\"zz\": 1, \"stmts\": ["});
+        for (var c : cases.entrySet()) {
+            String from = c.getValue()[0];
+            assertTrue(json.contains(from), c.getKey() + ": the export has " + from);
+            String bad = json.replaceFirst(java.util.regex.Pattern.quote(from), java.util.regex.Matcher.quoteReplacement(c.getValue()[1]));
+            var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(bad), c.getKey());
+            assertTrue(e.getMessage().contains("unknown field"), c.getKey() + ": " + e.getMessage());
         }
     }
 
@@ -187,11 +227,11 @@ class JscV2IrTest {
         var stale = new ArrayList<String>();
         var names = new ArrayList<String>();
         for (var e : sources().entrySet()) {
-            if (e.getKey().equals("Forms.jsc")) continue;
+            if (e.getKey().equals("Forms.jsc") || e.getKey().equals("JavaForms.jsc")) continue;
             String name = e.getKey().replace(".jsc", ".ir.json");
             names.add(name);
             Path f = JS_FIXTURES.resolve(name);
-            String now = DslExamples.lower(e.getValue(), e.getKey()).irJson();
+            String now = Examples.lower(e.getKey(), e.getValue()).irJson();
             if (write) Files.writeString(f, now);
             else if (!Files.exists(f) || !Files.readString(f).equals(now)) stale.add(name);
         }
@@ -241,7 +281,7 @@ class JscV2IrTest {
         if (node instanceof java.util.Map<?, ?> m) {
             // A type ({"list": …}) and a local's fieldTaints are maps of their own kind, not objects with fields.
             boolean typeOrTaints = !path.isEmpty() && path.getLast().equals("fieldTaints")
-                    || m.size() == 1 && java.util.Set.of("list", "option", "record", "enum", "map", "bigmap").containsAll(m.keySet());
+                    || m.size() == 1 && java.util.Set.of("list", "option", "record", "enum", "map", "bigmap", "instance", "deposit").containsAll(m.keySet());
             if (!typeOrTaints) out.add(java.util.List.copyOf(path));
             for (var e : ((java.util.Map<String, Object>) m).entrySet()) {
                 var p = new java.util.ArrayList<>(path);
@@ -267,5 +307,91 @@ class JscV2IrTest {
         var sb = new StringBuilder();
         IrJson.print(root, sb, "");
         return sb.toString();
+    }
+    /**
+     * The integration of M2 and M4 (`feat/jsc-2-int2`): one IR format 2 carries M2b's {@code params} and
+     * {@code invariants}, M2c's {@code contracts}, {@code reads} and a {@code receives} type, and M4's {@code libraries}.
+     * Such an export reads back with every one of them, its text unchanged when written again; and an unknown field is
+     * refused in each of its objects (the reader checks each object's fields, and that every field was read).
+     * semantics.test.js checks the same export (fixtures/joined/Joined.ir.json) on the JavaScript reader.
+     */
+    static final String JOINED = """
+            jsc 2
+            package org.julclang.state.examples.dsl
+
+            import { fee, Line } from "./fees.jsc"
+            import contract { Tips } from "./Tips.jsc"
+
+            type Tip = { n: Int }
+
+            contract Joined {
+              params { tips: Instance<Tips>, cap: Int }
+              state { owner: Key, lines: List<Line>, seen: Int }
+
+              init() {
+                return { owner: caller, lines: [], seen: 0 }
+              }
+
+              action look(t: reads params.tips, amount: Int) {
+                require(fee(amount, 100) <= params.cap, "over the cap")
+                return { ...state, seen: seen + 1 }
+              }
+
+              action take() receives Tip {
+                return { ...state, seen: seen + funds.deposits.length }
+              }
+
+              invariant capped = seen <= params.cap
+            }
+            """;
+
+    static JscV2.Lowered joined() {
+        var files = new java.util.LinkedHashMap<String, String>(Examples.files());
+        files.put(Examples.DIR + "Joined.jsc", JOINED);
+        return JscV2.lower(JOINED, "Joined.jsc", Examples.DIR + "Joined.jsc", JscModules.of(files));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void anExportWithParamsInvariantsAndLibraries_readsBack_andRefusesUnknownFields() throws Exception {
+        String json = joined().irJson();
+        Ir.Program p = IrJson.read(json);
+        assertNotNull(p.params(), "params");
+        assertEquals(List.of("tips", "cap"), p.params().fieldNames());
+        assertEquals(List.of("capped"), p.invariants().stream().map(Ir.Invariant::name).toList());
+        assertEquals(List.of("org.julclang.state.examples.dsl.Fees"), p.libraries().stream().map(Ir.Library::qualified).toList());
+        assertEquals(java.util.Set.of("Tips"), p.contracts().keySet());
+        assertEquals(1, p.method("look").reads().size(), "reads");
+        assertNotNull(p.method("take").receives().type(), "receives Tip");
+        assertEquals(json, IrJson.write(p, IrJson.sourceHashOf(json)), "the export reads back to the same text");
+        var root = (java.util.Map<String, Object>) AbiCheck.Json.parseStrict(json);
+        for (String k : List.of("params", "invariants", "contracts", "libraries", "javaLibraries")) assertTrue(root.containsKey(k), k);
+        var paths = new java.util.ArrayList<java.util.List<Object>>();
+        collect(root, new java.util.ArrayList<>(), paths);
+        var dropped = new java.util.ArrayList<String>();
+        for (var path : paths) {
+            try {
+                IrJson.read(withExtra(json, path));
+                dropped.add(path.toString());
+            } catch (IllegalArgumentException e) {
+                assertTrue(e.getMessage().contains("unknown field \"futureCheck\""), path + ": " + e.getMessage());
+            }
+        }
+        assertEquals(List.of(), dropped, "objects whose unknown field the reader dropped");
+        // Each top-level addition is reached: an object inside each one was mutated.
+        for (String k : List.of("params", "invariants", "contracts", "libraries")) {
+            assertTrue(paths.stream().anyMatch(x -> !x.isEmpty() && x.get(0).equals(k)), k + " was mutated");
+        }
+        // A writer never writes null for an absent params, invariants or contracts: the reader refuses it (Forms has none).
+        String forms = JscV2.lower(FORMS, "Forms.jsc").irJson();
+        for (String k : List.of("params", "invariants", "contracts")) {
+            var bad = assertThrows(IllegalArgumentException.class, () -> IrJson.read(forms.replace("\"ir\": 2,", "\"ir\": 2, \"" + k + "\": null,")));
+            assertTrue(bad.getMessage().contains("is null"), k + ": " + bad.getMessage());
+        }
+        System.out.println("[ir] the joined export (params, invariants, contracts, reads, receives T, libraries): an unknown field is"
+                + " refused in each of its " + paths.size() + " objects");
+        java.nio.file.Path fixture = JS_FIXTURES.resolve("joined/Joined.ir.json");
+        if (Boolean.getBoolean("joust.writeIrFixtures")) java.nio.file.Files.writeString(fixture, json);
+        assertEquals(json, java.nio.file.Files.readString(fixture), "stale fixture Joined.ir.json: rerun with -Pjoust.writeIrFixtures");
     }
 }

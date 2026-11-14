@@ -33,6 +33,9 @@ dependencies {
 // I1 compares with what the Gradle build of the examples wrote.
 tasks.named('test') {
     systemProperty 'joust.s2.debug', System.getProperty('joust.s2.debug', 'false')
+    // -Pjoust.writeIrFixtures: rewrite the JavaScript interpreter's java: fixture (js/jsc-interpreter/test/fixtures/java).
+    if (project.hasProperty('joust.writeIrFixtures')) systemProperty 'joust.writeIrFixtures', 'true'
+    inputs.dir(rootProject.file('examples/compliance/src/main/java')).withPropertyName('javaLibrarySources').withPathSensitivity(PathSensitivity.RELATIVE)
     // ADR-0018 D15 (M1b): the five-way tests run the JavaScript reference interpreter in Node (JsLeg).
     inputs.dir(rootProject.file('js/jsc-interpreter/src')).withPropertyName('jscInterpreterSources').withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('js/jsc-interpreter/bin')).withPropertyName('jscInterpreterBin').withPathSensitivity(PathSensitivity.RELATIVE)

@@ -24,10 +24,12 @@ final class Depth {
         var stack = new ArrayDeque<Item>();
         List<Item> roots = new ArrayList<>();
         for (Fn fn : f.fns()) roots.add(new Item(fn.body(), 0, fn.name()));
-        for (Method m : f.contract().methods()) roots.add(new Item(m.body(), 0, null));
-        for (Fn fn : f.contract().fns()) roots.add(new Item(fn.body(), 0, fn.name()));
-        // M2b (#84 review C5): invariants are roots too.
-        for (Syntax.InvariantDecl inv : f.contract().invariants()) roots.add(new Item(inv.body(), 0, null));
+        if (f.contract() != null) {
+            for (Method m : f.contract().methods()) roots.add(new Item(m.body(), 0, null));
+            for (Fn fn : f.contract().fns()) roots.add(new Item(fn.body(), 0, fn.name()));
+            // M2b (#84 review C5): invariants are roots too.
+            for (Syntax.InvariantDecl inv : f.contract().invariants()) roots.add(new Item(inv.body(), 0, null));
+        }
         for (int k = roots.size() - 1; k >= 0; k--) stack.push(roots.get(k));
         while (!stack.isEmpty()) {
             Item it = stack.pop();

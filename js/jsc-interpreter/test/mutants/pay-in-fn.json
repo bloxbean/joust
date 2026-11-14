@@ -78,6 +78,8 @@
  "recursiveFns": [
   "digits"
  ],
+ "libraries": [],
+ "javaLibraries": [],
  "fns": [
   {
    "name": "total",

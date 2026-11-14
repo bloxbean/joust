@@ -35,9 +35,12 @@ class JscCorpusTest {
     /** Directories never searched for repository .jsc files (build output, dependencies, the corpus itself). */
     static final Set<String> SKIP = Set.of("build", "node_modules", ".git", ".gradle", "tree-sitter-jsc", "dist", ".joust");
 
-    /** Lexer and parser only, dispatched as the build does: a file whose first word is {@code jsc} is {@code .jsc} 2. */
-    static void parse(String text) {
-        if (JscV2.isV2(text)) CorpusParse.parse(text);
+    /**
+     * Lexer and parser only, dispatched as the build does: a file whose first word is {@code jsc} is {@code .jsc} 2 (with
+     * the type names of the libraries it imports from beside it, ADR-0018 M4).
+     */
+    static void parse(String text, Path file) {
+        if (JscV2.isV2(text)) CorpusParse.parse(text, file);
         else Parser.parse(text);
     }
 
@@ -45,7 +48,7 @@ class JscCorpusTest {
     static String verdict(Path f) throws IOException {
         String text = Files.readString(f).replace("@@package@@", "app");
         try {
-            parse(text);
+            parse(text, f);
             return null;
         } catch (JscException e) {
             return e.format(f.getFileName().toString());
@@ -123,9 +126,9 @@ class JscCorpusTest {
     // ------------------------------------------------------------------ review r2 F5: structure, and pinned differences
 
     /** The declarations of a file, as tree-sitter-jsc/test/shared-corpus.mjs builds them from its tree. */
-    static String shape(String text) {
+    static String shape(String text, Path file) {
         text = text.replace("@@package@@", "app");
-        if (JscV2.isV2(text)) return CorpusParse.shape(text);
+        if (JscV2.isV2(text)) return CorpusParse.shape(text, file);
         Ast.Contract c = Parser.parse(text);
         var out = new ArrayList<String>();
         out.add("package " + c.pkg());
@@ -143,9 +146,9 @@ class JscCorpusTest {
     static TreeMap<String, String> shapes() throws IOException {
         var out = new TreeMap<String, String>();
         for (String version : List.of("v2", "v1")) {
-            for (Path f : jsc(CORPUS.resolve(version).resolve("valid"))) out.put(ROOT.relativize(f).toString(), shape(Files.readString(f)));
+            for (Path f : jsc(CORPUS.resolve(version).resolve("valid"))) out.put(ROOT.relativize(f).toString(), shape(Files.readString(f), f));
         }
-        for (Path f : repositoryFiles()) out.put(ROOT.relativize(f).toString(), shape(Files.readString(f)));
+        for (Path f : repositoryFiles()) out.put(ROOT.relativize(f).toString(), shape(Files.readString(f), f));
         return out;
     }
 

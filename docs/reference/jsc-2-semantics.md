@@ -16,7 +16,8 @@ types, shadowing, effect legality, the time rule (D11) and the BigMap flow rules
 except where a rule is what makes an evaluation well defined. Every node name below (`Arith`, `MapOp`, …) is the IR's.
 The encodings of values as Plutus data (D5) are in the ADR and in the ABI manifest. They are not part of evaluation.
 
-**Not yet covered:** owned and keyed objects (M3), libraries (M4). A `batched` action (M1c) is covered: its transition
+**Not yet covered:** owned and keyed objects (M3), and the bodies of `java:` library imports (M4b: a call of one has no
+answer, §2.4). `.jsc` libraries (M4) are covered: a library fn is a `fn` (§3.9). A `batched` action (M1c) is covered: its transition
 is an ordinary action's, the same in a batch and in a direct call; batch execution itself (the batcher's order, the
 fold over intents, refunds) is the validator's and the batcher's, not a call's.
 
@@ -441,7 +442,9 @@ The runtime stores it as a Merkle root of *now* (ADR-0014), which is an encoding
 ### 3.9 Functions, lambdas and the prelude
 
 - `CallFn`: evaluate the arguments left to right. Then evaluate the `fn`'s body block with **only** its parameters
-  bound. A `fn` sees no state, no τ and no locals of its caller (D7), so it is pure. A `fn` may call itself.
+  bound. A `fn` sees no state, no τ and no locals of its caller (D7), so it is pure. A `fn` may call itself. A `fn` of
+  an imported `.jsc` library (the IR's `libraries`, D9) is evaluated in the same way: it is the same kind of `fn`,
+  declared in another file. Its `require`s refuse with their own position, in the library's file (§2.5).
 - Lambdas exist only as arguments of the collection methods above. They see the locals in scope where they are
   written. They are evaluated as §3.6 and §3.7 say.
 - `asKey(b)`, `asHash(b)` (`Prelude`): `b` when it has 28 bytes, else fail.
