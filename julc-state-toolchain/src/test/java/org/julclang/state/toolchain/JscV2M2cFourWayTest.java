@@ -478,11 +478,20 @@ class JscV2M2cFourWayTest {
         bad.put("a Value of policies #0000 and #ff", stashParams(vv(new byte[]{0, 0}, N01, n(1), new byte[]{(byte) 0xFF}, N01, n(1)), h));
         bad.put("a Value of a 29-byte policy", stashParams(vv(JscV2M2FourWayTest.bytes(29, 0x70), N01, n(1)), h));
         bad.put("a 27-byte Hash", stashParams(vv(TOKEN_POLICY, N01, n(1)), new byte[27]));
+        // #90 review C9: the state each one's init would make without the check (params.v + Value.asset(params.h, #01, 1)),
+        // the mint validator's candidate output: the validator leg runs, and refuses it.
+        var made = new LinkedHashMap<String, Rec>();
+        made.put("a Value of a 1-byte policy", rec("State", n(7), vv(new byte[]{1}, N01, n(1), h, N01, n(1))));
+        made.put("a Value of policies #0000 and #ff", rec("State", n(7), vv(new byte[]{0, 0}, N01, n(1), new byte[]{(byte) 0xFF}, N01, n(1), h, N01, n(1))));
+        made.put("a Value of a 29-byte policy", rec("State", n(7), vv(JscV2M2FourWayTest.bytes(29, 0x70), N01, n(1), h, N01, n(1))));
+        made.put("a 27-byte Hash", rec("State", n(7), vv(TOKEN_POLICY, N01, n(1), new byte[27], N01, n(1))));
         int refused = 0;
         for (var e : bad.entrySet()) {
             var w = new FourWay("Stash", SOURCES.get("Stash.jsc"), TRANSITIONS.get("Stash"), e.getValue(), MODULES);
-            assertEquals("refused", w.check("init", null, List.of(), at(fill(0x0A), 0, 0), fill(0x0A)), e.getKey());
+            int runs = w.validatorRuns;
+            assertEquals("refused", w.check("init", null, List.of(), at(fill(0x0A), 0, 0), fill(0x0A), made.get(e.getKey())), e.getKey());
             assertEquals("input:params", w.lastRefusal, e.getKey());
+            assertEquals(runs + 1, w.validatorRuns, e.getKey() + ": the mint validator ran on the unchecked writer's output");
             JsLeg.check(w);
             refused++;
         }
@@ -497,7 +506,8 @@ class JscV2M2cFourWayTest {
         assertEquals("input:got", r.lastRefusal);
         r.mutants("peek", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash", rec("Stash.State", n(7), held))), null);
         JsLeg.check(r);
-        System.out.println("[M2c five-way] Stash: " + refused + " params refused by the init on every leg (input:params); StashReader reads"
+        System.out.println("[M2c five-way] Stash: " + refused + " params refused by the init on every leg (input:params; the mint validator"
+                + " refuses each unchecked output, #90 C9); StashReader reads"
                 + " every state Stash makes");
         report(r);
     }
