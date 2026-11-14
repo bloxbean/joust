@@ -52,7 +52,7 @@ class JscV2M3bFourWayTest {
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         if (!LEGS.isEmpty()) return;
         Map<String, String> files = new LinkedHashMap<>();
-        for (String c : List.of("Registry")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
+        for (String c : List.of("Registry", "Keys")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
         var r = Toolchain.build(files, Map.of());
         assertTrue(r.ok(), r.diagnostics().toString());
         for (var c : r.contracts()) {
@@ -247,6 +247,86 @@ class JscV2M3bFourWayTest {
         assertEquals(1, f.javaDiffs.size(), f.javaDiffs.toString());
         assertTrue(f.javaDiffs.get(0).startsWith("Registry.claim [#616c696365, 1, [#" + "00".repeat(27) + "], 1]")
                 && f.javaDiffs.get(0).endsWith("the Java example accepts, the port refuses"), f.javaDiffs.toString());
+        JsLeg.check(f);
+        report(f);
+    }
+
+    // ------------------------------------------------------------------ coverage: Keys
+
+    static Rec seat(byte[] holder, byte[] code, String note, Object guard) {
+        return rec("Seat", Bytes.of(holder), Bytes.of(code), Bytes.of(note.getBytes(java.nio.charset.StandardCharsets.UTF_8)), guard);
+    }
+
+    static Object keyCred(byte[] k) {
+        return new org.julclang.state.dsl.v2.Interpreter.CredV(false, Bytes.of(k));
+    }
+
+    @Test
+    @Order(2)
+    void keys() throws Exception {
+        var f = LEGS.get("Keys");
+        byte[] inst = f.harness.instanceId();
+        Rec open = rec("State", Bytes.of(ADMIN), true), closed = rec("State", Bytes.of(ADMIN), false);
+        ok(f.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN));
+        ok(f.check("setOpen", open, List.of(false), null, ADMIN));
+        f.defaultShared = open;
+        // A plain owned type beside keyed ones: its own Holding_Badge, created from a seed (K3, K12).
+        ok(f.check("award", null, List.of(), shared(at(ANN, 0, 0), open), ANN));
+        assertEquals("refused", f.check("award", null, List.of(), shared(at(ANN, 0, 0), closed), ANN, rec("Badge", Bytes.of(ANN), n(1))));
+        ok(f.check("drop", rec("Badge", Bytes.of(ANN), n(1)), List.of(), at(ANN, 0, f.harness.minAda()), ANN));
+        // Seats: the key at index 1 (code); C = 0: an anchor just relinked (linkedAt after the window's start) is no
+        // obstacle (K34), the window W = 30 s still is.
+        byte[] code = {0x31, 0x32};
+        Object g = keyCred(ANN);
+        f.anchor = FourWay.Node.head("Seat", inst, EMPTY, T0.add(n(60_000)));
+        ok(f.check("take", null, List.of(Bytes.of(code), Bytes.of(ANN), g), window(BOB, 0, 0, T0, T0.add(n(30_000))), BOB));
+        f.keyedRefused("keyed:window", "take", null, List.of(Bytes.of(code), Bytes.of(ANN), g), window(BOB, 0, 0, T0, T0.add(n(30_001))), BOB);
+        ok(f.check("mine", null, List.of(Bytes.of(code), g), window(ANN, 0, 0, T0, T0.add(n(30_000))), ANN));
+        // K26: the same key in another instance's list.
+        f.anchor = FourWay.Node.head("Seat", FourWay.OTHER, EMPTY, BigInteger.ZERO);
+        f.keyedRefused("keyed:anchor", "mine", null, List.of(Bytes.of(code), g), window(ANN, 0, 0, T0, T0.add(n(30_000))), ANN);
+        // An action authorized by the seat's credential: its key signs; a stranger does not; a script approves (M2b).
+        Rec s = seat(ANN, code, "", g);
+        ok(f.check("write", s, List.of(Bytes.of(new byte[]{1, 2, 3})), at(ANN, 0, 0), ANN));
+        f.modifierRefused("write", s, List.of(Bytes.of(new byte[]{1, 2, 3})), at(EVE, 0, 0), EVE);
+        byte[] script = fill(0x5C);
+        Rec sg = seat(ANN, code, "", new org.julclang.state.dsl.v2.Interpreter.CredV(true, Bytes.of(script)));
+        ok(f.as(List.of(EVE), List.of(script)).check("write", sg, List.of(Bytes.of(new byte[]{9})), at(EVE, 0, 0), EVE));
+        f.as(List.of(EVE), List.of()).modifierRefused("write", sg, List.of(Bytes.of(new byte[]{9})), at(EVE, 0, 0), EVE);
+        // A removal after a predecessor that is a plain node's (C = 0: relinked a moment ago), and a retire.
+        f.anchor = new FourWay.Node("Seat", "node", Bytes.of(new byte[]{0x30}), Bytes.of(code), T0.add(n(1)), seat(BOB, new byte[]{0x30}, "", keyCred(BOB)), inst);
+        f.nodeNext = EMPTY;
+        ok(f.check("free", s, List.of(), window(ANN, 0, f.harness.minAda(), T0, T0.add(n(30_000))), ANN));
+        f.modifierRefused("free", s, List.of(), window(EVE, 0, f.harness.minAda(), T0, T0.add(n(30_000))), EVE);
+        ok(f.check("leave", s, List.of(), at(ANN, 0, 0), ANN));
+        // Passes: a signed key in a Bytes field (I53): signed and 28 bytes; 27 bytes or unsigned refused (A27); 65 bytes
+        // over maxKeyBytes; the cooldown of 60,500 ms at its edge.
+        BigInteger c = n(60_500);
+        f.anchor = FourWay.Node.head("Pass", inst, EMPTY, T0.subtract(c));
+        ok(f.check("issue", null, List.of(Bytes.of(ANN), Bytes.of(BOB)), at(ANN, 0, 0), ANN));
+        f.keyedRefused("keyed:signed", "issue", null, List.of(Bytes.of(ANN), Bytes.of(BOB)), at(BOB, 0, 0), BOB);
+        f.keyedRefused("keyed:signed", "issue", null, List.of(Bytes.of(bytes(27, 0xA1)), Bytes.of(BOB)), at(ANN, 0, 0), ANN);
+        f.keyedRefused("keyed:length", "issue", null, List.of(Bytes.of(bytes(65, 0xA1)), Bytes.of(BOB)), at(ANN, 0, 0), ANN);
+        f.anchor = FourWay.Node.head("Pass", inst, EMPTY, T0.subtract(c).add(BigInteger.ONE));
+        f.keyedRefused("keyed:cooldown", "issue", null, List.of(Bytes.of(ANN), Bytes.of(BOB)), at(ANN, 0, 0), ANN);
+        Rec pass = rec("Pass", Bytes.of(ANN), Bytes.of(BOB), n(99));
+        ok(f.check("use", pass, List.of(), null, BOB));
+        f.invariantRefused("invariant:fewUses", "use", rec("Pass", Bytes.of(ANN), Bytes.of(BOB), n(100)), List.of(), null, BOB);
+        f.modifierRefused("use", pass, List.of(), null, ANN);
+        ok(f.check("end", pass, List.of(), at(BOB, 0, ada(1).longValue()), BOB));
+        // Mutants and attacks.
+        f.mutants("init", null, List.of(), at(ADMIN, 0, 0), ADMIN);
+        f.mutants("award", null, List.of(), shared(at(ANN, 0, 0), open), ANN);
+        f.anchor = FourWay.Node.head("Seat", inst, EMPTY, T0.add(n(60_000)));
+        f.mutants("take", null, List.of(Bytes.of(code), Bytes.of(ANN), g), window(BOB, 0, 0, T0, T0.add(n(30_000))), BOB);
+        f.mutants("write", s, List.of(Bytes.of(new byte[]{1, 2, 3})), at(ANN, 0, 0), ANN);
+        f.anchor = new FourWay.Node("Seat", "node", Bytes.of(new byte[]{0x30}), Bytes.of(code), T0.add(n(1)), seat(BOB, new byte[]{0x30}, "", keyCred(BOB)), inst);
+        f.mutants("free", s, List.of(), window(ANN, 0, f.harness.minAda(), T0, T0.add(n(30_000))), ANN);
+        f.mutants("leave", s, List.of(), at(ANN, 0, 0), ANN);
+        f.anchor = FourWay.Node.head("Pass", inst, EMPTY, T0.subtract(c));
+        f.mutants("issue", null, List.of(Bytes.of(ANN), Bytes.of(BOB)), at(ANN, 0, 0), ANN);
+        f.mutants("use", pass, List.of(), null, BOB);
+        f.mutants("end", pass, List.of(), at(BOB, 0, ada(1).longValue()), BOB);
         JsLeg.check(f);
         report(f);
     }

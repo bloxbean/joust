@@ -1,0 +1,78 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3b coverage: what the registry port leaves out of keyed objects (ADR-0016). A plain owned type before the
+// keyed ones; a key at a nonzero field index, without a link cooldown (C = 0) and with a short window; a signed key held
+// in a Bytes field, with a cooldown that is no whole number of seconds (60,500 ms, rounded up to slots by the runtime);
+// two initializers of one type, one that reads no transaction; an action authorized by a credential field of the
+// object; an action that sets a Bytes field (the size rule's edge); an event from a keyed action; an invariant of a
+// keyed type; maxDatumBytes at the keyed cap (2048).
+contract Keys(maxDatumBytes = 2048, maxValidityMs = 600000) {
+  state { admin: Key, isOpen: Bool }
+
+  event Noted { by: Key }
+
+  owned Badge { owner: Key, level: Int }
+  owned Seat keyed by code (linkCooldownMs = 0, linkWindowMs = 30000) { holder: Key, code: Bytes, note: Bytes, guard: Credential }
+  owned Pass keyed by holder (signed, maxKeyBytes = 64, linkCooldownMs = 60500, linkWindowMs = 600000) { holder: Bytes, owner: Key, uses: Int }
+
+  init() {
+    return { admin: caller, isOpen: true }
+  }
+
+  action setOpen(nowOpen: Bool) only admin {
+    return { ...state, isOpen: nowOpen }
+  }
+
+  // ---- a plain owned type beside the keyed ones
+
+  owned init Badge.award(keys: shared) {
+    require(keys.isOpen, "closed")
+    return { owner: caller, level: 1 }
+  }
+
+  owned destroy Badge.drop() only owner {
+    pay(owner, balance)
+  }
+
+  // ---- seats: the key at index 1, no cooldown
+
+  // Reads no transaction: the holder is an argument (anyone may take a free code: the squatting warning).
+  owned init Seat.take(code: Bytes, holder: Key, guard: Credential) {
+    return { holder, code, note: utf8(""), guard }
+  }
+
+  owned init Seat.mine(code: Bytes, guard: Credential) {
+    return { holder: caller, code, note: utf8("mine"), guard }
+  }
+
+  // Authorized by the seat's own credential (a key that signs, or a script that approves).
+  owned action Seat.write(text: Bytes) authorized guard {
+    emit(Noted { by: holder })
+    return { ...state, note: text }
+  }
+
+  owned destroy Seat.free() only holder {
+    pay(holder, balance)
+  }
+
+  owned destroy Seat.leave() only holder retire {
+    pay(holder, balance)
+  }
+
+  // ---- passes: a signed key in a Bytes field
+
+  owned init Pass.issue(holder: Bytes, owner: Key) {
+    return { holder, owner, uses: 0 }
+  }
+
+  owned action Pass.use() only owner {
+    return { ...state, uses: uses + 1 }
+  }
+
+  owned destroy Pass.end() only owner retire {
+    pay(owner, balance)
+  }
+
+  invariant Pass.fewUses = uses <= 100
+}

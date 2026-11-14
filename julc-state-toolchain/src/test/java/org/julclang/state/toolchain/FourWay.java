@@ -438,7 +438,7 @@ final class FourWay {
         }
         tx.inputs.add(new TxInInfo(new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x33)), BigInteger.ZERO),
                 StateHarness.walletOut(signer == null ? StateHarness.fill(28, 0xFE) : signer, BigInteger.valueOf(50_000_000))));
-        if (signer != null) tx.signers.add(signer);
+        if (signer != null && keyedSigns(method)) tx.signers.add(signer);
         if (t != null && (interp.usesTx(method) || insert || remove)) tx.range = StateHarness.window(t.validFrom(), t.validTo());
         if (interp.takesShared(method)) tx.referenceInputs.add(harness.instanceReference(java(t.shared())));
         if (insert) {
@@ -490,6 +490,13 @@ final class FourWay {
         return tx;
     }
 
+    /** M3b: whether a keyed call needs a signer (Ctx, an audience, a signed key), as the runtime builds it. */
+    boolean keyedSigns(String method) {
+        String T = keyedType(method);
+        return interp.usesTx(method) || interp.modifiers(method).stream().anyMatch(x -> x.startsWith("only ") || x.startsWith("quorum ")
+                || x.startsWith("authorized ")) || interp.kind(method).equals("ownedInit") && interp.keyedOptions(T)[1] == 1;
+    }
+
     /** A generated record's key (its key field's bytes). */
     byte[] keyOfJava(String type, Object v) throws Exception {
         return (byte[]) v.getClass().getMethod(interp.keyField(type)).invoke(v);
@@ -520,6 +527,7 @@ final class FourWay {
     private int mutantsKeyed(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
         String k = interp.kind(method);
         boolean insert = k.equals("ownedInit"), retire = interp.retires(method), remove = relinks(method) && !insert;
+        if (!keyedSigns(method)) signer = null;   // a call that needs no signature: the attack suite sees none
         var o = interp.transition(method, state, args, t);
         Object next = k.equals("ownedDestroy") ? null : java(o.value());
         JulcList<Payout> pays = payouts(o.payouts());
@@ -708,7 +716,9 @@ final class FourWay {
             for (byte[] k : signers) tx.signers.add(k);
         }
         if (approvers != null && !kindOf(method).equals("init")) {
-            var a = new org.julclang.state.api.Approval(harness.policy(), harness.instanceId(), BigInteger.valueOf(spendTag(method)));
+            // The approval names what the call spends: the instance, or (an owned or keyed object) the object's token.
+            byte[] target = tx.token != null ? tx.token : harness.instanceId();
+            var a = new org.julclang.state.api.Approval(harness.policy(), target, BigInteger.valueOf(spendTag(method)));
             var data = StateHarness.data(new org.julclang.state.api.Approvals(JulcList.<org.julclang.state.api.Approval>empty().prepend(a)));
             for (byte[] h : approvers) tx.withdrawals.put(new Credential.ScriptCredential(new ScriptHash(h)), data);
         }

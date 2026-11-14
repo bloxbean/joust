@@ -1,0 +1,175 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Keys",
+  "source": "Keys.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "admin", "type": "Key", "data": "bytes28" },
+      { "name": "isOpen", "type": "Bool", "data": "bool" }
+    ] },
+  "owned": ["Badge", "Seat", "Pass"],
+  "holdings": [
+      { "name": "Holding_Badge", "constr": 0, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "value", "type": "Badge", "data": "Badge" }
+        ] },
+      { "name": "Head_Seat", "constr": 1, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Keyed_Seat", "constr": 2, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "value", "type": "Seat", "data": "Seat" }
+        ] },
+      { "name": "Retired_Seat", "constr": 3, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "key", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Head_Pass", "constr": 4, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Keyed_Pass", "constr": 5, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "value", "type": "Pass", "data": "Pass" }
+        ] },
+      { "name": "Retired_Pass", "constr": 6, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "key", "type": "Bytes", "data": "bytes" }
+        ] }
+  ],
+  "keyed": [
+    { "type": "Seat", "key": "code", "keyIndex": 1, "maxKeyBytes": 32, "signedKey": false, "linkCooldownMs": 0, "linkWindowMs": 30000,
+      "typeId": "0453656174", "headTag": 1, "nodeTag": 2, "retiredTag": 3, "link": 7, "remove": 6,
+      "inserts": ["take", "mine"], "actions": ["write"], "removes": ["free"], "retires": ["leave"] },
+    { "type": "Pass", "key": "holder", "keyIndex": 0, "maxKeyBytes": 64, "signedKey": true, "linkCooldownMs": 60500, "linkWindowMs": 600000,
+      "typeId": "0450617373", "headTag": 4, "nodeTag": 5, "retiredTag": 6, "link": 7, "remove": null,
+      "inserts": ["issue"], "actions": ["use"], "removes": [], "retires": ["end"] }
+  ],
+  "redeemers": {
+    "spend": [
+      { "name": "SetOpen", "constr": 0, "fields": [
+          { "name": "nowOpen", "type": "Bool", "data": "bool" }
+        ] },
+      { "name": "Write", "constr": 1, "fields": [
+          { "name": "text", "type": "Bytes", "data": "bytes" },
+          { "name": "events", "type": "List<Event>", "data": "list<Event>" }
+        ] },
+      { "name": "Use", "constr": 2, "fields": [] },
+      { "name": "Drop", "constr": 3, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Free", "constr": 4, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Leave", "constr": 5, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "End", "constr": 6, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Link", "constr": 7, "fields": [] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] },
+      { "name": "Award", "constr": 2, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Insert_take", "constr": 3, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "code", "type": "Bytes", "data": "bytes" },
+          { "name": "holder", "type": "Key", "data": "bytes28" },
+          { "name": "guard", "type": "Credential", "data": "Credential" }
+        ] },
+      { "name": "Insert_mine", "constr": 4, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "code", "type": "Bytes", "data": "bytes" },
+          { "name": "guard", "type": "Credential", "data": "Credential" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Insert_issue", "constr": 5, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "holder", "type": "Bytes", "data": "bytes" },
+          { "name": "owner", "type": "Key", "data": "bytes28" }
+        ] },
+      { "name": "Remove_Seat", "constr": 6, "fields": [
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "removed", "type": "TxOutRef", "data": "TxOutRef" }
+        ] }
+    ]
+  },
+  "types": {
+    "Badge": { "kind": "record", "constructors": [{ "name": "Badge", "constr": 0, "fields": [
+        { "name": "owner", "type": "Key", "data": "bytes28" },
+        { "name": "level", "type": "Int", "data": "int" }
+      ] }] },
+    "Seat": { "kind": "record", "constructors": [{ "name": "Seat", "constr": 0, "fields": [
+        { "name": "holder", "type": "Key", "data": "bytes28" },
+        { "name": "code", "type": "Bytes", "data": "bytes" },
+        { "name": "note", "type": "Bytes", "data": "bytes" },
+        { "name": "guard", "type": "Credential", "data": "Credential" }
+      ] }] },
+    "Pass": { "kind": "record", "constructors": [{ "name": "Pass", "constr": 0, "fields": [
+        { "name": "holder", "type": "Bytes", "data": "bytes" },
+        { "name": "owner", "type": "Key", "data": "bytes28" },
+        { "name": "uses", "type": "Int", "data": "int" }
+      ] }] },
+    "Event": { "kind": "enum", "constructors": [
+      { "name": "Noted", "constr": 0, "fields": [
+          { "name": "by", "type": "Key", "data": "bytes28" }
+        ] }
+    ] },
+    "Address": { "kind": "ledger", "constructors": [{ "name": "Address", "constr": 0, "fields": [
+        { "name": "credential", "type": "Credential", "data": "Credential" },
+        { "name": "stakingCredential", "type": "Option<StakingCredential>", "data": "option<StakingCredential>" }
+      ] }] },
+    "Credential": { "kind": "ledger", "constructors": [
+      { "name": "PubKeyCredential", "constr": 0, "fields": [
+          { "name": "hash", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "ScriptCredential", "constr": 1, "fields": [
+          { "name": "hash", "type": "Bytes", "data": "bytes" }
+        ] }
+    ] },
+    "StakingCredential": { "kind": "ledger", "constructors": [
+      { "name": "StakingHash", "constr": 0, "fields": [
+          { "name": "credential", "type": "Credential", "data": "Credential" }
+        ] },
+      { "name": "StakingPtr", "constr": 1, "fields": [
+          { "name": "slot", "type": "Int", "data": "int" },
+          { "name": "txIndex", "type": "Int", "data": "int" },
+          { "name": "certIndex", "type": "Int", "data": "int" }
+        ] }
+    ] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}
