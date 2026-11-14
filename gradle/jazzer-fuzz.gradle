@@ -2,14 +2,14 @@
 //
 // A module with @FuzzTest targets applies this file and lists its targets:
 //     apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
-//     fuzzTargets 'org.julclang.state.toolchain.fuzz.FiveWayFuzzTest.generatedContractsAgree', ...
+//     fuzzTargets 'org.julclang.state.dsl.v2.IrReaderFuzzTest.readersAgree', ...    (and the kinds below)
 // and declares `testImplementation libs.jazzer.junit` itself.
 //
 // Modes:
 //   test        replays every target's saved inputs (<Class>Inputs/<method>/ in src/test/resources): seeds and the
 //               regressions kept from earlier findings. No fuzzing.
-//   fuzzShort   fuzzes each listed target for a short time (-Pfuzz.short, default 20s), one JVM per target, because
-//               Jazzer fuzzes only the first @FuzzTest a run selects. `check` (so `build`) runs it unless -PnoFuzz.
+//   fuzzShort   fuzzes each short-run target (below) for a short time (-Pfuzz.short, default 20s), one JVM per target,
+//               because Jazzer fuzzes only the first @FuzzTest a run selects. `check` (so `build`) runs it unless -PnoFuzz.
 //   fuzz        fuzzes one target, as JuLC's task does:
 //                 ./gradlew :<module>:fuzz --tests '*FiveWayFuzzTest' [-Pfuzz.duration=20m]
 //   -Pfuzz      the long opt-in run: fuzzShort's targets for -Pfuzz.duration each (default 10m).
@@ -67,25 +67,34 @@ if (!rootProject.hasProperty('noFuzz')) {
     tasks.named('check') { dependsOn fuzzShortTask }
 }
 
-ext.fuzzTargets = { String... targets ->
-    def previous = null
-    targets.each { String target ->
-        int dot = target.lastIndexOf('.')
-        String cls = target.substring(0, dot), method = target.substring(dot + 1)
-        String simple = cls.substring(cls.lastIndexOf('.') + 1)
-        def name = 'fuzz' + simple + method.capitalize()
-        def before = previous   // the closure below runs later, when previous is already this task
-        def task = tasks.register(name, Test) {
-            description = "Fuzzes ${target} with Jazzer"
-            configureFuzzTask(it)
-            filter { includeTestsMatching "${cls}.${method}" }
-            systemProperty 'jazzer.max_duration', fuzzDuration.get() ?: fuzzShortDuration.get()
-            // One JVM at a time: each target gets the machine, and its statistics are its own.
-            if (before != null) mustRunAfter before
-            // The regular tests first (they replay the saved inputs).
-            mustRunAfter tasks.named('test')
-        }
-        previous = task
-        fuzzShortTask.configure { dependsOn task }
+// Targets by kind (reviewing.md §3, SECURITY.md):
+//   fuzzTargets            fuzzed by fuzzShort everywhere (CI included) and by the nightly campaign;
+//   fuzzOnChainDecoders    decoders of data an attacker writes on chain (values, addresses, memos): a finding can be a
+//                          vulnerability, so public CI only replays them (`test`); fuzzShort fuzzes them locally only, and
+//                          -Pfuzz.public (CI) leaves them out (JuLC ADR-063 D13);
+//   fuzzLongOnly           too slow for a short run to be more than replay (the five-way target): `test` replays its
+//                          seeds, the nightly campaign and `fuzz` fuzz it, fuzzShort does not.
+def fuzzPublic = providers.gradleProperty('fuzz.public').isPresent()
+def previousFuzzTask = null
+def registerFuzzTarget = { String target, boolean inShort ->
+    int dot = target.lastIndexOf('.')
+    String cls = target.substring(0, dot), method = target.substring(dot + 1)
+    String simple = cls.substring(cls.lastIndexOf('.') + 1)
+    def name = 'fuzz' + simple + method.capitalize()
+    def before = previousFuzzTask   // the closure below runs later, when previousFuzzTask is already this task
+    def task = tasks.register(name, Test) {
+        description = "Fuzzes ${target} with Jazzer"
+        configureFuzzTask(it)
+        filter { includeTestsMatching "${cls}.${method}" }
+        systemProperty 'jazzer.max_duration', fuzzDuration.get() ?: fuzzShortDuration.get()
+        // One JVM at a time: each target gets the machine, and its statistics are its own.
+        if (before != null) mustRunAfter before
+        // The regular tests first (they replay the saved inputs).
+        mustRunAfter tasks.named('test')
     }
+    previousFuzzTask = task
+    if (inShort) fuzzShortTask.configure { dependsOn task }
 }
+ext.fuzzTargets = { String... targets -> targets.each { registerFuzzTarget(it, true) } }
+ext.fuzzOnChainDecoders = { String... targets -> targets.each { registerFuzzTarget(it, !fuzzPublic) } }
+ext.fuzzLongOnly = { String... targets -> targets.each { registerFuzzTarget(it, false) } }

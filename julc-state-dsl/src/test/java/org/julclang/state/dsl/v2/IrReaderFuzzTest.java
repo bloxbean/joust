@@ -298,6 +298,28 @@ class IrReaderFuzzTest {
 
     // ------------------------------------------------------------------ the target
 
+    /**
+     * #97's classes, exactly: the semantic checks of the JavaScript validator the Java reader does not make (its rule name,
+     * and a pattern over the JavaScript reader's message after its {@code invalid IR (where): } prefix). A message no rule
+     * matches is a new divergence and fails the input.
+     */
+    static final List<String[]> KNOWN_97 = List.of(
+            new String[]{"arity", ".*takes \\d+ argument\\(s\\), not \\d+"},
+            new String[]{"a missing field", "missing field \".*\""},
+            new String[]{"a name declared twice", "(two methods of that name|a name taken by another method, fn or invariant|two declarations named .*|a bad or repeated name|two fns named .*)"},
+            new String[]{"a type check", "(a bad (big)?map type|.* is of type .*, not .*|not a string)"},
+            new String[]{"a name that resolves to nothing", "(no (fn|record|enum|variant|imported contract) .*|.* has no field .*|the (state|params) (has|have) no field .*|unknown (name|op) \".*\"|a reference to the local \\d+ \\(.*\\) outside its scope)"},
+            new String[]{"a method's checked inputs or transaction use", "(checked is \\[.*\\], but .*|usesCtx is (true|false), but .*)"},
+            new String[]{"a declaration's shape", "(the (state|params) record .* named .*|a bad name.*|binds and fields differ in length|only a single-constructor arm binds)"},
+            new String[]{"a number out of the format's range", "(IR JSON: the integer -?\\d+ outside the safe range at offset \\d+|not a non-negative integer|not a decimal integer: .*)"});
+
+    /** The #97 rule a JavaScript refusal's message falls under, or null. */
+    static String known97(String jsMessage) {
+        String m = jsMessage.replaceFirst("^invalid IR \\((?:[^()]|\\([^()]*\\))*\\): ", "");
+        for (String[] r : KNOWN_97) if (m.matches("(?s)" + r[1])) return r[0];
+        return null;
+    }
+
     static String java(String text) {
         try {
             IrJson.read(text);
@@ -307,6 +329,52 @@ class IrReaderFuzzTest {
         } catch (RuntimeException | StackOverflowError e) {
             return "crash " + e;
         }
+    }
+
+    // ------------------------------------------------------------------ positive controls (review r1, Codex C4)
+
+    /** Every IR the compiler exports loads on both readers: a reader that refuses valid exports fails here, not in a tally. */
+    @org.junit.jupiter.api.Test
+    void everyFixtureLoadsOnBothReaders() throws IOException {
+        for (int k = 0; k < SEEDS.size(); k++) {
+            var sb = new StringBuilder();
+            write(sb, SEEDS.get(k));
+            String text = sb.toString();
+            assertEquals("ok", java(text), SEED_NAMES.get(k));
+            assertTrue(js(text).startsWith("{\"ok\":true"), SEED_NAMES.get(k) + ": " + js(text));
+        }
+    }
+
+    /**
+     * A user's names that are also the format's (review r1, Codex C3): a read state's field named {@code fields} puts
+     * {@code "fieldTaints": {"fields": 0}} in the export, which both readers must load.
+     */
+    @org.junit.jupiter.api.Test
+    void userNamesThatAreTheFormatsOwn_load() throws IOException {
+        var files = new LinkedHashMap<String, String>();
+        files.put("app/Source.jsc", """
+                jsc 2
+                package app
+                contract Source {
+                  state { fields: Int, args: Int, values: Int }
+                  init() { return { fields: 0, args: 0, values: 0 } }
+                }
+                """);
+        files.put("app/Reader.jsc", """
+                jsc 2
+                package app
+                import contract { Source } from "./Source.jsc"
+                contract Reader {
+                  params { src: Instance<Source> }
+                  state { n: Int }
+                  init() { return { n: 0 } }
+                  action peek(got: reads params.src) open { return { n: got.fields + got.args + got.values } }
+                }
+                """);
+        String ir = JscV2.lower(files.get("app/Reader.jsc"), "Reader.jsc", "app/Reader.jsc", JscModules.of(files)).irJson();
+        assertTrue(ir.contains("\"fieldTaints\""), "the export holds a read state's field taints");
+        assertEquals("ok", java(ir));
+        assertTrue(js(ir).startsWith("{\"ok\":true"), js(ir));
     }
 
     @FuzzTest(maxDuration = "30s")
@@ -330,14 +398,16 @@ class IrReaderFuzzTest {
         boolean jsCrash = js.contains("\"kind\":\"crash\"");
         count("java " + (j.startsWith("crash") ? "crash" : j.startsWith("refused") ? "refused" : j) + ", js " + (jsOk ? "ok" : jsCrash ? "crash" : "refused"));
         String what = "\n  Java: " + j + "\n  JS: " + js + "\n  input (from " + from + "): " + text;
-        if (j.equals("ok") && !jsOk && !jsCrash) {
-            // A registered divergence (as JuLC's KnownDivergences, counted and reported, never silent): the Java reader,
-            // which only the tests use, accepts exports the JavaScript reader refuses. Each class (the JavaScript reader's
-            // message without positions) is counted, and its first input written to build/fuzz/ (issue: KNOWN_ISSUE).
-            String cls = js.replaceAll(".*\"message\":\"", "").replaceAll("\"}$", "").replaceAll(" at [0-9]+,[0-9]+", "")
-                    .replaceAll("\\b[0-9]+\\b", "N").replaceAll("\\b(method|fn|local|record|enum) [A-Za-z0-9_]+", "$1 X");
-            count("known divergence (" + KNOWN_ISSUE + "): Java accepts, JS refuses: " + cls);
-            Path p = Path.of("build/fuzz/IrReaderFuzzTest.known-" + Integer.toHexString(cls.hashCode()) + ".txt");
+        @SuppressWarnings("unchecked")
+        var answer = (Map<String, Object>) AbiCheck.Json.parse(js);
+        String jsMessage = answer.get("message") instanceof String x ? x : "";
+        String rule = j.equals("ok") && !jsOk && !jsCrash ? known97(jsMessage) : null;
+        if (rule != null) {
+            // A registered divergence (as JuLC's KnownDivergences: an exact rule, counted and reported, never silent): the
+            // Java reader, which only the tests use, lacks one of the JavaScript reader's semantic checks that #97 lists.
+            // Only the rules below pass; any other "Java accepts, JS refuses" fails as a finding (review r1, S3 and C4).
+            count("known divergence (" + KNOWN_ISSUE + "): " + rule);
+            Path p = Path.of("build/fuzz/IrReaderFuzzTest.known-" + Integer.toHexString(rule.hashCode()) + ".txt");
             if (!Files.exists(p)) {
                 Files.createDirectories(p.getParent());
                 Files.writeString(p, what + "\n");

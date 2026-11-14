@@ -47,11 +47,11 @@ ext.pitMutableCodePaths = [project(':julc-state-api')]
 apply from: rootProject.file('gradle/pitest.gradle')
 
 apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
-fuzzTargets 'org.julclang.state.toolchain.FiveWayFuzzTest.generatedContractsAgree',
-        'org.julclang.state.toolchain.ValueAdapterFuzzTest.decoders',
+fuzzLongOnly 'org.julclang.state.toolchain.FiveWayFuzzTest.generatedContractsAgree'
+fuzzOnChainDecoders 'org.julclang.state.toolchain.ValueAdapterFuzzTest.decoders',
         'org.julclang.state.toolchain.AddressAdapterFuzzTest.addressesAndCredentials',
-        'org.julclang.state.toolchain.NodeOptionsFuzzTest.portAgreesWithNode',
         'org.julclang.state.toolchain.MemoFuzzTest.decodersAgree'
+fuzzTargets 'org.julclang.state.toolchain.NodeOptionsFuzzTest.portAgreesWithNode'
 
 // I1 compares with what the Gradle build of the examples wrote.
 tasks.named('test') {

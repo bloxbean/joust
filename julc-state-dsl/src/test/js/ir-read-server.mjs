@@ -15,7 +15,10 @@ for await (const line of rl) {
     load(Buffer.from(line, 'base64').toString('utf8'));
     answer = { ok: true };
   } catch (e) {
-    const clean = e instanceof SyntaxError || (e instanceof Error && e.constructor === Error);
+    // load() reports a TypeError or a RangeError thrown while validating as a plain Error whose cause is it: that is a
+    // validator crash, never a clean refusal (review r1, security S3), so it is a finding of its own.
+    const crashed = e?.cause instanceof TypeError || e?.cause instanceof RangeError;
+    const clean = !crashed && (e instanceof SyntaxError || (e instanceof Error && e.constructor === Error));
     answer = { ok: false, kind: clean ? 'refused' : 'crash', error: e?.constructor?.name ?? typeof e, message: String(e?.message ?? e).slice(0, 300) };
   }
   process.stdout.write(JSON.stringify(answer) + '\n');

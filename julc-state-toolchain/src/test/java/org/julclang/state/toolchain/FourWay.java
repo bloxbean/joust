@@ -513,14 +513,27 @@ final class FourWay {
      */
     String jvmRaw(String method, Rec state, Tx t, List<org.julclang.core.PlutusData> memos) throws Exception {
         rawMemos = memos;
+        lastJvmThrow = null;
         try {
             return jvm(method, state, List.of(), t);
         } catch (RuntimeException e) {
+            lastJvmThrow = e;
             return "threw: " + e;
         } finally {
             rawMemos = null;
         }
     }
+
+    /** The last JVM call's raw result (null when it refused): its next state is {@code nextState(r)}. */
+    Object lastJvmResult;
+
+    /** The next state of a JVM result (the record itself, or an outcome's state). */
+    static Object nextStateOf(Object r) throws Exception {
+        return nextState(r);
+    }
+
+    /** The exception the last {@link #jvmRaw} threw (its class and stack, for a caller that classifies it), or null. */
+    RuntimeException lastJvmThrow;
 
     /** M2c: the k-th depositor's input in a receiver's transaction (the registry names it as a claim's by). */
     static org.julclang.ledger.TxOutRef depositor(int k) {
@@ -743,6 +756,7 @@ final class FourWay {
         Object before = state == null ? null : java(state);
         var ms = new MerkleSupport(store);
         Object r = run(ms, method, before, args, t);
+        lastJvmResult = r;
         if (r == null) return "refused";
         if (kind.equals("view")) return "ok:" + data(r).serializeToHex();
         if (assets) return "ok:" + jvmStep(r, kind, stateClass, events);
@@ -1183,6 +1197,12 @@ final class FourWay {
      * transaction proposing {@code next} (null: the input state, nothing moved) with those claims on its output.
      */
     Object[] receiverRaw(String method, Rec state, Tx t, List<org.julclang.core.PlutusData> memos, Rec next, byte[] signer) throws Exception {
+        return receiverRawJava(method, state, t, memos, next == null ? java(state) : java(next), signer);
+    }
+
+    /** The same, proposing {@code nx}, a next state of the generated Java (the JVM leg's own, {@link #lastJvmResult}). */
+    Object[] receiverRawJava(String method, Rec state, Tx t, List<org.julclang.core.PlutusData> memos, Object nx, byte[] signer)
+            throws Exception {
         Funds honest = javaFunds(t);
         JulcList<DepositClaim> ds = JulcList.empty();
         var claims = new ArrayList<DepositClaim>();
@@ -1197,7 +1217,6 @@ final class FourWay {
         var in = new org.julclang.core.PlutusData.ConstrData(0, List.of(StateHarness.data(funds)));
         String tp = evaluateRaw(program, List.of(julc(data(java(state))), julc(NONE), in, julc(ctxData)));
         Object redeemer = assetRedeemer(method, List.of(), t, null);
-        Object nx = next == null ? java(state) : java(next);
         var h = held(interp.kind(method), java(state), t);
         var tx = harness.stepWith(h, redeemer, null, Transition.full(nx, JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none()), nx,
                 signer, interp.usesTx(method) ? ctx(t) : null, null);

@@ -119,6 +119,22 @@ final class FuzzData {
         return b;
     }
 
+    // ------------------------------------------------------------------ #96
+
+    /**
+     * The builtin when {@code e} is #96's failure, exactly: an IllegalArgumentException thrown by one of the JVM's
+     * {@code Builtins.un*Data} (top frame in org.julclang.stdlib.Builtins, message {@code unXData: expected ..., got ...})
+     * because it was given data of another kind; else null. Anything else is not #96 (review r1, Codex C5).
+     */
+    static String builtinWrongKind(Throwable e) {
+        if (!(e instanceof IllegalArgumentException) || e.getClass() != IllegalArgumentException.class) return null;
+        var st = e.getStackTrace();
+        if (st.length == 0 || !st[0].getClassName().equals("org.julclang.stdlib.Builtins")) return null;
+        var m = java.util.regex.Pattern.compile("(un(?:B|I|Constr|List|Map)Data): expected [A-Za-z]+, got .*", java.util.regex.Pattern.DOTALL)
+                .matcher(String.valueOf(e.getMessage()));
+        return m.matches() && st[0].getMethodName().equals(m.group(1)) ? m.group(1) : null;
+    }
+
     // ------------------------------------------------------------------ tallies
 
     /** A run's counts by outcome, written when the run ends. */
