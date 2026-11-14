@@ -1,8 +1,9 @@
 # ADR-0021: A language server and VS Code extension for `.jsc` 2
 
-**Status:** Proposed (r7). r5 was approved on #66 (design, security, Codex); r6 records the amendments that M5a's
-implementation (#83) made, which its reviews asked for, and was approved with #83; r7 records M5b's (§13), to be reviewed
-with M5b's pull request.
+**Status:** Proposed (r7 (M5b), with r7a). r5 was approved on #66 (design, security, Codex); r6 records the amendments
+that M5a's implementation (#83) made, which its reviews asked for, and was approved with #83. r7a records the project
+reading that the `.jsc` 2 integration (#98) brought forward from M5c; r7 (M5b) records M5b's amendments (§13), a
+separate entry, to be reviewed with #99.
 **Date:** 2026-11-13
 **Builds on:** ADR-0018 (`.jsc` 2), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
 D3 (names), D9 (libraries and `java:` imports, built in M4), D12 (stable codes, source maps, generated Java, ABI
@@ -270,6 +271,25 @@ thread that loaded it (F8). So:
   resolves `.jsc` libraries, contracts and `java:` libraries itself, and the snapshot includes them (D4a). So
   project-matched analysis of an importing file is available as soon as the compiler supports the import; M5c adds
   navigation and rename **across** files, not correctness of single-file analysis.
+- *(r7a)* **The project files an analysis reads** (brought forward from M5c by the `.jsc` 2 integration, #98, for L1):
+  the server analyses a file in a project's contracts directory (the npm `joust.config.json`'s `contracts`, or Gradle's
+  `src/main/jsc`) together with the files its imports reach, by the build's module ids, so the engine resolves them as
+  the build does. It reads them as follows:
+  - **Which:** the specifiers of each file's imports, found by one linear pass by the lexer's rules (comments and strings
+    are never imports), at most 128 a file; relative `.jsc` imports and `import contract` inside the contracts
+    directory, and npm package libraries under `node_modules/<package>/joust-lib/`. `std/` imports are the engine's;
+    `java:` imports are not read.
+  - **How:** each target is resolved inside the workspace folder by D4b's reader before anything else, and an open
+    buffer is used only for that confined path. The build's walk rules apply: in an npm project no `node_modules` or
+    dot-directory segment and no link (as `joust build`'s source walk, ADR-0018 #92 S12); in a Gradle project no
+    directory link (as `generateJsc`'s walk); a package library follows no link (as the toolchain's package walk).
+  - **Bounds:** 64 files, 8 MB in all and 1 MB each, open buffers included.
+  - **Mode:** a file with a `java:` import (the build certifies the library's Java sources, which the server does not
+    read until M5c), or one whose imports reach a bound, is **advisory** with that reason, whatever its selection.
+  - **Freshness (D4a):** an analysis records the files it read; a change to one of them as a buffer, its close, or a
+    change on disk (the extension watches `**/*.jsc`) schedules the open files that read it, and only those.
+  - **Keys (D2a):** the quarantine key of such an analysis is its source with its module id and the files it read, so
+    an edit to an imported file frees an importer quarantined for it.
 
 ### D3b. Launch paths and confinement (new in r2; revised in r3)
 
@@ -345,7 +365,8 @@ thread that loaded it (F8). So:
   (two analysis workers and one build worker) is what L10 bounds (§1: 1,003–1,012 MB). Other editors start one server
   per editor session. *(r6)* M5a
   shares one analysis worker per compiler (engine id) between the projects that use it: an M5a analysis holds no
-  project state; M5c, whose libraries are per project, revisits the key. The bound of two live analysis workers is
+  project state (*(r7a)*: a project file's analysis posts the files it read with it, and the worker keeps none); M5c,
+  whose libraries are per project, revisits the key. The bound of two live analysis workers is
   unchanged, and a worker that is loading or busy is never evicted to admit another (the acquisition waits).
 - **Limits:** a per-file size cap (illustrative: 1 MiB), the watchdog caps (D2a), a cap on files per snapshot, and
   M1e's nesting limit (F13), which turns deep input into a catalogued error on every path. The toolchain's internal
@@ -437,6 +458,9 @@ thread that loaded it (F8). So:
 - From `joust.config.json` the server takes only `contracts` (where the sources are), under these rules; it never reads
   `networks`, URLs or `out`.
 - Library roots are enumerated explicitly by the toolchain's resolution rules (ADR-0018 D9), never from import text.
+  *(r7a)* What the integration's project reading takes from import text is a specifier, never a root: the contracts
+  directory and `node_modules/<package>/joust-lib/` are the roots, each target is confined under them by the rules above
+  (D3a's r7a bullet), and a specifier that would leave them is not read.
   In restricted mode a library root must have its real path inside the workspace folders; in trusted mode a linked
   package outside them (`npm link`) is read under the same file rules.
 - **Gradle projects:** the bundled server does not run Gradle and does not read `~/.gradle` or `~/.m2`, so a `java:`
@@ -457,7 +481,7 @@ errors at once, and a tree to complete in while the user is half way through a l
   separately, gives an erroneous expression an error type that suppresses follow-on errors, and continues; warnings
   from declarations without errors are kept. Recovery runs only in the language core's mode; `JscV2.lower` keeps
   stopping at the first error, and the recovering mode must agree with it (L5) and must not invent errors elsewhere
-  (L13). *(r7)* As built (§13 note 1): the parser resumes at the next declaration, contract member or statement
+  (L13). *(r7, M5b)* As built (§13 note 1): the parser resumes at the next declaration, contract member or statement
   keyword **at the start of its line** at brace depth 0, and a member with an error inside it is dropped rather than
   holding an error node (no `Syntax` type changes, so no pass of the build sees one); its names become **unchecked**:
   a use of one stops the check of the declaration it is in without an error of its own, which is the error type's
@@ -512,7 +536,7 @@ them later), VS Code for the Web (D9).
 
 ### D7a. Accept ABI: one contract, the manifests the user saw, the tool that accepts (new in r2; revised in r3)
 
-*(r7)* Built as stated, with these names (§13 note 7): npm `joust abi diff <Contract> [--out <file>]` and `joust build
+*(r7, M5b)* Built as stated, with these names (§13 note 7): npm `joust abi diff <Contract> [--out <file>]` and `joust build
 --accept-abi=<Contract>@<committed-sha256|none>..<new-sha256>`; Gradle `jscAbiDiff --contract <C> [--out <file>]` and
 `acceptJscAbi --contract <C> --committed-sha256 <h1> --sha256 <h2>`. A bare `--accept-abi` (and `acceptJscAbi` without
 options) still accepts every changed manifest from a terminal; the extension only ever runs the bound form.
@@ -782,7 +806,7 @@ Numbered L… so they are not confused with the validator invariants I1–I55, A
 | L7 | Formatting is idempotent, keeps every comment, and leaves the script hash, ABI manifest and description unchanged (generated Java differs only in position comments) | D8 | formatter corpus tests (M5d) |
 | L8 | `publishDiagnostics` carries the document version, and the server never publishes for a version older than one already published (enforced by the server, since `vscode-languageclient` ignores the version); results computed for an older snapshot generation are dropped, and build diagnostics are withdrawn when a newer generation exists | D4, D4a | protocol tests with interleaved edits, saves and dependency changes |
 | L9 | No input (hostile, huge, deeply nested, binary, a FIFO, a network path) hangs or crashes the server: engine workers do no I/O and run under a time cap, a heap limit and an explicit stack size; models are size-capped; a failure yields one internal-error diagnostic, a new worker, a quarantined input and backoff; repeated failures (cancellations excluded) lead to "analysis unavailable", while the protocol thread keeps answering | D2a, D4, D4b | watchdog protocol tests; hostile-workspace tests |
-| L10 | On the reference corpus: analysis p95 latency, **including the model's export** across the engine boundary, at most 50 ms for the 1,889-line file; server process RSS at most 600 MB with one analysis worker, at most 1.1 GB with one analysis worker and a build worker, and **at most 1.2 GB in D4's largest configuration** (two analysis workers and a build worker, after builds; §1: 1,003–1,012 MB). D2a's heap limits are set so these hold. CI enforces looser regression bounds on its own hardware. *(r6)* The strict bounds hold on §1's reference machine (Apple M4 Max, Node 22): M5a measured p95 26–35 ms, RSS 420–436 MB and 762–786 MB there. *(r7)* M5b, with recovery and model v2: p95 45.9 ms, RSS 450 MB and 819 MB (§13 note 10). CI's `ubuntu-24.04` runner measured p95 86.7 ms, RSS 358 MB and 826 MB (run 43350031856); CI fails past 250 ms p95 and the RSS bounds plus 50% (§12 note 17) | D2a, D4 | M5a measurement job (the export is measured at M5a's exit) |
+| L10 | On the reference corpus: analysis p95 latency, **including the model's export** across the engine boundary, at most 50 ms for the 1,889-line file; server process RSS at most 600 MB with one analysis worker, at most 1.1 GB with one analysis worker and a build worker, and **at most 1.2 GB in D4's largest configuration** (two analysis workers and a build worker, after builds; §1: 1,003–1,012 MB). D2a's heap limits are set so these hold. CI enforces looser regression bounds on its own hardware. *(r6)* The strict bounds hold on §1's reference machine (Apple M4 Max, Node 22): M5a measured p95 26–35 ms, RSS 420–436 MB and 762–786 MB there. *(r7, M5b)* M5b, with recovery and model v2: p95 45.9 ms, RSS 450 MB and 819 MB (§13 note 10). CI's `ubuntu-24.04` runner measured p95 86.7 ms, RSS 358 MB and 826 MB (run 43350031856); CI fails past 250 ms p95 and the RSS bounds plus 50% (§12 note 17) | D2a, D4 | M5a measurement job (the export is measured at M5a's exit) |
 | L11 | Positions are UTF-16 code units, correct with non-BMP characters before the position on the same line | D6 | protocol tests |
 | L12 | **Hash-preserving edits keep the script hash.** Formatting, renames, import-adding edits and any edit the server labels hash-preserving leave the script hash (and, except for ABI-recorded renames, the ABI manifest and description) unchanged on every file that builds before and after. Edits the user chooses to change the program (inserting a completion item, accepting a quick fix that turns an invalid file into a valid one) are code changes and may change it. The server never labels a code change hash-preserving | D7, D8 | hash fixtures in both classes over the corpus (D12) |
 | L13 | Recovery adds no cascades: for a single-token mutation inside one declaration, every error the recovering mode reports outside that declaration is one the strict checker reports for the same text (a genuine non-local error, e.g. a duplicate name, at its code and position), or lies in a declaration that references the mutated one or depends on a name or signature the mutation changed | D5 | mutation corpus and the namespace fixture (M5b) |
@@ -838,7 +862,7 @@ it. The Web Image gains entries and reachability metadata for the model's record
 | # | Scope | Entry gate | Exit criteria |
 |---|---|---|---|
 | M5a | The server with diagnostics as you type (the first fatal error, or the warnings; codes and links), document symbols, selection ranges and folding (D6's M5a spans); engine hosting (D2a) with **Restart analysis** and **Restart server**; modes (D3a); engine selection and confinement (D3, D3b); snapshots and versioned diagnostics (D4a); input policy (D4b); `joust.lang.analyze`; the VS Code extension (M1d's TextMate grammar, language configuration, snippets, status bar, trust model, **JOUST: Build** task and the `$joust` problem matcher); `joust build` prints the catalogue's diagnostic shape (D9); *(r6)* D4a/D7's verified edit path with the quick fixes for JSC0128 and JSC0133, checked by M5a's weaker L6 (the fix's diagnostic gone and no error at or before its position; recovery gives M5b the full check); the `.vsix` built and smoke-tested in CI | ADR-0018 accepted, M1 exited (M1d's grammars and catalogue in place; Q1(b)) and **M1e exited as a whole** (§3a items 2–4); this ADR accepted | L1 (first error), L2, L3, L4, L8, L9, L10, L11 tested; the model's export measured and within L10; M1e's limit passes with margin on the smallest stack of each host (CLI main thread, engine worker at `stackSizeMb` 4, the extension host's runtime); both restart commands restore analysis after their unavailable states; the `.vsix` has no `.node` file and is under 16 MB; smoke tests green on the minimum and current VS Code; hostile-workspace and confinement tests green |
-| M5b | Recovery (lexer, parser, checker) and the remaining spans and reference mapping; hover, definition and references within a file, semantic tokens, completion, rename within a file, quick fixes and **Remove invisible characters…**, generated-Java view, ABI diff and **Accept ABI…** (D7a, with ADR-0018's D12 acceptance change), build diagnostics on save (worker) | M5a exit (Q1(b): may run alongside ADR-0018 M2/M3, with L5's corpus test in their front-end PRs) | L1 (recovered), L5, L6, L12, L13 tested; the recovery mutation corpus and the save tests green; latency still within L10. *(r7)* How each is tested: §13 note 9 |
+| M5b | Recovery (lexer, parser, checker) and the remaining spans and reference mapping; hover, definition and references within a file, semantic tokens, completion, rename within a file, quick fixes and **Remove invisible characters…**, generated-Java view, ABI diff and **Accept ABI…** (D7a, with ADR-0018's D12 acceptance change), build diagnostics on save (worker) | M5a exit (Q1(b): may run alongside ADR-0018 M2/M3, with L5's corpus test in their front-end PRs) | L1 (recovered), L5, L6, L12, L13 tested; the recovery mutation corpus and the save tests green; latency still within L10. *(r7, M5b)* How each is tested: §13 note 9 |
 | M5c | Across files: `.jsc` libraries, `import contract`, `java:` imports (read-only library documents), project-wide references and rename, library signature cache | M5b exit; ADR-0018 M4 exited; javac attribution cost in the engine measured | definition and references across a `.jsc` library and into a Java library in the template's tests; L6 and L12 across files |
 | M5d | Formatter: trivia-preserving lexing, `joust fmt`, `textDocument/formatting` | M5b exit (M1e's message scheme is in place since M5a) | L7 and L12 over the corpus and generated layouts |
 | M5e | Other editors: Neovim and Helix configurations (a user-installed `joust-lsp`), the tree-sitter grammar packaged with its queries, docs; the `.vsix` attached to a release for maintainers to publish (D11) | M5a exit (configurations), M5c exit (docs complete); the namespaces claimed and Q4 decided (D11) | the release checklist run by hand on each editor; the docs test refusing `npx joust` green |
@@ -1223,7 +1247,12 @@ checked as the build checks it.
   C21–C24): note 18 corrected and extended. After round r5 (security S13, S14; Codex C25–C28): note 18 extended. After round r6 (design F11, F12;
   security S15; Codex C29–C32): note 18 extended, note 19. After round r7 (security S16; Codex C33, C34): note 18
   extended; note 19's stray last sentence removed.
-- **r7** (2026-11-14; with the M5b implementation on `feat/jsc-2-int2`): amendments marked *(r7)* in D5 (recovery as
+- **r7a** (2026-11-14; the `.jsc` 2 integration, #98, round r2: security S1–S3, Codex C3, C4, C8, design F3, F4; a
+  separate entry from M5b's r7 on #99): D3a's *(r7a)* bullet (the project files an analysis reads: which, how, bounds,
+  mode, freshness, keys), D4b's note on import text and roots, and D2a's note on worker state. This brings forward the
+  part of M5c that L1 needs for files with `.jsc` and contract imports; navigation and rename across files, and `java:`
+  imports, stay M5c's.
+- **r7 (M5b)** (2026-11-14; with the M5b implementation, #99, on `feat/jsc-2-int2`): amendments marked *(r7, M5b)* in D5 (recovery as
   built: line-start resumption, dropped members and unchecked names instead of error nodes), D7a (the commands' names;
   the bare `--accept-abi` kept for terminals) and the M5b row; §13 holds M5b's implementation notes. ADR-0018 D12's
   acceptance change (§3a item 5) is implemented by M5b and recorded in ADR-0018 D12. Status stays Proposed.

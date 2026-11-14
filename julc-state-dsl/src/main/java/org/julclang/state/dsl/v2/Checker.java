@@ -215,6 +215,12 @@ final class Checker {
 
     /** {@code fqcn} takes the simple name {@code simple} in the generated imports: a different class of that name is a clash. */
     private void claimImport(String simple, String fqcn, Pos at, String what) {
+        // #98 review C2: an imported contract's class is imported by its simple name too (C.State, C.T).
+        Ir.Foreign fc = contracts.get(simple);
+        if (fc != null && !(fc.pkg() + "." + fc.name()).equals(fqcn)) {
+            throw at.error("JSC0744", what + " is imported as " + simple + ", the name of the imported contract " + fc.pkg() + "." + fc.name()
+                    + ": the generated Java names both by that simple name, an ambiguous import; rename one");
+        }
         if (importedSimple.isEmpty()) for (Module m : libraries) importedSimple.put(m.cls, m.qualified());
         if (simple.equals(main.cls) || file.contract() != null && file.contract().name().equals(simple)) {
             throw at.error("JSC0709", what + " is imported as " + simple + ", the name of this file's own class; rename one");
@@ -669,9 +675,10 @@ final class Checker {
             }
             String borrowed = borrowedType(op);
             if (borrowed != null) {
-                throw im.pos().error("JSC0746", "the contract " + name + " stores or receives the type " + borrowed + " of a library it imports:"
-                        + " reading another contract's state, or depositing a memo, of a library's type is not supported yet (ADR-0018 D9;"
-                        + " the .jsc 2 integration of M2c with M4); declare the type in " + src.fileName() + " itself");
+                throw im.pos().error("JSC0746", "the contract " + name + " uses the type " + borrowed + " of a library it imports in its state,"
+                        + " its declared types, its events or its memos: importing such a contract is not supported yet, since this file"
+                        + " names another contract's types as " + name + ".T (ADR-0018 D9; the .jsc 2 integration of M2c with M4); declare"
+                        + " the type in " + src.fileName() + " itself, or use the library's type only in its methods' parameters and results");
             }
             contracts.put(name, foreign(op));
         }

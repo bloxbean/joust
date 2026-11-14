@@ -1092,7 +1092,8 @@ final class FourWay {
                 default -> tr = Transition.full(null, Payouts.of(signer, t.balance()), JulcList.empty(), Assets.none(), Assets.none());
             }
         }
-        var v = evaluate(method, assetTx(method, redeemer, state, t, signer, tr));
+        // #98 review C7: signed as the interpreters' transaction is (the signer or M2b's signers, and the caller).
+        var v = evaluate(method, t, signer, assetTx(method, redeemer, state, t, signer, tr));
         validatorRuns++;
         lastVerdict = v;
         return v.accepted();
@@ -1359,12 +1360,12 @@ final class FourWay {
                         .withEvents(events(o)).withDeposits(q)));
             }
         }
-        var ok = evaluate(method, accepted);
+        var ok = evaluate(method, t, signer, accepted);   // #98 review C7: the merged signers
         assertTrue(ok.accepted(), name + "." + method + ": the unmutated transaction must be accepted\n" + ok);
         attacksRejected += org.julclang.state.testkit.Attacks.assertAllRejected(harness, accepted);
         int n = 0;
         for (var tx : txs) {
-            var v = evaluate(method, tx);
+            var v = evaluate(method, t, signer, tx);
             assertFalse(v.accepted(), name + "." + method + ": mutant #" + n + " accepted\n" + v);
             n++;
         }

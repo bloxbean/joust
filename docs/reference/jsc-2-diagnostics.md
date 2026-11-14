@@ -330,7 +330,7 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 | JSC0743 | error | the contract imports form a cycle ( … ): a contract may read or deposit into another only one way | Checker (M2c) |
 | JSC0744 | error | the contract … is imported twice / the imported contract … has this contract's name … / the … has the name of an imported contract; rename it … / the imported contract … has the name of a library's class in this build | Checker (M2c) |
 | JSC0745 | error | the contract … does not check: … | Checker (M2c) |
-| JSC0746 | error | the contract … stores or receives the type … of a library it imports: reading another contract's state, or depositing a memo, of a library's type is not supported yet … | Checker (M2/M4 integration) |
+| JSC0746 | error | the contract … uses the type … of a library it imports in its state, its declared types, its events or its memos: importing such a contract is not supported yet … (a library type only in its methods' parameters and results is fine; tracked in the issue linked from ADR-0018 r22) | Checker (M2/M4 integration) |
 
 ## Map and BigMap (ADR-0018 D5, D7, J14)
 

@@ -175,7 +175,7 @@ export class EngineHost {
     if (!this.opts.workerEntry) throw new Error('EngineHost needs workerEntry');
     this.slots = new Map();      // key -> { key, engine, worker, lastUsed, busy, queue }
     this.health = new Map();     // key|scope -> { failures: [], backoffUntil, backoffMs, unavailable }
-    this.quarantine = new Map(); // sha256(source) + engine id -> the failure
+    this.quarantine = new Map(); // the input's digest (its source, and a project file's id and files: #98 C4) + engine id -> the failure
     this.waiters = [];
     this.starting = 0;           // acquisitions holding a reserved place while they await their lease (C21)
     this.stats = { started: 0, terminated: 0, calls: 0, cancelled: 0, failures: 0, displaced: 0 };
@@ -305,10 +305,11 @@ export class EngineHost {
    * `{ retryAt }` (in backoff) or `{ missing: true }` (the engine's file is gone).
    */
   analyze(key, engine, { file, source, scope = '', moduleId, files }, token) {
-    // A project's files (the integration with ADR-0018 M2c and M4) are part of the input: quarantined with it.
+    // #98 review C4: a project file's analysis depends on its module id and the project files it reads, so its
+    // quarantine key is all of them: an edit to an imported library frees an importer quarantined for it.
     // The module id travels as `moduleId`: `id` is the call's own (EngineWorker.call), its correlation id.
     const msg = files ? { op: 'analyze', file, source, moduleId, files } : { op: 'analyze', file, source };
-    const input = files ? JSON.stringify([source, moduleId, Object.entries(files).sort()]) : source;
+    const input = files ? JSON.stringify([source, moduleId ?? null, Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))]) : source;
     return this.request(key, engine, msg, { scope, input, what: 'analysis' }, token);
   }
 
