@@ -492,16 +492,25 @@ export function completionModel(current, good, goodText, text) {
   let next = current.declarations.reduce((m, d) => Math.max(m, d.id), -1) + 1;
   const ids = new Map();
   const added = [];
+  // A declaration both models hold (the same word at the same place) keeps the current one, with what the checker
+  // knew of it before (its type, signature, context, scope) where the current model, which stopped in it, has none.
+  const known = new Map();
   for (const d of old.declarations) {
     const same = have.get(key(d));
     if (same !== undefined) {
       ids.set(d.id, same);
+      known.set(same, d);
       continue;
     }
     ids.set(d.id, next++);
     added.push(d);
   }
-  const merged = [...current.declarations,
+  const fill = (d) => {
+    const o = known.get(d.id);
+    if (!o) return d;
+    return { ...d, type: d.type ?? o.type, detail: d.detail ?? o.detail, context: d.context ?? o.context, scope: d.scope ?? o.scope };
+  };
+  const merged = [...current.declarations.map(fill),
     ...added.map((d) => ({ ...d, id: ids.get(d.id), parent: d.parent >= 0 ? ids.get(d.parent) ?? -1 : d.parent }))];
   return { ...current, declarations: merged, reconciled: true, _byId: undefined };
 }
