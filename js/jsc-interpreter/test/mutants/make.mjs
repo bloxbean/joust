@@ -47,3 +47,42 @@ const at = [1, 1];
   c.pays = false;
   out('destroy-without-pay', p);
 }
+
+// #98 review F1: every effect statement, not only a pay, is refused under an expression or in a fn, by both readers.
+const lit = (value, type) => ({ node: 'Lit', value, type, taint: 0, at });
+const sendStmt = () => ({ stmt: 'Send', to: { node: 'LedgerOp', op: 'wallet', args: [lit('0a'.repeat(28), 'Key')], type: 'Address', taint: 0, at },
+  value: { node: 'LedgerOp', op: 'none', args: [], type: 'Value', taint: 0, at }, at });
+// Coins' give with its send moved into a value block (the body's result), its audience dropped.
+{
+  const p = fixture('Coins');
+  const g = p.methods.find((m) => m.name === 'give');
+  const send = g.body.stmts.find((s) => s.stmt === 'Send');
+  g.body.stmts = g.body.stmts.filter((s) => s !== send);
+  g.body.result = { node: 'BlockValue', block: { stmts: [send], result: g.body.result, at }, type: g.body.result.type, taint: 0, at };
+  g.mods = [];
+  out('send-in-value-block', p);
+}
+// A fn that sends (Coins' total).
+{
+  const p = fixture('Coins');
+  p.fns.find((x) => x.name === 'total').body.stmts.unshift(sendStmt());
+  out('send-in-fn', p);
+}
+// A fn that mints (Coins' tokens).
+{
+  const p = fixture('Coins');
+  p.fns.find((x) => x.name === 'tokens').body.stmts.unshift({ stmt: 'Mint', burn: false, name: lit('01', 'Bytes'), qty: lit('1', 'Int'), at });
+  out('mint-in-fn', p);
+}
+// Stall's sell with its deposit moved into a lambda (a Hof over [1]), so no statement block holds it.
+{
+  const p = fixture('Stall');
+  const sell = p.methods.find((m) => m.name === 'sell');
+  const dep = sell.body.stmts.find((s) => s.stmt === 'Deposit');
+  sell.body.stmts = sell.body.stmts.filter((s) => s !== dep);
+  const x = { id: 90001, name: 'zx', type: 'Int', taint: 0, at };
+  const any = { node: 'Hof', kind: 'any', list: { node: 'ListLit', items: [lit('1', 'Int')], rest: null, type: { list: 'Int' }, taint: 0, at },
+    x, body: { stmts: [dep], result: lit(true, 'Bool'), at }, type: 'Bool', taint: 0, at };
+  sell.body.stmts.push({ stmt: 'Let', local: { id: 90002, name: 'zz', type: 'Bool', taint: 0, at }, value: any, at });
+  out('deposit-in-lambda', p);
+}
