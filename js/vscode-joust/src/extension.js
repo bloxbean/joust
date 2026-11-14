@@ -74,7 +74,8 @@ function makeClient() {
   let restarts = [];
   // The selection's inputs, the project's two engine files included (review C6 on #83: replaced engine bytes with an
   // unchanged package.json must reach the server; Restart analysis also selects again).
-  const watchers = ['**/joust.config.json', '**/package.json', '**/node_modules/@julclang/joust/package.json',
+  // And every .jsc file (the .jsc 2 integration, #98 F3d): an importer's diagnostics follow its imports on disk.
+  const watchers = ['**/*.jsc', '**/joust.config.json', '**/package.json', '**/node_modules/@julclang/joust/package.json',
     '**/node_modules/@julclang/joust/engine/joust-toolchain.js', '**/node_modules/@julclang/joust/engine/joust-toolchain.js.wasm']
     .map((g) => vscode.workspace.createFileSystemWatcher(g));
   watchers.forEach((w) => context.subscriptions.push(w));
