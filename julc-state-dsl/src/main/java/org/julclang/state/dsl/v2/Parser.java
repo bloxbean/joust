@@ -76,7 +76,16 @@ final class Parser {
     }
 
     static File parse(String src) {
+        return parse(src, Set.of());
+    }
+
+    /**
+     * Parses {@code src}; {@code importedTypes} are the type, enum and variant names its {@code .jsc} imports bring
+     * (ADR-0018 D9, M4): like the file's own, only these start a constructor {@code Name { … }}.
+     */
+    static File parse(String src, Set<String> importedTypes) {
         var p = new Parser(Lexer.lex(src));
+        p.typeNames.addAll(importedTypes);
         File f;
         try {
             f = p.file();
@@ -85,6 +94,64 @@ final class Parser {
         }
         Depth.check(f);
         return f;
+    }
+
+    /** A file's header: its package, whether it is a library, and its contract's name (null for a library). */
+    record Header(String pkg, boolean library, String contract) {}
+
+    /**
+     * The header of a file, from its tokens: what {@code a/b/Name.java} a lowering writes, without checking the body
+     * (whose constructors of imported types need the imports loaded). Refused as the parse refuses it when the head is
+     * malformed.
+     */
+    static Header header(String src) {
+        var toks = Lexer.lex(src);
+        var p = new Parser(toks);
+        if (!p.at("jsc")) throw p.peek().pos().error("JSC0112", "a .jsc 2 file starts with 'jsc 2'");
+        p.next();
+        p.next();
+        p.semis();
+        boolean library = p.at("library");
+        if (library) p.next();
+        else p.expect("package");
+        var pkg = new StringBuilder(p.packageSegment("a package name"));
+        while (p.eat(".")) pkg.append('.').append(p.packageSegment("a package segment"));
+        String contract = null;
+        int depth = 0;
+        for (int k = p.i; k < toks.size(); k++) {
+            Tok t = toks.get(k);
+            if (t.is("{") || t.is("(") || t.is("[")) depth++;
+            else if (t.is("}") || t.is(")") || t.is("]")) depth--;
+            else if (depth == 0 && t.is("contract") && k + 1 < toks.size() && toks.get(k + 1).kind() == K.IDENT) {
+                contract = toks.get(k + 1).text();
+                break;
+            }
+        }
+        if (contract == null && !library) throw toks.get(toks.size() - 1).pos().error("JSC0119", "the file declares no contract (a library starts 'library <package>')");
+        return new Header(pkg.toString(), library, contract);
+    }
+
+    /**
+     * The file's imports, read before it is parsed (ADR-0018 D9, M4): the {@code .jsc} libraries they name are loaded first,
+     * so their type names start constructors here. Only top-level {@code import} declarations count; a malformed one is
+     * reported as the parse would report it.
+     */
+    static List<Import> imports(String src) {
+        var toks = Lexer.lex(src);
+        var out = new ArrayList<Import>();
+        int depth = 0;
+        for (int k = 0; k < toks.size(); k++) {
+            Tok t = toks.get(k);
+            if (t.is("{") || t.is("(") || t.is("[")) depth++;
+            else if (t.is("}") || t.is(")") || t.is("]")) depth--;
+            else if (depth == 0 && t.is("import") && t.kind() != K.STRING) {
+                var p = new Parser(toks);
+                p.i = k;
+                out.add(p.importDecl());
+                k = p.i - 1;
+            }
+        }
+        return out;
     }
 
     /**
@@ -252,7 +319,10 @@ final class Parser {
         Tok v = next();
         if (v.kind() != K.INT || !v.text().equals("2")) throw v.pos().error("JSC0113", "this compiler reads 'jsc 2' files");
         semis();
-        expect("package");
+        // A library (ADR-0018 D9, M4): 'library <package>' instead of 'package', then types, enums and fns only.
+        boolean library = at("library");
+        if (library) next();
+        else expect("package");
         var pkg = new StringBuilder(packageSegment("a package name"));
         while (eat(".")) pkg.append('.').append(packageSegment("a package segment"));
         semis();
@@ -269,6 +339,8 @@ final class Parser {
             else if (t.is("enum")) enums.add(enumDecl());
             else if (t.is("fn")) fns.add(fn());
             else if (t.is("contract")) {
+                if (library) throw t.pos().error("JSC0711", "a library holds imports, types, enums and fns, not a contract: write the contract in"
+                        + " its own file and import the library there");
                 if (contract != null) throw t.pos().error("JSC0114", "one contract per file");
                 contract = contract();
             } else if (t.is("function")) throw t.pos().error("JSC0115", "functions are written 'fn name(x: Int): Int = …' in .jsc");
@@ -278,8 +350,8 @@ final class Parser {
             if (!t.is("contract")) endMember(member);
             semis();
         }
-        if (contract == null) throw peek().pos().error("JSC0119", "the file declares no contract");
-        return new File(pkg.toString(), imports, types, enums, fns, contract, List.copyOf(leadingMinus), members());
+        if (contract == null && !library) throw peek().pos().error("JSC0119", "the file declares no contract (a library starts 'library <package>')");
+        return new File(pkg.toString(), library, imports, types, enums, fns, contract, List.copyOf(leadingMinus), members());
     }
 
     private Import importDecl() {

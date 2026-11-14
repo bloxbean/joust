@@ -15,7 +15,7 @@ const BIN = fileURLToPath(new URL('../bin/create-joust.js', import.meta.url));
 const tmp = () => mkdtempSync(join(tmpdir(), 'create-joust-'));
 const json = (dir, f) => JSON.parse(readFileSync(join(dir, f), 'utf8'));
 
-const COMMON = ['.gitignore', 'README.md', 'joust.config.json', 'package.json', 'test/counter.test.js'];
+const COMMON = ['.gitignore', 'README.md', 'joust.config.json', 'package.json', 'test/counter.test.js', 'test/devkit/counter.test.js'];
 const FILES = {
   node: [...COMMON, 'index.js'],
   web: [...COMMON, 'page/engine.worker.js', 'page/index.html', 'page/main.js', 'vite.config.js'],

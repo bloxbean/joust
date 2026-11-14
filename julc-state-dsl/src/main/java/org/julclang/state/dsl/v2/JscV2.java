@@ -29,7 +29,7 @@ public final class JscV2 {
      * and the sites of the generated checks (D12, M1e: each on-chain message key with its {@code .jsc} position).
      */
     public record Lowered(String java, List<Warning> diagnostics, Set<String> recursiveFns, String fileName, String javaPath,
-                          String sourceMapJson, String abiJson, String irJson, List<Site> messages) {
+                          String sourceMapJson, String abiJson, String irJson, List<Site> messages, List<LibraryUse> libraries) {
         /** For each generated Java line (1-based) with a source: {@code [javaLine, jscLine, jscCol]}. */
         public List<int[]> sourceMap() {
             return Abi.sourceMap(java, fileName);
@@ -48,7 +48,7 @@ public final class JscV2 {
             String best = matching(trace, messages.stream().map(Site::message).toList());
             if (best == null) return out;
             for (Site s : messages) {
-                if (s.message().equals(best)) out.add(fileName + ":" + s.line() + ":" + s.col() + " (" + s.describe() + ")");
+                if (s.message().equals(best)) out.add((s.file() == null ? fileName : s.file()) + ":" + s.line() + ":" + s.col() + " (" + s.describe() + ")");
             }
             return out;
         }
@@ -60,11 +60,35 @@ public final class JscV2 {
     }
 
     /**
+     * A library a lowering used (ADR-0018 D9, J12), for {@code joust.lock} and the build report: {@code kind} {@code jsc}
+     * or {@code java}; {@code name} the module id of a {@code .jsc} library ({@code app/fees.jsc}, or
+     * {@code pkg:@acme/fees/fees.jsc} from an npm package) or {@code java:<class>}; the SHA-256 of its on-chain sources
+     * (a {@code .jsc} library's text; a Java library's certified sources, {@code JavaLibraryCertifier.hash}).
+     */
+    public record LibraryUse(String kind, String name, String sha256) {
+        /**
+         * The kind of a Java library a hand-written Java contract imports (review r2, #82 C7): pinned as a {@code java:}
+         * import is, under the same name, though nothing certifies it for {@code .jsc}.
+         */
+        public static final String JAVA_SOURCE = "java-source";
+
+        /** Whether it comes from outside the project's sources (an npm package, a Java library): what joust.lock pins. */
+        public boolean external() {
+            return kind.equals("java") || kind.equals(JAVA_SOURCE) || name.startsWith(JscModules.PACKAGE);
+        }
+    }
+
+    /**
      * A message the script can trace and the {@code .jsc} construct that raises it (D12): {@code kind} is {@code input}
      * (a checked parameter), {@code pay} (a payout's sign), {@code require} (the author's) or {@code operation} (a std or
      * collection operation's domain); {@code in} the method or fn; {@code what} the parameter of an input check.
      */
-    public record Site(String message, String kind, int line, int col, String in, String what) {
+    public record Site(String message, String kind, int line, int col, String in, String what, String file) {
+        /** A site in the lowered file itself ({@code file} null; an imported library's site names its file: D9, M4). */
+        public Site(String message, String kind, int line, int col, String in, String what) {
+            this(message, kind, line, col, in, what, null);
+        }
+
         String describe() {
             return switch (kind) {
                 case "input" -> "the parameter " + what + " of " + in + " is not a well-formed input";
@@ -133,25 +157,50 @@ public final class JscV2 {
         return JavaEmitter.str(text);
     }
 
-    /** Checks and lowers a {@code .jsc} 2 source to a Java {@code @StateContract}, on its own (it imports no other contract). */
+    /**
+     * Checks and lowers a {@code .jsc} 2 source to a Java {@code @StateContract}, on its own: it imports no libraries and
+     * no other contract.
+     */
     public static Lowered lower(String source, String fileName) {
-        return lower(source, fileName, null, JscModules.NONE);
+        checkFileName(fileName);
+        return lowered(Checker.check(Parser.parse(source), fileName), source, fileName);
     }
 
     /**
      * Checks and lowers {@code source}, the module {@code id} of a build whose other {@code .jsc} files {@code modules}
-     * finds (M2c, ADR-0018 D9): its {@code import contract { C } from "./C.jsc"} imports resolve there, each checked on its own.
+     * finds (ADR-0018 D9): its {@code .jsc} library imports (M4) and its {@code import contract { C } from "./C.jsc"}
+     * imports (M2c, each contract checked on its own) resolve there. A contract lowers to its {@code @StateContract}, a
+     * library ({@code library <package>}) to its {@code @OnchainLibrary} class, which Java contracts can call too. A
+     * library has no ABI manifest and no IR export of its own: each contract that imports it carries its declarations (the
+     * IR's {@code libraries}).
      */
     public static Lowered lower(String source, String fileName, String id, JscModules modules) {
+        return lower(source, fileName, id, modules, JavaLibraries.NONE);
+    }
+
+    /** As above, with the certified Java libraries its {@code java:} imports may name (D9, M4b). */
+    public static Lowered lower(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries) {
         checkFileName(fileName);
-        Ir.Program p = Checker.check(Parser.parse(source), fileName, id, modules);
+        return lowered(Checker.check(source, fileName, id, modules, javaLibraries), source, fileName);
+    }
+
+    /** Whether a {@code .jsc} 2 source is a library ({@code library <package>}): read from its header only. */
+    public static boolean isLibrary(String source) {
+        return Parser.header(source).library();
+    }
+
+    private static Lowered lowered(Ir.Program p, String source, String fileName) {
         var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList();
         JavaEmitter.Emitted e = JavaEmitter.emit(p);
         String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";
         var sites = new java.util.ArrayList<Site>();
-        for (JavaEmitter.Check c : e.checks()) sites.add(new Site(c.message(), c.kind(), c.pos().line(), c.pos().col(), c.in(), c.what()));
+        for (JavaEmitter.Check c : e.checks()) sites.add(new Site(c.message(), c.kind(), c.pos().line(), c.pos().col(), c.in(), c.what(), c.file()));
+        var uses = new java.util.ArrayList<LibraryUse>();
+        for (Ir.Library l : p.libraries()) uses.add(new LibraryUse("jsc", l.id() != null ? l.id() : l.qualified(), l.sourceSha256()));
+        for (Ir.JavaLib j : p.javaLibraries()) uses.add(new LibraryUse("java", "java:" + j.fqcn(), j.sourceSha256()));
         return new Lowered(e.java(), warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(e.java(), fileName, javaPath, e.checks()),
-                Abi.of(p), IrJson.write(p, IrJson.sourceHash(source)), List.copyOf(sites));
+                p.library() ? null : Abi.of(p), p.library() ? null : IrJson.write(p, IrJson.sourceHash(source)), List.copyOf(sites),
+                List.copyOf(uses));
     }
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */
@@ -159,10 +208,19 @@ public final class JscV2 {
         return interpreter(source, fileName, null, JscModules.NONE, hashes);
     }
 
-    /** The reference interpreter of the module {@code id} of a build, with the contracts it imports (M2c). */
+    /**
+     * The reference interpreter of the module {@code id} of a build, with the {@code .jsc} libraries (M4) and the contracts
+     * (M2c) it imports.
+     */
     public static Interpreter interpreter(String source, String fileName, String id, JscModules modules, Interpreter.Hashes hashes) {
+        return interpreter(source, fileName, id, modules, JavaLibraries.NONE, hashes);
+    }
+
+    /** As above, with Java libraries: a call of one has no answer in the interpreter (M4b). */
+    public static Interpreter interpreter(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries,
+                                          Interpreter.Hashes hashes) {
         checkFileName(fileName);
-        return new Interpreter(Checker.check(Parser.parse(source), fileName, id, modules), hashes);
+        return new Interpreter(Checker.check(source, fileName, id, modules, javaLibraries), hashes);
     }
 
     /**
@@ -180,6 +238,17 @@ public final class JscV2 {
                 b.javaSignature())).toList();
     }
 
+    /**
+     * The fixed messages the target of the binding row with Java signature {@code javaSignature} can trace (its adapter's
+     * domain checks; D12), or none.
+     */
+    public static List<String> bindingMessages(String javaSignature) {
+        for (Std.Binding b : Std.ROWS.values()) {
+            if (javaSignature.equals(b.javaSignature())) return Std.MESSAGES.getOrDefault(b.name(), List.of());
+        }
+        return List.of();
+    }
+
     /** The exact Java signature behind every {@code std} binding row (ADR-0018 D8). */
     public static List<String> bindingSignatures() {
         return Std.ROWS.values().stream().map(Std.Binding::javaSignature).filter(java.util.Objects::nonNull).toList();
@@ -187,7 +256,16 @@ public final class JscV2 {
 
     /** {@code a/b/Name.java} for the contract a source declares. */
     public static String outputPath(String source) {
-        var f = Parser.parse(source);
-        return f.pkg().replace('.', '/') + "/" + f.contract().name() + ".java";
+        return outputPath(source, null);
+    }
+
+    /**
+     * {@code a/b/Name.java} for the contract a source declares, or for the library it is: a library's class is its
+     * capitalised file name ({@code fees.jsc}: {@code Fees}).
+     */
+    public static String outputPath(String source, String fileName) {
+        var h = Parser.header(source);
+        String name = h.library() ? Checker.libraryClass(fileName == null ? "" : fileName, null, new Syntax.Pos(1, 1)) : h.contract();
+        return h.pkg().replace('.', '/') + "/" + name + ".java";
     }
 }

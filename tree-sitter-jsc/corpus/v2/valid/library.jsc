@@ -1,0 +1,13 @@
+jsc 2
+library app.lib
+
+// A .jsc library (ADR-0018 D9, M4): imports, types, enums and fns; no contract.
+import { sha2_256 } from "std/crypto"
+import { Base } from "./base.jsc"
+
+type Line = { to: Key, bps: Int }
+enum Tier { Basic, Gold { since: Int } }
+
+fn fee(amount: Int, bps: Int): Int = amount * bps / 10_000
+fn rate(t: Tier): Int = match t { Basic => 100, Gold { since } => since > 9 ? 25 : 50 }
+fn tag(b: Bytes): Bytes = sha2_256(b)

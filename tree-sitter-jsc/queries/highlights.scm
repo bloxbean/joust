@@ -69,7 +69,7 @@
 (version) @keyword.directive
 
 [
-  "package" "import" "from" "type" "enum" "fn" "contract" "state" "init" "action" "destroy" "view" "params" "event" "invariant"
+  "package" "library" "import" "from" "type" "enum" "fn" "contract" "state" "init" "action" "destroy" "view" "params" "event" "invariant"
 ] @keyword
 
 [

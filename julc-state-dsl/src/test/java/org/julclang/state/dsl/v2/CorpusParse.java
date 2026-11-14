@@ -13,19 +13,54 @@ public final class CorpusParse {
     }
 
     /**
+     * As {@link #parse(String)}, for a file on disk: the type names of the {@code .jsc} libraries it imports by relative
+     * path ({@code ./fees.jsc}, read beside it) start constructors, as in a build (ADR-0018 D9, M4). Only parsing: a
+     * missing or unparsable library adds no names.
+     */
+    public static void parse(String source, java.nio.file.Path file) {
+        Parser.parse(source, importedTypes(source, file));
+    }
+
+    static java.util.Set<String> importedTypes(String source, java.nio.file.Path file) {
+        var out = new java.util.HashSet<String>();
+        if (file == null) return out;
+        for (Syntax.Import im : Parser.imports(source)) {
+            if (!JscModules.isRelative(im.from())) continue;
+            java.nio.file.Path lib = file.toAbsolutePath().getParent().resolve(im.from()).normalize();
+            try {
+                Syntax.File f = Parser.parse(java.nio.file.Files.readString(lib));
+                for (Syntax.TypeDecl t : f.types()) out.add(t.name());
+                for (Syntax.EnumDecl e : f.enums()) {
+                    out.add(e.name());
+                    for (Syntax.VariantDecl v : e.variants()) out.add(v.name());
+                }
+            } catch (java.io.IOException | RuntimeException e) {
+                // not a library this parse can read: its names stay unknown
+            }
+        }
+        return out;
+    }
+
+    /**
      * The file's declarations, as one line both parsers must give alike (review r2 F5; tree-sitter-jsc's
      * test/shared-corpus.mjs builds the same line from its tree): package, imports, top-level types, enums and fns, then
      * the contract's options, state fields, params, events and invariants (M2b: each only when declared), methods (kind,
      * name, parameters, modifiers, in source order) and its own fns, types and enums.
      */
     public static String shape(String source) {
-        Syntax.File f = Parser.parse(source);
+        return shape(source, null);
+    }
+
+    /** As {@link #shape(String)}, for a file on disk (its libraries' type names known); a library has no contract part. */
+    public static String shape(String source, java.nio.file.Path file) {
+        Syntax.File f = Parser.parse(source, importedTypes(source, file));
         var c = f.contract();
         var out = new ArrayList<String>();
-        out.add("package " + f.pkg());
+        out.add((f.library() ? "library " : "package ") + f.pkg());
         // M2c: a contract import reads "contract ./Oracle.jsc{Oracle}", in source order among the others.
         out.add("imports: " + join(f.imports().stream().map(i -> (i.contract() ? "contract " : "") + i.from() + "{" + String.join(",", i.names()) + "}").toList()));
         types(out, "", f.types(), f.enums(), f.fns());
+        if (c == null) return String.join(" | ", out);
         out.add("contract " + c.name() + "(" + join(c.options().stream().map(Syntax.Option::name).toList()) + ")");
         out.add("state: " + join(c.state().stream().map(Syntax.FieldDecl::name).toList()));
         // M2b: the params, events and invariants, each only when the contract declares some.

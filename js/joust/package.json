@@ -8,7 +8,8 @@
   },
   "exports": {
     ".": "./src/index.js",
-    "./vite": "./src/vite.js"
+    "./vite": "./src/vite.js",
+    "./test": "./src/test/offline.js"
   },
   "files": [
     "bin",
@@ -19,6 +20,7 @@
     "@julclang/joust-runtime": "0.1.0-pre1-snapshot",
     "@julclang/state-client": "0.1.0-pre1-snapshot",
     "@rollup/plugin-inject": "5.0.5",
+    "@scure/bip39": "1.6.0",
     "vite-plugin-node-polyfills": "0.28.0"
   },
   "engines": {

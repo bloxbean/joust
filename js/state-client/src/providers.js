@@ -58,8 +58,20 @@ export function plutusScriptHash(cborHex, version = 3) {
 
 // ---------------------------------------------------------------------------------------------------- Blockfrost
 
+/**
+ * Review r2 (#82 F6): `joust test` runs its tests offline (JOUST_OFFLINE=1): a network provider is refused there, so a
+ * test that reaches for DevKit or a public chain fails at once instead of depending on the network.
+ */
+function offlineGuard(what) {
+  if (globalThis.process?.env?.JOUST_OFFLINE === '1') {
+    throw new Error(`${what}: joust test runs offline (JOUST_OFFLINE=1), with no network provider; use @julclang/joust/test's`
+      + ' in-memory ledger, or run network tests outside joust test (test/devkit/)');
+  }
+}
+
 /** Blockfrost, or any Blockfrost-style API (Yaci Store's /api/v1). */
 export function blockfrostProvider(baseUrl, { projectId, fetchImpl } = {}) {
+  offlineGuard('blockfrostProvider');
   const base = baseUrl.replace(/\/$/, '');
   const f = fetchImpl ?? globalThis.fetch.bind(globalThis);
   const headers = projectId ? { project_id: projectId } : {};
@@ -278,6 +290,7 @@ export function ogmiosParams(p, epoch) {
  * CBOR; scripts are known from the reference-script outputs it has served (by their hash).
  */
 export function ogmiosProvider(url, { fetchImpl } = {}) {
+  offlineGuard('ogmiosProvider');
   const f = fetchImpl ?? globalThis.fetch.bind(globalThis);
   const scripts = new Map();
   async function rpc(method, params) {

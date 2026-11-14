@@ -608,7 +608,26 @@ final class ContractReader {
                 init, actionIRs, destroyIRs, viewIRs, types.imports(), Strategies.OPTION_A,
                 List.copyOf(ownedIRs), ownedInitIRs,
                 ownedActionIRs, ownedDestroyIRs, paramsType == null ? null : types.render(paramsType), List.copyOf(invariants),
-                List.copyOf(purposes), stakeSelf, migrateIR));
+                List.copyOf(purposes), stakeSelf, migrateIR, javaLibraries(type)));
+    }
+
+    /** The words julc-state-dsl writes before a contract's java: libraries, in its Javadoc ({@code JavaEmitter}). */
+    static final String JAVA_LIBRARIES_MARKER = "Built with the java: libraries (ADR-0018 D9):";
+
+    /** The java: libraries a contract generated from .jsc names in its Javadoc (ADR-0018 D9, review r2), else none. */
+    private List<String> javaLibraries(TypeElement type) {
+        String doc = env.getElementUtils().getDocComment(type);
+        if (doc == null || !doc.strip().startsWith("GENERATED from ")) return List.of();
+        for (String line : doc.split("\n")) {
+            String l = line.strip();
+            if (!l.startsWith(JAVA_LIBRARIES_MARKER)) continue;
+            var out = new ArrayList<String>();
+            for (String n : l.substring(JAVA_LIBRARIES_MARKER.length()).strip().split("\\s+")) {
+                if (n.matches("[A-Za-z_$][\\w$]*(\\.[A-Za-z_$][\\w$]*)+")) out.add(n);
+            }
+            return List.copyOf(out);
+        }
+        return List.of();
     }
 
     // ------------------------------------------------------------------ keyed types (ADR-0016)

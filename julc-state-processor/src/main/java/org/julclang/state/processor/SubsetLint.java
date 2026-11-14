@@ -72,6 +72,18 @@ public final class SubsetLint {
     private final Trees trees;
     private final Reporter reporter;
     private final Set<String> pending = new HashSet<>();
+    /**
+     * What the findings name: "a @StateContract", or "an on-chain library" for a library the lint checks (a {@code .jsc}
+     * library's class, ADR-0018 D1, D9). Set per checked type; the typed pass of a library runs right after its check.
+     */
+    private volatile String label = "a @StateContract";
+    private final java.util.Map<String, String> labels = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static String labelOf(TypeElement type) {
+        boolean contract = type.getAnnotationMirrors().stream().anyMatch(a -> ((TypeElement) a.getAnnotationType().asElement())
+                .getQualifiedName().contentEquals(ContractReader.STATE_CONTRACT));
+        return contract ? "a @StateContract" : "an on-chain library";
+    }
     /** Trees of the context javac compiles in after processing (taken in the final round); see {@link #finalRound}. */
     private volatile Trees finalTrees;
 
@@ -109,6 +121,7 @@ public final class SubsetLint {
                         // After annotation processing javac works in a fresh context: use the task's Trees and the
                         // event's own compilation unit, not what was captured during processing.
                         Trees typedTrees = finalTrees != null ? finalTrees : Trees.instance(task);
+                        label = labels.getOrDefault(e.getTypeElement().getQualifiedName().toString(), "a @StateContract");
                         typed(typedTrees, e.getCompilationUnit(), e.getTypeElement().getSimpleName().toString());
                     }
                 }
@@ -138,13 +151,15 @@ public final class SubsetLint {
         TreePath path = trees.getPath(type);
         if (path == null) return true;
         pending.add(type.getQualifiedName().toString());
+        label = labelOf(type);
+        labels.put(type.getQualifiedName().toString(), label);
         boolean[] clean = {true};
         new TreePathScanner<Void, Void>() {
             @Override
             public Void visitPrimitiveType(PrimitiveTypeTree node, Void unused) {
                 if (FIXED_WIDTH_WRITTEN.contains(node.getPrimitiveTypeKind())) {
                     clean[0] = false;
-                    report(node, getCurrentPath(), "'" + node + "' in a @StateContract: JuLC treats it as an unbounded"
+                    report(node, getCurrentPath(), "'" + node + "' in " + label + ": JuLC treats it as an unbounded"
                             + " integer on-chain while the JVM wraps or rounds it, so the two runs could disagree."
                             + " Use BigInteger");
                 }
@@ -156,7 +171,7 @@ public final class SubsetLint {
                 if (node.getMethodSelect() instanceof MemberSelectTree select
                         && NARROWING_CALLS.contains(select.getIdentifier().toString())) {
                     clean[0] = false;
-                    report(node, getCurrentPath(), select.getIdentifier() + "() in a @StateContract: it narrows on the"
+                    report(node, getCurrentPath(), select.getIdentifier() + "() in " + label + ": it narrows on the"
                             + " JVM but is the identity on-chain, so the two runs could disagree. Stay in BigInteger");
                 }
                 return super.visitMethodInvocation(node, unused);
@@ -192,7 +207,7 @@ public final class SubsetLint {
             public Void visitCompoundAssignment(CompoundAssignmentTree node, Void unused) {
                 TypeMirror t = typeOf(node);
                 if (t != null && FIXED_WIDTH.contains(t.getKind())) {
-                    reportTyped(trees, node, getCurrentPath(), "fixed-width arithmetic (" + t + ") in a @StateContract: the JVM"
+                    reportTyped(trees, node, getCurrentPath(), "fixed-width arithmetic (" + t + ") in " + label + ": the JVM"
                             + " wraps, on-chain does not. Use BigInteger");
                 }
                 return super.visitCompoundAssignment(node, unused);
@@ -202,7 +217,7 @@ public final class SubsetLint {
             public Void visitNewClass(com.sun.source.tree.NewClassTree node, Void unused) {
                 TypeMirror t = typeOf(node);
                 if (t != null && MAP_TYPES.contains(t.toString())) {
-                    reportTyped(trees, node, getCurrentPath(), "constructing " + t + " in a @StateContract: a hand-made"
+                    reportTyped(trees, node, getCurrentPath(), "constructing " + t + " in " + label + ": a hand-made"
                             + " map carries reads nobody proved. Use MerkleMaps.empty() and its helpers (ADR-0002 r2)");
                 }
                 return super.visitNewClass(node, unused);
@@ -214,7 +229,7 @@ public final class SubsetLint {
                 if (name.equals("reads") || name.equals("writes") || name.equals("root")) {
                     TypeMirror owner = trees.getTypeMirror(new TreePath(getCurrentPath(), node.getExpression()));
                     if (owner != null && owner.toString().equals("org.julclang.state.api.MerkleMap")) {
-                        reportTyped(trees, node, getCurrentPath(), "MerkleMap." + name + "() in a @StateContract: its"
+                        reportTyped(trees, node, getCurrentPath(), "MerkleMap." + name + "() in " + label + ": its"
                                 + " internals differ between the JVM run and the on-chain run. Use MerkleMaps helpers");
                     }
                 }
@@ -227,8 +242,8 @@ public final class SubsetLint {
                 if (t != null && FIXED_WIDTH.contains(t.getKind())) {
                     // After attribution javac replaces `var` with the inferred type, so every fixed-width variable is
                     // reported here, written or inferred (written ones are also caught by the syntactic pass).
-                    reportTyped(trees, node, getCurrentPath(), "'" + node.getName() + "' is " + t + " in a"
-                            + " @StateContract (inferred or declared); fixed-width numbers diverge between the JVM and"
+                    reportTyped(trees, node, getCurrentPath(), "'" + node.getName() + "' is " + t + " in "
+                            + label + " (inferred or declared); fixed-width numbers diverge between the JVM and"
                             + " on-chain. Use BigInteger");
                 }
                 return super.visitVariable(node, unused);
@@ -238,7 +253,7 @@ public final class SubsetLint {
                 if (!ARITHMETIC.contains(node.getKind())) return;
                 TypeMirror t = typeOf(node);
                 if (t != null && FIXED_WIDTH.contains(t.getKind())) {
-                    reportTyped(trees, node, getCurrentPath(), "fixed-width arithmetic (" + t + ") in a @StateContract: the JVM"
+                    reportTyped(trees, node, getCurrentPath(), "fixed-width arithmetic (" + t + ") in " + label + ": the JVM"
                             + " wraps at " + (t.getKind() == TypeKind.LONG ? "64" : "32") + " bits, on-chain integers"
                             + " are unbounded, so the two runs could disagree. Compute in BigInteger");
                 }

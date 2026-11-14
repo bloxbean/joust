@@ -11,6 +11,8 @@
   "state": { "name": "State", "fields": [{ "name": "owner", "type": "Key" }, { "name": "n", "type": "Int" }], "at": [14, 1] },
   "timeFields": [],
   "recursiveFns": ["steps"],
+  "libraries": [],
+  "javaLibraries": [],
   "fns": [
     {
       "name": "steps",

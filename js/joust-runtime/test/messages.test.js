@@ -101,3 +101,12 @@ test("a map's script hash is its own script's, never the one it claims", () => {
   assert.equal(refusingContract([params], { title: 'P' }), params, 'still found by title');
   assert.equal(messageMap({ description: '{}' }), null, 'no map');
 });
+
+test('a message raised in an imported .jsc library names the library file (ADR-0018 D9, M4)', () => {
+  const shop = { messages: { source: 'contracts/app/Shop.jsc', scriptHash: 'cc', messages: {
+    'an amount is never negative': [{ line: 32, col: 3, kind: 'require', in: 'nonNegative', file: 'fees.jsc' }],
+    'pay the price and the fee': [{ line: 21, col: 5, kind: 'require', in: 'buy' }],
+  } } };
+  assert.deepEqual(messageSites('an amount is never negative', shop), ['fees.jsc:32:3 (a require in nonNegative)']);
+  assert.deepEqual(messageSites('pay the price and the fee', shop), ['contracts/app/Shop.jsc:21:5 (a require in buy)']);
+});

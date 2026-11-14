@@ -51,7 +51,16 @@ public record ContractIR(String packageName,
                          List<InvariantIR> invariants,
                          List<PurposeIR> purposes,
                          boolean stakeSelf,
-                         TransitionIR migrate) {
+                         TransitionIR migrate,
+                         List<String> javaLibraries) {
+
+    /**
+     * {@code javaLibraries}: the {@code java:} libraries a contract lowered from {@code .jsc} is built with (ADR-0018 D9,
+     * review r2), by class name; its client checks their classes when it loads. Empty for every other contract.
+     */
+    public ContractIR {
+        javaLibraries = javaLibraries == null ? List.of() : List.copyOf(javaLibraries);
+    }
 
     /** A handler for a non-spend purpose (ADR-0010). */
     public record PurposeIR(String kind, String method, List<ParamIR> args, boolean hasCtx, String quorumKeys,

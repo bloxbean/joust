@@ -941,6 +941,10 @@ public final class Interpreter {
                 for (Ir.Expr a : c.args()) args.add(eval(a, env, f));
                 yield invoke(p.fn(c.fn()), args, f);
             }
+            // ADR-0018 D9 (M4b): a Java library's body has no reference semantics here; it is certified on the two legs
+            // that run it (the JVM and UPLC) by its per-function vectors. No answer, never a refusal (semantics §2.4).
+            case Ir.CallJava c -> throw new Limit("java:" + c.library() + "." + c.fn() + " has no reference semantics: the interpreters do not"
+                    + " evaluate Java library calls (ADR-0018 D9, M4b; no answer)");
             case Ir.CallStd c -> std(c, env, f);
             case Ir.Prelude c -> prelude(c, env, f);
             case Ir.TimePred t -> {

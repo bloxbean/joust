@@ -185,6 +185,8 @@ public final class AbiCheck {
             String kind = m == null ? "record" : (String) m.get("kind");
             return switch (kind) {
                 case "api" -> "org.julclang.state.api." + t;
+                // A .jsc library's type (D9, M4): its library's class, as the processor names it.
+                case "library" -> m.get("library") + "." + t;
                 case "ledger" -> "org.julclang.ledger." + t;
                 case "validator" -> validator + t;
                 default -> own + t;

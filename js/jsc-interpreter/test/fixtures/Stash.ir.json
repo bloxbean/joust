@@ -12,6 +12,8 @@
   "params": { "name": "Config", "fields": [{ "name": "v", "type": "Value" }, { "name": "h", "type": "Hash" }], "at": [9, 3] },
   "timeFields": [],
   "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
   "fns": [],
   "methods": [
     {

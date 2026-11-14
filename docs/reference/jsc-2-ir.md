@@ -36,17 +36,26 @@ disagrees (below).
 `"ir"` is the format version, exactly the integer 2 here. Readers refuse versions they do not know (`IrJson.read`,
 and the JavaScript `load`).
 
-**Version 2 (M2b, #84 review C2).** Version 1's Java reader ignored top-level fields it did not know, so it read an
-M2b export and silently dropped its `params` and `invariants` (an invariant-only contract loaded, called and re-emitted
-without its invariant). M2b's additions therefore take a new version, which every version-1 reader refuses, and both
-readers of version 2 refuse any field they do not know, at every level (the Java reader now as the JavaScript one), so a
-later addition cannot be dropped either (the Java reader checks each object's fields, each statement's and node's from
-the writer's own lists: `JscV2IrTest.theReader_refusesAnUnknownField_atEveryLevel`). ADR-0018 M4a (libraries) also moves
-the format to 2 on its branch; the integration of M2 and M4 joins both sets of additions in one version 2, under two
-conditions (#84 review F11): neither branch's version 2 is published (npm, snapshots) before the join, and the joined
-Java reader keeps this strictness at every level (M4a's version-2 reader, without it, would drop `params` and
-`invariants`). The integration adds a test that an export with `params`, `invariants` and `libraries` reads back with all
-three, and that an unknown field is refused.
+**Version 2: one format, two sets of additions (the `.jsc` 2 integration of M2 and M4).** M2b (#84) and M4a (#77) each
+moved the IR to format 2 on their branches; neither branch's version 2 was published, and the integration
+(`feat/jsc-2-int2`) joins them into this **one** version 2, with both writers' fields, both readers' rules and one
+fixture set:
+
+- **M2b's** (#84 review C2): the top-level `params` and `invariants`, present only when the contract declares them, the
+  node `ParamsRef`, the statement `Emit`, and the modifiers `quorum` and `authorized`. Version 1's Java reader ignored
+  top-level fields it did not know, so it read an M2b export and silently dropped its `params` and `invariants`;
+  version 1 readers refuse every version-2 export.
+- **M4's**: the top-level `libraries` (the `.jsc` libraries the program imports, transitively, in dependency order, each
+  with its class, file, source hash and declarations) and `javaLibraries` (M4b), always present (`[]` without any), and
+  the node `CallJava`.
+- **Strict at every level, in both readers.** Both readers refuse any field they do not know, at every level: the
+  program, an imported contract, a library, a Java library and its records and fns, a method, a modifier, a read, a
+  statement, a node, a record and its fields, an enum, a declaration, a block. The Java reader does it twice: each
+  object's fields against the writer's own lists (M2b, `known`), and every field of the export must have been read
+  (M4, `unknownFields`). `JscV2IrTest.theReader_refusesAnUnknownField_atEveryLevel` covers the first, and
+  `JscV2IrTest.anExportWithParamsInvariantsAndLibraries_readsBack_andRefusesUnknownFields` (the integration's) reads an
+  export carrying `params`, `invariants`, `libraries`, `contracts`, `reads` and a `receives` type back on both readers
+  and adds an unknown field at each level; the JavaScript reader's twin is in `semantics.test.js`.
 
 **Version 1 is the format as of the M1 integration** (#76): `If` and `IfValue` hold a `branches` list (M1e's flat
 else-if chains). M1b's pre-release shape (`cond`, `then`, `otherwise` on those nodes) was never released and is not
@@ -54,7 +63,8 @@ version 1; the readers refuse it ("unknown field"). From M1's release, the rule 
 
 **What a version-1 reader refuses, and so what may change without a new version.** Both readers are strict: a duplicate
 key, a number that is not a plain integer, an integer literal that is not decimal, bytes that are not lower-case hex, a
-local referenced before it is declared or declared twice. The JavaScript reader also validates the whole program at
+local referenced before it is declared or declared twice, and (review r2 of M4) a field it does not know, at every level
+(the program, a library, a method, a statement, an expression, a record, a declaration, a block). The JavaScript reader also validates the whole program at
 load, before anything runs: an unknown node or statement kind, field, operator, modifier name (`payable`, `open`,
 `only`, `after`, `before`, `batched`), method kind, `std` row or type is refused there. So a change is **additive** when an old
 reader refuses every program that uses it, at load, rather than misreading it: a new node kind, a new modifier (M1c's
@@ -126,6 +136,11 @@ the program read back to the same Java and the same ABI manifest, and checks tha
                   "receives": [Type|null…], "bigMaps" }],
   "timeFields": ["lastSeen"],
   "recursiveFns": ["fact"],
+  "libraries": [{ "library": "org.example.Fees", "source": "fees.jsc", "sourceSha256": "<64 hex digits>",
+                  "records": [Record…], "enums": [Enum…], "fns": [Fn…] }],
+  "javaLibraries": [{ "class": "org.example.AllowList", "sourceSha256": "<64 hex digits>",
+                      "records": [Record + { "owner", "import", "javaName", "verified" }…],
+                      "fns": [{ "name", "params": [Type…], "result": Type }…] }],
   "fns": [{ "name", "params": [Local…], "result": Type, "body": Block, "at" }],
   "methods": [{ "kind": "init|action|destroy|view", "name", "params": [Local…], "mods": [{ "name", "field"? }],
                 "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at", "reads"? }],
@@ -136,6 +151,16 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 
 - **Record:** `{ "name", "fields": [{ "name", "type": Type }], "at" }`, with the fields in declaration order. An enum's
   variants are records in declaration order, so a variant's tag is its index.
+- **Java libraries** (version 2, M4b): each certified Java library the program imports with `java:`. Its records join the
+  namespace (`fields` empty when the record is opaque, `verified` false); `fns` lists the imported fns' signatures only.
+  Their bodies are not here: a `CallJava` node (`library`, `fn`, `args`) has no answer in either interpreter (semantics
+  §2.4), and both readers check that it names an imported fn with its arity. See
+  [jsc-2-java-libraries.md](jsc-2-java-libraries.md).
+- **Libraries** (version 2): a library's records, enums and fns join the program's in one namespace (the checker refuses a
+  name declared twice across a build, `JSC0709`), so a `CallFn`, `New`, `Variant` or type naming one of them means it.
+  The interpreters evaluate a library fn like the program's own. Its `at` positions are in its own file (`source`), so a
+  refusal's class names a position there (`require:32:3:…`); both interpreters read the same positions. Locals'
+  ids are unique across the program and its libraries.
 - **M2b.** `params` (present only when declared) is the params record, named `Config`. The contract's events are the
   enum `Event` in `enums`, its variants in declaration order. `invariants` (present only when declared) are Bools over
   the state (`StateRef`, `StateField`) and the params (`ParamsRef`), checked like a view's body. A modifier is
@@ -196,6 +221,7 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `GetField` | `target`, `record`, `field` | | `MapEmpty` | |
   | `New` | `record`, `values` (in field order) | | `MapOp` | `op` (`get has set delete size keys values isEmpty`), `map`, `args` |
   | `CallFn` | `fn`, `args` | | `MapHof` | `kind` (`any all`), `map`, `k`, `v` (Locals), `body` |
+  | `CallJava` | `library`, `fn`, `args` (M4b; no answer) | | | |
   | `CallStd` | `module`, `name`, `args` | | `MapFold` | `map`, `init`, `acc`, `k`, `v` (Locals), `body` |
   | `Prelude` | `op` (`min max abs asKey asHash`), `args` | | `BigEmpty` | |
   | `TimePred` | `after` (boolean), `threshold` | | `BigOp` | `op` (`get has at set delete isEmpty`), `map`, `args` |

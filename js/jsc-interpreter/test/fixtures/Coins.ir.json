@@ -20,6 +20,8 @@
   },
   "timeFields": [],
   "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
   "fns": [
     {
       "name": "tokens",

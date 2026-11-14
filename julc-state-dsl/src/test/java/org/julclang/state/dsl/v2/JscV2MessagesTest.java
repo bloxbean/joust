@@ -31,7 +31,7 @@ class JscV2MessagesTest {
         try (Stream<Path> s = Files.list(EXAMPLES)) {
             return s.filter(p -> p.toString().endsWith(".jsc")).filter(p -> {
                 try {
-                    return JscV2.isV2(Files.readString(p));
+                    return Examples.isContract(Files.readString(p));
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -52,7 +52,7 @@ class JscV2MessagesTest {
         int keys = 0;
         for (Path f : examples()) {
             String name = f.getFileName().toString();
-            var lowered = DslExamples.lower(Files.readString(f), name);
+            var lowered = Examples.lower(name, Files.readString(f));
             var counts = new HashMap<String, Integer>();
             for (String lit : messages(lowered.java())) {
                 assertFalse(lit.contains(".jsc"), name + ": a message names a file: " + lit);
@@ -95,7 +95,7 @@ class JscV2MessagesTest {
         sources.put("Order.jsc", ORDER);
         int checked = 0, intents = 0;
         for (var e : sources.entrySet()) {
-            var lowered = DslExamples.lower(e.getValue(), e.getKey());
+            var lowered = Examples.lower(e.getKey(), e.getValue());
             @SuppressWarnings("unchecked")
             var abi = (Map<String, Object>) AbiCheck.Json.parse(lowered.abiJson());
             @SuppressWarnings("unchecked")

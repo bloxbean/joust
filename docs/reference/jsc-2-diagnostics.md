@@ -306,12 +306,31 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 | JSC0702 | error | ' … ' is not in … (it is in … ) | Checker |
 | JSC0703 | error | ' … ' is imported and also declared as a fn; rename the fn | Checker |
 | JSC0704 | error | is in … : import { … } from " … " | Checker |
+| JSC0705 | error | a library's file name is its Java class (fees.jsc is the class Fees of its package): ' … ' gives ' … ', which is not a class name the generated code can use; name the file with letters and digits only | Checker |
+| JSC0706 | error | ' … ' is not a module: a .jsc library is imported by its path relative to this file, ending in .jsc; or: no .jsc library … beside … under the sources | Checker |
+| JSC0707 | error | these libraries import each other: … -> …; a library's imports form no cycle (move what both need into a third library) | Checker |
+| JSC0708 | error | ' … ' is not declared in … : a library exports its types, enums and fns; or: … is a contract, not a library | Checker |
+| JSC0709 | error | the … is also declared in …: the declarations of a build (a contract and the libraries it imports) share one namespace; rename one (also: two libraries with one class or one class name, a declaration or binding taking a library's class name) | Checker |
+| JSC0710 | error | ' … ' is declared in … : import { … } from it to use it here (a library's declarations are seen only where they are imported) | Checker |
+| JSC0711 | error | a library holds imports, types, enums and fns, not a contract: write the contract in its own file and import the library there | Parser |
+| JSC0712 | error | in the imported library …: error[…]: … (an error in a library, reported at the import that brings it into this build) | Checker |
+| JSC0720 | error | no on-chain sources of the Java library … are on the library path (Gradle: the joustLibrary configuration; npm: a package's joust-lib/); or: ' … ' does not name a class | Checker |
+| JSC0721 | error | the Java library … is not certified, so it cannot be imported (ADR-0018 D9): … (each problem, with its file and line) | Checker |
+| JSC0722 | error | java: … . … cannot be imported: its parameter … is … : … (or its result) | Checker |
+| JSC0723 | error | java: … . … is overloaded: .jsc calls a library fn by name, so an overloaded method cannot be imported | Checker |
+| JSC0724 | error | … is a record of java: … : read-only in .jsc (ADR-0018 D9); build it with the library's fns | Checker |
+| JSC0725 | error | … is an opaque record of java: … : never written as a type, stored, compared or read (or: an opaque Java library record is not comparable) | Checker |
+| JSC0726 | error | … is a Java library's (java: … ): a time value never reaches one, since its body is not checked for the time rule (ADR-0018 D11) | Checker |
+| JSC0731 | error | the library … (sha256 …) is not pinned in joust.lock: a library from outside the sources is pinned by the hash of its on-chain sources (ADR-0018 J12) | JscMain, joust build |
+| JSC0732 | error | the library … has other on-chain sources than joust.lock pins (sha256 …, pinned …): its code changed | JscMain, joust build |
+| JSC0727 | error | … is on the class path here, and is also compiled from the java: library's sources (ADR-0018 D9); also: a listed library class was not compiled (recordJoustLibraries) | JscMain (checkJoustLibraries, recordJoustLibraries) |
 | JSC0740 | error | import contract names one contract, the one its file declares: import contract { Oracle } from "./Oracle.jsc" | Parser (M2c) |
 | JSC0741 | error | import contract from a Java contract ( … ) is not supported yet: it needs the attribution of its source that java: library imports bring (ADR-0018 M4b) … | Checker (M2c) |
-| JSC0742 | error | ' … ' is not a contract file … / no contract … beside … under the sources / … declares the contract … , not … | Checker (M2c) |
+| JSC0742 | error | ' … ' is not a contract file … / no contract … beside … under the sources / … declares the contract … , not … / … is a library, not a contract / a library imports no contracts … | Checker (M2c; the last two from the M2/M4 integration) |
 | JSC0743 | error | the contract imports form a cycle ( … ): a contract may read or deposit into another only one way | Checker (M2c) |
-| JSC0744 | error | the contract … is imported twice / the imported contract … has this contract's name … / the … has the name of an imported contract; rename it … | Checker (M2c) |
+| JSC0744 | error | the contract … is imported twice / the imported contract … has this contract's name … / the … has the name of an imported contract; rename it … / the imported contract … has the name of a library's class in this build | Checker (M2c) |
 | JSC0745 | error | the contract … does not check: … | Checker (M2c) |
+| JSC0746 | error | the contract … stores or receives the type … of a library it imports: reading another contract's state, or depositing a memo, of a library's type is not supported yet … | Checker (M2/M4 integration) |
 
 ## Map and BigMap (ADR-0018 D5, D7, J14)
 

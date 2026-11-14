@@ -1,0 +1,44 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { Line, Tier, fee, total, rate, cuts, nonNegative, tag, digits } from "./fees.jsc"
+
+// A shop whose fees come from a .jsc library (ADR-0018 D9, M4): its types in the state and the redeemers, its fns in
+// requires, values and payouts.
+contract Shop(maxDatumBytes = 1024) {
+  state { owner: Key, price: Int, lines: List<Line>, tier: Tier, sold: Int, label: Bytes }
+
+  init(price: Int, lines: List<Line>, label: Bytes) {
+    require(total(lines) <= 10_000, "the lines exceed 100%")
+    return { owner: caller, price: nonNegative(price), lines, tier: Basic, sold: 0, label: tag(label) }
+  }
+
+  // The owner may move the shop to a tier (a library enum in the redeemer).
+  action setTier(next: Tier) only owner {
+    return { ...state, tier: next }
+  }
+
+  // One sale: the price plus the tier's fee on it.
+  action buy() payable {
+    require(received >= price + fee(price, rate(tier)), "pay the price and the fee")
+    return { ...state, sold: sold + 1, tier: match tier { Basic => Basic, Gold { since: n } => Gold { since: n + 1 } } }
+  }
+
+  // The owner may add a line (a library record in the redeemer, its key checked).
+  action addLine(line: Line) only owner {
+    require(total(lines) + line.bps <= 10_000, "the lines exceed 100%")
+    return { ...state, lines: [line, ...lines] }
+  }
+
+  // Each line takes its cut of the balance; the rest goes to the owner.
+  destroy close() only owner {
+    for (const l of lines) {
+      pay(l.to, fee(balance, l.bps))
+    }
+    pay(owner, balance - cuts(balance, lines).fold(0, (acc, c) => acc + c))
+  }
+
+  view feeOn(price2: Int): Int = fee(price2, rate(tier))
+
+  view soldDigits(): Int = digits(sold)
+}

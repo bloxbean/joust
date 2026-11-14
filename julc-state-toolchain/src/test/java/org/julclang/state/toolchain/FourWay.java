@@ -108,6 +108,17 @@ final class FourWay {
     int calls, refusals, validatorRuns, rounds, batchRuns, mutantsRejected, attacksRejected, modifierRefusals;
     StateHarness.Verdict lastVerdict;
 
+    /** The {@code .jsc} libraries' classes the program imports (ADR-0018 D9, M4): their records and variants are theirs. */
+    final List<String> libraries = new ArrayList<>();
+    /**
+     * ADR-0018 D9 (M4b): whether a call is first answered by the reference interpreters. A call into a {@code java:}
+     * library has no answer there (no reference semantics; its library is certified, with per-function JVM-vs-UPLC
+     * vectors), so a contract that imports one is checked on three legs: the JVM is where the comparison starts, and the
+     * transition program and the validator must agree with it. Calls that reach no Java library are still five-way.
+     */
+    boolean threeLegs;
+    int interpreterAnswers, noAnswers;
+
     FourWay(String name, String jscSource, Map<String, String> transitions) throws Exception {
         this(name, jscSource, transitions, null);
     }
@@ -122,15 +133,38 @@ final class FourWay {
     }
 
     /** M2c: a contract that imports others ({@code import contract}), which {@code modules} holds (by bare file name). */
-    @SuppressWarnings({"unchecked", "rawtypes"})
     FourWay(String name, String jscSource, Map<String, String> transitions, Rec params, org.julclang.state.dsl.v2.JscModules modules) throws Exception {
+        this(name, jscSource, modules == org.julclang.state.dsl.v2.JscModules.NONE ? null : name + ".jsc", modules,
+                org.julclang.state.dsl.v2.JavaLibraries.NONE, transitions, params);
+    }
+
+    /** The contract {@code name} of a build: the module {@code id}, with the {@code .jsc} libraries {@code modules} finds (M4). */
+    FourWay(String name, String jscSource, String id, org.julclang.state.dsl.v2.JscModules modules, Map<String, String> transitions)
+            throws Exception {
+        this(name, jscSource, id, modules, org.julclang.state.dsl.v2.JavaLibraries.NONE, transitions);
+    }
+
+    /** The same, with the certified Java libraries its java: imports name (M4b). */
+    FourWay(String name, String jscSource, String id, org.julclang.state.dsl.v2.JscModules modules,
+            org.julclang.state.dsl.v2.JavaLibraries javaLibs, Map<String, String> transitions) throws Exception {
+        this(name, jscSource, id, modules, javaLibs, transitions, null);
+    }
+
+    /** Every leg of a contract: its module id and modules (M2c, M4), its Java libraries (M4b) and its params (M2b). */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    FourWay(String name, String jscSource, String id, org.julclang.state.dsl.v2.JscModules modules,
+            org.julclang.state.dsl.v2.JavaLibraries javaLibs, Map<String, String> transitions, Rec params) throws Exception {
         this.name = name;
         this.cls = Class.forName(PKG + "." + name);
         this.stateClass = Class.forName(PKG + "." + name + "$State");
-        Interpreter i = JscV2.interpreter(jscSource, name + ".jsc", name + ".jsc", modules, HASHES);
+        Interpreter i = JscV2.interpreter(jscSource, name + ".jsc", id, modules, javaLibs, HASHES);
         this.params = params;
         this.interp = params == null ? i : i.withParams(params);
-        this.irJson = JscV2.lower(jscSource, name + ".jsc", name + ".jsc", modules).irJson();
+        this.irJson = JscV2.lower(jscSource, name + ".jsc", id, modules, javaLibs).irJson();
+        var jr = java.util.regex.Pattern.compile("\"import\": \"([A-Za-z0-9_.]+)\"").matcher(irJson);
+        while (jr.find()) libraries.add(jr.group(1));
+        var lm = java.util.regex.Pattern.compile("\"library\": \"([A-Za-z0-9_.]+)\"").matcher(irJson);
+        while (lm.find()) libraries.add(lm.group(1));
         this.transitions = transitions;
         var spec = (org.julclang.state.runtime.ContractSpec) Class.forName(PKG + "." + name + "Client").getField("SPEC").get(null);
         this.harness = (StateHarness<Object>) (params == null ? StateHarness.of(spec) : StateHarness.of(spec, java(params)));
@@ -319,9 +353,10 @@ final class FourWay {
                 case Rec r -> {
                     // The Java example's state record may have another name (dex's Pool; M2).
                     String type = c == reference && r.type().equals("State") ? referenceState : r.type();
-                    // M2c: another contract's type (Oracle.State) is a nested class of that contract, in the same package.
+                    // M2c: another contract's type (Oracle.State) is a nested class of that contract, in the same package;
+                    // M4: a library's type is a nested class of its library (recordClass).
                     Class<?> rc = type.contains(".") ? Class.forName(c.getPackageName() + "." + type.replace('.', '$'))
-                            : Class.forName(c.getName() + "$" + type);
+                            : recordClass(c, type);
                     var comps = rc.getRecordComponents();
                     var types = new Class<?>[comps.length];
                     var vals = new Object[comps.length];
@@ -335,6 +370,22 @@ final class FourWay {
             };
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    /** A record's or variant's class: the program's own, else an imported {@code .jsc} or Java library's (M4). */
+    Class<?> recordClass(Class<?> c, String type) throws ClassNotFoundException {
+        try {
+            return Class.forName(c.getName() + "$" + type);
+        } catch (ClassNotFoundException e) {
+            for (String lib : libraries) {
+                try {
+                    return Class.forName(lib + "$" + type);
+                } catch (ClassNotFoundException ignored) {
+                    // the next library
+                }
+            }
+            throw e;
         }
     }
 
@@ -782,11 +833,29 @@ final class FourWay {
     Boolean validator(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate) throws Exception {
         String kind = interp.kind(method);
         // The transition's outcome builds the transaction; a broken modifier leaves it honest, for the validator to refuse.
-        Interpreter.Outcome o;
+        // The transition's outcome as the generated Java's values: the interpreter's, or (three legs, M4b: a Java library
+        // call has no answer there) the JVM method's.
+        boolean ok;
+        Object nextJ = null;
+        JulcList<Payout> paysJ = JulcList.empty();
+        // M2: the interpreter's outcome also carries effects and events (null on a refusal, or with no answer: three legs).
+        Interpreter.Outcome o = null;
         try {
             o = interp.transition(method, state, args, t);
+            ok = true;
+            nextJ = o.value() == null || kind.equals("destroy") || kind.equals("view") ? null : java(o.value());
+            paysJ = payouts(o.payouts());
         } catch (Interpreter.Refused e) {
-            o = null;
+            ok = false;
+        } catch (Interpreter.Limit e) {
+            if (!threeLegs || !e.getMessage().contains("has no reference semantics")) throw e;
+            Object r = run(new MerkleSupport(store), method, state == null ? null : java(state), args, t);
+            ok = r != null;
+            if (ok && kind.equals("destroy")) paysJ = (JulcList<Payout>) r;
+            else if (ok) {
+                nextJ = nextState(r);
+                paysJ = outcomePayouts(r) == null ? JulcList.empty() : outcomePayouts(r);
+            }
         }
         if (assets) return validatorAssets(method, state, args, t, signer, candidate, o);
         var redeemerArgs = new ArrayList<Object>();
@@ -799,8 +868,8 @@ final class FourWay {
         if (kind.equals("action") && batched(method) && !direct(method)) {
             // A 'batched only' action has no direct redeemer: only the batch can run it.
             Object before = java(state);
-            Object next = o != null ? java(o.value()) : before;
-            var v = evaluate(method, batchTx(method, before, args, t, next, o != null ? payouts(o.payouts()) : JulcList.empty()));
+            Object next = ok ? nextJ : before;
+            var v = evaluate(method, batchTx(method, before, args, t, next, ok ? paysJ : JulcList.empty()));
             validatorRuns++;
             batchRuns++;
             lastVerdict = v;
@@ -818,7 +887,7 @@ final class FourWay {
         StateHarness.Verdict v;
         switch (kind) {
             case "init" -> {
-                Object first = o != null ? java(o.value()) : candidate == null ? null : java(candidate);
+                Object first = ok ? nextJ : candidate == null ? null : java(candidate);
                 if (first == null) return null;
                 var tx = harness.create(redeemer, first, c);
                 if (hasMaps()) {
@@ -833,25 +902,25 @@ final class FourWay {
                 var live = harness.live(before, t == null ? BigInteger.ZERO : t.balance());
                 if (batched(method)) {
                     // M1c: a batched action also runs as an intent, applied by a batch (both forms must agree).
-                    Object next = o != null ? java(o.value()) : before;
-                    JulcList<Payout> pays = o != null ? payouts(o.payouts()) : JulcList.empty();
+                    Object next = ok ? nextJ : before;
+                    JulcList<Payout> pays = ok ? paysJ : JulcList.empty();
                     var b = evaluate(method, batchTx(method, before, args, t, next, pays));
                     if (!direct(method)) {
                         v = b;
                         break;
                     }
-                    v = evaluate(method, t, signer, o != null ? harness.act(live, redeemer, next, pays, signer, c)
+                    v = evaluate(method, t, signer, ok ? harness.act(live, redeemer, next, pays, signer, c)
                             : harness.act(live, redeemer, before, JulcList.empty(), signer, c));
                     assertEquals(v.accepted(), b.accepted(), name + "." + method + ": the direct call and the intent disagree\n" + v + b);
                     batchRuns++;
                 } else if (!hasMaps()) {
-                    v = evaluate(method, t, signer, withReads(method, o != null ? harness.act(live, redeemer, java(o.value()), payouts(o.payouts()), signer, c)
+                    v = evaluate(method, t, signer, withReads(method, ok ? harness.act(live, redeemer, nextJ, paysJ, signer, c)
                             : harness.act(live, redeemer, before, JulcList.empty(), signer, c), t));
                 } else {
-                    Object after = o != null ? nextState(run(ms, method, before, args, t)) : before;
+                    Object after = ok ? nextState(run(ms, method, before, args, t)) : before;
                     var p = ms.prepare(harness.policy(), (Class) stateClass, before, after, StateHarness.LIVE_REF);
                     v = evaluate(method, t, signer, harness.withClaims(harness.act(live, redeemer, p.stored(),
-                            o != null ? payouts(o.payouts()) : JulcList.empty(), signer, c), p.claims()));
+                            ok ? paysJ : JulcList.empty(), signer, c), p.claims()));
                 }
             }
             case "destroy" -> {
@@ -859,9 +928,9 @@ final class FourWay {
                 Object before = java(state);
                 var live = harness.live(before, t.balance().subtract(BigInteger.valueOf(harness.minAda())));
                 var tx = withReads(method, harness.destroy(live, redeemer, construct("BurnInstance", List.of()),
-                        o != null ? payouts(o.payouts()) : Payouts.of(signer, live.lovelace()), signer, c), t);
+                        ok ? paysJ : Payouts.of(signer, live.lovelace()), signer, c), t);
                 if (hasMaps()) {
-                    if (o != null) run(ms, method, before, args, t);
+                    if (ok) run(ms, method, before, args, t);
                     tx = harness.withClaims(tx, ms.prepare(harness.policy(), (Class) stateClass, before, null, StateHarness.LIVE_REF).claims());
                 }
                 v = evaluate(method, t, signer, tx);
@@ -1769,7 +1838,22 @@ final class FourWay {
             o = interp.call(method, state, args, ti);
         } catch (Interpreter.Refused e) {
             refused = e;
+        } catch (Interpreter.Limit e) {
+            // A java: library call (M4b): no answer from the interpreters; the JVM starts the comparison (three legs).
+            if (!threeLegs || !e.getMessage().contains("has no reference semantics")) throw e;
+            noAnswers++;
+            String jv = jvm(method, state, args, t);
+            if (!interp.kind(method).equals("view")) {
+                assertEquals(jv, transition(method, state, args, t), "transition program vs JVM: " + what);
+                Boolean accepted = validator(method, state, args, t, signer, candidate);
+                if (accepted != null) assertEquals(!jv.equals("refused"), accepted, "validator vs JVM: " + what + " " + lastVerdict);
+            }
+            lastRefusal = null;
+            calls++;
+            if (jv.equals("refused")) refusals++;
+            return jv;
         }
+        interpreterAnswers++;
         String want = refused != null ? "refused" : encode(method, o);
         lastRefusal = refused == null ? null : refused.refusal();
         // The JVM method and the transition program compute the transition alone: a broken modifier (§2.6) is the

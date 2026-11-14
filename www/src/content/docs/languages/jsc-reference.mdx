@@ -17,8 +17,9 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 <Aside type="caution" title="A preview">
 `.jsc` 2 is a preview: the core language of milestone M1, M2a's values and native assets (`Value`, `Address`,
 `Credential`, `funds`, `send`, `mint`, `burn`, `accept`), and M2b's params, invariants, events, `quorum` and
-`authorized`, and M2c's composition (other contracts' instances and states, deposits made and received, send datums,
-stored values). M3 to M4 (owned and keyed objects, purposes, libraries) still need [Java](/languages/java/).
+`authorized`, M2c's composition (other contracts' instances and states, deposits made and received, send datums,
+stored values), and `.jsc` and Java libraries (M4, below). M3 (owned and keyed objects, purposes) still needs
+[Java](/languages/java/).
 </Aside>
 
 ## Lexical rules
@@ -38,9 +39,10 @@ stored values). M3 to M4 (owned and keyed objects, purposes, libraries) still ne
 ## Grammar at a glance
 
 ```text
-file      = "jsc" "2" "package" seg { "." seg } { import | type | enum | fn } contract
-import    = "import" "{" Ident { "," Ident } "}" "from" String
-          | "import" "contract" "{" Name "}" "from" String          (M2c: another contract, "./Name.jsc")
+file      = "jsc" "2" "package" seg { "." seg } { import | type | enum | fn } contract { import | type | enum | fn }
+library   = "jsc" "2" "library" seg { "." seg } { import | type | enum | fn }
+import    = "import" "{" Ident { "," Ident } "}" "from" String     (String: "std/…", a relative "./x.jsc", or "java:<class>")
+          | "import" "contract" "{" Name "}" "from" String          (M2c: another contract, "./Name.jsc"; not in a library)
 type      = "type" Name "=" "{" { field [","] } "}"
 enum      = "enum" Name "{" { Name [ "{" { field [","] } "}" ] [","] } "}"
 field     = Ident ":" typeRef
@@ -382,6 +384,128 @@ For accrual that pays the caller, measure from `validFrom` (`elapsedSince(t)`); 
 
 Every read and write is proven against the root by the shared map verifier ([MerkleMaps](/contracts/merklemaps/)).
 
+## Libraries
+
+A file headed `library <package>` is a **`.jsc` library** (ADR-0018 D9): imports, types, enums and fns, and no contract
+(`JSC0711`). Contracts and other libraries import from it by its path relative to the importing file:
+
+```jsc
+// contracts/app/fees.jsc
+jsc 2
+library app
+
+type Line = { to: Key, bps: Int }
+enum Tier { Basic, Gold { since: Int } }
+
+fn fee(amount: Int, bps: Int): Int = amount * bps / 10_000
+fn rate(t: Tier): Int = match t { Basic => 100, Gold { since } => since >= 10 ? 25 : 50 }
+```
+
+```jsc
+// contracts/app/Shop.jsc
+jsc 2
+package app
+
+import { Line, Tier, fee, rate } from "./fees.jsc"
+
+contract Shop {
+  state { owner: Key, price: Int, lines: List<Line>, tier: Tier }
+  init(price: Int, lines: List<Line>) { return { owner: caller, price, lines, tier: Basic } }
+  action buy() payable {
+    require(received >= price + fee(price, rate(tier)), "pay the price and the fee")
+    return state
+  }
+}
+```
+
+| Rule | |
+|---|---|
+| The class | A library lowers to a JuLC `@OnchainLibrary` class of its package, named by its file: `fees.jsc` is `app.Fees` (`JSC0705` when the file name makes no class name). Its fns are `public static`, its types nested records and sealed interfaces (`Fees.Line`, `Fees.Tier`), so **Java contracts call it** as they call any on-chain library (`examples/dsl`'s `JavaShop.java`). Its generated helpers are package-private, named with `__`. A Java caller skips `.jsc`'s ingress checks: the library's fns assume a `Key` of 28 bytes, a `Hash` of 28 or 32 and canonical maps, which only `.jsc` callers guarantee, so a Java contract that builds `new Fees.Line(bytes, …)` checks those lengths itself |
+| Imports | `./x.jsc` and `../dir/x.jsc`, resolved from the importing file and never outside the source folder (`JSC0706`). Only a library can be imported (`JSC0708`), and only names it declares (`JSC0708`). Libraries may import libraries, without cycles (`JSC0707`) |
+| Scope | A file sees its own declarations and the names it imports; importing an enum brings its variants. A library's other declarations are not in scope (`JSC0710`), but its values flow: a fn may return a record whose type the caller did not import, and the caller reads its fields. `std` imports are per file |
+| One namespace | The declarations of a build (a contract and every library it imports, transitively) share one namespace: no two of them, in any of its files, have the same name (`JSC0709`), and none takes a library's class name. No binding (a parameter, const, lambda parameter or match binding) takes a library's class name either, and two libraries of a build never share a file name, even in different packages (`JSC0709`): the generated Java names a library by its class. A method of the contract named like a library variant is refused as for its own (`JSC0203`). Known limit: two third-party libraries that declare one name cannot be combined, as there is no aliasing yet |
+| Checking | A library is checked on its own, and again in each contract that imports it. The time rule (D11) runs through library calls: a library fn called with a time value is checked with that parameter marked, so a division or a `require` on it is refused at the call. An error in a library is reported at the import that brings it into the build, naming the library's own position (`JSC0712`) |
+| Inputs | A library's types are checked inputs like the contract's: a `Line` in a redeemer has its `Key` checked to 28 bytes before the method runs |
+| Artifacts | A library has no ABI manifest of its own: each contract's manifest states the library types its datum and redeemers reach (`"kind": "library"`, with the library's class). Each contract's IR export carries the libraries it imports (format 2), so the JavaScript reference interpreter evaluates their fns, and its message map lists a library's messages with the library's file (`"file": "fees.jsc"`) |
+| Identity | A library's package and file name are its class, which importing files and Java contracts name: renaming either is a code change of every importer, and may change the scripts that use it (bloxbean/julc#328), as a contract's package does |
+
+### Library packages and `joust.lock`
+
+An npm package ships libraries under its `joust-lib/` folder: `.jsc` libraries, and the on-chain sources of Java
+libraries (`joust-lib/<package path>/<Class>.java`). A `.jsc` file imports a package's `.jsc` library by the package
+name and the path under `joust-lib/`, and a Java library by its class:
+
+```jsc
+import { fee } from "@acme/fees/fees.jsc"        // node_modules/@acme/fees/joust-lib/fees.jsc
+import { cap } from "java:acme.allow.Limits"      // node_modules/<any package>/joust-lib/acme/allow/Limits.java
+```
+
+A package library's own relative imports stay inside its package (`JSC0706`). A Java library from a package is
+certified like one from Gradle's `joustLibrary`, and the same codes apply. Of a package's Java sources, a build compiles
+only the source closure of each library a `.jsc` file imports with `java:` or a hand-written Java contract imports; no
+other package source reaches the build. Links under `joust-lib/` are not followed, and two packages that ship one Java
+path are refused, as is a library that declares a class in one of the project's own packages.
+
+**`joust.lock`** (committed at the project's root) pins every library that comes from **outside the project's sources**
+by the SHA-256 of its on-chain sources: a package's `.jsc` library (with the libraries it imports), or a Java library's
+source closure (every source file its class's file names, transitively; keyed by its path inside `joust-lib/`), whether
+a `.jsc` file imports it with `java:` or a hand-written Java contract imports it (ADR-0018 J12). `joust build` lists every library it used with its hash. It fails with `JSC0731` when
+such a library is not pinned, and with `JSC0732` when its sources differ from the pin. Review the library, then run
+`joust build --accept-lock`, which writes the lock to commit. The project's own `.jsc` libraries are part of its sources
+and are not pinned. On Gradle, `generateJsc` checks `joust.lock` for the `joustLibrary` libraries, and `acceptJoustLock`
+writes it.
+
+```json
+{ "lock": 1, "libraries": { "@acme/fees/fees.jsc": "…64 hex…", "java:acme.allow.Limits": "…64 hex…" } }
+```
+
+## Java libraries (`java:`)
+
+A `.jsc` file may import the public static methods and records of a Java (JuLC) on-chain library whose **on-chain
+sources** are on the library path and **certified** (ADR-0018 D9, M4b):
+
+```jsc
+import { Entry, isAllowed, limitOf, entry } from "java:org.example.compliance.AllowList"
+```
+
+On Gradle, the library's jar goes in the `joustLibrary` configuration, as sources only:
+
+```groovy
+dependencies {
+    joustLibrary 'org.example:compliance:1.0'   // its META-INF/plutus-sources
+}
+```
+
+The build extracts the library's `META-INF/plutus-sources`, compiles them into the project (the JVM side runs these
+sources, never the jar's classes), and certifies them before any import is admitted. Certification covers:
+
+- each signature's exact Java types, mapped to `.jsc` or refused;
+- every reachable body, checked with `SubsetLint`;
+- no casts and no reference equality;
+- only calls into the trusted base (D8's table, JOUST's `Require` and adapters, an allow-list of `BigInteger`, `JulcList`,
+  `JulcMap` and `Optional` operations);
+- none of the catalogue of known JVM/on-chain differences.
+
+`checkJoustLibraries` fails when a library class also reaches the runtime class path from a jar. When a contract is
+loaded, the runtime checks the bytes of each library class against the build's.
+
+| Rule | Code |
+|---|---|
+| No sources of the class on the library path | `JSC0720` |
+| The library is not certified (each problem, with its file and line) | `JSC0721` |
+| A fn whose signature does not map (`PlutusData`, maps, values, `void`, generics, fixed-width numbers) | `JSC0722` |
+| An overloaded name | `JSC0723` |
+| A Java record is read-only: built by the library's fns, never by an object literal | `JSC0724` |
+| An opaque record (a field that does not map) is never written as a type, read or compared | `JSC0725` |
+| A time value never reaches a Java fn (D11) | `JSC0726` |
+| A library class also on the runtime class path (Gradle) | `JSC0727` |
+
+`byte[]` maps to `Bytes` (a Java signature cannot say `Key`): make a `Key` of a result with `asKey(b)`. The reference
+interpreters do not evaluate a Java library's body: a call that reaches one has no answer there, and such calls are
+differential-tested on the JVM, the transition program and the validator, beside the library's own per-function vectors.
+The details, and the catalogue, are in
+[jsc-2-java-libraries.md](https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-java-libraries.md).
+
 ## The ABI manifest
 
 For every `.jsc` 2 contract the lowering writes `<Contract>.abi.json` (format `"abi": 2`), which the project commits
@@ -394,7 +518,7 @@ beside the `.jsc` file:
 | `params` (M2b) | the `Config` constructor the script is applied to, when the contract declares params |
 | `redeemers.spend` | one constructor per action, then per destroy, in source order, with its index and fields (the generated `ctx`, M2's `assetsIn` and M2b's `events` included) |
 | `redeemers.mint` | `CreateInstance` (`seed`, `ctx`) and `BurnInstance` |
-| `types` | every schema the datum and the redeemers reach: records, enums, and API and ledger types such as `Ctx`, `TxOutRef`, `MerkleMap` |
+| `types` | every schema the datum and the redeemers reach: records, enums, imported library types (`"kind": "library"`, with the library's class), and API and ledger types such as `Ctx`, `TxOutRef`, `MerkleMap` |
 | `timeFields` | the state's time fields |
 
 Views are not encoded, so moving or adding a view does not change the manifest.
@@ -461,10 +585,11 @@ map gives, with the generated file and line as a note.
 
 | Entry point | Use |
 |---|---|
-| `org.julclang.state.dsl.JscMain <srcDir> <outDir> [--accept-abi]` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first), with each `.jsc` 2 file's source map; checks (or with `--accept-abi` writes) the ABI manifests. Exits 1 on an error, 2 on bad usage. Gradle's `generateJsc` and `acceptJscAbi` run it |
+| `org.julclang.state.dsl.JscMain <srcDir> <outDir> [--accept-abi]` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first), with each `.jsc` 2 file's source map; checks (or with `--accept-abi` writes) the ABI manifests. A file's `./x.jsc` imports resolve to other files of `srcDir`. Exits 1 on an error, 2 on bad usage. Gradle's `generateJsc` and `acceptJscAbi` run it |
 | `JscMain --check-abi <srcDir> <descriptionsDir>` | Checks every manifest against the processor's descriptions (`checkJscAbi`) |
 | `JscMain --migrate <srcDir> <outDir> [--in-place]` | Translates v1 files to `.jsc` 2 ([migration](/languages/jsc-migration/)) |
-| `JscMain.lowerWithWarnings(source, fileName)` | `Lowered(java, diagnostics, fileName, sourceMapJson, abiJson)` for one file; with `(…, id, modules)` (M2c) a file of a build, whose `import contract` imports `modules` resolves |
+| `JscMain.lowerWithWarnings(source, fileName)` | `Lowered(java, diagnostics, fileName, sourceMapJson, abiJson)` for one file, on its own (it imports no libraries and no contracts) |
+| `JscMain.lowerWithWarnings(source, fileName, id, modules)` | The same for the file `id` of a build whose other files `modules` (`JscModules.of(files)`) finds: its libraries (M4) and the contracts it imports (M2c, `import contract`) |
 | `Toolchain.build(files, options)` (`julc-state-toolchain`) | Lowers `.jsc` entries, then compiles everything as Gradle does; used by `joust build` |
 
 ## Next steps

@@ -1,0 +1,572 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "69c075f3fb8c9d0cf070c3f2465bd4ba7eecbe6127b540b1dc89b28b80fb1cbf",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Joined",
+  "source": "Joined.jsc",
+  "options": [],
+  "records": [{ "name": "Tip", "fields": [{ "name": "n", "type": "Int" }], "at": [7, 1] }],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "owner", "type": "Key" },
+      { "name": "lines", "type": { "list": { "record": "Line" } } },
+      { "name": "seen", "type": "Int" }
+    ],
+    "at": [9, 1]
+  },
+  "params": {
+    "name": "Config",
+    "fields": [{ "name": "tips", "type": { "instance": "Tips" } }, { "name": "cap", "type": "Int" }],
+    "at": [10, 3]
+  },
+  "contracts": [
+    {
+      "name": "Tips",
+      "package": "org.julclang.state.examples.dsl",
+      "state": {
+        "name": "Tips.State",
+        "fields": [
+          { "name": "owner", "type": "Key" },
+          { "name": "credits", "type": { "map": ["Key", "Int"] } },
+          { "name": "taken", "type": "Value" },
+          { "name": "last", "type": { "option": { "record": "Tips.Last" } } }
+        ],
+        "at": [12, 1]
+      },
+      "records": [
+        {
+          "name": "Tips.Note",
+          "fields": [{ "name": "to", "type": "Key" }, { "name": "tag", "type": "Bytes" }],
+          "at": [9, 1]
+        },
+        {
+          "name": "Tips.Last",
+          "fields": [{ "name": "by", "type": "Key" }, { "name": "value", "type": "Value" }],
+          "at": [10, 1]
+        }
+      ],
+      "enums": [],
+      "timeFields": [],
+      "receives": [{ "record": "Tips.Note" }],
+      "bigMaps": false
+    }
+  ],
+  "timeFields": [],
+  "recursiveFns": ["digits"],
+  "libraries": [
+    {
+      "library": "org.julclang.state.examples.dsl.Fees",
+      "source": "fees.jsc",
+      "sourceSha256": "f9780036c1a59912129e6b551b01e74dc212fc878219f91f2f83516fb7c66c96",
+      "records": [{ "name": "Line", "fields": [{ "name": "to", "type": "Key" }, { "name": "bps", "type": "Int" }], "at": [11, 1] }],
+      "enums": [
+        {
+          "name": "Tier",
+          "variants": [
+            { "name": "Basic", "fields": [], "at": [13, 13] },
+            { "name": "Gold", "fields": [{ "name": "since", "type": "Int" }], "at": [13, 20] }
+          ],
+          "at": [13, 1]
+        }
+      ],
+      "fns": [
+        {
+          "name": "fee",
+          "params": [
+            { "id": 3, "name": "amount", "type": "Int", "taint": 0, "at": [16, 8] },
+            { "id": 4, "name": "bps", "type": "Int", "taint": 0, "at": [16, 21] }
+          ],
+          "result": "Int",
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "Arith",
+              "op": "/",
+              "left": {
+                "node": "Arith",
+                "op": "*",
+                "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [16, 38] },
+                "right": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [16, 47] },
+                "type": "Int",
+                "taint": 0,
+                "at": [16, 38]
+              },
+              "right": { "node": "Lit", "value": "10000", "type": "Int", "taint": 0, "at": [16, 53] },
+              "type": "Int",
+              "taint": 0,
+              "at": [16, 38]
+            },
+            "at": [16, 38]
+          },
+          "at": [16, 1]
+        },
+        {
+          "name": "total",
+          "params": [{ "id": 5, "name": "lines", "type": { "list": { "record": "Line" } }, "taint": 0, "at": [19, 10] }],
+          "result": "Int",
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "Fold",
+              "list": { "node": "LocalRef", "local": 5, "type": { "list": { "record": "Line" } }, "taint": 0, "at": [19, 36] },
+              "init": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [19, 47] },
+              "acc": { "id": 6, "name": "acc", "type": "Int", "taint": 0, "at": [19, 50] },
+              "x": { "id": 7, "name": "l", "type": { "record": "Line" }, "taint": 0, "at": [19, 50] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [19, 62] },
+                  "right": {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 7, "type": { "record": "Line" }, "taint": 0, "at": [19, 68] },
+                    "record": "Line",
+                    "field": "bps",
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [19, 68]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [19, 62]
+                },
+                "at": [19, 50]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [19, 36]
+            },
+            "at": [19, 36]
+          },
+          "at": [19, 1]
+        },
+        {
+          "name": "rate",
+          "params": [{ "id": 8, "name": "t", "type": { "enum": "Tier" }, "taint": 0, "at": [22, 9] }],
+          "result": "Int",
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "Match",
+              "scrutinee": { "node": "LocalRef", "local": 8, "type": { "enum": "Tier" }, "taint": 0, "at": [22, 31] },
+              "arms": [
+                {
+                  "ctors": ["Basic"],
+                  "fields": [],
+                  "binds": [],
+                  "body": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "100", "type": "Int", "taint": 0, "at": [23, 12] },
+                    "at": [23, 12]
+                  },
+                  "at": [23, 3]
+                },
+                {
+                  "ctors": ["Gold"],
+                  "fields": ["since"],
+                  "binds": [{ "id": 9, "name": "since", "type": "Int", "taint": 0, "at": [24, 10] }],
+                  "body": {
+                    "stmts": [],
+                    "result": {
+                      "node": "Cond",
+                      "cond": {
+                        "node": "Compare",
+                        "op": ">=",
+                        "left": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [24, 21] },
+                        "right": { "node": "Lit", "value": "10", "type": "Int", "taint": 0, "at": [24, 30] },
+                        "type": "Bool",
+                        "taint": 0,
+                        "at": [24, 21]
+                      },
+                      "then": { "node": "Lit", "value": "25", "type": "Int", "taint": 0, "at": [24, 35] },
+                      "otherwise": { "node": "Lit", "value": "50", "type": "Int", "taint": 0, "at": [24, 40] },
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [24, 21]
+                    },
+                    "at": [24, 21]
+                  },
+                  "at": [24, 3]
+                }
+              ],
+              "type": "Int",
+              "taint": 0,
+              "at": [22, 25]
+            },
+            "at": [22, 25]
+          },
+          "at": [22, 1]
+        },
+        {
+          "name": "cuts",
+          "params": [
+            { "id": 10, "name": "amount", "type": "Int", "taint": 0, "at": [28, 9] },
+            { "id": 11, "name": "lines", "type": { "list": { "record": "Line" } }, "taint": 0, "at": [28, 22] }
+          ],
+          "result": { "list": "Int" },
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "Hof",
+              "kind": "map",
+              "list": { "node": "LocalRef", "local": 11, "type": { "list": { "record": "Line" } }, "taint": 0, "at": [28, 54] },
+              "x": { "id": 12, "name": "l", "type": { "record": "Line" }, "taint": 0, "at": [28, 64] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "CallFn",
+                  "fn": "fee",
+                  "args": [
+                    { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [28, 73] },
+                    {
+                      "node": "GetField",
+                      "target": { "node": "LocalRef", "local": 12, "type": { "record": "Line" }, "taint": 0, "at": [28, 81] },
+                      "record": "Line",
+                      "field": "bps",
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [28, 81]
+                    }
+                  ],
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [28, 69]
+                },
+                "at": [28, 64]
+              },
+              "type": { "list": "Int" },
+              "taint": 0,
+              "at": [28, 54]
+            },
+            "at": [28, 54]
+          },
+          "at": [28, 1]
+        },
+        {
+          "name": "nonNegative",
+          "params": [{ "id": 13, "name": "n", "type": "Int", "taint": 0, "at": [31, 16] }],
+          "result": "Int",
+          "body": {
+            "stmts": [
+              {
+                "stmt": "Require",
+                "cond": {
+                  "node": "Compare",
+                  "op": ">=",
+                  "left": { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [32, 11] },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [32, 16] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [32, 11]
+                },
+                "message": "an amount is never negative",
+                "at": [32, 3]
+              }
+            ],
+            "result": { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [33, 3] },
+            "at": [31, 29]
+          },
+          "at": [31, 1]
+        },
+        {
+          "name": "tag",
+          "params": [{ "id": 14, "name": "label", "type": "Bytes", "taint": 0, "at": [37, 8] }],
+          "result": "Bytes",
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "CallStd",
+              "module": "std/bytes",
+              "name": "slice",
+              "args": [
+                {
+                  "node": "CallStd",
+                  "module": "std/crypto",
+                  "name": "blake2b_224",
+                  "args": [{ "node": "LocalRef", "local": 14, "type": "Bytes", "taint": 0, "at": [37, 49] }],
+                  "type": "Bytes",
+                  "taint": 0,
+                  "at": [37, 37]
+                },
+                { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [37, 57] },
+                { "node": "Lit", "value": "8", "type": "Int", "taint": 0, "at": [37, 60] }
+              ],
+              "type": "Bytes",
+              "taint": 0,
+              "at": [37, 31]
+            },
+            "at": [37, 31]
+          },
+          "at": [37, 1]
+        },
+        {
+          "name": "digits",
+          "params": [{ "id": 15, "name": "n", "type": "Int", "taint": 0, "at": [40, 11] }],
+          "result": "Int",
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "Cond",
+              "cond": {
+                "node": "Compare",
+                "op": "<",
+                "left": { "node": "LocalRef", "local": 15, "type": "Int", "taint": 0, "at": [40, 26] },
+                "right": { "node": "Lit", "value": "10", "type": "Int", "taint": 0, "at": [40, 30] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [40, 26]
+              },
+              "then": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [40, 35] },
+              "otherwise": {
+                "node": "Arith",
+                "op": "+",
+                "left": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [40, 39] },
+                "right": {
+                  "node": "CallFn",
+                  "fn": "digits",
+                  "args": [
+                    {
+                      "node": "Arith",
+                      "op": "/",
+                      "left": { "node": "LocalRef", "local": 15, "type": "Int", "taint": 0, "at": [40, 50] },
+                      "right": { "node": "Lit", "value": "10", "type": "Int", "taint": 0, "at": [40, 54] },
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [40, 50]
+                    }
+                  ],
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [40, 43]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [40, 39]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [40, 26]
+            },
+            "at": [40, 26]
+          },
+          "at": [40, 1]
+        }
+      ]
+    }
+  ],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [14, 21] },
+            {
+              "node": "ListLit",
+              "items": [],
+              "rest": null,
+              "type": { "list": { "record": "Line" } },
+              "taint": 0,
+              "at": [14, 36]
+            },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [14, 46] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [14, 12]
+        },
+        "at": [13, 10]
+      },
+      "at": [13, 3]
+    },
+    {
+      "kind": "action",
+      "name": "look",
+      "params": [{ "id": 2, "name": "amount", "type": "Int", "taint": 0, "at": [17, 37] }],
+      "mods": [],
+      "checked": [],
+      "reads": [
+        {
+          "local": {
+            "id": 1,
+            "name": "t",
+            "type": { "record": "Tips.State" },
+            "taint": 0,
+            "at": [17, 15],
+            "fieldTaints": { "credits": 0, "last": 0, "owner": 0, "taken": 0 }
+          },
+          "field": "tips"
+        }
+      ],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": "<=",
+              "left": {
+                "node": "CallFn",
+                "fn": "fee",
+                "args": [
+                  { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [18, 17] },
+                  { "node": "Lit", "value": "100", "type": "Int", "taint": 0, "at": [18, 25] }
+                ],
+                "type": "Int",
+                "taint": 0,
+                "at": [18, 13]
+              },
+              "right": { "node": "ParamsRef", "field": "cap", "type": "Int", "taint": 0, "at": [18, 33] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [18, 13]
+            },
+            "message": "over the cap",
+            "at": [18, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [19, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [19, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [19, 17] },
+              "record": "State",
+              "field": "lines",
+              "type": { "list": { "record": "Line" } },
+              "taint": 0,
+              "at": [19, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "seen", "type": "Int", "taint": 0, "at": [19, 30] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [19, 37] },
+              "type": "Int",
+              "taint": 0,
+              "at": [19, 30]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [19, 12]
+        },
+        "at": [17, 50]
+      },
+      "at": [17, 3]
+    },
+    {
+      "kind": "action",
+      "name": "take",
+      "params": [],
+      "mods": [{ "name": "receives", "type": { "record": "Tip" } }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [23, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "lines",
+              "type": { "list": { "record": "Line" } },
+              "taint": 0,
+              "at": [23, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "seen", "type": "Int", "taint": 0, "at": [23, 30] },
+              "right": {
+                "node": "ListProp",
+                "op": "length",
+                "list": {
+                  "node": "FundsRef",
+                  "field": "deposits",
+                  "type": { "list": { "deposit": { "record": "Tip" } } },
+                  "taint": 0,
+                  "at": [23, 37]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [23, 37]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [23, 30]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [23, 12]
+        },
+        "at": [22, 30]
+      },
+      "at": [22, 3]
+    }
+  ],
+  "invariants": [
+    {
+      "name": "capped",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Compare",
+          "op": "<=",
+          "left": { "node": "StateField", "field": "seen", "type": "Int", "taint": 0, "at": [26, 22] },
+          "right": { "node": "ParamsRef", "field": "cap", "type": "Int", "taint": 0, "at": [26, 30] },
+          "type": "Bool",
+          "taint": 0,
+          "at": [26, 22]
+        },
+        "at": [26, 22]
+      },
+      "at": [26, 3]
+    }
+  ],
+  "warnings": []
+}
