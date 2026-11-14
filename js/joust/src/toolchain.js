@@ -3,7 +3,6 @@
 import { fileURLToPath } from 'node:url';
 import { fork } from 'node:child_process';
 import { heapProblem } from './toolchain-heap.js';
-import { loadImage } from '@julclang/joust-runtime/load';
 
 let loading;
 
@@ -17,7 +16,9 @@ let loading;
 export function loadToolchain({ dir } = {}) {
   if (!loading) {
     const where = dir ?? fileURLToPath(new URL('../engine/', import.meta.url));
-    loading = loadImage(where.replace(/\/?$/, '/') + 'joust-toolchain.js');
+    // The engine loader is imported when an engine is loaded, so the command line's checks before a build need no
+    // package (CI runs cli.test.js with Node built-ins only).
+    loading = import('@julclang/joust-runtime/load').then(({ loadImage }) => loadImage(where.replace(/\/?$/, '/') + 'joust-toolchain.js'));
   }
   return loading;
 }
