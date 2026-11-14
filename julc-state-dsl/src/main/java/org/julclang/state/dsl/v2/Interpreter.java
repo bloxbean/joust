@@ -643,25 +643,29 @@ public final class Interpreter {
 
     /**
      * Semantics §2.7 (M2b): what the validator checks of every state it accepts as an output (ADR-0009 D2, D4), after the
-     * body, so the reference refuses where the validator does, as it does for the modifiers. At a creation, each quorum
-     * that names params is well formed; then, for an init's or action's next state, each quorum that names state fields
+     * body, so the reference refuses where the validator does, as it does for the modifiers. At the instance's init, each
+     * quorum that names params (any method's, an owned one's too) is well formed; then, for an init's or action's next state
+     * (or object), each quorum that names its fields
      * (every pair any method's quorum names, once, in source order) is well formed; then each invariant holds, in
      * declaration order. Well formed: keys strictly ascending (so distinct), each 28 bytes, and 1 <= threshold <= keys.
      */
     private void outputs(Ir.Method m, Outcome o) {
         if (!m.kind().creates() && !m.kind().continues()) return;
         Rec next = (Rec) o.value();
-        // M3a (§2.8): an object's output checks are its type's: the quorums its type's methods name, its type's invariants.
+        // M3a (§2.8): an object's output checks are its type's: the quorums over fields its type's methods name, its type's
+        // invariants. The params are the deployment's (#101 review S1, C1): every params quorum any method names, an owned
+        // one's too, is checked at the instance's init, and at no other creation, as the validator checks them.
         String on = m.on();
         var pairs = new java.util.LinkedHashSet<String>();
         for (Ir.Method x : p.methods()) {
-            if (!java.util.Objects.equals(x.on(), on)) continue;
-            for (Ir.Mod mod : x.mods()) if (mod.name().equals("quorum")) pairs.add(mod.field());
+            for (Ir.Mod mod : x.mods()) {
+                if (!mod.name().equals("quorum")) continue;
+                boolean ofParams = mod.field().startsWith("params.");
+                if (ofParams ? m.kind() == Ir.Kind.INIT : java.util.Objects.equals(x.on(), on)) pairs.add(mod.field());
+            }
         }
         for (String pair : pairs) {
             String[] kt = pair.split(" ");
-            boolean ofParams = kt[0].startsWith("params.");
-            if (ofParams && !m.kind().creates()) continue;
             if (!wellFormed(modField(next, kt[0]), modField(next, kt[1]))) {
                 throw new Refused("the quorum " + pair + " is not well formed", "invariant", "quorum " + pair);
             }

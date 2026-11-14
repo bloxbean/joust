@@ -184,8 +184,11 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   (an `admits T` action's arriving object, M3a3) is declared after the first parameter. The modifier `admits` is
   `{ "name": "admits", "field": T }`. An owned type's invariant names it in `on` (M3a3). A time field of an owned type is
   `T.f` in `timeFields`. Both readers refuse an owned kind without `on`, an `on` that is not an owned type, `shared` outside
-  an owned method, `into` outside an owned action, `arriving` without `admits`, and modifiers naming fields the object does
-  not have.
+  an owned method or of another type than `State`, `into` outside an owned action, `arriving` without `admits`, modifiers
+  naming fields the object does not have, `receives` on an owned method, and an owned type without an owned init or an
+  escape hatch (an owned destroy without `shared`, `before` or `after`). **Not produced until their part** (#101 review
+  F2, F9; refused by both readers until then): `into`, `arriving`, `admits` and an invariant's `on` (M3a3), a payable owned
+  destroy and native assets in an owned method (M3a2).
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),
   `{ "instance": C }` (M2c, `Instance<C>`), `{ "deposit": T|null }` (M2c, an element of `funds.deposits`: its memo type,
   or null),

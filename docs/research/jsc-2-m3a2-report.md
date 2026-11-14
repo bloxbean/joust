@@ -26,7 +26,13 @@ between markets (`relist` with `into`, `enlist` with `admits`), which are M3a3's
 **Locker** (`Locker.jsc`; Java `Locker.java`): an instance `BigMap` of balances with native assets. Stated difference:
 `unlock` takes Funds (a send is checked against the own policy, D4); the copied `LockerTest` passes the funds the instance
 holds (`copyPortTests`' word map). **Safes** (`Safes.jsc`; Java `Safes.java`): an owned type with a `BigMap` that takes
-native assets at creation. Stated difference: the state's `open` is `isOpen` (`open` is a modifier word).
+native assets at creation. Stated differences: the state's `open` is `isOpen` (`open` is a modifier word); and **a zero
+note** (#104 review C2): the port's notes are a `BigMap<Bytes, Int>`, whose `set` of 0 removes the key (D7: an absent key
+reads 0), where examples/locker's `MerkleMaps.putInt` stores a present entry of the empty encoding. So `note(k, 0)` leaves
+a different committed map: under a new key the Java example adds a present zero and the port changes nothing; over an
+existing note the Java example keeps the key and the port removes it. Both validators accept both calls
+(`JscV2M3a2GateTest.aZeroNote_isAStatedDifference`); every other value agrees. Keeping the present zero would need an Int
+to Bytes conversion in `std`, which `.jsc` 2 does not have.
 
 **Size** (`JscV2M3a2GateTest.size_within15PercentOfJava_andUnderTheRuntimeLimit`):
 

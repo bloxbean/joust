@@ -733,6 +733,21 @@ Two decisions the security review asked for (M3a1, r23):
   through its own calls (`received`, `pay`). The processor allows `@Receives` on an owned action; `.jsc` does not
   expose it, as no deposit could reach it.
 
+After #101's review (round r1), M3a1 also settles these:
+
+- **`shared` takes `Ctx`** (decision 3 of the report) is a port-fidelity choice: the processor does not tie `@Shared`
+  to `Ctx`, and examples/bank's owned methods take `Ctx` without needing it, so the ports keep their redeemers. A later
+  milestone may make it conditional on the method reading the transaction.
+- **An escape hatch** (JSC1209) is an owned destroy without `shared`, `before` or `after`: neither the instance's state
+  nor a deadline can trap an object. One that never reads `balance` could pay out nothing the validator accepts, so it is
+  an error (JSC1216). That its body can succeed is otherwise the author's: the rule is syntactic.
+- **Params quorums are the deployment's**: every `quorum params.k params.t`, an owned method's too, is checked at the
+  instance's init and at no owned init, as the validator's `paramsQuorumChecks` does (semantics §2.7).
+- **Native assets in owned actions and destroys** (`accept`, `send`, `mint`, `burn`, `deposit`, `funds`) come with
+  M3a2, which specifies `funds` for an object; M3a1 refuses them (JSC1215). Both IR readers are as strict, staged by part.
+- **An owned init's parameters** may take the shared state's field names (it is read only by projection), and the
+  owned annotations' names are reserved only in contracts with owned types.
+
 **As built in M3a2 (r24): several owned types, BigMaps in owned types, creations that accept** (ADR-0012 D1, D2;
 ADR-0014; gated by locker's Locker and Safes). A contract may declare several owned types; each type's objects are a
 constructor of the sealed `Holding_T` datum (in declaration order), so a method runs only on its own type's objects
@@ -741,7 +756,9 @@ type may keep `BigMap`s, whose claims are owned by the object's input or, at cre
 none while there are owned types (JSC1211). Issue #81 is fixed for `@OwnedInit`: a creation returning `(state,
 accepted)` has a transition program that reports what it accepted, so an owned init may `accept` native assets. An
 instance's `init` still may not (JSC0426): the processor reads the state's type from what `@Init` returns. An owned
-destroy may be `payable` (its payouts allocate `balance + received`). Market's port moves to M3a3, since it moves
+destroy may be `payable` (its payouts allocate `balance + received`). The Safes port's zero note is a stated difference
+(#104 review C2): a `BigMap<K, Int>`'s set of 0 removes the key (D7), where examples/locker's `putInt` stores a present
+zero. Market's port moves to M3a3, since it moves
 listings between markets (`relist`, `enlist`). The lowering drops checks that hold for every value (a list made once is
 not reversed; a send of `funds.held` or to `wallet(k)`, `accept(Value.none())`, a `Key` or `Hash` key's length; an
 `Int` map's `set` is one write), which keeps the locker ports under the runtime's 15,000-byte reference-script limit.
@@ -754,11 +771,13 @@ object as its input holds it. Both halves are in one transaction, and each reads
 (the processor's `@Into` and `@Admits`). `invariant T.name` is checked on every continuing object of type `T`. JSC1215
 is retired. One more decision the security review asked for:
 
-- **The order of a move's two halves (review A24).** The source's half is evaluated first, then the destination's
-  admit; when both refuse, the source's refusal is reported (the interpreters, the JVM and the transition program
-  report the class of the half they run; `JscV2M3a3FourWayTest` pins a move from a closed guild into a closed guild,
-  refused with the source's class). Neither half sees the other's outcome: the admit reads the arriving object's
-  input, and the move reads the destination's input (`JscV2M3a3AttackTest.admissionReadsTheArrivingInput_notTheMoveResult`).
+- **The order of a move's two halves (review A24; narrowed after #107 review C1).** Each half is its own call: it reads
+  its own input and the other half's input, never the other's outcome (the admit reads the arriving object's input;
+  the move reads the destination's input), and a refusal's class is its own half's. The transaction is accepted only
+  if both halves are. No transaction-wide order is defined beyond that: the interpreters, the JVM and the transition
+  program run the half they are given, and the runtime's `Compose` reports the first refusal in the order its calls
+  were added. (`JscV2M3a3FourWayTest` checks each half's class from that half; `JscV2M3a3FourWayTest.ferry` shows the
+  admit reading the input, not the move's result.)
   An arriving object comes only from an instance of the same policy, so its datum is the contract's own output, not a
   checked input.
 
@@ -1321,8 +1340,8 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 | M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; five-way differential tests (four-way to M1a) and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten. M1c's thresholds (r11): "below 14 KB" is below 14,000 bytes; "the protocol maximum" is 10,000,000,000 CPU steps and 14,000,000 memory units (the pre-Plomin memory limit, the stricter one), summed over every script of the transaction, with a warning above 80%; the saturated state is the largest one the Java example accepts (its stored datum within `maxDatumBytes`), which the port must then accept; a batched action is measured at `Batcher.DEFAULT_MAX` intents too |
 | M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green. Split (r15) into stacked parts: **M2a** values and assets (`Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `std/value`, `std/address`; gated by dex), **M2b** params, invariants, events, quorum, authorized (gated by treasury), **M2c** composition (deposits and `receives`, `reads`, `Instance<C>`, `import contract`, send datums and memo encoders, stored `Value`s with the wire conversion; gated by oracle and fees). M2c as built (r21): the oracle (Oracle, Shop as Kiosk) and fees (Pot, Stall) ports within +4% of the Java examples' sizes and budgets, every transaction at most 11.6% of the CPU and 26.2% of the memory maximum (a pot collecting 8 deposits); report `jsc-2-m2c-report.md`. **Exited (r22)**, on the integration branch: treasury 9,910 B (+6.6%), oracle 5,843 B (+0.9%; Kiosk 6,450 B, +2.1%), fees (Pot 9,439 B, +1.1%; Stall 9,846 B, +3.9%) and dex 13,492 B (+10.3%), all within J11; five-way M2a 136, M2b 56, M2c 81 calls |
 | M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green. Split (r23) into stacked parts: **M3a1** owned objects, one type, shared reads (bank; r23); **M3a2** several owned types, `BigMap`s in owned types, creations that take native assets with #81's fix (locker's Locker and Safes; r24); **M3a3** moves (`into`, `admits`) and invariants by type (guild's Guild and Armory, and market, moved from M3a2 in r24; r25); **M3b** keyed objects (registry); **M3c** script purposes, staking and migration (staking, upgrade). M3a1 as built (r23): the bank port within +2.3% of the Java example's size and +2.5% of its budget, every transaction at most 1.75% of the CPU and 3.98% of the memory maximum; report `jsc-2-m3a1-report.md`. M3a2 as built (r24): the locker ports (Locker, Safes) within +2.5% of the Java examples' sizes and +3.4% of their budgets, under the runtime's 15,000-byte limit; J11's 14 KB is exceeded by the Java examples (14,499 and 14,564 B) and the ports (14,812 and 14,935 B) alike, recorded as an exception; market moves to M3a3; report `jsc-2-m3a2-report.md`. M3a3 as built (r25): the guild ports within -1.2% to -0.4% of the Java examples' sizes (below 14 KB) and +0.9% of their budgets; the market port +6.3% (14,372 B: over J11's 14 KB, under the runtime's 15,000-byte limit, stated as an exception with the numbers) and -7.9% to +6.5% of its budgets; report `jsc-2-m3a3-report.md` |
-| M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12 (libraries from outside the sources pinned); a `.jsc` library called from Java and a Java library from `.jsc` (in `examples/dsl`; the plugin path waits for the toolchain's publication, D9 r19 amended); the template's tests run offline |
-| M5 | Language server | M3, M4 exit | — |
+| M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12 (libraries from outside the sources pinned); a `.jsc` library called from Java and a Java library from `.jsc` (in `examples/dsl`; the plugin path waits for the toolchain's publication, D9 r19 amended); the template's tests run offline. **Exited (r22)**, on the integration branch: Shop with `fees.jsc` on five legs (285 calls), `Guarded` on three legs for its `java:` calls (129 of 133), `JavaShop` calling `fees.jsc`, `joust.lock` on npm and Gradle, the template's offline tests |
+| M5 | Language server | ADR-0021 §8's gates (M5a: M1e's exit; M5b and M5c: their own); the language server merges to `main` only after this ADR's acceptance (#83). The `.jsc` 2 integration branch (#98) carries M5a before M3: these gates apply to `main`, not to that branch | — |
 
 **Recommendation gate.** `.jsc` 2 becomes the recommended language for JS developers when M2 and M4 have exited (the
 features most dApps need, and offline tests) **and** an independent security review of the lowering, the generated
@@ -1725,5 +1744,6 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   market's port to M3a3, which builds the moves it needs. JSC0426 stays for an instance's init (the processor reads the
   state's type from `@Init`'s return), with that reason.
 - **r25** (2026-11-14, M3a3: moves and invariants by type): D10 records what M3a3 built and the decision on the order
-  of a move's halves (A24: the source's first; each reads the other's input); §8 records M3a3's gates (the guild and
+  of a move's halves (A24: each half its own call, reading the other's input; narrowed after #107's review); §8 records
+  M3a3's gates (the guild and
   market ports; market over J11's 14 KB, stated as an exception with the numbers). JSC1215 is retired.

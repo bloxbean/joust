@@ -296,7 +296,8 @@ modifier is dropped on the way (#76 review S5).
 The validator checks every state it accepts as an output (ADR-0009 D2, D4); the interpreters make the same checks after
 the body, in this order, so a call refused there has the class the rule names:
 
-1. At a creation (an init): each quorum that names params fields (`quorum params.k params.t`) is *well formed*.
+1. At the instance's creation (its `init`, not an owned init): each quorum that names params fields (`quorum params.k
+   params.t`) that any method names, an owned method's too, is *well formed*: the params are the deployment's.
 2. For an init's or an action's next state: each pair of state fields any method's `quorum` names (once each, in source
    order) is well formed. A destroy has no output and makes no output check.
 3. Each invariant holds of the next state (with the params), in declaration order (class `invariant:<name>`). An
@@ -334,8 +335,9 @@ a record (§1), compared and encoded as one. Owned methods name their type: `own
   In a transaction that also spends the instance, τ.`shared` is still the input's state, never the instance call's
   outcome (ADR-0018 D10, r23; today's ledger refuses such a transaction, and the runtime never builds one).
 - **No deposits.** An owned action receives none (`receives` is JSC0447): a deposit's target is an instance.
-- **Output checks** (§2.7): for an owned init's and an owned action's object, each quorum that the owned type's methods
-  name (over the object's fields) is well formed. An owned destroy makes no output check.
+- **Output checks** (§2.7): for an owned init's and an owned action's object, each quorum over fields that the owned
+  type's methods name (over the object's fields) is well formed. A params quorum is checked at the instance's init only
+  (§2.7 item 1), whichever method names it, never at an owned init. An owned destroy makes no output check.
 - **Kinds.** A method of type `T` called on an object of another type is the caller's error, not a refusal: the
   validator refuses it (ADR-0003 I21, ADR-0012 I42) and the attack suite covers it.
 - **Transaction-level rules** (§2): a shared read of another instance than the object's, an object spent with an
@@ -357,10 +359,13 @@ a record (§1), compared and encoded as one. Owned methods name their type: `own
   of the contract: its outcome is the object's next value, held under that instance. τ.`into` is the destination's
   state as the transaction's input holds it. The destination consents with an instance action `admits T`, whose first
   parameter is the arriving object's id and whose optional second parameter (`obj: T`) is the arriving object as its
-  input holds it, before the move. Both halves are in one transaction, and each reads the other's input, never its
-  outcome. **The order is normative** (ADR-0018 D10, r25): a move's source half is evaluated first, then the admit, so
-  when both refuse, the source's refusal is the one reported. An object arrives only from an instance of the same
-  policy, so its datum is this contract's own output and not a checked input.
+  input holds it, before the move (not for a type that keeps a `BigMap`: its map reads would be unproven, so it is
+  admitted by its id alone, JSC1212). Both halves are in one transaction, and each reads the other's input, never its
+  outcome. **Each half is its own call** (ADR-0018 D10, r25, after #107 review C1): it is evaluated on its own input and
+  the other half's input, and a refusal's class is its own half's. The transaction is accepted only if both halves are:
+  the validator refuses it when either half refuses. No order between the halves is defined beyond that: a tool that
+  runs both reports the first refusal it meets (the runtime's `Compose`, in the order calls were added). An object
+  arrives only from an instance of the same policy, so its datum is this contract's own output and not a checked input.
 - **Invariants by type** (M3a3, ADR-0012 D1): `invariant T.name = …` reads an object of type `T` (its fields as bare
   names) and is checked on every continuing object of that type (an owned init's, an owned action's, a move's), never
   on another type's objects or on the state. A type that keeps a `BigMap` has none (JSC1213).

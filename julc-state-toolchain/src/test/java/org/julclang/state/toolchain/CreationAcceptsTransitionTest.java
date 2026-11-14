@@ -1,5 +1,7 @@
 package org.julclang.state.toolchain;
 
+import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.BytesPlutusData;
 import com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData;
 import com.bloxbean.cardano.client.plutus.spec.ListPlutusData;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
@@ -14,6 +16,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigInteger;
 import java.util.Arrays;
+import java.util.Map;
 
 import static org.julclang.state.toolchain.TransitionParityTest.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -65,5 +68,77 @@ class CreationAcceptsTransitionTest {
     static org.julclang.ledger.Address wallet(byte[] key) {
         return new org.julclang.ledger.Address(new org.julclang.ledger.Credential.PubKeyCredential(new org.julclang.ledger.PubKeyHash(key)),
                 java.util.Optional.empty());
+    }
+
+    // ------------------------------------------------------------------ #104 review C1: a component named state
+
+    static final String STATE_FIELD = """
+            package org.julclang.state.examples.probe;
+
+            import java.math.BigInteger;
+            import org.julclang.state.api.Action;
+            import org.julclang.state.api.Ctx;
+            import org.julclang.state.api.Init;
+            import org.julclang.state.api.Owned;
+            import org.julclang.state.api.OwnedDestroy;
+            import org.julclang.state.api.OwnedInit;
+            import org.julclang.state.api.Shared;
+            import org.julclang.state.api.SignedBy;
+            import org.julclang.state.api.StateContract;
+            import org.julclang.state.api.Payouts;
+            import org.julclang.state.api.Payout;
+            import org.julclang.core.types.JulcList;
+
+            @StateContract
+            public class StateField {
+                public record State(BigInteger state) {}
+
+                @Owned
+                public record Item(BigInteger state, byte[] owner) {}
+
+                @Init
+                public static State init() {
+                    return new State(BigInteger.ONE);
+                }
+
+                @Action
+                public static State increment(State s) {
+                    return new State(s.state().add(BigInteger.ONE));
+                }
+
+                @OwnedInit
+                public static Item make(@Shared State s, Ctx ctx) {
+                    return new Item(BigInteger.valueOf(7), ctx.caller());
+                }
+
+                @OwnedDestroy
+                @SignedBy("owner")
+                public static JulcList<Payout> end(Item i, Ctx ctx) {
+                    return Payouts.of(i.owner(), ctx.balance());
+                }
+            }
+            """;
+
+    /**
+     * #104 review C1: a creation is unwrapped only when it returns a result record (ContractReader's RESULT). A state, or
+     * an owned record, with a component named {@code state} is the creation's value itself: the program steps to the
+     * whole record, as the validator does.
+     */
+    @Test
+    void aComponentNamedState_isNotUnwrapped() throws Exception {
+        var built = Toolchain.build(Map.of("org/julclang/state/examples/probe/StateField.java", STATE_FIELD), Map.of());
+        assertTrue(built.ok(), built.diagnostics().toString());
+        var programs = built.contracts().get(0).transitions();
+        // init: Some(State(1)), not Some(1).
+        PlutusData state1 = ConstrPlutusData.of(0, BigIntPlutusData.of(1));
+        PlutusData empty = ListPlutusData.builder().build();
+        assertEquals("ok:" + ConstrPlutusData.of(0, ConstrPlutusData.of(0, state1), empty).serializeToHex(),
+                evaluate(programs.get("init"), NONE, NONE, args(), NONE), "the instance's init steps to its whole State");
+        // make (an owned init): Some(Item(7, caller)), not Some(7).
+        byte[] caller = fill(28, 0xA1);
+        var ctx = new Ctx(caller, BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO);
+        PlutusData item = ConstrPlutusData.of(0, BigIntPlutusData.of(7), BytesPlutusData.of(caller));
+        assertEquals("ok:" + ConstrPlutusData.of(0, ConstrPlutusData.of(0, item), empty).serializeToHex(),
+                evaluate(programs.get("make"), NONE, state1, args(), data(ctx)), "the owned init steps to its whole Item");
     }
 }

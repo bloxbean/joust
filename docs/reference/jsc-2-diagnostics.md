@@ -161,11 +161,12 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 
 ### Names M3a reserves (ADR-0018 D16)
 
-As the earlier parts', these are refused **in every contract**, whether it declares owned types or not.
+`admits` is refused in every contract, as the earlier parts' names are. The annotation names are refused only **in a
+contract with owned types**, the only kind that imports them (#101 review F10).
 
 | The name | Where it is now refused | Code |
 |---|---|---|
-| `Owned`, `OwnedInit`, `OwnedAction`, `OwnedDestroy`, `Shared`, `Into`, `Admits` (the annotations owned objects and moves lower to) | a type, enum, variant, field, binding or method name | JSC0211 |
+| `Owned`, `OwnedInit`, `OwnedAction`, `OwnedDestroy`, `Shared`, `Into`, `Admits` (the annotations owned objects and moves lower to), in a contract with owned types | a type, enum, variant or event name | JSC0211 |
 | `admits` (a method modifier) | a field or binding name | JSC0211 |
 | `Holding`, `Created`, `Exchanged` and, for an owned type `T`, `TOutcome`, `TReceived`, `TCreated` (the owned datum and the result records) | a method name whose redeemer would take it (`holding`, `created`, …) | JSC0203 |
 | the client's lookup of an owned type `T` (`t`, its name with a lower-case first letter: `account` for `Account`) | a method name | JSC1204 |
@@ -265,7 +266,7 @@ cardano-client-lib's `Account` there.
 | JSC0440 | error | a contract with a quorum over state fields (' … ' in … ) cannot have batched actions: a batch's states are not checked, so a batched action could make the quorum unreachable (ADR-0009 r3); use a params quorum, or no batched actions | Checker (M2b) |
 | JSC0441 | error | an invariant is a Bool, so it holds no require (ADR-0009 D4): write the condition into its value (invariant ok = a && b) | Checker (M2b) |
 | JSC0442 | error | a deposit names its memo too: deposit(target, value, memo); the memo is any value the receiver reads (a beneficiary, an order id) | Parser (M2c) |
-| JSC0443 | error | reads is for an action or destroy: an init, a view or a fn reads no other contract (ADR-0011 D2) / a batched action cannot read another contract yet | Checker (M2c) |
+| JSC0443 | error | reads is for an action or destroy of the instance: an init, an owned method, a view or a fn reads no other contract (ADR-0011 D2) / a batched action cannot read another contract yet | Checker (M2c) |
 | JSC0444 | error | reads params. … : the contract declares no params { … } / … ; reads names a params field Instance<C> | Checker (M2c) |
 | JSC0445 | error | Instance<C> names an imported contract C … / an Instance<C> is a params field only … / an Instance<C> is used whole, as a deposit's target or by reads, and has no field ' … ' | Checker (M2c) |
 | JSC0446 | error | … is another contract's type: it can be read (from reads) and passed to fns, but not be … / … is another contract's enum: compare it with == … matching on it is not supported yet | Checker (M2c) |
@@ -466,12 +467,13 @@ rule is the processor's (ContractReader), refused at the `.jsc` position.
 | JSC1206 | error | a method has at most one … parameter / the … parameter comes first(, after shared if there is one) (ADR-0003 D1, ADR-0012 D3) | Checker (M3a) |
 | JSC1207 | error | a method parameter cannot be (or hold) an owned type: an object is its own UTxO, read by its methods, never passed as an argument … / an owned type is no field of another value: an object is its own UTxO (ADR-0003 D2) | Checker (M3a) |
 | JSC1208 | error | the owned type … needs an owned init to create its objects: owned init ….open(…) { … } | Checker (M3a) |
-| JSC1209 | error | objects of the owned type … need an escape hatch: an owned destroy on … without a shared parameter, so an owner can always close their object whatever the instance's state (ADR-0003 r2, ADR-0012 D1) | Checker (M3a) |
+| JSC1209 | error | objects of the owned type … need an escape hatch: an owned destroy on … without a shared parameter, before or after, so an owner can always close their object whatever the instance's state and the time (ADR-0003 r2, ADR-0012 D1). Syntactic: that the hatch's body can succeed is the author's (but see JSC1216) | Checker (M3a) |
 | JSC1210 | error | a contract with owned objects cannot destroy its instance: objects that read it (shared) would be locked forever (ADR-0003 r2); end the objects with their owned destroys | Checker (M3a) |
 | JSC1211 | error | a contract with owned objects keeps no BigMap state: a shared read has no proof path for its maps (ADR-0003 r2); a BigMap may be a field of an owned type instead (ADR-0012 D2) | Checker (M3a) |
-| JSC1212 | error | admits goes on an instance action: objects arrive at an instance (ADR-0012 D3) / an admits action cannot be batched … / admits …: … is not an owned type of this contract / an admits action's first parameter is the arriving object's id, a Bytes … / an admits action cannot read another contract yet | Checker (M3a) |
+| JSC1212 | error | admits goes on an instance action: objects arrive at an instance (ADR-0012 D3) / an admits action cannot be batched … / admits …: … is not an owned type of this contract / an admits action's first parameter is the arriving object's id, a Bytes … / an admits action cannot read another contract yet / the arriving … keeps a BigMap, so an admits action cannot take it as a parameter: admit it by its id alone (#107 review C3) | Checker (M3a) |
 | JSC1213 | error | the owned type … holds a BigMap, so it cannot have invariants: on chain only the opened reads are visible, so the JVM and the chain would disagree (ADR-0009 r2, ADR-0012 D2) | Checker (M3a) |
 | JSC1214 | error | … moves a … to another instance, which must consent: declare an action admits … (ADR-0012 D3) / … admits …, but no owned action moves a … (an into parameter): no object could ever arrive through it (ADR-0012 D3) | Checker (M3a) |
+| JSC1216 | error | … is its type's escape hatch but never reads balance: an owned destroy pays out everything the object holds (the validator refuses any other allocation), so no object could ever be closed | Checker (M3a1, #101 review S3) |
 
 JSC1215 (the parts of M3a not built yet) is retired in M3a3.
 

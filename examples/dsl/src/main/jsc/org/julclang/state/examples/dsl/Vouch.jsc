@@ -1,0 +1,28 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3a1 coverage (#101 review S1, C1): a params quorum named only by an owned method. The params are the
+// deployment's, so the instance's init checks the quorum's shape (as the validator does), and no owned init does.
+contract Vouch {
+  params { keys: List<Key>, threshold: Int }
+  state { host: Key, vouches: Int }
+
+  owned Card { owner: Key, vouched: Int }
+
+  init() {
+    return { host: caller, vouches: 0 }
+  }
+
+  owned init Card.make(v: shared) {
+    return { owner: caller, vouched: 0 }
+  }
+
+  // The keepers vouch for a card: a quorum of the params' keys.
+  owned action Card.endorse() quorum params.keys params.threshold {
+    return { ...state, vouched: vouched + 1 }
+  }
+
+  owned destroy Card.tear() only owner {
+    pay(owner, balance)
+  }
+}
