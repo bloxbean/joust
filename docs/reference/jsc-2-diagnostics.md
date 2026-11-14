@@ -113,7 +113,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0222 | error | ' … ' would hide the type / enum / variant / fn …; a name is bound once and never replaces a declaration | Checker |
 | JSC0223 | error | the batched action … has an intent form named …Intent (the client's method) and …Intent (the validator's record); a method or type of that name would clash with it: rename one of them | Checker |
 | JSC0224 | error | the invariant … has the name of a method, fn or other invariant; rename it (each becomes a method of one Java class) / … has the name of a declared type, variant or built-in; rename it | Checker (M2b) |
-| JSC0225 | error | 'Config' is the name of the params record (ADR-0009 D1): a contract with params cannot declare a type, enum, variant or event named Config / 'Event' is the type of the contract's events (each 'event X { … }' is one of its variants, ADR-0009 D5): … cannot declare … named Event; rename it | Checker (M2b) |
+| JSC0225 | error | 'Config' is the name of the params record (ADR-0009 D1): a contract with params cannot declare a type, enum, variant or event named Config / 'Event' is the type of the contract's events (each 'event X { … }' is one of its variants, ADR-0009 D5): … cannot declare … named Event; rename it / '…' is the record generated for the owned type …'s results (ADR-0018 D10, M3a): a contract with that owned type cannot declare … named …; rename it | Checker (M2b, M3a) |
 
 ### Names M2a reserves: a source change for preview users (ADR-0018 D16; M2a review F9)
 
@@ -269,7 +269,7 @@ cardano-client-lib's `Account` there.
 | JSC0444 | error | reads params. … : the contract declares no params { … } / … ; reads names a params field Instance<C> | Checker (M2c) |
 | JSC0445 | error | Instance<C> names an imported contract C … / an Instance<C> is a params field only … / an Instance<C> is used whole, as a deposit's target or by reads, and has no field ' … ' | Checker (M2c) |
 | JSC0446 | error | … is another contract's type: it can be read (from reads) and passed to fns, but not be … / … is another contract's enum: compare it with == … matching on it is not supported yet | Checker (M2c) |
-| JSC0447 | error | only an action receives deposits: it continues, and its output takes them (ADR-0011 D3) / a batched action cannot receive deposits … | Checker (M2c) |
+| JSC0447 | error | only an action receives deposits: it continues, and its output takes them (ADR-0011 D3) / a batched action cannot receive deposits … / an owned action receives no deposits: a deposit's target is an instance (Instance<C>), never an object (ADR-0018 D10, M3a) | Checker (M2c) |
 | JSC0448 | error | funds.deposits is read in a receiving action … / this action reads no memos: say which type they are, action name(…) receives T … / a deposit has value and memo, not ' … ' | Checker (M2c) |
 | JSC0449 | error | a deposit's target is another contract's instance: a params field Instance<C> … / the contract … has no receiving action (receives), so nothing could take this deposit … | Checker (M2c) |
 | JSC0450 | error | the memo is … , but … 's receiving actions read memos of … : no receiver could decode it, so the transaction would always fail | Checker (M2c) |

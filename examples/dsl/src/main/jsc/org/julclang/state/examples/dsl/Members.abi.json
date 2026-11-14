@@ -3,7 +3,7 @@
   "contract": "org.julclang.state.examples.dsl.Members",
   "source": "Members.jsc",
   "datum": { "name": "State", "constr": 0, "fields": [
-      { "name": "host", "type": "Key", "data": "bytes28" },
+      { "name": "owner", "type": "Key", "data": "bytes28" },
       { "name": "isOpen", "type": "Bool", "data": "bool" },
       { "name": "joined", "type": "Int", "data": "int" }
     ] },
@@ -52,6 +52,7 @@
           { "name": "guardians", "type": "List<Key>", "data": "list<bytes28>" },
           { "name": "needed", "type": "Int", "data": "int" },
           { "name": "until", "type": "Int", "data": "int" },
+          { "name": "tier", "type": "Tier", "data": "Tier" },
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] }
     ]

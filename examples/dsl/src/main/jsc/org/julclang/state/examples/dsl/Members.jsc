@@ -6,7 +6,7 @@ package org.julclang.state.examples.dsl
 // the params and the club by reference, take checked inputs, and emit events.
 contract Members(maxDatumBytes = 640) {
   params { fee: Int }
-  state { host: Key, isOpen: Bool, joined: Int }
+  state { owner: Key, isOpen: Bool, joined: Int }
 
   event Noted { by: Key, score: Int }
   event Left { who: Key, notes: Int }
@@ -17,18 +17,19 @@ contract Members(maxDatumBytes = 640) {
   owned Member { owner: Key, guardians: List<Key>, needed: Int, notes: Map<Key, Int>, tier: Tier, best: Option<Note>, until: Int }
 
   init() {
-    return { host: caller, isOpen: true, joined: 0 }
+    return { owner: caller, isOpen: true, joined: 0 }
   }
 
-  action setOpen(nowOpen: Bool) only host {
+  action setOpen(nowOpen: Bool) only owner {
     return { ...state, isOpen: nowOpen }
   }
 
   // Joins while the club is open, paying at least the fee; the guardians and the deadline are checked inputs.
-  owned init Member.join(club: shared, guardians: List<Key>, needed: Int, until: Int) payable {
+  // Both the club and the member have an owner: in an owned method, owner (and only owner) is the member's.
+  owned init Member.join(club: shared, guardians: List<Key>, needed: Int, until: Int, tier: Tier) payable {
     require(club.isOpen, "the club is closed")
     require(received >= params.fee, "pay the fee")
-    return { owner: caller, guardians, needed, notes: Map.empty(), tier: Basic, best: None, until }
+    return { owner: caller, guardians, needed, notes: Map.empty(), tier, best: None, until }
   }
 
   // Before its deadline, the owner notes a score from someone; the best note is kept.

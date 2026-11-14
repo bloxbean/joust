@@ -1656,6 +1656,19 @@ final class FourWay {
         byte[] caller = t == null ? signer : t.caller().bytes();
         var txs = new ArrayList<org.julclang.state.testkit.TxModel>();
         if (next != null) for (Object m : nearbyRecords(next)) txs.add(ownedTx(method, state, args, t, signer, true, m, pays, o, null));
+        // Security review A3 (I19): a creation's object pinned to another instance of the policy than the redeemer's, its
+        // value unchanged (Attacks' "object's instance changed" covers the spends).
+        if (kind.equals("init")) {
+            var pinned = accepted.copy();
+            var out = pinned.outputs.get(pinned.stateOutput);
+            var datum = (org.julclang.core.PlutusData.ConstrData) ((org.julclang.ledger.OutputDatum.OutputDatumInline) out.datum()).datum();
+            var fs = new ArrayList<>(datum.fields());
+            fs.set(0, org.julclang.core.PlutusData.bytes(StateHarness.fill(32, 0x77)));
+            pinned.outputs.set(pinned.stateOutput, new org.julclang.ledger.TxOut(out.address(), out.value(),
+                    new org.julclang.ledger.OutputDatum.OutputDatumInline(new org.julclang.core.PlutusData.ConstrData(datum.tag(), fs)),
+                    out.referenceScript()));
+            txs.add(pinned);
+        }
         if (!kind.equals("init")) {
             for (var q : nearbyPayouts(pays, caller, kind.equals("action"))) txs.add(ownedTx(method, state, args, t, signer, true, next, q, o, null));
         }

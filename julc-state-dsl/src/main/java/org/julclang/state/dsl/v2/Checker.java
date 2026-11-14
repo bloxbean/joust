@@ -1193,6 +1193,15 @@ final class Checker {
 
     /** M2b: {@code Config} names the params record and {@code Event} the events' type, when the contract has them. */
     private static void generatedTypeName(String n, Pos p, Contract c) {
+        // M3a: the records generated for owned types (TOutcome, TReceived, TCreated) and the owned datum, by their names.
+        for (TypeDecl o : c.owned()) {
+            for (String g : List.of(o.name() + "Outcome", o.name() + "Received", o.name() + "Created")) {
+                if (n.equals(g)) {
+                    throw p.error("JSC0225", "'" + g + "' is the record generated for the owned type " + o.name() + "'s results (ADR-0018"
+                            + " D10, M3a): a contract with that owned type cannot declare a type, enum, variant or event named " + g + "; rename it");
+                }
+            }
+        }
         if (n.equals(Ir.PARAMS) && c.params() != null) {
             throw p.error("JSC0225", "'Config' is the name of the params record (ADR-0009 D1): a contract with params cannot declare a"
                     + " type, enum, variant or event named Config; rename it");
@@ -1680,6 +1689,7 @@ final class Checker {
             // batched actions in one (ADR-0007 r2), so the checker does, at the batched modifier.
             // M2c: deposits and receives make a contract asset-aware too (D10; ADR-0011 D3).
             assetAware = c.methods().stream().anyMatch(m -> usesFunds(m.body()) || effectsIn(m.body()).contains("deposit") || receives(m));
+            ownedFields(c);
             for (Syntax.Method m : c.methods()) methods.add(method(m));
         }
         // Every fn of the build, each in its module's scope: the program's own, then each library's (the interpreters
@@ -1777,14 +1787,8 @@ final class Checker {
         return new Ir.Invariant(inv.name(), new Ir.Block(stmts, r, b.pos()), inv.pos());
     }
 
-    /**
-     * M3a (ADR-0003 r2, ADR-0012): the processor's contract-level rules for owned objects, at {@code .jsc} positions. An owned
-     * type is no field of another value; each owned type has an owned init and an escape hatch (an owned destroy without
-     * shared, so no object is trapped behind a paused instance); the instance itself is never destroyed (objects reading it
-     * would be locked) and keeps no BigMap state (a shared read has no proof path for its maps); a move's type is admitted by
-     * an admits action, and an admits action's type has a move.
-     */
-    private void ownedRules(Contract c, List<Ir.Method> methods) {
+    /** M3a: an owned type is no field of another value (the state, the params, a type, a variant or an event), checked before the methods. */
+    private void ownedFields(Contract c) {
         var holders = new ArrayList<Map.Entry<LinkedHashMap<String, Ty>, List<FieldDecl>>>();
         holders.add(Map.entry(stateFields, c.state()));
         if (c.params() != null) holders.add(Map.entry(paramsFields, c.params()));
@@ -1800,6 +1804,16 @@ final class Checker {
                 }
             }
         }
+    }
+
+    /**
+     * M3a (ADR-0003 r2, ADR-0012): the processor's contract-level rules for owned objects, at {@code .jsc} positions. An owned
+     * type is no field of another value; each owned type has an owned init and an escape hatch (an owned destroy without
+     * shared, so no object is trapped behind a paused instance); the instance itself is never destroyed (objects reading it
+     * would be locked) and keeps no BigMap state (a shared read has no proof path for its maps); a move's type is admitted by
+     * an admits action, and an admits action's type has a move.
+     */
+    private void ownedRules(Contract c, List<Ir.Method> methods) {
         if (ownedTypes.isEmpty()) return;
         for (TypeDecl t : c.owned()) {
             String o = t.name();
@@ -1997,6 +2011,12 @@ final class Checker {
                     // (M3a: an owned action too, which the processor allows).
                     if (!ik.continues()) {
                         throw mod.pos().error("JSC0447", "only an action receives deposits: it continues, and its output takes them (ADR-0011 D3)");
+                    }
+                    // M3a (decision, security review A18): a deposit names its target by Instance<C>, an instance; no deposit
+                    // can name an object, so an owned action takes none.
+                    if (ik == Ir.Kind.OWNED_ACTION) {
+                        throw mod.pos().error("JSC0447", "an owned action receives no deposits: a deposit's target is an instance"
+                                + " (Instance<C>), never an object (ADR-0018 D10, M3a)");
                     }
                     if (batched) throw mod.pos().error("JSC0447", "a batched action cannot receive deposits: a deposit needs its receiver in the"
                             + " depositor's transaction (ADR-0011 D3)");

@@ -178,6 +178,91 @@ class JscV2M3a1CheckerTest {
         bad("  @@invariant Account.positive = saved >= 0", "JSC1215", "an owned type's invariant");
     }
 
+    /** The security review's checker items (scratchpad m3-attacks.md A10, A11, A18, A19) that belong to M3a1. */
+    @Test
+    void securityReview_atTheChecker() {
+        // A10: the state and the object both have an owner; in an owned method, owner (and only owner) is the object's.
+        String both = """
+                jsc 2
+                package t
+                contract C {
+                  state { owner: Key, n: Int }
+                  owned Lease { owner: Key, n: Int }
+                  init() { return { owner: caller, n: 0 } }
+                  owned init Lease.take(s: shared) { return { owner: caller, n: s.n } }
+                  owned action Lease.bump() only owner { return { ...state, n: n + 1 } }
+                  owned destroy Lease.end() only owner { pay(owner, balance) }
+                }
+                """;
+        var ir = lower(both).irJson();
+        assertTrue(ir.contains("\"on\": \"Lease\""), ir);
+        String java = lower(both).java();
+        assertTrue(java.contains("@OwnedAction\n    @SignedBy(\"owner\")\n    public static Lease bump(Lease s__)"), java);
+        // A11: the same field name timed in the object and not in the state: the state's is compared freely through
+        // a shared read, the object's never decides.
+        String timed = """
+                jsc 2
+                package t
+                contract C {
+                  state { a: Key, until: Int }
+                  owned Lease { owner: Key, until: Int }
+                  init() { return { a: caller, until: 5 } }
+                  owned init Lease.take(s: shared) { require(s.until > 0, "x"); return { owner: caller, until: validTo } }
+                  owned action Lease.check() only owner { require(@@until > 0, "x"); return state }
+                  owned destroy Lease.end() only owner { pay(owner, balance) }
+                }
+                """;
+        lower(timed.replace("owned action Lease.check() only owner { require(@@until > 0, \"x\"); return state }\n", ""));
+        badSourceIn(timed, "C.jsc", "JSC0502", "a time value cannot decide here");
+        // A11: a timed object field is never a quorum's count.
+        badSourceIn("""
+                jsc 2
+                package t
+                contract C {
+                  state { a: Key }
+                  owned Lease { owner: Key, keys: List<Key>, until: Int }
+                  init() { return { a: caller } }
+                  owned init Lease.take(keys: List<Key>) { return { owner: caller, keys, until: validTo } }
+                  owned action Lease.check() @@quorum keys until { return state }
+                  owned destroy Lease.end() only owner { pay(owner, balance) }
+                }
+                """, "C.jsc", "JSC0524", "holds a time value");
+        // A18 (decision): a deposit's target is an instance, so an owned action receives none.
+        bad("  owned action Account.top() only owner @@receives { return state }", "JSC0447", "an owned action receives no deposits");
+        // A19: the type name of an owned method, spaced or with a comment, is the same name (and an unknown one is refused).
+        lower(bank(BASICS + "  owned action Account . bump() only owner { return { ...state, saved: saved + 1 } }"));
+        lower(bank(BASICS + "  owned action Account /* the type */ .bump() only owner { return { ...state, saved: saved + 1 } }"));
+        badSource(bank(BASICS + "  @@owned action Acount . bump() only owner { return state }"), "JSC1203", "Acount is not an owned type");
+        // A19: an owned type named like a variant, a type or the generated records; generated names as user types.
+        // (the owned types are declared after the types and enums, so the owned type is the second declaration)
+        badSource(bank(BASICS + "  enum Kind { Account, Other }").replace("owned Account {", "owned @@Account {"), "JSC0910", "declared twice");
+        bad("  @@type AccountOutcome = { a: Int }", "JSC0225", "the record generated for the owned type Account");
+        bad("  @@type AccountReceived = { a: Int }", "JSC0225", "the record generated for the owned type Account");
+        bad("  @@enum AccountCreated { A, B }", "JSC0225", "the record generated for the owned type Account");
+        bad("  @@type Holding = { a: Int }", "JSC0220", "Holding");
+        // A19: an owned type as a params field, a state field, an event field, nested in a List, an Option or a record.
+        badSource(bank(BASICS).replace("state { admin: Key, paused: Bool, limit: Int }",
+                "params { a: @@Account }\n  state { admin: Key, paused: Bool, limit: Int }"), "JSC1207", "owned type");
+        badSource(bank(BASICS).replace("limit: Int }", "limit: Int, last: @@Account }"), "JSC1207", "owned type");
+        bad("  event Opened { who: @@Account }", "JSC1207", "owned type");
+        bad("  type Box = { a: @@List<Account> }", "JSC1207", "owned type");
+        bad("  type Box = { a: @@Option<Account> }", "JSC1207", "owned type");
+        bad("  owned action Account.x(a: @@List<Account>) only owner { return state }", "JSC1207", "owned type");
+        // A19: shared after an ordinary parameter (JSC1206 above), shared in an instance method (JSC1205 above).
+    }
+
+    static void badSourceIn(String source, String file, String code, String fragment) {
+        int at = source.indexOf("@@");
+        assertTrue(at >= 0, "mark the expected position with @@");
+        String before = source.substring(0, at);
+        int line = (int) before.chars().filter(c -> c == '\n').count() + 1;
+        int col = at - before.lastIndexOf('\n');
+        var e = assertThrows(JscException.class, () -> JscV2.lower(source.replace("@@", ""), file), fragment);
+        assertEquals(code, e.code, e.getMessage());
+        assertTrue(e.getMessage().contains(fragment), "message '" + e.getMessage() + "' should mention '" + fragment + "'");
+        assertEquals(line + ":" + col, e.line + ":" + e.col, "position of: " + e.getMessage());
+    }
+
     @Test
     void time_atTheNewPositions() {
         // An object's field set from the window is a time field of its type ("Account.until"): it then never decides.

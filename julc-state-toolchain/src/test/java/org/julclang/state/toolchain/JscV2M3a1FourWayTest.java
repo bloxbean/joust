@@ -151,21 +151,25 @@ class JscV2M3a1FourWayTest {
         f.defaultShared = club;
         // Joining: the params' fee, the club read by reference, checked inputs, the quorum's shape at creation (per type).
         Rec fresh = member(keys(K1, K2, K3), 2, MapV.EMPTY, rec("Basic"), Opt.NONE, later);
-        ok(f.check("join", null, List.of(keys(K1, K2, K3), n(2), later), shared(at(ANN, ada(5).longValue(), 0), club), ANN));
-        assertEquals("refused", f.check("join", null, List.of(keys(K1, K2, K3), n(2), later), shared(at(ANN, ada(5).longValue(), 0), closed), ANN, fresh));
-        assertEquals("refused", f.check("join", null, List.of(keys(K1, K2, K3), n(2), later), shared(at(ANN, ada(1).longValue(), 0), club), ANN, fresh));
-        assertEquals("refused", f.check("join", null, List.of(keys(new byte[27], K2, K3), n(2), later), shared(at(ANN, ada(5).longValue(), 0), club), ANN,
+        ok(f.check("join", null, List.of(keys(K1, K2, K3), n(2), later, rec("Basic")), shared(at(ANN, ada(5).longValue(), 0), club), ANN));
+        assertEquals("refused", f.check("join", null, List.of(keys(K1, K2, K3), n(2), later, rec("Basic")), shared(at(ANN, ada(5).longValue(), 0), closed), ANN, fresh));
+        assertEquals("refused", f.check("join", null, List.of(keys(K1, K2, K3), n(2), later, rec("Basic")), shared(at(ANN, ada(1).longValue(), 0), club), ANN, fresh));
+        assertEquals("refused", f.check("join", null, List.of(keys(new byte[27], K2, K3), n(2), later, rec("Basic")), shared(at(ANN, ada(5).longValue(), 0), club), ANN,
                 member(keys(new byte[27], K2, K3), 2, MapV.EMPTY, rec("Basic"), Opt.NONE, later)));
         assertEquals("input:guardians", f.lastRefusal);
-        f.invariantRefused("invariant:quorum guardians needed", "join", null, List.of(keys(K2, K1), n(1), later),
+        f.invariantRefused("invariant:quorum guardians needed", "join", null, List.of(keys(K2, K1), n(1), later, rec("Basic")),
                 shared(at(ANN, ada(5).longValue(), 0), club), ANN);
-        f.invariantRefused("invariant:quorum guardians needed", "join", null, List.of(keys(K1, K2), n(3), later),
+        f.invariantRefused("invariant:quorum guardians needed", "join", null, List.of(keys(K1, K2), n(3), later, rec("Basic")),
                 shared(at(ANN, ada(5).longValue(), 0), club), ANN);
         // Scoring before the deadline, with an event; the best note kept in an Option of a record.
         ok(f.check("score", fresh, List.of(Bytes.of(K1), n(3)), at(ANN, 0, 0), ANN));
         assertEquals("refused", f.check("score", fresh, List.of(Bytes.of(K1), n(0)), at(ANN, 0, 0), ANN));
         f.modifierRefused("score", member(keys(K1, K2, K3), 2, MapV.EMPTY, rec("Basic"), Opt.NONE, T0), List.of(Bytes.of(K1), n(3)), at(ANN, 0, 0), ANN);
         f.modifierRefused("score", fresh, List.of(Bytes.of(K1), n(3)), at(EVE, 0, 0), EVE);
+        // A10: the club's owner is not the member's: only owner reads the object's field, so the club's owner is refused.
+        f.modifierRefused("score", fresh, List.of(Bytes.of(K1), n(3)), at(ADMIN, 0, 0), ADMIN);
+        // A member joining at Gold: an enum argument stored in the object.
+        ok(f.check("join", null, List.of(keys(K1, K2, K3), n(2), later, rec("Gold", n(1))), shared(at(ANN, ada(5).longValue(), 0), club), ANN));
         assertEquals("refused", f.check("score", fresh, List.of(Bytes.of(new byte[27]), n(3)), at(ANN, 0, 0), ANN));
         assertEquals("input:by", f.lastRefusal);
         // Promoting by the guardians' quorum over the object's own fields.
@@ -182,7 +186,7 @@ class JscV2M3a1FourWayTest {
         ok(f.check("leave", noted, List.of(), at(ANN, 0, lovelace), ANN));
         f.modifierRefused("leave", noted, List.of(), at(EVE, 0, lovelace), EVE);
         ok(f.check("isOpen", club, List.of(), null, null));
-        f.mutants("join", null, List.of(keys(K1, K2, K3), n(2), later), shared(at(ANN, ada(5).longValue(), 0), club), ANN);
+        f.mutants("join", null, List.of(keys(K1, K2, K3), n(2), later, rec("Basic")), shared(at(ANN, ada(5).longValue(), 0), club), ANN);
         f.mutants("score", fresh, List.of(Bytes.of(K1), n(3)), at(ANN, 0, 0), ANN);
         f.as(List.of(K1, K3), null).mutants("promote", fresh, List.of(n(7)), null, K1);
         f.mutants("extend", gold, List.of(n(10)), at(ANN, 0, 0), ANN);
