@@ -8,8 +8,9 @@ import { delegatesOnlyTo } from "std/certs"
 //   - a withdrawal with arguments that reads the transaction (a deadline, so its redeemer carries a Ctx);
 //   - a certify handler that allows every certificate it sees: the built-in filter, not the handler, refuses
 //     unregistration, pool and committee certificates;
-//   - a vote handler that depends on the action and the vote, by a quorum;
-//   - a guardrail over every governance action, reading the ledger types' fields and LedgerMaps.
+//   - a vote handler that depends on the action and the vote, by a quorum.
+// The guardrail over every governance action is Guardrail.jsc's (one script with all four handlers would exceed the
+// runtime's 15,000-byte limit for a reference script).
 contract Steward {
   params { gov: Credential, council: List<Key>, quorum: Int, pool: Bytes, payee: Key, deadline: Int, banned: Bytes }
   state { owner: Key }
@@ -53,21 +54,6 @@ contract Steward {
     const indexZero = action.govActionIx == 0
     action.txId != params.banned && (indexZero || match choice { Abstain => true, _ => false })
   }
-
-  propose rail(p: ProposalProcedure) = p.deposit > 0 && match p.governanceAction {
-    ParameterChange { id, constitutionScript } => constitutionScript != None && match id { None => true, _ => false },
-    HardForkInitiation { protocolVersion } => protocolVersion.major <= 11 && protocolVersion.minor >= 0,
-    TreasuryWithdrawals { withdrawals } => total(withdrawals) <= 1000 ada && withdrawals.all((c, v) => v > 0)
-      && !withdrawals.has(keyCred(params.payee)) && withdrawals.size <= 3 && !withdrawals.isEmpty,
-    NoConfidence => false,
-    UpdateCommittee { removedMembers, addedMembers, newQuorum } => removedMembers.length <= 1 && addedMembers.keys.length <= 2
-      && addedMembers.any((c, e) => e > 100) == false && newQuorum.denominator > 0
-      && newQuorum.numerator * 3 >= newQuorum.denominator * 2,
-    NewConstitution { constitution } => constitution.script != None,
-    InfoAction => (p.returnAddress == keyCred(params.payee)) == false
-  }
-
-  fn total(m: LedgerMap<Credential, Int>): Int = m.fold(0, (acc, c, v) => acc + v)
 
   fn delegateeOk(d: Delegatee, pool: Bytes): Bool = match d {
     Stake { poolId } => poolId == pool,

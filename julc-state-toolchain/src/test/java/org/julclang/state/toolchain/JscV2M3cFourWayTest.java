@@ -90,7 +90,7 @@ class JscV2M3cFourWayTest {
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         if (!LEGS.isEmpty()) return;
         Map<String, String> files = new LinkedHashMap<>();
-        for (String c : List.of("StakedVault", "CounterV1", "CounterV2", "Steward", "TallyV1", "TallyV2")) {
+        for (String c : List.of("StakedVault", "CounterV1", "CounterV2", "Steward", "Guardrail", "TallyV1", "TallyV2")) {
             SOURCES.put(c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
             files.put("org/julclang/state/examples/dsl/" + c + ".jsc", SOURCES.get(c + ".jsc"));
         }
@@ -195,6 +195,200 @@ class JscV2M3cFourWayTest {
         ok(p.check("proposal", List.of(proposal(ADA, ret, action("NoConfidence", Opt.some(a0)))), null));
         JsLeg.check(f);
         report(f, p);
+    }
+
+    // ------------------------------------------------------------------ coverage: Steward (the purposes)
+
+    static final BigInteger DEADLINE = T0.add(n(600_000));
+
+    static Rec stewardParams(CredV gov) {
+        return rec("Config", gov, keys(A, B, C), n(2), Bytes.of(POOL), Bytes.of(PAYEE), DEADLINE, Bytes.of(fill(0x6B)));
+    }
+
+    /**
+     * K46: an approval replayed with one component of its identity changed: another policy, another purpose's action, the
+     * target of another script info. Each is refused by the validator alone (the interpreters see the approver, §2.6).
+     */
+    static int approvalMutants(PurposeLegs p, String method, List<Object> args, Tx t, List<org.julclang.ledger.ScriptInfo> others, int tag)
+            throws Exception {
+        int n = 0;
+        var variants = new ArrayList<org.julclang.state.api.Approval>();
+        byte[] policy = p.f.harness.policy();
+        byte[] honest = com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash224(org.julclang.core.cbor.PlutusDataCborEncoder.encode(
+                new org.julclang.ledger.ScriptInfo.RewardingScript(p.f.harness.ownCredential()).toPlutusData()));
+        variants.add(new org.julclang.state.api.Approval(fill(0x0B), honest, n(1000 + tag)));
+        for (int other : List.of(2, 3, 4, 0)) if (other != tag) variants.add(new org.julclang.state.api.Approval(policy, honest, n(1000 + other)));
+        for (var info : others) {
+            byte[] target = com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash224(org.julclang.core.cbor.PlutusDataCborEncoder.encode(info.toPlutusData()));
+            variants.add(new org.julclang.state.api.Approval(policy, target, n(1000 + tag)));
+        }
+        for (var a : variants) {
+            var data = StateHarness.data(new org.julclang.state.api.Approvals(JulcList.<org.julclang.state.api.Approval>empty().prepend(a)));
+            p.mutate = tx -> {
+                var c = tx.copy();
+                c.withdrawals.replaceAll((k, v) -> data);
+                return c;
+            };
+            var v = p.mutantVerdict(method, args, t);
+            assertFalse(v.accepted(), p.f.name + "." + method + ": a replayed approval " + a + " is accepted\n" + v);
+            n++;
+        }
+        p.f.mutantsRejected += n;
+        p.purposeMutants += n;
+        return n;
+    }
+
+    @Test
+    @Order(3)
+    void steward() throws Exception {
+        var f = legs("Steward", stewardParams(keyCred(GOV)));
+        var p = new PurposeLegs(f);
+        byte[] own = f.harness.policy();
+        CredV self = scriptCred(own);
+        ok(f.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN));
+        Rec s = rec("State", Bytes.of(ADMIN));
+        ok(f.check("close", s, List.of(), at(ADMIN, 0, ada(3).longValue()), ADMIN));
+        f.modifierRefused("close", s, List.of(), at(EVE, 0, ada(3).longValue()), EVE);
+
+        // ---- withdraw with arguments and a Ctx (K41): the key credential signs; the window before the deadline
+        Tx byGov = at(GOV, 0, 0);
+        ok(p.as(List.of(GOV), List.of()).check("take", List.of(ada(10), Bytes.of(B), ada(1)), byGov));
+        ok(p.as(List.of(GOV), List.of()).check("take", List.of(ada(10), Bytes.of(B), ada(10)), byGov));
+        ok(p.as(List.of(GOV), List.of()).check("take", List.of(BigInteger.ZERO, Bytes.of(B), BigInteger.ZERO), byGov));
+        assertEquals("refused", p.as(List.of(GOV), List.of()).check("take", List.of(ada(10), Bytes.of(B), ada(11)), byGov));
+        assertTrue(f.lastRefusal.endsWith(":the tip is within the amount"), f.lastRefusal);
+        assertEquals("refused", p.as(List.of(GOV), List.of()).check("take", List.of(ada(10), Bytes.of(B), ada(1)),
+                FourWay.tx(GOV, 0, 0, DEADLINE.subtract(n(60_000)), DEADLINE.add(BigInteger.ONE))));
+        assertTrue(f.lastRefusal.endsWith(":too late to withdraw"), f.lastRefusal);
+        ok(p.as(List.of(GOV), List.of()).check("take", List.of(ada(10), Bytes.of(B), ada(1)), FourWay.tx(GOV, 0, 0, DEADLINE.subtract(n(60_000)), DEADLINE)));
+        p.as(List.of(GOV), List.of()).refused("input:to", "take", List.of(ada(10), Bytes.of(new byte[27]), ada(1)), byGov);
+        p.as(List.of(EVE), List.of()).refused("modifier:authorized params.gov", "take", List.of(ada(10), Bytes.of(B), ada(1)), at(EVE, 0, 0));
+        p.as(List.of(GOV), List.of()).withdrawMutants("take", List.of(ada(10), Bytes.of(B), ada(1)), byGov);
+        // K41: the withdrawal's Ctx: its balance is the amount, received 0, the caller signs (each one step away).
+        for (var mut : List.<java.util.function.UnaryOperator<org.julclang.core.PlutusData>>of(
+                d -> ctxField(d, 2, ada(10).add(BigInteger.ONE)), d -> ctxField(d, 1, BigInteger.ONE))) {
+            p.as(List.of(GOV), List.of()).redeemerMutant = mut;
+            assertFalse(p.mutantVerdict("take", List.of(ada(10), Bytes.of(B), ada(1)), byGov).accepted(), "a Ctx one step away");
+            f.mutantsRejected++;
+        }
+
+        // ---- certify: the handler allows everything it sees; the built-in filter refuses before it (K43, I38)
+        p.as(List.of(GOV), List.of());
+        GovV stake = gov("Delegatee", "Stake", Bytes.of(POOL)), abstain = gov("DRep", "AlwaysAbstain");
+        for (GovV c : List.of(cert("RegStaking", self, Opt.some(n(2))), cert("RegStaking", self, Opt.NONE), cert("DelegStaking", self, stake),
+                cert("DelegStaking", self, gov("Delegatee", "Vote", abstain)), cert("RegDeleg", self, stake, n(2)), cert("RegDRep", self, n(2)),
+                cert("UpdateDRep", self))) {
+            ok(p.as(List.of(GOV), List.of()).check("anything", List.of(c), null));
+        }
+        for (GovV c : List.of(cert("DelegStaking", self, gov("Delegatee", "Stake", Bytes.of(fill(0x91)))),
+                cert("DelegStaking", self, gov("Delegatee", "Vote", gov("DRep", "DRepCredential", keyCred(EVE)))),
+                cert("DelegStaking", self, gov("Delegatee", "StakeVote", Bytes.of(POOL), abstain)),
+                cert("RegDeleg", self, stake, n(-1)), cert("RegDRep", self, n(0)))) {
+            p.as(List.of(GOV), List.of()).refused("purpose:certify", "anything", List.of(c), null);
+        }
+        for (GovV c : List.of(cert("UnRegStaking", self, Opt.NONE), cert("UnRegDRep", self, n(2)), cert("PoolRegister", Bytes.of(POOL), Bytes.of(A)),
+                cert("PoolRetire", Bytes.of(POOL), n(9)), cert("AuthHotCommittee", self, keyCred(A)), cert("ResignColdCommittee", self),
+                cert("DelegStaking", keyCred(own), stake))) {
+            p.as(List.of(GOV), List.of()).refused("purpose:certificate", "anything", List.of(c), null);
+        }
+
+        // ---- vote (K44): every vote of exactly this voter, each decided on its action and its vote
+        GovV me = voter("DRepVoter", self), them = voter("DRepVoter", scriptCred(fill(0x5B)));
+        GovV a0 = actionId(fill(0x61), 0), a1 = actionId(fill(0x61), 1), banned = actionId(fill(0x6B), 0);
+        ok(p.as(List.of(A, B), List.of()).check("judge", List.of(me, List.of(pair(a0, vote("VoteNo")), pair(a1, vote("Abstain")))), null));
+        // The second vote refused: a handler run on the first entry only would accept it.
+        p.as(List.of(A, B), List.of()).refused("purpose:vote", "judge", List.of(me, List.of(pair(a0, vote("VoteYes")), pair(a1, vote("VoteYes")))), null);
+        p.as(List.of(A, B), List.of()).refused("purpose:vote", "judge", List.of(me, List.of(pair(banned, vote("VoteYes")))), null);
+        // Another voter's accepted votes beside this voter's refused one, and beside none of this voter's.
+        p.as(List.of(A, B), List.of()).otherVoter = them;
+        p.otherVotes = List.of(pair(a0, vote("VoteYes")));
+        p.refused("purpose:vote", "judge", List.of(me, List.of(pair(a1, vote("VoteYes")))), null);
+        p.as(List.of(A, B), List.of()).otherVoter = them;
+        p.otherVotes = List.of(pair(a0, vote("VoteYes")));
+        p.dropOwnVotes = true;
+        p.refused("purpose:votes", "judge", List.of(me, List.of()), null);
+        p.as(List.of(A), List.of()).refused("modifier:quorum params.council params.quorum", "judge", List.of(me, List.of(pair(a0, vote("VoteNo")))), null);
+
+        JsLeg.check(f);
+        report(f, p);
+
+        // ---- the same contract governed by a script: approvals bound to the purpose's identity (K46)
+        var g = legs("Steward", stewardParams(scriptCred(GOVERNOR)));
+        var q = new PurposeLegs(g);
+        Tx byAnyone = at(EVE, 0, 0);
+        ok(q.as(List.of(EVE), List.of(GOVERNOR)).check("take", List.of(ada(10), Bytes.of(B), ada(1)), byAnyone));
+        q.as(List.of(EVE), List.of()).refused("modifier:authorized params.gov", "take", List.of(ada(10), Bytes.of(B), ada(1)), byAnyone);
+        ok(q.as(List.of(EVE), List.of(GOVERNOR)).check("anything", List.of(cert("DelegStaking", scriptCred(g.harness.policy()), stake)), null));
+        q.as(List.of(EVE), List.of()).refused("modifier:authorized params.gov", "anything", List.of(cert("DelegStaking", scriptCred(g.harness.policy()), stake)), null);
+        var otherCert = (org.julclang.ledger.TxCert) PurposeLegs.ledger(cert("RegStaking", scriptCred(g.harness.policy()), Opt.NONE), org.julclang.ledger.TxCert.class);
+        var myCert = (org.julclang.ledger.TxCert) PurposeLegs.ledger(cert("DelegStaking", scriptCred(g.harness.policy()), stake), org.julclang.ledger.TxCert.class);
+        q.as(List.of(EVE), List.of(GOVERNOR));
+        approvalMutants(q, "take", List.of(ada(10), Bytes.of(B), ada(1)), byAnyone,
+                List.of(new org.julclang.ledger.ScriptInfo.RewardingScript(new org.julclang.ledger.Credential.ScriptCredential(new org.julclang.ledger.ScriptHash(fill(0x0C))))), 2);
+        // A certificate's approval names it and its index: another certificate's, or the same one at another index, is refused.
+        approvalMutants(q, "anything", List.of(cert("DelegStaking", scriptCred(g.harness.policy()), stake)), null,
+                List.of(new org.julclang.ledger.ScriptInfo.CertifyingScript(BigInteger.ZERO, otherCert),
+                        new org.julclang.ledger.ScriptInfo.CertifyingScript(BigInteger.ONE, myCert)), 3);
+        JsLeg.check(g);
+        report(g, q);
+    }
+
+    @Test
+    @Order(4)
+    void guardrail() throws Exception {
+        var f = legs("Guardrail", rec("Config", Bytes.of(PAYEE), ada(1000)));
+        var p = new PurposeLegs(f);
+        byte[] own = f.harness.policy();
+        GovV a0 = actionId(fill(0x61), 0), a1 = actionId(fill(0x61), 1);
+        ok(f.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN));
+        Rec s = rec("State", Bytes.of(ADMIN));
+        ok(f.check("close", s, List.of(), at(ADMIN, 0, ada(3).longValue()), ADMIN));
+        f.mutants("close", s, List.of(), at(ADMIN, 0, ada(3).longValue()), ADMIN);
+        // The guardrail: a guardrail over every governance action, the ledger types' fields and LedgerMaps (K40, K45)
+        CredV ret = keyCred(A);
+        GovV pv = gov("ProtocolVersion", "ProtocolVersion", n(10), n(0)), pv12 = gov("ProtocolVersion", "ProtocolVersion", n(12), n(0));
+        GovV q23 = gov("Rational", "Rational", n(2), n(3)), q12 = gov("Rational", "Rational", n(1), n(2));
+        var accepted = List.of(
+                action("ParameterChange", Opt.NONE, new DataV("d87980"), Opt.some(Bytes.of(own))),
+                action("HardForkInitiation", Opt.some(a0), pv),
+                action("TreasuryWithdrawals", ledgerMap(List.of(keyCred(A), scriptCred(C)), List.of(ada(400), ada(600))), Opt.NONE),
+                action("UpdateCommittee", Opt.NONE, List.of(keyCred(C)), ledgerMap(List.of(keyCred(A)), List.of(n(90))), q23),
+                action("NewConstitution", Opt.some(a1), gov("Constitution", "Constitution", Opt.some(Bytes.of(own)))),
+                action("InfoAction"));
+        for (GovV a : accepted) ok(p.check("rail", List.of(proposal(ADA, ret, a)), null));
+        var refusedActions = List.of(
+                action("ParameterChange", Opt.some(a0), new DataV("d87980"), Opt.some(Bytes.of(own))),
+                action("ParameterChange", Opt.NONE, new DataV("d87980"), Opt.NONE),
+                action("HardForkInitiation", Opt.NONE, pv12),
+                action("TreasuryWithdrawals", ledgerMap(List.of(keyCred(A), scriptCred(C)), List.of(ada(400), ada(601))), Opt.NONE),
+                action("TreasuryWithdrawals", ledgerMap(List.of(keyCred(A), keyCred(B)), List.of(ada(1), n(0))), Opt.NONE),
+                action("TreasuryWithdrawals", ledgerMap(List.of(keyCred(A), keyCred(PAYEE)), List.of(ada(1), ada(1))), Opt.NONE),
+                action("TreasuryWithdrawals", ledgerMap(List.of(keyCred(A), keyCred(B), keyCred(C), scriptCred(A)), List.of(ada(1), ada(1), ada(1), ada(1))), Opt.NONE),
+                action("TreasuryWithdrawals", ledgerMap(List.of(), List.of()), Opt.NONE),
+                action("NoConfidence", Opt.NONE),
+                action("UpdateCommittee", Opt.NONE, List.of(keyCred(C)), ledgerMap(List.of(keyCred(A)), List.of(n(101))), q23),
+                action("UpdateCommittee", Opt.NONE, List.of(keyCred(C), keyCred(B)), ledgerMap(List.of(), List.of()), q23),
+                action("UpdateCommittee", Opt.NONE, List.of(), ledgerMap(List.of(), List.of()), q12),
+                action("NewConstitution", Opt.NONE, gov("Constitution", "Constitution", Opt.NONE)));
+        for (GovV a : refusedActions) p.refused("purpose:propose", "rail", List.of(proposal(ADA, ret, a)), null);
+        p.refused("purpose:propose", "rail", List.of(proposal(BigInteger.ZERO, ret, action("InfoAction"))), null);
+        p.refused("purpose:propose", "rail", List.of(proposal(ADA, keyCred(PAYEE), action("InfoAction"))), null);
+        // A duplicate key outside the ledger's domain (a map from the script context has none): every entry counts.
+        p.refused("purpose:propose", "rail", List.of(proposal(ADA, ret, action("TreasuryWithdrawals",
+                ledgerMap(List.of(keyCred(A), keyCred(A)), List.of(ada(600), ada(600))), Opt.NONE))), null);
+        JsLeg.check(f);
+        report(f, p);
+    }
+
+    /** A Rewards redeemer with its Ctx's field {@code i} (caller, received, balance, validFrom, validTo) set to {@code v}. */
+    static org.julclang.core.PlutusData ctxField(org.julclang.core.PlutusData d, int i, BigInteger v) {
+        var r = (org.julclang.core.PlutusData.ConstrData) d;
+        var fs = new ArrayList<>(r.fields());
+        var ctx = (org.julclang.core.PlutusData.ConstrData) fs.getLast();
+        var cf = new ArrayList<>(ctx.fields());
+        cf.set(i, org.julclang.core.PlutusData.integer(v));
+        fs.set(fs.size() - 1, new org.julclang.core.PlutusData.ConstrData(ctx.constructorTag(), cf));
+        return new org.julclang.core.PlutusData.ConstrData(r.constructorTag(), fs);
     }
 
     // ------------------------------------------------------------------ migration (ADR-0011 D4, I41)

@@ -23,8 +23,7 @@
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
       ] } },
     { "purpose": "certify", "name": "anything" },
-    { "purpose": "vote", "name": "judge" },
-    { "purpose": "propose", "name": "rail" }
+    { "purpose": "vote", "name": "judge" }
   ],
   "redeemers": {
     "spend": [

@@ -183,6 +183,8 @@ final class FourWay {
         for (Class<?> nested : cls.getDeclaredClasses()) {
             if (nested.isRecord()) for (var rc : nested.getRecordComponents()) a |= rc.getName().equals("deposits");
         }
+        // M3c: a contract with a withdraw handler is asset-aware too (ContractIR.assetAware: its steps carry sends).
+        a |= interp.methods().containsValue("withdraw");
         this.assets = a;
     }
 

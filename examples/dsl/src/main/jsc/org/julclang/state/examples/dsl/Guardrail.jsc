@@ -1,0 +1,33 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3c's coverage contract for the propose purpose (ADR-0010 D1): a guardrail over every governance action, which
+// reads the ledger types' fields (protocol versions, rationals, constitutions, action ids) and LedgerMaps (fold, all, has,
+// size, isEmpty, keys). The ledger runs it for a proposal once a constitution names this script; it takes no audience.
+contract Guardrail {
+  params { payee: Key, cap: Int }
+  state { owner: Key }
+
+  init() {
+    return { owner: caller }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+
+  propose rail(p: ProposalProcedure) = p.deposit > 0 && match p.governanceAction {
+    ParameterChange { id, constitutionScript } => constitutionScript != None && match id { None => true, _ => false },
+    HardForkInitiation { protocolVersion } => protocolVersion.major <= 11 && protocolVersion.minor >= 0,
+    TreasuryWithdrawals { withdrawals } => total(withdrawals) <= params.cap && withdrawals.all((c, v) => v > 0)
+      && !withdrawals.has(keyCred(params.payee)) && withdrawals.size <= 3 && !withdrawals.isEmpty,
+    NoConfidence => false,
+    UpdateCommittee { removedMembers, addedMembers, newQuorum } => removedMembers.length <= 1 && addedMembers.keys.length <= 2
+      && addedMembers.any((c, e) => e > 100) == false && newQuorum.denominator > 0
+      && newQuorum.numerator * 3 >= newQuorum.denominator * 2,
+    NewConstitution { constitution } => constitution.script != None,
+    InfoAction => (p.returnAddress == keyCred(params.payee)) == false
+  }
+
+  fn total(m: LedgerMap<Credential, Int>): Int = m.fold(0, (acc, c, v) => acc + v)
+}
