@@ -163,7 +163,9 @@ Method names are unique, and a `fn` may not share one (`JSC0202`); nor may an in
 its own script (pin `policyIdFor(params)`), and they are in no redeemer. An `init` takes them (first) whenever the
 contract declares them; any other method or view takes them (directly after the state) when it reads them. `Config` is
 then a reserved type name, as `Event` is in a contract with events (`JSC0225`). A batched action does not read them yet
-(`JSC0437`).
+(`JSC0437`). M2c: the init checks them as a checked input (`#params:`: every `Key` and `Hash` 28 bytes, maps canonical,
+addresses the ledger's, every `Value` of lovelace's or 28-byte policies), so no instance is made under params whose
+values a reader would refuse.
 
 **Invariants** (ADR-0009 D4) are checked by the validator on every state it accepts as an output (a creation and every
 action; a destroy has none), and by the runtime before it submits. A state that breaks one can only be destroyed.

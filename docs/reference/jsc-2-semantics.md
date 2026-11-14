@@ -131,7 +131,8 @@ finish a call (its stack runs out) gives **no answer**, which is not a refusal (
    such a method without it is the caller's error, not a refusal).
 2. **Modifiers** (§2.6), in source order: a broken one fails the call.
 3. **Checked inputs** (§4). For each parameter listed in the method's `checked` list, in order, the argument must be
-   well formed at the parameter's type; otherwise the call fails (class `input:<parameter>`). M2c: then each read state,
+   well formed at the parameter's type; otherwise the call fails (class `input:<parameter>`). M2c: then, in an init, the
+   params it is made under, well formed at `Config` (class `input:params`; review r3, C7); then each read state,
    in the method's order, well formed at `C.State` (class `input:<parameter>`); then, for `receives T`, every deposit's
    memo well formed at `T` (class `input:deposits`). This happens before any statement runs, in the transition alone
    too (it is the method's own check, as the generated code makes it where the method starts).
@@ -559,6 +560,12 @@ constructor tag or field count, so for them the encoding clauses are always true
 data (`AddressAdapter.addressOk`/`credentialOk`), where a transition program, which decodes nothing before the method
 runs, could otherwise be handed one (review r1 C2). The validator's decoding of a redeemer refuses such data too; the
 tests carry both legs on raw data (`JscV2M2HostileInputTest`).
+
+**M2c: the params, at the init** (review r3, C7). The params are fixed for a deployment, so the init checks them once:
+well formed at `Config`, by the rules above (every `Key` and `Hash` 28 bytes, maps canonical, addresses the ledger's,
+every `Value` as below). No instance is then made under params that would let a writer store a value its readers
+refuse (a `Value` param of another policy, or a `Hash` param that `Value.asset` would make one of); every other method
+trusts them. A params quorum's keys (§2.7) are checked here first, so a malformed key is `input:params`.
 
 **M2c: read states and memos.** A `reads` parameter's state (another contract's datum) and, for `receives T`, each
 deposit's memo are checked inputs too (§2, step 3), by the same rules at `C.State` and `T`. A value stored in them (a

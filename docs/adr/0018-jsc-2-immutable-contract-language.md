@@ -311,7 +311,10 @@ before the method runs), 28-byte credentials and no staking pointer (r15). A fai
   decided again before M4b's `java:` contract imports** (a Java contract may hold raw `PlutusData`), for example by
   decoding the read datum with the memo decoders, which needs the raw datum in the method (the `@Reads` parameter is
   typed by the processor today). A `receives T` memo is decoded by a generated decoder that decides every tag and field
-  count on the data (`#memo:`); a memo is a checked input in full. The on-chain cost of the checks is measured in M0 and
+  count on the data (`#memo:`); a memo is a checked input in full. The params are a checked input of the init
+  (`#params:`, review r3 on #90, C7): fixed for the deployment, they are checked where the instance is made, so a
+  `.jsc` writer never stores a value (from a `Value` param, or `Value.asset` of a `Hash` param) that a `.jsc` reader
+  refuses. The on-chain cost of the checks is measured in M0 and
   budgeted in each milestone (J15, J16). A foreign datum that fails the checks makes that instance unreadable by this
   contract: for JOUST contracts, whose validators fix their datum's shape, this can only happen if the foreign contract
   itself accepted a non-canonical value. (No build-time warning says so: none is built, M2c review r1, F7.)
@@ -1328,4 +1331,5 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   are named by the checked type (C1); both interpreters check an arriving `Value`'s domain (C2); the JVM `fromData` checks
   the data as it came (C3); a read state's stored `Value`s are checked, used or not (C4); D5's read-state trust is scoped
   to `.jsc` imports and re-decided before M4b (F4); D9's differential test covers M2c's `ValueAdapter` functions and is
-  checked by reflection (F3); stale D5 text removed (F7).
+  checked by reflection (F3); stale D5 text removed (F7). Round r3: a Value that crosses as data holds only the
+  ledger's policies (C6). Round r4: the params are a checked input of the init (C7).
