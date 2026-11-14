@@ -151,8 +151,9 @@ belongs to; these are M3a1's (owned objects of one type), each with its test or 
 
 Round r2 (after #101's round-r1 reviews), at `99020d31`: `./gradlew clean build -PnoDevnet --continue --no-watch-fs` gives
 997 JVM tests, 0 failures (1 skipped): julc-state-dsl 215, julc-state-toolchain 187, examples/dsl 114. `toolchainWasmTest`
-(the Web Image against the JVM): 140 build outputs identical, 117 language-server models byte-identical, 3,595/3,595 S2
-cases, 21 depth cases. npm: `js/jsc-interpreter` 56/56 (the owned-program mutants among them), `tree-sitter-jsc` and the
+(the Web Image against the JVM): 140 results the same (102 build outputs and 38 depth runs; earlier rounds' "build
+outputs" counts include the depth runs too), 117 language-server models byte-identical, 3,595/3,595 S2 cases, 21 depth
+cases. npm: `js/jsc-interpreter` 56/56 (the owned-program mutants among them), `tree-sitter-jsc` and the
 shared corpus in agreement, the language server 86/87 (1 skipped). (`--no-watch-fs`: Gradle's file-system watching
 misses edits in the sandbox these ran in.)
 
