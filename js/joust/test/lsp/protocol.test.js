@@ -178,6 +178,9 @@ test('oversized, binary and deeply nested files: one diagnostic each, the server
   }
 });
 
+// An accepted file with no declarations: a library that declares nothing (until r26 of ADR-0018, a v1 file).
+const EMPTY = 'jsc 1\nlibrary t\n';
+
 test('an accepted model with no declarations clears the outline (review C9)', { skip }, async () => {
   const dir = tmp();
   const lsp = await startLsp({ folders: [dir] });
@@ -186,8 +189,8 @@ test('an accepted model with no declarations clears the outline (review C9)', { 
     lsp.open(uri, COUNTER, 1);
     await lsp.diagnostics(uri, 1);
     assert.equal((await lsp.request('textDocument/documentSymbol', { textDocument: { uri } }))[0].name, 'Counter');
-    lsp.change(uri, 2, V1);
-    await lsp.diagnostics(uri, 2);
+    lsp.change(uri, 2, EMPTY);
+    assert.deepEqual((await lsp.diagnostics(uri, 2)).diagnostics, []);
     assert.deepEqual(await lsp.request('textDocument/documentSymbol', { textDocument: { uri } }), []);
     assert.deepEqual(await lsp.request('textDocument/foldingRange', { textDocument: { uri } }), []);
   } finally {
