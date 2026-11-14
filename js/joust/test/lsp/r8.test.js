@@ -45,3 +45,101 @@ test('S16: a copy is published already marked as used; a collector running right
   assert.deepEqual(claimed.filter((n) => n === c.id), [], 'B never claimed the fresh copy');
   assert.ok(existsSync(c.file));
 });
+
+/** A copy moved aside as `.damaged-` by a crashed collector 5 minutes ago; `{ id, name, js }`. */
+async function leftDamaged(engines, store, tag) {
+  const [js, wasm] = stubBytes(tag);
+  const c = await store.put(js, wasm);
+  const name = `.damaged-${c.id}-${deadPid()}-${Date.now() - 5 * 60_000}`;
+  renameSync(join(engines, c.id), join(engines, name));
+  return { id: c.id, name, js, wasm };
+}
+const damagedOf = (engines, id) => readdirSync(engines).filter((n) => n.startsWith(`.damaged-${id}-`));
+
+test('C33: a moved-aside copy whose bytes cannot be read now is kept; a later sweep restores it', async () => {
+  for (const code of ['EPERM', 'EACCES', 'EMFILE']) {
+    const storage = tmp('joust-lsp-store-');
+    const engines = join(storage, 'engines');
+    let fail = false;
+    const fs = { ...fsp,
+      readFile: async (p, ...a) => {
+        if (fail && String(p).includes('.damaged-')) throw Object.assign(new Error(`${code}: injected`), { code });
+        return fsp.readFile(p, ...a);
+      } };
+    const store = createStore(storage, { maxCopies: 10, recentMs: 0, fs });
+    const { id, name, js } = await leftDamaged(engines, store, `c33-${code}`);
+    fail = true;
+    const [j1, w1] = stubBytes(`c33-${code}-1`);
+    await store.put(j1, w1);
+    assert.deepEqual(damagedOf(engines, id), [name], `${code}: kept`);
+    assert.ok(!existsSync(join(engines, id)), `${code}: nothing restored yet`);
+    fail = false;
+    const [j2, w2] = stubBytes(`c33-${code}-2`);
+    await store.put(j2, w2);
+    assert.equal(readFileSync(join(engines, id, ENGINE_JS), 'utf8'), js.toString(), `${code}: restored`);
+    assert.deepEqual(damagedOf(engines, id), []);
+  }
+});
+
+test('C33: a valid moved-aside copy facing an invalid destination restores the good bytes under its digest', async () => {
+  const storage = tmp('joust-lsp-store-');
+  const engines = join(storage, 'engines');
+  const store = createStore(storage, { maxCopies: 10, recentMs: 0 });
+  const { id, js } = await leftDamaged(engines, store, 'c33-dest');
+  // An invalid copy sits under the digest name (wrong loader bytes).
+  const [other, wasm] = stubBytes('c33-other');
+  await fsp.mkdir(join(engines, id));
+  await fsp.writeFile(join(engines, id, ENGINE_JS), other);
+  await fsp.writeFile(join(engines, id, ENGINE_WASM), wasm);
+  const [j1, w1] = stubBytes('c33-dest-1');
+  await store.put(j1, w1);
+  assert.equal(readFileSync(join(engines, id, ENGINE_JS), 'utf8'), js.toString(), 'the good bytes are in place');
+  // The invalid one was moved aside in turn; once past the bound, the sweep proves it invalid and removes it.
+  const aside = damagedOf(engines, id);
+  assert.equal(aside.length, 1);
+  assert.equal(readFileSync(join(engines, aside[0], ENGINE_JS), 'utf8'), other.toString());
+  renameSync(join(engines, aside[0]), join(engines, `.damaged-${id}-${deadPid()}-${Date.now() - 5 * 60_000}`));
+  const [j2, w2] = stubBytes('c33-dest-2');
+  await store.put(j2, w2);
+  assert.deepEqual(damagedOf(engines, id), []);
+  assert.equal(readFileSync(join(engines, id, ENGINE_JS), 'utf8'), js.toString());
+});
+
+test('C33: a valid moved-aside copy is kept while the destination cannot be read; removed once a valid one is proven', async () => {
+  const storage = tmp('joust-lsp-store-');
+  const engines = join(storage, 'engines');
+  let fail = false;
+  const fs = { ...fsp,
+    readFile: async (p, ...a) => {
+      if (fail && !String(p).includes('.damaged-') && String(p).endsWith(ENGINE_WASM)) {
+        throw Object.assign(new Error('EACCES: injected'), { code: 'EACCES' });
+      }
+      return fsp.readFile(p, ...a);
+    } };
+  const store = createStore(storage, { maxCopies: 10, recentMs: 0, fs });
+  const { id, name, js, wasm } = await leftDamaged(engines, store, 'c33-unread');
+  await fsp.mkdir(join(engines, id));
+  await fsp.writeFile(join(engines, id, ENGINE_JS), js);
+  await fsp.writeFile(join(engines, id, ENGINE_WASM), wasm);
+  fail = true;
+  const [j1, w1] = stubBytes('c33-unread-1');
+  await store.put(j1, w1).catch(() => {});
+  assert.deepEqual(damagedOf(engines, id), [name], 'kept while nothing is proven');
+  fail = false;
+  const [j2, w2] = stubBytes('c33-unread-2');
+  await store.put(j2, w2);
+  assert.deepEqual(damagedOf(engines, id), [], 'removed: a valid copy is in place');
+  assert.equal(readFileSync(join(engines, id, ENGINE_JS), 'utf8'), js.toString());
+});
+
+test('C33: a moved-aside copy whose bytes fail their digest is removed', async () => {
+  const storage = tmp('joust-lsp-store-');
+  const engines = join(storage, 'engines');
+  const store = createStore(storage, { maxCopies: 10, recentMs: 0 });
+  const { id, name } = await leftDamaged(engines, store, 'c33-bad');
+  await fsp.writeFile(join(engines, name, ENGINE_JS), 'tampered');
+  const [j1, w1] = stubBytes('c33-bad-1');
+  await store.put(j1, w1);
+  assert.deepEqual(damagedOf(engines, id), []);
+  assert.ok(!existsSync(join(engines, id)));
+});

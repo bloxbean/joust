@@ -74,14 +74,50 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       return 0;
     }
   };
-  /** Whether a directory holds a copy whose bytes are digest `n`. */
-  async function validCopy(dir, n) {
+  /**
+   * What a directory holds for digest `n`, proven by reading it (C33 on #83): `valid` (its bytes are `n`), `invalid`
+   * (read, and they are not, or a file is missing from it), `absent` (no directory), or `unreadable` (a read failed for
+   * another reason, EPERM, EACCES or EMFILE say: nothing is proven either way).
+   */
+  async function digestOf(dir, n) {
+    let a;
+    let b;
     try {
-      const [a, b] = await Promise.all([fs.readFile(join(dir, ENGINE_JS)), fs.readFile(join(dir, ENGINE_WASM))]);
-      return engineId(hex(a), hex(b)) === n;
-    } catch {
-      return false;
+      [a, b] = await Promise.all([fs.readFile(join(dir, ENGINE_JS)), fs.readFile(join(dir, ENGINE_WASM))]);
+    } catch (e) {
+      if (e?.code !== 'ENOENT' && e?.code !== 'ENOTDIR') return 'unreadable';
+      const st = await fs.stat(dir).then((x) => x, (x) => x);
+      if (st?.code === 'ENOENT') return 'absent';
+      return st?.isDirectory?.() ? 'invalid' : st?.code ? 'unreadable' : 'invalid';
     }
+    return engineId(hex(a), hex(b)) === n ? 'valid' : 'invalid';
+  }
+
+  /**
+   * A moved-aside destination left behind (C31, C33 on #83). It is deleted only when that is proven safe: its own bytes
+   * read and fail their digest, or a valid copy of its digest is verified in place. A valid one with nothing of its
+   * digest in place goes back; one facing a destination proven invalid replaces it (the invalid one moved aside, to be
+   * proven and deleted in turn). Whatever cannot be read now is kept, for a later sweep.
+   */
+  async function recoverDamaged(dir, n) {
+    const own = await digestOf(dir, n);
+    if (own === 'unreadable') return;
+    if (own !== 'valid') {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      return;
+    }
+    const dest = join(root, n);
+    const there = await digestOf(dest, n);
+    if (there === 'valid') {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      return;
+    }
+    if (there === 'unreadable') return;
+    if (there === 'invalid') {
+      const aside = join(root, `.damaged-${n}-${process.pid}-${Date.now()}-x`);
+      if (!(await fs.rename(dest, aside).then(() => true, () => false))) return;
+    }
+    await fs.rename(dir, dest).catch(() => {});
   }
 
   /** Whether a claimed copy is still wanted: a live lease, a fresh use, or this server's own use. */
@@ -197,12 +233,9 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       await sweep(all.filter((n) => n.startsWith('.evicted-')), inUse);
       // A damaged destination moved aside (C27) and left by a crash: removed once past the claim bound.
       for (const d of all) {
-        const m = /^\.damaged-([0-9a-f]{64})-\d+-(\d+)$/.exec(d);
+        const m = /^\.damaged-([0-9a-f]{64})-\d+-(\d+)(?:-x)?$/.exec(d);
         if (!m || Date.now() - Number(m[2]) <= CLAIM_MS) continue;
-        // C31: a moved-aside copy that is in fact valid goes back if nothing of its digest is in place; else removed.
-        const present = await fs.stat(join(root, m[1])).then(() => true, () => false);
-        if (!present && await validCopy(join(root, d), m[1])) await fs.rename(join(root, d), join(root, m[1])).catch(() => {});
-        else await fs.rm(join(root, d), { recursive: true, force: true }).catch(() => {});
+        await recoverDamaged(join(root, d), m[1]);
       }
     } catch {
       // no store yet
