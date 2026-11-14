@@ -699,16 +699,22 @@ function movesIn(block) {
 }
 
 /** §4: a type holds a Key, a Hash or a Map somewhere (records and variants through their fields). */
-function needsCheck(t, shapes, enums) {
+// A type that reaches itself is walked once: a second visit adds no field the first does not reach. The checker refuses
+// recursive types, so only a hostile IR holds one (IrReaderFuzzTest: a library enum with a variant holding itself made
+// this a stack overflow).
+function needsCheck(t, shapes, enums, seen = new Set()) {
   // M2c (review r1, C4): a Value too (it crosses only stored in a read state; an argument never holds one).
   if (typeof t === 'string') return t === 'Key' || t === 'Hash' || t === 'Address' || t === 'Credential' || t === 'Value';
   const [k, v] = Object.entries(t)[0];
   if (k === 'instance' || k === 'deposit') return false;   // M2c: the deployer's; memos are checked where the action starts
-  if (k === 'list' || k === 'option') return needsCheck(v, shapes, enums);
+  if (k === 'list' || k === 'option') return needsCheck(v, shapes, enums, seen);
   if (k === 'map') return true;
   if (k === 'bigmap') return false;
-  if (k === 'record') return shapes.get(v).some((f) => needsCheck(f.type, shapes, enums));
-  return enums.get(v).some((variant) => shapes.get(variant).some((f) => needsCheck(f.type, shapes, enums)));
+  const id = `${k}:${v}`;
+  if (seen.has(id)) return false;
+  seen.add(id);
+  if (k === 'record') return shapes.get(v).some((f) => needsCheck(f.type, shapes, enums, seen));
+  return enums.get(v).some((variant) => shapes.get(variant).some((f) => needsCheck(f.type, shapes, enums, seen)));
 }
 
 /** Whether a method body names the transaction: caller, received, balance, the window, after/before or std/time. */
