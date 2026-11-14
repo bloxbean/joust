@@ -154,7 +154,12 @@ def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['
              guild: ['Guild', null, [:], ['destination\\.open': 'destination.isOpen']],
              market: ['Market', 'open', [Config: 'State', Sold: 'Exchanged'],
                       ['var r = (Market\\.offer\\(config, NFT_POLICY, NFT, PRICE, ctx, h\\.createFunds\\(true, )junk':
-                               'assertThrows(RequireException.class, () -> $1junk))); var r = $1nft']]]
+                               'assertThrows(RequireException.class, () -> $1junk))); var r = $1nft']],
+             // ADR-0018 M3c: examples/staking (StakedVault: purposes, stakeSelf) and examples/upgrade (CounterV1 and CounterV2, a
+             // migration). The port's init migrate is the Java method migrate (as its init is init), so CounterV2's adopt is
+             // called by that name, and so is the client's.
+             staking: ['StakedVault', 'open'],
+             upgrade: ['CounterV1', null, [:], ['CounterV2\\.adopt\\(': 'CounterV2.migrate(', 'CounterV2Client\\.adopt\\(': 'CounterV2Client.migrate(']]]
 // ADR-0018 M3b: examples/registry's tests, run against the Registry port. Its test tree has helpers (RegistryWorld, Tamper,
 // M2Kit), DevKit tests in devnet/ and tests in the runtime's package, so it has its own list: every file of
 // examples/registry/src/test is copied or left out here with the reason, and any other file stops the build (fail closed).
