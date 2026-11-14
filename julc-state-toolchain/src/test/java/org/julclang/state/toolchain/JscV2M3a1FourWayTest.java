@@ -1,6 +1,8 @@
 package org.julclang.state.toolchain;
 
 import org.julclang.state.dsl.v2.Interpreter.Bytes;
+import org.julclang.state.dsl.v2.Interpreter.MapV;
+import org.julclang.state.dsl.v2.Interpreter.Opt;
 import org.julclang.state.dsl.v2.Interpreter.Rec;
 import org.julclang.state.dsl.v2.Interpreter.Tx;
 import org.junit.jupiter.api.BeforeAll;
@@ -47,12 +49,13 @@ class JscV2M3a1FourWayTest {
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         if (!LEGS.isEmpty()) return;
         Map<String, String> files = new LinkedHashMap<>();
-        for (String c : List.of("Bank")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
+        for (String c : List.of("Bank", "Members")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
         var r = Toolchain.build(files, Map.of());
         assertTrue(r.ok(), r.diagnostics().toString());
         for (var c : r.contracts()) {
             System.out.println("[M3a1] " + c.name() + ": " + c.scriptSizeBytes() + " bytes");
-            LEGS.put(c.name(), new FourWay(c.name(), files.get("org/julclang/state/examples/dsl/" + c.name() + ".jsc"), c.transitions()));
+            LEGS.put(c.name(), new FourWay(c.name(), files.get("org/julclang/state/examples/dsl/" + c.name() + ".jsc"), c.transitions(),
+                    c.name().equals("Members") ? rec("Config", ada(2)) : null));
         }
     }
 
@@ -119,6 +122,71 @@ class JscV2M3a1FourWayTest {
         f.mutants("close", acct, List.of(), at(ANN, 0, lovelace), ANN);
         f.mutants("setPaused", open, List.of(true), null, ADMIN);
         assertEquals(List.of(), f.javaDiffs, "the port and examples/bank agree on every vector");
+        JsLeg.check(f);
+        report(f);
+    }
+
+    // ------------------------------------------------------------------ coverage: Members
+
+    static final byte[] K1 = fill(0x11), K2 = fill(0x22), K3 = fill(0x33);
+
+    static List<Object> keys(byte[]... ks) {
+        var out = new java.util.ArrayList<Object>();
+        for (byte[] k : ks) out.add(Bytes.of(k));
+        return out;
+    }
+
+    static Rec member(List<Object> guardians, long needed, MapV notes, Rec tier, Opt best, BigInteger until) {
+        return rec("Member", Bytes.of(ANN), guardians, n(needed), notes, tier, best, until);
+    }
+
+    @Test
+    @Order(2)
+    void members() throws Exception {
+        var f = LEGS.get("Members");
+        Rec club = rec("State", Bytes.of(ADMIN), true, n(0)), closed = rec("State", Bytes.of(ADMIN), false, n(0));
+        BigInteger later = T0.add(WINDOW).add(n(60_000)), earlier = T0.subtract(n(1));
+        ok(f.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN));
+        ok(f.check("setOpen", club, List.of(false), null, ADMIN));
+        f.defaultShared = club;
+        // Joining: the params' fee, the club read by reference, checked inputs, the quorum's shape at creation (per type).
+        Rec fresh = member(keys(K1, K2, K3), 2, MapV.EMPTY, rec("Basic"), Opt.NONE, later);
+        ok(f.check("join", null, List.of(keys(K1, K2, K3), n(2), later), shared(at(ANN, ada(5).longValue(), 0), club), ANN));
+        assertEquals("refused", f.check("join", null, List.of(keys(K1, K2, K3), n(2), later), shared(at(ANN, ada(5).longValue(), 0), closed), ANN, fresh));
+        assertEquals("refused", f.check("join", null, List.of(keys(K1, K2, K3), n(2), later), shared(at(ANN, ada(1).longValue(), 0), club), ANN, fresh));
+        assertEquals("refused", f.check("join", null, List.of(keys(new byte[27], K2, K3), n(2), later), shared(at(ANN, ada(5).longValue(), 0), club), ANN,
+                member(keys(new byte[27], K2, K3), 2, MapV.EMPTY, rec("Basic"), Opt.NONE, later)));
+        assertEquals("input:guardians", f.lastRefusal);
+        f.invariantRefused("invariant:quorum guardians needed", "join", null, List.of(keys(K2, K1), n(1), later),
+                shared(at(ANN, ada(5).longValue(), 0), club), ANN);
+        f.invariantRefused("invariant:quorum guardians needed", "join", null, List.of(keys(K1, K2), n(3), later),
+                shared(at(ANN, ada(5).longValue(), 0), club), ANN);
+        // Scoring before the deadline, with an event; the best note kept in an Option of a record.
+        ok(f.check("score", fresh, List.of(Bytes.of(K1), n(3)), at(ANN, 0, 0), ANN));
+        assertEquals("refused", f.check("score", fresh, List.of(Bytes.of(K1), n(0)), at(ANN, 0, 0), ANN));
+        f.modifierRefused("score", member(keys(K1, K2, K3), 2, MapV.EMPTY, rec("Basic"), Opt.NONE, T0), List.of(Bytes.of(K1), n(3)), at(ANN, 0, 0), ANN);
+        f.modifierRefused("score", fresh, List.of(Bytes.of(K1), n(3)), at(EVE, 0, 0), EVE);
+        assertEquals("refused", f.check("score", fresh, List.of(Bytes.of(new byte[27]), n(3)), at(ANN, 0, 0), ANN));
+        assertEquals("input:by", f.lastRefusal);
+        // Promoting by the guardians' quorum over the object's own fields.
+        ok(f.as(List.of(K1, K3), null).check("promote", fresh, List.of(n(7)), null, K1));
+        f.as(List.of(K1), null).modifierRefused("promote", fresh, List.of(n(7)), null, K1);
+        // Extending after the deadline, by tier (a match on the object's enum).
+        Rec gold = member(keys(K1, K2, K3), 2, MapV.EMPTY, rec("Gold", n(7)), Opt.NONE, earlier);
+        ok(f.check("extend", gold, List.of(n(10)), at(ANN, 0, 0), ANN));
+        ok(f.check("extend", member(keys(K1, K2, K3), 2, MapV.EMPTY, rec("Basic"), Opt.NONE, earlier), List.of(n(10)), at(ANN, 0, 0), ANN));
+        f.modifierRefused("extend", fresh, List.of(n(10)), at(ANN, 0, 0), ANN);   // its deadline is later than the window
+        // Leaving, with an event naming how many notes the object held.
+        long lovelace = ada(5).longValue() + 2_000_000;
+        Rec noted = member(keys(K1, K2, K3), 2, MapV.of(Map.of(Bytes.of(K1), n(3))), rec("Basic"), Opt.some(rec("Note", Bytes.of(K1), Bytes.hex("6e6f746564"))), later);
+        ok(f.check("leave", noted, List.of(), at(ANN, 0, lovelace), ANN));
+        f.modifierRefused("leave", noted, List.of(), at(EVE, 0, lovelace), EVE);
+        ok(f.check("isOpen", club, List.of(), null, null));
+        f.mutants("join", null, List.of(keys(K1, K2, K3), n(2), later), shared(at(ANN, ada(5).longValue(), 0), club), ANN);
+        f.mutants("score", fresh, List.of(Bytes.of(K1), n(3)), at(ANN, 0, 0), ANN);
+        f.as(List.of(K1, K3), null).mutants("promote", fresh, List.of(n(7)), null, K1);
+        f.mutants("extend", gold, List.of(n(10)), at(ANN, 0, 0), ANN);
+        f.mutants("leave", noted, List.of(), at(ANN, 0, lovelace), ANN);
         JsLeg.check(f);
         report(f);
     }

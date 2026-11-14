@@ -1,0 +1,61 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3a1 coverage: what the bank port leaves out of owned objects. A member's object holds a List, a Map, an
+// Option of a record and an enum; its methods use only, before, after and a quorum over the object's own fields, read
+// the params and the club by reference, take checked inputs, and emit events.
+contract Members(maxDatumBytes = 640) {
+  params { fee: Int }
+  state { host: Key, isOpen: Bool, joined: Int }
+
+  event Noted { by: Key, score: Int }
+  event Left { who: Key, notes: Int }
+
+  enum Tier { Basic, Gold { since: Int } }
+  type Note = { by: Key, text: Bytes }
+
+  owned Member { owner: Key, guardians: List<Key>, needed: Int, notes: Map<Key, Int>, tier: Tier, best: Option<Note>, until: Int }
+
+  init() {
+    return { host: caller, isOpen: true, joined: 0 }
+  }
+
+  action setOpen(nowOpen: Bool) only host {
+    return { ...state, isOpen: nowOpen }
+  }
+
+  // Joins while the club is open, paying at least the fee; the guardians and the deadline are checked inputs.
+  owned init Member.join(club: shared, guardians: List<Key>, needed: Int, until: Int) payable {
+    require(club.isOpen, "the club is closed")
+    require(received >= params.fee, "pay the fee")
+    return { owner: caller, guardians, needed, notes: Map.empty(), tier: Basic, best: None, until }
+  }
+
+  // Before its deadline, the owner notes a score from someone; the best note is kept.
+  owned action Member.score(by: Key, points: Int) only owner before until {
+    require(points > 0, "a score is positive")
+    emit(Noted { by, score: points })
+    const prior = notes.get(by) ?? 0
+    return { ...state, notes: notes.set(by, prior + points), best: Some(Note { by, text: utf8("noted") }) }
+  }
+
+  // The guardians promote the member.
+  owned action Member.promote(since: Int) quorum guardians needed {
+    return { ...state, tier: Gold { since } }
+  }
+
+  // After its deadline, the owner extends it, matching on the tier.
+  owned action Member.extend(by: Int) only owner after until {
+    require(by > 0, "extend by a positive amount")
+    const bonus = match tier { Basic => 0, Gold { since } => since > 0 ? 1 : 0 }
+    return { ...state, until: until + by + bonus }
+  }
+
+  // The escape hatch: no club read; the member leaves with everything it holds.
+  owned destroy Member.leave() only owner {
+    emit(Left { who: owner, notes: notes.size })
+    pay(owner, balance)
+  }
+
+  view isOpen(): Bool = isOpen
+}
