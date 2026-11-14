@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // A semantics fixture (ADR-0005 r2): an untaken if-arm and the right side of a false || must not run, on the JVM or

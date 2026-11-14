@@ -1,7 +1,7 @@
 {
  "ir": 2,
  "language": "jsc 2",
- "sourceSha256": "9fc97004be8ff3bf9842ff77274402c1ec96abb46ac75ac333f534589fe2149b",
+ "sourceSha256": "b5a5efb2b3bac1802c666eb3ebac7c952be3827815460b17d8789cbf0754fce2",
  "package": "org.julclang.state.examples.dsl",
  "contract": "Stall",
  "source": "Stall.jsc",

@@ -151,7 +151,7 @@ class JscLangTest {
     // ------------------------------------------------------------------ D5: the first error, or the warnings
 
     static final String WARNED = """
-            jsc 2
+            jsc 1
             package t
             contract W {
               state { n: Int, owner: Key }
@@ -186,7 +186,7 @@ class JscLangTest {
 
     @Test
     void aParseErrorKeepsTheDeclarationsBeforeItMarkedPartial() {
-        String src = "jsc 2\npackage t\ntype P = { a: Int }\ncontract C {\n  state { n: Int }\n  action go() {\n    let x = 1\n  }\n}\n";
+        String src = "jsc 1\npackage t\ntype P = { a: Int }\ncontract C {\n  state { n: Int }\n  action go() {\n    let x = 1\n  }\n}\n";
         var m = JscLang.analyze(src, "C.jsc");
         assertEquals("JSC0128", m.diagnostics().get(0).code());
         assertEquals(new JscLang.Range(6, 4, 6, 7), m.diagnostics().get(0).range());   // the 'let' token
@@ -204,19 +204,19 @@ class JscLangTest {
     @Test
     void positionsAreUtf16CodeUnitsWithNonBmpCharactersBeforeThemOnTheLine() {
         String line = "    require(true, \"\uD83D\uDE00\uD83D\uDE00\") /* \uD83D\uDCA9 */; const t = nope";
-        String src = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a() {\n" + line
+        String src = "jsc 1\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a() {\n" + line
                 + "\n    return state\n  }\n}\n";
         var d = JscLang.analyze(src, "C.jsc").diagnostics().get(0);
         int col = line.indexOf("nope");   // UTF-16 index (Java strings are UTF-16)
         assertEquals(col + 1, d.col(), d.toString());
         assertEquals(new JscLang.Range(6, col, 6, col + 4), d.range());
         // A character rule underlines the character: a non-BMP character (a surrogate pair) is two code units.
-        String bad = "jsc 2\npackage t\ncontract C {\n  state { n\uD835\uDC00: Int }\n}\n";
+        String bad = "jsc 1\npackage t\ncontract C {\n  state { n\uD835\uDC00: Int }\n}\n";
         var e = JscLang.analyze(bad, "C.jsc").diagnostics().get(0);
         assertEquals("JSC0108", e.code());
         assertEquals(new JscLang.Range(3, 11, 3, 13), e.range());
         // A bidirectional control (JSC0145) in a comment: one code unit.
-        var f = JscLang.analyze("jsc 2\npackage t\n// x\u202Ey\ncontract C { state { n: Int } }\n", "C.jsc").diagnostics().get(0);
+        var f = JscLang.analyze("jsc 1\npackage t\n// x\u202Ey\ncontract C { state { n: Int } }\n", "C.jsc").diagnostics().get(0);
         assertEquals("JSC0145", f.code());
         assertEquals(new JscLang.Range(2, 4, 2, 5), f.range());
     }
@@ -373,7 +373,7 @@ class JscLangTest {
     @Test
     void nestingPastTheCapIsTheCatalogued() {
         String deep = "(".repeat(70) + "1" + ")".repeat(70);
-        String src = "jsc 2\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: " + deep + " } }\n}\n";
+        String src = "jsc 1\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: " + deep + " } }\n}\n";
         var d = JscLang.analyze(src, "D.jsc").diagnostics().get(0);
         assertEquals("JSC0149", d.code());
         sameAsTheBuild(src, "D.jsc");
@@ -381,7 +381,7 @@ class JscLangTest {
 
     @Test
     void aBadFileNameIsTheBuildsError() {
-        var d = JscLang.analyze("jsc 2\npackage t\ncontract C { state { n: Int } }\n", "my file.jsc").diagnostics().get(0);
+        var d = JscLang.analyze("jsc 1\npackage t\ncontract C { state { n: Int } }\n", "my file.jsc").diagnostics().get(0);
         assertEquals("JSC0001", d.code());
         assertEquals(new JscLang.Range(0, 0, 0, 1), d.range());
     }
@@ -404,7 +404,7 @@ class JscLangTest {
     @Test
     void foldingRangesKeepTheClosingBraceAndFoldCommentsAndImports() {
         String src = """
-                jsc 2
+                jsc 1
                 package t
                 import { div } from "std/math"
                 import { mod } from "std/math"

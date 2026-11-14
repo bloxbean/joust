@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "23a290d273ca9dd50dc7abdb7d637ac4113f7c7afa4da5f4136fc468605de420",
+  "sourceSha256": "36c1fff600728251e40b4653a85e0eff349c3fcca080d91c9f4fa1f76470eb03",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Oracle",
   "source": "Oracle.jsc",

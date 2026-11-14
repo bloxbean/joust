@@ -60,7 +60,7 @@ class JavaLibrariesClientTest {
     @Test
     void theClient_checksTheContractsJavaLibraries_andOnlyThen() throws Exception {
         String with = client("""
-                jsc 2
+                jsc 1
                 package app
                 import { fee } from "java:lib.Fees"
                 contract C {
@@ -72,7 +72,7 @@ class JavaLibrariesClientTest {
                 + "java.util.List.of(\"lib.Fees\"));"), with);
         assertTrue(with.indexOf("JavaLibraryCheck.verify") < with.indexOf("SPEC ="), "the check runs before anything of the client");
         String without = client("""
-                jsc 2
+                jsc 1
                 package app
                 contract C {
                   state { n: Int }

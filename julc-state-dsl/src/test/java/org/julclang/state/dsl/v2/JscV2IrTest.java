@@ -30,7 +30,7 @@ class JscV2IrTest {
 
     /** Forms the examples do not use: value ifs and blocks, negation, every list method, nested lambdas, if/for/match statements. */
     static final String FORMS = """
-            jsc 2
+            jsc 1
             package forms
             import { sha2_256 } from "std/crypto"
             type P = { a: Int, b: Bytes }
@@ -77,7 +77,7 @@ class JscV2IrTest {
         out.put("Forms.jsc", FORMS);
         // A java: import (M4b), against a hand-written library description: CallJava and a Java record in the state.
         out.put("JavaForms.jsc", """
-                jsc 2
+                jsc 1
                 package forms
                 import { P, twice, mk, size } from "java:com.acme.L"
                 contract JavaForms {
@@ -185,7 +185,7 @@ class JscV2IrTest {
         assertEquals("a\"b/c\u00e9", AbiCheck.Json.parseStrict("\"a\\\"b\\/c\\u00e9\""), "the defined escapes are read");
         // Review C4: an initializer that reads the binding it introduces is refused at load, by both readers.
         String bind = JscV2.lower("""
-                jsc 2
+                jsc 1
                 package t
                 contract Bind {
                   state { n: Int }
@@ -316,7 +316,7 @@ class JscV2IrTest {
      * semantics.test.js checks the same export (fixtures/joined/Joined.ir.json) on the JavaScript reader.
      */
     static final String JOINED = """
-            jsc 2
+            jsc 1
             package org.julclang.state.examples.dsl
 
             import { fee, Line } from "./fees.jsc"

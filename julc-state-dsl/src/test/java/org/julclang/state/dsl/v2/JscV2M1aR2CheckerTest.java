@@ -42,7 +42,7 @@ class JscV2M1aR2CheckerTest {
     @Test
     void stateFieldsNeverReplaceATypeAVariantOrAFn() {
         String attack = """
-                jsc 2
+                jsc 1
                 package t
                 enum Phase { Open, Closed }
                 contract S {
@@ -91,7 +91,7 @@ class JscV2M1aR2CheckerTest {
         bad("action a() { require(Some(state) == Some(state), \"x\")\n return state }", "held in an Option", 0, 27);
         bad("action a() { require([state] != [state], \"x\")\n return state }", "an element of a list", 0, 22);
         bad("action a() { require([state].contains(state), \"x\")\n return state }", "an element of a list", 0, 22);
-        String noBigMaps = "jsc 2\npackage t\nimport { indexOf } from \"std/list\"\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
+        String noBigMaps = "jsc 1\npackage t\nimport { indexOf } from \"std/list\"\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
                 + "  view v(): Bool = [state].contains(state) && (indexOf([state], state) ?? 0) == 0\n}\n";
         assertDoesNotThrow(() -> JscV2.lower(noBigMaps, "C.jsc"), "a state without BigMaps is an ordinary record");
     }
@@ -211,7 +211,7 @@ class JscV2M1aR2CheckerTest {
     @Test
     void typeCyclesAreRefusedAtTheirDeclaration_throughAnyContainer() {
         // Codex's repro.
-        String repro = "jsc 2\npackage probe\n enum E { End, Link { xs: List<E> } }\n contract EnumCycle {\n   state { e: E }\n"
+        String repro = "jsc 1\npackage probe\n enum E { End, Link { xs: List<E> } }\n contract EnumCycle {\n   state { e: E }\n"
                 + "   init() { return { e: Link { xs: [] } } }\n }\n";
         cycle(repro, "JSC0302", "the enum E contains itself", 3, 2);
         cycle(file("enum E { End, Link { next: Option<E> } }"), "JSC0302", "the enum E contains itself", 3, 1);

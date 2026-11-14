@@ -418,8 +418,8 @@ final class Checker {
                     JscV2.checkFileName(s.fileName());
                     f = Parser.parse(s.text(), types);
                     if (!f.library()) {
-                        throw new Pos(1, 1).error("JSC0708", s.fileName() + " is a contract, not a library: only a file that starts"
-                                + " 'jsc 2' then 'library <package>' can be imported (to read another contract's state or deposit"
+                        throw new Pos(1, 1).error("JSC0708", s.fileName() + " is a contract, not a library: only a file that declares"
+                                + " 'library <package>' can be imported (to read another contract's state or deposit"
                                 + " into it, write import contract { " + f.contract().name() + " } from \"…\"; M2c)");
                     }
                     cls = libraryClass(s.fileName(), f, new Pos(1, 1));

@@ -18,7 +18,7 @@ class JscV2M2bCheckerTest {
     /** A contract with params and an event; members start at line 8. */
     static String council(String members) {
         return """
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   params { board: List<Key>, need: Int, auditor: Credential, cap: Int }
@@ -56,10 +56,10 @@ class JscV2M2bCheckerTest {
 
     @Test
     void params_declaredOnce_readAsParamsF_notInFns() {
-        badSource("jsc 2\npackage t\ncontract C {\n  params { a: Int }\n  @@params { b: Int }\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
+        badSource("jsc 1\npackage t\ncontract C {\n  params { a: Int }\n  @@params { b: Int }\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
                 "the params are declared once");
-        badSource("jsc 2\npackage t\ncontract C {\n  @@params { }\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n", "the params need at least one field");
-        badSource("jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a() { require(@@params.x > 0, \"x\")\n return state }\n}\n",
+        badSource("jsc 1\npackage t\ncontract C {\n  @@params { }\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n", "the params need at least one field");
+        badSource("jsc 1\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a() { require(@@params.x > 0, \"x\")\n return state }\n}\n",
                 "the contract declares no params");
         bad("fn f(): Int = @@params.cap", "params is not available in a fn");
         bad("action a() { require(@@params.nope > 0, \"x\")\n return state }", "the params have no field nope");
@@ -86,7 +86,7 @@ class JscV2M2bCheckerTest {
         bad("@@enum Event { A }", "'Event' is the type of the contract's events");
         bad("type R = { x: Int }\n event @@Config", "'Config' is the name of the params record");
         bad("event @@Paid", "declared twice");
-        badSource("jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a() { @@emit(1)\n return state }\n}\n",
+        badSource("jsc 1\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a() { @@emit(1)\n return state }\n}\n",
                 "the contract declares no events");
         bad("action a() { emit(@@1)\n return state }", "expected Event");
         bad("view v(): Int { @@emit(Paid { to: owner, amount: 1 })\n 1 }", "emit(…) is allowed only in an action or destroy");
@@ -116,7 +116,7 @@ class JscV2M2bCheckerTest {
         // (JSC0502); JSC0525 refuses any time-tainted result that reaches the invariant's value (defence in depth).
         bad("action s() { return { ...state, deadline: validFrom } }\n invariant x = @@deadline == 0", "a time value cannot decide here");
         // Not with BigMap state; not with batched actions.
-        badSource("jsc 2\npackage t\ncontract C {\n  state { m: BigMap<Key, Int> }\n  init() { return { m: BigMap.empty() } }\n  @@invariant x = true\n}\n",
+        badSource("jsc 1\npackage t\ncontract C {\n  state { m: BigMap<Key, Int> }\n  init() { return { m: BigMap.empty() } }\n  @@invariant x = true\n}\n",
                 "a contract with BigMap state cannot have invariants");
         bad("invariant ok = true\n action b() @@batched open { return state }", "a contract with invariants cannot have batched actions");
         String j = java("invariant capped { quorum <= params.cap }\n invariant someone = members.length > 0");
@@ -133,7 +133,7 @@ class JscV2M2bCheckerTest {
         bad("action a() @@authorized owner { return state }", "needs a Credential field");
         bad("action a() @@authorized params.nope { return state }", "the params have no field nope");
         bad("action a() quorum params.board params.cap @@params.need { return state }", "expected '{'");
-        badSource("jsc 2\npackage t\ncontract C {\n  state { k: Credential }\n  init(k: Credential) { return { k } }\n"
+        badSource("jsc 1\npackage t\ncontract C {\n  state { k: Credential }\n  init(k: Credential) { return { k } }\n"
                 + "  action a() @@authorized params.k { return state }\n}\n", "the contract declares no params");
         // Not in an init; not in a batched action.
         badSource(council("").replace("init(members: List<Key>, quorum: Int) {", "init(members: List<Key>, quorum: Int) @@quorum members quorum {"),

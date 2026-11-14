@@ -44,7 +44,7 @@ class JscV2M1eR2BuildTest {
         try (Stream<Path> s = Files.list(DSL)) {
             for (Path p : s.filter(f -> f.toString().endsWith(".jsc")).sorted().toList()) {
                 String text = Files.readString(p);
-                if (text.startsWith("jsc 2")) SOURCES.put(PKG_PATH + p.getFileName(), text);
+                if (text.startsWith("jsc 1")) SOURCES.put(PKG_PATH + p.getFileName(), text);
             }
         }
         all = Toolchain.build(SOURCES, Map.of(), ExampleLibraries.javaSources());

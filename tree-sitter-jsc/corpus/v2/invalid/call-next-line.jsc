@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 // A call's '(' on the next line starts a new expression (review r2 F2): after the fn, (x) is no declaration.

@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "6d0f0442b7f027452d50a84c3e7c44088b3c3e125c9843957c8d92875775bf9c",
+  "sourceSha256": "bb29130c203cd9c8661a33a2f8e88755f84bb39c01e74c2bc1675711c629c991",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Dex",
   "source": "Dex.jsc",

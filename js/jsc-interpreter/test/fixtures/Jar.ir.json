@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "7ea97ea89eef43e5b3737bdc20e70f51dda45bdaf02e522fe9136014f546193f",
+  "sourceSha256": "95f162e4193cb41e3c579342acb8f3e2b3bb03333da90842e68ce5c10fc32858",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Jar",
   "source": "Jar.jsc",

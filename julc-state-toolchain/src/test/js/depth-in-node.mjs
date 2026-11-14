@@ -18,7 +18,7 @@ enableExnref();
 const ENGINE_STACK_MB = 8;
 const [engineDir, caseIndex, where] = isMainThread ? process.argv.slice(2) : [workerData.engineDir, workerData.caseIndex, 'worker'];
 
-const contract = (m) => `jsc 2\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n${m}\n}\n`;
+const contract = (m) => `jsc 1\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n${m}\n}\n`;
 const action = (v) => contract(`  action a(x: Int) { return { ...state, n: ${v} } }`);
 const rep = (s, n) => s.repeat(n);
 const blocks = (n) => contract(`  action a(x: Int) {\n    ${rep('if x > 0 { ', n)}require(x > 0, "p")${rep(' }', n)}\n    return state\n  }`);
@@ -51,13 +51,13 @@ const elseIfValues = (n) => {
 const types = (n) => {
   let t = '';
   for (let k = 0; k < n; k++) t += `type T${k} = { f: ${k === n - 1 ? 'Int' : 'T' + (k + 1)} }\n`;
-  return `jsc 2\npackage t\n${t}contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n`;
+  return `jsc 1\npackage t\n${t}contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n`;
 };
 
 const wrapped = (named, wrappers) => {
   let t = '';
   for (let k = 0; k < named; k++) t += `type T${k} = { f: ${rep('List<', wrappers)}${k === named - 1 ? 'Key' : 'T' + (k + 1)}${rep('>', wrappers)} }\n`;
-  return `jsc 2\npackage t\n${t}contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a(v: T0) { require(v == v, "same")\n return state }\n}\n`;
+  return `jsc 1\npackage t\n${t}contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a(v: T0) { require(v == v, "same")\n return state }\n}\n`;
 };
 const recursive = (n) => {
   let s = 'if x == 0 { 0 }';

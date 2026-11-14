@@ -20,7 +20,7 @@ class JscV2M2CheckerTest {
     /** A contract with values; members start at line 6. */
     static String coins(String members) {
         return """
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { owner: Key, to: Address, guard: Credential, n: Int, deadline: Int }
@@ -53,7 +53,7 @@ class JscV2M2CheckerTest {
      */
     @Test
     void m2aReservedNames_refusedInEveryContract() {
-        String plain = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n%s\n}\n";
+        String plain = "jsc 1\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n%s\n}\n";
         for (String t : java.util.List.of("Received", "Settled", "ValueAdapter", "AddressAdapter", "Assets", "Funds", "Send", "Sends", "Datum",
                 "PubKeyHash", "ScriptHash", "KeyCred", "ScriptCred")) {
             assertEquals("JSC0211", code(plain.formatted("").replace("contract C {", "type " + t + " = { x: Int }\ncontract C {")), t);

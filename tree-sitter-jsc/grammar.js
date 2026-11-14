@@ -66,8 +66,8 @@ module.exports = grammar({
 
   rules: {
     source_file: $ => seq(
-      $.version,
-      repeat(';'),
+      // The header is optional (ADR-0018 r26): a file with no header is version 1.
+      optional(seq($.version, repeat(';'))),
       choice(
         seq(
           $.package_declaration,
@@ -86,7 +86,7 @@ module.exports = grammar({
       ),
     ),
 
-    version: $ => seq('jsc', '2'),
+    version: $ => seq('jsc', '1'),
 
     package_declaration: $ => seq('package', field('name', $.package_name)),
 

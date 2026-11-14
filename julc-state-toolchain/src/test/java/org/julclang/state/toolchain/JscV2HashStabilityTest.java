@@ -34,7 +34,7 @@ class JscV2HashStabilityTest {
             return s.filter(p -> p.toString().endsWith(".jsc")).filter(p -> {
                 try {
                     String t = Files.readString(p);
-                    return t.startsWith("jsc 2") && !org.julclang.state.dsl.v2.JscV2.isLibrary(t);
+                    return t.startsWith("jsc 1") && !org.julclang.state.dsl.v2.JscV2.isLibrary(t);
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -72,7 +72,7 @@ class JscV2HashStabilityTest {
         try (Stream<Path> s = Files.list(DSL)) {
             for (Path p : s.filter(p -> p.toString().endsWith(".jsc")).sorted().toList()) {
                 String t = Files.readString(p);
-                if (t.startsWith("jsc 2") && org.julclang.state.dsl.v2.JscV2.isLibrary(t)) out.put(PKG + p.getFileName(), t);
+                if (t.startsWith("jsc 1") && org.julclang.state.dsl.v2.JscV2.isLibrary(t)) out.put(PKG + p.getFileName(), t);
             }
         }
         return out;

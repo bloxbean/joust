@@ -16,7 +16,7 @@ class JscV2M1cCheckerTest {
     /** A pool-like contract; members start at line 6. */
     static String pool(String members) {
         return """
-                jsc 2
+                jsc 1
                 package t
                 contract P {
                   state { admin: Key, total: Int, deadline: Int }
@@ -65,7 +65,7 @@ class JscV2M1cCheckerTest {
         bad("action a() payable batched { pay(caller, 1)\n return state }", "a batched action cannot use 'only' (any intent's owner is its caller), so write 'open'", 0, 1);
         // No BigMap state with batched actions (ADR-0004 D1, D7).
         badSource("""
-                jsc 2
+                jsc 1
                 package t
                 contract P {
                   state { admin: Key, bal: BigMap<Key, Int> }
@@ -79,7 +79,7 @@ class JscV2M1cCheckerTest {
                 "TipIntent (the validator's record)", 7, 1);
         // Review C1: the intent method takes its own deadline after the arguments (ClientGenerator).
         bad("action go(deadline: Int) batched only { return { ...state, total: deadline } }", "'deadline' is a name the generated client uses", 0, 11);
-        assertTrue(JscV2.lower("jsc 2\npackage t\ncontract D {\n state { n: Int }\n init() { return { n: 0 } }\n"
+        assertTrue(JscV2.lower("jsc 1\npackage t\ncontract D {\n state { n: Int }\n init() { return { n: 0 } }\n"
                 + " action go(deadline: Int) { return { n: deadline } }\n}\n", "D.jsc").java().contains("go(State s__, BigInteger deadline)"),
                 "an action that is not batched may name a parameter deadline");
         // Review C4: the ledger schemas a batched contract's manifest states beside the contract's types are not free names.

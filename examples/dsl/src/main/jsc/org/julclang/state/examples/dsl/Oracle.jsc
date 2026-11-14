@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/oracle's Oracle in .jsc 2 (ADR-0018 M2c, J11; ADR-0011 D2): a price feed. The publisher posts a price with

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/treasury in .jsc 2 (ADR-0018 M2b, J11; ADR-0009): a multisig treasury. A council of keys decides by quorum;

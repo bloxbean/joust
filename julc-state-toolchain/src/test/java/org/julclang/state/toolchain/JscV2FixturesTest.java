@@ -37,7 +37,7 @@ class JscV2FixturesTest {
     static Toolchain.Result built;
 
     static void fixture(String name, String body) {
-        FIXTURES.put("f/" + name + ".jsc", "jsc 2\npackage f\n" + body + "\n");
+        FIXTURES.put("f/" + name + ".jsc", "jsc 1\npackage f\n" + body + "\n");
     }
 
     static {

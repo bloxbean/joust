@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "31d12659bc424158e6399d4c69a5a650654a44a22aca6601625a79a9a87da557",
+  "sourceSha256": "acb53402b14fe25461fafb2d89f6dc4bd8380e821289813bf4240eaf678a5297",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Points",
   "source": "Points.jsc",

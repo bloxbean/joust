@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 contract C { state { n: Int } init() { require(true, "tab \t here") return { n: 0 } } }

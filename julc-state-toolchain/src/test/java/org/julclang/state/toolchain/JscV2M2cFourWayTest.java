@@ -339,7 +339,7 @@ class JscV2M2cFourWayTest {
     @Test
     void aReceiverOfEveryMemoTypeBuilds() throws Exception {
         String src = """
-                jsc 2
+                jsc 1
                 package probe
 
                 enum E { A, B { x: Int } }

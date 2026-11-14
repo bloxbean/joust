@@ -13,7 +13,7 @@ import { scanImports } from '../../src/lsp/imports.js';
 
 const skip = !HAS_ENGINE && 'needs the toolchain engine in js/joust/engine (./gradlew :julc-state-toolchain:toolchainWasm)';
 
-const FEES = `jsc 2
+const FEES = `jsc 1
 library app
 
 type Line = { to: Key, bps: Int }
@@ -21,7 +21,7 @@ type Line = { to: Key, bps: Int }
 fn fee(amount: Int, bps: Int): Int = amount * bps / 10_000
 `;
 
-const SHOP = `jsc 2
+const SHOP = `jsc 1
 package app
 
 import { fee, Line } from "./fees.jsc"
@@ -52,7 +52,7 @@ contract Shop {
 }
 `;
 
-const FEED = `jsc 2
+const FEED = `jsc 1
 package app
 
 contract Feed {
@@ -147,17 +147,17 @@ function npm(contracts = 'contracts') {
 }
 
 test('the import scan follows the lexer: comments and strings are never imports; linear on a hostile file (S1, C3)', () => {
-  const t = 'jsc 2\npackage app\nimport /* fees */ { fee } from "./fees.jsc"\n// import { x } from "./gone.jsc"\n'
+  const t = 'jsc 1\npackage app\nimport /* fees */ { fee } from "./fees.jsc"\n// import { x } from "./gone.jsc"\n'
     + '/* import contract { Y } from "./Y.jsc" */\nimport contract { Feed } from "./Feed.jsc"\n'
     + 'type S = { s: Bytes }\nfn f(): Bytes = "import { q } from \\"./q.jsc\\""\ncontract C { state { n: Int } }\n';
   assert.deepEqual(scanImports(t).imports, [{ spec: './fees.jsc', contract: false }, { spec: './Feed.jsc', contract: true }]);
   // #83 S1's class: 1 MB of `import {` with no `}` (the regex's quadratic case) is one linear pass.
-  const big = 'jsc 2\npackage app\n' + 'import {'.repeat(130_000);
+  const big = 'jsc 1\npackage app\n' + 'import {'.repeat(130_000);
   let t0 = Date.now();
   assert.deepEqual(scanImports(big, 128).imports, []);
   assert.ok(Date.now() - t0 < 1000, `${Date.now() - t0} ms`);
   // At most 128 specifiers a file are read; the rest is reported as truncated.
-  let many = 'jsc 2\npackage app\n';
+  let many = 'jsc 1\npackage app\n';
   for (let i = 0; i < 31_852; i++) many += `import { a } from "./m${i}.jsc"\n`;
   t0 = Date.now();
   const r = scanImports(many, 128);
@@ -171,7 +171,7 @@ test('a 1 MB file of unclosed imports never stalls the protocol thread (S1)', { 
   const lsp = await startLsp({ folders: [dir], args: ['--project-engine'] });
   try {
     const uri = uriOf(join(src, 'Big.jsc'));
-    const big = 'jsc 2\npackage app\n' + 'import {'.repeat(130_000);
+    const big = 'jsc 1\npackage app\n' + 'import {'.repeat(130_000);
     writeFileSync(join(src, 'Big.jsc'), big);
     lsp.open(uri, big);
     await new Promise((r) => setTimeout(r, 400));
@@ -246,7 +246,7 @@ test('a link out of the folder is refused even when its target is open (S2); an 
 
 test('a java: import makes a project-matched file advisory, with its reason (D3a, F3a)', { skip, timeout: 180_000 }, async () => {
   const n = npm();
-  const text = 'jsc 2\npackage app\n\nimport { isAllowed } from "java:com.example.compliance.AllowList"\n\ncontract C {\n  state { n: Int }\n'
+  const text = 'jsc 1\npackage app\n\nimport { isAllowed } from "java:com.example.compliance.AllowList"\n\ncontract C {\n  state { n: Int }\n'
     + '  init() {\n    return { n: 0 }\n  }\n}\n';
   writeFileSync(join(n.src, 'C.jsc'), text);
   const lsp = await startLsp({ folders: [n.dir], args: ['--project-engine'] });
@@ -264,8 +264,8 @@ test('a java: import makes a project-matched file advisory, with its reason (D3a
 
 test('an importer quarantined for its library is analysed again once the library changes on disk (C4, F3d)', { timeout: 60_000 }, async () => {
   const { dir, src } = gradle();
-  writeFileSync(join(src, 'fees.jsc'), 'jsc 2 DEPHANG');
-  const shop = 'jsc 2 import { fee } from "./fees.jsc"';
+  writeFileSync(join(src, 'fees.jsc'), 'jsc 1 DEPHANG');
+  const shop = 'jsc 1 import { fee } from "./fees.jsc"';
   writeFileSync(join(src, 'Shop.jsc'), shop);
   const lsp = await startLsp({ engineDir: STUB, folders: [dir], args: ['--project-engine'], hostOptions: { analysisMs: 600, graceMs: 200, backoffMs: 100, backoffMaxMs: 400 } });
   try {
@@ -275,7 +275,7 @@ test('an importer quarantined for its library is analysed again once the library
     assert.equal(p.diagnostics[0]?.code, 'JSC-INTERNAL', JSON.stringify(p.diagnostics));
     const calls = (await lsp.stats()).calls;
     // The library is fixed on disk; the watcher says so. Shop's text is unchanged, its key is not.
-    writeFileSync(join(src, 'fees.jsc'), 'jsc 2 fixed');
+    writeFileSync(join(src, 'fees.jsc'), 'jsc 1 fixed');
     const before = lsp.published.length;
     lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(join(src, 'fees.jsc')), type: 2 }] });
     await lsp.until(() => lsp.published.slice(before).find((x) => x.uri === uri && x.diagnostics.length === 0), 20_000, 'Shop analysed again');
@@ -288,7 +288,7 @@ test('an importer quarantined for its library is analysed again once the library
 // ------------------------------------------------------------------ round r3 of #98 (Codex C9-C14, security S7, design N1, N2)
 
 test('the scan takes the lexer\'s Unicode whitespace between import tokens (C13)', () => {
-  const t = 'jsc 2\npackage app\nimport\u2000{ fee }\u3000from\u2028"./fees.jsc"\n';
+  const t = 'jsc 1\npackage app\nimport\u2000{ fee }\u3000from\u2028"./fees.jsc"\n';
   assert.deepEqual(scanImports(t).imports, [{ spec: './fees.jsc', contract: false }]);
 });
 
@@ -343,7 +343,7 @@ test('a missing, deleted or oversized import that comes right later reschedules 
 
 test('the advisory reason stays after the model, and in a status request (C10)', { skip, timeout: 180_000 }, async () => {
   const n = npm();
-  const text = 'jsc 2\npackage app\n\nimport { isAllowed } from "java:com.example.compliance.AllowList"\n\ncontract C {\n  state { n: Int }\n'
+  const text = 'jsc 1\npackage app\n\nimport { isAllowed } from "java:com.example.compliance.AllowList"\n\ncontract C {\n  state { n: Int }\n'
     + '  init() {\n    return { n: 0 }\n  }\n}\n';
   writeFileSync(join(n.src, 'C.jsc'), text);
   const lsp = await startLsp({ folders: [n.dir], args: ['--project-engine'] });
@@ -484,9 +484,9 @@ test('a backslash specifier is never joined or read, though the reader would res
   // specifier and read what it resolves to, the analysis would hang.
   const { dir, src } = gradle();
   // D4b's reader splits a path on both separators, so ./x\..\fees.jsc would reach app/fees.jsc: it says DEPHANG.
-  writeFileSync(join(src, 'fees.jsc'), 'jsc 2 DEPHANG');
+  writeFileSync(join(src, 'fees.jsc'), 'jsc 1 DEPHANG');
   // In .jsc a backslash in a string is written \\ (the lexer's escape): the specifier is ./x\..\fees.jsc.
-  const shop = 'jsc 2 import { fee } from "./x\\\\..\\\\fees.jsc"';
+  const shop = 'jsc 1 import { fee } from "./x\\\\..\\\\fees.jsc"';
   writeFileSync(join(src, 'Shop.jsc'), shop);
   const lsp = await startLsp({ engineDir: STUB, folders: [dir], args: ['--project-engine'], hostOptions: { analysisMs: 600, graceMs: 200, backoffMs: 100, backoffMaxMs: 400 } });
   try {

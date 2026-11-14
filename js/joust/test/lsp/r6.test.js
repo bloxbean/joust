@@ -137,7 +137,7 @@ test('C26: a loader missing under a storage path with quotes and spaces is a mis
     return () => {};
   } });
   try {
-    const r = await host.analyze('engine:q', { file, id: 'q' }, { file: 'S.jsc', source: 'jsc 2 WARN' });
+    const r = await host.analyze('engine:q', { file, id: 'q' }, { file: 'S.jsc', source: 'jsc 1 WARN' });
     assert.deepEqual(r, { missing: true });
     assert.equal(host.stats.failures, 0);
     assert.equal(host.quarantine.size, 0);
@@ -239,7 +239,7 @@ test('S13: another window churning the shared store while this one reloads its e
   try {
     for (let k = 0; k < 150; k++) {
       host.restart();   // every round loads the engine afresh, as a restarted or long-idle worker does
-      const r = await host.analyze(`engine:${c.id}`, { file: c.file, id: c.id, storeRoot: store.root }, { file: 'S.jsc', source: `jsc 2 WARN ${k}` });
+      const r = await host.analyze(`engine:${c.id}`, { file: c.file, id: c.id, storeRoot: store.root }, { file: 'S.jsc', source: `jsc 1 WARN ${k}` });
       const kind = r.model ? 'model' : r.missing ? 'missing' : r.cancelled ? 'cancelled' : `internal:${r.internal?.kind}:${r.internal?.message}`;
       tally[kind] = (tally[kind] ?? 0) + 1;
       if (r.missing) c = await store.put(js, wasm);   // what the server does: select again, republishing the copy

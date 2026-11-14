@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "3bae84bba6b36c6c10236181367e0fb21ce49a87916afaecb64f3e0863186a54",
+  "sourceSha256": "19ea62e5a3bc0d077de38b8a587498b5878b2a74f5a13816e1242e96562a2a9c",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Escrow",
   "source": "Escrow.jsc",

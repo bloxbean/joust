@@ -198,7 +198,7 @@ test('a host that does not start, or exits before it reports, rejects its builds
 test('joust build refuses an invalid limit before it runs anything', async () => {
   const root = mkdtempSync(join(tmpdir(), 'joust-limits-'));
   mkdirSync(join(root, 'contracts', 'app'), { recursive: true });
-  writeFileSync(join(root, 'contracts', 'app', 'C.jsc'), 'jsc 2\npackage app\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n');
+  writeFileSync(join(root, 'contracts', 'app', 'C.jsc'), 'jsc 1\npackage app\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n');
   const before = process.env.JOUST_ENGINE_STACK_MB;
   process.env.JOUST_ENGINE_STACK_MB = 'abc';
   try {
@@ -217,12 +217,12 @@ test('a build that cannot be sent fails at once and stops its worker (S4)', asyn
   assert.ok(Date.now() - t < 10_000);
 });
 
-const small = { 'app/C.jsc': 'jsc 2\npackage app\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n'
+const small = { 'app/C.jsc': 'jsc 1\npackage app\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n'
   + '  action inc(by: Int) {\n    require(by > 0, "positive")\n    return { ...state, n: n + by }\n  }\n}\n' };
 const chain = (n) => {
   let s = '    if x == 0 { require(x >= 0, "a0") }';
   for (let k = 1; k < n; k++) s += ` else if x == ${k} { require(x != ${k}, "a${k}") }`;
-  return { 'app/W.jsc': `jsc 2\npackage app\ncontract W {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a(x: Int) {\n${s}`
+  return { 'app/W.jsc': `jsc 1\npackage app\ncontract W {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a(x: Int) {\n${s}`
     + ` else { require(x > ${n}, "z") }\n    return { ...state, n: x }\n  }\n}\n` };
 };
 const skipNoEngine = ENGINE ? false : 'no engine (js/joust/engine)';

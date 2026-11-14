@@ -7,7 +7,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * The {@code .jsc} 2 front end (ADR-0018): files that start with {@code jsc 2}. Parse ({@link Parser}), check into the
+ * The {@code .jsc} front end (ADR-0018): files that start with {@code jsc 1}, or with no header. Parse ({@link Parser}), check into the
  * typed IR ({@link Checker}), then lower it to Java ({@link JavaEmitter}) or evaluate it ({@link Interpreter}).
  */
 public final class JscV2 {

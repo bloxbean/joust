@@ -45,8 +45,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0109 | error | expected ' … ' but found | Parser |
 | JSC0110 | error | expected … but found | Parser |
 | JSC0111 | error | ' … ' is a Java keyword, so it cannot be a package segment | Parser |
-| JSC0112 | error | a .jsc 2 file starts with 'jsc 2' | Parser |
-| JSC0113 | error | this compiler reads 'jsc 2' files | Parser |
+| JSC0113 | error | 'jsc 2' is no longer a header: the language is version 1, so write 'jsc 1' or drop the line (a file with no header is version 1) / this compiler reads .jsc version 1: the header is 'jsc 1', or none (a file with no header is version 1) | Parser |
 | JSC0114 | error | one contract per file | Parser |
 | JSC0115 | error | functions are written 'fn name(x: Int): Int = …' in .jsc | Parser |
 | JSC0116 | error | there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }' | Parser |
@@ -436,7 +435,7 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 ## Retired codes (ADR-0018 r26)
 
 JSC1101 to JSC1110 (`joust migrate`'s refusals) and JSC9006 (the v1 deprecation warning) went with `.jsc` v1 and its
-migration. They are not reused.
+migration; JSC0112 (a file without the header) went when the header became optional. They are not reused.
 
 ## Warnings (ADR-0018 D11, D12)
 

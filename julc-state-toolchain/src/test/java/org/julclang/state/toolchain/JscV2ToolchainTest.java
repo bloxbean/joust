@@ -48,9 +48,9 @@ class JscV2ToolchainTest {
      */
     @Test
     void anNpmPackagesJscLibrary_buildsAsTheProjectsOwnWould() {
-        String fees = "jsc 2\nlibrary acme.fees\n\nfn fee(amount: Int, bps: Int): Int = amount * bps / 10_000\n";
+        String fees = "jsc 1\nlibrary acme.fees\n\nfn fee(amount: Int, bps: Int): Int = amount * bps / 10_000\n";
         String shop = """
-                jsc 2
+                jsc 1
                 package app
 
                 import { fee } from "%s"
@@ -162,8 +162,8 @@ class JscV2ToolchainTest {
     void packageOwnership_andUnreachedBadSources() throws Exception {
         String javaLib = "package acme.fees;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
                 + "@OnchainLibrary\npublic class L {\n    public static BigInteger f(BigInteger n) { return n; }\n}\n";
-        String fees = "jsc 2\nlibrary acme.fees\nimport { f } from \"java:acme.fees.L\"\nfn fee(n: Int): Int = f(n)\n";
-        String c = "jsc 2\npackage app\nimport { fee } from \"@acme/fees/fees.jsc\"\ncontract C {\n  state { n: Int }\n  init() { return { n: fee(1) } }\n}\n";
+        String fees = "jsc 1\nlibrary acme.fees\nimport { f } from \"java:acme.fees.L\"\nfn fee(n: Int): Int = f(n)\n";
+        String c = "jsc 1\npackage app\nimport { fee } from \"@acme/fees/fees.jsc\"\ncontract C {\n  state { n: Int }\n  init() { return { n: fee(1) } }\n}\n";
         var plain = Toolchain.build(Map.of("app/C.jsc", c), Map.of(), Map.of("acme/fees/L.java", javaLib), Map.of("@acme/fees/fees.jsc", fees));
         assertTrue(plain.ok(), plain.diagnostics().toString());
         var extra = Toolchain.build(Map.of("app/C.jsc", c, "app/Extra.java", "package app; public class Extra {}\n"), Map.of(),
@@ -244,7 +244,7 @@ class JscV2ToolchainTest {
     @Test
     void acceptingTheAbi_neverWritesTheLock(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
         Path src = Files.createDirectories(dir.resolve("jsc/app"));
-        Files.writeString(src.resolve("C.jsc"), "jsc 2\npackage app\nimport { f } from \"java:lib.L\"\ncontract C {\n  state { n: Int }\n"
+        Files.writeString(src.resolve("C.jsc"), "jsc 1\npackage app\nimport { f } from \"java:lib.L\"\ncontract C {\n  state { n: Int }\n"
                 + "  init() { return { n: f() } }\n}\n");
         Path libs = Files.createDirectories(dir.resolve("libs/lib"));
         Files.writeString(libs.resolve("L.java"), "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
@@ -270,7 +270,7 @@ class JscV2ToolchainTest {
     @Test
     void errorsKeepTheirJscLineAndColumn() {
         var r = Toolchain.build(Map.of("t/Bad.jsc", """
-                jsc 2
+                jsc 1
                 package t
                 contract Bad {
                   state { n: Int }
@@ -292,7 +292,7 @@ class JscV2ToolchainTest {
     @Test
     void warningsKeepTheirJscLineAndColumn() {
         var r = Toolchain.build(Map.of("t/Warn.jsc", """
-                jsc 2
+                jsc 1
                 package t
                 contract Warn {
                   state { owner: Key, last: Int }
@@ -314,7 +314,7 @@ class JscV2ToolchainTest {
     /** Security S3 on the npm path: a file name that would rewrite the contract is refused at 1:1, nothing is built. */
     @Test
     void unsafeFileNamesAreRefused() {
-        String gate = "jsc 2\npackage t\ncontract Gate {\n  state { owner: Key }\n  init() { return { owner: caller } }\n"
+        String gate = "jsc 1\npackage t\ncontract Gate {\n  state { owner: Key }\n  init() { return { owner: caller } }\n"
                 + "  action claim(k: Key) {\n    require(false, \"nobody may claim\")\n    return { ...state, owner: k }\n  }\n}\n";
         String name = "t/x\"); if (true) return new State(k); Require.that(true, \".jsc";
         var r = Toolchain.build(Map.of(name, gate), Map.of());

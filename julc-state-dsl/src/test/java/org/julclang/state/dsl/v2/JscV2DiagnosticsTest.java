@@ -78,11 +78,11 @@ class JscV2DiagnosticsTest {
 
     @Test
     void codesReachTheMessages() {
-        var e = assertThrows(JscException.class, () -> JscV2.lower("jsc 2\npackage t\ncontract C {\n  state { n: Int }\n"
+        var e = assertThrows(JscException.class, () -> JscV2.lower("jsc 1\npackage t\ncontract C {\n  state { n: Int }\n"
                 + "  init() { let x = 1\n return { n: 0 } }\n}\n", "C.jsc"));
         assertNotNull(e.code);
         assertTrue(e.format("C.jsc").startsWith("C.jsc:5:12: error[" + e.code + "]: values are immutable"), e.format("C.jsc"));
-        var w = JscMain.lowerWithWarnings("jsc 2\npackage t\ncontract C {\n  state { owner: Key, last: Int }\n"
+        var w = JscMain.lowerWithWarnings("jsc 1\npackage t\ncontract C {\n  state { owner: Key, last: Int }\n"
                 + "  init() { return { owner: caller, last: 0 } }\n  action a() { return { ...state, last: validFrom } }\n}\n", "C.jsc");
         assertEquals(1, w.diagnostics().size());
         assertTrue(w.warnings().get(0).matches("C\\.jsc:6:41: warning\\[JSC9\\d{3}\\]: a stores a value of the validity window in last.*"),

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 enum E { A { x: Int } }

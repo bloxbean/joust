@@ -26,7 +26,7 @@ stored values), and `.jsc` and Java libraries (M4, below). M3 (owned and keyed o
 
 | Element | Rule |
 |---|---|
-| Version line | The first word of the file, after whitespace and comments, is `jsc`, followed by `2` (`JSC0112`, `JSC0113`). A file whose first word is anything else is v1 |
+| Header | Optional: when the first word of the file, after whitespace and comments, is `jsc`, it is followed by `1`. A file without a header is version 1. Any other version is refused (`JSC0113`), `jsc 2` included: it was the header of the previews, and there is no alias |
 | Line ends | LF or CRLF only. A lone CR, NEL, U+2028, U+2029, VT and FF are refused (`JSC0147`): some editors break lines there and a `//` comment could hide the code after them |
 | Format characters | No Unicode format character (category Cf: the bidirectional controls, zero-width characters) anywhere in the file, comments and strings included (`JSC0145`); a leading byte-order mark is allowed |
 | Comments | `//` to the end of the line, and `/* … */` |
@@ -391,7 +391,7 @@ A file headed `library <package>` is a **`.jsc` library** (ADR-0018 D9): imports
 
 ```jsc
 // contracts/app/fees.jsc
-jsc 2
+jsc 1
 library app
 
 type Line = { to: Key, bps: Int }
@@ -403,7 +403,7 @@ fn rate(t: Tier): Int = match t { Basic => 100, Gold { since } => since >= 10 ? 
 
 ```jsc
 // contracts/app/Shop.jsc
-jsc 2
+jsc 1
 package app
 
 import { Line, Tier, fee, rate } from "./fees.jsc"

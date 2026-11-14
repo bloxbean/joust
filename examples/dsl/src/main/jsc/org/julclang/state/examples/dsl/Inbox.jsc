@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M2c (review r1, S1, F5, C1): a receiver whose memo holds every shape a generated memo decoder decides on the

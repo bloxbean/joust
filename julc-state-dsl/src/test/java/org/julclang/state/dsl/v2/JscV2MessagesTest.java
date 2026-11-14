@@ -145,7 +145,7 @@ class JscV2MessagesTest {
 
     /** A {@code batched only} action before an action and a destroy, with an input check and a pay in each (review S1). */
     static final String ORDER = """
-            jsc 2
+            jsc 1
             package t
             contract Order {
               state { admin: Key, n: Int }
@@ -163,7 +163,7 @@ class JscV2MessagesTest {
             """;
 
     static final String SRC = """
-            jsc 2
+            jsc 1
             package t
             contract Pay {
               state { owner: Key, total: Int }

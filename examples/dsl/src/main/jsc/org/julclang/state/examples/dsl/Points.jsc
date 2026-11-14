@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // Loyalty points in a Map<Key, Int> (a MerkleMap: any number of holders, a 32-byte root on chain).

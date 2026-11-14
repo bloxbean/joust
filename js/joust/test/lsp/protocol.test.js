@@ -63,7 +63,7 @@ test('diagnostics as you type: the first error with its code and link, then the 
   const lsp = await startLsp({ folders: [dir] });
   try {
     const uri = uriOf(join(dir, 'W.jsc'));
-    const src = (v) => `jsc 2\npackage t\ncontract W {\n  state { n: Int, owner: Key }\n  init() { return { n: 0, owner: caller } }\n`
+    const src = (v) => `jsc 1\npackage t\ncontract W {\n  state { n: Int, owner: Key }\n  init() { return { n: 0, owner: caller } }\n`
       + `  destroy a() only owner { pay(owner, n) }\n  action b() { return { ...state, n: ${v} } }\n  destroy c() only owner { pay(owner, n + 2) }\n}\n`;
     lsp.open(uri, src('missing'));
     const p1 = await lsp.diagnostics(uri, 1);
@@ -164,7 +164,7 @@ test('oversized, binary and deeply nested files: one diagnostic each, the server
     assert.equal(b.diagnostics[0].code, 'JSC-INTERNAL');
     assert.match(b.diagnostics[0].message, /larger than/);
     const bin = uriOf(join(dir, 'Bin.jsc'));
-    lsp.open(bin, 'jsc 2\npackage t\n\u0000\u0001\u0002ÿ�');
+    lsp.open(bin, 'jsc 1\npackage t\n\u0000\u0001\u0002ÿ�');
     const x = await lsp.diagnostics(bin, 1);
     assert.equal(x.diagnostics[0].code, 'JSC0148');
     const deep = uriOf(join(dir, 'Deep.jsc'));

@@ -48,7 +48,7 @@ contract that holds real value: every line carries a comment with its `.jsc` pos
 This is the counter `npm create joust` writes:
 
 ```jsc title="contracts/app/Counter.jsc"
-jsc 2
+jsc 1
 package app
 
 // A counter anyone can increment and only its owner can reset or close.
@@ -90,11 +90,12 @@ and a client with `deploy`, `increment`, `reset`, `close` and `count`.
 
 ### The file
 
-A `.jsc` 2 file starts with `jsc 2` (comments may come before it), then a `package`, then any number of `import`s,
+A `.jsc` file may start with the header `jsc 1` (comments may come before it; a file without it is version 1 too), then a
+`package`, then any number of `import`s,
 `type`s, `enum`s and `fn`s, and exactly one `contract`:
 
 ```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Pledges.jsc (head)"
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 import { blake2b_224 } from "std/crypto"

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // A tip jar: anyone tips (also as a batched intent); the owner withdraws.

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package @@package@@
 
 // A counter anyone can increment and only its owner can reset or close.

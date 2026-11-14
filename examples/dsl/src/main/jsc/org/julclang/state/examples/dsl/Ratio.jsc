@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M2b, #84 review S2 (the security review's SecInv): an invariant that can fail, not only be false. A division

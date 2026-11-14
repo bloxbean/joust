@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package lang.markers
 
 // ADR-0021 D12: hand-written expectations for the language core's M5a spans, written without the implementation.

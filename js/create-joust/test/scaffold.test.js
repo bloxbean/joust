@@ -55,7 +55,7 @@ for (const template of TEMPLATES) {
       // Review r2 F4: a language preview, said so, with what it means for a deployment.
       assert.equal(readme.includes('a language preview'), lang === 'jsc');
       assert.equal(readme.includes("don't\ndeploy it to hold value") || readme.includes("don't deploy it to hold value"), lang === 'jsc');
-      if (lang === 'jsc') assert.match(readFileSync(join(dir, 'contracts/app/Counter.jsc'), 'utf8'), /^jsc 2\npackage app\n/);
+      if (lang === 'jsc') assert.match(readFileSync(join(dir, 'contracts/app/Counter.jsc'), 'utf8'), /^jsc 1\npackage app\n/);
       assert.ok(!existsSync(join(dir, 'gitignore')));
     });
   }

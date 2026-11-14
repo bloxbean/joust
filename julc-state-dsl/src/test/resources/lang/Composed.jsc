@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package lang.m2
 
 import { isEmpty } from "std/value"

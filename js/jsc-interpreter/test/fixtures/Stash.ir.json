@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "9b2b209d1ec4d88b297cf822ca6ce0ff299735827dbba505cb16453f716038b7",
+  "sourceSha256": "efe9fe87b439bb8de56a9f110c5681e893f98452a313357b31819a59e210a1f2",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Stash",
   "source": "Stash.jsc",

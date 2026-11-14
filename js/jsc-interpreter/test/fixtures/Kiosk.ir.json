@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "014fc6c4ab8ecddb92698e27531faa7aa0deba96d1dc18bfe6ffdaf242b78fc8",
+  "sourceSha256": "a01bd6ff4bd13d2d8fd09beacfa7265917c5f188036aa7629504d7c51ac70cb5",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Kiosk",
   "source": "Kiosk.jsc",

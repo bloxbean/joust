@@ -21,7 +21,7 @@ class JscV2CheckerTest {
 
     static String contract(String members) {
         return """
-                jsc 2
+                jsc 1
                 package t
                 import { slice, byteAt } from "std/bytes"
                 type R = { t: Int, ok: Bool }
@@ -135,7 +135,7 @@ class JscV2CheckerTest {
                 "divisor", 1, 49);
         // In an init: no input state, so a time value in the first state.
         badSource("""
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { owner: Key, start: Int }
@@ -230,23 +230,23 @@ class JscV2CheckerTest {
     @Test
     void names_packageSegmentsAreJavaIdentifiers() {
         String body = "\ncontract Edge {\n state { n: Int }\n init() { return { n: 0 } }\n}\n";
-        badSource("jsc 2\npackage probe._" + body, "Java keyword", 2, 15);
-        badSource("jsc 2\npackage _.probe" + body, "Java keyword", 2, 9);
-        badSource("jsc 2\npackage probe.class" + body, "Java keyword", 2, 15);
-        assertDoesNotThrow(() -> JscV2.lower("jsc 2\npackage probe._ok" + body, "Edge.jsc"));
+        badSource("jsc 1\npackage probe._" + body, "Java keyword", 2, 15);
+        badSource("jsc 1\npackage _.probe" + body, "Java keyword", 2, 9);
+        badSource("jsc 1\npackage probe.class" + body, "Java keyword", 2, 15);
+        assertDoesNotThrow(() -> JscV2.lower("jsc 1\npackage probe._ok" + body, "Edge.jsc"));
     }
 
     @Test
     void names_stateFieldsCannotReplaceBuiltIns() {
         for (String b : List.of("caller", "received", "balance", "validFrom", "validTo", "state", "params", "funds", "max", "Some", "None")) {
-            String src = "jsc 2\npackage t\ncontract C {\n  state { owner: Key, " + b + ": Key }\n  init(k: Key) { return { owner: k } }\n}\n";
+            String src = "jsc 1\npackage t\ncontract C {\n  state { owner: Key, " + b + ": Key }\n  init(k: Key) { return { owner: k } }\n}\n";
             var e = assertThrows(JscException.class, () -> JscV2.lower(src, "C.jsc"), b);
             assertEquals("4:23", e.line + ":" + e.col, b + ": " + e.getMessage());
             assertTrue(e.getMessage().contains("built-in name") || e.getMessage().contains("reserved"), e.getMessage());
         }
         // The ownership takeover of C1, refused at the field.
         badSource("""
-                jsc 2
+                jsc 1
                 package probe
                 contract CallerShadow {
                   state { caller: Key, owner: Key }
@@ -265,22 +265,22 @@ class JscV2CheckerTest {
         // Codex C14: '_' is a Java keyword; C15: two methods with one redeemer variant.
         bad("action a(_: Int) { return { ...state, count: _ } }", "reserved", 0, 10);
         bad("action foo() { return state }\n action Foo() { return state }", "clash with the generated name Foo", 1, 2);
-        badSource("jsc 2\npackage t\ncontract Keep {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action keep() { return state }\n}\n",
+        badSource("jsc 1\npackage t\ncontract Keep {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action keep() { return state }\n}\n",
                 "clash with the generated name Keep", 6, 3);
         bad("action a(ByteStringLib: Bytes) { require(ByteStringLib == #00, \"bytes\")\n return state }", "reserved", 0, 10);
         bad("action a(k: Key) { const ByteStringLib = 1\n require(ByteStringLib > 0 && k == owner, \"x\")\n return state }", "reserved", 0, 20);
         for (String t : List.of("Ctx", "Action", "Init", "View", "Destroy", "Payable", "SignedBy", "ByteStringLib", "CryptoLib",
                 "BytesAdapter", "Boolean", "Object", "Opt", "Int", "Bytes", "State", "Outcome")) {
-            badSource("jsc 2\npackage t\ntype " + t + " = { a: Int }\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
+            badSource("jsc 1\npackage t\ntype " + t + " = { a: Int }\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
                     "reserved", 3, 1);
         }
-        badSource("jsc 2\npackage t\ntype Opt_Int = { a: Int }\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
+        badSource("jsc 1\npackage t\ntype Opt_Int = { a: Int }\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
                 "without '_'", 3, 1);
-        badSource("jsc 2\npackage t\ntype T = { a: Int }\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
+        badSource("jsc 1\npackage t\ntype T = { a: Int }\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
                 "contract's name", 3, 1);
-        badSource("jsc 2\npackage t\nfn bump(n: Int): Int = n + 1\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
+        badSource("jsc 1\npackage t\nfn bump(n: Int): Int = n + 1\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
                 + "  action bump() { return { ...state, n: bump(n) } }\n}\n", "name of a method", 3, 1);
-        badSource("jsc 2\npackage t\ntype S = { hashCode: Int }\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
+        badSource("jsc 1\npackage t\ntype S = { hashCode: Int }\ncontract T {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n",
                 "reserved", 3, 12);
     }
 
@@ -295,7 +295,7 @@ class JscV2CheckerTest {
                 "only in an action or destroy", 3, 16);
         // A destroy pays out what it holds (F15); an init cannot pay (F12).
         bad("destroy close() only owner { require(true, \"x\") }", "must pay out", 0, 1);
-        badSource("jsc 2\npackage t\ncontract T {\n  state { owner: Key }\n  init() { pay(caller, 1)\n return { owner: caller } }\n}\n",
+        badSource("jsc 1\npackage t\ncontract T {\n  state { owner: Key }\n  init() { pay(caller, 1)\n return { owner: caller } }\n}\n",
                 "an init cannot pay", 5, 12);
         bad("action a() only owner { require(xs.all(x => { pay(owner, 1)\n true }), \"x\")\n return state }", "only const and require", 0, 47);
     }
@@ -389,7 +389,7 @@ class JscV2CheckerTest {
         bad("action a() { const x = function() { 1 }\n return state }", "no function values", 0, 24);
         bad("action a() { function f() { }\n return state }", "fn name", 0, 14);
         bad("async action a() { return state }", "no 'async'", 0, 1);
-        badSource("jsc 2\npackage t\nclass Foo {}\n", "no classes", 3, 1);
+        badSource("jsc 1\npackage t\nclass Foo {}\n", "no classes", 3, 1);
         bad("action a() {\n if (count > 5) { return state }\n return { ...state, count: count + 1 } }", "no early return", 1, 19);
         bad("view v(o: Option<Bool>, b: Bool): Bool = o ?? b || true", "cannot be mixed", 0, 47);
         ok("view v(o: Option<Bool>, b: Bool): Bool = (o ?? b) || true");
@@ -423,11 +423,35 @@ class JscV2CheckerTest {
         assertTrue(e.getMessage().contains("write && for the logical operator"), e.getMessage());
     }
 
+    /** ADR-0018 r26: the header is optional ({@code jsc 1}, or none); {@code jsc 2} and any other version are refused. */
+    @Test
+    void theHeaderIsOptional_andOnlyVersion1IsRead() {
+        String body = "package t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n";
+        var with = JscV2.lower("jsc 1\n" + body, "C.jsc");
+        var without = JscV2.lower(body, "C.jsc");
+        var commented = JscV2.lower("// a comment\n/* and a block */ jsc 1; package t\ncontract C {\n  state { n: Int }\n"
+                + "  init() { return { n: 0 } }\n}\n", "C.jsc");
+        assertEquals(with.abiJson(), without.abiJson());
+        assertEquals(with.abiJson(), commented.abiJson());
+        assertEquals(with.javaPath(), without.javaPath());
+        var two = assertThrows(JscException.class, () -> JscV2.lower("jsc 2\n" + body, "C.jsc"));
+        assertEquals("JSC0113 1:5", two.code + " " + two.line + ":" + two.col);
+        assertTrue(two.getMessage().contains("write 'jsc 1' or drop the line"), two.getMessage());
+        for (String head : List.of("jsc 3\n", "jsc 0\n", "jsc one\n", "jsc\n")) {
+            var e = assertThrows(JscException.class, () -> JscV2.lower(head + body, "C.jsc"), head);
+            assertEquals("JSC0113", e.code, head);
+            assertTrue(e.getMessage().contains("the header is 'jsc 1', or none"), e.getMessage());
+        }
+        // The module header reads the same (a library, or a contract's output path).
+        assertEquals("t/C.java", JscV2.outputPath(body, "C.jsc"));
+        assertThrows(JscException.class, () -> JscV2.outputPath("jsc 2\n" + body, "C.jsc"));
+    }
+
     /** Security S3: the file name is embedded in the generated Java, so only safe names are accepted. */
     @Test
     void fileNamesAreCheckedAtTheBoundary() {
         String gate = """
-                jsc 2
+                jsc 1
                 package t
                 contract Gate {
                   state { owner: Key }

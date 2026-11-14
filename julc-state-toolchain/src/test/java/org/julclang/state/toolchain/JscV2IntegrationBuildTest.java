@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2IntegrationBuildTest {
 
     static final String LIB = """
-            jsc 2
+            jsc 1
             library t
 
             type Line = { to: Key, bps: Int }
@@ -30,7 +30,7 @@ class JscV2IntegrationBuildTest {
     }
 
     static String receiving(String memo) {
-        return "jsc 2\npackage t\n\nimport { Line, Tier } from \"./lib.jsc\"\n\ncontract P {\n  state { owner: Key, n: Int }\n\n"
+        return "jsc 1\npackage t\n\nimport { Line, Tier } from \"./lib.jsc\"\n\ncontract P {\n  state { owner: Key, n: Int }\n\n"
                 + "  init() {\n    return { owner: caller, n: 0 }\n  }\n\n"
                 + "  action take() receives " + memo + " {\n    return { ...state, n: n + funds.deposits.length }\n  }\n\n"
                 + "  destroy close() only owner {\n    pay(owner, balance)\n  }\n}\n";
@@ -47,7 +47,7 @@ class JscV2IntegrationBuildTest {
     @Test
     void aSendDatumOfALibraryRecordOrEnum_builds() {
         String c = """
-                jsc 2
+                jsc 1
                 package t
 
                 import { Line, Tier } from "./lib.jsc"

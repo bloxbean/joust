@@ -1,7 +1,7 @@
 # tree-sitter-jsc
 
 A [tree-sitter](https://tree-sitter.github.io/) grammar for JOUST's contract language, `.jsc` 2 (ADR-0018 D2, D13).
-It serves editors that use tree-sitter (highlighting,
+A file may start with the header `jsc 1`; a file without one is version 1 too. It serves editors that use tree-sitter (highlighting,
 folding, structure); ADR-0021 D5 keeps the language server on the hand-written parser, not on this grammar. Token colouring for Shiki (the docs
 site) and VS Code is the TextMate grammar in [`js/vscode-joust`](../js/vscode-joust) (the VS Code extension, ADR-0021 D9).
 

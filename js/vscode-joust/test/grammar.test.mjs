@@ -79,7 +79,7 @@ test('.jsc 2: the header, declarations, effects, calls, literals and comments', 
 
 test('.jsc 2: ada, bytes, escapes, Option and the time prelude', () => {
   const t = tokens([
-    'jsc 2', 'package p', '/* a block', '   comment */',
+    'jsc 1', 'package p', '/* a block', '   comment */',
     'fn f(o: Option<Int>): Bytes = #00ff', 'contract C(minAda = 2 ada) {',
     '  state { n: Int }', '  init() { require(after(1) && n == 0, "say \\"hi\\"\\n"); return { n: Some(1) ?? None } }', '}',
   ].join('\n'));

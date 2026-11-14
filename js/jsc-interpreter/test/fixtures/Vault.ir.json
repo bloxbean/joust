@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "58effeaa06a390a7baa198bdd34f506abd70655276cbeac1c4fd9360ec2a6d08",
+  "sourceSha256": "53c428f1960a2278e75dd356be062d24c9ac4d9ac559be1b1dc821683a22658e",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Vault",
   "source": "Vault.jsc",
