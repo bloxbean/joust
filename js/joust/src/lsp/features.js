@@ -232,7 +232,6 @@ export function semanticTokens(model) {
 
 // ------------------------------------------------------------------ completion
 
-const WORD = /[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** The text of `text` before `pos` on its line, and the offset of `pos`. */
 function lineBefore(text, pos) {
@@ -327,33 +326,102 @@ function methodAt(model, pos) {
  * completed on the cursor's line; an item that needs an import carries `needsImport: { name, module }`, which the
  * server turns into its joust.addImport command (D4a: no additionalTextEdits).
  */
+/** S1 on #99: completion reads at most this much of the cursor's line, and of the text before it. */
+export const LINE_WINDOW = 512;
+export const TEXT_WINDOW = 4000;
+
+const identChar = (c) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c === '_';
+const identStart = (c) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_';
+
+/**
+ * The tokens of a window of text, by the lexer's rules as far as completion needs them (D5: "the tokens around the
+ * cursor"): names, numbers, strings (one token), comments skipped, every other character one token. One linear pass
+ * (S1 on #99: no pattern with nested quantifiers runs on workspace text).
+ */
+export function scanTokens(src) {
+  const out = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === ' ' || c === '\t' || c === '\r' || c === '\n') {
+      i++;
+    } else if (c === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') i++;
+    } else if (c === '/' && src[i + 1] === '*') {
+      const e = src.indexOf('*/', i + 2);
+      i = e < 0 ? src.length : e + 2;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== '"' && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1;
+      out.push({ t: 'str', v: src.slice(i + 1, Math.min(j, src.length)), at: i });
+      i = j + 1;
+    } else if (identChar(c)) {
+      let j = i + 1;
+      while (j < src.length && identChar(src[j])) j++;
+      out.push({ t: identStart(c) ? 'id' : 'num', v: src.slice(i, j), at: i });
+      i = j;
+    } else {
+      out.push({ t: 'p', v: c, at: i });
+      i++;
+    }
+  }
+  return out;
+}
+
+const HEADERS = new Set(['init', 'action', 'destroy', 'view']);
+
+/**
+ * The completion items at `pos` in `text` (the current buffer), from `model` (the model of that very version: the server
+ * waits for it, C4 on #99) and the engine's catalogue `std` ({ rows, types, members, modifiers }). Each item's
+ * `textEdit` replaces only the word being completed on the cursor's line; an item that needs an import carries
+ * `needsImport: { name, module }`, which the server turns into its joust.addImport command (D4a: no
+ * additionalTextEdits). The context is read from a bounded window of tokens before the cursor, in linear time (S1).
+ */
 export function completion(text, pos, model, std = {}) {
-  const line = lineBefore(text, pos);
-  const word = WORD.exec(line)?.[0] ?? '';
+  const full = lineBefore(text, pos);
+  const line = full.length > LINE_WINDOW ? full.slice(full.length - LINE_WINDOW) : full;
+  let w = line.length;
+  while (w > 0 && identChar(line[w - 1]) && line.length - w < 256) w--;
+  const word = w < line.length && identStart(line[w]) ? line.slice(w) : '';
   const head = line.slice(0, line.length - word.length);
   const replace = { start: { line: pos.line, character: pos.character - word.length }, end: pos };
   const item = (label, kind, detail, extra = {}) => ({ label, kind, ...(detail ? { detail } : {}), textEdit: { range: replace, newText: extra.insert ?? label },
     ...(extra.snippet ? { insertTextFormat: 2 } : {}), ...(extra.needsImport ? { needsImport: extra.needsImport } : {}),
     ...(extra.sort ? { sortText: extra.sort } : {}) });
   const offset = offsetAt(text, pos);
-  const textBefore = text.slice(Math.max(0, offset - 4000), offset);
+  const textBefore = text.slice(Math.max(0, offset - TEXT_WINDOW), offset - word.length);
   const rows = std.rows ?? [];
+  const toks = scanTokens(head);
+  const last = (k = 1) => toks[toks.length - k];
 
-  // Inside `import { … } from "std/…"`: the module's rows.
-  const imp = /\bimport\s*(contract\s*)?\{([^}]*)$/.exec(textBefore);
-  if (imp) {
-    if (imp[1]) return [];
-    const after = text.slice(offset, offset + 400);
-    const mod = /^[^}]*\}\s*from\s*"([^"]*)"/.exec(after)?.[1];
-    const listed = new Set(imp[2].split(',').map((x) => x.trim()));
-    return rows.filter((r) => r.module !== 'prelude' && (!mod || r.module === mod) && !listed.has(r.name))
-      .map((r) => item(r.name, 3, `${r.signature}  (${r.module})`));
+  // Inside `import { … } from "std/…"`: the module's rows (the last '{' before the cursor is open and follows `import`).
+  const open = textBefore.lastIndexOf('{');
+  if (open >= 0 && textBefore.indexOf('}', open) < 0) {
+    const before = scanTokens(textBefore.slice(Math.max(0, open - 64), open));
+    const b1 = before[before.length - 1];
+    const b2 = before[before.length - 2];
+    const isImport = b1?.v === 'import' || (b1?.v === 'contract' && b2?.v === 'import');
+    if (isImport) {
+      if (b1.v === 'contract') return [];
+      const after = text.slice(offset, offset + 400);
+      const close = after.indexOf('}');
+      const tail = close < 0 ? [] : scanTokens(after.slice(close + 1, close + 200));
+      const mod = tail[0]?.v === 'from' && tail[1]?.t === 'str' ? tail[1].v : undefined;
+      const listed = new Set(scanTokens(textBefore.slice(open + 1)).filter((t) => t.t === 'id').map((t) => t.v));
+      return rows.filter((r) => r.module !== 'prelude' && (!mod || r.module === mod) && !listed.has(r.name))
+        .map((r) => item(r.name, 3, `${r.signature}  (${r.module})`));
+    }
   }
 
-  // After a dot: the members of the target's type.
-  const dot = /([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\s*\.\s*$/.exec(head);
-  if (dot) {
-    const names = dot[1].split('.').map((x) => x.trim());
+  // After a dot: the members of the target's type (a chain `a.b.` read back over its tokens).
+  if (last()?.v === '.') {
+    const names = [];
+    let k = toks.length - 1;
+    while (k > 0 && toks[k].v === '.' && toks[k - 1].t === 'id') {
+      names.unshift(toks[k - 1].v);
+      k -= 2;
+    }
+    if (!names.length) return [];
     const method = methodAt(model, pos);
     let t = parseType(nameType(model, names[0], pos, method));
     for (const n of names.slice(1)) {
@@ -368,9 +436,19 @@ export function completion(text, pos, model, std = {}) {
     return members.map((m) => item(m.name, m.kind === 'property' ? 10 : 2, m.signature));
   }
 
-  // A method header after its parameters: the modifiers.
-  if (/^\s*(init|action|destroy|view|receives)\b[^{]*\)\s*([A-Za-z_]\w*(\([^)]*\))?\s*)*$/.test(head)) {
-    return (std.modifiers ?? ['only', 'authorized', 'after', 'before', 'payable', 'open']).map((m) => item(m, 14, 'modifier'));
+  // A method header: the parameters' parentheses closed, nothing but modifiers since (no '{', '=' or ':').
+  const first = toks[0];
+  if (first && HEADERS.has(first.v)) {
+    let depth = 0;
+    let closed = -1;
+    for (let k = 1; k < toks.length; k++) {
+      if (toks[k].v === '(') depth++;
+      else if (toks[k].v === ')' && --depth === 0 && closed < 0) closed = k;
+    }
+    const rest = closed < 0 ? null : toks.slice(closed + 1);
+    if (rest && !rest.some((t) => t.v === '{' || t.v === '=' || t.v === ':')) {
+      return (std.modifiers ?? ['only', 'authorized', 'after', 'before', 'payable', 'open']).map((m) => item(m, 14, 'modifier'));
+    }
   }
 
   // A type position: `const x: …`, a parameter's or a field's type, a return type, a type argument.
@@ -378,37 +456,59 @@ export function completion(text, pos, model, std = {}) {
     const d = model.declarations.filter((x) => ['type', 'state', 'variant', 'event', 'params'].includes(x.kind) && contains(x.range, pos));
     return d.length > 0 && !methodAt(model, pos);
   })();
-  const header = /^\s*(fn|init|action|destroy|view)\b[^{=]*$/.test(head);
-  if (/\bconst\s+[A-Za-z_]\w*\s*:\s*$/.test(head) || /<\s*$|<[^<>]*,\s*$/.test(head) && /[A-Z]\w*\s*<[^>]*$/.test(head)
-    || header && /:\s*$/.test(head) || inFields && /^\s*[A-Za-z_]\w*\s*:\s*$/.test(head)) {
+  const header = first && (first.v === 'fn' || HEADERS.has(first.v)) && !toks.some((t) => t.v === '{' || t.v === '=');
+  let angle = 0;
+  for (const t of toks) {
+    if (t.v === '<') angle++;
+    else if (t.v === '>' && angle > 0) angle--;
+  }
+  const typeArg = angle > 0 && (last()?.v === '<' || last()?.v === ',');
+  const afterColon = last()?.v === ':' && last(2)?.t === 'id';
+  const constType = afterColon && last(3)?.v === 'const';
+  const fieldType = afterColon && inFields && toks.length === 2;
+  if (constType || typeArg || (header && afterColon) || fieldType || (header && last()?.v === ':' && last(2)?.v === ')')) {
     const declared = model.declarations.filter((d) => ['type', 'enum', 'event'].includes(d.kind)).map((d) => item(d.name, d.kind === 'enum' ? 13 : 22, d.kind));
     return [...(std.types ?? []).map((t) => item(t, 7, 'type')), ...declared];
   }
 
-  // The arms of a match on an enum or an Option, as a snippet, on the line after `match e {`.
-  const m = /\bmatch\s+([A-Za-z_][\w.]*)\s*\{\s*$/.exec(textBefore);
-  if (m && word === '') {
-    const method = methodAt(model, pos);
-    const names = m[1].split('.');
-    let t = parseType(nameType(model, names[0], pos, method));
-    for (const n of names.slice(1)) {
-      if (!t) break;
-      const f = recordFields(model, t.name).find((d) => d.name === n);
-      t = f ? parseType(f.type) : null;
-    }
-    if (t?.name === 'Option') {
-      return [item('match arms (Some, None)', 15, `Option<${t.args[0] ? showType(t.args[0]) : 'T'}>`, { snippet: true,
-        insert: 'Some(${1:x}) => ${2},\nNone => ${3}' })];
-    }
-    const en = t && model.declarations.find((d) => d.kind === 'enum' && d.name === t.name);
-    if (en) {
-      const vs = model.declarations.filter((d) => d.parent === en.id && d.kind === 'variant');
-      let k = 1;
-      const arms = vs.map((v) => {
-        const fs = model.declarations.filter((d) => d.parent === v.id && d.kind === 'field').map((f) => f.name);
-        return `${v.name}${fs.length ? ` { ${fs.join(', ')} }` : ''} => \${${k++}}`;
-      });
-      return [item(`match arms (${vs.map((v) => v.name).join(', ')})`, 15, en.name, { snippet: true, insert: arms.join(',\n') })];
+  // The arms of a match on an enum or an Option, as a snippet, on the line after `match e {` (read back over tokens).
+  if (word === '' && !toks.length) {
+    const back = scanTokens(textBefore.slice(Math.max(0, textBefore.length - 256)));
+    const n = back.length;
+    if (n >= 3 && back[n - 1].v === '{') {
+      const names = [];
+      let k = n - 2;
+      while (k >= 0 && back[k].t === 'id' && back[k].v !== 'match') {
+        names.unshift(back[k].v);
+        if (back[k - 1]?.v === '.') k -= 2;
+        else {
+          k--;
+          break;
+        }
+      }
+      if (back[k]?.v === 'match' && names.length) {
+        const method = methodAt(model, pos);
+        let t = parseType(nameType(model, names[0], pos, method));
+        for (const nm of names.slice(1)) {
+          if (!t) break;
+          const f = recordFields(model, t.name).find((d) => d.name === nm);
+          t = f ? parseType(f.type) : null;
+        }
+        if (t?.name === 'Option') {
+          return [item('match arms (Some, None)', 15, `Option<${t.args[0] ? showType(t.args[0]) : 'T'}>`, { snippet: true,
+            insert: 'Some(${1:x}) => ${2},\nNone => ${3}' })];
+        }
+        const en = t && model.declarations.find((d) => d.kind === 'enum' && d.name === t.name);
+        if (en) {
+          const vs = model.declarations.filter((d) => d.parent === en.id && d.kind === 'variant');
+          let a = 1;
+          const arms = vs.map((v) => {
+            const fs = model.declarations.filter((d) => d.parent === v.id && d.kind === 'field').map((f) => f.name);
+            return `${v.name}${fs.length ? ` { ${fs.join(', ')} }` : ''} => \${${a++}}`;
+          });
+          return [item(`match arms (${vs.map((v) => v.name).join(', ')})`, 15, en.name, { snippet: true, insert: arms.join(',\n') })];
+        }
+      }
     }
   }
 

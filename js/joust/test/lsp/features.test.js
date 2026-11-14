@@ -166,3 +166,24 @@ test('invisible characters: every JSC0145 and JSC0148 the model reports, with it
   ] });
   assert.deepEqual(invisibleOccurrences(m, text).map((o) => o.char), ['U+200B', 'U+0007']);
 });
+
+test('S1 on #99: completion reads a bounded window in linear time: hostile lines answer at once', () => {
+  const m = model();
+  const cases = [
+    `  action a() ${'a'.repeat(40)}+b`,
+    `  action a() ${'a'.repeat(4000)}+b`,
+    `${'a.'.repeat(8000)}a !`,
+    `${'a.'.repeat(500_000)}`,
+    `  action a(${'('.repeat(100_000)}`,
+    `import { ${'x, '.repeat(200_000)}`,
+    `  match ${'a.'.repeat(100_000)}{`,
+    'x'.repeat(1024 * 1024),
+  ];
+  for (const line of cases) {
+    const text = `jsc 2\npackage t\n${line}`;
+    const t = performance.now();
+    completion(text, { line: 2, character: line.length }, m, { rows: [{ module: 'std/crypto', name: 'sha2_256', signature: 's' }] });
+    const ms = performance.now() - t;
+    assert.ok(ms < 200, `${line.slice(0, 40)}… (${line.length} chars): ${ms.toFixed(1)} ms`);
+  }
+});
