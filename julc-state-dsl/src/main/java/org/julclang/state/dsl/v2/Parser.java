@@ -129,7 +129,10 @@ final class Parser {
         if (recover) {
             // The parser's errors get the build's note on a leading '-' (the lexer's never do: the build throws them first).
             var members = p.members();
-            for (int k = lexical; k < spans.errors.size(); k++) spans.errors.set(k, hinted(spans.errors.get(k), p.leadingMinus, members));
+            // The first ones only: a model reports JscLang.MAX_ERRORS (N1 on #99: the search is per error and member).
+            for (int k = lexical; k < Math.min(spans.errors.size(), lexical + 10 * JscLang.MAX_ERRORS); k++) {
+                spans.errors.set(k, hinted(spans.errors.get(k), p.leadingMinus, members));
+            }
             if (f == null) return null;
             try {
                 Depth.check(f);
@@ -179,11 +182,19 @@ final class Parser {
         return t.is("}") && lineStart && t.line() > open.line() && t.col() > indentOf(open);
     }
 
+    /** The column of each line's first token (0: none), built once (N1 on #99: a token search per call was quadratic). */
+    private int[] lineIndent;
+
     /** The column of the first token on {@code t}'s line. */
     private int indentOf(Tok t) {
-        int k = toks.indexOf(t);
-        while (k > 0 && toks.get(k - 1).line() == t.line()) k--;
-        return k < 0 ? t.col() : toks.get(k).col();
+        if (lineIndent == null) {
+            int max = 0;
+            for (Tok x : toks) max = Math.max(max, x.line());
+            lineIndent = new int[max + 2];
+            for (Tok x : toks) if (x.line() >= 0 && lineIndent[x.line()] == 0) lineIndent[x.line()] = x.col();
+        }
+        int c = t.line() >= 0 && t.line() < lineIndent.length ? lineIndent[t.line()] : 0;
+        return c == 0 ? t.col() : c;
     }
 
     /** The number of declarations when the current top-level member started (its own are dropped with it). */
@@ -464,6 +475,8 @@ final class Parser {
      * not where the error is found (a block without its value, an unknown name).
      */
     static JscException hinted(JscException e, List<Pos> leadingMinus, List<int[]> members) {
+        // No line starts with '-': nothing to note (N1 on #99: the member search below is per error).
+        if (leadingMinus.isEmpty()) return e;
         // The member (declaration, method) the error is in, by span: a leading '-' there, the nearest on or before the
         // error's line, else the first after it within the member, since an error found at a construct's start (a value
         // block without its value) comes before its cause (review r3 F12). A '-' of another member is never named, even

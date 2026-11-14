@@ -541,7 +541,7 @@ final class Checker {
         try {
             return checkFile(main, loader.order, JavaLibraries.NONE, modules == null ? JscModules.NONE : modules, List.of(), facts);
         } catch (JscException e) {
-            if (!Facts.isPoisoned(e)) facts.errors.add(Parser.hinted(e, main.file.leadingMinus(), main.file.members()));
+            if (!Facts.isPoisoned(e)) facts.errors.add(facts.errors.size() < 10 * JscLang.MAX_ERRORS ? Parser.hinted(e, main.file.leadingMinus(), main.file.members()) : e);   // N1: the first ones hinted
             return null;
         }
     }
@@ -556,7 +556,7 @@ final class Checker {
             r.run();
             return true;
         } catch (JscException e) {
-            if (!Facts.isPoisoned(e)) facts.errors.add(Parser.hinted(e, file.leadingMinus(), file.members()));
+            if (!Facts.isPoisoned(e)) facts.errors.add(facts.errors.size() < 10 * JscLang.MAX_ERRORS ? Parser.hinted(e, file.leadingMinus(), file.members()) : e);   // N1: the first ones hinted
             return false;
         }
     }
