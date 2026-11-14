@@ -1,7 +1,7 @@
 {
   "abi": 2,
-  "contract": "org.julclang.state.examples.dsl.migrated.PointsV2",
-  "source": "PointsV2.jsc",
+  "contract": "org.julclang.state.examples.dsl.Points",
+  "source": "Points.jsc",
   "datum": { "name": "State", "constr": 0, "fields": [
       { "name": "admin", "type": "Key", "data": "bytes28" },
       { "name": "supply", "type": "Int", "data": "int" },

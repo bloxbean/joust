@@ -1,37 +1,33 @@
+jsc 2
 package org.julclang.state.examples.dsl
 
 // A tip jar: anyone tips (also as a batched intent); the owner withdraws.
 contract Jar(maxDatumBytes = 192) {
-    state owner: Key
-    state goal: Int
-    state total: Int
-    state tips: Int
+  state { owner: Key, goal: Int, total: Int, tips: Int }
 
-    init(goal: Int) payable {
-        require goal > 0 "the goal must be positive"
-        owner = caller
-        this.goal = goal
-        total = received
+  init(goal: Int) payable {
+    require(goal > 0, "the goal must be positive")
+    return { owner: caller, goal, total: received, tips: 0 }
+  }
+
+  action tip() payable batched {
+    require(received >= 1 ada, "tip at least 1 ADA")
+    return { ...state, total: total + received, tips: tips + 1 }
+  }
+
+  // Before the goal is reached, the owner may take at most half of what the jar holds.
+  action withdraw(amount: Int) only owner {
+    require(amount > 0 && amount <= balance, "bad amount")
+    if total < goal {
+      require(amount * 2 <= balance, "before the goal, at most half")
     }
+    pay(owner, amount)
+    return state
+  }
 
-    action tip() payable batched {
-        require received >= 1 ada "tip at least 1 ADA"
-        total += received
-        tips += 1
-    }
+  destroy close() only owner {
+    pay(owner, balance)
+  }
 
-    // Before the goal is reached, the owner may take at most half of what the jar holds.
-    action withdraw(amount: Int) only owner {
-        require amount > 0 && amount <= balance "bad amount"
-        if total < goal {
-            require amount * 2 <= balance "before the goal, at most half"
-        }
-        pay amount to owner
-    }
-
-    destroy close() only owner {
-        pay balance to owner
-    }
-
-    view reached(): Bool = total >= goal
+  view reached(): Bool = total >= goal
 }

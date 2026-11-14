@@ -1,7 +1,7 @@
 {
   "abi": 2,
-  "contract": "org.julclang.state.examples.dsl.migrated.GuardsV2",
-  "source": "GuardsV2.jsc",
+  "contract": "org.julclang.state.examples.dsl.Guards",
+  "source": "Guards.jsc",
   "datum": { "name": "State", "constr": 0, "fields": [
       { "name": "owner", "type": "Key", "data": "bytes28" },
       { "name": "n", "type": "Int", "data": "int" }

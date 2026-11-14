@@ -1,0 +1,575 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "31d12659bc424158e6399d4c69a5a650654a44a22aca6601625a79a9a87da557",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Points",
+  "source": "Points.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "160" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "admin", "type": "Key" },
+      { "name": "supply", "type": "Int" },
+      { "name": "points", "type": { "bigmap": ["Key", "Int"] } }
+    ],
+    "at": [5, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [9, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [9, 37] },
+            { "node": "BigEmpty", "type": { "bigmap": ["Key", "Int"] }, "taint": 0, "at": [9, 48] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [9, 12]
+        },
+        "at": [8, 10]
+      },
+      "at": [8, 3]
+    },
+    {
+      "kind": "action",
+      "name": "award",
+      "params": [
+        { "id": 1, "name": "to", "type": "Key", "taint": 0, "at": [12, 16] },
+        { "id": 2, "name": "n", "type": "Int", "taint": 0, "at": [12, 25] }
+      ],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [1],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [13, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [13, 17] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [13, 13]
+            },
+            "message": "award a positive amount",
+            "at": [13, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [14, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [14, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "supply", "type": "Int", "taint": 0, "at": [14, 32] },
+              "right": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [14, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [14, 32]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "points",
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [14, 52]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 1, "type": "Key", "taint": 0, "at": [14, 63] },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "BigOp",
+                    "op": "at",
+                    "map": {
+                      "node": "StateField",
+                      "field": "points",
+                      "type": { "bigmap": ["Key", "Int"] },
+                      "taint": 0,
+                      "at": [14, 67]
+                    },
+                    "args": [{ "node": "LocalRef", "local": 1, "type": "Key", "taint": 0, "at": [14, 74] }],
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [14, 67]
+                  },
+                  "right": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [14, 80] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [14, 67]
+                }
+              ],
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [14, 52]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [14, 12]
+        },
+        "at": [12, 44]
+      },
+      "at": [12, 3]
+    },
+    {
+      "kind": "action",
+      "name": "spend",
+      "params": [{ "id": 3, "name": "n", "type": "Int", "taint": 0, "at": [18, 16] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 4, "name": "have", "type": "Int", "taint": 0, "at": [19, 5] },
+            "value": {
+              "node": "BigOp",
+              "op": "at",
+              "map": {
+                "node": "StateField",
+                "field": "points",
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [19, 18]
+              },
+              "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [19, 25] }],
+              "type": "Int",
+              "taint": 0,
+              "at": [19, 18]
+            },
+            "at": [19, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [20, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [20, 17] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [20, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": ">=",
+                "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [20, 22] },
+                "right": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [20, 30] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [20, 22]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [20, 13]
+            },
+            "message": "not enough points",
+            "at": [20, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [21, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [21, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "-",
+              "left": { "node": "StateField", "field": "supply", "type": "Int", "taint": 0, "at": [21, 32] },
+              "right": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [21, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [21, 32]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "points",
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [21, 52]
+              },
+              "args": [
+                { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [21, 63] },
+                {
+                  "node": "Cond",
+                  "cond": {
+                    "node": "Equals",
+                    "negate": false,
+                    "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [21, 71] },
+                    "right": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [21, 79] },
+                    "operand": "Int",
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [21, 71]
+                  },
+                  "then": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [21, 83] },
+                  "otherwise": {
+                    "node": "Arith",
+                    "op": "-",
+                    "left": {
+                      "node": "BigOp",
+                      "op": "at",
+                      "map": {
+                        "node": "StateField",
+                        "field": "points",
+                        "type": { "bigmap": ["Key", "Int"] },
+                        "taint": 0,
+                        "at": [21, 87]
+                      },
+                      "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [21, 94] }],
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [21, 87]
+                    },
+                    "right": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [21, 104] },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [21, 87]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [21, 71]
+                }
+              ],
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [21, 52]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [21, 12]
+        },
+        "at": [18, 24]
+      },
+      "at": [18, 3]
+    },
+    {
+      "kind": "action",
+      "name": "give",
+      "params": [
+        { "id": 5, "name": "to", "type": "Key", "taint": 0, "at": [24, 15] },
+        { "id": 6, "name": "n", "type": "Int", "taint": 0, "at": [24, 24] }
+      ],
+      "mods": [],
+      "checked": [5],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [25, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [25, 17] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [25, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": ">=",
+                "left": {
+                  "node": "BigOp",
+                  "op": "at",
+                  "map": {
+                    "node": "StateField",
+                    "field": "points",
+                    "type": { "bigmap": ["Key", "Int"] },
+                    "taint": 0,
+                    "at": [25, 22]
+                  },
+                  "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [25, 29] }],
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [25, 22]
+                },
+                "right": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [25, 40] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [25, 22]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [25, 13]
+            },
+            "message": "not enough points",
+            "at": [25, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 7, "name": "points1", "type": "Int", "taint": 0, "at": [26, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "-",
+              "left": {
+                "node": "BigOp",
+                "op": "at",
+                "map": {
+                  "node": "StateField",
+                  "field": "points",
+                  "type": { "bigmap": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [26, 21]
+                },
+                "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [26, 28] }],
+                "type": "Int",
+                "taint": 0,
+                "at": [26, 21]
+              },
+              "right": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [26, 38] },
+              "type": "Int",
+              "taint": 0,
+              "at": [26, 21]
+            },
+            "at": [26, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [27, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [27, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [27, 17] },
+              "record": "State",
+              "field": "supply",
+              "type": "Int",
+              "taint": 0,
+              "at": [27, 12]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "BigOp",
+                "op": "set",
+                "map": {
+                  "node": "StateField",
+                  "field": "points",
+                  "type": { "bigmap": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [27, 32]
+                },
+                "args": [
+                  { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [27, 43] },
+                  { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [27, 51] }
+                ],
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [27, 32]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 5, "type": "Key", "taint": 0, "at": [27, 64] },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "Cond",
+                    "cond": {
+                      "node": "Equals",
+                      "negate": false,
+                      "left": { "node": "LocalRef", "local": 5, "type": "Key", "taint": 0, "at": [27, 69] },
+                      "right": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [27, 75] },
+                      "operand": "Key",
+                      "type": "Bool",
+                      "taint": 0,
+                      "at": [27, 69]
+                    },
+                    "then": { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [27, 84] },
+                    "otherwise": {
+                      "node": "BigOp",
+                      "op": "at",
+                      "map": {
+                        "node": "StateField",
+                        "field": "points",
+                        "type": { "bigmap": ["Key", "Int"] },
+                        "taint": 0,
+                        "at": [27, 94]
+                      },
+                      "args": [{ "node": "LocalRef", "local": 5, "type": "Key", "taint": 0, "at": [27, 101] }],
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [27, 94]
+                    },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [27, 69]
+                  },
+                  "right": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [27, 108] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [27, 68]
+                }
+              ],
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [27, 32]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [27, 12]
+        },
+        "at": [24, 32]
+      },
+      "at": [24, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "StateField", "field": "supply", "type": "Int", "taint": 0, "at": [31, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [31, 23] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [31, 13]
+              },
+              "right": {
+                "node": "BigOp",
+                "op": "isEmpty",
+                "map": {
+                  "node": "StateField",
+                  "field": "points",
+                  "type": { "bigmap": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [31, 28]
+                },
+                "args": [],
+                "type": "Bool",
+                "taint": 0,
+                "at": [31, 28]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [31, 13]
+            },
+            "message": "points are still out",
+            "at": [31, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "admin", "type": "Key", "taint": 0, "at": [32, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [32, 16] },
+            "at": [32, 5]
+          }
+        ],
+        "result": null,
+        "at": [30, 30]
+      },
+      "at": [30, 3]
+    },
+    {
+      "kind": "view",
+      "name": "pointsOf",
+      "params": [{ "id": 8, "name": "who", "type": "Key", "taint": 0, "at": [35, 17] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "BigOp",
+          "op": "at",
+          "map": { "node": "StateField", "field": "points", "type": { "bigmap": ["Key", "Int"] }, "taint": 0, "at": [35, 34] },
+          "args": [{ "node": "LocalRef", "local": 8, "type": "Key", "taint": 0, "at": [35, 41] }],
+          "type": "Int",
+          "taint": 0,
+          "at": [35, 34]
+        },
+        "at": [35, 34]
+      },
+      "at": [35, 3]
+    }
+  ],
+  "warnings": []
+}
