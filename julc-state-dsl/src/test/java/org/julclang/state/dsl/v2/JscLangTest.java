@@ -258,20 +258,6 @@ class JscLangTest {
         // Review F2 on #83: the server's path (the front end alone, lower = false) gives the same model as the lowering
         // path, so every L1/L5 comparison below also holds for what the server publishes.
         assertEquals(a.model().json(), JscLang.analysis(src, file, id, modules, false).model().json(), file);
-        if (!JscV2.isV2(src)) {
-            // What the build does with it: the v1 front end (a deletion of 'jsc' makes a file v1).
-            try {
-                var r = org.julclang.state.dsl.JscMain.lowerWithWarnings(src, file);
-                assertTrue(a.model().accepted(), file);
-                assertEquals(r.diagnostics().stream().map(w -> String.valueOf(w.code()) + w.line() + ":" + w.col() + w.message()).toList(),
-                        a.model().diagnostics().stream().map(d -> String.valueOf(d.code()) + d.line() + ":" + d.col() + d.message()).toList(), file);
-            } catch (JscException e) {
-                var d = a.model().diagnostics().get(0);
-                assertEquals(String.valueOf(e.code) + e.line + ":" + e.col + e.getMessage(),
-                        String.valueOf(d.code()) + d.line() + ":" + d.col() + d.message(), file);
-            }
-            return;
-        }
         JscV2.Lowered strict;
         try {
             strict = modules == null ? JscV2.lower(src, file) : JscV2.lower(src, file, id, modules);
@@ -302,7 +288,6 @@ class JscLangTest {
         int n = 0;
         for (Path p : corpus()) {
             String src = Files.readString(p);
-            if (!JscV2.isV2(src)) continue;
             sameAsTheBuild(src, name(p));
             n++;
         }
@@ -333,7 +318,6 @@ class JscLangTest {
             String id = exampleId(p);
             if (id == null) continue;
             String src = Files.readString(p);
-            if (!JscV2.isV2(src)) continue;
             sameAsTheBuild(src, name(p), id, modules);
             var m = JscLang.analysis(src, name(p), id, modules, false).model();
             for (JscLang.Declaration d : m.declarations()) kinds.add(d.kind());
@@ -370,7 +354,6 @@ class JscLangTest {
         for (Path p : corpus()) {
             if (!p.toString().contains("examples/dsl") && !p.toString().contains("create-joust")) continue;
             String src = Files.readString(p);
-            if (!JscV2.isV2(src)) continue;
             List<Lexer.Tok> toks = Lexer.lex(src);
             var lineStarts = new ArrayList<Integer>();
             lineStarts.add(0);
@@ -401,22 +384,6 @@ class JscLangTest {
         var d = JscLang.analyze("jsc 2\npackage t\ncontract C { state { n: Int } }\n", "my file.jsc").diagnostics().get(0);
         assertEquals("JSC0001", d.code());
         assertEquals(new JscLang.Range(0, 0, 0, 1), d.range());
-    }
-
-    @Test
-    void aV1FileGetsTheBuildsDeprecationWarningAndNoSpans() {
-        // Valid v1 (review C10 on #83): accepted, with exactly the deprecation warning.
-        String v1 = "package t;\ncontract C {\n  state n: Int;\n  init() { n = 0; }\n}\n";
-        var m = JscLang.analyze(v1, "C.jsc");
-        assertEquals("jsc1", m.language());
-        assertTrue(m.accepted(), m.toString());
-        assertEquals(List.of("JSC9006"), m.diagnostics().stream().map(JscLang.Diagnostic::code).toList());
-        assertTrue(m.declarations().isEmpty());
-        // Malformed v1: the v1 front end's error, as the build reports it.
-        String bad = "package t;\ncontract C {\n  state { n: Int }\n  init() { n = 0; }\n}\n";
-        var e = JscLang.analyze(bad, "C.jsc");
-        assertFalse(e.accepted());
-        sameAsTheBuild(bad, "C.jsc");
     }
 
     // ------------------------------------------------------------------ D2a: the model's bounds

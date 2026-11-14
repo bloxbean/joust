@@ -408,11 +408,10 @@ class JscV2CheckerTest {
         assertEquals("\"a\\rb\\t\\001\"", JavaEmitter.str("a\rb\t\u0001"));
     }
 
-    // ------------------------------------------------------------------ dispatch, file names, v1 (D2, F8, F9, S3)
+    // ------------------------------------------------------------------ lexical errors, file names (F8, S3)
 
     @Test
-    void dispatchReadsOnlyTheFirstWord_soV2LexicalErrorsAreV2s() {
-        // F8: each of these was reported by the v1 front end.
+    void lexicalErrorsAreTheFrontEndsAtTheirPositions() {
         var e = assertThrows(JscException.class, () -> JscMain.lowerWithWarnings(contract("action a() { require(true, \"tab\\t\")\n return state }"), "T.jsc"));
         assertEquals(L + ":32", e.line + ":" + e.col);
         assertTrue(e.getMessage().contains("unknown escape \\t"), e.getMessage());
@@ -422,12 +421,9 @@ class JscV2CheckerTest {
         e = assertThrows(JscException.class, () -> JscMain.lowerWithWarnings(contract("view v(): Bool = true & false"), "T.jsc"));
         assertEquals(L + ":23", e.line + ":" + e.col);
         assertTrue(e.getMessage().contains("write && for the logical operator"), e.getMessage());
-        assertTrue(JscV2.isV2("/* ` */ jsc 2\npackage p"));
-        assertTrue(JscV2.isV2("// a comment\n\njsc 2"));
-        assertFalse(JscV2.isV2("package t\ncontract C {}"));
     }
 
-    /** Security S3: the file name is embedded in the generated Java, so only safe names are accepted, on v1 and v2. */
+    /** Security S3: the file name is embedded in the generated Java, so only safe names are accepted. */
     @Test
     void fileNamesAreCheckedAtTheBoundary() {
         String gate = """
@@ -456,20 +452,5 @@ class JscV2CheckerTest {
         // ADR-0018 D12 (r12): the input check's message is its ABI key; the file name is only in comments.
         assertTrue(java.contains("\"#input:spend0.0\""), java);
         assertFalse(java.contains("\"Gate-1_v2.jsc"), java);
-    }
-
-    @Test
-    void jscMainDispatchesOnTheVersionLine_andV1WarnsThatItIsDeprecated() {
-        var v2 = JscMain.lowerWithWarnings(contract(""), "T.jsc");
-        assertTrue(v2.java().contains("ADR-0018"));
-        String v1 = """
-                package t
-                contract C { state n: Int
-                  init() { n = 1 } }
-                """;
-        var lowered = JscMain.lowerWithWarnings(v1, "C.jsc");
-        // F9, D16: v1's deprecation warning arrived with M1d (templates switched, `joust migrate` present).
-        assertEquals(1, lowered.warnings().size(), lowered.warnings().toString());
-        assertTrue(lowered.warnings().get(0).startsWith("C.jsc:1:1: warning[JSC9006]: "), lowered.warnings().toString());
     }
 }

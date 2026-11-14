@@ -12,7 +12,7 @@ This page defines `.jsc` 2, as the front end in `julc-state-dsl` implements it
 [`v2/JavaEmitter.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/JavaEmitter.java))
 and [ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md) states
 it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the functions, the
-[standard library](/languages/jsc-std/). A file without `jsc 2` is [.jsc v1](/languages/jsc-v1/).
+[standard library](/languages/jsc-std/).
 
 <Aside type="caution" title="A preview">
 `.jsc` 2 is a preview: the core language of milestone M1, M2a's values and native assets (`Value`, `Address`,
@@ -572,11 +572,7 @@ against the sources by a test, is the
 | `JSC08xx` | maps |
 | `JSC09xx` | enums and `match` |
 | `JSC10xx` | lists, loops and lambdas |
-| `JSC11xx` | `joust migrate` refusals |
 | `JSC9xxx` | warnings |
-
-`JSC9006` is the warning every build of a v1 file prints: v1 is deprecated, and
-[`joust migrate`](/languages/jsc-migration/) translates the file.
 
 A diagnostic of javac or the JOUST processor on generated Java is reported at the `.jsc` line and column the source
 map gives, with the generated file and line as a note.
@@ -587,7 +583,6 @@ map gives, with the generated file and line as a note.
 |---|---|
 | `org.julclang.state.dsl.JscMain <srcDir> <outDir> [--accept-abi]` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first), with each `.jsc` 2 file's source map; checks (or with `--accept-abi` writes) the ABI manifests. A file's `./x.jsc` imports resolve to other files of `srcDir`. Exits 1 on an error, 2 on bad usage. Gradle's `generateJsc` and `acceptJscAbi` run it |
 | `JscMain --check-abi <srcDir> <descriptionsDir>` | Checks every manifest against the processor's descriptions (`checkJscAbi`) |
-| `JscMain --migrate <srcDir> <outDir> [--in-place]` | Translates v1 files to `.jsc` 2 ([migration](/languages/jsc-migration/)) |
 | `JscMain.lowerWithWarnings(source, fileName)` | `Lowered(java, diagnostics, fileName, sourceMapJson, abiJson)` for one file, on its own (it imports no libraries and no contracts) |
 | `JscMain.lowerWithWarnings(source, fileName, id, modules)` | The same for the file `id` of a build whose other files `modules` (`JscModules.of(files)`) finds: its libraries (M4) and the contracts it imports (M2c, `import contract`) |
 | `Toolchain.build(files, options)` (`julc-state-toolchain`) | Lowers `.jsc` entries, then compiles everything as Gradle does; used by `joust build` |
@@ -597,6 +592,5 @@ map gives, with the generated file and line as a note.
 <CardGrid>
 <LinkCard title=".jsc guide" description="The language by example." href="/languages/jsc/" />
 <LinkCard title=".jsc standard library" description="The prelude and the std modules." href="/languages/jsc-std/" />
-<LinkCard title="Migrating from .jsc v1" description="joust migrate and what it changes." href="/languages/jsc-migration/" />
 <LinkCard title="Annotations" description="The annotations .jsc modifiers lower to." href="/reference/annotations/" />
 </CardGrid>

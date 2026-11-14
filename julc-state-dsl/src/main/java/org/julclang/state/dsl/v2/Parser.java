@@ -293,14 +293,6 @@ final class Parser {
         return i > 0 && peek().line() > toks.get(i - 1).line();
     }
 
-    /**
-     * Whether a source is {@code .jsc} 2: its first word, after whitespace and comments, is {@code jsc}. Only the head is
-     * read: a lexical error further down is reported by the {@code .jsc} 2 front end, at its position (F8).
-     */
-    static boolean isV2(String src) {
-        return "jsc".equals(Lexer.firstWord(src));
-    }
-
     // ------------------------------------------------------------------ tokens
 
     private Tok peek() {

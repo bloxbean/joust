@@ -5,7 +5,6 @@ import org.gradle.api.GradleException;
 import org.gradle.api.Task;
 import org.gradle.api.logging.StandardOutputListener;
 import org.gradle.api.file.RegularFile;
-import org.gradle.api.provider.Property;
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
@@ -39,7 +38,7 @@ import java.util.Properties;
  *   <li>the JOUST processor, JuLC's processor and the on-chain API sources on the annotation processor path;</li>
  *   <li>{@code -parameters}, UTF-8, native access for tests and {@code run}, MerkleMap mirrors in memory for tests;</li>
  *   <li>{@code generateJsc}, when {@code src/main/jsc} exists: {@code .jsc} lowered to Java before compiling; with it
- *       {@code acceptJscAbi}, {@code checkJscAbi}, {@code migrateJsc} and {@code remapJscDiagnostics} (ADR-0018).</li>
+ *       {@code acceptJscAbi}, {@code checkJscAbi} and {@code remapJscDiagnostics} (ADR-0018).</li>
  * </ul>
  *
  * <p>Every version comes from the JOUST build that produced the plugin ({@code META-INF/joust/gradle-plugin.properties}),
@@ -249,20 +248,6 @@ public class JoustPlugin implements Plugin<Project> {
         });
         project.getTasks().named(JavaPlugin.COMPILE_JAVA_TASK_NAME, t -> t.finalizedBy(recordLibraries));
         project.getTasks().named(main.getClassesTaskName(), t -> t.dependsOn(recordLibraries));
-
-        // ADR-0018 D16: v1 files translated to .jsc 2, into build/jsc-migrated (or in place, with --in-place).
-        Provider<Directory> migrated = project.getLayout().getBuildDirectory().dir("jsc-migrated");
-        project.getTasks().register("migrateJsc", MigrateJsc.class, t -> {
-            t.setGroup("build");
-            t.setDescription("Translates the .jsc v1 files of " + MAIN_JSC + " to .jsc 2, into build/jsc-migrated (--in-place: replaces"
-                    + " them, keeping Name.jsc.v1)");
-            t.setClasspath(tool);
-            t.getMainClass().set("org.julclang.state.dsl.JscMain");
-            Property<Boolean> inPlace = t.getInPlace();
-            t.getArgumentProviders().add(() -> inPlace.get()
-                    ? List.of("--migrate", src.getAbsolutePath(), migrated.get().getAsFile().getAbsolutePath(), "--in-place")
-                    : List.of("--migrate", src.getAbsolutePath(), migrated.get().getAsFile().getAbsolutePath()));
-        });
 
         // ADR-0018 D12: javac's and the processors' diagnostics on the generated Java, reported again at their .jsc
         // positions (the source map beside the Java), as the npm toolchain reports them. compileJava's output is kept

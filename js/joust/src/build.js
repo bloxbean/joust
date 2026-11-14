@@ -167,8 +167,8 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
 }
 
 /**
- * ADR-0018 D16 (review r2 S1): recorded deployments (deployments.<network>.json) this build no longer produces, as
- * warnings: a contract built to another script (a migrated .jsc file, a changed contract; by the digest of its script
+ * Review r2 S1 (ADR-0018): recorded deployments (deployments.<network>.json) this build no longer produces, as
+ * warnings: a contract built to another script (a changed contract; by the digest of its script
  * before parameters, so @Params contracts too, else by its policy), a contract no longer built (renamed or removed), and
  * a file that cannot be read. Instances deployed earlier stay on the recorded script.
  */
@@ -176,8 +176,8 @@ export function staleDeployments(dir, contracts) {
   const out = [];
   const built = new Map(contracts.map((c) => [`${c.packageName}.${c.name}`, c]));
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => /^deployments\..+\.json$/.test(f)).sort() : [];
-  const tail = 'instances deployed earlier stay on that script; to call them, keep the build that made it (joust migrate'
-    + ' --in-place keeps the v1 artifacts in build/joust/v1/; joust deploy keeps superseded records) (ADR-0018 D16)';
+  const tail = 'instances deployed earlier stay on that script; to call them, keep the build that made it (joust deploy keeps'
+    + ' superseded records)';
   for (const f of files) {
     let recorded;
     try {

@@ -94,19 +94,15 @@ test('.jsc 2: ada, bytes, escapes, Option and the time prelude', () => {
   assert.ok(t.filter((x) => x.line === 3 || x.line === 4).every((x) => x.scopes.includes('comment.block.jsc')));
 });
 
-test('.jsc v1: statements, modifiers and pay … to', () => {
+test('Jar and Points: modifiers, views and map updates', () => {
   const t = tokens(example('Jar.jsc'));
   assert.equal(scopeOf(t, 'state'), 'storage.type.state.jsc');
   assert.equal(scopeOf(t, 'batched'), 'storage.modifier.jsc');
   assert.equal(scopeOf(t, 'payable'), 'storage.modifier.jsc');
-  assert.equal(scopeOf(t, 'this'), 'variable.language.this.jsc');
-  assert.equal(scopeOf(t, 'to'), 'keyword.other.to.jsc');
-  assert.equal(scopeOf(t, '+='), 'keyword.operator.assignment.jsc');
+  assert.equal(scopeOf(t, 'pay'), 'keyword.other.effect.jsc');
   assert.equal(scopeOf(t, 'received'), 'variable.language.jsc');
   assert.equal(scopeOf(t, 'view'), 'storage.type.function.jsc');
   assert.equal(scopeOf(t, 'reached'), 'entity.name.function.jsc');
   const points = tokens(example('Points.jsc'));
-  assert.equal(scopeOf(points, 'delete'), 'keyword.other.effect.jsc');
-  assert.equal(scopeOf(points, 'let'), 'storage.type.jsc');
-  assert.equal(scopeOf(points, 'isEmpty'), 'support.function.builtin.jsc');
+  assert.equal(scopeOf(points, 'const'), 'storage.type.jsc');
 });

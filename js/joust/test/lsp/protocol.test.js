@@ -178,21 +178,6 @@ test('oversized, binary and deeply nested files: one diagnostic each, the server
   }
 });
 
-const V1 = 'package t;\ncontract C {\n  state n: Int;\n  init() { n = 0; }\n}\n';
-
-test('a valid v1 file gets the build\'s deprecation warning and no error (ADR-0018 D16; review C10)', { skip }, async () => {
-  const dir = tmp();
-  const lsp = await startLsp({ folders: [dir] });
-  try {
-    const uri = uriOf(join(dir, 'Old.jsc'));
-    lsp.open(uri, V1);
-    const p = await lsp.diagnostics(uri, 1);
-    assert.deepEqual(p.diagnostics.map((d) => [d.code, d.severity]), [['JSC9006', 2]]);
-  } finally {
-    await lsp.stop();
-  }
-});
-
 test('an accepted model with no declarations clears the outline (review C9)', { skip }, async () => {
   const dir = tmp();
   const lsp = await startLsp({ folders: [dir] });

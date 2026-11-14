@@ -26,9 +26,6 @@ the recommended language for JavaScript developers only after M2, M4 and an inde
 lowering.
 </Aside>
 
-A file that does not start with `jsc 2` is a `.jsc` **v1** file. v1 keeps compiling, with a deprecation warning
-(`JSC9006`); [`joust migrate`](/languages/jsc-migration/) translates it. Its reference is [.jsc v1](/languages/jsc-v1/).
-
 ## Why it exists
 
 A Java `@StateContract` is readable, but it is Java: `BigInteger.compareTo`, `ByteStringLib.equals`, records rebuilt
@@ -612,6 +609,5 @@ version.
 <CardGrid>
 <LinkCard title=".jsc reference" description="Lexical rules, grammar, types and encodings, operators, the time rule, the ABI manifest." href="/languages/jsc-reference/" />
 <LinkCard title=".jsc standard library" description="Every std function, its domain and its Java target." href="/languages/jsc-std/" />
-<LinkCard title="Migrating from .jsc v1" description="joust migrate, and what it changes." href="/languages/jsc-migration/" />
 <LinkCard title="State and lifecycle" description="What init, action, destroy and view mean on chain." href="/contracts/state-and-lifecycle/" />
 </CardGrid>

@@ -1,2 +1,0 @@
-package p
-contract C { state n: Int init() { } view v(): Int { n } }

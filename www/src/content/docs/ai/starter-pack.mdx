@@ -815,8 +815,7 @@ Require.that(Clock.after(ctx, s.deadline()), "too early");
 
 `.jsc` 2 (a preview, ADR-0018) is lowered to a Java `@StateContract` before compilation (the Gradle plugin's
 `generateJsc` task, or `joust build` for `.jsc` files in `contracts/`). Full reference:
-[.jsc reference](/languages/jsc-reference/); functions: [.jsc standard library](/languages/jsc-std/). A file without the
-`jsc 2` line is deprecated v1 (warning `JSC9006`; translate it with `joust migrate`).
+[.jsc reference](/languages/jsc-reference/); functions: [.jsc standard library](/languages/jsc-std/).
 
 | Element | Syntax |
 |---|---|

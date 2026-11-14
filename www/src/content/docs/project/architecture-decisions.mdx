@@ -324,7 +324,7 @@ typed `std/*` library, and imports JuLC `@OnchainLibrary` code with exact Java s
 Equality, time, inputs and audiences are made sound by rule: generated structural equality, a dataflow rule that
 keeps time out of control flow, deep checks on every input, and an explicit audience for every paying method. It still lowers to a
 Java `@StateContract`, so nothing new is trusted on chain; an independent reference interpreter checks the lowering.
-Files start with `jsc 2`; v1 files keep compiling and `joust migrate` rewrites them.
+The first language, `.jsc` v1 (ADR-0005), and its migration were removed in r26.
 
 ### ADR-0021: A language server and VS Code extension for `.jsc` 2
 

@@ -120,16 +120,11 @@ public final class JscV2 {
     /**
      * Whether {@code n} cannot be a name in {@code .jsc} 2: a reserved word of the checker, a word the parser reads as
      * syntax ({@code match}, {@code undefined}, …), or a method modifier ({@code only}, {@code batched}, …; as a field or
-     * binding name, JSC0211). {@code joust migrate} renames such v1 names or refuses them.
+     * binding name, JSC0211).
      */
     public static boolean isReservedName(String n) {
         // The modifier words (M1c, JSC0211) are no field or binding name either (#76 review F6).
         return Checker.RESERVED.contains(n) || EXPRESSION_WORDS.contains(n) || Parser.MODIFIERS.contains(n);
-    }
-
-    /** Whether a source is {@code .jsc} 2: its first word, after whitespace and comments, is {@code jsc}. */
-    public static boolean isV2(String source) {
-        return Parser.isV2(source);
     }
 
     private static final Pattern SAFE_FILE_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");

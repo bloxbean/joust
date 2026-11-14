@@ -34,7 +34,6 @@ Every command reads `joust.config.json` from the working directory (see [`joust.
 |---|---|---|
 | `joust build` | `--src <dir>` (default config `contracts`), `--out <dir>` (default config `out`), `--accept-abi`, `--accept-lock`, `--traces` | compiles every `.java` and `.jsc` file under the source folder into the output folder, with the libraries of the project's npm packages (`joust-lib/`); exits 1 on a compile error, on a `.jsc` 2 ABI manifest that is missing or changed unless `--accept-abi` writes it ([the ABI manifest](/languages/jsc/#the-abi-manifest)), or on a library from a package that `joust.lock` does not pin at its hash unless `--accept-lock` writes it ([library packages](/languages/jsc-reference/#library-packages-and-joustlock)). `--traces` keeps the contracts' traces in the scripts (larger scripts; for debugging) |
 | `joust test` | `[-- <node --test args>]` | builds, then runs `test/*.test.js` with Node's test runner (one file at a time). Tests that use `@julclang/joust/test` run offline: see [offline tests](#offline-tests) |
-| `joust migrate` | `[<file.jsc>…]`, `--in-place` | translates `.jsc` v1 files (with no file named, every v1 file under the contracts folder) to `.jsc` 2, written to `build/joust/migrated/<same path>`; `--in-place` replaces each v1 file and keeps its text as `<Name>.jsc.v1`. Refusals are `JSC11xx` errors ([migration](/languages/jsc-migration/)) |
 | `joust deploy` | `--network <name>` | publishes each contract's reference script (once) and writes `<out>/deployments.<network>.json` |
 | `joust dev` | `--network <name>`, `--port <port>` (default config `dev.port`, else 5178), `--accept-abi` | attaches to the chain (starting it with the network's `start` command if needed), builds, deploys, serves the page; rebuilds and redeploys on save |
 | `joust serve` | `--network <name>`, `--dir <dir>` (default `dist`), `--port <port>` (default as `dev`) | serves a built page as static files, with the chain API at `/chain` and on DevKit the faucet |
@@ -42,7 +41,7 @@ Every command reads `joust.config.json` from the working directory (see [`joust.
 | `joust help` | (also `--help`, `-h`, `<command> --help`) | the usage; never runs a command |
 | `joust new` | | prints the `npm create joust` command to run (Gradle projects come from the native `joust`); creates nothing |
 
-In a project, a project command (`build`, `test`, `migrate`, `deploy`, `dev`, `serve`) runs at the project's root (the nearest directory
+In a project, a project command (`build`, `test`, `deploy`, `dev`, `serve`) runs at the project's root (the nearest directory
 with `joust.config.json`, or a `package.json` that depends on `@julclang/joust`), and by the project's own
 `@julclang/joust`: a global or other copy hands over to it, as [the native `joust`](#the-native-joust) does.
 
