@@ -1,0 +1,91 @@
+// Coverage-guided fuzzing with Jazzer, adopted from JuLC (gradle/jazzer-fuzz.gradle there; JuLC ADR-063 D13).
+//
+// A module with @FuzzTest targets applies this file and lists its targets:
+//     apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
+//     fuzzTargets 'org.julclang.state.toolchain.fuzz.FiveWayFuzzTest.generatedContractsAgree', ...
+// and declares `testImplementation libs.jazzer.junit` itself.
+//
+// Modes:
+//   test        replays every target's saved inputs (<Class>Inputs/<method>/ in src/test/resources): seeds and the
+//               regressions kept from earlier findings. No fuzzing.
+//   fuzzShort   fuzzes each listed target for a short time (-Pfuzz.short, default 20s), one JVM per target, because
+//               Jazzer fuzzes only the first @FuzzTest a run selects. `check` (so `build`) runs it unless -PnoFuzz.
+//   fuzz        fuzzes one target, as JuLC's task does:
+//                 ./gradlew :<module>:fuzz --tests '*FiveWayFuzzTest' [-Pfuzz.duration=20m]
+//   -Pfuzz      the long opt-in run: fuzzShort's targets for -Pfuzz.duration each (default 10m).
+//
+// A failing input is saved as crash-* in the target's <Class>Inputs/<method>/ resource directory. Do not commit it there
+// until a fix makes it pass (that directory is also the replay set and the seed corpus, so a committed crash fails every
+// build): commit it renamed regression-*, once it passes. The targets also write what they found to build/fuzz/.
+// Jazzer's own lines go to build/fuzz/<task>.log; libFuzzer's statistics ("#N DONE cov: ... ft: ... exec/s: ...") are
+// written by native code to the test JVM's standard error, which Gradle logs at --info: scripts/fuzz-report.sh reads
+// them from such a log, beside each target's build/fuzz/<Target>.summary.txt.
+
+def fuzzLong = providers.gradleProperty('fuzz').isPresent()
+def fuzzDuration = providers.gradleProperty('fuzz.duration').orElse(fuzzLong ? '10m' : '')
+def fuzzShortDuration = providers.gradleProperty('fuzz.short').orElse('20s')
+
+def configureFuzzTask = { Test t ->
+    t.group = 'verification'
+    t.testClassesDirs = sourceSets.test.output.classesDirs
+    t.classpath = sourceSets.test.runtimeClasspath
+    t.useJUnitPlatform {
+        includeEngines 'junit-jupiter'
+    }
+    t.environment 'JAZZER_FUZZ', '1'
+    // Coverage feedback from all of JOUST and JuLC (its VM's builtins and decoders too), not only the test's own package
+    // (Jazzer's default).
+    t.systemProperty 'jazzer.instrumentation_includes', 'org.julclang.**'
+    // A fuzz run is no unit test: JUnit's default timeout (10m, the root build) must not stop a long run.
+    t.systemProperty 'junit.jupiter.execution.timeout.default', '6h'
+    t.maxHeapSize = '3g'
+    t.outputs.upToDateWhen { false }
+    // Every line the fuzzer prints (libFuzzer's "#N ... cov: ... ft: ... exec/s" and the final DONE line) is kept.
+    def log = layout.buildDirectory.file("fuzz/${t.name}.log").get().asFile
+    t.doFirst {
+        log.parentFile.mkdirs()
+        log.text = ''
+    }
+    t.addTestOutputListener({ descriptor, event -> log.append(event.message) } as TestOutputListener)
+    t.testLogging {
+        events 'passed', 'skipped', 'failed'
+        exceptionFormat = 'full'
+    }
+}
+
+tasks.register('fuzz', Test) {
+    description = 'Fuzzes one @FuzzTest with Jazzer (--tests selects it)'
+    configureFuzzTask(it)
+    if (fuzzDuration.get()) systemProperty 'jazzer.max_duration', fuzzDuration.get()
+}
+
+def fuzzShortTask = tasks.register('fuzzShort') {
+    group = 'verification'
+    description = 'Fuzzes each listed @FuzzTest target for -Pfuzz.short (default 20s), or -Pfuzz.duration with -Pfuzz'
+}
+if (!rootProject.hasProperty('noFuzz')) {
+    tasks.named('check') { dependsOn fuzzShortTask }
+}
+
+ext.fuzzTargets = { String... targets ->
+    def previous = null
+    targets.each { String target ->
+        int dot = target.lastIndexOf('.')
+        String cls = target.substring(0, dot), method = target.substring(dot + 1)
+        String simple = cls.substring(cls.lastIndexOf('.') + 1)
+        def name = 'fuzz' + simple + method.capitalize()
+        def before = previous   // the closure below runs later, when previous is already this task
+        def task = tasks.register(name, Test) {
+            description = "Fuzzes ${target} with Jazzer"
+            configureFuzzTask(it)
+            filter { includeTestsMatching "${cls}.${method}" }
+            systemProperty 'jazzer.max_duration', fuzzDuration.get() ?: fuzzShortDuration.get()
+            // One JVM at a time: each target gets the machine, and its statistics are its own.
+            if (before != null) mustRunAfter before
+            // The regular tests first (they replay the saved inputs).
+            mustRunAfter tasks.named('test')
+        }
+        previous = task
+        fuzzShortTask.configure { dependsOn task }
+    }
+}

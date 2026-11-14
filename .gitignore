@@ -8,3 +8,6 @@ local.properties
 
 # Node proof-of-concept dependencies
 node_modules/
+
+### Jazzer: the corpus generated while fuzzing (gradle/jazzer-fuzz.gradle) ###
+.cifuzz-corpus/

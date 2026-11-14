@@ -6,6 +6,8 @@ cardano-client-lib = "0.8.0-pre7"
 junit = "5.11.4"
 bouncycastle = "1.83"
 assertj = "3.25.1"
+# Coverage-guided fuzzing (as JuLC, ADR-063 D13): gradle/jazzer-fuzz.gradle.
+jazzer = "0.30.0"
 
 [libraries]
 julc-stdlib = { module = "org.julclang:julc-stdlib", version.ref = "julc" }
@@ -27,6 +29,7 @@ junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+jazzer-junit = { module = "com.code-intelligence:jazzer-junit", version.ref = "jazzer" }
 bouncycastle-bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 
 [plugins]

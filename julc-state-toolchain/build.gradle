@@ -28,7 +28,13 @@ dependencies {
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes
     testImplementation project(':julc-state-testkit')     // ADR-0018 M0: the validator leg of the four-way vectors
+    // Coverage-guided fuzzing (gradle/jazzer-fuzz.gradle): the five-way differential and the decoders of untrusted data.
+    testImplementation libs.jazzer.junit
 }
+
+apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
+fuzzTargets 'org.julclang.state.toolchain.ValueAdapterFuzzTest.decoders',
+        'org.julclang.state.toolchain.AddressAdapterFuzzTest.addressesAndCredentials'
 
 // I1 compares with what the Gradle build of the examples wrote.
 tasks.named('test') {
