@@ -379,8 +379,8 @@ jobs:
       # Review r1, design F5: every npm suite that runs without DevKit, a browser or a preview key, on this commit's engines
       # (the security tests of M1h, M4 and #80 among them: migrate's link refusals, the worker's heap and time limits, the
       # library pin, the keyed window). Not here, because they need DevKit or Chromium: js/joust's create, dev and page;
-      # js/joust-runtime's devkit, examples and providers; preview needs a Blockfrost preview key; exnref assumes a Node 22
-      # whose Wasm exnref is off, which the runner's current Node 22 is not (#108; reviewing.md §2).
+      # js/joust-runtime's devkit, examples and providers; preview needs a Blockfrost preview key (reviewing.md §2). exnref
+      # rejoined once #108 branched it on what the probe finds.
       - name: Test the npm packages on the engines
         shell: bash
         run: |
@@ -389,7 +389,7 @@ jobs:
           (cd js/joust && ../../scripts/node-test.sh joust --test-concurrency=1 test/abi.test.js test/cold-engine.test.js \
             test/libraries.test.js test/migrate.test.js test/offline-ledger.test.js test/sources.test.js test/worker-limits.test.js)
           (cd js/joust-runtime && ../../scripts/node-test.sh joust-runtime --test-concurrency=1 test/compat.test.js \
-            test/keyed-window.test.js test/messages.test.js test/mirror.test.js)
+            test/exnref.test.js test/keyed-window.test.js test/messages.test.js test/mirror.test.js)
 
       - name: Upload the engine job's npm test results
         if: always()
