@@ -80,6 +80,11 @@ export function txFromJson(t) {
     shared: t.shared == null ? null : fromJson(t.shared),
     into: t.into == null ? null : fromJson(t.into),
     arriving: t.arriving == null ? null : fromJson(t.arriving),
+    // M3b (§2.9): a keyed insert's or removal's instance and the node it relinks (its anchor or predecessor).
+    instance: t.instance == null ? null : fromHex(t.instance),
+    anchor: t.anchor == null ? null : {
+      instance: fromHex(t.anchor.instance), type: t.anchor.type, key: fromHex(t.anchor.key), next: fromHex(t.anchor.next), linkedAt: BigInt(t.anchor.linkedAt),
+    },
     caller: fromHex(t.caller),
     received: BigInt(t.received),
     balance: BigInt(t.balance),

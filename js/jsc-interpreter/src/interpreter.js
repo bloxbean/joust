@@ -71,6 +71,8 @@ class Program {
     for (const c of p.contracts ?? []) for (const e of c.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
     this.fns = new Map([...p.libraries.flatMap((l) => l.fns), ...p.fns].map((f) => [f.name, f]));
     this.methods = new Map(p.methods.map((m) => [m.name, m]));
+    // M3b (ADR-0016 D1): the keyed types' options, by type.
+    this.keyed = new Map((p.keyed ?? []).map((k) => [k.type, k]));
   }
 
   get name() {
@@ -152,7 +154,10 @@ class Program {
       throw new Error(`${name}: the transaction's caller is not among its signers (semantics §2: the caller signs)`);
     }
     return depthGuard(() => {
-      if (modifiers) this.#modifiers(m, state, tx);
+      if (modifiers) {
+        this.#modifiers(m, state, tx);
+        this.#keyedBefore(m, state, tx);
+      }
       const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [], deposits: [] };
       let env = null;
       // M3a (§2.8): an owned method's shared state and a move's destination first, from the transaction; an admits
@@ -211,9 +216,62 @@ class Program {
       const out = {
         value, payouts: frame.payouts, sends: frame.sends, mint: frame.mint, accepted: frame.accepted, events: frame.events, deposits: frame.deposits,
       };
-      if (modifiers) this.#outputs(m, value);
+      if (modifiers) {
+        this.#keyedAfter(m, state, value, tx);
+        this.#outputs(m, value);
+      }
       return out;
     });
+  }
+
+  /**
+   * §2.9 (M3b, ADR-0016 D4, D5, D9): an insert (a keyed type's owned init) and a removal (its owned destroy without
+   * retire) relink tx.anchor, after the modifiers: a node of this instance's list of the type, and for a removal the
+   * removed node's predecessor (keyed:anchor); a window at most W long ending in [2^32, 2^64) (keyed:window); with
+   * C > 0, starting at least C after the anchor's last relink (keyed:cooldown). A retiring exit receives nothing (I55).
+   */
+  #keyedBefore(m, state, tx) {
+    const k = m.on ? this.keyed.get(m.on) : undefined;
+    if (!k) return;
+    const retire = m.mods.some((x) => x.name === 'retire');
+    if (retire && tx && tx.received !== 0n) throw new Error(`${m.name} retires its object: its transaction pays nothing into it (ADR-0016 I55)`);
+    const insert = m.kind === 'ownedInit', remove = m.kind === 'ownedDestroy' && !retire;
+    if (!insert && !remove) return;
+    if (!tx || !tx.anchor || !tx.instance) throw new Error(`${m.name} relinks a node of its list: its transaction needs the instance and the anchor`);
+    const a = tx.anchor;
+    if (!bytesEqual(a.instance, tx.instance) || a.type !== m.on) {
+      throw new Refused(`the anchor is not a node of this instance's list of ${m.on}`, 'keyed', 'anchor');
+    }
+    if (remove && !bytesEqual(a.next, this.#field(state, k.key))) throw new Refused(`the predecessor does not point at the removed ${m.on}`, 'keyed', 'anchor');
+    const lower = tx.validFrom, upper = tx.validTo;
+    if (upper - lower > BigInt(k.linkWindowMs) || upper < 1n << 32n || upper >= 1n << 64n) {
+      throw new Refused(`the validity window is longer than ${k.linkWindowMs} ms or ends outside [2^32, 2^64)`, 'keyed', 'window');
+    }
+    if (k.linkCooldownMs > 0 && lower < a.linkedAt + BigInt(k.linkCooldownMs)) {
+      throw new Refused(`the anchor was relinked less than ${k.linkCooldownMs} ms before the window starts`, 'keyed', 'cooldown');
+    }
+  }
+
+  /**
+   * §2.9 (M3b), after the body: an insert's key is 1 to maxKeyBytes long (keyed:length); with signed, a 28-byte key among
+   * the signers (keyed:signed); in the anchor's gap (keyed:order). A keyed action keeps its object's key (keyed:fixed).
+   */
+  #keyedAfter(m, state, value, tx) {
+    const k = m.on ? this.keyed.get(m.on) : undefined;
+    if (!k) return;
+    if (m.kind === 'ownedInit') {
+      const key = this.#field(value, k.key);
+      if (key.length < 1 || key.length > k.maxKeyBytes) throw new Refused(`the key is ${key.length} bytes: 1 to ${k.maxKeyBytes}`, 'keyed', 'length');
+      const signers = tx.signers ?? [tx.caller];
+      if (k.signed && (key.length !== 28 || !signers.some((x) => bytesEqual(x, key)))) {
+        throw new Refused('the key is not a 28-byte key hash that signed the transaction', 'keyed', 'signed');
+      }
+      const a = tx.anchor;
+      const placed = bytesCompare(a.key, key) < 0 && (a.next.length === 0 || bytesCompare(key, a.next) < 0);
+      if (!placed) throw new Refused('the key is taken, or not in the anchor\'s gap', 'keyed', 'order');
+    } else if (m.kind === 'ownedAction' && !bytesEqual(this.#field(value, k.key), this.#field(state, k.key))) {
+      throw new Refused('a keyed object\'s key is fixed', 'keyed', 'fixed');
+    }
   }
 
   /**

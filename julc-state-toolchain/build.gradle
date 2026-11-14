@@ -28,6 +28,7 @@ dependencies {
     testImplementation project(':examples:locker')
     testImplementation project(':examples:guild')
     testImplementation project(':examples:market')
+    testImplementation project(':examples:registry')  // ADR-0018 M3b (J11): the Java example the registry port is measured against
     testImplementation libs.julc.vm.java
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes

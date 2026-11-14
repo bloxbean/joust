@@ -86,7 +86,7 @@ export const STMTS = {
 };
 // batched is M1c's (#67): known here so that its IR loads; like every modifier but open and only, it makes a method
 // read the transaction (review F11).
-const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched', 'quorum', 'authorized', 'receives', 'admits');
+const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched', 'quorum', 'authorized', 'receives', 'admits', 'retire');
 // M2b: quorum and authorized read the signatories and withdrawals in the validator, so like open and only they do not
 // make a method read the transaction (Ctx).
 const NO_CTX = set('open', 'only', 'quorum', 'authorized');
@@ -132,7 +132,8 @@ export function validate(p) {
   // M2b (additive): "params" and "invariants" appear only when the contract declares them.
   // M2c (additive): "contracts" appears only when the contract imports another.
   // M3a (additive): "owned" appears only when the contract declares owned types.
-  const optional = ['params', 'invariants', 'contracts', 'owned'].filter((k) => k in p);
+  // M3b (additive): "keyed" appears only when the contract declares keyed types.
+  const optional = ['params', 'invariants', 'contracts', 'owned', 'keyed'].filter((k) => k in p);
   for (const k of optional) if (p[k] === null || typeof p[k] !== 'object') fail('program', `"${k}" is ${JSON.stringify(p[k])}: an absent ${k} is not written`);
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
     'recursiveFns', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings', ...optional], 'program');
@@ -518,6 +519,7 @@ export function validate(p) {
       && (m.mods.some((x) => !NO_CTX.has(x.name)) || readsTx(m.body)));
     if (usesCtx !== m.usesCtx) fail(where, `usesCtx is ${m.usesCtx}, but the method ${usesCtx ? 'reads' : 'does not read'} the transaction`);
   }
+  keyedRules(p, owned, fail, keys);
   for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${n}`);
   // M2b: invariants, each a Bool over the state and the params, with names of their own.
   if ('invariants' in p) {
@@ -540,6 +542,90 @@ export function validate(p) {
 }
 
 /**
+ * M3b (ADR-0016 D1, K2): a keyed program only in the checker's shapes, as the Java reader reads it (IrJson.keyedChecked).
+ * Each entry of "keyed" names an owned type once, its key a Bytes, Key or Hash field of that type, with the options'
+ * ranges; a keyed contract has at most 16 keyed types, maxDatumBytes at most 2048, no batched action, no BigMap in an
+ * owned type, no native assets, no key that is a time field; each keyed type has a retiring exit signed by its owner that
+ * needs nobody else; every keyed action names its audience; no keyed type moves; retire is only a keyed type's.
+ */
+function keyedRules(p, owned, fail, keys) {
+  const keyed = new Map();
+  if ('keyed' in p) {
+    if (!Array.isArray(p.keyed) || p.keyed.length === 0) fail('keyed', 'a non-empty list, absent when there are none');
+    for (const k of p.keyed) {
+      keys(k, ['type', 'key', 'maxKeyBytes', 'signed', 'linkCooldownMs', 'linkWindowMs'], 'a keyed type');
+      if (!owned.includes(k.type) || keyed.has(k.type)) fail('keyed', `keyed type ${k.type} is not one owned type`);
+      if (typeof k.key !== 'string') fail('keyed', `keyed type ${k.type}: its key is a field name`);
+      if (typeof k.signed !== 'boolean') fail('keyed', `keyed type ${k.type}: signed is a boolean`);
+      for (const f of ['maxKeyBytes', 'linkCooldownMs', 'linkWindowMs']) {
+        if (!Number.isSafeInteger(k[f])) fail('keyed', `keyed type ${k.type}: ${f} is an integer`);
+      }
+      keyed.set(k.type, k);
+    }
+  }
+  for (const m of p.methods) {
+    if (m.mods.some((x) => x.name === 'retire') && !keyed.has(m.on)) fail(`method ${m.name}`, 'only a keyed type\'s owned destroy retires');
+  }
+  if (keyed.size === 0) return;
+  if (keyed.size > 16) fail('keyed', `a contract has at most 16 keyed types, not ${keyed.size}`);
+  let maxDatum = 512n, maxValidity = 3600000n;
+  for (const o of p.options) {
+    if (o.name === 'maxDatumBytes') maxDatum = BigInt(o.value);
+    if (o.name === 'maxValidityMs') maxValidity = BigInt(o.value);
+  }
+  if (maxDatum > 2048n) fail('keyed', `maxDatumBytes is at most 2048 in a contract with keyed types, not ${maxDatum}`);
+  for (const o of owned) {
+    if (p.records.find((r) => r.name === o).fields.some((f) => f.type && typeof f.type === 'object' && 'bigmap' in f.type)) {
+      fail('keyed', `owned type ${o} keeps a BigMap beside keyed types`);
+    }
+  }
+  if (assetsIn(p.methods)) fail('keyed', 'a keyed contract handles no native assets (send, mint, accept, deposit, funds)');
+  const windowCap = maxValidity < 900000n ? maxValidity : 900000n;
+  for (const [t, k] of keyed) {
+    const kt = p.records.find((r) => r.name === t).fields.find((f) => f.name === k.key)?.type;
+    if (!['Bytes', 'Key', 'Hash'].includes(kt)) fail('keyed', `keyed type ${t}: its key ${k.key} is not a Bytes, Key or Hash field`);
+    if (k.maxKeyBytes < 1 || k.maxKeyBytes > 64) fail('keyed', `keyed type ${t}: maxKeyBytes is 1 to 64`);
+    if (k.signed && (k.maxKeyBytes < 28 || kt === 'Hash')) fail('keyed', `keyed type ${t}: a signed key is a 28-byte key hash (maxKeyBytes at least 28, no Hash)`);
+    if (k.linkCooldownMs !== 0 && (k.linkCooldownMs < 60000 || k.linkCooldownMs > 3600000)) fail('keyed', `keyed type ${t}: linkCooldownMs is 0 or 60000 to 3600000`);
+    if (k.linkWindowMs < 20000 || BigInt(k.linkWindowMs) > windowCap) fail('keyed', `keyed type ${t}: linkWindowMs is 20000 to min(900000, maxValidityMs)`);
+    if (p.timeFields.includes(`${t}.${k.key}`)) fail('keyed', `keyed type ${t}: its key is a time field`);
+    let hatch = false;
+    for (const m of p.methods) {
+      if (m.on !== t) continue;
+      const names = new Set(m.mods.map((x) => x.name));
+      if (m.kind === 'ownedDestroy' && names.has('retire')) {
+        if (!names.has('only') || ['payable', 'quorum', 'authorized', 'after', 'before'].some((x) => names.has(x)) || 'shared' in m || 'reads' in m) {
+          fail(`method ${m.name}`, 'a retiring exit is signed by its owner (only f) and needs nobody else (no shared, reads, payable, quorum, authorized, after or before)');
+        }
+        hatch = true;
+      }
+      if (m.kind === 'ownedAction' && !['only', 'quorum', 'authorized'].some((x) => names.has(x))) {
+        fail(`method ${m.name}`, 'a keyed action names its audience (only, quorum or authorized)');
+      }
+      if ('into' in m) fail(`method ${m.name}`, 'a keyed object does not move (into)');
+    }
+    if (!hatch) fail('keyed', `keyed type ${t} has no retiring exit (an owned destroy with retire)`);
+  }
+  for (const m of p.methods) {
+    if (m.mods.some((x) => x.name === 'batched')) fail(`method ${m.name}`, 'a keyed contract has no batched action');
+    const admits = m.mods.find((x) => x.name === 'admits');
+    if (admits && keyed.has(admits.field)) fail(`method ${m.name}`, `a keyed object does not move (admits ${admits.field})`);
+    if (m.mods.some((x) => x.name === 'receives')) fail(`method ${m.name}`, 'a keyed contract receives no deposits');
+  }
+}
+
+/** Whether a method's body holds a native-asset statement or reads funds (M3b: none in a keyed contract). */
+function assetsIn(o) {
+  if (Array.isArray(o)) return o.some(assetsIn);
+  if (o !== null && typeof o === 'object') {
+    if (['Send', 'Mint', 'Accept', 'Deposit'].includes(o.stmt)) return true;
+    if (o.node === 'FundsRef') return true;
+    return Object.values(o).some(assetsIn);
+  }
+  return false;
+}
+
+/**
  * A method's modifiers are the checker's (D4, D10; M1 hardening, review S5 on #76): each is known; `payable` and `open`
  * name no field; `only f` names a Key field of the state and `after f`/`before f` an Int field; `batched` names none
  * or is `batched only`, on an action, with no `only`, `after` or `before` beside it; none is given twice; an init takes
@@ -558,7 +644,7 @@ function modifiers(m, where, fail, keys, state, modField, type) {
     else if (w === 'receives') keys(mod, ['name', ...('type' in mod ? ['type'] : [])], where);
     // #98 review C6 (with the Java reader): payable and open name no field at all; a batched modifier's field is absent
     // or "only", never null.
-    else if (w === 'payable' || w === 'open') keys(mod, ['name'], where);
+    else if (w === 'payable' || w === 'open' || w === 'retire') keys(mod, ['name'], where);
     else keys(mod, ['name', 'field'], where);
     if (w === 'batched' && 'field' in mod && mod.field === null) fail(where, 'batched names no field or "only", not null');
     if (!MODS.has(w)) fail(where, `unknown modifier ${w}`);
@@ -567,8 +653,10 @@ function modifiers(m, where, fail, keys, state, modField, type) {
     seen.add(w);
     if (m.kind === 'view') fail(where, `a view takes no modifiers, not ${w}`);
     if ((m.kind === 'init' || m.kind === 'ownedInit') && w !== 'payable') fail(where, `an init takes only payable, not ${w}`);
-    if (w === 'payable' || w === 'open') {
+    if (w === 'payable' || w === 'open' || w === 'retire') {
       if (field !== null) fail(where, `${w} names no field, not ${JSON.stringify(field)}`);
+      // M3b (ADR-0016 D10, JSC1245): retire is an owned destroy's (keyed, checked with the program).
+      if (w === 'retire' && m.kind !== 'ownedDestroy') fail(where, `only an owned destroy retires, not a${m.kind === 'init' ? 'n' : ''} ${m.kind}`);
       if (w === 'payable' && m.kind === 'destroy') fail(where, 'a destroy cannot be payable');
     } else if (w === 'only' || w === 'after' || w === 'before') {
       const want = w === 'only' ? 'Key' : 'Int';

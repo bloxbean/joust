@@ -402,6 +402,11 @@ final class JsLeg {
                 + (t.shared() == null ? "" : ", \"shared\": " + json(t.shared()))
                 + (t.into() == null ? "" : ", \"into\": " + json(t.into()))
                 + (t.arriving() == null ? "" : ", \"arriving\": " + json(t.arriving()))
+                // M3b: a keyed insert's or removal's instance and the node it relinks.
+                + (t.instance() == null ? "" : ", \"instance\": \"" + HEX.formatHex(t.instance().bytes()) + "\"")
+                + (t.anchor() == null ? "" : ", \"anchor\": { \"instance\": \"" + HEX.formatHex(t.anchor().instance().bytes()) + "\", \"type\": \""
+                        + t.anchor().type() + "\", \"key\": \"" + HEX.formatHex(t.anchor().key().bytes()) + "\", \"next\": \""
+                        + HEX.formatHex(t.anchor().next().bytes()) + "\", \"linkedAt\": \"" + t.anchor().linkedAt() + "\" }")
                 + "}";
         return "{\"method\": \"" + method + "\", \"state\": " + json(state) + ", \"args\": [" + String.join(", ", parts) + "], \"tx\": " + tx
                 + (params == null ? "" : ", \"params\": " + json(params)) + "}";

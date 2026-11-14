@@ -233,11 +233,26 @@ public final class Interpreter {
      * transaction whose approval names this contract, instance and action, ADR-0009 D3), which {@code authorized} reads.
      */
     public record Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
-                     FundsV funds, List<Bytes> approvers, java.util.Map<String, Object> reads, Rec shared, Rec into, Rec arriving) {
+                     FundsV funds, List<Bytes> approvers, java.util.Map<String, Object> reads, Rec shared, Rec into, Rec arriving,
+                     Bytes instance, AnchorV anchor) {
         public Tx {
             signers = List.copyOf(signers);
             approvers = List.copyOf(approvers);
             reads = java.util.Map.copyOf(reads);
+        }
+
+        /** M3a's shape: no keyed list (M3b). */
+        public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
+                  FundsV funds, List<Bytes> approvers, java.util.Map<String, Object> reads, Rec shared, Rec into, Rec arriving) {
+            this(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, arriving, null, null);
+        }
+
+        /**
+         * M3b (semantics §2.9): a keyed insert's or removal's list: the instance the call acts under and the node it relinks
+         * (an insert's anchor, a removal's predecessor), as the transaction spends it with Link (ADR-0016 D4, D5).
+         */
+        public Tx withAnchor(Bytes inst, AnchorV a) {
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, arriving, inst, a);
         }
 
         public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
@@ -250,17 +265,17 @@ public final class Interpreter {
          * {@code shared} parameter reads (ADR-0003 D1).
          */
         public Tx withShared(Rec state) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, state, into, arriving);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, state, into, arriving, instance, anchor);
         }
 
         /** M3a: a move's destination instance's state, as its input holds it ({@code into}, ADR-0012 D3). */
         public Tx withInto(Rec state) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, state, arriving);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, state, arriving, instance, anchor);
         }
 
         /** M3a: the object arriving through an admits action, as its input holds it before the move (ADR-0012 r4). */
         public Tx withArriving(Rec object) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, object);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, object, instance, anchor);
         }
 
         public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
@@ -284,17 +299,17 @@ public final class Interpreter {
 
         /** The same transaction, signed by {@code keys}. */
         public Tx signedBy(List<Bytes> keys) {
-            return new Tx(caller, received, balance, validFrom, validTo, keys, funds, approvers, reads, shared, into, arriving);
+            return new Tx(caller, received, balance, validFrom, validTo, keys, funds, approvers, reads, shared, into, arriving, instance, anchor);
         }
 
         /** The same transaction, with the native assets the call sees (M2). */
         public Tx withFunds(FundsV f) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, f, approvers, reads, shared, into, arriving);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, f, approvers, reads, shared, into, arriving, instance, anchor);
         }
 
         /** The same transaction, approved by these scripts (M2b, ADR-0009 D3). */
         public Tx approvedBy(List<Bytes> scripts) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, scripts, reads, shared, into, arriving);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, scripts, reads, shared, into, arriving, instance, anchor);
         }
 
         /**
@@ -302,9 +317,16 @@ public final class Interpreter {
          * params field naming each instance ({@code oracle} for {@code reads params.oracle}).
          */
         public Tx withReads(java.util.Map<String, Object> states) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, states, shared, into, arriving);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, states, shared, into, arriving, instance, anchor);
         }
     }
+
+    /**
+     * M3b (ADR-0016 D2, semantics §2.9): a node of a keyed list as the transaction spends it with Link: the instance and the
+     * keyed type of its list, its key (empty for the list's head), the next key (empty at the end) and the time of its last
+     * relink.
+     */
+    public record AnchorV(Bytes instance, String type, Bytes key, Bytes next, BigInteger linkedAt) {}
 
     /**
      * The native assets a call sees (M2, ADR-0007 D1): what the caller offers ({@code received}), what the UTxO holds
@@ -578,6 +600,28 @@ public final class Interpreter {
         return p.owned();
     }
 
+    /** M3b: the keyed types, in declaration order (ADR-0016 D1). */
+    public List<String> keyedTypes() {
+        return List.copyOf(p.keyed().keySet());
+    }
+
+    /** M3b: a keyed type's key field, or null for a plain owned type. */
+    public String keyField(String type) {
+        Ir.Keyed k = p.keyedOf(type);
+        return k == null ? null : k.key();
+    }
+
+    /** M3b: a keyed type's options: maxKeyBytes, signed (1 or 0), linkCooldownMs, linkWindowMs. */
+    public long[] keyedOptions(String type) {
+        Ir.Keyed k = p.keyedOf(type);
+        return new long[]{k.maxKeyBytes(), k.signed() ? 1 : 0, k.cooldownMs(), k.windowMs()};
+    }
+
+    /** M3b: whether an owned destroy retires its object (ADR-0016 D10). */
+    public boolean retires(String method) {
+        return method(method).mods().stream().anyMatch(x -> x.name().equals("retire"));
+    }
+
     /** Whether the method takes the transaction (Ctx). */
     public boolean usesTx(String method) {
         return method(method).usesCtx();
@@ -634,9 +678,15 @@ public final class Interpreter {
             throw new IllegalArgumentException(name + ": the transaction's caller is not among its signers (semantics §2: the caller signs)");
         }
         return deep(() -> {
-            if (modifiers) modifiers(m, state, tx);
+            if (modifiers) {
+                modifiers(m, state, tx);
+                keyedBefore(m, state, tx);
+            }
             Outcome o = run(m, state, args, tx);
-            if (modifiers) outputs(m, o);
+            if (modifiers) {
+                keyedAfter(m, state, o, tx);
+                outputs(m, o);
+            }
             return o;
         });
     }
@@ -677,6 +727,69 @@ public final class Interpreter {
                 throw new Refused("the invariant " + inv.name() + " fails: " + e.getMessage(), "invariant", inv.name());
             }
             if (!holds) throw new Refused("the invariant " + inv.name() + " does not hold", "invariant", inv.name());
+        }
+    }
+
+    static final BigInteger TIME_LOW = BigInteger.ONE.shiftLeft(32), TIME_HIGH = BigInteger.ONE.shiftLeft(64);
+
+    /**
+     * Semantics §2.9 (M3b, ADR-0016 D4, D5, D9): a keyed type's structural calls are transaction preconditions too, after the
+     * modifiers. An insert (a keyed type's owned init) and a removal (its owned destroy without retire) relink a node of the
+     * list, τ.anchor (the insert's anchor, the removal's predecessor), so: the anchor is a node of this instance's list of the
+     * type (τ.instance), and a removal's predecessor points at the removed node (class keyed:anchor); the window is at most W
+     * long and ends in [2^32, 2^64) (keyed:window); with a cooldown C > 0, it starts at least C after the anchor's last
+     * relink (keyed:cooldown). A retiring exit receives nothing (I55): a τ that pays into one is the caller's error.
+     */
+    private void keyedBefore(Ir.Method m, Rec state, Tx tx) {
+        Ir.Keyed k = p.keyedOf(m.on());
+        if (k == null) return;
+        boolean retire = m.mods().stream().anyMatch(x -> x.name().equals("retire"));
+        if (retire && tx != null && tx.received().signum() != 0) {
+            throw new IllegalArgumentException(m.name() + " retires its object: its transaction pays nothing into it (ADR-0016 I55)");
+        }
+        boolean insert = m.kind() == Ir.Kind.OWNED_INIT, remove = m.kind() == Ir.Kind.OWNED_DESTROY && !retire;
+        if (!insert && !remove) return;
+        if (tx == null || tx.anchor() == null || tx.instance() == null) {
+            throw new IllegalArgumentException(m.name() + " relinks a node of its list: its transaction needs the instance and the anchor (withAnchor)");
+        }
+        AnchorV a = tx.anchor();
+        if (!a.instance().equals(tx.instance()) || !a.type().equals(m.on())) {
+            throw new Refused("the anchor is not a node of this instance's list of " + m.on(), "keyed", "anchor");
+        }
+        if (remove && !a.next().equals(field(state, k.key()))) {
+            throw new Refused("the predecessor does not point at the removed " + m.on(), "keyed", "anchor");
+        }
+        BigInteger lower = tx.validFrom(), upper = tx.validTo();
+        if (upper.subtract(lower).compareTo(BigInteger.valueOf(k.windowMs())) > 0 || upper.compareTo(TIME_LOW) < 0 || upper.compareTo(TIME_HIGH) >= 0) {
+            throw new Refused("the validity window is longer than " + k.windowMs() + " ms or ends outside [2^32, 2^64)", "keyed", "window");
+        }
+        if (k.cooldownMs() > 0 && lower.compareTo(a.linkedAt().add(BigInteger.valueOf(k.cooldownMs()))) < 0) {
+            throw new Refused("the anchor was relinked less than " + k.cooldownMs() + " ms before the window starts", "keyed", "cooldown");
+        }
+    }
+
+    /**
+     * Semantics §2.9 (M3b), after the body and before the output checks: an insert's key (the new object's key field) is 1
+     * to maxKeyBytes long (class keyed:length); with signed, a 28-byte key among τ.signers (keyed:signed, I53); and it fits the
+     * anchor's gap: anchor.key < key, and anchor.next is empty or greater (keyed:order, I46). A keyed action keeps its
+     * object's key (keyed:fixed, I50).
+     */
+    private void keyedAfter(Ir.Method m, Rec state, Outcome o, Tx tx) {
+        Ir.Keyed k = p.keyedOf(m.on());
+        if (k == null) return;
+        if (m.kind() == Ir.Kind.OWNED_INIT) {
+            Bytes key = (Bytes) field((Rec) o.value(), k.key());
+            int n = key.value.length;
+            if (n < 1 || n > k.maxKeyBytes()) throw new Refused("the key is " + n + " bytes: 1 to " + k.maxKeyBytes(), "keyed", "length");
+            if (k.signed() && (n != 28 || !tx.signers().contains(key))) {
+                throw new Refused("the key is not a 28-byte key hash that signed the transaction", "keyed", "signed");
+            }
+            AnchorV a = tx.anchor();
+            boolean placed = Arrays.compareUnsigned(a.key().value, key.value) < 0
+                    && (a.next().value.length == 0 || Arrays.compareUnsigned(key.value, a.next().value) < 0);
+            if (!placed) throw new Refused("the key is taken, or not in the anchor's gap", "keyed", "order");
+        } else if (m.kind() == Ir.Kind.OWNED_ACTION && !field((Rec) o.value(), k.key()).equals(field(state, k.key()))) {
+            throw new Refused("a keyed object's key is fixed", "keyed", "fixed");
         }
     }
 
