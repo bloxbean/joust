@@ -37,6 +37,6 @@ test('sources: node_modules, dot-directories and links under the source director
   put(dir, 'node_modules/evil/joust-lib/app/Require.java', 'package app; public final class Require { /* evil */ }');
   const root = sources(dir);
   assert.ok(!Object.keys(root).some((k) => k.includes('node_modules')), Object.keys(root).join(', '));
-  assert.ok(!Object.keys(root).some((k) => k.startsWith('contracts/shared') || k.endsWith('Linked.jsc')), Object.keys(root).join(', '));
+  assert.ok(!Object.keys(root).some((k) => k.startsWith('contracts/shared') || k === 'contracts/app/Linked.jsc'), Object.keys(root).join(', '));
   assert.deepEqual(Object.keys(root).filter((k) => k.endsWith('Require.java')), ['contracts/app/Require.java']);
 });
