@@ -135,7 +135,12 @@ tasks.register('toolchainWasmTest', Exec) {
     dependsOn 'toolchainWasm'
     dependsOn tasks.named('test').get().dependsOn
     dependsOn 'test'   // writes build/s2-vectors.json (TransitionParityTest)
+    dependsOn ':julc-state-dsl:test'   // writes julc-state-dsl/build/lang-parity.json (JscLangTest)
     doLast {
+        // ADR-0021 M5a in Wasm: lang.analyze's document models equal the JVM's, its diagnostics are joust.build's (L1),
+        // and the nesting cap holds through it on the main thread and on the language server's 4 MB worker.
+        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/lang-in-node.mjs',
+                'julc-state-toolchain/build/wasm', 'julc-state-dsl/build/lang-parity.json'; workingDir rootDir }
         // S2 in Wasm: every transition vector through the engine's VM, against the JVM's answers.
         injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2-vectors.json'; workingDir rootDir }

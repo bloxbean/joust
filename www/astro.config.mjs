@@ -8,8 +8,8 @@ import llmsIntegration from './scripts/llms-integration.mjs';
 import { SITE } from './site.config.mjs';
 import { SIDEBAR } from './sidebar.mjs';
 
-// .jsc is JOUST's contract language: its TextMate grammar (editors/vscode-jsc, ADR-0018 D13) highlights both versions.
-const jscGrammar = JSON.parse(readFileSync(new URL('../editors/vscode-jsc/syntaxes/jsc.tmLanguage.json', import.meta.url), 'utf8'));
+// .jsc is JOUST's contract language: its TextMate grammar (js/vscode-joust, ADR-0018 D13; ADR-0021 D9) highlights both versions.
+const jscGrammar = JSON.parse(readFileSync(new URL('../js/vscode-joust/syntaxes/jsc.tmLanguage.json', import.meta.url), 'utf8'));
 
 export default defineConfig({
   site: SITE.url,

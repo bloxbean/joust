@@ -4,11 +4,13 @@
   "description": "JOUST for JavaScript developers: build Cardano state contracts written in Java (.java) or JOUST's DSL (.jsc) with npm only, no JDK or GraalVM (ADR-0015)",
   "type": "module",
   "bin": {
-    "joust": "bin/joust.js"
+    "joust": "bin/joust.js",
+    "joust-lsp": "bin/joust-lsp.js"
   },
   "exports": {
     ".": "./src/index.js",
-    "./vite": "./src/vite.js"
+    "./vite": "./src/vite.js",
+    "./lsp": "./src/lsp/index.js"
   },
   "files": [
     "bin",
@@ -19,7 +21,9 @@
     "@julclang/joust-runtime": "0.1.0-pre1-snapshot",
     "@julclang/state-client": "0.1.0-pre1-snapshot",
     "@rollup/plugin-inject": "5.0.5",
-    "vite-plugin-node-polyfills": "0.28.0"
+    "vite-plugin-node-polyfills": "0.28.0",
+    "vscode-languageserver": "11.0.0",
+    "vscode-languageserver-textdocument": "1.0.16"
   },
   "engines": {
     "node": ">=22"
@@ -35,7 +39,7 @@
     "registry": "http://127.0.0.1:4873/"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1 test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js test/lsp/*.test.js"
   },
   "devDependencies": {
     "@cardano-foundation/cardano-connect-with-wallet-core": "0.2.12",

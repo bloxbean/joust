@@ -38,10 +38,10 @@ export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAb
     }
     refused.add(g.javaFile);
     errors.push(exists
-      ? `error[JSC0002]: ${g.jscFile}: the ABI manifest ${relative(root, committed)} differs from the committed one at `
+      ? `${g.jscFile}:1:1: error[JSC0002]: the ABI manifest ${relative(root, committed)} differs from the committed one at `
         + `${firstDifference(old, g.abi)}: a datum or redeemer encoding changed, which strands deployed instances; if the change is `
         + 'intended, run joust build --accept-abi and commit the new manifest'
-      : `error[JSC0003]: ${g.jscFile}: no ABI manifest ${relative(root, committed)}: the encoding of its datum and redeemers must be `
+      : `${g.jscFile}:1:1: error[JSC0003]: no ABI manifest ${relative(root, committed)}: the encoding of its datum and redeemers must be `
         + 'committed; create it with joust build --accept-abi, review it and commit it');
   }
   return errors;

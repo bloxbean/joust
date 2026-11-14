@@ -1,0 +1,51 @@
+{
+  "contract": {
+    "prefix": "contract",
+    "description": "A .jsc 2 contract with its state and init",
+    "body": [
+      "contract ${1:Name} {",
+      "  state { ${2:count}: ${3:Int}, owner: Key }",
+      "",
+      "  init() {",
+      "    return { ${2:count}: ${4:0}, owner: caller }",
+      "  }",
+      "$0",
+      "}"
+    ]
+  },
+  "action": {
+    "prefix": "action",
+    "description": "An action: checks, then the next state",
+    "body": [
+      "action ${1:name}(${2:by}: ${3:Int}) {",
+      "  require(${4:by > 0}, \"${5:why}\")",
+      "  return { ...state$0 }",
+      "}"
+    ]
+  },
+  "match": {
+    "prefix": "match",
+    "description": "A match over an enum or an Option: one arm per case",
+    "body": [
+      "match ${1:value} {",
+      "  ${2:Some(x)} => ${3:x},",
+      "  ${4:None} => ${5:0}",
+      "}"
+    ]
+  },
+  "fn": {
+    "prefix": "fn",
+    "description": "A function: typed parameters and result",
+    "body": ["fn ${1:name}(${2:x}: ${3:Int}): ${4:Int} = ${0:x}"]
+  },
+  "enum": {
+    "prefix": "enum",
+    "description": "An enum: variants, some with fields",
+    "body": [
+      "enum ${1:Phase} {",
+      "  ${2:Open},",
+      "  ${3:Closed} { ${4:since}: ${5:Int} }",
+      "}"
+    ]
+  }
+}
