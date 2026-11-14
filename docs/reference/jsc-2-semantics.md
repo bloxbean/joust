@@ -343,8 +343,19 @@ a record (§1), compared and encoded as one. Owned methods name their type: `own
 - **Transaction-level rules** (§2): a shared read of another instance than the object's, an object spent with an
   instance's redeemer or an instance with an object's, and a creation without its seed are the validator's to refuse.
 
-M3a1 builds one owned type per contract, without BigMaps; M3a2 and M3a3 add several types, BigMaps in owned records,
-moves between instances and invariants by type (refused until then, JSC1215).
+- **Several owned types** (M3a2, ADR-0012 D1). Each type's objects are a datum constructor of their own (`Holding_T`,
+  in declaration order), so a method of type `T` runs only on an object of type `T`, whatever their fields' shapes. Each
+  type has its own owned init and escape hatch.
+- **BigMaps in owned types** (M3a2, ADR-0012 D2, ADR-0014): an owned record's `BigMap` field is read and written as the
+  state's is (§1), its claims owned by the object's input (or, at creation, the seed): one object's claims are never
+  another's or the instance's. An owned init may write the object's maps (`BigMap.empty().set(…)`). The instance itself
+  keeps no `BigMap` while the contract has owned types (JSC1211).
+- **What a creation takes** (M3a2, issue #81): an owned init may `accept` native assets (it is then payable), and its
+  outcome's accepted value is the object's, as an action's is. An instance's `init` still accepts none (JSC0426).
+- **A payable owned destroy** (M3a2): τ.`received` is paid in with the call, so its payouts may allocate `balance +
+  received`. The instance's destroy is never payable.
+
+M3a3 adds moves between instances and invariants by type (refused until then, JSC1215).
 
 ## 3. Expressions
 

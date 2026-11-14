@@ -137,11 +137,11 @@ final class Checker {
     private String inputRec = "State";
 
     /** #101 review F3: whether owned actions and destroys may take, send, mint or deposit native assets (M3a2). */
-    private static final boolean ASSETS_IN_OWNED = false;
+    private static final boolean ASSETS_IN_OWNED = true;   // M3a2
 
     /**
-     * M3a1: what later parts of M3a build is refused here (JSC1215): several owned types and BigMaps in owned types (M3a2),
-     * moves, admits and invariants by type (M3a3).
+     * M3a2: what M3a3 builds is refused here (JSC1215): moves, admits and invariants by type. (M3a1 refused several owned
+     * types and BigMaps in owned types too; M3a2 builds them.)
      */
     private static final boolean NOT_YET = true;
 
@@ -901,15 +901,7 @@ final class Checker {
             for (TypeDecl t : c.owned()) {
                 if (t.fields().isEmpty()) throw t.pos().error("JSC1202", "the owned type " + t.name() + " needs at least one field: owned "
                         + t.name() + " { owner: Key }");
-                if (NOT_YET && t != c.owned().get(0)) {
-                    throw t.pos().error("JSC1215", "a second owned type is not supported yet: several owned types come in M3a2 (ADR-0012 D1)");
-                }
                 fillFields(records.get(t.name()), t.fields(), t.name(), true);
-                for (FieldDecl f : t.fields()) {
-                    if (NOT_YET && records.get(t.name()).get(f.name()) instanceof Ty.BigMapT) {
-                        throw f.type().pos().error("JSC1215", "a BigMap in an owned type is not supported yet: it comes in M3a2 (ADR-0012 D2)");
-                    }
-                }
             }
         }
         if (c != null && c.params() != null) {
@@ -1946,17 +1938,18 @@ final class Checker {
             throw firstEffect(m.body(), Set.of("emit")).error("JSC0413", "emit(…) is allowed only in an action or destroy, not in a fn, view,"
                     + " lambda or value block (ADR-0018 D4)");
         }
-        // Issue #81 (a creation's transition program drops what it accepted) is open, so a creation does not take native
-        // assets yet: an init's or an owned init's accept, or a payable creation reading funds, is refused (M2's JSC0426).
-        if (ik.creates() && fx.contains("accept")) {
-            throw firstEffect(m.body(), Set.of("accept")).error("JSC0426", "accept in an " + (ik == Ir.Kind.INIT ? "init" : "owned init")
-                    + " is not supported yet: the transition program of a creation that takes native assets is not generated correctly"
-                    + " (ADR-0018 M2, deferred; issue #81); create it, then take the assets in an action");
+        // M3a2: issue #81 is fixed for owned inits (an @OwnedInit returning (state, accepted) has a transition program that
+        // reports what it accepted), so an owned init takes native assets as any payable method does. An init still does
+        // not: the processor reads the state's type from @Init's return type, so an @Init cannot return (state, accepted).
+        if (ik == Ir.Kind.INIT && fx.contains("accept")) {
+            throw firstEffect(m.body(), Set.of("accept")).error("JSC0426", "accept in an init is not supported yet: the processor reads the"
+                    + " state's type from what @Init returns, so an init cannot also return what it accepted (an owned init can, M3a2);"
+                    + " create the instance, then take the assets in an action");
         }
-        if (ik.creates() && payable && funds) {
-            throw m.pos().error("JSC0426", "a payable " + (ik == Ir.Kind.INIT ? "init" : "owned init") + " that uses funds would take native"
-                    + " assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred; issue #81); drop payable, or"
-                    + " create it and take the assets in an action");
+        if (ik == Ir.Kind.INIT && payable && funds) {
+            throw m.pos().error("JSC0426", "a payable init that uses funds would take native assets, which needs accept in an init: not"
+                    + " supported yet (the processor reads the state's type from what @Init returns); drop payable, or create the"
+                    + " instance and take the assets in an action");
         }
         // #101 review F3: native assets in an owned action or destroy come with M3a2, which specifies τ.funds for an object
         // (what it holds, what the call offers, its own token) and tests each effect on every leg. Until then they are
@@ -2008,10 +2001,7 @@ final class Checker {
                 case "payable" -> {
                     // M3a: an owned destroy may be payable (examples/market's buy: the buyer pays the price into the
                     // listing it ends, ADR-0007); the instance's destroy may not.
-                    if (m.kind() == Kind.DESTROY || m.kind() == Kind.OWNED_DESTROY) {
-                        throw mod.pos().error("JSC0406", m.kind() == Kind.DESTROY ? "a destroy cannot be payable"
-                                : "an owned destroy cannot be payable yet (M3a2: a payable owned destroy, examples/market's buy)");
-                    }
+                    if (m.kind() == Kind.DESTROY) throw mod.pos().error("JSC0406", "a destroy cannot be payable");
                 }
                 case "open" -> audience = true;
                 case "only" -> {

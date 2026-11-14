@@ -12,6 +12,12 @@ const BANK = readFileSync(new URL('./fixtures/Bank.ir.json', import.meta.url), '
 const method = (ir, name) => ir.methods.find((m) => m.name === name);
 const local = (id, name, record) => ({ id, name, type: { record }, taint: 0, at: [1, 1] });
 
+function reads(mutate) {
+  const ir = JSON.parse(BANK);
+  mutate(ir);
+  load(JSON.stringify(ir));
+}
+
 function refused(mutate, fragment) {
   const ir = JSON.parse(BANK);
   mutate(ir);
@@ -23,17 +29,18 @@ test('the unmutated bank port loads', () => {
 });
 
 test('owned mutants are refused (#101 review F2)', () => {
-  refused((ir) => method(ir, 'close').mods.unshift({ name: 'payable' }), 'a payable owned destroy is not produced yet');
+  // From M3a2 (OWNED_STAGE 2) a payable owned destroy and native assets in an owned method are produced: they read.
+  reads((ir) => method(ir, 'close').mods.unshift({ name: 'payable' }));
   refused((ir) => method(ir, 'deposit').mods.push({ name: 'receives' }), 'an owned method receives no deposits');
   refused((ir) => { method(ir, 'close').shared = local(900, 'bank', 'State'); }, 'has no escape hatch');
   refused((ir) => method(ir, 'close').mods.push({ name: 'before', field: 'saved' }), 'has no escape hatch');
   refused((ir) => { method(ir, 'withdraw').into = local(901, 'dest', 'State'); }, 'moves (into, admits) are not produced yet');
   refused((ir) => method(ir, 'setPaused').mods.push({ name: 'admits', field: 'Account' }), 'moves (into, admits) are not produced yet');
   refused((ir) => { method(ir, 'deposit').shared = local(902, 'bank', 'Account'); }, 'the shared state is a State');
-  refused((ir) => {
+  reads((ir) => {
     const held = { node: 'FundsRef', field: 'held', type: 'Value', taint: 0, at: [1, 1] };
     const cond = { node: 'LedgerOp', op: 'covers', args: [held, held], type: 'Bool', taint: 0, at: [1, 1] };
     method(ir, 'deposit').body.stmts.unshift({ stmt: 'Require', cond, message: 'x', at: [1, 1] });
-  }, 'native assets in an owned method');
+  });
   refused((ir) => { ir.methods = ir.methods.filter((m) => m.name !== 'open'); }, 'has no owned init');
 });

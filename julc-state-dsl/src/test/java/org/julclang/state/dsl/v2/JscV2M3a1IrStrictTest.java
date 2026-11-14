@@ -57,6 +57,16 @@ class JscV2M3a1IrStrictTest {
         return m;
     }
 
+    interface Mutant {
+        void apply(Consumer<Map<String, Object>> mutate, String fragment) throws Exception;
+    }
+
+    static void reads(Consumer<Map<String, Object>> mutate) throws Exception {
+        var ir = ir();
+        mutate.accept(ir);
+        IrJson.read(write(ir));
+    }
+
     static void refused(Consumer<Map<String, Object>> mutate, String fragment) throws Exception {
         var ir = ir();
         mutate.accept(ir);
@@ -72,8 +82,9 @@ class JscV2M3a1IrStrictTest {
 
     @Test
     void ownedMutants_areRefused() throws Exception {
-        // A payable owned destroy (JSC0406 until M3a2).
-        refused(ir -> mods(method(ir, "close")).add(0, mod("payable", null)), "a payable owned destroy is not produced yet");
+        // A payable owned destroy (JSC0406 until M3a2; from M3a2 a program of that shape reads).
+        if (IrJson.OWNED_STAGE < 2) refused(ir -> mods(method(ir, "close")).add(0, mod("payable", null)), "a payable owned destroy is not produced yet");
+        else reads(ir -> mods(method(ir, "close")).add(0, mod("payable", null)));
         // receives on an owned action (decision A18: a deposit's target is an instance; JSC0447).
         refused(ir -> mods(method(ir, "deposit")).add(mod("receives", null)), "an owned method receives no deposits");
         // shared on the only shared-free destroy: no escape hatch is left (JSC1209).
@@ -86,8 +97,9 @@ class JscV2M3a1IrStrictTest {
         refused(ir -> mods(method(ir, "setPaused")).add(mod("admits", "Account")), "moves (into, admits) are not produced yet");
         // a shared local that is not the instance's State.
         refused(ir -> method(ir, "deposit").put("shared", local(902, "bank", "Account")), "the shared state is a State");
-        // native assets in an owned action (M3a2): a require reading funds.held.
-        refused(ir -> {
+        // native assets in an owned action (M3a2): a require reading funds.held (refused until M3a2; read from it).
+        Mutant assets = IrJson.OWNED_STAGE < 2 ? JscV2M3a1IrStrictTest::refused : (m, f) -> reads(m);
+        assets.apply(ir -> {
             @SuppressWarnings("unchecked")
             var body = (Map<String, Object>) method(ir, "deposit").get("body");
             @SuppressWarnings("unchecked")

@@ -180,8 +180,12 @@ values a reader would refuse.
 other), and comes first (`JSC1205`, `JSC1206`); read its fields as `bank.paused`. In an owned action or destroy,
 `received` is what the call pays into the object and `balance` what the object holds. A method with a `shared` parameter
 takes `Ctx`, as the Java examples' owned methods do. An owned action or destroy without an audience warns (`JSC9010`:
-anyone could call it on anyone's object); say `open` when that is meant. Several owned types, `BigMap`s in owned types,
-moves between instances (`into`, `admits`) and invariants by type come in M3a2 and M3a3 (`JSC1215` until then).
+anyone could call it on anyone's object); say `open` when that is meant. A contract may declare several owned types
+(M3a2): each type's objects have their own datum constructor (`Holding_T`), so a method only ever runs on its own type's
+objects, and each type needs its own owned init and escape hatch (`JSC1208`, `JSC1209`, at the type). An owned type may
+keep `BigMap`s (the instance then keeps none, `JSC1211`), and an owned init may write them and `accept` native assets;
+an owned destroy may be `payable`. An instance's `init` does not accept native assets (`JSC0426`). Moves between
+instances (`into`, `admits`) and invariants by type come in M3a3 (`JSC1215` until then).
 
 ```text
 contract Bank(maxDatumBytes = 160) {
@@ -208,7 +212,7 @@ action; a destroy has none), and by the runtime before it submits. A state that 
 
 | Modifier | Annotation | Allowed on | Field type |
 |---|---|---|---|
-| `payable` | `@Payable` | `init`, `action` | |
+| `payable` | `@Payable` | `init`, `action`, an owned init, an owned destroy (M3a2) | |
 | `only f` | `@SignedBy("f")` | `action`, `destroy` | `Key` (`JSC0311`) |
 | `after f` | `@ValidAfter("f")` | `action`, `destroy` | `Int` |
 | `before f` | `@ValidBefore("f")` | `action`, `destroy` | `Int` |

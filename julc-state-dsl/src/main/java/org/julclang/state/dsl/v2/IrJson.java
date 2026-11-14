@@ -510,6 +510,9 @@ final class IrJson {
     }
 
     @SuppressWarnings("unchecked")
+    /** #101 review F2: the parts of M3a the readers admit (the Reader's stage, for its tests). */
+    static final int OWNED_STAGE = Reader.OWNED_STAGE;
+
     private static final class Reader {
         private final Map<Long, Ir.Local> locals = new HashMap<>();
 
@@ -1086,7 +1089,7 @@ final class IrJson {
          * 2: M3a2's native assets in owned methods and payable owned destroys; 3: M3a3's moves and invariants by type). A
          * program with a later part's shape is refused, as the checker would refuse its source.
          */
-        static final int OWNED_STAGE = 1;
+        static final int OWNED_STAGE = 2;
 
         /** An owned type's escape hatch (JSC1209): an owned destroy of it without shared, before or after. */
         static boolean escapeHatch(Ir.Method m, String type) {

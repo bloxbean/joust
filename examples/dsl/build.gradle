@@ -142,7 +142,10 @@ def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['
              fees: ['Pot', null],
              // ADR-0018 M3a1: the owned-object port of examples/bank; its Account field balance is the port's saved (balance is
              // a built-in name).
-             bank: ['Bank', null, [:], ['(?<=\\.)balance(?=\\(\\))': 'saved']]]
+             bank: ['Bank', null, [:], ['(?<=\\.)balance(?=\\(\\))': 'saved']],
+             // ADR-0018 M3a2: examples/locker (Locker and Safes). locker's unlock sends, so the port takes Funds (a send is checked
+             // against the own policy, ADR-0018 D4): its direct calls in LockerTest pass the funds the instance holds.
+             locker: ['Locker', null, [:], ['(Locker\\.unlock\\(s, BigInteger\\.valueOf\\(\\d+\\), ctx)': '$1, h.funds(held, Assets.none())']]]
 def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
 def copyPortTests = tasks.register('copyPortTests', Sync) {
     description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'

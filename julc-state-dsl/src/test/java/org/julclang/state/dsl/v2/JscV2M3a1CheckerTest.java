@@ -144,9 +144,9 @@ class JscV2M3a1CheckerTest {
         // only/after/before name the object's fields; the instance's are not bare names there.
         bad("  owned action Account.x() @@only admin { return state }", "JSC0310", "no Account field admin");
         bad("  owned action Account.x() only owner { require(@@paused, \"no\"); return state }", "JSC0217", "unknown name 'paused'");
-        // An owned init takes only payable; an owned destroy is not payable yet.
+        // An owned init takes only payable; an owned destroy may be payable (M3a2), the instance's destroy never.
         bad("  owned init Account.y() @@only owner { return { owner: caller, saved: 0 } }", "JSC0405", "an owned init takes only 'payable'");
-        bad("  owned destroy Account.z() @@payable only owner { pay(owner, balance) }", "JSC0406", "an owned destroy cannot be payable yet");
+        lower(bank(BASICS + "  owned destroy Account.z() payable only owner { pay(owner, balance + received) }"));
         // A creation's results and an object's ends (D4).
         bad("  owned init Account.y() { @@pay(caller, 1); return { owner: caller, saved: 0 } }", "JSC0404", "an owned init cannot pay");
         bad("  @@owned destroy Account.z() only owner { require(true, \"x\") }", "JSC0409", "an owned destroy ends its object");
@@ -157,22 +157,14 @@ class JscV2M3a1CheckerTest {
         assertTrue(w.warnings().stream().anyMatch(x -> x.contains("JSC9010") && x.contains("anyone can call it on anyone's Account")), w.warnings().toString());
         assertFalse(lower(bank(BASICS + "  owned action Account.bump() open { return { ...state, saved: saved + 1 } }")).warnings().stream()
                 .anyMatch(x -> x.contains("JSC9010")), "'open' says that is meant");
-        // #81 is open: a creation takes no native assets (JSC0426, as M2's init).
-        bad("  owned init Account.y() payable { @@accept(Value.none()); return { owner: caller, saved: 0 } }", "JSC0426", "accept in an owned init");
+        // M3a2: #81 is fixed, so an owned init may accept (its result record is AccountCreated).
+        assertTrue(lower(bank(BASICS + "  owned init Account.y() payable { accept(Value.none()); return { owner: caller, saved: 0 } }")).java()
+                .contains("public record AccountCreated(Account state, Value accepted) {}"));
     }
 
     @Test
     void laterParts_areRefusedHere() {
-        badSource(bank(BASICS + "  owned @@Loan { owner: Key }"), "JSC1215", "a second owned type");
-        badSource("""
-                jsc 2
-                package t
-                contract C {
-                  state { a: Key }
-                  owned Vault { owner: Key, items: @@BigMap<Bytes, Int> }
-                  init() { return { a: caller } }
-                }
-                """, "JSC1215", "a BigMap in an owned type");
+        // (A second owned type and a BigMap in an owned type are M3a2's: JscV2M3a2CheckerTest.)
         bad("  owned action Account.move(@@d: into) only owner { return state }", "JSC1215", "an into parameter");
         bad("  action enlist(id: Bytes) @@admits Account { return state }", "JSC1215", "admits is not supported yet");
         bad("  @@invariant Account.positive = saved >= 0", "JSC1215", "an owned type's invariant");
@@ -254,12 +246,10 @@ class JscV2M3a1CheckerTest {
     /** #101 review round r1: F3 (native assets in owned methods until M3a2), S3 (the escape hatch), F10 (reserved names). */
     @Test
     void reviewRound1_rules() {
-        // F3: accept, send, mint, deposit and funds in an owned action or destroy are refused until M3a2 (JSC1215).
-        bad("  owned action Account.give(to: Key) only owner { @@send(wallet(to), Value.lovelace(1)); return state }", "JSC1215",
-                "native assets in an owned method");
-        bad("  @@owned action Account.peek() only owner { require(funds.held == Value.none(), \"x\"); return state }", "JSC1215",
-                "native assets in an owned method");
-        bad("  owned action Account.take() payable only owner { @@accept(Value.none()); return state }", "JSC1215", "native assets in an owned method");
+        // F3: accept, send, mint, deposit and funds in an owned action or destroy were refused in M3a1 (JSC1215); M3a2
+        // builds them (semantics §2.8: funds for an object).
+        lower(bank(BASICS + "  owned action Account.give(to: Key) only owner { send(wallet(to), Value.lovelace(1)); return state }"));
+        lower(bank(BASICS + "  owned action Account.take() payable only owner { accept(Value.none()); return state }"));
         // S3: an escape hatch that never reads balance could never pay out its object (JSC1216); one with a deadline is no
         // escape hatch (JSC1209).
         badSource(bank("""

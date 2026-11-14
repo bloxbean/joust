@@ -109,7 +109,7 @@ const MAP_ARITY = { get: 1, has: 1, set: 2, delete: 1, size: 0, keys: 0, values:
 const KINDS = set('init', 'action', 'destroy', 'view', 'ownedInit', 'ownedAction', 'ownedDestroy');
 // #101 review F2: the parts of M3a the checker produces so far (1: owned objects of one type with shared reads; 2: native
 // assets in owned methods, payable owned destroys; 3: moves and invariants by type), as the Java reader's OWNED_STAGE.
-const OWNED_STAGE = 1;
+const OWNED_STAGE = 2;
 
 /** Whether raw IR holds a statement or expression node of one of the names, at any depth. */
 function hasNode(json, names) {
