@@ -563,6 +563,16 @@ public final class Interpreter {
         return method(method).owned() != null && method(method).owned().into() != null;
     }
 
+    /** M3a3: the owned type an admits action lets arrive, or null. */
+    public String admitsType(String method) {
+        return method(method).admits();
+    }
+
+    /** M3a3: whether an admits action reads its arriving object (a parameter after its first). */
+    public boolean readsArriving(String method) {
+        return method(method).owned() != null && method(method).owned().arriving() != null;
+    }
+
     /** M3a: the contract's owned types, in declaration order. */
     public List<String> ownedTypes() {
         return p.owned();

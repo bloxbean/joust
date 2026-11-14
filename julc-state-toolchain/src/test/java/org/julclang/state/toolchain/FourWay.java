@@ -270,8 +270,87 @@ final class FourWay {
      * sealed Holding_T of the value's type.
      */
     Object holding(Object value) throws Exception {
+        return holding(value, harness.instanceId());
+    }
+
+    /** The same, under {@code instance} (a move's destination, M3a3). */
+    Object holding(Object value, byte[] instance) throws Exception {
         String typed = "Holding_" + value.getClass().getSimpleName();
-        return construct(exists(PKG + "." + name + "Validator$" + typed) ? typed : "Holding", List.of(harness.instanceId(), value));
+        return construct(exists(PKG + "." + name + "Validator$" + typed) ? typed : "Holding", List.of(instance, value));
+    }
+
+    // ------------------------------------------------------------------ moves (M3a3, ADR-0012 D3)
+
+    /** The other instance of a move: a move's destination, or an arriving object's source. */
+    static final byte[] OTHER = StateHarness.fill(32, 0xB2);
+    static final org.julclang.ledger.TxOutRef OTHER_REF = new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x0C)),
+            BigInteger.ZERO);
+    static final org.julclang.ledger.TxOutRef SOURCE_REF = new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x0D)),
+            BigInteger.ZERO);
+
+    /**
+     * M3a3: a move's other half, which every transaction of the half under test carries. For a move (an owned action with
+     * into): the destination's admits action ({@code method}, its extra {@code args} after the object's id) on the
+     * destination instance's state {@code state}. For an admits action: the arriving object's move ({@code method},
+     * {@code args}) on the object {@code state}, its source instance's state {@code shared} and this destination's state
+     * {@code destination}.
+     */
+    record Partner(String method, Rec state, List<Object> args, Rec shared, Rec destination) {}
+
+    /** The partner the next checks build their transactions with (null: none). */
+    Partner partner;
+
+    /** A move's half, the object continuing under the destination: adds the destination spent with its admits action. */
+    org.julclang.state.testkit.TxModel withDestination(org.julclang.state.testkit.TxModel tx, Rec object, Tx t) throws Exception {
+        assertNotNull(partner, "a move's transaction needs the destination's half: set partner");
+        var admitArgs = new ArrayList<Object>();
+        admitArgs.add(Bytes.of(harness.objectId()));
+        admitArgs.addAll(partner.args());
+        Ctx c = new Ctx(t.caller().bytes(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo());
+        Tx at = new Tx(t.caller(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo(), t.signers(), null, List.of(), Map.of(), null, null, object);
+        Rec next;
+        try {
+            next = (Rec) interp.transition(partner.method(), partner.state(), admitArgs, at).value();
+        } catch (Interpreter.Refused e) {
+            next = partner.state();
+        }
+        var redeemerArgs = new ArrayList<Object>();
+        for (Object a : admitArgs) redeemerArgs.add(java(a));
+        if (interp.usesTx(partner.method())) redeemerArgs.add(c);
+        return harness.withInstance(tx, OTHER, OTHER_REF, java(partner.state()), construct(cap(partner.method()), redeemerArgs), java(next),
+                BigInteger.valueOf(harness.minAda()));
+    }
+
+    /**
+     * An admits action's transaction: adds the arriving object, spent from the other instance with its move (into this
+     * instance) and continuing under this one, with the source instance by reference when the move reads it.
+     */
+    org.julclang.state.testkit.TxModel withArrival(org.julclang.state.testkit.TxModel tx, Tx t) throws Exception {
+        assertNotNull(partner, "an admits action's transaction needs the arriving object's move: set partner");
+        Ctx c = new Ctx(t.caller().bytes(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo());
+        Tx mt = new Tx(t.caller(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo(), t.signers(), null, List.of(), Map.of(),
+                partner.shared(), partner.destination(), null);
+        Rec moved;
+        try {
+            moved = (Rec) interp.transition(partner.method(), partner.state(), partner.args(), mt).value();
+        } catch (Interpreter.Refused e) {
+            moved = partner.state();
+        }
+        var redeemerArgs = new ArrayList<Object>();
+        redeemerArgs.add(harness.instanceId());
+        for (Object a : partner.args()) redeemerArgs.add(java(a));
+        if (interp.usesTx(partner.method())) redeemerArgs.add(c);
+        var c2 = tx;   // in place, as withReads adds its reference inputs
+        Value value = Assets.add(Assets.lovelace(BigInteger.valueOf(harness.minAda())), Assets.of(harness.policy(), harness.objectId(), BigInteger.ONE));
+        c2.inputs.add(new TxInInfo(StateHarness.OBJECT_REF, new TxOut(harness.stateAddress(), value,
+                new OutputDatum.OutputDatumInline(StateHarness.data(holding(java(partner.state()), OTHER))), Optional.empty())));
+        c2.spendRedeemers.put(StateHarness.OBJECT_REF, StateHarness.data(construct(cap(partner.method()), redeemerArgs)));
+        c2.outputs.add(new TxOut(harness.stateAddress(), value, new OutputDatum.OutputDatumInline(StateHarness.data(holding(java(moved)))),
+                Optional.empty()));
+        if (interp.takesShared(partner.method())) {
+            c2.referenceInputs.add(new TxInInfo(SOURCE_REF, harness.instanceOut(OTHER, java(partner.shared()), BigInteger.valueOf(harness.minAda()))));
+        }
+        return c2;
     }
 
     /** M3a2: the generated record of the method's owned type. */
@@ -709,7 +788,11 @@ final class FourWay {
         if (takesParams(method)) call.add(java(params));
         // M2c: the read states directly after the params (ADR-0011 D2), as the transaction's reference inputs give them.
         for (String f : interp.reads(method)) call.add(java(t.reads().get(f)));
-        for (Object a : args) call.add(java(a));
+        for (int i = 0; i < args.size(); i++) {
+            call.add(java(args.get(i)));
+            // M3a3: an admits action's arriving object, after its first argument (the object's id).
+            if (i == 0 && interp.readsArriving(method)) call.add(java(t.arriving()));
+        }
         if (interp.usesTx(method)) call.add(ctx(t));
         if (takesFunds(method)) call.add(javaFunds(t));
         try {
@@ -829,6 +912,14 @@ final class FourWay {
         {
             // M2: a method with Funds takes them first in its arguments' record (the transition generator's leading fields).
             var in = rawArgs(args);
+            // M3a3: a move's destination state and an admits action's arriving object lead the arguments, after the Funds.
+            if (interp.takesInto(method) || interp.readsArriving(method)) {
+                var fs = new ArrayList<org.julclang.core.PlutusData>();
+                if (interp.takesInto(method)) fs.add(raw(t.into()));
+                if (interp.readsArriving(method)) fs.add(raw(t.arriving()));
+                fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
+                in = new org.julclang.core.PlutusData.ConstrData(0, fs);
+            }
             if (takesFunds(method)) {
                 var fs = new ArrayList<org.julclang.core.PlutusData>(List.of(fundsData(t)));
                 fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
@@ -1068,6 +1159,8 @@ final class FourWay {
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
         // M3a2: an owned init's redeemer names the instance after the seed (ADR-0003).
         if (kind.equals("init") && object) redeemerArgs.add(harness.instanceId());
+        boolean move = interp.takesInto(method);
+        if (move) redeemerArgs.add(OTHER);   // M3a3: a move's destination, first
         for (Object a : args) redeemerArgs.add(java(a));
         if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
         Class<?> rc = Class.forName(PKG + "." + name + "Validator$" + variant);
@@ -1077,7 +1170,7 @@ final class FourWay {
         if (interp.carriesEvents(method)) redeemerArgs.add(evs == null ? JulcList.empty() : evs);
         var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(construct(variant, redeemerArgs));
         var fields = new ArrayList<>(encoded.fields());
-        int offset = kind.equals("init") ? object ? 2 : 1 : 0;
+        int offset = kind.equals("init") ? object ? 2 : 1 : move ? 1 : 0;
         for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
         return new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
     }
@@ -1156,8 +1249,10 @@ final class FourWay {
         Object before = java(state);
         BigInteger funds = t.balance().subtract(kind.equals("destroy") ? BigInteger.valueOf(harness.minAda()) : BigInteger.ZERO);
         var h = harness.heldObject(holding(before), funds, heldOf(t));
-        var tx = harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null : holding(tr.next()), signer, c,
-                shared);
+        boolean move = interp.takesInto(method);
+        var tx = harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null
+                : holding(tr.next(), move ? OTHER : harness.instanceId()), signer, c, shared);
+        if (move) tx = withDestination(tx, state, t);   // M3a3
         return maps ? harness.withClaims(tx, mapClaims(method, ownedClass(method), before, kind, t, StateHarness.OBJECT_REF)) : tx;
     }
 
@@ -1189,6 +1284,14 @@ final class FourWay {
 
     /** M2c: each read state a reference input holding its instance's token at its script's address (ADR-0011 D2). */
     org.julclang.state.testkit.TxModel withReads(String method, org.julclang.state.testkit.TxModel tx, Tx t) {
+        // M3a3: an admits action's transaction carries the arriving object's move.
+        if (interp.admitsType(method) != null) {
+            try {
+                tx = withArrival(tx, t);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }
         for (String f : interp.reads(method)) {
             InstV inst = (InstV) params.fields().get(interp.paramsFields().indexOf(f));
             var out = instanceAt(inst, Assets.none());
@@ -1290,7 +1393,7 @@ final class FourWay {
         assetArgs = honest;
         var encoded = (org.julclang.core.PlutusData.ConstrData) assetRedeemer(method, honest, t, null);
         var fields = new ArrayList<>(encoded.fields());
-        int offset = kind.equals("init") ? owned(method) ? 2 : 1 : 0;
+        int offset = kind.equals("init") ? owned(method) ? 2 : 1 : interp.takesInto(method) ? 1 : 0;
         for (int i = 0; i < raw.size(); i++) fields.set(offset + i, raw.get(i));
         var redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
         Transition<Object> tr = next != null ? Transition.full(next, JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none())
@@ -1726,6 +1829,8 @@ final class FourWay {
             redeemerArgs.add(harness.seed());
             redeemerArgs.add(harness.instanceId());
         }
+        boolean move = interp.takesInto(method);
+        if (move) redeemerArgs.add(OTHER);   // M3a3: a move's redeemer names its destination first (ADR-0012 D3)
         for (Object a : args) redeemerArgs.add(java(a));
         if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
         if (interp.carriesEvents(method)) redeemerArgs.add(events(o));
@@ -1733,7 +1838,7 @@ final class FourWay {
         // The arguments as an attacker may send them (raw, not re-encoded canonically).
         var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
         var fields = new ArrayList<>(encoded.fields());
-        int offset = kind.equals("init") ? 2 : 0;
+        int offset = kind.equals("init") ? 2 : move ? 1 : 0;
         for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
         redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
         Ctx c = interp.usesTx(method) ? ctx(t) : null;
@@ -1746,7 +1851,9 @@ final class FourWay {
             case "action" -> {
                 Object before = java(state);
                 var live = harness.liveObject(holding(before), t == null ? BigInteger.ZERO : t.balance());
-                yield harness.actObject(live, redeemer, holding(ok ? next : before), pays, signer, c, shared);
+                if (!move) yield harness.actObject(live, redeemer, holding(ok ? next : before), pays, signer, c, shared);
+                // M3a3: a move continues its object under the destination, which admits it in the same transaction.
+                yield withDestination(harness.actObject(live, redeemer, holding(ok ? next : before, OTHER), pays, signer, c, shared), state, t);
             }
             default -> {
                 // An owned destroy's balance is everything the object holds, deposit included.
