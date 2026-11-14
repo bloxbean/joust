@@ -36,8 +36,9 @@ pitest {
     timeoutConstInMillis = 20000
     jvmArgs = ['-Xmx2g', '-Djoust.mapStore=memory', '--enable-native-access=ALL-UNNAMED']
     mutationThreshold = providers.gradleProperty('pit.threshold').map { it as Integer }.orElse(0)
-    // Fuzz targets replay only their seeds here; DevKit tests need a devnet.
-    excludedTestClasses = ['*DevnetTest', '*FuzzTest']
+    // DevKit tests need a devnet. Fuzz targets run here in replay mode (their seeds), like any test; a module names the
+    // ones it wants in ext.pitTests.
+    excludedTestClasses = ['*DevnetTest']
     useClasspathFile = true
 }
 

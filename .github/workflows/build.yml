@@ -138,10 +138,15 @@ jobs:
           ../../scripts/node-test.sh vscode-joust test/*.test.mjs
 
       # The npm joust's command line (ADR-0017 D5, D9), and joust deploy's write of deployments.<network>.json with the
-      # runtime and wallet stubbed (issue #75): Node built-ins only, no packages installed.
+      # runtime and wallet stubbed (issue #75). Two cases run the command from this copy, whose build.js imports the
+      # client: this repository's packages are linked beside js/joust, as in the engines job (no registry).
       - name: Test the npm joust command line
-        working-directory: js/joust
-        run: ../../scripts/node-test.sh joust-cli test/cli.test.js test/deploy.test.js
+        run: |
+          mkdir -p js/node_modules/@julclang
+          ln -sfn ../../state-client js/node_modules/@julclang/state-client
+          ln -sfn ../../joust-runtime js/node_modules/@julclang/joust-runtime
+          cd js/joust
+          ../../scripts/node-test.sh joust-cli test/cli.test.js test/deploy.test.js
 
       # The .jsc 2 reference interpreter (ADR-0018 D15): its crypto and the semantics' hand-written vectors. No packages
       # installed. The five-way differential tests in ./gradlew build run it too.

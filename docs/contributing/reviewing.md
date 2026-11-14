@@ -103,7 +103,7 @@ In CI the `mutation` job runs both only on what changed since the base (`scripts
 least 50% of the changed files' mutants. Both thresholds sit below the baselines, so a timeout does not fail a run, but a
 change whose new lines no test guards does. `-Ppit.targetClasses=a.B` and `JOUST_MUTATE=src/build.js` narrow a local run
 in the same way. The baselines, measured on the whole set when this was added, are in the pull request that added it
-(#ci/verification-infra). Update them when a module's tests change a lot.
+(#95). Update them when a module's tests change a lot.
 
 ## 5. What is left to the reviewer
 
