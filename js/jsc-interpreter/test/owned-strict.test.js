@@ -104,3 +104,44 @@ test('round-r2 mutants (#101 review C3, C4, C5)', () => {
     refused((ir) => { method(ir, 'withdraw')[k] = null; }, `"${k}" is null: an absent field is not written`);
   }
 });
+
+// #107 round-r2 review C5, F6, F7, as the Java reader's twin (stage3_admitsOnlyTheCheckersMoveShapes): the shapes stage 3
+// admits are the checker's.
+test('stage 3 admits only the checker\'s move shapes (#107 round-r2 C5, F6, F7)', () => {
+  const FERRY = readFileSync(new URL('./fixtures/Ferry.ir.json', import.meta.url), 'utf8');
+  const ARMORY = readFileSync(new URL('./fixtures/Armory.ir.json', import.meta.url), 'utf8');
+  load(FERRY);
+  load(ARMORY);
+  const refusedIn = (src, mutate, fragment) => {
+    const ir = JSON.parse(src);
+    mutate(ir);
+    assert.throws(() => load(JSON.stringify(ir)), (e) => e.message.includes(fragment) || assert.fail(`'${e.message}' should mention '${fragment}'`));
+  };
+  const passKeepsAMap = (ir) => {
+    const map = { bigmap: ['Bytes', 'Int'] };
+    ir.records.find((r) => r.name === 'Pass').fields.push({ name: 'm', type: map });
+    const grow = (o) => {
+      if (Array.isArray(o)) { o.forEach(grow); return; }
+      if (o === null || typeof o !== 'object') return;
+      if (o.node === 'New' && o.record === 'Pass') o.values.push({ node: 'BigEmpty', type: map, taint: 0, at: o.at });
+      Object.values(o).forEach(grow);
+    };
+    grow(ir.methods);
+    const arriving = method(ir, 'board').arriving;
+    if (arriving.fieldTaints) arriving.fieldTaints.m = 0;
+  };
+  const id = 'an admits action\'s first parameter is the arriving object\'s id, a Bytes (JSC1212)';
+  refusedIn(FERRY, (ir) => { method(ir, 'board').params = []; method(ir, 'board').checked = []; }, id);
+  refusedIn(FERRY, (ir) => { method(ir, 'board').params[0].type = 'Int'; }, id);
+  refusedIn(FERRY, (ir) => { method(ir, 'board').mods.push({ name: 'batched' }); }, 'an admits action cannot be batched (JSC1212)');
+  refusedIn(FERRY, (ir) => { method(ir, 'lift').into.type = { record: 'Pass' }; }, 'a move\'s destination is a State');
+  refusedIn(FERRY, passKeepsAMap, 'Pass keeps a BigMap, so it cannot move yet (JSC1212)');
+  refusedIn(FERRY, (ir) => {
+    passKeepsAMap(ir);
+    const board = method(ir, 'board');
+    ir.methods = [board, ...ir.methods.filter((m) => m !== board)];
+  }, 'the arriving Pass keeps a BigMap, so an admits action cannot take it as a parameter (JSC1212)');
+  refusedIn(ARMORY, (ir) => {
+    ir.invariants = [{ name: 'small', on: 'Vault', body: { stmts: [], result: { node: 'Lit', value: true, type: 'Bool', taint: 0, at: [1, 1] }, at: [1, 1] }, at: [1, 1] }];
+  }, 'the owned type Vault keeps a BigMap, so it has no invariants (JSC1213)');
+});

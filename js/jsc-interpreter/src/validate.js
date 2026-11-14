@@ -478,6 +478,8 @@ export function validate(p) {
       }
     }
   }
+  const keepsBigMap = (t) => (p.records.find((r) => r.name === t)?.fields ?? [])
+    .some((f) => f.type !== null && typeof f.type === 'object' && 'bigmap' in f.type);
   const ownedKind = (k) => k === 'ownedInit' || k === 'ownedAction' || k === 'ownedDestroy';
   for (const m of p.methods) {
     const where = `method ${m.name}`;
@@ -507,6 +509,17 @@ export function validate(p) {
       fail(where, 'native assets in an owned method (accept, send, mint, burn, deposit, funds) are not produced yet (M3a2; JSC1215)');
     }
     if (OWNED_STAGE < 3 && ('into' in m || 'arriving' in m || admits)) fail(where, 'moves (into, admits) are not produced yet (M3a3; JSC1215)');
+    // #107 round-r2 review C5, F7: the shapes stage 3 admits, as the checker produces them (and as the Java reader).
+    if ('into' in m && 'on' in m && keepsBigMap(m.on)) fail(where, `${m.on} keeps a BigMap, so it cannot move yet (JSC1212)`);
+    if (admits) {
+      if (!Array.isArray(m.params) || m.params.length === 0 || m.params[0] === null || m.params[0].type !== 'Bytes') {
+        fail(where, 'an admits action\'s first parameter is the arriving object\'s id, a Bytes (JSC1212)');
+      }
+      if (m.mods.some((x) => x && x.name === 'batched')) fail(where, 'an admits action cannot be batched (JSC1212)');
+      if ('arriving' in m && keepsBigMap(admits.field)) {
+        fail(where, `the arriving ${admits.field} keeps a BigMap, so an admits action cannot take it as a parameter (JSC1212)`);
+      }
+    }
     const scope = new Set();
     if ('shared' in m) {
       decl(m.shared, where, scope);
@@ -590,6 +603,8 @@ export function validate(p) {
       const where = `invariant ${inv.name}`;
       keys(inv, ['name', ...('on' in inv ? ['on'] : []), 'body', 'at'], where);
       if ('on' in inv && !owned.includes(inv.on)) fail(where, `${inv.on} is not an owned type`);
+      // #107 round-r2 review F7: an owned type that keeps a BigMap has no invariants (JSC1213).
+      if ('on' in inv && keepsBigMap(inv.on)) fail(where, `the owned type ${inv.on} keeps a BigMap, so it has no invariants (JSC1213)`);
       if ('on' in inv && OWNED_STAGE < 3) fail(where, 'an owned type\'s invariant is not produced yet (M3a3; JSC1215)');
       if (names.has(inv.name) || methodNames.has(inv.name) || fnNames.has(inv.name)) fail(where, 'a name taken by another method, fn or invariant');
       names.add(inv.name);

@@ -188,7 +188,9 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   naming fields the object does not have, `receives` on an owned method, an owned type without an owned init or an
   escape hatch (an owned destroy without `shared`, `before` or `after`), an escape hatch that never reads `balance`
   (JSC1216), and a present `null` for `on`, `shared`, `into`, `arriving` or `reads` (an absent field is not written; #101
-  round-r2 review C4, C5). **Not produced until their part** (#101 review F2, F9, round-r2 C3; refused by both readers until
+  round-r2 review C4, C5). From M3a3 (#107 round-r2 review C5, F7) they also refuse a move whose `into` is not a
+  `State` or whose object keeps a `BigMap`, an `admits` action whose first parameter is not a `Bytes` id or that is
+  `batched`, an `arriving` object that keeps a `BigMap` (JSC1212), and an invariant of a type that keeps one (JSC1213). **Not produced until their part** (#101 review F2, F9, round-r2 C3; refused by both readers until
   then): `into`, `arriving`, `admits` and an invariant's `on` (M3a3); a payable owned destroy, native assets in an owned
   method, a second owned type and a BigMap in an owned type (M3a2).
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),

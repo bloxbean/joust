@@ -133,6 +133,87 @@ class JscV2M3a1IrStrictTest {
         assertTrue(e.getMessage().contains("but no owned action moves"), e.getMessage());
     }
 
+    static final String DSL = "../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/";
+
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> lowered(String contract) throws Exception {
+        return (Map<String, Object>) AbiCheck.Json.parseStrict(JscV2.lower(Files.readString(Path.of(DSL + contract + ".jsc")), contract + ".jsc").irJson());
+    }
+
+    /** A mutant of {@code contract}'s IR refused with {@code fragment}. */
+    static void refusedIn(String contract, Consumer<Map<String, Object>> mutate, String fragment) throws Exception {
+        var ir = lowered(contract);
+        mutate.accept(ir);
+        String json = write(ir);
+        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json), fragment);
+        assertTrue(e.getMessage().contains(fragment), "'" + e.getMessage() + "' should mention '" + fragment + "'");
+    }
+
+    /** Pass (Ferry's owned type) gains a BigMap field, with an empty map in each New Pass and the arriving local's taints. */
+    @SuppressWarnings("unchecked")
+    static void passKeepsAMap(Map<String, Object> ir) {
+        var map = Map.of("bigmap", List.of("Bytes", "Int"));
+        for (Object r : (List<Object>) ir.get("records")) {
+            var rm = (Map<String, Object>) r;
+            if (rm.get("name").equals("Pass")) ((List<Object>) rm.get("fields")).add(new LinkedHashMap<String, Object>(Map.of("name", "m", "type", map)));
+        }
+        growRecords(ir.get("methods"), "Pass", map);
+        var arriving = (Map<String, Object>) method(ir, "board").get("arriving");
+        if (arriving.get("fieldTaints") instanceof Map<?, ?> ft) ((Map<String, Object>) ft).put("m", 0);
+    }
+
+    /** Each {@code New record} in raw IR gains an empty map for a field added after the others. */
+    @SuppressWarnings("unchecked")
+    static void growRecords(Object o, String record, Object mapType) {
+        if (o instanceof Map<?, ?> m) {
+            var mm = (Map<String, Object>) m;
+            if ("New".equals(mm.get("node")) && record.equals(mm.get("record"))) {
+                var values = new ArrayList<>((List<Object>) mm.get("values"));
+                values.add(new LinkedHashMap<String, Object>(Map.of("node", "BigEmpty", "type", mapType, "taint", 0, "at", mm.get("at"))));
+                mm.put("values", values);
+            }
+            for (Object v : new ArrayList<>(mm.values())) growRecords(v, record, mapType);
+        } else if (o instanceof List<?> l) {
+            for (Object v : l) growRecords(v, record, mapType);
+        }
+    }
+
+    /**
+     * #107 round-r2 review C5, F6, F7: the shapes stage 3 admits are the checker's. Each mutant of Ferry's (or Armory's)
+     * IR is one the checker never produces: an admission without its Bytes id first, or batched; an arriving object, a
+     * move or an invariant of a type that keeps a BigMap; a move whose destination is not a State.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void stage3_admitsOnlyTheCheckersMoveShapes() throws Exception {
+        if (IrJson.OWNED_STAGE < 3) return;
+        IrJson.read(write(lowered("Ferry")));
+        IrJson.read(write(lowered("Armory")));
+        String id = "an admits action's first parameter is the arriving object's id, a Bytes (JSC1212)";
+        refusedIn("Ferry", ir -> {
+            method(ir, "board").put("params", new ArrayList<>());
+            method(ir, "board").put("checked", new ArrayList<>());
+        }, id);
+        refusedIn("Ferry", ir -> ((Map<String, Object>) ((List<Object>) method(ir, "board").get("params")).get(0)).put("type", "Int"), id);
+        refusedIn("Ferry", ir -> mods(method(ir, "board")).add(mod("batched", null)), "an admits action cannot be batched (JSC1212)");
+        refusedIn("Ferry", ir -> ((Map<String, Object>) method(ir, "lift").get("into")).put("type", Map.of("record", "Pass")),
+                "a move's destination is a State");
+        refusedIn("Ferry", JscV2M3a1IrStrictTest::passKeepsAMap, "Pass keeps a BigMap, so it cannot move yet (JSC1212)");
+        refusedIn("Ferry", ir -> {   // the admission first, so its arriving parameter is read before the moves
+            passKeepsAMap(ir);
+            var ms = (List<Object>) ir.get("methods");
+            var board = method(ir, "board");
+            ms.remove(board);
+            ms.add(0, board);
+        }, "the arriving Pass keeps a BigMap, so an admits action cannot take it as a parameter (JSC1212)");
+        refusedIn("Armory", ir -> {
+            var lit = new LinkedHashMap<String, Object>(Map.of("node", "Lit", "value", true, "type", "Bool", "taint", 0, "at", List.of(1, 1)));
+            var body = new LinkedHashMap<String, Object>(Map.of("stmts", List.of(), "result", lit, "at", List.of(1, 1)));
+            ir.put("invariants", new ArrayList<>(List.of(new LinkedHashMap<String, Object>(Map.of("name", "small", "on", "Vault", "body", body,
+                    "at", List.of(1, 1))))));
+        }, "the owned type Vault keeps a BigMap, so it has no invariants (JSC1213)");
+    }
+
     /** A deep copy of parsed JSON (maps and lists), so a mutant can copy a part of the program. */
     @SuppressWarnings("unchecked")
     static Object copy(Object o) {

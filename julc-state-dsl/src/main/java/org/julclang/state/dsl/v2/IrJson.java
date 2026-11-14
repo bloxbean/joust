@@ -903,6 +903,28 @@ final class IrJson {
                 if (OWNED_STAGE < 3 && (x.containsKey("into") || x.containsKey("arriving") || admitted != null)) {
                     throw new IllegalArgumentException("method " + x.get("name") + ": moves (into, admits) are not produced yet (M3a3; JSC1215)");
                 }
+                // #107 round-r2 review C5, F7: the shapes stage 3 admits, as the checker produces them. A move's destination
+                // is a State; a move's object keeps no BigMap (JSC1212, #107 F6); an admits action's first parameter is
+                // the arriving object's id, a Bytes; it is never batched; its arriving object keeps no BigMap (JSC1212).
+                if (into != null && !into.type.equals(new Ty.Rec("State"))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": a move's destination is a State");
+                }
+                if (into != null && on != null && records.get(on).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": " + on + " keeps a BigMap, so it cannot move yet (JSC1212)");
+                }
+                if (admitted != null) {
+                    if (params.isEmpty() || !params.get(0).type.equals(Ty.BYTES)) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": an admits action's first parameter is the arriving object's id,"
+                                + " a Bytes (JSC1212)");
+                    }
+                    if (mods.stream().anyMatch(md -> md.name().equals("batched"))) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": an admits action cannot be batched (JSC1212)");
+                    }
+                    if (arriving != null && records.get(admitted).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": the arriving " + admitted + " keeps a BigMap, so an admits"
+                                + " action cannot take it as a parameter (JSC1212)");
+                    }
+                }
                 Ir.Owned ow = on != null || admitted != null ? new Ir.Owned(on, shared, into, arriving) : null;
                 methods.add(new Ir.Method(kind, s(x.get("name")), params, mods, checked,
                         (Boolean) x.get("usesCtx"), pays, body,
@@ -952,6 +974,11 @@ final class IrJson {
                     if (on != null && !owned.contains(on)) throw new IllegalArgumentException("invariant " + x.get("name") + ": " + on + " is not an owned type");
                     if (on != null && OWNED_STAGE < 3) {
                         throw new IllegalArgumentException("invariant " + x.get("name") + ": an owned type's invariant is not produced yet (M3a3; JSC1215)");
+                    }
+                    // #107 round-r2 review F7: an owned type that keeps a BigMap has no invariants (JSC1213).
+                    if (on != null && records.get(on).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                        throw new IllegalArgumentException("invariant " + x.get("name") + ": the owned type " + on + " keeps a BigMap, so it has no"
+                                + " invariants (JSC1213)");
                     }
                     invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at")), on));
                 }

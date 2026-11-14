@@ -2126,6 +2126,12 @@ final class Checker {
                 if (!isShared && (p.name().equals("into") || p.name().equals("destination_state"))) {
                     throw p.pos().error("JSC0216", "'" + p.name() + "' is a name a move's generated redeemer and client use; rename the parameter");
                 }
+                // #107 review F6: a move of an object that keeps a BigMap (its map claims keyed to its input while it
+                // continues under another instance) is run by no test yet, so it is refused until one runs it.
+                if (!isShared && records.get(m.on()).values().stream().anyMatch(ft -> ft instanceof Ty.BigMapT)) {
+                    throw p.pos().error("JSC1212", m.on() + " keeps a BigMap, so it cannot move yet: a move of an object with map claims is not"
+                            + " supported until a test runs one (ADR-0012 D3, ADR-0014)");
+                }
                 // The instance's time fields are time values here (D11), as in its own methods.
                 var fts = new LinkedHashMap<String, Integer>();
                 for (String fld : stateFields.keySet()) fts.put(fld, timeFields.contains(fld) ? TIME : 0);
