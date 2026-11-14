@@ -72,7 +72,21 @@ def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['
              // ADR-0018 M2c: oracle (Oracle and Shop; the port names the shop Kiosk, since examples/dsl's Shop.jsc is M4a's and
              // JuLC writes a script by its validator's simple name) and fees (Pot and Stall).
              oracle: ['Oracle', 'open', [:], [Shop: 'Kiosk', ShopClient: 'KioskClient', ShopValidator: 'KioskValidator']],
-             fees: ['Pot', null]]
+             fees: ['Pot', null],
+             // ADR-0018 M3a: the owned-object ports. examples/bank's Account field balance is the port's saved (balance is a
+             // built-in name); guild's (and armory's) open state field is isOpen (open is a modifier word); market's state
+             // record Config is State (Config is the params record's name) and its buy's result record Sold is Exchanged.
+             bank: ['Bank', null, [:], ['(?<=\\.)balance(?=\\(\\))': 'saved']],
+             // locker's unlock sends, so the port takes Funds (a send is checked against the own policy, ADR-0018 D4): its
+             // direct calls in LockerTest pass the funds the instance holds.
+             locker: ['Locker', null, [:], ['(Locker\\.unlock\\(s, BigInteger\\.valueOf\\(\\d+\\), ctx)': '$1, h.funds(held, Assets.none())']],
+             guild: ['Guild', null, [:], ['destination\\.open': 'destination.isOpen']],
+             // market's offer with a junk token alongside: the port's method refuses it itself (what it accepts is not what the
+             // caller offers, #funds:, ADR-0018 D4), where examples/market's method returns and only its validator refuses;
+             // the copied test expects that refusal of the method, then builds its transaction from the honest offer.
+             market: ['Market', 'open', [Config: 'State', Sold: 'Exchanged'],
+                      ['var r = (Market\\.offer\\(config, NFT_POLICY, NFT, PRICE, ctx, h\\.createFunds\\(true, )junk':
+                               'assertThrows(RequireException.class, () -> $1junk))); var r = $1nft']]]
 def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
 def copyPortTests = tasks.register('copyPortTests', Sync) {
     description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'

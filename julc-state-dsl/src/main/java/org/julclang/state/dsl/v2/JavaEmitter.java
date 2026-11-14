@@ -329,7 +329,40 @@ final class JavaEmitter {
 
     // ------------------------------------------------------------------ methods and fns
 
+    /** M3a (size): the effect kinds the method being emitted makes at most once: one statement of the kind, in no loop. */
+    private Set<String> once = Set.of();
+
+    private static void countEffects(List<Ir.Stmt> ss, Map<String, Integer> n, boolean loop) {
+        for (Ir.Stmt s : ss) {
+            String k = switch (s) {
+                case Ir.Pay x -> "pay";
+                case Ir.Send x -> "send";
+                case Ir.Emit x -> "emit";
+                case Ir.Deposit x -> "deposit";
+                default -> null;
+            };
+            if (k != null) n.merge(k, loop ? 2 : 1, Integer::sum);
+            switch (s) {
+                case Ir.If i -> {
+                    for (Ir.Branch b : i.branches()) countEffects(b.then().stmts(), n, loop);
+                    if (i.otherwise() != null) countEffects(i.otherwise().stmts(), n, loop);
+                }
+                case Ir.MatchStmt ms -> ms.arms().forEach(a -> countEffects(a.body().stmts(), n, loop));
+                case Ir.For f -> countEffects(f.body().stmts(), n, true);
+                default -> {
+                }
+            }
+        }
+    }
+
     private String method(Ir.Method m) {
+        var counts = new HashMap<String, Integer>();
+        countEffects(m.body().stmts(), counts, false);
+        var single = new HashSet<String>();
+        counts.forEach((k, c) -> {
+            if (c == 1) single.add(k);
+        });
+        once = single;
         owner = m.name();
         stateType = m.on() != null ? m.on() : "State";
         redeemer = switch (m.kind()) {
@@ -537,7 +570,7 @@ final class JavaEmitter {
                     stmts.append("        return new Settled(").append(result("Settled", acc)).append(");\n");
                 } else {
                     ret = "JulcList<Payout>";
-                    stmts.append("        return ").append(acc.cur.get("pay")).append(".reverse();\n");
+                    stmts.append("        return ").append(acc.cur.get("pay")).append(once.contains("pay") ? ";\n" : ".reverse();\n");
                 }
             }
             case VIEW -> {
@@ -557,7 +590,9 @@ final class JavaEmitter {
         for (String k : Effects.recordKinds(p, record)) {
             String v = acc.cur.containsKey(k) ? acc.cur.get(k) : empty(k);
             // Lists accumulate by prepending: reversed into source order, unless still empty.
-            parts.add((k.equals("pay") || k.equals("send") || k.equals("emit") || k.equals("deposit")) && !v.equals(empty(k)) ? v + ".reverse()" : v);
+            // M3a (size): a kind made at most once (one statement, in no loop) needs no reverse.
+            parts.add((k.equals("pay") || k.equals("send") || k.equals("emit") || k.equals("deposit")) && !v.equals(empty(k)) && !once.contains(k)
+                    ? v + ".reverse()" : v);
         }
         return String.join(", ", parts);
     }
@@ -1037,8 +1072,12 @@ final class JavaEmitter {
                     imports.add("org.julclang.state.api.Require");
                     String cur = acc.cur.get("pay");
                     out.append(ind).append("BigInteger ").append(a).append(" = ").append(ex(y.amount())).append(";\n");
-                    out.append(ind).append("Require.that(").append(a).append(".compareTo(BigInteger.ZERO) >= 0, ")
-                            .append(str(key("pay", ordinals.get("pay").get(y.pos()), y.pos(), null))).append(");\n");
+                    // M3a (size): balance is never negative (the validator binds it to the input's lovelace, at least the
+                    // deposit, I3, I5), so pay(to, balance) has no sign check.
+                    if (!(y.amount() instanceof Ir.CtxRef cr && cr.name().equals("balance"))) {
+                        out.append(ind).append("Require.that(").append(a).append(".compareTo(BigInteger.ZERO) >= 0, ")
+                                .append(str(key("pay", ordinals.get("pay").get(y.pos()), y.pos(), null))).append(");\n");
+                    }
                     out.append(ind).append("JulcList<Payout> ").append(np).append(" = ").append(a).append(".compareTo(BigInteger.ZERO) == 0 ? ")
                             .append(cur).append(" : Payouts.add(").append(cur).append(", ").append(to).append(", ")
                             .append(a).append(");\n");
@@ -1057,10 +1096,21 @@ final class JavaEmitter {
                     String v = fresh("value"), ns = fresh("sends");
                     imports.add("org.julclang.state.api.Require");
                     out.append(ind).append("Value ").append(v).append(" = ").append(ex(y.value())).append(";\n");
-                    imports.add("org.julclang.state.api.AddressAdapter");
-                    out.append(ind).append("Require.that(ValueAdapter.sendable(").append(v).append(", funds.policy()) && AddressAdapter.notOwnScript(")
-                            .append(to).append(", funds.policy()), ")
-                            .append(str(key("send", ordinals.get("send").get(y.pos()), y.pos(), null))).append(");\n");
+                    // M3a (size): a part that holds for every value is not checked. funds.held is always sendable (the
+                    // instance's own native assets: positive, and never a reserved name of the own policy, which no output
+                    // of the contract holds but its own token, I30, I31); a key's address (wallet) is never a script's.
+                    var conds = new ArrayList<String>();
+                    if (!(y.value() instanceof Ir.FundsRef held && held.field().equals("held"))) {
+                        conds.add("ValueAdapter.sendable(" + v + ", funds.policy())");
+                    }
+                    if (!(y.to() instanceof Ir.LedgerOp w && (w.op().equals("wallet") || w.op().equals("walletStaked")))) {
+                        imports.add("org.julclang.state.api.AddressAdapter");
+                        conds.add("AddressAdapter.notOwnScript(" + to + ", funds.policy())");
+                    }
+                    if (!conds.isEmpty()) {
+                        out.append(ind).append("Require.that(").append(String.join(" && ", conds)).append(", ")
+                                .append(str(key("send", ordinals.get("send").get(y.pos()), y.pos(), null))).append(");\n");
+                    }
                     // M2c: with a datum, an inline datum built by the generated encoder (D5, J17); evaluated after the value.
                     String datum = "Datum.none()";
                     if (y.datum() != null) {
@@ -1105,9 +1155,33 @@ final class JavaEmitter {
                     // accept(value) (M2): native assets only, every quantity positive (§5.3), summed.
                     String v = fresh("value"), na = fresh("accepted");
                     imports.add("org.julclang.state.api.Require");
-                    out.append(ind).append("Value ").append(v).append(" = ").append(ex(y.value())).append(";\n");
-                    out.append(ind).append("Require.that(ValueAdapter.acceptable(").append(v).append(", funds.policy()), ")
-                            .append(str(key("accept", ordinals.get("accept").get(y.pos()), y.pos(), null))).append(");\n");
+                    String check;
+                    if (y.value() instanceof Ir.LedgerOp lo && lo.op().equals("asset")) {
+                        // M3a (size): one token's value is checked by its parts (acceptableAsset is acceptable(asset(…))),
+                        // each argument evaluated once, left to right, then the value built (its domain checks first).
+                        var parts = new ArrayList<String>();
+                        String[] types = {"byte[]", "byte[]", "BigInteger"};
+                        for (int i = 0; i < 3; i++) {
+                            String x = ex(lo.args().get(i));
+                            if (!simple(x)) {
+                                String l = fresh("part");
+                                out.append(ind).append(types[i]).append(" ").append(l).append(" = ").append(x).append(";\n");
+                                x = l;
+                            }
+                            parts.add(x);
+                        }
+                        out.append(ind).append("Value ").append(v).append(" = ValueAdapter.asset(").append(String.join(", ", parts)).append(");\n");
+                        check = "ValueAdapter.acceptableAsset(" + String.join(", ", parts) + ", funds.policy())";
+                    } else {
+                        out.append(ind).append("Value ").append(v).append(" = ").append(ex(y.value())).append(";\n");
+                        // M3a (size): Value.none() is always acceptable.
+                        check = y.value() instanceof Ir.LedgerOp lo && lo.op().equals("none") ? null
+                                : "ValueAdapter.acceptable(" + v + ", funds.policy())";
+                    }
+                    if (check != null) {
+                        out.append(ind).append("Require.that(").append(check).append(", ")
+                                .append(str(key("accept", ordinals.get("accept").get(y.pos()), y.pos(), null))).append(");\n");
+                    }
                     String prior = acc.cur.get("accept");
                     out.append(ind).append("Value ").append(na).append(" = ").append(prior.equals(empty("accept")) ? v
                             : "ValueAdapter.add(" + prior + ", " + v + ")").append(";\n");
@@ -1880,6 +1954,11 @@ final class JavaEmitter {
 
     // ------------------------------------------------------------------ BigMap (ADR-0002/0014, D7)
 
+    /** A key type whose values have 28 bytes (D5: a Key or a Hash, checked where it enters), so never over 64. */
+    private static boolean sized(Ty key) {
+        return key.equals(Ty.KEY) || key.equals(Ty.HASH);
+    }
+
     private String bigOp(Ir.BigOp o) {
         imports.add("org.julclang.state.api.MerkleMaps");
         Ty.BigMapT bt = (Ty.BigMapT) o.map().type();
@@ -1896,6 +1975,8 @@ final class JavaEmitter {
                 return "MerkleMaps.isEmpty(" + m + ")";
             }
             case "delete" -> {
+                // M3a (size): a Key or Hash key has 28 bytes (D5), so its length is not checked.
+                if (sized(bt.key())) return "MerkleMaps.remove(" + m + ", " + ex(o.args().get(0)) + ")";
                 // The key's length is checked as set checks it (security S4).
                 operation("BigMap.delete: a key has at most 64 bytes", o.pos());
                 imports.add("org.julclang.state.api.MerkleMap");
@@ -1922,18 +2003,19 @@ final class JavaEmitter {
                 imports.add("org.julclang.state.api.MerkleMap");
                 imports.add("org.julclang.state.api.Require");
                 imports.add("org.julclang.stdlib.lib.ByteStringLib");
+                // M3a (size): a Key or Hash key has 28 bytes (D5), so its length is not checked; an Int value is written by
+                // MerkleMaps.setInt (non-negative, 0 removes the entry: v1's rule, D7), one write without a branch.
+                boolean sized = sized(bt.key());
+                if (ints) operation("BigMap.set: a value cannot be negative", o.pos());
+                if (sized) {
+                    return ints ? "MerkleMaps.setInt(" + m + ", " + ex(o.args().get(0)) + ", " + ex(o.args().get(1)) + ")"
+                            : "MerkleMaps.put(" + m + ", " + ex(o.args().get(0)) + ", " + ex(o.args().get(1)) + ")";
+                }
                 String h = ints ? "bigSet__Int" : "bigSet__Bytes";
                 operation("BigMap.set: a key has at most 64 bytes", o.pos());
-                if (ints) {
-                    operation("BigMap.set: a value cannot be negative", o.pos());
-                    operation(Std.PUT_INT, o.pos());   // MerkleMaps.putInt's own check, in the script though set checks first
-                }
                 String keyCheck = "        Require.that(ByteStringLib.length(k__) <= 64, \"BigMap.set: a key has at most 64 bytes\");\n";
                 String body = ints
-                        // Int values are non-negative and 0 removes the entry (v1's rule, D7).
-                        ? keyCheck + "        Require.that(v__.compareTo(BigInteger.ZERO) >= 0, \"BigMap.set: a value cannot be negative\");\n"
-                          + "        if (v__.compareTo(BigInteger.ZERO) == 0) {\n            return MerkleMaps.remove(m__, k__);\n        } else {\n"
-                          + "            return MerkleMaps.putInt(m__, k__, v__);\n        }\n"
+                        ? keyCheck + "        return MerkleMaps.setInt(m__, k__, v__);\n"
                         : keyCheck + "        return MerkleMaps.put(m__, k__, v__);\n";
                 addHelper(h, "    static MerkleMap " + h + "(MerkleMap m__, byte[] k__, " + (ints ? "BigInteger" : "byte[]") + " v__) {\n" + body + "    }\n\n");
                 return h + "(" + m + ", " + ex(o.args().get(0)) + ", " + ex(o.args().get(1)) + ")";
