@@ -188,6 +188,9 @@ class JscV2M3a2FourWayTest {
         assertEquals("refused", f.check("release", seat, List.of(), at(ANN, ada(2).longValue(), lovelace).withShared(open), ANN));
         f.modifierRefused("release", seat, List.of(), at(EVE, ada(1).longValue(), lovelace).withShared(open), EVE);
         ok(f.check("leave", seat, List.of(), at(ANN, 0, lovelace), ANN));
+        // #104 review S1: tip pays the host what it received and leaves the seat's value over. Each leg accepts the call;
+        // the validator refuses the transaction (I8: a destroy's payouts total what the object holds plus what it received).
+        f.transactionLevel("tip", seat, List.of(), at(BEN, ada(1).longValue(), lovelace).withShared(open), BEN);
         // Passes: the other type, of the same shape; raised one level at a time, up to 3.
         ok(f.check("issue", null, List.of(), at(BEN, 0, 0).withShared(open), BEN));
         Rec pass = rec("Pass", Bytes.of(BEN), n(2));

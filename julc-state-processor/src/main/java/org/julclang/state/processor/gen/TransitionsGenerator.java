@@ -312,7 +312,11 @@ public final class TransitionsGenerator {
             for (RecordComponentElement rc : Records.components((TypeElement) ((DeclaredType) r).asElement())) {
                 accepted |= rc.getSimpleName().contentEquals("accepted");
             }
-            if (accepted && !c.assetAware()) return null;
+            // #104 review F2: never a silent skip. 'accepted' needs @Payable and a Funds parameter (ContractReader refuses it
+            // otherwise), and a Funds parameter makes the contract asset-aware, so this cannot happen.
+            if (accepted && !c.assetAware()) {
+                throw new IllegalStateException(c.name() + "." + t.method() + " returns 'accepted' in a contract that is not asset-aware");
+            }
             sb.append("        ").append(render(r)).append(" r = ").append(invoke).append(";\n");
             sb.append("        return new ").append(step).append("(Optional.of(r.state()), Payouts.none()")
                     .append(c.assetAware() ? ", Sends.none(), Assets.none(), " + (accepted ? "r.accepted()" : "Assets.none()") + ", JulcList.empty()" : "")

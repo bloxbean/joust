@@ -212,7 +212,7 @@ action; a destroy has none), and by the runtime before it submits. A state that 
 
 | Modifier | Annotation | Allowed on | Field type |
 |---|---|---|---|
-| `payable` | `@Payable` | `init`, `action`, an owned init, an owned destroy (M3a2) | |
+| `payable` | `@Payable` | `init`, `action`, an owned init, an owned action, an owned destroy (M3a2) | |
 | `only f` | `@SignedBy("f")` | `action`, `destroy` | `Key` (`JSC0311`) |
 | `after f` | `@ValidAfter("f")` | `action`, `destroy` | `Int` |
 | `before f` | `@ValidBefore("f")` | `action`, `destroy` | `Int` |

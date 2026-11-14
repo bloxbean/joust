@@ -1326,6 +1326,12 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12 (libraries from outside the sources pinned); a `.jsc` library called from Java and a Java library from `.jsc` (in `examples/dsl`; the plugin path waits for the toolchain's publication, D9 r19 amended); the template's tests run offline. **Exited (r22)**, on the integration branch: Shop with `fees.jsc` on five legs (285 calls), `Guarded` on three legs for its `java:` calls (129 of 133), `JavaShop` calling `fees.jsc`, `joust.lock` on npm and Gradle, the template's offline tests |
 | M5 | Language server | ADR-0021 §8's gates (M5a: M1e's exit; M5b and M5c: their own); the language server merges to `main` only after this ADR's acceptance (#83). The `.jsc` 2 integration branch (#98) carries M5a before M3: these gates apply to `main`, not to that branch | — |
 
+**J11's 14 KB bound when the Java example is over it** (r24, after #104's review F1). A port meets J11's size bound
+when it is below 14,000 bytes, or, when its Java example is itself 14,000 bytes or more, when it is within +15% of the
+example and at most the runtime's 15,000-byte reference-script limit (`StateContractHandle.scriptFor`). Such a port's
+gate test pins its recorded size with a stated slack (100 bytes), so any growth has to be justified again. Locker
+(14,812 B) and Safes (14,935 B) are the first ports under this rule.
+
 **Recommendation gate.** `.jsc` 2 becomes the recommended language for JS developers when M2 and M4 have exited (the
 features most dApps need, and offline tests) **and** an independent security review of the lowering, the generated
 checks and the bindings has passed. Until then the docs call it a preview and say which features need Java.

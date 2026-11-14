@@ -509,10 +509,10 @@ final class IrJson {
         return (String) ((Map<String, Object>) AbiCheck.Json.parseStrict(json)).get("sourceSha256");
     }
 
-    @SuppressWarnings("unchecked")
     /** #101 review F2: the parts of M3a the readers admit (the Reader's stage, for its tests). */
     static final int OWNED_STAGE = Reader.OWNED_STAGE;
 
+    @SuppressWarnings("unchecked")
     private static final class Reader {
         private final Map<Long, Ir.Local> locals = new HashMap<>();
 

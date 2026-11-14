@@ -45,7 +45,9 @@ to Bytes conversion in `std`, which `.jsc` 2 does not have.
 14,499 and 14,564 B, so no port of them can be both within +15% and below 14 KB without beating the Java example by 4%.
 The ports are within +2.5% of Java and under the runtime's 15,000-byte reference-script limit
 (`StateContractHandle.scriptFor`), which is what deploys them; a reference script of 14,935 B leaves the transaction
-about 1 KB under 16 KB. Without the size work the ports were 15,200 and 15,879 B, over that limit.
+about 1 KB under 16 KB. Without the size work the ports were 15,200 and 15,879 B, over that limit. After #104's review
+F1 the exception is a rule in ADR-0018 §8 (a Java example over 14 KB: the port within +15% of it and at most 15,000 B),
+and the gate pins each port at its recorded size plus 100 B (`size_within15PercentOfJava_andUnderTheRuntimeLimit`).
 
 **Encoding** (`encoding_equalsTheJavaExamples`): Locker's manifest matches its description structurally (datum, every
 redeemer); Safes' too (datum, `Holding`, every redeemer, `OpenSafe`) but for `isOpen`. **Modifiers**
@@ -78,8 +80,8 @@ transition program and the validator.
 |---|---|---|---|---|---|---|---|
 | Locker (port) | 14 | 8 | 14 | 1 | 20 | 55 | an instance BigMap with native assets: locks of exactly the tokens (none, ADA, one short, a junk token alongside refused), unlocks within and over the caller's balance, a stranger, the close of an empty locker only |
 | Safes (port) | 10 | 5 | 10 | 2 | 17 | 53 | an owned init that accepts and writes its BigMap at creation (closed, nothing, one short refused); notes by the owner only; the escape hatch sending the tokens back |
-| Studio (coverage) | 22 | 11 | 21 | 3 | 25 | 87 | two owned types of one shape (Seat, Pass) under `Holding_T`; a payable owned destroy reading the instance by reference (exactly the fee); escape hatches; the init's check; a view |
-| **Total** | **46** | 24 | 45 | 6 | **62** | **195** | |
+| Studio (coverage) | 23 | 11 | 22 | 3 | 25 | 87 | two owned types of one shape (Seat, Pass) under `Holding_T`; a payable owned destroy reading the instance by reference (exactly the fee); a destroy that leaves the object's value over (`tip`, transaction-level: I8, #104 review S1); escape hatches; the init's check; a view |
+| **Total** | **47** | 24 | 46 | 6 | **62** | **195** | |
 
 ## The security reviews' items
 
@@ -149,6 +151,19 @@ write. One candidate was rejected: dropping `pay(to, balance)`'s sign check, whi
 balance is refused there by a generated check whose key names its site). Ledger's message map now holds setInt's message
 in place of putInt's (`JscV2M1eR2BuildTest`). These ports are not in `fixtures/m3`, whose groups record the Java examples.
 
+## Review round r2 (#104)
+
+All three reviews approved at `dcf19a8b`. The P3 items, folded in:
+
+| Item | What changed | Test |
+|---|---|---|
+| Design F1 | J11's exception is a rule in ADR-0018 §8; Locker and Safes are pinned at 14,812 and 14,935 B plus 100 B | `size_within15PercentOfJava_andUnderTheRuntimeLimit` |
+| Design F2 | `TransitionsGenerator` no longer skips a creation that returns `accepted` in a contract that is not asset-aware: it is an assertion (ContractReader makes it unreachable); #81 has a comment on what stays open | |
+| Design F3 | `JavaEmitter.countEffects` lists every `Ir.Stmt` kind, with no `default`, so a new statement kind fails to compile there | |
+| Design F4 | `@SuppressWarnings` back on `IrJson.Reader`, the stage's javadoc above it; the reference's `payable` row names owned actions | |
+| Security S1 | Studio's `tip`, an open payable owned destroy that pays the host `received` and leaves the seat's value over: every leg accepts the call, the validator refuses the transaction (I8) | `FourWay.transactionLevel("tip", …)` in the five-way; with I8's check removed from the processor (mutant M4p) the test fails |
+| #101 round r2 | merged in; at stage 2 the round's M3a2 forms read as complete programs (a second owned type with its own owned init and escape hatch; an owned BigMap with an empty map in each `New`) | `JscV2M3a1IrStrictTest`, `owned-strict.test.js` |
+
 ## Found on the way
 
 - **The processor cannot take native assets in an `@Init`** (ContractReader reads the state's type from `@Init`'s
@@ -174,7 +189,8 @@ no runtime code):
 ## Decisions for the maintainers
 
 1. **Market moves to M3a3** (it needs moves), a change to the split approved for M3a2.
-2. **J11's 14 KB bound for the locker ports**: an exception, with the numbers above (the Java examples are over it).
+2. **J11's 14 KB bound for the locker ports**: an exception, with the numbers above (the Java examples are over it), now
+   a rule in ADR-0018 §8 with each port's size pinned (#104 review F1).
 3. **The size work changes 26 earlier scripts** (all smaller), recorded above rather than kept byte-identical.
 4. **JSC0426 stays for an instance's init**: lifting it needs a processor change (an `@Init` returning `(state,
    accepted)`), not planned here.
