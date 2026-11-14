@@ -1,8 +1,7 @@
 jsc 1
 package known
 
-// a lone carriage return:
- here
+// a lone carriage return: here
 contract K {
   state { n: Int }
   init() {
