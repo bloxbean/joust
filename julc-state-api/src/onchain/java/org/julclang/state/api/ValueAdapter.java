@@ -219,17 +219,6 @@ public class ValueAdapter {
         return policiesOk(Builtins.unMapData((PlutusData) (Object) v), policy, false);
     }
 
-    /**
-     * {@code acceptable(asset(policy, name, q), own)} without building the value's traversal (ADR-0018 M3a, size): the
-     * value is empty when {@code q} is 0 (acceptable), refused when {@code q} is negative, and otherwise one token,
-     * refused under the lovelace policy or as a reserved name of the own policy. Called after {@code asset} has built the
-     * same value, so its domain checks have run.
-     */
-    public static boolean acceptableAsset(byte[] policy, byte[] name, BigInteger q, byte[] own) {
-        return q.compareTo(BigInteger.ZERO) == 0 || q.compareTo(BigInteger.ZERO) > 0 && ByteStringLib.length(policy) != 0
-                && !(ByteStringLib.equals(policy, own) && reserved(name));
-    }
-
     public static boolean acceptable(Value v, byte[] policy) {
         return policiesOk(Builtins.unMapData((PlutusData) (Object) v), policy, true);
     }

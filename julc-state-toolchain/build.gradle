@@ -24,10 +24,6 @@ dependencies {
     testImplementation project(':examples:dex')       // ADR-0018 M2 (J11): the Java example the dex port is measured against
     testImplementation project(':examples:oracle')    // ADR-0018 M2c (J11): the Java examples the oracle and fees ports are measured against
     testImplementation project(':examples:fees')
-    // ADR-0018 M3a (J11): the Java examples the owned-object ports are measured against; market's offer pins issue #81.
-    testImplementation project(':examples:locker')
-    testImplementation project(':examples:guild')
-    testImplementation project(':examples:market')
     testImplementation libs.julc.vm.java
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes

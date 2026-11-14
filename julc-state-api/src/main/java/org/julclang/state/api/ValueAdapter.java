@@ -268,16 +268,6 @@ public class ValueAdapter {
         return true;
     }
 
-    /**
-     * {@code acceptable(asset(policy, name, q), own)} without building the value's traversal (ADR-0018 M3a, size): the
-     * value is empty when {@code q} is 0 (acceptable), refused when {@code q} is negative, and otherwise one token,
-     * refused under the lovelace policy or as a reserved name of the own policy. Called after {@code asset} has built the
-     * same value, so its domain checks have run.
-     */
-    public static boolean acceptableAsset(byte[] policy, byte[] name, BigInteger q, byte[] own) {
-        return q.signum() == 0 || q.signum() > 0 && policy.length != 0 && !(java.util.Arrays.equals(policy, own) && reserved(name));
-    }
-
     /** Whether the own policy may mint {@code name}: at most 32 bytes, and not a reserved kind (ADR-0007 D3). */
     public static boolean mintable(byte[] name) {
         return name.length <= 32 && !reserved(name);

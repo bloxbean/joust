@@ -98,8 +98,7 @@ public final class TransitionsGenerator {
             if (unsupported(t)) continue;
             ExecutableElement m = method(t.method());
             if (m == null || methods.contains(t.method())) continue;
-            // A creation that returns a result record (state, accepted): its step is the state's (issue #81).
-            String made = render(createdType(m.getReturnType()));
+            String made = render(m.getReturnType());
             String step = stepTypes.computeIfAbsent(made, k -> "Step" + (stepTypes.size() + 1));
             String code = creation(t, m, step);
             if (code == null) continue;
@@ -301,39 +300,11 @@ public final class TransitionsGenerator {
         sb.append("    /** Runs {@link ").append(c.name()).append("#").append(t.method()).append("} (a creation: no target). */\n");
         sb.append("    public static ").append(step).append(" ").append(t.method()).append("(PlutusData target, ").append(sharedType)
                 .append(" shared, ").append(argsRecord).append(" args, Ctx ctx) {\n");
-        String invoke = c.name() + "." + t.method() + "(" + String.join(", ", call) + ")";
-        TypeMirror r = m.getReturnType();
-        if (r != createdType(r)) {
-            // Issue #81: a result record (state, accepted), as the validator reads it (result.state(), and
-            // result.accepted() against the offered assets, I31). A creation pays, sends, mints and deposits nothing.
-            boolean accepted = false;
-            for (RecordComponentElement rc : Records.components((TypeElement) ((DeclaredType) r).asElement())) {
-                accepted |= rc.getSimpleName().contentEquals("accepted");
-            }
-            if (accepted && !c.assetAware()) return null;
-            sb.append("        ").append(render(r)).append(" r = ").append(invoke).append(";\n");
-            sb.append("        return new ").append(step).append("(Optional.of(r.state()), Payouts.none()")
-                    .append(c.assetAware() ? ", Sends.none(), Assets.none(), " + (accepted ? "r.accepted()" : "Assets.none()") + ", JulcList.empty()" : "")
-                    .append(eventsType() != null ? ", JulcList.empty()" : "").append(");\n    }\n");
-            return sb.toString();
-        }
-        sb.append("        return new ").append(step).append("(Optional.of(").append(invoke).append("), Payouts.none()")
+        sb.append("        return new ").append(step).append("(Optional.of(").append(c.name()).append(".").append(t.method())
+                .append("(").append(String.join(", ", call)).append(")), Payouts.none()")
                 .append(c.assetAware() ? ", Sends.none(), Assets.none(), Assets.none(), JulcList.empty()" : "")
                 .append(eventsType() != null ? ", JulcList.empty()" : "").append(");\n    }\n");
         return sb.toString();
-    }
-
-    /**
-     * What a creation makes: its result, or the {@code state} of a result record (issue #81: an {@code @Init} or
-     * {@code @OwnedInit} returning {@code (state, accepted)}).
-     */
-    private TypeMirror createdType(TypeMirror r) {
-        if (r instanceof DeclaredType d && d.asElement().getKind() == ElementKind.RECORD) {
-            for (RecordComponentElement rc : Records.components((TypeElement) d.asElement())) {
-                if (rc.getSimpleName().contentEquals("state")) return rc.asType();
-            }
-        }
-        return r;
     }
 
     /** The args record's leading fields: the {@code @Params} record and the {@code @Reads} states, before the arguments. */

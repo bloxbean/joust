@@ -56,16 +56,6 @@ public class MerkleMaps {
         return put(m, key, ByteStringLib.integerToByteString(true, 0, value));
     }
 
-    /**
-     * A {@code BigMap<K, Int>}'s {@code set} (ADR-0018 D7, M3a): a non-negative integer, where 0 removes the key, as
-     * {@link #remove} does, and any other value is stored as {@link #putInt} stores it; one write, without a branch.
-     */
-    public static MerkleMap setInt(MerkleMap m, byte[] key, BigInteger value) {
-        Require.that(value.compareTo(BigInteger.ZERO) >= 0, "BigMap.set: a value cannot be negative");
-        return new MerkleMap(m.root(), m.reads(), m.writes().prepend(new MapEntry(key, value.compareTo(BigInteger.ZERO) > 0,
-                ByteStringLib.integerToByteString(true, 0, value))));
-    }
-
     public static MerkleMap remove(MerkleMap m, byte[] key) {
         return new MerkleMap(m.root(), m.reads(), m.writes().prepend(new MapEntry(key, false, ByteStringLib.empty())));
     }

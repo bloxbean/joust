@@ -138,6 +138,12 @@ final class Checker {
      */
     private String inputRec = "State";
 
+    /**
+     * M3a1: what later parts of M3a build is refused here (JSC1215): several owned types and BigMaps in owned types (M3a2),
+     * moves, admits and invariants by type (M3a3).
+     */
+    private static final boolean NOT_YET = true;
+
     /** The fields of the method's input ({@link #inputRec}). */
     private LinkedHashMap<String, Ty> inFields() {
         return inputRec.equals("State") ? stateFields : records.get(inputRec);
@@ -887,7 +893,15 @@ final class Checker {
             for (TypeDecl t : c.owned()) {
                 if (t.fields().isEmpty()) throw t.pos().error("JSC1202", "the owned type " + t.name() + " needs at least one field: owned "
                         + t.name() + " { owner: Key }");
+                if (NOT_YET && t != c.owned().get(0)) {
+                    throw t.pos().error("JSC1215", "a second owned type is not supported yet: several owned types come in M3a2 (ADR-0012 D1)");
+                }
                 fillFields(records.get(t.name()), t.fields(), t.name(), true);
+                for (FieldDecl f : t.fields()) {
+                    if (NOT_YET && records.get(t.name()).get(f.name()) instanceof Ty.BigMapT) {
+                        throw f.type().pos().error("JSC1215", "a BigMap in an owned type is not supported yet: it comes in M3a2 (ADR-0012 D2)");
+                    }
+                }
             }
         }
         if (c != null && c.params() != null) {
@@ -1718,6 +1732,9 @@ final class Checker {
      * reads are visible on chain), and never a time value (D11): whether a state is acceptable would move with a window.
      */
     private Ir.Invariant invariant(Syntax.InvariantDecl inv, Contract c) {
+        if (inv.on() != null && NOT_YET) {
+            throw inv.pos().error("JSC1215", "an owned type's invariant is not supported yet: invariants by type come in M3a3 (ADR-0012 D1)");
+        }
         if (inv.on() != null) {
             // M3a (ADR-0012 D1): invariant T.name = e, over an object of the owned type T, checked on every T a call makes
             // or continues; never over BigMaps (on chain only the opened reads are visible: the processor's rule).
@@ -1893,8 +1910,18 @@ final class Checker {
             throw firstEffect(m.body(), Set.of("emit")).error("JSC0413", "emit(…) is allowed only in an action or destroy, not in a fn, view,"
                     + " lambda or value block (ADR-0018 D4)");
         }
-        // M3a: issue #81 is fixed (a creation's transition program reads what it accepted), so an init and an owned init
-        // take native assets as any payable method does: accept in a creation is allowed (JSC0426 is retired).
+        // Issue #81 (a creation's transition program drops what it accepted) is open, so a creation does not take native
+        // assets yet: an init's or an owned init's accept, or a payable creation reading funds, is refused (M2's JSC0426).
+        if (ik.creates() && fx.contains("accept")) {
+            throw firstEffect(m.body(), Set.of("accept")).error("JSC0426", "accept in an " + (ik == Ir.Kind.INIT ? "init" : "owned init")
+                    + " is not supported yet: the transition program of a creation that takes native assets is not generated correctly"
+                    + " (ADR-0018 M2, deferred; issue #81); create it, then take the assets in an action");
+        }
+        if (ik.creates() && payable && funds) {
+            throw m.pos().error("JSC0426", "a payable " + (ik == Ir.Kind.INIT ? "init" : "owned init") + " that uses funds would take native"
+                    + " assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred; issue #81); drop payable, or"
+                    + " create it and take the assets in an action");
+        }
         if (fx.contains("accept") && !payable) {
             throw firstEffect(m.body(), Set.of("accept")).error("JSC0422", "accept states the native assets a method takes in, so the method must"
                     + " be payable (ADR-0007 D1)");
@@ -1935,7 +1962,10 @@ final class Checker {
                 case "payable" -> {
                     // M3a: an owned destroy may be payable (examples/market's buy: the buyer pays the price into the
                     // listing it ends, ADR-0007); the instance's destroy may not.
-                    if (m.kind() == Kind.DESTROY) throw mod.pos().error("JSC0406", "a destroy cannot be payable");
+                    if (m.kind() == Kind.DESTROY || m.kind() == Kind.OWNED_DESTROY) {
+                        throw mod.pos().error("JSC0406", m.kind() == Kind.DESTROY ? "a destroy cannot be payable"
+                                : "an owned destroy cannot be payable yet (M3a2: a payable owned destroy, examples/market's buy)");
+                    }
                 }
                 case "open" -> audience = true;
                 case "only" -> {
@@ -2015,6 +2045,7 @@ final class Checker {
                     }
                 }
                 case "admits" -> {
+                    if (NOT_YET) throw mod.pos().error("JSC1215", "admits is not supported yet: moves between instances come in M3a3 (ADR-0012 D3)");
                     // M3a (ADR-0012 D3): @Admits("T"): objects of the owned type T arrive through this action, spent in the
                     // same transaction with a move whose destination is this instance. The contract-level rules (a move of
                     // T exists, one admits per type at least) are checked with the contract (ownedRules).
@@ -2057,6 +2088,9 @@ final class Checker {
         for (Mod mod : m.mods()) if (mod.name().equals("admits")) admits = mod.arg();
         for (int pi = 0; pi < m.params().size(); pi++) {
             Param p = m.params().get(pi);
+            if ("into".equals(p.role()) && NOT_YET) {
+                throw p.pos().error("JSC1215", "an into parameter is not supported yet: moves between instances come in M3a3 (ADR-0012 D3)");
+            }
             if (p.role() != null) {
                 // M3a (ADR-0003 D1, ADR-0012 D3): name: shared, the instance's state by reference; name: into, a move's
                 // destination state. Neither is a redeemer field; both come first, shared before into (the processor's order).
