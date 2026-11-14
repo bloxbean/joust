@@ -30,6 +30,11 @@ tasks.withType(Test).matching { it.name.startsWith('fuzz') }.configureEach {
 }
 
 // Mutation testing (gradle/pitest.gradle): the .jsc 2 checker (D5's checked inputs, the subset's rules) and joust.lock.
-ext.pitTargets = ['org.julclang.state.dsl.v2.Checker*', 'org.julclang.state.dsl.JscMain']
-ext.pitTests = ['org.julclang.state.dsl.v2.*CheckerTest', 'org.julclang.state.dsl.v2.JscV2PackageLockTest', 'org.julclang.state.dsl.*Test']
+ext.pitTargets = ['org.julclang.state.dsl.v2.Checker*', 'org.julclang.state.dsl.JscMain*']
+// PIT's * matches dots too: org.julclang.state.dsl.*Test was every test of the module (51 minutes); the checker's and the
+// lock's own tests are the ones that decide these classes' mutants.
+ext.pitTests = ['org.julclang.state.dsl.v2.*CheckerTest', 'org.julclang.state.dsl.v2.JscV2PackageLockTest',
+                'org.julclang.state.dsl.v2.JscV2IrTest', 'org.julclang.state.dsl.v2.JscV2LibraryTest',
+                'org.julclang.state.dsl.v2.JscV2AbiTest', 'org.julclang.state.dsl.v2.JscV2DiagnosticsTest',
+                'org.julclang.state.dsl.JscCheckerTest', 'org.julclang.state.dsl.MigrateTest']
 apply from: rootProject.file('gradle/pitest.gradle')

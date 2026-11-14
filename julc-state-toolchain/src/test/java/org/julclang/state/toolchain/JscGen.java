@@ -40,6 +40,19 @@ import java.util.TreeSet;
  *   <li><b>M4</b>: a {@code .jsc} library in its own file holding the record, the enum and the fns (one with a
  *   {@code require} of its own), imported by the contract.</li>
  * </ul>
+ * <b>r2</b> (review r1 of #95, design F2) adds: a {@code Map<Bytes, Int>} state field and arguments (raw, so unordered,
+ * repeated and over-long keys arrive); an action that accepts what is offered, mints the own policy's token and sends it
+ * ({@code assetSlots}); per call, a validity window of its own, co-signers, and whether its accepted transaction is also
+ * attacked ({@link FourWay#mutants}, an unbounded window end); for an init, a candidate first state. What it does not
+ * generate yet is #105's list, in order (malformed nested tags, BigMap, deposits, reads, quorum, batched, M3).
+ * <p>
+ * <b>Extending it</b> (the contract a milestone's features meet before it exits; docs/contributing/reviewing.md §3): a
+ * feature has (1) a grammar rule and a feature flag in {@link G#plan}; (2) its value and state generators
+ * ({@code G.value}, {@code G.state}); (3) its transaction shape and the {@code FourWay} method that evaluates it, mutants
+ * included, in {@code FiveWayFuzzTest.run}; (4) a {@code JscGenTest} quota; (5) a tally key in the five-way summary. A
+ * change of the grammar changes {@link #VERSION}: Jazzer's byte seeds then decode to other programs, and only the
+ * {@code .plan} cases ({@link PlanCodec}) replay as they were.
+ * <p>
  * Values are bounded where the chain bounds them and the interpreters do not (so a mismatch is the legs', not a datum
  * size or a budget): every Int stored in the state is reduced modulo 1,000,003, stored bytes and lists are truncated,
  * payouts are 2 to 5 ADA from a 100 ADA balance, recursion is at most 12 deep. Intermediate values are not bounded:

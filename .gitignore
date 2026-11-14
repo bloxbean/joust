@@ -15,3 +15,10 @@ node_modules/
 ### Mutation testing (gradle/pitest.gradle, js/mutation): reports and Stryker sandboxes ###
 js/joust/reports/
 .stryker-tmp/
+# What a fuzz run saves beside the seeds (review r1, security S8): never commit these as they are; a fixed finding is kept
+# renamed regression-* (and, for the five-way target, as a .plan case).
+**/*Inputs/**/crash-*
+**/*Inputs/**/slow-unit-*
+**/*Inputs/**/timeout-*
+**/*Inputs/**/oom-*
+js/state-client/reports/

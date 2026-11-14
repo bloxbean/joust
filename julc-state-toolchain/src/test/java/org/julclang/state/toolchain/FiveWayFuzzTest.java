@@ -126,9 +126,11 @@ class FiveWayFuzzTest {
                     TALLY.count("mutants rejected", f.mutantsRejected - mutantsBefore);
                     TALLY.count("attacks rejected", f.attacksRejected - attacksBefore);
                 }
-                if (out.startsWith("ok:") && !view && f.interp.usesTx(s.method()) && s.mutants()) {
+                if (out.startsWith("ok:") && !view && readsTime(plan, s.method()) && s.mutants()) {
                     // The honest transaction with an unbounded validity end (CLAUDE.md: IntervalLib.finite*Bound is -1 there):
-                    // the interpreters cannot express it, the validator must refuse it (review r1, design F2).
+                    // the interpreters cannot express it, and a method that reads the window (after/before) must be refused
+                    // (semantics §2.6: an unbounded window end never passes). A method that reads only the caller or the
+                    // balance does not depend on the window, and its validator need not bind it (review r1, design F2).
                     for (boolean upper : new boolean[]{true, false}) {
                         f.as(signers, null);
                         f.txTweak = tx -> tx.range = unbounded(tx.range, upper);
@@ -157,6 +159,16 @@ class FiveWayFuzzTest {
             var path = FuzzData.reproducer("FiveWayFuzzTest", plan.describe() + "\nafter " + calls + " calls:\n" + e);
             throw new AssertionError("the legs disagree on a generated program (" + path + "): " + e.getMessage(), e);
         }
+    }
+
+    /** Whether the generated method's body reads the validity window (an after/before require): read from its source. */
+    static boolean readsTime(JscGen.Plan plan, String method) {
+        String src = plan.source();
+        var m = java.util.regex.Pattern.compile("\\n  (?:(?:action|destroy|view) )?" + java.util.regex.Pattern.quote(method) + "\\(").matcher(src);
+        if (!m.find()) return false;
+        int end = src.indexOf("\n  }", m.end());
+        String body = src.substring(m.end(), end < 0 ? src.length() : end);
+        return body.contains("after(") || body.contains("before(");
     }
 
     /** {@code r} with one end unbounded (the upper +inf, or the lower -inf). */

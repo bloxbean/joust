@@ -7,8 +7,9 @@
 //     apply from: rootProject.file('gradle/pitest.gradle')
 //
 //   ./gradlew :<module>:pitest                                    the module's whole set (the baseline)
-//   ./gradlew :<module>:pitest -Ppit.targetClasses=a.B,a.C        only these classes (CI: the changed ones, scripts/pit-changed.sh)
-//   -Ppit.threshold=N                                             fail below N% killed (default 0: report only)
+//   ./gradlew :<module>:pitest -Ppit.targetClasses=a.B,a.C        only these classes (CI: the changed ones, scripts/pit-changed.py)
+//   -Ppit.threshold=N                                             fail below N% killed (default 0: report only; CI's
+//                                                                 gate is per class, scripts/pit-summary.py --baseline)
 //
 // The report is build/reports/pitest/ (HTML, and mutations.xml for scripts/pit-summary.py). Not part of `check`: PIT
 // runs the covering tests once per mutant, which is minutes to hours.

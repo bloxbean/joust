@@ -20,6 +20,16 @@ If you find a security vulnerability in JOUST, please report it privately:
 
 We will acknowledge your report and keep you informed while we investigate and fix it.
 
+### Fuzzing findings
+
+The decoders of data an attacker writes on chain (`ValueAdapterFuzzTest`, `AddressAdapterFuzzTest` and
+`MemoFuzzTest`: values, addresses, memos) are fuzzed locally only. Public CI only replays their committed inputs and never
+uploads their failure records, because a finding there can be a vulnerability and this repository's logs and artifacts
+are public (as JuLC's ADR-063 D13 decides for its own decoders). If one of them fails for you, report it here before you
+commit its input or open an issue. The other fuzz targets (the five-way differential, the IR readers, NODE_OPTIONS) are
+fuzzed in public CI and nightly, and their findings are published like any test failure.
+`docs/contributing/reviewing.md` §3 has the details.
+
 ## Scope
 
 Security-relevant issues include:
