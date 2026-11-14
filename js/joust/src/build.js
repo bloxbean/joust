@@ -14,7 +14,6 @@
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, lstatSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { generate } from '@julclang/state-client/codegen';
 import { buildInWorker, engineLimits } from './toolchain.js';
 import { abiGate } from './abi.js';
 import { libraryPackages, lockGate } from './libraries.js';
@@ -68,7 +67,7 @@ export async function compile({ root = process.cwd(), src = 'contracts', options
   const files = sources(resolve(root, src));
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
   const { packages, javaLibraries } = libraryPackages(root);
-  return buildInWorker({ files, options, packages, javaLibraries });
+  return buildInWorker({ files, options, limits: engineLimits(), packages, javaLibraries });
 }
 
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
@@ -138,6 +137,9 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     const m = JSON.parse(g.sourceMap);
     if (m.messages) messagesOf[g.javaFile] = { source: g.jscFile, messages: m.messages };
   }
+  // The client generator is loaded when there is a client to write, so the command line's checks before a build (no
+  // contracts, a refused project) need no package (CI runs cli.test.js with Node built-ins only).
+  const { generate } = r.contracts.length ? await import('@julclang/state-client/codegen') : {};
   for (const c of r.contracts) {
     const description = JSON.parse(c.descriptionJson);
     writeFileSync(join(dir, c.name + '.json'), JSON.stringify(description, null, 2) + '\n');

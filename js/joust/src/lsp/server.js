@@ -423,7 +423,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const file = fileNameOf(uri);
     const project = await projectOf(uri, text, sel);
     if (state.get(uri) !== s || s.seq !== seq || documents.get(uri)?.version !== version) return;
-    const r = await host.analyze(sel.key, sel.engine, { file, source: text, scope: scopeOf(sel), ...(project ?? {}) }, cts.token);
+    const r = await host.analyze(sel.key, sel.engine, { file, source: text, scope: scopeOf(sel), ...(project ? { moduleId: project.id, files: project.files } : {}) }, cts.token);
     if (s.cts === cts) s.cts = undefined;
     // D4a: a result is published only if nothing it read changed since: the open lifetime (C2), the buffer's version and
     // the selection.
@@ -605,7 +605,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // With the project's files the document's imports reach, as its analysis has them (else an edit's check would see
     // the file alone and refuse it for its imports).
     const project = await projectOf(uri, source, sel);
-    const r = await host.analyze(sel.key, sel.engine, { file: fileNameOf(uri), source, scope: scopeOf(sel), ...(project ?? {}) }, token);
+    const r = await host.analyze(sel.key, sel.engine, { file: fileNameOf(uri), source, scope: scopeOf(sel),
+      ...(project ? { moduleId: project.id, files: project.files } : {}) }, token);
     if (!r.model) return null;
     try {
       return parseModel(r.model);
@@ -852,7 +853,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const text = doc.getText();
     if (text.length > MAX_FILE_CHARS) return { error: 'the file is larger than the language server reads' };
     const project = await projectOf(p.uri, text, sel);
-    const r = await host.request(sel.key, sel.engine, { op: 'lower', file: fileNameOf(p.uri), source: text, ...(project ? { module: project.id, files: project.files } : {}) },
+    const r = await host.request(sel.key, sel.engine, { op: 'lower', file: fileNameOf(p.uri), source: text, ...(project ? { moduleId: project.id, files: project.files } : {}) },
       { scope: scopeOf(sel), input: project ? JSON.stringify([text, project.id, Object.entries(project.files).sort()]) : text, what: 'the lowering',
         timeoutMs: LOWER_MS }, token);
     if (!r.model) return { error: r.internal?.message ?? (r.cancelled ? 'cancelled' : 'the lowering is unavailable') };

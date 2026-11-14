@@ -304,11 +304,11 @@ export class EngineHost {
    * quarantined), `{ cancelled: true }` (cancelled, or displaced by a stop: `displaced`), `{ unavailable: true }`,
    * `{ retryAt }` (in backoff) or `{ missing: true }` (the engine's file is gone).
    */
-  analyze(key, engine, { file, source, scope = '', id, files }, token) {
+  analyze(key, engine, { file, source, scope = '', moduleId, files }, token) {
     // A project's files (the integration with ADR-0018 M2c and M4) are part of the input: quarantined with it.
-    // The module id travels as `module`: `id` is the call's own (EngineWorker.call), which would replace it.
-    const msg = files ? { op: 'analyze', file, source, module: id, files } : { op: 'analyze', file, source };
-    const input = files ? JSON.stringify([source, id, Object.entries(files).sort()]) : source;
+    // The module id travels as `moduleId`: `id` is the call's own (EngineWorker.call), its correlation id.
+    const msg = files ? { op: 'analyze', file, source, moduleId, files } : { op: 'analyze', file, source };
+    const input = files ? JSON.stringify([source, moduleId, Object.entries(files).sort()]) : source;
     return this.request(key, engine, msg, { scope, input, what: 'analysis' }, token);
   }
 
