@@ -190,8 +190,9 @@ class JscLangTest {
         var m = JscLang.analyze(src, "C.jsc");
         var let = m.diagnostics().stream().filter(d -> "JSC0128".equals(d.code())).findFirst().orElseThrow();
         assertEquals(new JscLang.Range(6, 4, 6, 7), let.range());   // the 'let' token
-        // M5b: the parser recovers at the statement, so nothing ends early; the contract's missing init is reported too.
-        assertTrue(m.diagnostics().stream().anyMatch(d -> "JSC0401".equals(d.code())), m.diagnostics().toString());
+        // M5b: the parser recovers at the statement, so nothing ends early. The missing init is not judged: go was dropped
+        // (its statement broke), and a file-level rule cannot be judged on a file with a dropped member (L13).
+        assertFalse(m.diagnostics().stream().anyMatch(d -> "JSC0401".equals(d.code())), m.diagnostics().toString());
         var p = m.declarations().stream().filter(d -> d.name().equals("P")).findFirst().orElseThrow();
         assertFalse(p.partial());
         var go = m.declarations().stream().filter(d -> d.name().equals("go")).findFirst().orElseThrow();
@@ -238,7 +239,7 @@ class JscLangTest {
         return out;
     }
 
-    private static String name(Path p) {
+    static String name(Path p) {
         String n = p.getFileName().toString();
         try {
             JscV2.checkFileName(n);

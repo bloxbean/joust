@@ -37,7 +37,7 @@ public final class JscLang {
      * {@code modules} (the integration with ADR-0018 M2c and M4): {@code lang.analyze} takes a project's files, which a
      * file's library and contract imports resolve to as in the build.
      */
-    public static final List<String> FEATURES = List.of("analyze", "modules");
+    public static final List<String> FEATURES = List.of("analyze", "modules", "std", "lower");
 
     /** D2a: a model's bounds. Over either, the analysis reports one diagnostic instead of the model. */
     public static final int MAX_ENTRIES = 200_000;
@@ -315,8 +315,15 @@ public final class JscLang {
         errors.addAll(spans.errors);
         errors.addAll(facts.errors);
         var seen = new HashSet<String>();
+        // A file-level completeness rule (the contract needs an init, its state a field, …), reported at the contract's
+        // head, cannot be judged when the parser dropped a member: the build stopped at that member's error first (L1),
+        // and the rule's error would be a cascade (L13).
+        int[] head = null;
+        for (Spans.Decl d : spans.decls) if (d.kind.equals("contract")) head = new int[]{d.startLine, d.startCol};
+        var fromChecker = new HashSet<JscException>(facts.errors);
         for (JscException e : errors) {
             if (Facts.isPoisoned(e) || !seen.add(e.code + ":" + e.line + ":" + e.col)) continue;
+            if (spans.incomplete && head != null && fromChecker.contains(e) && e.line == head[0] && e.col == head[1]) continue;
             diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, source, spans));
         }
         boolean clean = diagnostics.isEmpty();
@@ -518,6 +525,138 @@ public final class JscLang {
             }
         }
         o.append('"');
+    }
+
+    // ------------------------------------------------------------------ M5b: the catalogue and the lowering on request
+
+    /** The types written as types (D7: completion in a type position). */
+    static final List<String> TYPES = List.of("Int", "Bool", "Bytes", "Key", "Hash", "Value", "Address", "Credential", "List", "Option", "Map",
+            "BigMap", "Instance");
+
+    /** The method modifiers offered after a method's parameters (D7). */
+    static final List<String> MODIFIERS = List.of("only", "authorized", "after", "before", "payable", "open", "quorum", "receives", "batched");
+
+    /** What follows a '.' on a value of each container type (D7), as the checker reads it: properties and methods. */
+    static final java.util.Map<String, List<String[]>> MEMBERS = java.util.Map.of(
+            "List", List.of(new String[]{"length", "property", "Int"}, new String[]{"isEmpty", "property", "Bool"}, new String[]{"head", "property", "Option<T>"},
+                    new String[]{"map", "method", "map(x => …): List<U>"}, new String[]{"filter", "method", "filter(x => …): List<T>"},
+                    new String[]{"fold", "method", "fold(init, (acc, x) => …)"}, new String[]{"any", "method", "any(x => …): Bool"},
+                    new String[]{"all", "method", "all(x => …): Bool"}, new String[]{"find", "method", "find(x => …): Option<T>"},
+                    new String[]{"contains", "method", "contains(x): Bool"}, new String[]{"sum", "method", "sum(): Int"},
+                    new String[]{"reverse", "method", "reverse(): List<T>"}, new String[]{"take", "method", "take(n): List<T>"},
+                    new String[]{"drop", "method", "drop(n): List<T>"}, new String[]{"concat", "method", "concat(ys): List<T>"}),
+            "Map", List.of(new String[]{"size", "property", "Int"}, new String[]{"isEmpty", "property", "Bool"}, new String[]{"keys", "property", "List<K>"},
+                    new String[]{"values", "property", "List<V>"}, new String[]{"get", "method", "get(k): Option<V>"},
+                    new String[]{"has", "method", "has(k): Bool"}, new String[]{"set", "method", "set(k, v): Map<K, V>"},
+                    new String[]{"delete", "method", "delete(k): Map<K, V>"}, new String[]{"any", "method", "any((k, v) => …): Bool"},
+                    new String[]{"all", "method", "all((k, v) => …): Bool"}),
+            "BigMap", List.of(new String[]{"get", "method", "get(k): Option<V>"}, new String[]{"has", "method", "has(k): Bool"},
+                    new String[]{"set", "method", "set(k, v): BigMap<K, V>"}, new String[]{"delete", "method", "delete(k): BigMap<K, V>"},
+                    new String[]{"isEmpty", "property", "Bool (in a destroy)"}));
+
+    /**
+     * The {@code lang.std} answer (M5b, D7, D8): every {@code std} row (module, name, {@code .jsc} signature, domain, Java
+     * target), the prelude, the type names, the container members and the modifiers: what hover and completion offer.
+     */
+    public static String stdJson() {
+        var o = new StringBuilder("{\"rows\":[");
+        int k = 0;
+        for (Std.Binding b : Std.ROWS.values()) {
+            if (k++ > 0) o.append(',');
+            var sig = new StringBuilder(b.name()).append('(');
+            for (int i = 0; i < b.params().size(); i++) {
+                if (i > 0) sig.append(", ");
+                sig.append(Ty.show(b.params().get(i)));
+            }
+            sig.append("): ").append(Ty.show(b.result()));
+            o.append("{\"module\":");
+            str(o, b.module());
+            o.append(",\"name\":");
+            str(o, b.name());
+            o.append(",\"signature\":");
+            str(o, sig.toString());
+            o.append(",\"domain\":");
+            str(o, b.domain());
+            o.append(",\"target\":");
+            str(o, b.policy() == Std.Policy.GENERATED ? "(generated)" : b.target());
+            o.append(",\"timeTotal\":").append(b.timeTotal()).append('}');
+        }
+        for (String n : new java.util.TreeSet<>(Checker.PRELUDE)) {
+            if (n.equals("Some")) continue;
+            o.append(",{\"module\":\"prelude\",\"name\":");
+            str(o, n);
+            o.append(",\"signature\":");
+            str(o, n + "(…)");
+            o.append('}');
+        }
+        o.append("],\"types\":[");
+        for (int i = 0; i < TYPES.size(); i++) {
+            if (i > 0) o.append(',');
+            str(o, TYPES.get(i));
+        }
+        o.append("],\"modifiers\":[");
+        for (int i = 0; i < MODIFIERS.size(); i++) {
+            if (i > 0) o.append(',');
+            str(o, MODIFIERS.get(i));
+        }
+        o.append("],\"members\":{");
+        int t = 0;
+        for (String type : new java.util.TreeSet<>(MEMBERS.keySet())) {
+            if (t++ > 0) o.append(',');
+            str(o, type);
+            o.append(":[");
+            List<String[]> ms = MEMBERS.get(type);
+            for (int i = 0; i < ms.size(); i++) {
+                if (i > 0) o.append(',');
+                o.append("{\"name\":");
+                str(o, ms.get(i)[0]);
+                o.append(",\"kind\":");
+                str(o, ms.get(i)[1]);
+                o.append(",\"signature\":");
+                str(o, ms.get(i)[2]);
+                o.append('}');
+            }
+            o.append(']');
+        }
+        return o.append("}}").toString();
+    }
+
+    /**
+     * The {@code lang.lower} answer (M5b, D7's generated-Java view, run on request only): the Java the file lowers to (on
+     * its own, or as the module {@code id} of {@code files}), its path, and its source map's lines as {@code [jscLine,
+     * javaLine]} (each {@code .jsc} line's first Java line); or {@code ok} false with the first error.
+     */
+    public static String lowerJson(String source, String fileName, String id, java.util.Map<String, String> files) {
+        var o = new StringBuilder();
+        try {
+            JscModules modules = modulesOf(files);
+            JscV2.Lowered l = modules == null ? JscV2.lower(source, fileName) : JscV2.lower(source, fileName, id, modules);
+            o.append("{\"ok\":true,\"javaFile\":");
+            str(o, l.javaPath());
+            o.append(",\"contract\":");
+            str(o, l.javaPath().substring(0, l.javaPath().length() - ".java".length()).replace('/', '.'));
+            o.append(",\"java\":");
+            str(o, l.java());
+            o.append(",\"lines\":[");
+            var seen = new HashSet<Integer>();
+            int k = 0;
+            for (int[] e : l.sourceMap()) {
+                if (!seen.add(e[1])) continue;
+                if (k++ > 0) o.append(',');
+                o.append('[').append(e[1]).append(',').append(e[0]).append(']');
+            }
+            return o.append("]}").toString();
+        } catch (JscException e) {
+            o.setLength(0);
+            o.append("{\"ok\":false,\"error\":");
+            str(o, "the file does not lower: " + (e.code == null ? "" : "error[" + e.code + "] ") + e.line + ":" + e.col + ": " + e.getMessage());
+            return o.append('}').toString();
+        } catch (RuntimeException | Error e) {
+            o.setLength(0);
+            o.append("{\"ok\":false,\"error\":");
+            str(o, JscMain.internalError(e));
+            return o.append('}').toString();
+        }
     }
 
     /** The {@code lang.info} answer: the protocol, the model version and the features (ADR-0021 D3). */

@@ -76,7 +76,7 @@ final class JscLangIndex {
     private Spans.Decl field(String record, String field) {
         if (record == null) return null;
         if (record.equals("State")) return decl("stateField", field);
-        if (record.equals(Ir.PARAMS)) return decl("paramsField", field);
+        if (record.equals(Ir.PARAMS)) return decl("field", "params." + field);
         Spans.Decl f = decl("field", record + "." + field);
         return f;
     }
@@ -146,8 +146,8 @@ final class JscLangIndex {
         for (Object[] lr : spans.lateRefs) {
             Tok t = (Tok) lr[0];
             String kind = (String) lr[1];
-            Spans.Decl d = kind.equals("params") ? decl("paramsField", t.text()) : decl("stateField", t.text());
-            if (d == null && kind.equals("field")) d = decl("paramsField", t.text());
+            Spans.Decl d = kind.equals("params") ? decl("field", "params." + t.text()) : decl("stateField", t.text());
+            if (d == null && kind.equals("field")) d = decl("field", "params." + t.text());
             ref(t, d, 0);
         }
         flagShorthands();
@@ -213,7 +213,8 @@ final class JscLangIndex {
                         ref(n.pos().line(), n.pos().col(), end, d, 0);
                     }
                     case Ir.StateField f -> ref(n.pos().line(), n.pos().col(), end, decl("stateField", f.field()), 0);
-                    case Ir.Variant v -> ref(n.pos().line(), n.pos().col(), end, decl("variant", v.variant()), 0);
+                    case Ir.Variant v -> ref(n.pos().line(), n.pos().col(), end,
+                            decl("variant", v.variant()) != null ? decl("variant", v.variant()) : decl("event", v.variant()), 0);
                     case Ir.StateRef s -> builtin(n.pos().line(), n.pos().col(), end, "state");
                     case Ir.CtxRef c -> builtin(n.pos().line(), n.pos().col(), end, c.name());
                     case Ir.NoneLit x -> builtin(n.pos().line(), n.pos().col(), end, "None");
@@ -227,7 +228,7 @@ final class JscLangIndex {
                 if (name == null) return;
                 switch (ir) {
                     case Ir.GetField g -> ref(name, field(g.record(), g.field()), 0);
-                    case Ir.ParamsRef p -> ref(name, decl("paramsField", p.field()), 0);
+                    case Ir.ParamsRef p -> ref(name, decl("field", "params." + p.field()), 0);
                     default -> {
                     }
                 }
@@ -251,7 +252,9 @@ final class JscLangIndex {
                     default -> null;
                 };
                 if (o.type() != null && record != null) {
-                    Spans.Decl d = ir instanceof Ir.Variant ? decl("variant", record) : typeDecl(o.type());
+                    // A variant, or an event (a variant of the contract's Event).
+                    Spans.Decl d = ir instanceof Ir.Variant ? (decl("variant", record) != null ? decl("variant", record) : decl("event", record))
+                            : typeDecl(o.type());
                     ref(o.pos().line(), o.pos().col(), o.pos().col() + o.type().length(), d, 0);
                 }
                 String owner = ir instanceof Ir.Variant v ? v.variant() : record;
@@ -326,9 +329,9 @@ final class JscLangIndex {
             String parent = d.parent == null ? null : d.parent.name;
             switch (d.kind) {
                 case "stateField" -> setType(d, program.state() == null ? null : program.state().fields().get(d.name));
-                case "paramsField" -> setType(d, program.params() == null ? null : program.params().fields().get(d.name));
                 case "field" -> {
-                    Ir.RecordType r = parent == null ? null : program.record(parent);
+                    // The params' fields are fields of the params block (its name is params; its record Config).
+                    Ir.RecordType r = parent == null ? null : d.parent.kind.equals("params") ? program.params() : program.record(parent);
                     if (r != null) setType(d, r.fields().get(d.name));
                 }
                 default -> {

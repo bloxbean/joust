@@ -375,7 +375,8 @@ final class Checker {
                 imports = Parser.imports(source);
             } catch (JscException e) {
                 if (facts == null) throw e;
-                imports = List.of();   // a lexical or import error: the main parse below records it
+                // A lexical or import error: the main parse below records it; the imports that do parse still load.
+                imports = Parser.importsRecovering(source);
             }
             for (Import im : imports) {
                 // A Java library's records (M4b): a capitalised imported name is read as a type, so a constructor of one
@@ -499,6 +500,7 @@ final class Checker {
     private void visible(String name, Pos p) {
         Module o = owner.get(name);
         if (o == null || o == current || current.visible.contains(name)) return;
+        unchecked(name);   // recovering: a name whose import failed is not wrong here
         String what = variantEnum.containsKey(name) ? "the variant " + name + " of " + variantEnum.get(name) + ", which is declared in "
                 + o.where() + ": import { " + variantEnum.get(name) + " }" : "'" + name + "' is declared in " + o.where() + ": import { " + name + " }";
         throw p.error("JSC0710", what + " from it to use it here (a library's declarations are seen only where they are imported)");
@@ -523,6 +525,8 @@ final class Checker {
             return null;
         }
         if (main == null) return null;
+        // A file whose contract the parser could not read has nothing for the checker (the build stopped before it).
+        if (main.file.contract() == null && !main.file.library()) return null;
         // What the parser dropped is unknown to the checker, not wrong (L13): by name, or everything when a dropped member
         // had no name or was the state or the params.
         facts.poisoned.addAll(spans.droppedNames);
@@ -2041,6 +2045,7 @@ final class Checker {
         }
         if (batched) throw p.pos().error("JSC0443", "a batched action cannot read another contract yet (ADR-0009, ADR-0011 D2)");
         if (paramsFields == null) {
+            unchecked("#params");   // recovering: params the parser dropped are not missing
             throw p.pos().error("JSC0444", "reads params." + p.reads() + ": the contract declares no params { … }; the instance it reads is a"
                     + " params field Instance<C> (ADR-0011 r2)");
         }
@@ -2069,6 +2074,7 @@ final class Checker {
     private void modField(String ref, Ty want, Pos p, String mod) {
         if (ref.startsWith("params.")) {
             String f = ref.substring("params.".length());
+            if (paramsFields == null) unchecked("#params");
             if (paramsFields == null) throw p.error("JSC0434", "'" + mod + " " + ref + "': the contract declares no params { … }");
             Ty t = paramsFields.get(f);
             if (t == null) throw p.error("JSC0310", "'" + mod + " " + ref + "': the params have no field " + f);
@@ -2405,6 +2411,7 @@ final class Checker {
                     // carries exactly these. Events are the contract's Event (each 'event X { … }').
                     effectAllowed(em.pos(), sc, "emit(…)");
                     if (!enums.containsKey(Ir.EVENT) || file.contract().events().isEmpty()) {
+                        unchecked("#event");   // recovering: events the parser dropped are not missing
                         throw em.pos().error("JSC0438", "the contract declares no events: declare one with event Name { field: Type } (ADR-0009 D5)");
                     }
                     Ty et = new Ty.EnumT(Ir.EVENT);
@@ -2595,7 +2602,9 @@ final class Checker {
             throw c.args().get(0).pos().error("JSC0505", "this threshold depends on the current call's validity window, which can invert "
                     + c.fn() + "(t): use a stored or given time (ADR-0018 D11)");
         }
-        return new Ir.TimePred(c.fn().equals("after"), t, Ty.BOOL, 0, c.pos());
+        Ir.Expr tp = new Ir.TimePred(c.fn().equals("after"), t, Ty.BOOL, 0, c.pos());
+        if (facts != null) facts.typed.put(c, tp);   // ADR-0021 D6: a require's after/before is checked here, not by expr
+        return tp;
     }
 
     // ------------------------------------------------------------------ expressions
@@ -2730,6 +2739,7 @@ final class Checker {
 
     /** {@code params.f} (M2b, ADR-0009 D1): in a method or invariant of a contract with params; never a time value. */
     private Ir.Expr paramsRef(Field f, Sc sc) {
+        if (paramsFields == null) unchecked("#params");
         if (paramsFields == null) throw f.pos().error("JSC0434", "the contract declares no params { … }, so there is no params." + f.name());
         if (sc.kind == null) {
             throw f.pos().error("JSC0433", "params is not available in a fn: pass params." + f.name() + " as an argument");

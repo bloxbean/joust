@@ -167,6 +167,23 @@ final class Parser {
      */
     private boolean eofReported;
 
+    /** The '{' of the innermost block or contract body being read (recovery reads the layout around it). */
+    private Tok openedAt;
+
+    /** Whether the '}' here starts its line deeper than the line of {@code open} (recovering: not {@code open}'s close). */
+    private boolean strayClose(Tok open) {
+        Tok t = peek();
+        boolean lineStart = i == 0 || toks.get(i - 1).line() < t.line();
+        return t.is("}") && lineStart && t.line() > open.line() && t.col() > indentOf(open);
+    }
+
+    /** The column of the first token on {@code t}'s line. */
+    private int indentOf(Tok t) {
+        int k = toks.indexOf(t);
+        while (k > 0 && toks.get(k - 1).line() == t.line()) k--;
+        return k < 0 ? t.col() : toks.get(k).col();
+    }
+
     /** The number of declarations when the current top-level member started (its own are dropped with it). */
     private int memberDecls = Integer.MAX_VALUE;
 
@@ -177,19 +194,24 @@ final class Parser {
         if (!(atEof && eofReported)) spans.errors.add(e);
         if (atEof) eofReported = true;
         spans.incomplete = true;
+        // Every name the dropped member declared (an import's names, an enum's variants) is unchecked from now on.
         for (int k = memberDecls; k < spans.decls.size(); k++) {
             Spans.Decl x = spans.decls.get(k);
-            if (x.name != null && x.parent == null) spans.droppedNames.add(x.name);
+            if (x.name != null && !statement) spans.droppedNames.add(x.name);
         }
         var beyond = spans.openBeyond(spansDepth);
-        for (Spans.Decl d : beyond) if (d.name != null) spans.droppedNames.add(d.name);
+        for (Spans.Decl d : beyond) {
+            if (d.name != null) spans.droppedNames.add(d.name);
+            spans.droppedNames.add("#" + d.kind);
+        }
         // A member dropped without a name (or the state, the params, the contract's head): every unknown name is unchecked.
         // A statement's error drops its member, which dropMember judges.
         if (!statement && (beyond.isEmpty() || beyond.get(0).name == null || beyond.get(0).kind.equals("state")
                 || beyond.get(0).kind.equals("params") || beyond.get(0).kind.equals("contract"))) {
             spans.namelessDropped = true;
         }
-        spans.unwind(spansDepth, toks.get(Math.max(i - 1, 0)));
+        // A member cut short ends with the token the error was found at, so the error lies inside it.
+        spans.unwind(spansDepth, peek().kind() == K.EOF ? toks.get(Math.max(i - 1, 0)) : peek());
         depth = nesting;
         int d = 0;
         for (int k = from; k < i; k++) {
@@ -197,10 +219,28 @@ final class Parser {
             else if (toks.get(k).is("}")) d = Math.max(0, d - 1);
         }
         boolean moved = i > from;
+        boolean first = true;
         while (peek().kind() != K.EOF) {
             Tok t = peek();
+            if (statement && t.is("}") && d == 0) {
+                // In a block, a '}' that does not start its line and is followed by a token on a later line closed something
+                // of the broken statement (an object whose '{' went wrong), not the block; so is a stray '}' the error was
+                // found at. A '}' that starts its line, or is followed on its line ({ return x } }), closes the block.
+                boolean lineStart = i == 0 || toks.get(i - 1).line() < t.line();
+                boolean followedOnLine = peek(1).line() == t.line() && peek(1).kind() != K.EOF;
+                // A '}' that starts its line deeper than the line that opened the block closes something inside it.
+                boolean deeper = lineStart && openedAt != null && t.col() > indentOf(openedAt);
+                boolean own = !lineStart && (first || !followedOnLine) || deeper;
+                if (!own) return;
+                i++;
+                moved = true;
+                first = false;
+                continue;
+            }
+            first = false;
             if (moved && d == 0) {
-                if (t.kind() == K.IDENT && sync.contains(t.text()) && (!statement || startsLine())) return;
+                // A keyword resumes only at the start of its line (`import contract { … }` holds `contract`, a lambda `fn`…).
+                if (t.kind() == K.IDENT && sync.contains(t.text()) && startsLine()) return;
                 if (statement && t.is(";")) {
                     i++;
                     return;
@@ -209,7 +249,14 @@ final class Parser {
             if (t.is("{")) d++;
             else if (t.is("}")) {
                 if (d == 0) {
-                    if (stopAtClose) return;
+                    // Among a contract's members, a '}' followed by a member keyword on a later line is the broken member's
+                    // own (its '{' is what went wrong), not the contract's: it is skipped.
+                    Tok next = peek(1);
+                    boolean lineStart = i == 0 || toks.get(i - 1).line() < t.line();
+                    boolean own = !statement && stopAtClose && (next.line() > t.line()
+                            && (next.kind() == K.IDENT && MEMBER_SYNC.contains(next.text()) || next.is("}"))
+                            || lineStart && openedAt != null && t.col() > indentOf(openedAt));
+                    if (stopAtClose && !own) return;
                 } else d--;
             }
             i++;
@@ -221,6 +268,7 @@ final class Parser {
     private void dropMember(int at) {
         spans.incomplete = true;
         Spans.Decl d = at < spans.decls.size() ? spans.decls.get(at) : null;
+        if (d != null) spans.droppedNames.add("#" + d.kind);
         if (d == null || d.name == null || d.kind.equals("state") || d.kind.equals("params") || d.kind.equals("contract")) spans.namelessDropped = true;
         else spans.droppedNames.add(d.name);
     }
@@ -293,6 +341,44 @@ final class Parser {
      * so their type names start constructors here. Only top-level {@code import} declarations count; a malformed one is
      * reported as the parse would report it.
      */
+    /**
+     * ADR-0021 D5 (M5b): the imports the recovering mode can read: each one that parses (a broken one is skipped, and the
+     * main parse reports it), from tokens lexed with recovery.
+     */
+    static List<Import> importsRecovering(String src) {
+        var toks = Lexer.lex(src, null, new ArrayList<>());
+        var out = new ArrayList<Import>();
+        int depth = 0;
+        for (int k = 0; k < toks.size(); k++) {
+            Tok t = toks.get(k);
+            if (t.is("{") || t.is("(") || t.is("[")) depth++;
+            else if (t.is("}") || t.is(")") || t.is("]")) depth = Math.max(0, depth - 1);
+            else if (depth == 0 && t.is("import") && t.kind() != K.STRING) {
+                // Leniently: `import [contract] { names… } from "spec"`, whatever else is broken in it.
+                int j = k + 1;
+                boolean contract = j < toks.size() && toks.get(j).is("contract");
+                if (contract) j++;
+                if (j >= toks.size() || !toks.get(j).is("{")) continue;
+                var names = new ArrayList<String>();
+                j++;
+                while (j < toks.size() && !toks.get(j).is("}") && toks.get(j).kind() != K.EOF && toks.get(j).line() - t.line() < 50) {
+                    if (toks.get(j).kind() == K.IDENT) names.add(toks.get(j).text());
+                    j++;
+                }
+                if (j + 1 < toks.size() && toks.get(j).is("}") && !names.isEmpty()) {
+                    // The module string, a token or two after the '}' (a missing or mangled 'from' is the main parse's error).
+                    int at = j + 1;
+                    while (at < Math.min(toks.size(), j + 4) && toks.get(at).kind() != K.STRING) at++;
+                    if (at < toks.size() && toks.get(at).kind() == K.STRING) {
+                        out.add(new Import(names, toks.get(at).text(), t.pos(), contract));
+                        k = at;
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
     static List<Import> imports(String src) {
         var toks = Lexer.lex(src);
         var out = new ArrayList<Import>();
@@ -727,11 +813,21 @@ final class Parser {
         var fns = new ArrayList<Fn>();
         var types = new ArrayList<TypeDecl>();
         var enums = new ArrayList<EnumDecl>();
-        while (!at("}")) {
+        int contractErrors = errors();
+        openedAt = clb;
+        while (!at("}") || recover && errors() > contractErrors && strayClose(clb)) {
+            if (at("}")) {
+                i++;
+                continue;
+            }
+            // Recovering: the end of the file after an error inside the contract is that error's consequence, no error
+            // of its own (the build stopped at the first).
+            if (recover && peek().kind() == K.EOF && errors() > contractErrors) break;
             Tok t = peek();
             int[] member = startMember();
             int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth, errs = errors();
             int declsBefore = spans == null ? 0 : spans.decls.size();
+            memberDecls = declsBefore;
             int[] sizes = {methods.size(), fns.size(), types.size(), enums.size(), events.size(), invariants.size()};
             try {
             if (t.is("state")) {
@@ -939,12 +1035,29 @@ final class Parser {
 
     private Block blockBody() {
         Tok lb = expect("{");
+        Tok outerOpen = openedAt;
+        openedAt = lb;
+        try {
+            return blockBody(lb);
+        } finally {
+            openedAt = outerOpen;
+        }
+    }
+
+    private Block blockBody(Tok lb) {
         Pos p = lb.pos();
         var stmts = new ArrayList<Stmt>();
         Expr result = null;
         Pos returnPos = null;
         var consts = new ArrayList<Spans.Decl>();
-        while (!at("}")) {
+        int blockErrors = errors();
+        while (!at("}") || recover && errors() > blockErrors && strayClose(lb)) {
+            if (at("}")) {
+                // After an error in this block: a '}' deeper than the block's own line closes something the error broke.
+                i++;
+                continue;
+            }
+            if (recover && peek().kind() == K.EOF && (errors() > blockErrors || eofReported)) break;
             int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth;
             try {
             if (result != null) throw result.pos().error("JSC0127", "an expression's value is unused here: only the last one is the block's value");

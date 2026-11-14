@@ -93,6 +93,14 @@ public final class JoustToolchainWasm {
      */
     public record AnalyzeResult(boolean ok, String model, String error) {}
 
+    /** ADR-0021 M5b: {@code lang.std} takes nothing; {@code lang.lower} the file as {@code lang.analyze} does. */
+    public record StdRequest() {}
+
+    public record LowerRequest(String file, String source, String id, Map<String, String> files) {}
+
+    /** The catalogue's or the lowering's JSON, or {@code ok} false and the failure (never a front-end diagnostic). */
+    public record JsonResult(boolean ok, String json, String error) {}
+
     /** {@code lang.info} takes nothing. */
     public record LangInfoRequest() {}
 
@@ -109,7 +117,28 @@ public final class JoustToolchainWasm {
         // engine operation is named group.operation (julc-wasm's ApiRegistry): lang.info and lang.analyze.
         api.add("lang.info", LangInfoRequest.class, JoustToolchainWasm::langInfo);
         api.add("lang.analyze", AnalyzeRequest.class, JoustToolchainWasm::analyze);
+        // M5b: the catalogue hover and completion read, and the lowering the generated-Java view shows (on request only).
+        api.add("lang.std", StdRequest.class, JoustToolchainWasm::std);
+        api.add("lang.lower", LowerRequest.class, JoustToolchainWasm::lower);
         JsApi.install(api, new EngineInfo("joustToolchain", "joust-toolchain", VERSION, List.of("vm", "debug", "joust", "lang")));
+    }
+
+    static ServiceResult<JsonResult> std(StdRequest request) {
+        try {
+            return ServiceResult.ok(new JsonResult(true, org.julclang.state.dsl.v2.JscLang.stdJson(), null));
+        } catch (Throwable t) {
+            return ServiceResult.ok(new JsonResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
+        }
+    }
+
+    static ServiceResult<JsonResult> lower(LowerRequest request) {
+        try {
+            String file = request.file() == null ? "File.jsc" : request.file();
+            return ServiceResult.ok(new JsonResult(true, org.julclang.state.dsl.v2.JscLang.lowerJson(request.source(), file, request.id(),
+                    request.files()), null));
+        } catch (Throwable t) {
+            return ServiceResult.ok(new JsonResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
+        }
     }
 
     static ServiceResult<LangInfo> langInfo(LangInfoRequest request) {
