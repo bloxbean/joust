@@ -18,8 +18,8 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 `.jsc` 2 is a preview: the core language of milestone M1, M2a's values and native assets (`Value`, `Address`,
 `Credential`, `funds`, `send`, `mint`, `burn`, `accept`), and M2b's params, invariants, events, `quorum` and
 `authorized`, M2c's composition (other contracts' instances and states, deposits made and received, send datums,
-stored values), and `.jsc` and Java libraries (M4, below). M3 (owned and keyed objects, purposes) still needs
-[Java](/languages/java/).
+stored values), `.jsc` and Java libraries (M4, below), and M3's owned and keyed objects, script purposes and
+migration.
 </Aside>
 
 ## Lexical rules
@@ -91,6 +91,7 @@ Members may come in any order. A block's last expression is its value; a stateme
 | `maxDatumBytes` | `int maxDatumBytes()` | `512` | Largest serialised state the validator accepts |
 | `maxValidityMs` | `long maxValidityMs()` | `3600000` | Widest validity interval a call that reads the transaction may use |
 | `assetSlots` | `int assetSlots()` | `4` when a method moves native assets, else `0` | Native assets the state UTxO's deposit is sized for (ADR-0007 D2); 0 to 64 |
+| `stakeSelf` | `boolean stakeSelf() = true` | off | M3c (ADR-0010 D2): a flag, written without a value (`JSC1301`). The state's address is staked to the contract's own script, so its funds earn rewards; needs a `withdraw` and a `certify` handler (`JSC1302`) |
 
 Values are non-negative integer literals (`ada` allowed); anything else is `JSC0402` or `JSC0403`.
 
@@ -163,6 +164,11 @@ hash, and every `Address` the ledger's encoding with a well-formed payment crede
 | `owned destroy T.m(params) mods { … }` | `@OwnedDestroy public static JulcList<Payout> m(T s__, …, Ctx ctx)` (or `Settled`) | pays out what the object holds (`JSC0409`) |
 | `owned T keyed by f (opts) { … }` | `@Owned(key = "f", maxKeyBytes = n, …) public record T(...)` | M3b (ADR-0016): a keyed type, one object per key per instance, in a sorted on-chain list. `f` is a `Bytes`, `Key` or `Hash` field (`JSC1241`); the options are `signed`, `maxKeyBytes = 1…64` (default 32; at least 28 with `signed`, `JSC1242`), `linkCooldownMs = 0 or 60000…3600000` (default 60,000) and `linkWindowMs = 20000…min(900000, maxValidityMs)` (default min(120,000, maxValidityMs), `JSC1243`) |
 | `owned destroy T.m() only f retire { … }` | `@OwnedDestroy(retire = true)` | M3b: a keyed type's retiring exit, its escape hatch (`JSC1245`): the node stays retired, its key taken for good; signed by `only f` and needing nobody else |
+| `withdraw m(amount: Int, args…) aud { … }` | `@Withdraw public static JulcList<Send> m(Config params__, BigInteger amount, args…[, Ctx ctx])` | M3c (ADR-0010): the contract's rewards withdrawn; its only effect is `send`, and its sends allocate the amount exactly in lovelace. `aud` is `quorum` or `authorized` over `params.*` (`JSC1312`, `JSC1313`); no state (`JSC1318`), no `received` or `balance` (`JSC1315`); its redeemer is `Rewards(74, amount, args…)` |
+| `certify m(cert: TxCert) aud = expr` | `@Certify public static boolean m(Config params__, TxCert cert)` | M3c: decides a certificate the processor's filter admits (a script credential's registration, delegation, DRep registration or update); a Bool, no effects (`JSC1319`, `JSC1341`) |
+| `vote m(voter: Voter, action: GovernanceActionId, vote: Vote) aud = expr` | `@Votes public static boolean m(Config params__, Voter voter, GovernanceActionId action, Vote vote)` | M3c: runs once per vote the voter (a script DRep or committee member) casts in the transaction; all must be allowed |
+| `propose m(p: ProposalProcedure) = expr` | `@Propose public static boolean m(Config params__, ProposalProcedure p)` | M3c: a guardrail on a proposal; no modifiers (`JSC1313`) |
+| `init migrate from params.p(old: V.State, args…) { … }` | `@Migrate(from = "params.p") public static State migrate(Config params__, V.State old, args…[, Ctx ctx])` | M3c (ADR-0011 D4): adopts an instance of the previous version `V` (an imported contract), whose policy `params.p` pins (a `Hash` or `Bytes`, `JSC1335`). No modifiers (`JSC1339`), nothing received and no effects (`JSC1338`): the new instance holds exactly the old one's lovelace. `old` is a checked input. One per contract; not beside owned objects, BigMap state or native assets (`JSC1334`) |
 | `import contract { C } from "./C.jsc"` | `import <C's package>.C;` | M2c (ADR-0018 D9): another `.jsc` contract of the build, checked on its own; its state is `C.State` and its instances `Instance<C>`. One name, the file's contract (`JSC0740`, `JSC0742`); no cycle (`JSC0743`); not twice, nor its name for another declaration (`JSC0744`); `java:` contracts not yet (`JSC0741`). Not yet: a contract whose state, declared types, events or memos use a `.jsc` or `java:` library's type cannot be imported (`JSC0746`); a library type in its methods' parameters and results is fine. |
 
 Method names are unique, and a `fn` may not share one (`JSC0202`); nor may an invariant (`JSC0224`). A method gets
@@ -246,6 +252,42 @@ contract Registry(maxDatumBytes = 384) {
 }
 ```
 
+**Script purposes** (ADR-0010, M3c). A handler runs when the contract's script is used for a purpose other than a
+spend or a mint: `withdraw` for its own staking credential's rewards, `certify` for a certificate, `vote` for its votes
+as a DRep or committee member, `propose` for a proposal. No instance is spent, so a handler reads only its parameters,
+the params and (a withdraw handler) the transaction, and the params say who may: `quorum params.council params.n` or
+`authorized params.governor`. The purposes' data is the ledger's: `TxCert`, `Voter`, `Vote`, `GovernanceActionId`,
+`ProposalProcedure`, `GovernanceAction` and the types they hold, with JuLC's constructors and fields, read by a field
+or an exhaustive `match`; never stored, passed by a caller, encoded or compared (`JSC1320`–`JSC1325`). A
+`LedgerMap<Credential, Int>` (a treasury withdrawal's, a committee update's) is read-only: `size`, `keys`, `values`,
+`get`, `has`, `any`, `all`, `fold`. `std/certs` holds the exact certificate tests.
+
+```text
+contract StakedVault(stakeSelf) {
+  params { council: List<Key>, quorum: Int, pool: Bytes, payee: Key, cap: Int }
+  state { deposits: Int }
+  init() payable { return { deposits: received } }
+  withdraw collect(amount: Int) quorum params.council params.quorum {
+    if amount > 0 { send(wallet(params.payee), Value.lovelace(amount)) }
+  }
+  certify certificate(cert: TxCert) quorum params.council params.quorum =
+    isRegistration(cert) || delegatesOnlyTo(cert, params.pool)
+  vote vote(voter: Voter, action: GovernanceActionId, choice: Vote) quorum params.council params.quorum = true
+  propose proposal(p: ProposalProcedure) = match p.governanceAction {
+    TreasuryWithdrawals { withdrawals } => withdrawals.values.sum() <= params.cap,
+    _ => true
+  }
+}
+```
+
+**Migration** (ADR-0011 D4, M3c). An instance moves into its successor version in one transaction: the old version's
+`destroy upgrade() only admin migrates to successor { }` (a `Bytes` or `Hash` state field the admin sets; never a
+params field, `JSC1331`) burns its token and moves its whole value, and the new version's
+`init migrate from params.previous(old: CounterV1.State) { … }` mints the new instance for it, from the old state. A
+migrating destroy has no effects (`JSC1332`) and an audience (`JSC1333`). An action that writes the successor field
+warns (`JSC9014`: it can redirect the migration after users relied on it) unless it requires the field unset,
+`require(successor == #, "the successor is set once")`, which fixes it once.
+
 **Invariants** (ADR-0009 D4) are checked by the validator on every state it accepts as an output (a creation and every
 action; a destroy has none), and by the runtime before it submits. A state that breaks one can only be destroyed.
 
@@ -264,6 +306,7 @@ action; a destroy has none), and by the runtime before it submits. A state that 
 | `authorized c` | `@AuthorizedBy("c")` | `action`, `destroy` | `Credential`, a state field or `params.f` |
 | `receives`, `receives T` | `@Receives`, and the method takes `Funds` | `action` (`JSC0447`), not `batched` | `T`: the type of the deposits' memos, each a checked input |
 | `retire` | `@OwnedDestroy(retire = true)` | an owned destroy of a keyed type (`JSC1245`) | |
+| `migrates to f` | `@MigrateTo("f")` | an instance `destroy` (`JSC1330`) | `Bytes` or `Hash`, a state field, not a time value (`JSC1330`, `JSC1331`) |
 
 `quorum k t` (ADR-0009 D2) holds when at least `t ≥ 1` of the transaction's signatories are in `k`, read from the
 input state, never the result. Every state the validator accepts as an output keeps each state quorum *well formed*

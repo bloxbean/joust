@@ -262,6 +262,8 @@ class JscV2M3cFourWayTest {
         assertTrue(f.lastRefusal.endsWith(":too late to withdraw"), f.lastRefusal);
         ok(p.as(List.of(GOV), List.of()).check("take", List.of(ada(10), Bytes.of(B), ada(1)), FourWay.tx(GOV, 0, 0, DEADLINE.subtract(n(60_000)), DEADLINE)));
         p.as(List.of(GOV), List.of()).refused("input:to", "take", List.of(ada(10), Bytes.of(new byte[27]), ada(1)), byGov);
+        // I37: the sends allocate the amount exactly: a one-lovelace tip is not sent, so the allocation is short (purpose:withdraw).
+        p.as(List.of(GOV), List.of()).refused("purpose:withdraw", "take", List.of(ada(10), Bytes.of(B), BigInteger.ONE), byGov);
         p.as(List.of(EVE), List.of()).refused("modifier:authorized params.gov", "take", List.of(ada(10), Bytes.of(B), ada(1)), at(EVE, 0, 0));
         p.as(List.of(GOV), List.of()).withdrawMutants("take", List.of(ada(10), Bytes.of(B), ada(1)), byGov);
         // K41: the withdrawal's Ctx: its balance is the amount, received 0, the caller signs (each one step away).

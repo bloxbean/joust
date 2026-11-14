@@ -30,7 +30,8 @@ contract Steward {
     if amount - tip > 0 {
       send(wallet(to), Value.lovelace(amount - tip))
     }
-    if tip > 0 {
+    // (Coverage of purpose:withdraw: a one-lovelace tip makes no output, so its allocation is short and refused.)
+    if tip > 1 {
       send(wallet(params.payee), Value.lovelace(tip))
     }
   }
