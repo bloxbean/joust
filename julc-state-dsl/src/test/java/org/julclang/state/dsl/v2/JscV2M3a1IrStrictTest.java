@@ -200,7 +200,7 @@ class JscV2M3a1IrStrictTest {
     @Test
     @SuppressWarnings("unchecked")
     void reviewRound2_mutants_areRefused() throws Exception {
-        {   // M3a2's forms: refused while the readers' stage is 1, read from M3a2 (stage 2)
+        {   // M3a2's forms: refused while the readers' stage is 1 (complete programs, refused by the stage alone), read from M3a2
             Mutant m3a2 = IrJson.OWNED_STAGE < 2 ? JscV2M3a1IrStrictTest::refused : (m, f) -> reads(m);
             m3a2.apply(ir -> {
                 var records = (List<Object>) ir.get("records");
