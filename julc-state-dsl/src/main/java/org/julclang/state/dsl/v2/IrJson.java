@@ -895,6 +895,13 @@ final class IrJson {
             // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy
             // without shared, before or after, so no object is trapped behind its instance or a deadline.
             for (String o : owned) {
+                // #101 review F2, M3a3 (JSC1214): a move of a type needs an admits action for it, and the reverse.
+                boolean moves = methods.stream().anyMatch(m -> o.equals(m.on()) && m.owned() != null && m.owned().into() != null);
+                boolean admits = methods.stream().anyMatch(m -> o.equals(m.admits()));
+                if (moves != admits) {
+                    throw new IllegalArgumentException(moves ? "a move of " + o + " needs an admits action for it (JSC1214)"
+                            : "admits " + o + ", but no owned action moves a " + o + " (JSC1214)");
+                }
                 if (methods.stream().noneMatch(m -> m.kind() == Ir.Kind.OWNED_INIT && o.equals(m.on()))) {
                     throw new IllegalArgumentException("the owned type " + o + " has no owned init (JSC1208)");
                 }
@@ -1089,7 +1096,7 @@ final class IrJson {
          * 2: M3a2's native assets in owned methods and payable owned destroys; 3: M3a3's moves and invariants by type). A
          * program with a later part's shape is refused, as the checker would refuse its source.
          */
-        static final int OWNED_STAGE = 2;
+        static final int OWNED_STAGE = 3;
 
         /** An owned type's escape hatch (JSC1209): an owned destroy of it without shared, before or after. */
         static boolean escapeHatch(Ir.Method m, String type) {

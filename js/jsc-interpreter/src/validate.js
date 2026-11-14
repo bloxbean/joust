@@ -109,7 +109,7 @@ const MAP_ARITY = { get: 1, has: 1, set: 2, delete: 1, size: 0, keys: 0, values:
 const KINDS = set('init', 'action', 'destroy', 'view', 'ownedInit', 'ownedAction', 'ownedDestroy');
 // #101 review F2: the parts of M3a the checker produces so far (1: owned objects of one type with shared reads; 2: native
 // assets in owned methods, payable owned destroys; 3: moves and invariants by type), as the Java reader's OWNED_STAGE.
-const OWNED_STAGE = 2;
+const OWNED_STAGE = 3;
 
 /** Whether raw IR holds a statement or expression node of one of the names, at any depth. */
 function hasNode(json, names) {
@@ -545,6 +545,10 @@ export function validate(p) {
   // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy without
   // shared, before or after.
   for (const o of owned) {
+    // #101 review F2, M3a3 (JSC1214): a move of a type needs an admits action for it, and the reverse.
+    const moves = p.methods.some((m) => m.on === o && 'into' in m);
+    const admits = p.methods.some((m) => m.mods.some((x) => x && x.name === 'admits' && x.field === o));
+    if (moves !== admits) fail('owned', moves ? `a move of ${o} needs an admits action for it (JSC1214)` : `admits ${o}, but no owned action moves a ${o} (JSC1214)`);
     if (!p.methods.some((m) => m.kind === 'ownedInit' && m.on === o)) fail('owned', `the owned type ${o} has no owned init (JSC1208)`);
     if (!p.methods.some((m) => m.kind === 'ownedDestroy' && m.on === o && !('shared' in m)
       && !m.mods.some((x) => x && (x.name === 'before' || x.name === 'after')))) {

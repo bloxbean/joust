@@ -34,8 +34,8 @@ test('owned mutants are refused (#101 review F2)', () => {
   refused((ir) => method(ir, 'deposit').mods.push({ name: 'receives' }), 'an owned method receives no deposits');
   refused((ir) => { method(ir, 'close').shared = local(900, 'bank', 'State'); }, 'has no escape hatch');
   refused((ir) => method(ir, 'close').mods.push({ name: 'before', field: 'saved' }), 'has no escape hatch');
-  refused((ir) => { method(ir, 'withdraw').into = local(901, 'dest', 'State'); }, 'moves (into, admits) are not produced yet');
-  refused((ir) => method(ir, 'setPaused').mods.push({ name: 'admits', field: 'Account' }), 'moves (into, admits) are not produced yet');
+  // From M3a3 (OWNED_STAGE 3) moves are produced: a move without its admits, or the reverse, is JSC1214's.
+  refused((ir) => { method(ir, 'withdraw').into = local(901, 'dest', 'State'); }, 'needs an admits action for it');
   refused((ir) => { method(ir, 'deposit').shared = local(902, 'bank', 'Account'); }, 'the shared state is a State');
   reads((ir) => {
     const held = { node: 'FundsRef', field: 'held', type: 'Value', taint: 0, at: [1, 1] };
@@ -43,4 +43,16 @@ test('owned mutants are refused (#101 review F2)', () => {
     method(ir, 'deposit').body.stmts.unshift({ stmt: 'Require', cond, message: 'x', at: [1, 1] });
   });
   refused((ir) => { ir.methods = ir.methods.filter((m) => m.name !== 'open'); }, 'has no owned init');
+});
+
+test('a move and its admits come together (M3a3, JSC1214)', () => {
+  const GUILD = readFileSync(new URL('./fixtures/Guild.ir.json', import.meta.url), 'utf8');
+  load(GUILD);
+  const refusedIn = (src, mutate, fragment) => {
+    const ir = JSON.parse(src);
+    mutate(ir);
+    assert.throws(() => load(JSON.stringify(ir)), (e) => e.message.includes(fragment) || assert.fail(`'${e.message}' should mention '${fragment}'`));
+  };
+  // admit Hero with no move of a Hero left (transfer without its into).
+  refusedIn(GUILD, (ir) => { const t = method(ir, 'transfer'); delete t.into; }, 'but no owned action moves');
 });

@@ -136,14 +136,6 @@ final class Checker {
      */
     private String inputRec = "State";
 
-    /** #101 review F3: whether owned actions and destroys may take, send, mint or deposit native assets (M3a2). */
-    private static final boolean ASSETS_IN_OWNED = true;   // M3a2
-
-    /**
-     * M3a2: what M3a3 builds is refused here (JSC1215): moves, admits and invariants by type. (M3a1 refused several owned
-     * types and BigMaps in owned types too; M3a2 builds them.)
-     */
-    private static final boolean NOT_YET = true;
 
     /** The fields of the method's input ({@link #inputRec}). */
     private LinkedHashMap<String, Ty> inFields() {
@@ -1752,9 +1744,6 @@ final class Checker {
      * reads are visible on chain), and never a time value (D11): whether a state is acceptable would move with a window.
      */
     private Ir.Invariant invariant(Syntax.InvariantDecl inv, Contract c) {
-        if (inv.on() != null && NOT_YET) {
-            throw inv.pos().error("JSC1215", "an owned type's invariant is not supported yet: invariants by type come in M3a3 (ADR-0012 D1)");
-        }
         if (inv.on() != null) {
             // M3a (ADR-0012 D1): invariant T.name = e, over an object of the owned type T, checked on every T a call makes
             // or continues; never over BigMaps (on chain only the opened reads are visible: the processor's rule).
@@ -1951,16 +1940,6 @@ final class Checker {
                     + " supported yet (the processor reads the state's type from what @Init returns); drop payable, or create the"
                     + " instance and take the assets in an action");
         }
-        // #101 review F3: native assets in an owned action or destroy come with M3a2, which specifies τ.funds for an object
-        // (what it holds, what the call offers, its own token) and tests each effect on every leg. Until then they are
-        // refused (an owned init's accept is JSC0426 above).
-        if (ik.owned() && !ASSETS_IN_OWNED && (usesFunds(m.body()) || fx.contains("send") || fx.contains("mint") || fx.contains("accept")
-                || fx.contains("deposit"))) {
-            Pos at = fx.contains("send") || fx.contains("mint") || fx.contains("accept") || fx.contains("deposit")
-                    ? firstEffect(m.body(), Set.of("accept", "send", "mint", "deposit")) : m.pos();
-            throw at.error("JSC1215", "native assets in an owned method (accept, send, mint, burn, deposit, funds) are not supported yet: they"
-                    + " come in M3a2, which specifies funds for an object (ADR-0012 D2)");
-        }
         if (fx.contains("accept") && !payable) {
             throw firstEffect(m.body(), Set.of("accept")).error("JSC0422", "accept states the native assets a method takes in, so the method must"
                     + " be payable (ADR-0007 D1)");
@@ -2087,7 +2066,6 @@ final class Checker {
                     }
                 }
                 case "admits" -> {
-                    if (NOT_YET) throw mod.pos().error("JSC1215", "admits is not supported yet: moves between instances come in M3a3 (ADR-0012 D3)");
                     // M3a (ADR-0012 D3): @Admits("T"): objects of the owned type T arrive through this action, spent in the
                     // same transaction with a move whose destination is this instance. The contract-level rules (a move of
                     // T exists, one admits per type at least) are checked with the contract (ownedRules).
@@ -2130,9 +2108,6 @@ final class Checker {
         for (Mod mod : m.mods()) if (mod.name().equals("admits")) admits = mod.arg();
         for (int pi = 0; pi < m.params().size(); pi++) {
             Param p = m.params().get(pi);
-            if ("into".equals(p.role()) && NOT_YET) {
-                throw p.pos().error("JSC1215", "an into parameter is not supported yet: moves between instances come in M3a3 (ADR-0012 D3)");
-            }
             if (p.role() != null) {
                 // M3a (ADR-0003 D1, ADR-0012 D3): name: shared, the instance's state by reference; name: into, a move's
                 // destination state. Neither is a redeemer field; both come first, shared before into (the processor's order).
@@ -2162,6 +2137,13 @@ final class Checker {
             }
             if (admits != null && pi == 1 && p.type() != null && p.type().args().isEmpty() && p.type().name().equals(admits)) {
                 // M3a (ADR-0012 r4): the arriving object, as its input holds it before the move: not a redeemer field.
+                // #107 review C3: an object that keeps a BigMap cannot be passed (its map reads would be unproven, the
+                // processor refuses it); such a type is admitted by its id alone.
+                if (records.get(admits).values().stream().anyMatch(ft -> ft instanceof Ty.BigMapT)) {
+                    throw p.pos().error("JSC1212", "the arriving " + admits + " keeps a BigMap, so an admits action cannot take it as a parameter"
+                            + " (its map reads would be proved by nobody, ADR-0014): admit it by its id alone, action " + m.name() + "(id: Bytes)"
+                            + " admits " + admits);
+                }
                 if (VALIDATOR_LOCALS.contains(p.name())) {
                     throw p.pos().error("JSC0216", "'" + p.name() + "' is a name the generated validator uses for its own values; rename the parameter");
                 }

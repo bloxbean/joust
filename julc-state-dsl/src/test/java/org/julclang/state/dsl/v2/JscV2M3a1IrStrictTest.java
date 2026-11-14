@@ -91,10 +91,11 @@ class JscV2M3a1IrStrictTest {
         refused(ir -> method(ir, "close").put("shared", local(900, "bank", "State")), "has no escape hatch");
         // before on the only escape hatch: it could expire (JSC1209, #101 review S3).
         refused(ir -> mods(method(ir, "close")).add(mod("before", "saved")), "has no escape hatch");
-        // into on an owned action, with no admits partner (M3a3).
-        refused(ir -> method(ir, "withdraw").put("into", local(901, "dest", "State")), "moves (into, admits) are not produced yet");
-        // admits on an instance action (M3a3).
-        refused(ir -> mods(method(ir, "setPaused")).add(mod("admits", "Account")), "moves (into, admits) are not produced yet");
+        // into on an owned action, with no admits partner, and admits with no move (M3a3: refused until then; JSC1214 from it).
+        boolean moves = IrJson.OWNED_STAGE >= 3;
+        refused(ir -> method(ir, "withdraw").put("into", local(901, "dest", "State")),
+                moves ? "needs an admits action for it" : "moves (into, admits) are not produced yet");
+        if (!moves) refused(ir -> mods(method(ir, "setPaused")).add(mod("admits", "Account")), "moves (into, admits) are not produced yet");
         // a shared local that is not the instance's State.
         refused(ir -> method(ir, "deposit").put("shared", local(902, "bank", "Account")), "the shared state is a State");
         // native assets in an owned action (M3a2): a require reading funds.held (refused until M3a2; read from it).
@@ -117,6 +118,19 @@ class JscV2M3a1IrStrictTest {
             ms.removeIf(m -> "open".equals(((Map<?, ?>) m).get("name")));
             ir.put("methods", ms);
         }, "has no owned init");
+    }
+
+    /** M3a3 (JSC1214): admits of a type with no move of it (Guild's transfer without its into) is refused. */
+    @Test
+    void aMoveAndItsAdmits_comeTogether() throws Exception {
+        if (IrJson.OWNED_STAGE < 3) return;
+        String guild = JscV2.lower(Files.readString(Path.of("../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Guild.jsc")), "Guild.jsc").irJson();
+        @SuppressWarnings("unchecked")
+        var ir = (Map<String, Object>) AbiCheck.Json.parseStrict(guild);
+        IrJson.read(write(ir));
+        method(ir, "transfer").remove("into");
+        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(write(ir)));
+        assertTrue(e.getMessage().contains("but no owned action moves"), e.getMessage());
     }
 
     // ------------------------------------------------------------------ a minimal JSON writer (the parser's inverse)
