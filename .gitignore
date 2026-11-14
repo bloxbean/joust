@@ -11,3 +11,7 @@ node_modules/
 
 ### Jazzer: the corpus generated while fuzzing (gradle/jazzer-fuzz.gradle) ###
 .cifuzz-corpus/
+
+### Mutation testing (gradle/pitest.gradle, js/mutation): reports and Stryker sandboxes ###
+js/joust/reports/
+.stryker-tmp/
