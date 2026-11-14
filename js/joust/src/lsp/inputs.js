@@ -177,9 +177,11 @@ export function createReader(fs = { ...realFs, descriptorPath }) {
    * M5b (D4, D4b): the files under the directory `rel` inside the folder whose names end in one of `exts`, as
    * '/'-separated paths relative to that directory, at most `max` of them (more: `{ error: 'too-many' }`). The directory
    * itself is resolved under the rules above; below it no symlink is followed (D4b: directory symlinks are not followed
-   * when enumerating; a file symlink is left out too, since reading it would follow it).
+   * when enumerating; a file symlink is left out too, since reading it would follow it). The build's walk rules (#92 S12,
+   * #98 S3, r7a): `kind` 'npm' (joust build's sources()) skips node_modules and dot-directories, dot-files included;
+   * 'gradle' (JscMain's Files.walk) skips no name.
    */
-  async function list(folder, rel, { exts = ['.jsc', '.java'], max = 500, base = [] } = {}) {
+  async function list(folder, rel, { exts = ['.jsc', '.java'], max = 500, base = [], kind = 'npm' } = {}) {
     const r = await resolveIn(folder, rel, { base });
     if (r.error) return r;
     const out = [];
@@ -193,9 +195,10 @@ export function createReader(fs = { ...realFs, descriptorPath }) {
       }
       entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const e of entries) {
-        if (e.name.startsWith('.')) continue;
-        if (e.isDirectory()) await walk(dir, [...prefix, e.name], depth + 1);
-        else if (e.isFile() && exts.some((x) => e.name.endsWith(x))) {
+        if (e.isDirectory()) {
+          if (kind !== 'gradle' && (e.name === 'node_modules' || e.name.startsWith('.'))) continue;
+          await walk(dir, [...prefix, e.name], depth + 1);
+        } else if (e.isFile() && exts.some((x) => e.name.endsWith(x))) {
           out.push([...prefix, e.name].join('/'));
           if (out.length > max) throw Object.assign(new Error('too many files'), { tooMany: true });
         }

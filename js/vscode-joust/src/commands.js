@@ -102,7 +102,10 @@ function register(vscode, ctx, getClient) {
       vscode.window.showInformationMessage('JOUST: no invisible or control characters in this file.');
       return { applied: false, occurrences: [] };
     }
-    const list = r.occurrences.map((o) => `${o.line}:${o.col} ${o.char} (${o.code})`).join('\n');
+    // The modal lists the first 50 (all of them are removed); the server bounds one run (r.more: left for the next).
+    const shown = r.occurrences.slice(0, 50).map((o) => `${o.line}:${o.col} ${o.char} (${o.code})`);
+    const rest = r.occurrences.length - shown.length;
+    const list = shown.join('\n') + (rest > 0 ? `\n… and ${rest} more` : '') + (r.more > 0 ? `\n(${r.more} more after these: run the command again)` : '');
     const ok = args && 'confirm' in args ? args.confirm === true
       : (await vscode.window.showWarningMessage(`Remove ${r.occurrences.length} invisible or control character${r.occurrences.length === 1 ? '' : 's'}?`,
         { modal: true, detail: `Removing a character inside a string changes the string's content.\n\n${list}` }, 'Remove')) === 'Remove';
@@ -165,6 +168,21 @@ function register(vscode, ctx, getClient) {
         reject(err);
       });
     });
+  }
+
+  /** Whether the manifest at `rel` (inside the folder, no link followed out of it) now has SHA-256 `sha`. */
+  function manifestIs(folder, rel, sha) {
+    if (typeof rel !== 'string' || path.isAbsolute(rel)) return false;
+    try {
+      const root = fs.realpathSync.native(folder.uri.fsPath);
+      const file = fs.realpathSync.native(path.join(root, rel));
+      if (!file.startsWith(root + path.sep)) return false;
+      const st = fs.statSync(file);
+      if (!st.isFile() || st.size > 4 * 1024 * 1024) return false;
+      return require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex') === sha;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -258,10 +276,14 @@ function register(vscode, ctx, getClient) {
     const ok = args && 'confirm' in args ? args.confirm === true
       : (await vscode.window.showWarningMessage(`Accept the ABI change of ${name}?`, { modal: true, detail }, 'Accept')) === 'Accept';
     if (!ok) return { ran: true, accepted: false, reason: 'not confirmed', diff };
-    const accepted = await runTask(folder, 'accept abi', cmds.accept(name, diff.committed.sha256, diff.now.sha256));
-    if (accepted !== 0) vscode.window.showWarningMessage(`JOUST: the ABI change of ${name} was not accepted (see the task's output).`);
-    else vscode.window.showInformationMessage(`JOUST: accepted the ABI manifest of ${name} (${diff.path ?? ''}); review and commit it.`);
-    return { ran: true, accepted: accepted === 0, diff };
+    const code2 = await runTask(folder, 'accept abi', cmds.accept(name, diff.committed.sha256, diff.now.sha256));
+    // What was written decides, not the exit code alone (S5 on #99): the build can accept this manifest and still fail
+    // on another contract's. The manifest is read back at the path the diff named, inside the folder.
+    const written = manifestIs(folder, diff.path, diff.now.sha256);
+    if (written && code2 === 0) vscode.window.showInformationMessage(`JOUST: accepted the ABI manifest of ${name} (${diff.path}); review and commit it.`);
+    else if (written) vscode.window.showWarningMessage(`JOUST: accepted the ABI manifest of ${name} (${diff.path}), but the build reported other errors (see the task's output).`);
+    else vscode.window.showWarningMessage(`JOUST: the ABI change of ${name} was not accepted (see the task's output).`);
+    return { ran: true, accepted: written, code: code2, diff };
   }));
 }
 

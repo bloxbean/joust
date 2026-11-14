@@ -13,7 +13,7 @@ import v8 from 'node:v8';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { completion, importEdit, normalise } from '../../src/lsp/features.js';
+import { completion, importEdit, normalise, reconcile } from '../../src/lsp/features.js';
 import { hasExnref } from '../../src/lsp/worker.js';
 import { ENGINE, HAS_ENGINE } from './client.js';
 
@@ -80,4 +80,52 @@ test('every offered completion item, inserted at the corpus positions, adds no s
   console.log(`[completion] ${inserted} items inserted at ${positions} positions; ${failures.length} failures`);
   assert.deepEqual(failures.slice(0, 20), []);
   assert.ok(inserted > 500, `${inserted} insertions`);
+});
+
+// F1 on #99: inside a method that does not check (an unused const, a half-typed call, an unknown name: the method being
+// typed), completion keeps the method's context. The server answers from the last model without an error, reconciled
+// with the text (the labels are those of the valid file at that position); with no such model, from the broken model,
+// whose method context comes from the syntax (no name the valid file does not offer there; caller and state exactly
+// when the valid file offers them).
+test('inside a method with an error, completion offers what the valid file offers there (F1)', { skip, timeout: 600_000 }, async () => {
+  const api = await engine();
+  const analyse = (source, file) => normalise(JSON.parse(api.lang.analyze({ file, source }).model));
+  const std = JSON.parse(api.lang.std({}).json);
+  const BREAKS = [['an unused const', 'const unusedQ = 1'], ['a half-typed call', 'require('], ['an unknown name', 'require(nopeQ > 0, "x")']];
+  const labels = (items) => new Set(items.filter((i) => [5, 6, 20].includes(i.kind)).map((i) => i.label));
+  let positions = 0;
+  const failures = [];
+  for (const f of readdirSync(DSL).filter((x) => x.endsWith('.jsc')).sort()) {
+    const src = readFileSync(join(DSL, f), 'utf8');
+    const model = analyse(src, f);
+    if (!model.accepted) continue;
+    const doc = TextDocument.create('x', 'jsc', 1, src);
+    for (const m of [...src.matchAll(/\brequire\(/g)].slice(0, 6)) {
+      const pos = doc.positionAt(m.index + m[0].length);
+      const valid = labels(completion(src, pos, model, std));
+      const lineStart = doc.offsetAt({ line: pos.line, character: 0 });
+      const indent = /^[ \t]*/.exec(src.slice(lineStart))[0];
+      for (const [what, line] of BREAKS) {
+        const broken = src.slice(0, lineStart) + indent + line + '\n' + src.slice(lineStart);
+        const at = { line: pos.line + 1, character: pos.character };
+        const bad = analyse(broken, f);
+        if (!bad.diagnostics.some((d) => d.severity === 'error')) continue;   // e.g. an unused const in a fn: a warning
+        positions++;
+        const where = `${f}:${pos.line + 1} (${what})`;
+        const viaGood = labels(completion(broken, at, reconcile(model, src, broken), std));
+        const missing = [...valid].filter((l) => !viaGood.has(l));
+        const extra = [...viaGood].filter((l) => !valid.has(l));
+        if (missing.length || extra.length) failures.push(`${where}, reconciled: missing ${missing}, extra ${extra}`);
+        const viaBroken = labels(completion(broken, at, bad, std));
+        const wrong = [...viaBroken].filter((l) => !valid.has(l) && l !== 'unusedQ');
+        if (wrong.length) failures.push(`${where}, broken model: offers ${wrong}`);
+        for (const l of ['caller', 'state']) {
+          if (valid.has(l) !== viaBroken.has(l)) failures.push(`${where}, broken model: ${l} ${valid.has(l) ? 'missing' : 'offered'}`);
+        }
+      }
+    }
+  }
+  console.log(`[completion] F1: ${positions} positions inside a method with an error; ${failures.length} failures`);
+  assert.deepEqual(failures.slice(0, 20), []);
+  assert.ok(positions > 30, `${positions} positions`);
 });

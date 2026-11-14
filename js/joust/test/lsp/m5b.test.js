@@ -164,7 +164,7 @@ test('JOUST: Rename Symbol: validated on the snapshot, applied through workspace
     // A state field is recorded in the ABI manifest: a warning first, then applied on confirmation; the shorthand-free
     // references all change.
     const w = await lsp.request('joust/rename', { uri, position: at(SHOP, 'total: Int'), newName: 'sum2' });
-    assert.equal(w.needsConfirmation, true);
+    assert.equal(w.needsConfirmation, true, JSON.stringify(w));
     assert.match(w.warning, /ABI manifest/);
     const n = lsp.applied.length;
     const ok = await lsp.request('joust/rename', { uri, position: at(SHOP, 'total: Int'), newName: 'sum2', confirm: true });

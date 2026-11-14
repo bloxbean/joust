@@ -21,8 +21,11 @@ export function parseModel(json) {
 }
 
 /** The LSP diagnostics of a model, labelled with `source` (D3a: the compiler and the mode). */
+/** The diagnostics the server publishes for one file at most (S2 on #99): the model's, its build's and the notes. */
+export const MAX_PUBLISHED = 200;
+
 export function diagnostics(model, source) {
-  return model.diagnostics.map((d) => {
+  const out = model.diagnostics.slice(0, MAX_PUBLISHED).map((d) => {
     const internal = d.internal != null;
     const code = internal ? INTERNAL_CODE : d.code ?? undefined;
     return {
@@ -37,6 +40,14 @@ export function diagnostics(model, source) {
       message: d.message,
     };
   });
+  // The language core reports its first errors only (JscLang.MAX_ERRORS, the build's first among them): said once, at
+  // the last one shown.
+  const more = Array.isArray(model.advisory) && model.advisory.includes('more-errors');
+  if ((more || model.diagnostics.length > MAX_PUBLISHED) && out.length) {
+    const last = [...out].reverse().find((d) => d.severity === 1) ?? out[out.length - 1];
+    out.push({ range: last.range, severity: 3, source, message: 'More errors follow, not shown: the language server reports the first ones. Fix these and analyse again.' });
+  }
+  return out;
 }
 
 /** One internal-error diagnostic (D2a: a timeout, memory, a crash, an internal failure, a model over its cap). */

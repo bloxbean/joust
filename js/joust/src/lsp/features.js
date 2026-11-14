@@ -80,7 +80,19 @@ export function occurrences(model, id) {
   const out = [];
   if (d?.name) out.push({ range: d.nameRange, decl: true, shorthand: d.shorthand === true });
   for (const r of model.references) if (r[4] === id) out.push({ range: r.slice(0, 4), shorthand: (r[5] & 1) === 1 });
-  return out.sort((a, b) => (before(a.range, b.range) ? -1 : before(b.range, a.range) ? 1 : 0));
+  out.sort((a, b) => (before(a.range, b.range) ? -1 : before(b.range, a.range) ? 1 : 0));
+  // C5 on #99: a shorthand whose two meanings are both this declaration (`return { count }` of the state field count) is
+  // one occurrence, renamed whole (`{ total }`): never two edits of one token.
+  const merged = [];
+  for (const o of out) {
+    const last = merged[merged.length - 1];
+    if (last && last.range.join() === o.range.join()) {
+      merged[merged.length - 1] = { range: last.range, ...(last.decl || o.decl ? { decl: true } : {}), shorthand: false, both: true };
+    } else {
+      merged.push(o);
+    }
+  }
+  return merged;
 }
 
 // ------------------------------------------------------------------ hover
@@ -289,12 +301,12 @@ function nameType(model, name, pos, method) {
     }
   }
   if (best) return best.type;
-  if (method?.context?.state) {
+  if (method?.ctx?.state) {
     const f = model.declarations.find((d) => d.kind === 'stateField' && d.name === name);
     if (f) return f.type;
     if (name === 'state') return 'State';
   }
-  if (name === 'params' && method?.context?.params) return 'Params';
+  if (name === 'params' && method?.ctx?.params) return 'Params';
   return BUILTIN_DOCS[name]?.[0] ?? null;
 }
 
@@ -311,13 +323,36 @@ function recordFields(model, name) {
 }
 
 /** The innermost method or fn declaration containing `pos`. */
-function methodAt(model, pos) {
+function methodAt(model, pos, text) {
   let best = null;
   for (const d of model.declarations) {
     if (!['init', 'action', 'destroy', 'view', 'fn'].includes(d.kind) || !contains(d.range, pos)) continue;
     if (!best || size(d.range) < size(best.range)) best = d;
   }
-  return best;
+  return best && { ...best, ctx: contextOf(model, best, text) };
+}
+
+/**
+ * F1 on #99: what a method's body may name, `{ state, tx, params, funds }`. The checker's (the declaration's context),
+ * or, for a member it did not check (the one being typed, usually), from the syntax as the checker would: a view and
+ * an action or destroy read the state, init does not; all but a view build a transaction; params when the contract has a
+ * params block; funds when the header says receives (its tokens, up to the body, at most 512 characters). A fn: params
+ * only.
+ */
+export function contextOf(model, method, text) {
+  if (!method) return {};
+  if (method.context) return method.context;
+  const params = model.declarations.some((d) => d.kind === 'params');
+  if (method.kind === 'fn') return { params };
+  let funds = false;
+  if (typeof text === 'string' && method.range && (method.kind === 'action' || method.kind === 'destroy')) {
+    const from = offsetAt(text, { line: method.range[0], character: method.range[1] });
+    for (const t of scanTokens(text.slice(from, from + 512))) {
+      if (t.t === 'p' && (t.v === '{' || t.v === '=')) break;
+      if (t.t === 'id' && t.v === 'receives') funds = true;
+    }
+  }
+  return { state: method.kind !== 'init', tx: method.kind !== 'view', params, funds };
 }
 
 /**
@@ -371,6 +406,64 @@ export function scanTokens(src) {
 const HEADERS = new Set(['init', 'action', 'destroy', 'view']);
 
 /**
+ * C4, F1 on #99: `model` (of `oldText`) mapped onto `newText`, keeping only what the edit between them did not touch: the
+ * common prefix and suffix of the two texts bound the edited region; a declaration whose name, range or scope starts or
+ * ends inside it is left out, the rest keep their names (the same text) at their shifted positions. A copy, with the
+ * declarations only (completion's): no reference, expression or diagnostic of the old text.
+ */
+export function reconcile(model, oldText, newText) {
+  if (oldText === newText) return model;
+  let p = 0;
+  const n = Math.min(oldText.length, newText.length);
+  while (p < n && oldText.charCodeAt(p) === newText.charCodeAt(p)) p++;
+  let q = 0;
+  while (q < n - p && oldText.charCodeAt(oldText.length - 1 - q) === newText.charCodeAt(newText.length - 1 - q)) q++;
+  const oldEnd = oldText.length - q;
+  const delta = newText.length - oldText.length;
+  const starts = (t) => {
+    const out = [0];
+    for (let i = 0; i < t.length; i++) if (t.charCodeAt(i) === 10) out.push(i + 1);
+    return out;
+  };
+  const so = starts(oldText);
+  const sn = starts(newText);
+  const lineOf = (st, off) => {
+    let lo = 0, hi = st.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >>> 1;
+      if (st[mid] <= off) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+  // An old position's new one, or null inside the edited region (its boundaries map: a name may end where it starts).
+  const map = (l, c) => {
+    const off = (so[l] ?? oldText.length) + c;
+    let o;
+    if (off <= p) o = off;
+    else if (off >= oldEnd) o = off + delta;
+    else return null;
+    const nl = lineOf(sn, o);
+    return [nl, o - sn[nl]];
+  };
+  const range = (r) => {
+    if (!r) return r;
+    const a = map(r[0], r[1]);
+    const b = map(r[2], r[3]);
+    return a && b ? [a[0], a[1], b[0], b[1]] : undefined;
+  };
+  const declarations = [];
+  for (const d of model.declarations) {
+    const nameRange = range(d.nameRange);
+    const r = range(d.range);
+    const scope = range(d.scope);
+    if (nameRange === undefined || r === undefined || scope === undefined) continue;
+    declarations.push({ ...d, nameRange, range: r, scope });
+  }
+  return { ...model, declarations, references: [], exprs: [], diagnostics: [], reconciled: true };
+}
+
+/**
  * The completion items at `pos` in `text` (the current buffer), from `model` (the model of that very version: the server
  * waits for it, C4 on #99) and the engine's catalogue `std` ({ rows, types, members, modifiers }). Each item's
  * `textEdit` replaces only the word being completed on the cursor's line; an item that needs an import carries
@@ -422,7 +515,7 @@ export function completion(text, pos, model, std = {}) {
       k -= 2;
     }
     if (!names.length) return [];
-    const method = methodAt(model, pos);
+    const method = methodAt(model, pos, text);
     let t = parseType(nameType(model, names[0], pos, method));
     for (const n of names.slice(1)) {
       if (!t) break;
@@ -487,7 +580,7 @@ export function completion(text, pos, model, std = {}) {
         }
       }
       if (back[k]?.v === 'match' && names.length) {
-        const method = methodAt(model, pos);
+        const method = methodAt(model, pos, text);
         let t = parseType(nameType(model, names[0], pos, method));
         for (const nm of names.slice(1)) {
           if (!t) break;
@@ -513,8 +606,8 @@ export function completion(text, pos, model, std = {}) {
   }
 
   // An expression: what is in scope here and nothing the checker refuses here (D3, D7).
-  const method = methodAt(model, pos);
-  const ctx = method?.context ?? {};
+  const method = methodAt(model, pos, text);
+  const ctx = method?.ctx ?? {};
   const out = [];
   const seen = new Set();
   const add = (label, kind, detail, extra) => {
@@ -600,6 +693,11 @@ const RENAMABLE = new Set(['param', 'const', 'loopVar', 'binding', 'lambdaParam'
  * a shorthand keeps its other meaning: `{ goal }` becomes `{ goal: g }` or `{ g: goal }`), or `{ error }`.
  */
 export function renamePlan(model, pos, newName) {
+  // S4, C2 on #99: recovery drops a member that does not parse and stops checking one at its first error, so a model
+  // with an error may not hold every use of a name: no rename until the file checks.
+  if (model.diagnostics.some((x) => x.severity === 'error')) {
+    return { error: 'the file has errors: a rename needs a file that checks, so that every use is found; fix them first' };
+  }
   const s = symbolAt(model, pos);
   if (!s?.decl) return { error: 'nothing to rename here' };
   const d = s.decl;
@@ -609,22 +707,48 @@ export function renamePlan(model, pos, newName) {
   if (KEYWORDS.has(newName)) return { error: `'${newName}' is a keyword` };
   if (newName === d.name) return { error: 'the name is unchanged' };
   const edits = [];
+  // The other meaning of each shorthand token, looked up by range (indexed once: S3 on #99).
+  let refsAt = null;
+  let declsAt = null;
+  const index = () => {
+    refsAt = new Map();
+    for (const r of model.references) if (r[4] !== d.id) refsAt.set(r.slice(0, 4).join(), refsAt.get(r.slice(0, 4).join()) ?? r);
+    declsAt = new Map();
+    for (const x of model.declarations) if (x.id !== d.id && x.nameRange && !declsAt.has(x.nameRange.join())) declsAt.set(x.nameRange.join(), x);
+  };
   for (const o of occurrences(model, d.id)) {
     let newText = newName;
     if (o.shorthand) {
       // Both a field and a value: keep the other one's name.
       // The field's name comes first, the value after it: `{ field: value }`, `Variant { field: binding }`.
       const fieldish = (x) => x.kind === 'field' || x.kind === 'stateField';
-      const other = model.references.find((r) => r[4] !== d.id && r.slice(0, 4).join() === o.range.join());
+      if (!refsAt) index();
+      const other = refsAt.get(o.range.join());
       // The other meaning is a reference, or a pattern's binding declared at that very token (`Closed { at }`).
-      const otherDecl = (other && declOf(model, other[4]))
-        ?? model.declarations.find((x) => x.id !== d.id && x.nameRange && x.nameRange.join() === o.range.join());
+      const otherDecl = (other && declOf(model, other[4])) ?? declsAt.get(o.range.join());
       const otherName = otherDecl ? otherDecl.name : d.name;
       newText = fieldish(d) ? `${newName}: ${otherName}` : `${otherName}: ${newName}`;
     }
     edits.push({ range: lspRange(o.range), newText });
   }
-  return { decl: d, edits, abi: d.abi === true };
+  return { decl: d, edits, abi: d.abi === true, visible: visibleElsewhere(model, d) };
+}
+
+/** Kinds local to a method, fn or lambda: no other file can name them. */
+const LOCAL = new Set(['param', 'loopVar', 'binding', 'lambdaParam']);
+
+/**
+ * F2 on #99: whether another file can name `d`. A library exports its top-level types, enums (their variants and
+ * fields) and fns; an importer of a contract (`import contract { C }`) sees its interface: its actions, views, destroy,
+ * state, events and types. A parameter, a loop variable, a binding, a lambda's parameter and a const or fn inside a
+ * contract or a method are the file's own.
+ */
+export function visibleElsewhere(model, d) {
+  if (LOCAL.has(d.kind)) return false;
+  const library = !model.declarations.some((x) => x.kind === 'contract');
+  const parent = d.parent >= 0 ? declOf(model, d.parent) : null;
+  if (d.kind === 'const' || d.kind === 'fn') return library && !parent;
+  return true;
 }
 
 /** The position `p` after applying `edits` (sorted, on single lines) to the text. */
@@ -653,22 +777,52 @@ export function renamePreserves(before, after, edits) {
     had.set(key(d), n - 1);
   }
   if (after.declarations.length !== before.declarations.length) return { ok: false, reason: 'the rename changes the declarations' };
-  const at = new Map();
-  for (const r of after.references) at.set(`${r[0]}:${r[1]}:${r[4]}`, true);
-  const sorted = [...edits].sort((a, b) => a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character);
+  const at = new Set();
+  for (const r of after.references) at.add(`${r[0]}:${r[1]}:${r[4]}`);
+  // S3 on #99: the edits indexed once, by (line, start), and per line their ends with the running column shift, so each
+  // reference costs a lookup and a binary search: O((R + E) log E), not O(R·E).
+  const own = new Map();
+  const lines = new Map();
+  for (const e of edits) {
+    const r = e.range;
+    own.set(`${r.start.line}:${r.start.character}:${r.end.character}`, e);
+    if (r.start.line !== r.end.line) continue;
+    if (!lines.has(r.start.line)) lines.set(r.start.line, []);
+    lines.get(r.start.line).push(e);
+  }
+  const perLine = new Map();
+  for (const [line, es] of lines) {
+    es.sort((a, b) => a.range.end.character - b.range.end.character);
+    const ends = new Array(es.length);
+    const sums = new Array(es.length + 1);
+    sums[0] = 0;
+    for (let k = 0; k < es.length; k++) {
+      ends[k] = es[k].range.end.character;
+      sums[k + 1] = sums[k] + es[k].newText.length - (es[k].range.end.character - es[k].range.start.character);
+    }
+    perLine.set(line, { ends, sums });
+  }
+  // The column of `line:col` after the edits: the shifts of the edits on its line that end at or before it.
+  const shifted = (line, col) => {
+    const t = perLine.get(line);
+    if (!t) return col;
+    let lo = 0, hi = t.ends.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (t.ends[mid] <= col) lo = mid + 1;
+      else hi = mid;
+    }
+    return col + t.sums[lo];
+  };
   const fieldish = (d) => d && (d.kind === 'field' || d.kind === 'stateField');
   for (const r of before.references) {
     // A reference that is an edited token moves to the edit's (shifted) start; the value of a shorthand that became
     // `field: value` to just after the `: `.
-    const own = sorted.find((e) => e.range.start.line === r[0] && e.range.start.character === r[1] && e.range.end.character === r[3]);
-    let c;
-    if (own) {
-      const before0 = sorted.filter((e) => e !== own);
-      c = shift([r[0], r[1]], before0);
-      const colon = own.newText.indexOf(': ');
+    const e = own.get(`${r[0]}:${r[1]}:${r[3]}`);
+    let c = shifted(r[0], r[1]);
+    if (e) {
+      const colon = e.newText.indexOf(': ');
       if (colon >= 0 && !fieldish(declOf(before, r[4]))) c += colon + 2;
-    } else {
-      c = shift(r, sorted);
     }
     if (!at.has(`${r[0]}:${c}:${r[4]}`)) return { ok: false, reason: `a reference at ${r[0] + 1}:${r[1] + 1} would no longer resolve to the same declaration` };
   }
@@ -679,18 +833,46 @@ export function renamePreserves(before, after, edits) {
 // ------------------------------------------------------------------ invisible characters
 
 const INVISIBLE = new Set(['JSC0145', 'JSC0148']);
+const FORMAT = /^\p{Cf}$/u;
 
-/** The characters **Remove invisible characters…** would delete: every JSC0145 and JSC0148 the model reports (D7). */
+/**
+ * The characters **Remove invisible characters…** would delete: every JSC0145 and JSC0148 of the text (D7). A .jsc 2
+ * file's are found by the lexer's own rules over the text (S2 on #99: the model reports its first errors only):
+ * JSC0145 a format character (Unicode Cf, of the Basic Multilingual Plane, as the lexer reads UTF-16 units; not a BOM at
+ * the start), JSC0148 a control character other than TAB, LF, CR and the line breaks of JSC0147 (U+000B, U+000C,
+ * U+0085). A v1 file's come from its model.
+ */
 export function invisibleOccurrences(model, text) {
-  const lines = text.split('\n');
   const out = [];
-  for (const d of model.diagnostics) {
-    if (!INVISIBLE.has(d.code)) continue;
-    const [l, c, , ec] = d.range;
-    const s = (lines[l] ?? '').slice(c, ec);
-    if (!s) continue;
-    const cp = s.codePointAt(0);
-    out.push({ range: d.range, code: d.code, char: `U+${cp.toString(16).toUpperCase().padStart(4, '0')}`, line: l + 1, col: c + 1 });
+  if (model.language !== 'jsc2') {
+    const lines = text.split('\n');
+    for (const d of model.diagnostics) {
+      if (!INVISIBLE.has(d.code)) continue;
+      const [l, c, , ec] = d.range;
+      const s = (lines[l] ?? '').slice(c, ec);
+      if (!s) continue;
+      const cp = s.codePointAt(0);
+      out.push({ range: d.range, code: d.code, char: `U+${cp.toString(16).toUpperCase().padStart(4, '0')}`, line: l + 1, col: c + 1 });
+    }
+    return out;
+  }
+  let line = 0;
+  let col = 0;
+  for (let i = 0; i < text.length; i++) {
+    const u = text.charCodeAt(i);
+    if (u === 10) {
+      line++;
+      col = 0;
+      continue;
+    }
+    let code = null;
+    if (u < 0x20 || (u >= 0x7f && u <= 0x9f)) {
+      if (u !== 9 && u !== 13 && u !== 0x0b && u !== 0x0c && u !== 0x85) code = 'JSC0148';
+    } else if (FORMAT.test(text[i]) && !(i === 0 && u === 0xfeff)) {
+      code = 'JSC0145';
+    }
+    if (code) out.push({ range: [line, col, line, col + 1], code, char: `U+${u.toString(16).toUpperCase().padStart(4, '0')}`, line: line + 1, col: col + 1 });
+    col++;
   }
   return out;
 }

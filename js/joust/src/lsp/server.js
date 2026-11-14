@@ -17,10 +17,10 @@ import { EngineHost } from './host.js';
 import { createReader } from './inputs.js';
 import { scanImports } from './imports.js';
 import {
-  diagnostics as toDiagnostics, documentSymbols, fixFor, foldingRanges, internalDiagnostic, MODEL_VERSION, parseModel, selectionRanges,
+  diagnostics as toDiagnostics, MAX_PUBLISHED, documentSymbols, fixFor, foldingRanges, internalDiagnostic, MODEL_VERSION, parseModel, selectionRanges,
 } from './model.js';
 import {
-  completion, definition, hover, importEdit, invisibleOccurrences, references, renamePlan, renamePreserves, semanticTokens, TOKEN_MODIFIERS,
+  completion, definition, hover, importEdit, reconcile, invisibleOccurrences, references, renamePlan, renamePreserves, semanticTokens, TOKEN_MODIFIERS,
   TOKEN_TYPES,
 } from './features.js';
 import { inside, localPath } from './paths.js';
@@ -29,6 +29,8 @@ import { createHash } from 'node:crypto';
 
 /** D4: a file over this many characters is not analysed (one diagnostic says so). */
 export const MAX_FILE_CHARS = 1024 * 1024;
+/** The invisible characters one Remove invisible characters… lists and removes at most (S2 on #99). */
+export const MAX_INVISIBLE = 10_000;
 
 /** The project files one analysis reads at most (its imports, transitively; the integration with ADR-0018 M2c, M4). */
 export const MAX_PROJECT_FILES = 64;
@@ -282,7 +284,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     s.lastDiagnostics = diags;
     // D4 (M5b): a build's diagnostics belong to the version they were computed for; withdrawn once a newer one exists.
     const extra = s.build && s.build.version === version && s.build.gen === selector.generation ? s.build.diagnostics : [];
-    connection.sendDiagnostics({ uri, version, diagnostics: [...diags, ...extra] });
+    connection.sendDiagnostics({ uri, version, diagnostics: [...diags, ...extra].slice(0, MAX_PUBLISHED + 1) });
   }
 
   function schedule(uri, delay = DEBOUNCE_MS) {
@@ -563,6 +565,13 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     s.model = model;
     s.modelVersion = version;
     s.modelGen = gen;
+    // C4, F1 on #99: the last model without an error, with its text: completion maps it onto a newer text it has no
+    // complete model of (features.reconcile keeps only what the edit did not touch).
+    if (!model.diagnostics.some((d) => d.severity === 'error')) {
+      s.goodModel = model;
+      s.goodText = text;
+      s.goodGen = gen;
+    }
     s.modelEngine = sel.engine.id;
     // C9: an accepted model replaces the outline even when it has no declarations (a v1 file, an emptied contract); a
     // file the front end stopped in early keeps the last outline only while its own model has none.
@@ -798,19 +807,25 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return p;
   }
 
+  // C4 on #99: hover, definition, references and completion answer from the model of the version they are asked about
+  // (waiting for its analysis, bounded as waitModel is), never from an older one: names and ranges move with every edit.
+  async function currentModel(uri) {
+    await waitModel(uri);
+    return freshModel(uri);
+  }
   connection.onHover(async (p) => {
-    const s = state.get(p.textDocument.uri);
-    if (!s?.model) return null;
-    const std = await stdOf(s.selection);
-    return hover(s.model, p.position, std);
+    const f = await currentModel(p.textDocument.uri);
+    if (!f) return null;
+    const std = await stdOf(f.s.selection);
+    return freshModel(p.textDocument.uri)?.model === f.model ? hover(f.model, p.position, std) : null;
   });
-  connection.onDefinition((p) => {
-    const m = state.get(p.textDocument.uri)?.model;
-    return m ? definition(m, p.textDocument.uri, p.position) : null;
+  connection.onDefinition(async (p) => {
+    const f = await currentModel(p.textDocument.uri);
+    return f ? definition(f.model, p.textDocument.uri, p.position) : null;
   });
-  connection.onReferences((p) => {
-    const m = state.get(p.textDocument.uri)?.model;
-    return m ? references(m, p.textDocument.uri, p.position, p.context?.includeDeclaration === true) : [];
+  connection.onReferences(async (p) => {
+    const f = await currentModel(p.textDocument.uri);
+    return f ? references(f.model, p.textDocument.uri, p.position, p.context?.includeDeclaration === true) : [];
   });
   connection.languages.semanticTokens.on(async (p) => {
     await waitModel(p.textDocument.uri);
@@ -828,12 +843,21 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const s = state.get(uri);
     if (!doc || !s) return null;
     const version = doc.version;
+    // C4 on #99: the model of this version (waited for); without one, no name of the file is offered (only keywords,
+    // built-ins and std), and the list says it is incomplete.
+    const fresh = await currentModel(uri);
     const std = (await stdOf(s.selection)) ?? {};
     const now = documents.get(uri);
     if (!now || now.version !== version || state.get(uri) !== s) return null;
+    const current = freshModel(uri);
+    const usable = fresh && current && current.model === fresh.model ? fresh.model : null;
+    // A model with an error (a member recovery dropped or stopped checking, the usual state while typing) or none: the
+    // last model without one, reconciled with this text (C4, F1).
+    const good = s.goodModel && s.goodGen === selector.generation && (!usable || usable.diagnostics.some((d) => d.severity === 'error'))
+      ? reconcile(s.goodModel, s.goodText, now.getText()) : null;
     // The previous list's import ids go: only the latest list's items can still be chosen.
     for (const [id, x] of imports) if (x.uri === uri || Date.now() - x.issued > ID_MS) imports.delete(id);
-    const model = s.model ?? { declarations: [], references: [], builtins: [], exprs: [], types: [], diagnostics: [] };
+    const model = good ?? usable ?? { declarations: [], references: [], builtins: [], exprs: [], types: [], diagnostics: [] };
     const items = completion(now.getText(), p.position, model, std).map((it) => {
       if (!it.needsImport) return it;
       const { needsImport, ...rest } = it;
@@ -841,7 +865,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       imports.set(id, { uri, st: s, gen: selector.generation, ...needsImport, issued: Date.now() });
       return { ...rest, command: { title: `Import ${needsImport.name}`, command: IMPORT_COMMAND, arguments: [id] } };
     });
-    return { isIncomplete: false, items };
+    return { isIncomplete: !usable && !good, items };
   });
 
   // ------------------------------------------------------------------ M5b: rename (D7, L6)
@@ -853,6 +877,16 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (f.model.modelVersion < 2) return { error: 'this compiler predates rename (JOUST M5b)' };
     const plan = renamePlan(f.model, position, newName);
     if (plan.error) return plan;
+    // F2 on #99: a name other files can see is renamed only when no project file imports this one (renaming across
+    // files comes with M5c's project index).
+    if (plan.visible) {
+      const imp = await importersOf(uri, f.s.selection ?? await selectionFor(uri));
+      if (imp.error) return { error: `'${plan.decl.name}' can be named by other files, and ${imp.error}: rename it by hand (renaming across files comes with M5c)` };
+      if (imp.importers.length) {
+        return { error: `'${plan.decl.name}' can be named by the files that import this one (${imp.importers.slice(0, 3).join(', ')}${imp.importers.length > 3 ? ', …' : ''}):`
+          + ' renaming across files comes with M5c; rename it by hand' };
+      }
+    }
     const version = f.doc.version;
     const text = f.doc.getText();
     const after = await analyseText(uri, f.s.selection, TextDocument.applyEdits(f.doc, plan.edits), token);
@@ -884,9 +918,11 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   // Other editors with edits enabled (flag): the standard rename, versioned (D4a); an ABI-recorded name is refused there,
   // since no warning can come first.
-  if (!isVscode) {
+  // S8 on #99: registered whatever the client (isVscode is known only at initialize); VS Code gets no rename capability,
+  // and the handler refuses there too.
+  {
     connection.onRenameRequest(async (p, token) => {
-      if (!edits) return null;
+      if (!edits || isVscode) return null;
       const r = await validatedRename(p.textDocument.uri, p.position, p.newName, token);
       if (r.error) throw new Error(r.error);
       if (r.plan.abi) throw new Error(`${abiWarning(r.plan.decl)} Rename it in VS Code (with its warning), or by hand.`);
@@ -902,12 +938,14 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   connection.onRequest('joust/invisible', (p) => {
     const f = p && freshModel(p.uri);
     if (!f) return { error: 'the file changed or is still being analysed: try again' };
-    const occurrences = invisibleOccurrences(f.model, f.doc.getText());
-    if (!occurrences.length) return { occurrences: [] };
+    const all = invisibleOccurrences(f.model, f.doc.getText());
+    if (!all.length) return { occurrences: [] };
+    // Bounded (S2 on #99): the first MAX_INVISIBLE, the count of the rest said; a second run removes them.
+    const occurrences = all.slice(0, MAX_INVISIBLE);
     for (const [k, x] of removals) if (x.uri === p.uri || Date.now() - x.issued > ID_MS) removals.delete(k);
     const id = randomBytes(18).toString('base64url');
     removals.set(id, { uri: p.uri, st: f.s, version: f.doc.version, gen: selector.generation, ranges: occurrences.map((o) => o.range), issued: Date.now() });
-    return { id, version: f.doc.version, occurrences: occurrences.map(({ range, ...o }) => o) };
+    return { id, version: f.doc.version, occurrences: occurrences.map(({ range, ...o }) => o), more: all.length - occurrences.length };
   });
   connection.onRequest('joust/removeInvisible', async (p) => {
     if (!edits) return { applied: false, error: 'edits are off for this client' };
@@ -999,7 +1037,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       return { files, versions, dir: null };
     }
     const rel = sel.contractsRel.join('/');
-    const listed = await reader.list(sel.folder, rel, { max: MAX_BUILD_FILES });
+    const listed = await reader.list(sel.folder, rel, { max: MAX_BUILD_FILES, kind: sel.kind === 'gradle' ? 'gradle' : 'npm' });
     if (listed.error) return { error: listed.error === 'too-many' ? `more than ${MAX_BUILD_FILES} source files` : `the contracts directory cannot be read (${listed.error})` };
     for (const f of listed.files) {
       const full = join(listed.path, ...f.split('/'));
@@ -1014,6 +1052,53 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       files[f] = r.bytes.toString('utf8');
     }
     return { files, versions, dir: listed.path };
+  }
+
+  /**
+   * F2 on #99: the project files whose imports name the file `uri` (relative imports resolved as projectOf does; the
+   * project's sources, or the folder's without a known project, listed by the build's walk, open buffers in place of
+   * their files, each read bounded): `{ importers }` (paths), or `{ error }` when they cannot all be read (too many
+   * files, a file too large).
+   */
+  async function importersOf(uri, sel) {
+    if (!sel?.folder) return { error: 'the file is outside every workspace folder' };
+    // The project's contracts directory, or (no project known: a bare folder, Restricted Mode) the whole folder.
+    const project = sel.contracts && sel.contractsRel;
+    const base = project ? sel.contracts : sel.folder;
+    // A buffer not on disk yet is named by its own path (importers name it so).
+    const own = localFileOf(uri);
+    const self = (await realPathOf(uri, sel)) ?? (own && inside(own, sel.folder) ? own : null);
+    if (!self || !inside(self, base)) return { error: 'the file is outside its project\'s contracts directory' };
+    const id = relative(base, self).split(sep).join('/');
+    const rel = project ? sel.contractsRel.join('/') : '.';
+    const listed = await reader.list(sel.folder, rel, { exts: ['.jsc'], max: MAX_BUILD_FILES, kind: sel.kind === 'gradle' ? 'gradle' : 'npm' });
+    if (listed.error) return { error: listed.error === 'too-many' ? `the project has more than ${MAX_BUILD_FILES} source files` : 'the contracts directory cannot be read' };
+    const open = new Map();
+    for (const d of documents.all()) {
+      const p = await realPathOf(d.uri, sel);
+      if (p) open.set(p, d.getText());
+    }
+    const importers = [];
+    for (const f of listed.files) {
+      if (f === id) continue;
+      const full = join(listed.path, ...f.split('/'));
+      let text = open.get(full);
+      if (text === undefined) {
+        const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: MAX_FILE_CHARS });
+        if (r.error) return { error: `${f} cannot be read (${r.error})` };
+        text = r.bytes.toString('utf8');
+      }
+      const scanned = scanImports(text, MAX_IMPORTS_PER_FILE);
+      if (scanned.truncated) return { error: `${f} has more imports than the language server reads` };
+      for (const { spec } of scanned.imports) {
+        if (!spec.startsWith('./') && !spec.startsWith('../')) continue;
+        if (posix.normalize(posix.join(posix.dirname(f), spec)) === id) {
+          importers.push(f);
+          break;
+        }
+      }
+    }
+    return { importers };
   }
 
   /** `file://` URI of a build diagnostic's file (relative to the snapshot's directory), or null. */
@@ -1089,7 +1174,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       st.build = { seq, gen, version: snap.versions.get(u) ?? doc.version, diagnostics: byUri.get(u) ?? [] };
       builtFrom.set(u, seq);
       if (st.lastPublished === st.build.version) {
-        connection.sendDiagnostics({ uri: u, version: st.lastPublished, diagnostics: [...(st.lastDiagnostics ?? []), ...st.build.diagnostics] });
+        connection.sendDiagnostics({ uri: u, version: st.lastPublished, diagnostics: [...(st.lastDiagnostics ?? []), ...st.build.diagnostics].slice(0, MAX_PUBLISHED + 1) });
       }
     }
     return { ok: result.ok === true && errors === 0, errors, contracts: (result.contracts ?? []).length };
