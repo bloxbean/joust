@@ -1,0 +1,676 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "635c22d814d57be301d059d5d210bbfc8bea16d2a82176b27f17ad82cdcaca88",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Guild",
+  "source": "Guild.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "160" }],
+  "records": [
+    {
+      "name": "Hero",
+      "fields": [{ "name": "owner", "type": "Key" }, { "name": "level", "type": "Int" }],
+      "at": [11, 9]
+    },
+    {
+      "name": "Item",
+      "fields": [{ "name": "owner", "type": "Key" }, { "name": "power", "type": "Int" }],
+      "at": [12, 9]
+    }
+  ],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "master", "type": "Key" },
+      { "name": "isOpen", "type": "Bool" },
+      { "name": "arrivals", "type": "Int" },
+      { "name": "minLevel", "type": "Int" }
+    ],
+    "at": [8, 1]
+  },
+  "owned": ["Hero", "Item"],
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [{ "id": 1, "name": "minLevel", "type": "Int", "taint": 0, "at": [14, 8] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [15, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 24] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [15, 13]
+            },
+            "message": "the minimum level must be positive",
+            "at": [15, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [16, 22] },
+            { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [16, 38] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [16, 54] },
+            { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [16, 57] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [16, 12]
+        },
+        "at": [14, 23]
+      },
+      "at": [14, 3]
+    },
+    {
+      "kind": "action",
+      "name": "setOpen",
+      "params": [{ "id": 2, "name": "nowOpen", "type": "Bool", "taint": 0, "at": [19, 18] }],
+      "mods": [{ "name": "only", "field": "master" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [20, 17] },
+              "record": "State",
+              "field": "master",
+              "type": "Key",
+              "taint": 0,
+              "at": [20, 12]
+            },
+            { "node": "LocalRef", "local": 2, "type": "Bool", "taint": 0, "at": [20, 32] },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [20, 17] },
+              "record": "State",
+              "field": "arrivals",
+              "type": "Int",
+              "taint": 0,
+              "at": [20, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [20, 17] },
+              "record": "State",
+              "field": "minLevel",
+              "type": "Int",
+              "taint": 0,
+              "at": [20, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [20, 12]
+        },
+        "at": [19, 45]
+      },
+      "at": [19, 3]
+    },
+    {
+      "kind": "action",
+      "name": "admit",
+      "params": [{ "id": 3, "name": "heroId", "type": "Bytes", "taint": 0, "at": [25, 16] }],
+      "arriving": {
+        "id": 4,
+        "name": "hero",
+        "type": { "record": "Hero" },
+        "taint": 0,
+        "at": [25, 31],
+        "fieldTaints": { "level": 0, "owner": 0 }
+      },
+      "mods": [{ "name": "admits", "field": "Hero" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": { "node": "StateField", "field": "isOpen", "type": "Bool", "taint": 0, "at": [26, 13] },
+            "message": "the guild is closed",
+            "at": [26, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 4, "type": { "record": "Hero" }, "taint": 0, "at": [27, 13] },
+                "record": "Hero",
+                "field": "level",
+                "type": "Int",
+                "taint": 0,
+                "at": [27, 13]
+              },
+              "right": { "node": "StateField", "field": "minLevel", "type": "Int", "taint": 0, "at": [27, 27] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [27, 13]
+            },
+            "message": "the hero's level is too low for this guild",
+            "at": [27, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [28, 17] },
+              "record": "State",
+              "field": "master",
+              "type": "Key",
+              "taint": 0,
+              "at": [28, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [28, 17] },
+              "record": "State",
+              "field": "isOpen",
+              "type": "Bool",
+              "taint": 0,
+              "at": [28, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "arrivals", "type": "Int", "taint": 0, "at": [28, 34] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [28, 45] },
+              "type": "Int",
+              "taint": 0,
+              "at": [28, 34]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [28, 17] },
+              "record": "State",
+              "field": "minLevel",
+              "type": "Int",
+              "taint": 0,
+              "at": [28, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [28, 12]
+        },
+        "at": [25, 55]
+      },
+      "at": [25, 3]
+    },
+    {
+      "kind": "action",
+      "name": "admitItem",
+      "params": [{ "id": 5, "name": "item", "type": "Bytes", "taint": 0, "at": [32, 20] }],
+      "mods": [{ "name": "admits", "field": "Item" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": { "node": "StateField", "field": "isOpen", "type": "Bool", "taint": 0, "at": [33, 13] },
+            "message": "the guild is closed",
+            "at": [33, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 12] },
+        "at": [32, 45]
+      },
+      "at": [32, 3]
+    },
+    {
+      "kind": "ownedInit",
+      "name": "recruit",
+      "on": "Hero",
+      "shared": {
+        "id": 6,
+        "name": "guild",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [39, 27],
+        "fieldTaints": { "arrivals": 0, "isOpen": 0, "master": 0, "minLevel": 0 }
+      },
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Hero" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 6, "type": { "record": "State" }, "taint": 0, "at": [40, 13] },
+              "record": "State",
+              "field": "isOpen",
+              "type": "Bool",
+              "taint": 0,
+              "at": [40, 13]
+            },
+            "message": "the guild is closed",
+            "at": [40, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Hero",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [41, 21] },
+            { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [41, 36] }
+          ],
+          "type": { "record": "Hero" },
+          "taint": 0,
+          "at": [41, 12]
+        },
+        "at": [39, 42]
+      },
+      "at": [39, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "levelUp",
+      "on": "Hero",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "Hero" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "Hero",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Hero" }, "taint": 0, "at": [45, 17] },
+              "record": "Hero",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [45, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "level", "type": "Int", "taint": 0, "at": [45, 31] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [45, 39] },
+              "type": "Int",
+              "taint": 0,
+              "at": [45, 31]
+            }
+          ],
+          "type": { "record": "Hero" },
+          "taint": 0,
+          "at": [45, 12]
+        },
+        "at": [44, 42]
+      },
+      "at": [44, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "transfer",
+      "on": "Hero",
+      "shared": {
+        "id": 7,
+        "name": "source",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [49, 30],
+        "fieldTaints": { "arrivals": 0, "isOpen": 0, "master": 0, "minLevel": 0 }
+      },
+      "into": {
+        "id": 8,
+        "name": "destination",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [49, 46],
+        "fieldTaints": { "arrivals": 0, "isOpen": 0, "master": 0, "minLevel": 0 }
+      },
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Hero" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 7, "type": { "record": "State" }, "taint": 0, "at": [50, 13] },
+              "record": "State",
+              "field": "isOpen",
+              "type": "Bool",
+              "taint": 0,
+              "at": [50, 13]
+            },
+            "message": "the source guild is closed",
+            "at": [50, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "StateField", "field": "level", "type": "Int", "taint": 0, "at": [51, 13] },
+              "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [51, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [51, 13]
+            },
+            "message": "a hero moves from level 2",
+            "at": [51, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "Hero" }, "taint": 0, "at": [52, 12] },
+        "at": [49, 76]
+      },
+      "at": [49, 3]
+    },
+    {
+      "kind": "ownedDestroy",
+      "name": "retire",
+      "on": "Hero",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [56, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [56, 16] },
+            "at": [56, 5]
+          }
+        ],
+        "result": null,
+        "at": [55, 42]
+      },
+      "at": [55, 3]
+    },
+    {
+      "kind": "ownedInit",
+      "name": "forge",
+      "on": "Item",
+      "shared": {
+        "id": 9,
+        "name": "guild",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [61, 25],
+        "fieldTaints": { "arrivals": 0, "isOpen": 0, "master": 0, "minLevel": 0 }
+      },
+      "params": [{ "id": 10, "name": "power", "type": "Int", "taint": 0, "at": [61, 40] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Item" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 9, "type": { "record": "State" }, "taint": 0, "at": [62, 13] },
+              "record": "State",
+              "field": "isOpen",
+              "type": "Bool",
+              "taint": 0,
+              "at": [62, 13]
+            },
+            "message": "the guild is closed",
+            "at": [62, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [63, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [63, 21] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [63, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": "<=",
+                "left": { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [63, 26] },
+                "right": { "node": "Lit", "value": "10", "type": "Int", "taint": 0, "at": [63, 35] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [63, 26]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [63, 13]
+            },
+            "message": "a new item has power 1 to 10",
+            "at": [63, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Item",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [64, 21] },
+            { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [64, 29] }
+          ],
+          "type": { "record": "Item" },
+          "taint": 0,
+          "at": [64, 12]
+        },
+        "at": [61, 52]
+      },
+      "at": [61, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "enchant",
+      "on": "Item",
+      "params": [{ "id": 11, "name": "by", "type": "Int", "taint": 0, "at": [67, 29] }],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "Item" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 11, "type": "Int", "taint": 0, "at": [68, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [68, 18] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [68, 13]
+            },
+            "message": "enchant by a positive amount",
+            "at": [68, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Item",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Item" }, "taint": 0, "at": [69, 17] },
+              "record": "Item",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [69, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "power", "type": "Int", "taint": 0, "at": [69, 31] },
+              "right": { "node": "LocalRef", "local": 11, "type": "Int", "taint": 0, "at": [69, 39] },
+              "type": "Int",
+              "taint": 0,
+              "at": [69, 31]
+            }
+          ],
+          "type": { "record": "Item" },
+          "taint": 0,
+          "at": [69, 12]
+        },
+        "at": [67, 49]
+      },
+      "at": [67, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "carry",
+      "on": "Item",
+      "into": {
+        "id": 12,
+        "name": "destination",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [73, 27],
+        "fieldTaints": { "arrivals": 0, "isOpen": 0, "master": 0, "minLevel": 0 }
+      },
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Item" },
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateRef", "type": { "record": "Item" }, "taint": 0, "at": [74, 12] },
+        "at": [73, 57]
+      },
+      "at": [73, 3]
+    },
+    {
+      "kind": "ownedDestroy",
+      "name": "scrap",
+      "on": "Item",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [78, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [78, 16] },
+            "at": [78, 5]
+          }
+        ],
+        "result": null,
+        "at": [77, 41]
+      },
+      "at": [77, 3]
+    },
+    {
+      "kind": "view",
+      "name": "open",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateField", "field": "isOpen", "type": "Bool", "taint": 0, "at": [86, 23] },
+        "at": [86, 23]
+      },
+      "at": [86, 3]
+    }
+  ],
+  "invariants": [
+    {
+      "name": "heroLevel",
+      "on": "Hero",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Compare",
+          "op": ">",
+          "left": { "node": "StateField", "field": "level", "type": "Int", "taint": 0, "at": [83, 30] },
+          "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [83, 38] },
+          "type": "Bool",
+          "taint": 0,
+          "at": [83, 30]
+        },
+        "at": [83, 30]
+      },
+      "at": [83, 3]
+    },
+    {
+      "name": "itemPower",
+      "on": "Item",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Compare",
+          "op": "<=",
+          "left": { "node": "StateField", "field": "power", "type": "Int", "taint": 0, "at": [84, 30] },
+          "right": { "node": "Lit", "value": "100", "type": "Int", "taint": 0, "at": [84, 39] },
+          "type": "Bool",
+          "taint": 0,
+          "at": [84, 30]
+        },
+        "at": [84, 30]
+      },
+      "at": [84, 3]
+    }
+  ],
+  "warnings": []
+}

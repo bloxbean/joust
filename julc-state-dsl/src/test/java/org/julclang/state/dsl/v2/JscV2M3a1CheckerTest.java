@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * ADR-0018 M3a1: owned objects (ADR-0003). The syntax ({@code owned T { … }}, {@code owned init/action/destroy T.m},
  * {@code name: shared}), the processor's rules at {@code .jsc} positions (an owned type has an owned init and an escape
  * hatch; the instance is never destroyed and keeps no BigMap; shared only in owned methods, first), the bindings of an
- * owned method (its object's fields), the time rule at the new positions (D11), the later parts' refusals (JSC1215), and
+ * owned method (its object's fields), the time rule at the new positions (D11), the later parts' rules, and
  * the lowering's shape. Each refusal is asserted at the position marked {@code @@} in its source.
  */
 class JscV2M3a1CheckerTest {
@@ -165,9 +165,10 @@ class JscV2M3a1CheckerTest {
     @Test
     void laterParts_areRefusedHere() {
         // (A second owned type and a BigMap in an owned type are M3a2's: JscV2M3a2CheckerTest.)
-        bad("  owned action Account.move(@@d: into) only owner { return state }", "JSC1215", "an into parameter");
-        bad("  action enlist(id: Bytes) @@admits Account { return state }", "JSC1215", "admits is not supported yet");
-        bad("  @@invariant Account.positive = saved >= 0", "JSC1215", "an owned type's invariant");
+        // (M3a3 builds moves and invariants by type: JscV2M3a3CheckerTest. A move still needs its admits, and the reverse.)
+        bad("  @@owned action Account.move(d: into) only owner { return state }", "JSC1214", "which must consent");
+        bad("  @@action enlist(id: Bytes) admits Account { return state }", "JSC1214", "but no owned action moves");
+        lower(bank(BASICS + "  invariant Account.positive = saved >= 0"));
     }
 
     /** The security review's checker items (scratchpad m3-attacks.md A10, A11, A18, A19) that belong to M3a1. */

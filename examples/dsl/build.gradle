@@ -145,7 +145,16 @@ def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['
              bank: ['Bank', null, [:], ['(?<=\\.)balance(?=\\(\\))': 'saved']],
              // ADR-0018 M3a2: examples/locker (Locker and Safes). locker's unlock sends, so the port takes Funds (a send is checked
              // against the own policy, ADR-0018 D4): its direct calls in LockerTest pass the funds the instance holds.
-             locker: ['Locker', null, [:], ['(Locker\\.unlock\\(s, BigInteger\\.valueOf\\(\\d+\\), ctx)': '$1, h.funds(held, Assets.none())']]]
+             locker: ['Locker', null, [:], ['(Locker\\.unlock\\(s, BigInteger\\.valueOf\\(\\d+\\), ctx)': '$1, h.funds(held, Assets.none())']],
+             // ADR-0018 M3a3: examples/guild (Guild and Armory; guild's open state field is isOpen, a modifier word) and
+             // examples/market (its state record Config is State, Config being the params record's name; buy's result
+             // record Sold is Exchanged). market's offer with a junk token alongside: the port's method refuses it itself
+             // (what it accepts is not what the caller offers, #funds:, D4), where examples/market's method returns and only
+             // its validator refuses; the copied test expects that refusal, then builds its transaction from the honest offer.
+             guild: ['Guild', null, [:], ['destination\\.open': 'destination.isOpen']],
+             market: ['Market', 'open', [Config: 'State', Sold: 'Exchanged'],
+                      ['var r = (Market\\.offer\\(config, NFT_POLICY, NFT, PRICE, ctx, h\\.createFunds\\(true, )junk':
+                               'assertThrows(RequireException.class, () -> $1junk))); var r = $1nft']]]
 def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
 def copyPortTests = tasks.register('copyPortTests', Sync) {
     description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'

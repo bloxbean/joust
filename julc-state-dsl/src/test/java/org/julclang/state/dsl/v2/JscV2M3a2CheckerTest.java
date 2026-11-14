@@ -168,7 +168,8 @@ class JscV2M3a2CheckerTest {
 
     @Test
     void laterParts_stillRefused() {
-        bad(src(TWO + "  owned action Seat.move(@@d: into) only holder { return state }"), "JSC1215", "an into parameter");
-        bad(src(TWO + "  @@invariant Seat.positive = row > 0"), "JSC1215", "an owned type's invariant");
+        // (M3a3 builds them: a move needs its admits; an invariant by type lowers.)
+        bad(src(TWO + "  @@owned action Seat.move(d: into) only holder { return state }"), "JSC1214", "which must consent");
+        lower(src(TWO + "  invariant Seat.positive = row > 0"));
     }
 }

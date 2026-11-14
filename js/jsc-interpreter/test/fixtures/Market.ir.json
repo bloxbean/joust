@@ -1,0 +1,706 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "fcdddbe8a39ffd860bee8540d5737a71c4fe49ace0d28aa41c393d505a629143",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Market",
+  "source": "Market.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "384" }, { "name": "assetSlots", "value": "1" }],
+  "records": [
+    {
+      "name": "Royalty",
+      "fields": [
+        { "name": "nftPolicy", "type": "Hash" },
+        { "name": "nftName", "type": "Bytes" },
+        { "name": "price", "type": "Int" }
+      ],
+      "at": [15, 3]
+    },
+    {
+      "name": "Listing",
+      "fields": [
+        { "name": "seller", "type": "Key" },
+        { "name": "nftPolicy", "type": "Hash" },
+        { "name": "nftName", "type": "Bytes" },
+        { "name": "price", "type": "Int" }
+      ],
+      "at": [12, 9]
+    }
+  ],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "admin", "type": "Key" },
+      { "name": "feeBps", "type": "Int" },
+      { "name": "royaltyVault", "type": "Address" },
+      { "name": "royaltyBps", "type": "Int" },
+      { "name": "paused", "type": "Bool" }
+    ],
+    "at": [8, 1]
+  },
+  "owned": ["Listing"],
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [
+        { "id": 1, "name": "feeBps", "type": "Int", "taint": 0, "at": [17, 8] },
+        { "id": 2, "name": "royaltyVault", "type": "Address", "taint": 0, "at": [17, 21] },
+        { "id": 3, "name": "royaltyBps", "type": "Int", "taint": 0, "at": [17, 44] }
+      ],
+      "mods": [],
+      "checked": [2],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Logic",
+                "op": "&&",
+                "left": {
+                  "node": "Compare",
+                  "op": ">=",
+                  "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [18, 13] },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [18, 23] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [18, 13]
+                },
+                "right": {
+                  "node": "Compare",
+                  "op": ">=",
+                  "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [18, 28] },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [18, 42] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [18, 28]
+                },
+                "type": "Bool",
+                "taint": 0,
+                "at": [18, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": "<",
+                "left": {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [18, 47] },
+                  "right": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [18, 56] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [18, 47]
+                },
+                "right": { "node": "Lit", "value": "10000", "type": "Int", "taint": 0, "at": [18, 69] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [18, 47]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [18, 13]
+            },
+            "message": "fees must leave the seller something",
+            "at": [18, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [19, 21] },
+            { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [19, 29] },
+            { "node": "LocalRef", "local": 2, "type": "Address", "taint": 0, "at": [19, 37] },
+            { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [19, 51] },
+            { "node": "Lit", "value": false, "type": "Bool", "taint": 0, "at": [19, 71] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [19, 12]
+        },
+        "at": [17, 61]
+      },
+      "at": [17, 3]
+    },
+    {
+      "kind": "action",
+      "name": "setPaused",
+      "params": [{ "id": 4, "name": "pause", "type": "Bool", "taint": 0, "at": [22, 20] }],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [23, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "feeBps",
+              "type": "Int",
+              "taint": 0,
+              "at": [23, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "royaltyVault",
+              "type": "Address",
+              "taint": 0,
+              "at": [23, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "royaltyBps",
+              "type": "Int",
+              "taint": 0,
+              "at": [23, 12]
+            },
+            { "node": "LocalRef", "local": 4, "type": "Bool", "taint": 0, "at": [23, 32] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [23, 12]
+        },
+        "at": [22, 44]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "ownedInit",
+      "name": "offer",
+      "on": "Listing",
+      "shared": {
+        "id": 5,
+        "name": "market",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [27, 28],
+        "fieldTaints": { "admin": 0, "feeBps": 0, "paused": 0, "royaltyBps": 0, "royaltyVault": 0 }
+      },
+      "params": [
+        { "id": 6, "name": "nftPolicy", "type": "Hash", "taint": 0, "at": [27, 44] },
+        { "id": 7, "name": "nftName", "type": "Bytes", "taint": 0, "at": [27, 61] },
+        { "id": 8, "name": "price", "type": "Int", "taint": 0, "at": [27, 77] }
+      ],
+      "mods": [{ "name": "payable" }],
+      "checked": [6],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Listing" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Not",
+              "operand": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 5, "type": { "record": "State" }, "taint": 0, "at": [28, 14] },
+                "record": "State",
+                "field": "paused",
+                "type": "Bool",
+                "taint": 0,
+                "at": [28, 14]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [28, 13]
+            },
+            "message": "the market is paused",
+            "at": [28, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [29, 13] },
+              "right": { "node": "Lit", "value": "2000000", "type": "Int", "taint": 0, "at": [29, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [29, 13]
+            },
+            "message": "price below 2 ADA",
+            "at": [29, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [30, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [30, 25] },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [30, 13]
+            },
+            "message": "a listing takes the NFT, not ADA",
+            "at": [30, 5]
+          },
+          {
+            "stmt": "Accept",
+            "value": {
+              "node": "LedgerOp",
+              "op": "asset",
+              "args": [
+                { "node": "LocalRef", "local": 6, "type": "Hash", "taint": 0, "at": [31, 24] },
+                { "node": "LocalRef", "local": 7, "type": "Bytes", "taint": 0, "at": [31, 35] },
+                { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [31, 44] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [31, 12]
+            },
+            "at": [31, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Listing",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [32, 22] },
+            { "node": "LocalRef", "local": 6, "type": "Hash", "taint": 0, "at": [32, 30] },
+            { "node": "LocalRef", "local": 7, "type": "Bytes", "taint": 0, "at": [32, 41] },
+            { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [32, 50] }
+          ],
+          "type": { "record": "Listing" },
+          "taint": 0,
+          "at": [32, 12]
+        },
+        "at": [27, 97]
+      },
+      "at": [27, 3]
+    },
+    {
+      "kind": "ownedDestroy",
+      "name": "buy",
+      "on": "Listing",
+      "shared": {
+        "id": 9,
+        "name": "market",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [36, 29],
+        "fieldTaints": { "admin": 0, "feeBps": 0, "paused": 0, "royaltyBps": 0, "royaltyVault": 0 }
+      },
+      "params": [],
+      "mods": [{ "name": "payable" }, { "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Not",
+              "operand": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 9, "type": { "record": "State" }, "taint": 0, "at": [37, 14] },
+                "record": "State",
+                "field": "paused",
+                "type": "Bool",
+                "taint": 0,
+                "at": [37, 14]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [37, 13]
+            },
+            "message": "the market is paused",
+            "at": [37, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [38, 13] },
+              "right": { "node": "StateField", "field": "price", "type": "Int", "taint": 0, "at": [38, 25] },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [38, 13]
+            },
+            "message": "pay exactly the price",
+            "at": [38, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": true,
+              "left": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [39, 13] },
+              "right": { "node": "StateField", "field": "seller", "type": "Key", "taint": 0, "at": [39, 23] },
+              "operand": "Key",
+              "type": "Bool",
+              "taint": 0,
+              "at": [39, 13]
+            },
+            "message": "the seller cannot buy their own listing",
+            "at": [39, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 10, "name": "fee", "type": "Int", "taint": 0, "at": [40, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "/",
+              "left": {
+                "node": "Arith",
+                "op": "*",
+                "left": { "node": "StateField", "field": "price", "type": "Int", "taint": 0, "at": [40, 17] },
+                "right": {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 9, "type": { "record": "State" }, "taint": 0, "at": [40, 25] },
+                  "record": "State",
+                  "field": "feeBps",
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [40, 25]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [40, 17]
+              },
+              "right": { "node": "Lit", "value": "10000", "type": "Int", "taint": 0, "at": [40, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [40, 17]
+            },
+            "at": [40, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 11, "name": "royalty", "type": "Int", "taint": 0, "at": [41, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "/",
+              "left": {
+                "node": "Arith",
+                "op": "*",
+                "left": { "node": "StateField", "field": "price", "type": "Int", "taint": 0, "at": [41, 21] },
+                "right": {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 9, "type": { "record": "State" }, "taint": 0, "at": [41, 29] },
+                  "record": "State",
+                  "field": "royaltyBps",
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [41, 29]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [41, 21]
+              },
+              "right": { "node": "Lit", "value": "10000", "type": "Int", "taint": 0, "at": [41, 49] },
+              "type": "Int",
+              "taint": 0,
+              "at": [41, 21]
+            },
+            "at": [41, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "seller", "type": "Key", "taint": 0, "at": [43, 9] },
+            "amount": {
+              "node": "Arith",
+              "op": "+",
+              "left": {
+                "node": "Arith",
+                "op": "-",
+                "left": {
+                  "node": "Arith",
+                  "op": "-",
+                  "left": { "node": "StateField", "field": "price", "type": "Int", "taint": 0, "at": [43, 17] },
+                  "right": { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [43, 25] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [43, 17]
+                },
+                "right": { "node": "LocalRef", "local": 11, "type": "Int", "taint": 0, "at": [43, 31] },
+                "type": "Int",
+                "taint": 0,
+                "at": [43, 17]
+              },
+              "right": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [43, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [43, 17]
+            },
+            "at": [43, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 9, "type": { "record": "State" }, "taint": 0, "at": [45, 9] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [45, 9]
+            },
+            "amount": { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [45, 23] },
+            "at": [45, 5]
+          },
+          {
+            "stmt": "Send",
+            "to": {
+              "node": "LedgerOp",
+              "op": "wallet",
+              "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [46, 17] }],
+              "type": "Address",
+              "taint": 0,
+              "at": [46, 10]
+            },
+            "value": { "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [46, 26] },
+            "at": [46, 5]
+          },
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Compare",
+                  "op": ">",
+                  "left": { "node": "LocalRef", "local": 11, "type": "Int", "taint": 0, "at": [47, 8] },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [47, 18] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [47, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Send",
+                      "to": {
+                        "node": "GetField",
+                        "target": { "node": "LocalRef", "local": 9, "type": { "record": "State" }, "taint": 0, "at": [47, 27] },
+                        "record": "State",
+                        "field": "royaltyVault",
+                        "type": "Address",
+                        "taint": 0,
+                        "at": [47, 27]
+                      },
+                      "value": {
+                        "node": "LedgerOp",
+                        "op": "lovelace",
+                        "args": [{ "node": "LocalRef", "local": 11, "type": "Int", "taint": 0, "at": [47, 63] }],
+                        "type": "Value",
+                        "taint": 0,
+                        "at": [47, 48]
+                      },
+                      "datum": {
+                        "node": "New",
+                        "record": "Royalty",
+                        "values": [
+                          { "node": "StateField", "field": "nftPolicy", "type": "Hash", "taint": 0, "at": [47, 83] },
+                          { "node": "StateField", "field": "nftName", "type": "Bytes", "taint": 0, "at": [47, 94] },
+                          { "node": "StateField", "field": "price", "type": "Int", "taint": 0, "at": [47, 103] }
+                        ],
+                        "type": { "record": "Royalty" },
+                        "taint": 0,
+                        "at": [47, 73]
+                      },
+                      "at": [47, 22]
+                    }
+                  ],
+                  "result": null,
+                  "at": [47, 20]
+                },
+                "at": [47, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": false,
+            "at": [47, 5]
+          },
+          {
+            "stmt": "Accept",
+            "value": { "node": "LedgerOp", "op": "none", "args": [], "type": "Value", "taint": 0, "at": [48, 12] },
+            "at": [48, 5]
+          }
+        ],
+        "result": null,
+        "at": [36, 58]
+      },
+      "at": [36, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "relist",
+      "on": "Listing",
+      "into": {
+        "id": 12,
+        "name": "to",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [52, 31],
+        "fieldTaints": { "admin": 0, "feeBps": 0, "paused": 0, "royaltyBps": 0, "royaltyVault": 0 }
+      },
+      "params": [{ "id": 13, "name": "newPrice", "type": "Int", "taint": 0, "at": [52, 41] }],
+      "mods": [{ "name": "only", "field": "seller" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Listing" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [53, 13] },
+              "right": { "node": "Lit", "value": "2000000", "type": "Int", "taint": 0, "at": [53, 25] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [53, 13]
+            },
+            "message": "price below 2 ADA",
+            "at": [53, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Listing",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Listing" }, "taint": 0, "at": [54, 17] },
+              "record": "Listing",
+              "field": "seller",
+              "type": "Key",
+              "taint": 0,
+              "at": [54, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Listing" }, "taint": 0, "at": [54, 17] },
+              "record": "Listing",
+              "field": "nftPolicy",
+              "type": "Hash",
+              "taint": 0,
+              "at": [54, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Listing" }, "taint": 0, "at": [54, 17] },
+              "record": "Listing",
+              "field": "nftName",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [54, 12]
+            },
+            { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [54, 31] }
+          ],
+          "type": { "record": "Listing" },
+          "taint": 0,
+          "at": [54, 12]
+        },
+        "at": [52, 68]
+      },
+      "at": [52, 3]
+    },
+    {
+      "kind": "action",
+      "name": "enlist",
+      "params": [{ "id": 14, "name": "listingId", "type": "Bytes", "taint": 0, "at": [58, 17] }],
+      "mods": [{ "name": "admits", "field": "Listing" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Not",
+              "operand": { "node": "StateField", "field": "paused", "type": "Bool", "taint": 0, "at": [59, 14] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [59, 13]
+            },
+            "message": "the market is paused",
+            "at": [59, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [60, 12] },
+        "at": [58, 50]
+      },
+      "at": [58, 3]
+    },
+    {
+      "kind": "ownedDestroy",
+      "name": "cancel",
+      "on": "Listing",
+      "params": [],
+      "mods": [{ "name": "only", "field": "seller" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "seller", "type": "Key", "taint": 0, "at": [65, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [65, 17] },
+            "at": [65, 5]
+          },
+          {
+            "stmt": "Send",
+            "to": {
+              "node": "LedgerOp",
+              "op": "wallet",
+              "args": [{ "node": "StateField", "field": "seller", "type": "Key", "taint": 0, "at": [66, 17] }],
+              "type": "Address",
+              "taint": 0,
+              "at": [66, 10]
+            },
+            "value": { "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [66, 26] },
+            "at": [66, 5]
+          }
+        ],
+        "result": null,
+        "at": [64, 46]
+      },
+      "at": [64, 3]
+    }
+  ],
+  "warnings": []
+}

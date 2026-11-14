@@ -138,11 +138,6 @@ final class Checker {
      */
     private String inputRec = "State";
 
-    /**
-     * M3a2: what M3a3 builds is refused here (JSC1215): moves, admits and invariants by type. (M3a1 refused several owned
-     * types and BigMaps in owned types too; M3a2 builds them.)
-     */
-    private static final boolean NOT_YET = true;
 
     /** The fields of the method's input ({@link #inputRec}). */
     private LinkedHashMap<String, Ty> inFields() {
@@ -1734,9 +1729,6 @@ final class Checker {
      * reads are visible on chain), and never a time value (D11): whether a state is acceptable would move with a window.
      */
     private Ir.Invariant invariant(Syntax.InvariantDecl inv, Contract c) {
-        if (inv.on() != null && NOT_YET) {
-            throw inv.pos().error("JSC1215", "an owned type's invariant is not supported yet: invariants by type come in M3a3 (ADR-0012 D1)");
-        }
         if (inv.on() != null) {
             // M3a (ADR-0012 D1): invariant T.name = e, over an object of the owned type T, checked on every T a call makes
             // or continues; never over BigMaps (on chain only the opened reads are visible: the processor's rule).
@@ -2055,7 +2047,6 @@ final class Checker {
                     }
                 }
                 case "admits" -> {
-                    if (NOT_YET) throw mod.pos().error("JSC1215", "admits is not supported yet: moves between instances come in M3a3 (ADR-0012 D3)");
                     // M3a (ADR-0012 D3): @Admits("T"): objects of the owned type T arrive through this action, spent in the
                     // same transaction with a move whose destination is this instance. The contract-level rules (a move of
                     // T exists, one admits per type at least) are checked with the contract (ownedRules).
@@ -2098,9 +2089,6 @@ final class Checker {
         for (Mod mod : m.mods()) if (mod.name().equals("admits")) admits = mod.arg();
         for (int pi = 0; pi < m.params().size(); pi++) {
             Param p = m.params().get(pi);
-            if ("into".equals(p.role()) && NOT_YET) {
-                throw p.pos().error("JSC1215", "an into parameter is not supported yet: moves between instances come in M3a3 (ADR-0012 D3)");
-            }
             if (p.role() != null) {
                 // M3a (ADR-0003 D1, ADR-0012 D3): name: shared, the instance's state by reference; name: into, a move's
                 // destination state. Neither is a redeemer field; both come first, shared before into (the processor's order).

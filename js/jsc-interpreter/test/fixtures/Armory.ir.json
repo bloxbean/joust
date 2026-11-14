@@ -1,0 +1,455 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "8d48bb61d463edae5e06b5e7c0491e72b8888b55672a4eab9b52cb3256dce966",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Armory",
+  "source": "Armory.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "160" }],
+  "records": [
+    {
+      "name": "Vault",
+      "fields": [
+        { "name": "owner", "type": "Key" },
+        { "name": "kinds", "type": "Int" },
+        { "name": "inventory", "type": { "bigmap": ["Bytes", "Int"] } }
+      ],
+      "at": [11, 9]
+    }
+  ],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "keeper", "type": "Key" }, { "name": "isOpen", "type": "Bool" }],
+    "at": [7, 1]
+  },
+  "owned": ["Vault"],
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [14, 22] },
+            { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [14, 38] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [14, 12]
+        },
+        "at": [13, 10]
+      },
+      "at": [13, 3]
+    },
+    {
+      "kind": "action",
+      "name": "setOpen",
+      "params": [{ "id": 1, "name": "nowOpen", "type": "Bool", "taint": 0, "at": [17, 18] }],
+      "mods": [{ "name": "only", "field": "keeper" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [18, 17] },
+              "record": "State",
+              "field": "keeper",
+              "type": "Key",
+              "taint": 0,
+              "at": [18, 12]
+            },
+            { "node": "LocalRef", "local": 1, "type": "Bool", "taint": 0, "at": [18, 32] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [18, 12]
+        },
+        "at": [17, 45]
+      },
+      "at": [17, 3]
+    },
+    {
+      "kind": "ownedInit",
+      "name": "openVault",
+      "on": "Vault",
+      "shared": {
+        "id": 2,
+        "name": "armory",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [21, 30],
+        "fieldTaints": { "isOpen": 0, "keeper": 0 }
+      },
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Vault" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 2, "type": { "record": "State" }, "taint": 0, "at": [22, 13] },
+              "record": "State",
+              "field": "isOpen",
+              "type": "Bool",
+              "taint": 0,
+              "at": [22, 13]
+            },
+            "message": "the armory is closed",
+            "at": [22, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Vault",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [23, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [23, 36] },
+            { "node": "BigEmpty", "type": { "bigmap": ["Bytes", "Int"] }, "taint": 0, "at": [23, 50] }
+          ],
+          "type": { "record": "Vault" },
+          "taint": 0,
+          "at": [23, 12]
+        },
+        "at": [21, 46]
+      },
+      "at": [21, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "stash",
+      "on": "Vault",
+      "params": [
+        { "id": 3, "name": "item", "type": "Bytes", "taint": 0, "at": [26, 28] },
+        { "id": 4, "name": "count", "type": "Int", "taint": 0, "at": [26, 41] }
+      ],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "Vault" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [27, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [27, 21] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [27, 13]
+            },
+            "message": "stash a positive count",
+            "at": [27, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 5, "name": "have", "type": "Int", "taint": 0, "at": [28, 5] },
+            "value": {
+              "node": "BigOp",
+              "op": "at",
+              "map": {
+                "node": "StateField",
+                "field": "inventory",
+                "type": { "bigmap": ["Bytes", "Int"] },
+                "taint": 0,
+                "at": [28, 18]
+              },
+              "args": [{ "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [28, 28] }],
+              "type": "Int",
+              "taint": 0,
+              "at": [28, 18]
+            },
+            "at": [28, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Vault",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Vault" }, "taint": 0, "at": [29, 17] },
+              "record": "Vault",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [29, 12]
+            },
+            {
+              "node": "Cond",
+              "cond": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [29, 31] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [29, 39] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [29, 31]
+              },
+              "then": {
+                "node": "Arith",
+                "op": "+",
+                "left": { "node": "StateField", "field": "kinds", "type": "Int", "taint": 0, "at": [29, 43] },
+                "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [29, 51] },
+                "type": "Int",
+                "taint": 0,
+                "at": [29, 43]
+              },
+              "otherwise": { "node": "StateField", "field": "kinds", "type": "Int", "taint": 0, "at": [29, 55] },
+              "type": "Int",
+              "taint": 0,
+              "at": [29, 31]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "inventory",
+                "type": { "bigmap": ["Bytes", "Int"] },
+                "taint": 0,
+                "at": [29, 73]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [29, 87] },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [29, 93] },
+                  "right": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [29, 100] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [29, 93]
+                }
+              ],
+              "type": { "bigmap": ["Bytes", "Int"] },
+              "taint": 0,
+              "at": [29, 73]
+            }
+          ],
+          "type": { "record": "Vault" },
+          "taint": 0,
+          "at": [29, 12]
+        },
+        "at": [26, 64]
+      },
+      "at": [26, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "take",
+      "on": "Vault",
+      "params": [
+        { "id": 6, "name": "item", "type": "Bytes", "taint": 0, "at": [32, 27] },
+        { "id": 7, "name": "count", "type": "Int", "taint": 0, "at": [32, 40] }
+      ],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "Vault" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 8, "name": "have", "type": "Int", "taint": 0, "at": [33, 5] },
+            "value": {
+              "node": "BigOp",
+              "op": "at",
+              "map": {
+                "node": "StateField",
+                "field": "inventory",
+                "type": { "bigmap": ["Bytes", "Int"] },
+                "taint": 0,
+                "at": [33, 18]
+              },
+              "args": [{ "node": "LocalRef", "local": 6, "type": "Bytes", "taint": 0, "at": [33, 28] }],
+              "type": "Int",
+              "taint": 0,
+              "at": [33, 18]
+            },
+            "at": [33, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [34, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [34, 21] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [34, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": "<=",
+                "left": { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [34, 26] },
+                "right": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [34, 35] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [34, 26]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [34, 13]
+            },
+            "message": "not that many in the vault",
+            "at": [34, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 9, "name": "left", "type": "Int", "taint": 0, "at": [35, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "-",
+              "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [35, 18] },
+              "right": { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [35, 25] },
+              "type": "Int",
+              "taint": 0,
+              "at": [35, 18]
+            },
+            "at": [35, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Vault",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Vault" }, "taint": 0, "at": [36, 17] },
+              "record": "Vault",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [36, 12]
+            },
+            {
+              "node": "Cond",
+              "cond": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [36, 31] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [36, 39] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [36, 31]
+              },
+              "then": {
+                "node": "Arith",
+                "op": "-",
+                "left": { "node": "StateField", "field": "kinds", "type": "Int", "taint": 0, "at": [36, 43] },
+                "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [36, 51] },
+                "type": "Int",
+                "taint": 0,
+                "at": [36, 43]
+              },
+              "otherwise": { "node": "StateField", "field": "kinds", "type": "Int", "taint": 0, "at": [36, 55] },
+              "type": "Int",
+              "taint": 0,
+              "at": [36, 31]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "inventory",
+                "type": { "bigmap": ["Bytes", "Int"] },
+                "taint": 0,
+                "at": [36, 73]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 6, "type": "Bytes", "taint": 0, "at": [36, 87] },
+                { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [36, 93] }
+              ],
+              "type": { "bigmap": ["Bytes", "Int"] },
+              "taint": 0,
+              "at": [36, 73]
+            }
+          ],
+          "type": { "record": "Vault" },
+          "taint": 0,
+          "at": [36, 12]
+        },
+        "at": [32, 63]
+      },
+      "at": [32, 3]
+    },
+    {
+      "kind": "ownedDestroy",
+      "name": "closeVault",
+      "on": "Vault",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "StateField", "field": "kinds", "type": "Int", "taint": 0, "at": [41, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [41, 22] },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [41, 13]
+            },
+            "message": "empty the vault first",
+            "at": [41, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [42, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [42, 16] },
+            "at": [42, 5]
+          }
+        ],
+        "result": null,
+        "at": [40, 47]
+      },
+      "at": [40, 3]
+    }
+  ],
+  "warnings": []
+}

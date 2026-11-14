@@ -157,7 +157,7 @@ As M2a's and M2b's, these are refused **in every contract**, whether it composes
 
 `reads` and `deposit` are not reserved: `reads` is a word only after a parameter's `:`, and `deposit` was an effect
 word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a datum, deferred) is retired: M2c's
-`send(to, value, datum)` takes it, and the code is not reused.
+`send(to, value, datum)` takes it, and the code is not reused. `JSC1215` (M3a1 and M3a2: the parts of M3a not built yet) is retired in M3a3, which builds the last of them (moves and invariants by type), and the code is not reused.
 
 ### Names M3a reserves (ADR-0018 D16)
 
@@ -472,7 +472,6 @@ rule is the processor's (ContractReader), refused at the `.jsc` position.
 | JSC1212 | error | admits goes on an instance action: objects arrive at an instance (ADR-0012 D3) / an admits action cannot be batched … / admits …: … is not an owned type of this contract / an admits action's first parameter is the arriving object's id, a Bytes … / an admits action cannot read another contract yet | Checker (M3a) |
 | JSC1213 | error | the owned type … holds a BigMap, so it cannot have invariants: on chain only the opened reads are visible, so the JVM and the chain would disagree (ADR-0009 r2, ADR-0012 D2) | Checker (M3a) |
 | JSC1214 | error | … moves a … to another instance, which must consent: declare an action admits … (ADR-0012 D3) / … admits …, but no owned action moves a … (an into parameter): no object could ever arrive through it (ADR-0012 D3) | Checker (M3a) |
-| JSC1215 | error | admits / an into parameter / an owned type's invariant is not supported yet: … comes in M3a3 (ADR-0012) | Checker (M3a1; M3a2 builds several owned types and BigMaps in owned types) |
 
 M3a also changes rules of earlier sections where they meet owned methods. An owned init takes only `payable`
 (JSC0405); an owned destroy may be payable from M3a2 (examples/market's `buy`; the instance's destroy may not, JSC0406);
