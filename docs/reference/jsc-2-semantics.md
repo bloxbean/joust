@@ -331,6 +331,9 @@ a record (§1), compared and encoded as one. Owned methods name their type: `own
   instance's state as the transaction's reference input holds it (ADR-0003 D1), never spent, so an owned call does not
   contend with others. A call of a method with a `shared` parameter needs τ.`shared`; without it it is the caller's error,
   not a refusal. It is not a checked input: it is this contract's own instance datum, which its validator accepted.
+  In a transaction that also spends the instance, τ.`shared` is still the input's state, never the instance call's
+  outcome (ADR-0018 D10, r23; today's ledger refuses such a transaction, and the runtime never builds one).
+- **No deposits.** An owned action receives none (`receives` is JSC0447): a deposit's target is an instance.
 - **Output checks** (§2.7): for an owned init's and an owned action's object, each quorum that the owned type's methods
   name (over the object's fields) is well formed. An owned destroy makes no output check.
 - **Kinds.** A method of type `T` called on an object of another type is the caller's error, not a refusal: the

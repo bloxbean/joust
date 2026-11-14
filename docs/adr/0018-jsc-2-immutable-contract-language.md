@@ -717,6 +717,22 @@ types, `BigMap`s in owned types and creations that take native assets (with issu
 (`into`, `admits`) and invariants by type are M3a3's; until then they are refused (JSC1215), so every earlier `.jsc` file
 lowers to byte-identical output.
 
+Two decisions the security review asked for (M3a1, r23):
+
+- **An instance action and an owned action that reads the instance in one transaction (review A5).** A shared read is
+  a reference input, so an owned method reads the instance's state as the transaction's inputs hold it, never an
+  instance action's output in the same transaction. The language and the runtime do not compose the two: the runtime
+  builds each call as its own transaction, and today's ledger refuses a transaction that spends and references one
+  UTxO (cardano-ledger's `disjointRefInputs`, enforced at protocol versions 9 and 10 only). The validators themselves
+  accept such a pair, each reading the inputs' state
+  (`JscV2M3a1AttackTest.aPauseComposedWithAWithdrawal_readsTheInputsState` records it), and that is the defined outcome
+  once a protocol version lifts the ledger rule: a pause takes effect for owned methods from the next transaction on,
+  whoever builds the transaction. No later milestone plans a composition that reads the instance's next state.
+- **A deposit's target (review A18).** A deposit names its target by `Instance<C>`, an instance; no deposit names an
+  object. So an owned action receives no deposits (`receives` on one is JSC0447), and an object's value changes only
+  through its own calls (`received`, `pay`). The processor allows `@Receives` on an owned action; `.jsc` does not
+  expose it, as no deposit could reach it.
+
 **The method modifiers** (r11, fixed in M1c; gated by vault, escrow and pool, which pass): an `init`, `action` or
 `destroy` header is followed by modifiers, in any order, each at most once (JSC0416): `payable` (not on a destroy),
 `open`, `only f` (`@SignedBy("f")`, `f` a `Key` state field), `after f` and `before f` (`@ValidAfter`/`@ValidBefore`,
@@ -1661,5 +1677,7 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
 - **r23** (2026-11-14, M3a1: owned objects, one type, with shared reads; r22 is the integration's): D10 records what
   M3a1 built (the syntax `owned T { … }` and `owned init/action/destroy T.m`, `name: shared`, the object as an owned
   method's input, the processor's owned-object rules at `.jsc` positions, the lowering's records and `Ctx` choice, the
-  keys of owned spends and creations, D11 at the new positions, the ABI's owned datum, JSC1215 for the later parts).
+  keys of owned spends and creations, D11 at the new positions, the ABI's owned datum, JSC1215 for the later parts) and
+  two decisions from the security review: an owned method's shared read is the transaction's input state and is never
+  composed with an instance action (A5); a deposit targets an instance, so an owned action receives none (A18).
   §8 splits M3 into M3a1, M3a2, M3a3, M3b and M3c, and records M3a1's gates.

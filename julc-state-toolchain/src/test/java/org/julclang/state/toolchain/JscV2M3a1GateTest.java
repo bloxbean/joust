@@ -80,6 +80,37 @@ class JscV2M3a1GateTest {
                 + " examples/bank's; three names differ (stated): " + unrenamed);
     }
 
+    /**
+     * Security review A9: the port drops no modifier the Java example has. Per call, the processor's descriptions of both
+     * agree on the kind, Ctx, payable, assets, every policy (signedBy, validAfter/Before, quorum, authorizedBy, shared,
+     * into, admits, receives, batched, migrateTo), what it returns and the recipe's signers, the stated renamings aside.
+     */
+    @Test
+    void modifiers_perMethod_equalTheJavaExample() throws Exception {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var java = json.readTree(description("org.julclang.state.examples.bank.Bank")).get("x-joust");
+        var port = json.readTree(description("org.julclang.state.examples.dsl.Bank")).get("x-joust");
+        int compared = 0;
+        for (String section : List.of("creations", "actions")) {
+            var want = new java.util.LinkedHashMap<String, com.fasterxml.jackson.databind.JsonNode>();
+            java.get(section).forEach(c -> want.put(c.get("name").asText(), c));
+            assertEquals(want.size(), port.get(section).size(), section);
+            for (var c : port.get(section)) {
+                String name = c.get("name").asText();
+                var w = want.get(name);
+                assertNotNull(w, section + ": the Java example has no " + name);
+                for (String f : List.of("kind", "ctx", "payable", "takesAssets", "needsService", "policies", "returns")) {
+                    assertEquals(String.valueOf(w.get(f)), String.valueOf(c.get(f)), name + "." + f);
+                }
+                for (String f : List.of("shared", "signers", "validAfter", "validBefore", "params", "reads", "stepEvents")) {
+                    assertEquals(String.valueOf(w.get("recipe").get(f)), String.valueOf(c.get("recipe").get(f)), name + ".recipe." + f);
+                }
+                compared++;
+            }
+        }
+        System.out.println("[M3a1 modifiers] Bank: " + compared + " calls, every modifier and policy as examples/bank's");
+    }
+
     // ------------------------------------------------------------------ the calls
 
     /** The Java example's classes, or the port's, by the Java example's names (the bank's are the same names). */

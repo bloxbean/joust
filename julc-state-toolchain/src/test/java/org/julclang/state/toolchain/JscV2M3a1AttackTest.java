@@ -108,12 +108,12 @@ class JscV2M3a1AttackTest {
     /**
      * A5 (decision, ADR-0018 r23): an owned action's shared read is a reference input, so it sees the instance as the
      * transaction's inputs hold it, never an instance action's output in the same transaction. Pausing the bank while
-     * withdrawing, the withdrawal reading the unpaused input: the scripts alone accept it (each reads the inputs'
-     * state); what refuses it is the ledger, which from protocol version 9 refuses a transaction that spends and
-     * references one UTxO (disjointRefInputs). The runtime never composes the two.
+     * withdrawing, the withdrawal reading the unpaused input: the scripts accept it, each reading the inputs' state, and
+     * that is the defined outcome. Today's ledger refuses the transaction (it spends and references one UTxO:
+     * cardano-ledger's disjointRefInputs, enforced at protocol versions 9 and 10 only); the runtime never composes the two.
      */
     @Test
-    void aPauseComposedWithAWithdrawal_isTheLedgersToRefuse() {
+    void aPauseComposedWithAWithdrawal_readsTheInputsState() {
         TxModel tx = withdraw(open);
         TxModel pause = h.act(h.live(open, BigInteger.ZERO), new BankValidator.SetPaused(true), Bank.setPaused(open, true), ADMIN, null);
         tx.inputs.add(pause.inputs.get(0));
@@ -124,7 +124,7 @@ class JscV2M3a1AttackTest {
                 "the instance UTxO is both spent and referenced");
         var v = h.evaluate(tx);
         System.out.println("[M3a1 A5] pause + withdraw in one transaction, scripts only: " + v);
-        assertTrue(v.accepted(), "each script reads the inputs' state, so both accept; the ledger refuses the transaction: " + v);
+        assertTrue(v.accepted(), "each script reads the inputs' state, so both accept: " + v);
         // Reading the paused bank (as a composition might wish the withdrawal to), the withdrawal is refused.
         h.assertRejected(withdraw(paused), "a withdrawal reading a paused bank");
     }
