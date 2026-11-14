@@ -25,7 +25,7 @@ class JscV2MessagesTest {
 
     static final Path EXAMPLES = Path.of("../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl");
     static final Pattern REQUIRE = Pattern.compile("Require\\.that\\(.*, (\"(?:[^\"\\\\]|\\\\.)*\")\\);$", Pattern.MULTILINE);
-    static final Pattern KEY = Pattern.compile("#(input|pay):(spend|mint|intent)\\d+\\.\\d+");
+    static final Pattern KEY = Pattern.compile("#(input|pay):(spend|mint|intent|withdraw)\\d+\\.\\d+");
 
     static List<Path> examples() throws Exception {
         try (Stream<Path> s = Files.list(EXAMPLES)) {
@@ -67,7 +67,7 @@ class JscV2MessagesTest {
                 assertEquals(1, lowered.messages().stream().filter(x -> x.message().equals(s.message())).count(), name + ": " + s.message());
                 // No parameter, method or fn name is in it: after its fixed words (the kind, "#pay:", and the redeemer's,
                 // "spend", which methods named pay and spend share: treasury's, Council's; M2b), only numbers.
-                String rest = s.message().replaceFirst("^#[a-z]+:(spend|mint|intent)", "");
+                String rest = s.message().replaceFirst("^#[a-z]+:(spend|mint|intent|withdraw)", "");
                 assertFalse(rest.contains(s.in()), s.message());
                 if (s.what() != null) assertFalse(rest.contains(s.what()), s.message());
             }
@@ -121,6 +121,16 @@ class JscV2MessagesTest {
                     ctor = redeemers.get("mint").stream().anyMatch(c -> c.get("name").equals(cap)) ? cap
                             : redeemers.get("mint").stream().anyMatch(c -> c.get("name").equals(insert)) ? insert : "CreateInstance";
                     want = "mint";
+                } else if (red.startsWith("withdraw")) {
+                    // M3c: a withdraw handler's arguments are its Rewards redeemer's fields (the manifest's purposes).
+                    @SuppressWarnings("unchecked")
+                    var purposes = (List<Map<String, Object>>) abi.get("purposes");
+                    @SuppressWarnings("unchecked")
+                    var rewards = (Map<String, Object>) purposes.stream().filter(x -> "withdraw".equals(x.get("purpose"))).findFirst().orElseThrow()
+                            .get("redeemer");
+                    ctors = List.of(rewards);
+                    ctor = "Rewards";
+                    want = "withdraw";
                 } else if (red.startsWith("intent")) {
                     ctors = intentCalls;
                     ctor = cap + "Intent";

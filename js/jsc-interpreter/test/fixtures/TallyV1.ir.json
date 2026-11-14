@@ -1,0 +1,286 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "2d4b0194b66745824df7f93170c373e2b5e8af4d1b90367598dd9968a53d0728",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "TallyV1",
+  "source": "TallyV1.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "512" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "admin", "type": "Key" },
+      { "name": "successor", "type": "Bytes" },
+      { "name": "voters", "type": { "list": "Key" } },
+      { "name": "needed", "type": "Int" },
+      { "name": "tags", "type": { "map": ["Bytes", "Int"] } },
+      { "name": "note", "type": { "option": "Bytes" } }
+    ],
+    "at": [7, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [
+        { "id": 1, "name": "voters", "type": { "list": "Key" }, "taint": 0, "at": [10, 8] },
+        { "id": 2, "name": "needed", "type": "Int", "taint": 0, "at": [10, 27] }
+      ],
+      "mods": [{ "name": "payable" }],
+      "checked": [1],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [11, 21] },
+            { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [11, 40] },
+            { "node": "LocalRef", "local": 1, "type": { "list": "Key" }, "taint": 0, "at": [11, 43] },
+            { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [11, 51] },
+            { "node": "MapEmpty", "type": { "map": ["Bytes", "Int"] }, "taint": 0, "at": [11, 65] },
+            { "node": "NoneLit", "type": { "option": "Bytes" }, "taint": 0, "at": [11, 84] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [11, 12]
+        },
+        "at": [10, 48]
+      },
+      "at": [10, 3]
+    },
+    {
+      "kind": "action",
+      "name": "tag",
+      "params": [
+        { "id": 3, "name": "name", "type": "Bytes", "taint": 0, "at": [14, 14] },
+        { "id": 4, "name": "n", "type": "Int", "taint": 0, "at": [14, 27] }
+      ],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [15, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [15, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [15, 17] },
+              "record": "State",
+              "field": "successor",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [15, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [15, 17] },
+              "record": "State",
+              "field": "voters",
+              "type": { "list": "Key" },
+              "taint": 0,
+              "at": [15, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [15, 17] },
+              "record": "State",
+              "field": "needed",
+              "type": "Int",
+              "taint": 0,
+              "at": [15, 12]
+            },
+            {
+              "node": "MapOp",
+              "op": "set",
+              "map": { "node": "StateField", "field": "tags", "type": { "map": ["Bytes", "Int"] }, "taint": 0, "at": [15, 30] },
+              "args": [
+                { "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [15, 39] },
+                { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [15, 45] }
+              ],
+              "type": { "map": ["Bytes", "Int"] },
+              "taint": 0,
+              "at": [15, 30]
+            },
+            {
+              "node": "SomeOf",
+              "value": { "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [15, 60] },
+              "type": { "option": "Bytes" },
+              "taint": 0,
+              "at": [15, 55]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [15, 12]
+        },
+        "at": [14, 46]
+      },
+      "at": [14, 3]
+    },
+    {
+      "kind": "action",
+      "name": "setSuccessor",
+      "params": [{ "id": 5, "name": "next", "type": "Bytes", "taint": 0, "at": [19, 23] }],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "StateField", "field": "successor", "type": "Bytes", "taint": 0, "at": [20, 13] },
+              "right": { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [20, 26] },
+              "operand": "Bytes",
+              "type": "Bool",
+              "taint": 0,
+              "at": [20, 13]
+            },
+            "message": "the successor is set once",
+            "at": [20, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [21, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [21, 12]
+            },
+            { "node": "LocalRef", "local": 5, "type": "Bytes", "taint": 0, "at": [21, 35] },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [21, 17] },
+              "record": "State",
+              "field": "voters",
+              "type": { "list": "Key" },
+              "taint": 0,
+              "at": [21, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [21, 17] },
+              "record": "State",
+              "field": "needed",
+              "type": "Int",
+              "taint": 0,
+              "at": [21, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [21, 17] },
+              "record": "State",
+              "field": "tags",
+              "type": { "map": ["Bytes", "Int"] },
+              "taint": 0,
+              "at": [21, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [21, 17] },
+              "record": "State",
+              "field": "note",
+              "type": { "option": "Bytes" },
+              "taint": 0,
+              "at": [21, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [21, 12]
+        },
+        "at": [19, 47]
+      },
+      "at": [19, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "move",
+      "params": [],
+      "mods": [{ "name": "quorum", "keys": "voters", "threshold": "needed" }, { "name": "migrates", "field": "successor" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": null,
+      "body": { "stmts": [], "result": null, "at": [24, 61] },
+      "at": [24, 3]
+    }
+  ],
+  "invariants": [
+    {
+      "name": "reachable",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Logic",
+          "op": "&&",
+          "left": {
+            "node": "Compare",
+            "op": ">",
+            "left": { "node": "StateField", "field": "needed", "type": "Int", "taint": 0, "at": [26, 25] },
+            "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [26, 34] },
+            "type": "Bool",
+            "taint": 0,
+            "at": [26, 25]
+          },
+          "right": {
+            "node": "Compare",
+            "op": "<=",
+            "left": { "node": "StateField", "field": "needed", "type": "Int", "taint": 0, "at": [26, 39] },
+            "right": {
+              "node": "ListProp",
+              "op": "length",
+              "list": { "node": "StateField", "field": "voters", "type": { "list": "Key" }, "taint": 0, "at": [26, 49] },
+              "type": "Int",
+              "taint": 0,
+              "at": [26, 49]
+            },
+            "type": "Bool",
+            "taint": 0,
+            "at": [26, 39]
+          },
+          "type": "Bool",
+          "taint": 0,
+          "at": [26, 25]
+        },
+        "at": [26, 25]
+      },
+      "at": [26, 3]
+    }
+  ],
+  "warnings": []
+}

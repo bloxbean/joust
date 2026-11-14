@@ -56,6 +56,8 @@ class JscV2BindingTest {
             case "Value" -> "org.julclang.ledger.Value";
             case "Address" -> "org.julclang.ledger.Address";
             case "Option<Key>", "Option<Hash>" -> "java.util.Optional<byte[]>";
+            // M3c: std/certs' ledger types, JuLC's own.
+            case "TxCert", "DRep" -> "org.julclang.ledger." + jscType;
             default -> throw new IllegalArgumentException(jscType);
         };
     }
