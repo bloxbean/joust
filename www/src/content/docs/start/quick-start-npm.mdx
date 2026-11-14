@@ -112,7 +112,7 @@ export npm_config_registry=http://127.0.0.1:4873/
    }
    ```
 
-   It is written in `.jsc` 2, a preview ([.jsc](/languages/jsc/)). Beside it, `create-joust` writes
+   It is written in `.jsc`, a preview ([.jsc](/languages/jsc/)). Beside it, `create-joust` writes
    `Counter.abi.json`, the contract's ABI manifest: how its state and its calls are encoded on chain. A build fails
    when the manifest is missing or differs from what the contract now compiles to, so an encoding change cannot slip
    through; `npx joust build --accept-abi` accepts a change you intend, to review and commit.

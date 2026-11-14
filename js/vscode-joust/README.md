@@ -1,6 +1,6 @@
 # JOUST `.jsc` for VS Code
 
-JOUST's contract language, `.jsc` 2, in VS Code (ADR-0021, milestone M5a). Language preview, like `.jsc` 2 itself.
+JOUST's contract language, `.jsc`, in VS Code (ADR-0021, milestone M5a). Language preview, like `.jsc` itself.
 
 - **Diagnostics as you type**, from the build's own front end: the first error, or, when the file checks, its warnings,
   each with its stable code (`JSC0502`) linking its row in the

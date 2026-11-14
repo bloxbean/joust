@@ -32,7 +32,7 @@ Every command reads `joust.config.json` from the working directory (see [`joust.
 
 | Command | Flags | What it does |
 |---|---|---|
-| `joust build` | `--src <dir>` (default config `contracts`), `--out <dir>` (default config `out`), `--accept-abi`, `--accept-lock`, `--traces` | compiles every `.java` and `.jsc` file under the source folder into the output folder, with the libraries of the project's npm packages (`joust-lib/`); exits 1 on a compile error, on a `.jsc` 2 ABI manifest that is missing or changed unless `--accept-abi` writes it ([the ABI manifest](/languages/jsc/#the-abi-manifest)), or on a library from a package that `joust.lock` does not pin at its hash unless `--accept-lock` writes it ([library packages](/languages/jsc-reference/#library-packages-and-joustlock)). `--traces` keeps the contracts' traces in the scripts (larger scripts; for debugging) |
+| `joust build` | `--src <dir>` (default config `contracts`), `--out <dir>` (default config `out`), `--accept-abi`, `--accept-lock`, `--traces` | compiles every `.java` and `.jsc` file under the source folder into the output folder, with the libraries of the project's npm packages (`joust-lib/`); exits 1 on a compile error, on a `.jsc` ABI manifest that is missing or changed unless `--accept-abi` writes it ([the ABI manifest](/languages/jsc/#the-abi-manifest)), or on a library from a package that `joust.lock` does not pin at its hash unless `--accept-lock` writes it ([library packages](/languages/jsc-reference/#library-packages-and-joustlock)). `--traces` keeps the contracts' traces in the scripts (larger scripts; for debugging) |
 | `joust test` | `[-- <node --test args>]` | builds, then runs `test/*.test.js` with Node's test runner (one file at a time). Tests that use `@julclang/joust/test` run offline: see [offline tests](#offline-tests) |
 | `joust deploy` | `--network <name>` | publishes each contract's reference script (once) and writes `<out>/deployments.<network>.json` |
 | `joust dev` | `--network <name>`, `--port <port>` (default config `dev.port`, else 5178), `--accept-abi` | attaches to the chain (starting it with the network's `start` command if needed), builds, deploys, serves the page; rebuilds and redeploys on save |
@@ -252,7 +252,7 @@ folder. Every project has a `Counter` contract, `joust.config.json` for DevKit, 
 | Option | Values |
 |---|---|
 | `--template`, `-t` | `node` (default): `index.js`, a Node script that deploys and calls the contract; scripts `start`, `build`, `deploy`, `test`. `web`: a page (`page/`) with the Cardano Foundation's connect button and an in-page DevKit key, and `vite.config.js`; the scripts listed under [A browser page](/start/quick-start-npm/#a-browser-page) |
-| `--lang`, `-l` | `jsc` (default): `contracts/app/Counter.jsc` in `.jsc` 2 (a language preview), with its ABI manifest `Counter.abi.json`. `java`: `contracts/app/Counter.java`. Both give the same description and client |
+| `--lang`, `-l` | `jsc` (default): `contracts/app/Counter.jsc` in `.jsc` (a language preview), with its ABI manifest `Counter.abi.json`. `java`: `contracts/app/Counter.java`. Both give the same description and client |
 | `--help`, `-h` | the usage |
 
 Options go after `--` with `npm create` (npm passes them on); `npx create-joust my-app --lang java` takes them

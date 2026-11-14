@@ -80,7 +80,7 @@ class ScaffoldTest {
         assertThat(Files.readString(d.resolve("src/main/jsc/org/example/counter/Counter.abi.json")))
                 .contains("\"contract\": \"org.example.counter.Counter\"").doesNotContain("@@");
         assertThat(Files.readString(d.resolve("README.md"))).contains("acceptJscAbi").contains("a language preview").doesNotContain("@@");
-        assertThat(s.outText()).contains("Note: .jsc 2 is a language preview");
+        assertThat(s.outText()).contains("Note: .jsc is a language preview");
         assertThat(Files.readString(d.resolve("build.gradle"))).contains("mainClass = 'org.example.counter.CounterMain'");
         assertThat(Files.readString(d.resolve("README.md"))).contains("src/main/jsc/org/example/counter/Counter.jsc");
     }

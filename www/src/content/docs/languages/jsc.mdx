@@ -1,6 +1,6 @@
 ---
 title: ".jsc"
-description: "Write a JOUST contract in .jsc 2, an immutable, expression-oriented contract language that reads like TypeScript and lowers to a Java @StateContract."
+description: "Write a JOUST contract in .jsc, an immutable, expression-oriented contract language that reads like TypeScript and lowers to a Java @StateContract."
 ---
 
 import { Tabs, TabItem, Aside, LinkCard, CardGrid, FileTree } from '@astrojs/starlight/components';
@@ -13,10 +13,10 @@ for a contract written in Java: the JOUST processor generates the validator and 
 validator to UPLC.
 
 <Aside type="caution" title="A language preview">
-`.jsc` 2 is a language preview ([ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)
+`.jsc` is a language preview ([ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)
 D14), not to be confused with Cardano's preview network. The language and the compiler's output may change before it
 leaves preview, so the same file may compile to a different script hash in a later JOUST (milestone M1e changed once
-the hash of every `.jsc` 2 script with a generated check). Use it on DevKit and testnets, and don't deploy it to hold value; a deployed preview
+the hash of every `.jsc` script with a generated check). Use it on DevKit and testnets, and don't deploy it to hold value; a deployed preview
 contract is rebuilt with the JOUST version recorded for it: each record of `build/joust/deployments.<network>.json` states
 it (commit those files if you must rebuild a deployed script later; `build/` is ignored), or the plugin's version.
 It covers the core language (milestone M1). Native assets, sends, mints, deploy parameters, events and reads of other
@@ -29,7 +29,7 @@ lowering.
 ## Why it exists
 
 A Java `@StateContract` is readable, but it is Java: `BigInteger.compareTo`, `ByteStringLib.equals`, records rebuilt
-field by field. `.jsc` 2 gives JavaScript developers the same contract model in the syntax they know, and it removes
+field by field. `.jsc` gives JavaScript developers the same contract model in the syntax they know, and it removes
 the ways to get the subset wrong: there is no `byte[] ==`, no fixed-width integer, no mutable local.
 
 **`.jsc` lowers to Java, not to UPLC.** Nothing new is trusted on chain. The validator's invariants (thread token,
@@ -380,7 +380,7 @@ this call") is read only in a destroy. A method reads its own writes through the
 
 ### Time
 
-`validFrom` and `validTo` are chosen by whoever submits the transaction, within `maxValidityMs`. So `.jsc` 2 keeps
+`validFrom` and `validTo` are chosen by whoever submits the transaction, within `maxValidityMs`. So `.jsc` keeps
 them from deciding anything (ADR-0018 D11):
 
 - **Decide only with `after(t)` and `before(t)`.** They hold for the whole validity window, and they are allowed only
@@ -491,7 +491,7 @@ note.
 
 ## The ABI manifest
 
-The build writes `<Contract>.abi.json` for every `.jsc` 2 contract: the encoding of its datum and of every redeemer
+The build writes `<Contract>.abi.json` for every `.jsc` contract: the encoding of its datum and of every redeemer
 (constructor indices, field names and order, data shapes, the schemas they reach) and its time fields. The project
 **commits it beside the `.jsc` file**. Every build compares what the lowering produces with the committed copy, so a
 change that would alter how a deployed instance's datum or redeemer is encoded cannot pass unnoticed:
@@ -595,7 +595,7 @@ agree.
 
 ## What still needs Java
 
-| Feature | In `.jsc` 2 |
+| Feature | In `.jsc` |
 |---|---|
 | Native assets, `send`, `mint`/`burn`, deposits, deploy parameters, invariants, events, quorums, reads of other contracts | milestone M2 |
 | Owned and keyed objects, moves, `init migrate`, script purposes (staking, governance) | M3 |

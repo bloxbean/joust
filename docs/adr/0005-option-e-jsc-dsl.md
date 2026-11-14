@@ -1,6 +1,7 @@
 # ADR-0005: Option E — `.jsc`, a state-contract surface syntax that lowers to Java
 
-**Status:** Accepted with changes (r2). A semantics reviewer and Codex both returned "request changes"; their
+**Status:** Superseded by ADR-0018 (r26: `.jsc` v1 and its migration were removed; the language is ADR-0018's `.jsc`).
+Before: Accepted with changes (r2). A semantics reviewer and Codex both returned "request changes"; their
 findings are resolved in §6 and implemented.
 **Date:** 2026-11-07
 **Builds on:** ADR-0001 to ADR-0004. Research doc §4 Option E and §6 (one State IR, several front ends).

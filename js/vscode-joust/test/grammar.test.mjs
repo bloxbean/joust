@@ -45,10 +45,10 @@ function scopeOf(toks, text, nth = 0) {
 
 const example = (name) => readFileSync(here(`../../../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/${name}`), 'utf8');
 
-test('.jsc 2: the header, declarations, effects, calls, literals and comments', () => {
+test('.jsc: the header, declarations, effects, calls, literals and comments', () => {
   const t = tokens(example('Ledger.jsc'));
   assert.equal(scopeOf(t, 'jsc'), 'keyword.other.directive.version.jsc');
-  assert.equal(scopeOf(t, '2'), 'constant.numeric.version.jsc');
+  assert.equal(scopeOf(t, '1'), 'constant.numeric.version.jsc');
   assert.equal(scopeOf(t, 'package'), 'keyword.other.package.jsc');
   assert.equal(scopeOf(t, 'import'), 'keyword.control.import.jsc');
   assert.equal(scopeOf(t, 'length'), 'support.function.std.jsc');
@@ -77,7 +77,7 @@ test('.jsc 2: the header, declarations, effects, calls, literals and comments', 
   assert.ok(t.some((x) => x.scopes.includes('string.quoted.double.jsc')));
 });
 
-test('.jsc 2: ada, bytes, escapes, Option and the time prelude', () => {
+test('.jsc: ada, bytes, escapes, Option and the time prelude', () => {
   const t = tokens([
     'jsc 1', 'package p', '/* a block', '   comment */',
     'fn f(o: Option<Int>): Bytes = #00ff', 'contract C(minAda = 2 ada) {',

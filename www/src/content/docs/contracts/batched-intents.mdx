@@ -66,7 +66,7 @@ public class Pool {
 - `@Batched(only = true)` drops the direct call. Nobody can then spend the instance with that action directly, which
   would invalidate the batches being built against it. Use it for actions users race on.
 
-In `.jsc` the modifier is `batched` (and `batched only` for intent-only). In `.jsc` 2 a batched action that pays
+In `.jsc` the modifier is `batched` (and `batched only` for intent-only). In `.jsc` a batched action that pays
 says `open` ([the rules](/languages/jsc-reference/#modifiers)):
 
 <Tabs syncKey="lang">

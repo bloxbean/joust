@@ -1,6 +1,6 @@
 # tree-sitter-jsc
 
-A [tree-sitter](https://tree-sitter.github.io/) grammar for JOUST's contract language, `.jsc` 2 (ADR-0018 D2, D13).
+A [tree-sitter](https://tree-sitter.github.io/) grammar for JOUST's contract language, `.jsc` (ADR-0018 D2, D13).
 A file may start with the header `jsc 1`; a file without one is version 1 too. It serves editors that use tree-sitter (highlighting,
 folding, structure); ADR-0021 D5 keeps the language server on the hand-written parser, not on this grammar. Token colouring for Shiki (the docs
 site) and VS Code is the TextMate grammar in [`js/vscode-joust`](../js/vscode-joust) (the VS Code extension, ADR-0021 D9).
@@ -62,7 +62,7 @@ Where the two parsers do not decide alike. Each one is pinned by a file in `corp
   as a type or variant (and the brace looks like an object). This grammar keeps both readings for any name and keeps
   the one that parses, so `if Ready { x }`, where `Ready` is a declared type, is an `if` here and an error in Java. A
   misspelt `return` (`retun { ...state, … }`) is a constructor literal here, so the typo shows no syntax error.
-- **File-level lexical rules of `.jsc` 2** are not grammar rules: format characters (JSC0145), line ends other than LF
+- **File-level lexical rules of `.jsc`** are not grammar rules: format characters (JSC0145), line ends other than LF
   and CRLF (JSC0147) and a Java keyword as a package segment (JSC0111) are refused only by the Java front end.
 - **`--x`.** The Java lexer reads `--` as one token and refuses it (JSC0135); here it is two minus signs.
 - **`Some` as a bare pattern** (a variant named `Some`): the Java parser accepts it; here `Some` in a pattern needs

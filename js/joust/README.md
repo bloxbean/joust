@@ -10,7 +10,7 @@ npx joust test       # build, then test/*.test.js offline (an in-memory ledger: 
 npx joust deploy     # publishes the reference scripts; writes build/joust/deployments.<network>.json
 ```
 
-A `.jsc` 2 contract's ABI manifest (`<Contract>.abi.json`, beside it) is committed; a build whose manifest is missing or
+A `.jsc` contract's ABI manifest (`<Contract>.abi.json`, beside it) is committed; a build whose manifest is missing or
 different fails until it is accepted with `joust build --accept-abi` (ADR-0018 D12). A build warns when a recorded
 deployment's script is not the one it produces (a changed contract: earlier instances stay on the old one).
 

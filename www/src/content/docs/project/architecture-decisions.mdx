@@ -29,7 +29,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0002](#adr-0002-option-b-merklemap-state) | Option B: MerkleMap state, shared verifier | Accepted with changes (r2), implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0003](#adr-0003-option-c-owned-objects) | Option C: owned objects beside shared state | Accepted with changes (r2), implemented | [Owned objects](/contracts/owned-objects/) |
 | [0004](#adr-0004-option-d-batched-intents) | Option D: batched intents | Accepted with changes (r2), implemented | [Batched intents](/contracts/batched-intents/) |
-| [0005](#adr-0005-option-e-the-jsc-language) | Option E: `.jsc`, lowered to Java | Accepted with changes (r2), implemented | [.jsc](/languages/jsc/) |
+| [0005](#adr-0005-option-e-the-jsc-language) | Option E: `.jsc`, lowered to Java | Superseded by ADR-0018 (r26) | [.jsc](/languages/jsc/) |
 | [0006](#adr-0006-option-f-optimistic-l2-spike) | Option F: optimistic L2 (spike) | Accepted as a spike (r2) | [Examples: rollup](/reference/examples/#rollup) |
 | [0007](#adr-0007-option-g-native-assets-minting-and-general-outputs) | Option G: native assets, minting, general outputs | Accepted with changes (r2), implemented | [Native assets, mints and sends](/contracts/assets-mints-sends/) |
 | [0008](#adr-0008-option-h-lower-fees) | Option H: lower fees, smaller scripts | Accepted (r2), implemented | [Fees and script size](/contracts/fees-and-size/) |
@@ -41,8 +41,8 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
-| [0018](#adr-0018-jsc-2-an-immutable-contract-language) | `.jsc` 2: an immutable contract language for JavaScript developers | Proposed (r6) | [.jsc](/languages/jsc/) |
-| [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc-2) | A language server and VS Code extension for `.jsc` 2 | Proposed (r6); M5a in #83 (draft) | – |
+| [0018](#adr-0018-the-jsc-language-an-immutable-contract-language) | The `.jsc` language: an immutable contract language for JavaScript developers | Proposed (r6) | [.jsc](/languages/jsc/) |
+| [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc) | A language server and VS Code extension for `.jsc` | Proposed (r6); M5a in #83 (draft) | – |
 
 ## The base
 
@@ -115,7 +115,7 @@ Covered in: [Batched intents](/contracts/batched-intents/), [Pool: batched inten
 ### ADR-0005: Option E, the .jsc language
 
 [`0005-option-e-jsc-dsl.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0005-option-e-jsc-dsl.md)
-· Accepted with changes (r2), implemented
+· Superseded by ADR-0018 (r26): its language, `.jsc` v1, was removed, and its lowering to a Java `@StateContract` is ADR-0018's D1
 
 `.jsc` gives Solidity-style syntax (`total += received`, `balances[to] += amt`) without a new back end.
 `julc-state-dsl` parses and type-checks a `.jsc` file and **emits one Java `@StateContract` class**; everything after
@@ -310,12 +310,12 @@ Homebrew formula gated on repository settings.
 Covered in: [Quick start: Java & Gradle](/start/quick-start-java/#create-it-with-joust-new),
 [the native `joust`](/reference/joust-cli/#the-native-joust).
 
-### ADR-0018: `.jsc` 2, an immutable contract language
+### ADR-0018: The `.jsc` language, an immutable contract language
 
 [`0018-jsc-2-immutable-contract-language.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)
 · Proposed (r6)
 
-`.jsc` 2 makes the language npm projects start with able to express every JOUST contract. It is **immutable**, like
+`.jsc` makes the language npm projects start with able to express every JOUST contract. It is **immutable**, like
 UPLC: names are bound once with `const`, blocks and `if`/`match` are expressions, and an action evaluates to the next
 state (`{ ...state, count: count + by }`). Paying, sending, minting and emitting are declarations, in source order. It
 adds typed functions (with direct recursion), records, enums, `Option`, lists with `fold`/`map`/`filter`, inline and
@@ -326,12 +326,12 @@ keeps time out of control flow, deep checks on every input, and an explicit audi
 Java `@StateContract`, so nothing new is trusted on chain; an independent reference interpreter checks the lowering.
 The first language, `.jsc` v1 (ADR-0005), and its migration were removed in r26.
 
-### ADR-0021: A language server and VS Code extension for `.jsc` 2
+### ADR-0021: A language server and VS Code extension for `.jsc`
 
 [`0021-jsc-language-server-and-vscode-extension.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0021-jsc-language-server-and-vscode-extension.md)
 · Proposed (r6); M5a implemented in #83 (draft)
 
-The editor runs the build's own `.jsc` 2 front end, so the editor and the build cannot disagree about the language.
+The editor runs the build's own `.jsc` front end, so the editor and the build cannot disagree about the language.
 A Java language core beside the checker turns files into a document model (diagnostics with their stable codes,
 symbols, resolved names, types and time taint); it is compiled into the existing toolchain Wasm engine, and a
 JavaScript LSP layer serves it, so nobody needs a JDK; every engine runs in a worker that a watchdog can stop. The
