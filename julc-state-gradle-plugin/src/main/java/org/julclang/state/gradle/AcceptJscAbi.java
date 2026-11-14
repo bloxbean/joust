@@ -32,17 +32,28 @@ public abstract class AcceptJscAbi extends JavaExec {
     @Option(option = "sha256", description = "The SHA-256 of the new manifest that was reviewed")
     public abstract Property<String> getSha256();
 
-    /** The acceptance argument: {@code --accept-abi}, or the bound {@code --accept-abi=C@h1..h2}. */
+    /**
+     * The acceptance argument: the bare {@code --accept-abi} only when none of the three options is given; with any of
+     * them, all three are required (C1 on #99: a partial set never falls back to accepting every manifest), and the
+     * bound {@code --accept-abi=C@h1..h2} is checked here before anything runs.
+     */
     List<String> acceptance() {
+        boolean c = getContract().isPresent(), h1 = getCommittedSha256().isPresent(), h2 = getSha256().isPresent();
         var out = new ArrayList<String>();
-        if (!getContract().isPresent()) {
+        if (!c && !h1 && !h2) {
             out.add("--accept-abi");
             return out;
         }
-        if (!getCommittedSha256().isPresent() || !getSha256().isPresent()) {
-            throw new org.gradle.api.GradleException("acceptJscAbi --contract needs --committed-sha256 and --sha256 (from jscAbiDiff)");
+        if (!c || !h1 || !h2) {
+            throw new org.gradle.api.GradleException("acceptJscAbi: --contract, --committed-sha256 and --sha256 go together (from jscAbiDiff);"
+                    + " nothing was accepted. Without all three, run acceptJscAbi with none of them to accept every changed manifest");
         }
-        out.add("--accept-abi=" + getContract().get() + "@" + getCommittedSha256().get() + ".." + getSha256().get());
+        String contract = getContract().get(), committed = getCommittedSha256().get(), now = getSha256().get();
+        if (!contract.matches("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*") || !committed.matches("none|[0-9a-f]{64}") || !now.matches("[0-9a-f]{64}")) {
+            throw new org.gradle.api.GradleException("acceptJscAbi: --contract is a (qualified) contract name, --committed-sha256 a SHA-256 or"
+                    + " none, --sha256 a SHA-256; nothing was accepted");
+        }
+        out.add("--accept-abi=" + contract + "@" + committed + ".." + now);
         return out;
     }
 }

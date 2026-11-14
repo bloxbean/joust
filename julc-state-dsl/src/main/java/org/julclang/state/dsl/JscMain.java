@@ -123,9 +123,37 @@ public final class JscMain {
      */
     public record Bound(String contract, String committed, String now) {
         static Bound parse(String arg) {
-            var m = java.util.regex.Pattern.compile("([A-Za-z_][A-Za-z0-9_]*)@(none|[0-9a-f]{64})\\.\\.([0-9a-f]{64})").matcher(arg);
+            // S5, F5 on #99: the contract by its qualified name (app.A), or a simple name only when it is unambiguous.
+            var m = java.util.regex.Pattern.compile("([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)@(none|[0-9a-f]{64})\\.\\.([0-9a-f]{64})").matcher(arg);
             return m.matches() ? new Bound(m.group(1), m.group(2), m.group(3)) : null;
         }
+    }
+
+    /**
+     * S5, F5 on #99: the one {@code .jsc} 2 contract file {@code contract} names among {@code files}: by its qualified
+     * name ({@code app.A}), or by its simple name when exactly one contract has it. {@code {file, null}}, or
+     * {@code {null, error}}.
+     */
+    static Object[] resolveContract(Path src, List<Path> files, String contract) throws IOException {
+        var hits = new ArrayList<Path>();
+        var names = new ArrayList<String>();
+        for (Path f : files) {
+            String rel;
+            try {
+                rel = outputPath(Files.readString(f), f.getFileName().toString());
+            } catch (RuntimeException e) {
+                continue;
+            }
+            String qualified = rel.substring(0, rel.length() - ".java".length()).replace('/', '.');
+            String simple = qualified.substring(qualified.lastIndexOf('.') + 1);
+            if (contract.contains(".") ? qualified.equals(contract) : simple.equals(contract)) {
+                hits.add(f);
+                names.add(qualified + " (" + src.relativize(f) + ")");
+            }
+        }
+        if (hits.size() == 1) return new Object[]{hits.get(0), null};
+        if (hits.isEmpty()) return new Object[]{null, "no .jsc 2 contract " + contract + " under " + src};
+        return new Object[]{null, "the name " + contract + " is ambiguous: " + String.join(", ", names) + "; name the contract by its qualified name"};
     }
 
     static String sha256(String text) {
@@ -721,8 +749,6 @@ public final class JscMain {
         return org.julclang.state.dsl.v2.JscModules.of(texts);
     }
 
-    private static boolean boundSeen;
-
     /**
      * ADR-0021 D7a: the committed ABI manifest of {@code contract} and the one the build computes now, each with its SHA-256
      * ({@code none} when nothing is committed); printed, and with {@code out} written as JSON there (the extension's own
@@ -736,15 +762,16 @@ public final class JscMain {
             }
         }
         var modules = modules(src, files);
-        for (Path f : files) {
+        Object[] target = resolveContract(src, files, contract);
+        if (target[0] == null) {
+            System.err.println("jsc: " + target[1]);
+            return 1;
+        }
+        for (Path f : List.of((Path) target[0])) {
             String text = Files.readString(f);
-            String rel;
-            try {
-                rel = outputPath(text, f.getFileName().toString());
-            } catch (JscException e) {
-                continue;
-            }
-            if (!rel.substring(rel.lastIndexOf('/') + 1).equals(contract + ".java")) continue;
+            String rel = outputPath(text, f.getFileName().toString());
+            String qualified = rel.substring(0, rel.length() - ".java".length()).replace('/', '.');
+            contract = qualified.substring(qualified.lastIndexOf('.') + 1);
             Lowered lowered;
             try {
                 lowered = lowerWithWarnings(text, f.getFileName().toString(), id(src, f), modules, javaLibraries);
@@ -761,11 +788,11 @@ public final class JscMain {
             System.out.println(old == null ? "(none)" : old);
             System.out.println("+++ now sha256 " + now);
             System.out.println(lowered.abiJson());
-            System.out.println(was.equals(now) ? "unchanged" : "accept it with: ./gradlew acceptJscAbi --contract " + contract
+            System.out.println(was.equals(now) ? "unchanged" : "accept it with: ./gradlew acceptJscAbi --contract " + qualified
                     + " --committed-sha256 " + was + " --sha256 " + now);
             if (out != null) {
                 var o = new StringBuilder("{\"contract\":");
-                org.julclang.state.dsl.v2.JscLangJson.str(o, contract);
+                org.julclang.state.dsl.v2.JscLangJson.str(o, qualified);
                 o.append(",\"path\":");
                 org.julclang.state.dsl.v2.JscLangJson.str(o, src.relativize(committed).toString());
                 o.append(",\"committed\":{\"sha256\":\"").append(was).append("\",\"text\":");
@@ -859,7 +886,16 @@ public final class JscMain {
             }
         }
         int errors = 0;
-        boundSeen = false;
+        Path boundFile = null;
+        if (bound != null) {
+            Object[] target = resolveContract(src, files, bound.contract());
+            if (target[0] == null) {
+                // Nothing accepted, nothing written (S5 on #99: never another contract of the same simple name).
+                System.err.println("jsc: error[JSC0002]: --accept-abi=" + bound.contract() + "@…: " + target[1] + "; nothing accepted");
+                return 1;
+            }
+            boundFile = (Path) target[0];
+        }
         var written = new java.util.HashSet<Path>();
         // ADR-0018 D9: the .jsc libraries the files import (M4) and the contracts they import (M2c) are files of the same
         // tree, by relative path.
@@ -900,10 +936,8 @@ public final class JscMain {
                     // ADR-0018 D12: the ABI manifest is committed beside the .jsc file. Checked first: Java whose
                     // manifest is refused is not written, so nothing can compile it (security S9).
                     Path committedAbi = f.resolveSibling(target.getFileName().toString().replace(".java", ".abi.json"));
-                    String contractName = target.getFileName().toString().replace(".java", "");
-                    String refused = bound != null && bound.contract().equals(contractName) ? checkBound(committedAbi, lowered.abiJson(), name, bound)
+                    String refused = f.equals(boundFile) ? checkBound(committedAbi, lowered.abiJson(), name, bound)
                             : checkAbi(committedAbi, lowered.abiJson(), name, accept);
-                    if (bound != null && bound.contract().equals(contractName)) boundSeen = true;
                     if (refused != null) {
                         System.err.println(refused);
                         errors++;
@@ -955,11 +989,6 @@ public final class JscMain {
         for (var u : used.values()) {
             System.out.println("jsc: library " + u.name() + " sha256 " + u.sha256() + (u.external() ? (u.kind().equals("java")
                     ? " (statically certified; pinned)" : " (pinned)") : " (the project's)"));
-        }
-        if (bound != null && !boundSeen) {
-            System.err.println("jsc: error[JSC0002]: --accept-abi=" + bound.contract() + "@…: no .jsc 2 contract " + bound.contract()
-                    + " in " + src + "; nothing accepted");
-            errors++;
         }
         // Review r2 (#82 S6): only acceptJoustLock (--accept-lock) writes the lock; --accept-abi does not.
         if (lock != null) errors += checkLock(lock, used.values(), acceptLock);

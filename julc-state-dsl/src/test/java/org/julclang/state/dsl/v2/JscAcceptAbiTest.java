@@ -58,7 +58,7 @@ class JscAcceptAbiTest {
         assertEquals(0, d.code(), d.err());
         assertEquals("none", json(diff, "committed"));
         String now = json(diff, "now");
-        assertTrue(d.out().contains("acceptJscAbi --contract A --committed-sha256 none --sha256 " + now), d.out());
+        assertTrue(d.out().contains("acceptJscAbi --contract app.A --committed-sha256 none --sha256 " + now), d.out());
         // A only: B's missing manifest still fails the build and is not written.
         Run a = run(src.toString(), out.toString(), "--accept-abi=A@none.." + now);
         assertEquals(1, a.code());
@@ -85,5 +85,29 @@ class JscAcceptAbiTest {
         assertEquals(2, run(src.toString(), out.toString(), "--accept-abi=A@x..y").code());
         assertTrue(run(src.toString(), out.toString(), "--accept-abi=Nope@none.." + h2).err().contains("no .jsc 2 contract Nope"));
         assertEquals(1, run("--abi-diff", src.toString(), "Nope").code());
+    }
+
+    /** S5, F5 on #99: two contracts A in two packages: a simple name is ambiguous, refused; the qualified name picks one. */
+    @Test
+    void aContractIsItsQualifiedNameAndAnAmbiguousSimpleNameIsRefused(@TempDir Path dir) throws Exception {
+        Path src = dir.resolve("jsc"), out = dir.resolve("out");
+        Files.createDirectories(src.resolve("app"));
+        Files.createDirectories(src.resolve("other"));
+        Files.writeString(src.resolve("app/A.jsc"), contract("A", ", n: Int"));
+        Files.writeString(src.resolve("other/A.jsc"), contract("A", ", n: Int").replace("package app", "package other"));
+        Run amb = run("--abi-diff", src.toString(), "A");
+        assertEquals(1, amb.code());
+        assertTrue(amb.err().contains("ambiguous: app.A (app/A.jsc), other.A (other/A.jsc)"), amb.err());
+        Path diff = dir.resolve("d.json");
+        assertEquals(0, run("--abi-diff", src.toString(), "other.A", diff.toString()).code());
+        assertTrue(Files.readString(diff).contains("\"contract\":\"other.A\",\"path\":\"other/A.abi.json\""), Files.readString(diff));
+        String now = json(diff, "now");
+        Run ambiguous = run(src.toString(), out.toString(), "--accept-abi=A@none.." + now);
+        assertEquals(1, ambiguous.code());
+        assertTrue(ambiguous.err().contains("ambiguous"), ambiguous.err());
+        assertFalse(Files.exists(src.resolve("app/A.abi.json")) || Files.exists(src.resolve("other/A.abi.json")), "nothing written");
+        run(src.toString(), out.toString(), "--accept-abi=other.A@none.." + now);
+        assertTrue(Files.exists(src.resolve("other/A.abi.json")));
+        assertFalse(Files.exists(src.resolve("app/A.abi.json")), "the other A is not accepted");
     }
 }
