@@ -146,6 +146,12 @@ belongs to; these are M3a1's (owned objects of one type), each with its test or 
 | K21–K49 | moves, keyed, purposes, migration (M3a3, M3b, M3c) |
 | K50 separate gates | size, encoding, budget and modifiers gates (`JscV2M3a1GateTest`) |
 
+## Builds and DevKit
+
+`./gradlew build -PnoDevnet --continue`: 982 JVM tests, 0 failures. `toolchainWasmTest`: 387 tests on the Web Image, all passed. npm: `js/jsc-interpreter` 50/50, `tree-sitter-jsc` 20/20 and the shared corpus in agreement, `js/state-client` 48/48, the language server 75/76 (1 skipped).
+
+`./gradlew :examples:dsl:test` on Yaci DevKit (after a devnet reset): **126 tests, 0 failures**, including `BankDevnetPortTest` (examples/bank's DevKit test against the port: two customers in parallel, the owner and limit refusals, a pause, the escape hatch while paused) and the earlier ports' DevKit tests. The `js/joust` DevKit flows pass (the MerkleMap page included), except `joust dev … redeploys on save`: Node's recursive `fs.watch` never fires in this sandbox (a 10-line probe in a fresh tmpdir got no event), so the watcher does not rebuild. `js/joust-runtime`'s Ogmios provider test fails after the devnet reset because it probes the M0 fixtures' transactions, which are not on the fresh chain. M3a1 touches neither the dev server nor the runtime.
+
 ## Found on the way
 
 - **The transition generator took an owned method's first parameter after its object for the params**
