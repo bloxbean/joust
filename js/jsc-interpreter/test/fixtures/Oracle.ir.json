@@ -1,0 +1,150 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "23a290d273ca9dd50dc7abdb7d637ac4113f7c7afa4da5f4136fc468605de420",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Oracle",
+  "source": "Oracle.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "publisher", "type": "Key" }, { "name": "price", "type": "Int" }, { "name": "updatedAt", "type": "Int" }],
+    "at": [7, 1]
+  },
+  "timeFields": ["updatedAt"],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [{ "id": 1, "name": "price", "type": "Int", "taint": 0, "at": [10, 8] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [11, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [11, 21] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [11, 13]
+            },
+            "message": "price must be positive",
+            "at": [11, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [12, 25] },
+            { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [12, 33] },
+            { "node": "CtxRef", "name": "validFrom", "type": "Int", "taint": 3, "at": [12, 51] }
+          ],
+          "type": { "record": "State" },
+          "taint": 3,
+          "at": [12, 12]
+        },
+        "at": [10, 20]
+      },
+      "at": [10, 3]
+    },
+    {
+      "kind": "action",
+      "name": "post",
+      "params": [{ "id": 2, "name": "newPrice", "type": "Int", "taint": 0, "at": [16, 15] }],
+      "mods": [{ "name": "only", "field": "publisher" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [17, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [17, 24] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [17, 13]
+            },
+            "message": "price must be positive",
+            "at": [17, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 1, "at": [18, 17] },
+              "record": "State",
+              "field": "publisher",
+              "type": "Key",
+              "taint": 0,
+              "at": [18, 12]
+            },
+            { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [18, 31] },
+            { "node": "CtxRef", "name": "validFrom", "type": "Int", "taint": 3, "at": [18, 52] }
+          ],
+          "type": { "record": "State" },
+          "taint": 3,
+          "at": [18, 12]
+        },
+        "at": [16, 45]
+      },
+      "at": [16, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "publisher" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "publisher", "type": "Key", "taint": 0, "at": [22, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [22, 20] },
+            "at": [22, 5]
+          }
+        ],
+        "result": null,
+        "at": [21, 34]
+      },
+      "at": [21, 3]
+    }
+  ],
+  "warnings": [
+    {
+      "line": 12,
+      "col": 51,
+      "code": "JSC9003",
+      "message": "init stores a value of the validity window in updatedAt: whoever submits the transaction chooses the window, so validFrom can be up to maxValidityMs early and validTo that much late (ADR-0018 D11)"
+    },
+    {
+      "line": 18,
+      "col": 52,
+      "code": "JSC9003",
+      "message": "post stores a value of the validity window in updatedAt: whoever submits the transaction chooses the window, so validFrom can be up to maxValidityMs early and validTo that much late (ADR-0018 D11)"
+    }
+  ]
+}

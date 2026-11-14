@@ -1,0 +1,1187 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "fdb03f7bca01178ac0dac8bbfb92211d6b970ba40363d6ba66989571bc734880",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Inbox",
+  "source": "Inbox.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "512" }],
+  "records": [
+    {
+      "name": "Slip",
+      "fields": [
+        { "name": "urgent", "type": "Bool" },
+        { "name": "ref", "type": { "option": "Int" } },
+        { "name": "kind", "type": { "enum": "Kind" } },
+        { "name": "tags", "type": { "list": "Bytes" } },
+        { "name": "shares", "type": { "map": ["Key", "Int"] } },
+        { "name": "extra", "type": "Value" },
+        { "name": "reply", "type": "Address" }
+      ],
+      "at": [12, 1]
+    }
+  ],
+  "enums": [
+    {
+      "name": "Kind",
+      "variants": [
+        { "name": "Plain", "fields": [], "at": [10, 13] },
+        { "name": "Bonus", "fields": [{ "name": "factor", "type": "Int" }], "at": [10, 20] }
+      ],
+      "at": [10, 1]
+    }
+  ],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "owner", "type": "Key" },
+      { "name": "urgent", "type": "Int" },
+      { "name": "refs", "type": "Int" },
+      { "name": "bonus", "type": "Int" },
+      { "name": "tags", "type": "Int" },
+      { "name": "shares", "type": "Int" },
+      { "name": "extra", "type": "Int" },
+      { "name": "reply", "type": { "option": "Address" } },
+      { "name": "keys", "type": "Int" },
+      { "name": "names", "type": "Int" },
+      { "name": "flag", "type": "Bool" },
+      { "name": "pick", "type": { "option": "Int" } },
+      { "name": "kind", "type": { "enum": "Kind" } }
+    ],
+    "at": [14, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [19, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [19, 37] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [19, 46] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [19, 56] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [19, 65] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [19, 76] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [19, 86] },
+            { "node": "NoneLit", "type": { "option": "Address" }, "taint": 0, "at": [19, 96] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [19, 108] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [19, 118] },
+            { "node": "Lit", "value": false, "type": "Bool", "taint": 0, "at": [19, 127] },
+            { "node": "NoneLit", "type": { "option": "Int" }, "taint": 0, "at": [19, 140] },
+            {
+              "node": "Variant",
+              "enum": "Kind",
+              "variant": "Plain",
+              "values": [],
+              "type": { "enum": "Kind" },
+              "taint": 0,
+              "at": [19, 152]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [19, 12]
+        },
+        "at": [18, 10]
+      },
+      "at": [18, 3]
+    },
+    {
+      "kind": "action",
+      "name": "post",
+      "params": [],
+      "mods": [{ "name": "receives", "type": { "record": "Slip" } }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Not",
+              "operand": {
+                "node": "ListProp",
+                "op": "isEmpty",
+                "list": {
+                  "node": "FundsRef",
+                  "field": "deposits",
+                  "type": { "list": { "deposit": { "record": "Slip" } } },
+                  "taint": 0,
+                  "at": [24, 14]
+                },
+                "type": "Bool",
+                "taint": 0,
+                "at": [24, 14]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [24, 13]
+            },
+            "message": "nothing deposited",
+            "at": [24, 5]
+          }
+        ],
+        "result": {
+          "node": "Fold",
+          "list": {
+            "node": "FundsRef",
+            "field": "deposits",
+            "type": { "list": { "deposit": { "record": "Slip" } } },
+            "taint": 0,
+            "at": [25, 12]
+          },
+          "init": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [25, 32] },
+          "acc": {
+            "id": 1,
+            "name": "st",
+            "type": { "record": "State" },
+            "taint": 0,
+            "at": [25, 39],
+            "fieldTaints": {
+              "bonus": 0,
+              "extra": 0,
+              "flag": 0,
+              "keys": 0,
+              "kind": 0,
+              "names": 0,
+              "owner": 0,
+              "pick": 0,
+              "refs": 0,
+              "reply": 0,
+              "shares": 0,
+              "tags": 0,
+              "urgent": 0
+            }
+          },
+          "x": { "id": 2, "name": "d", "type": { "deposit": { "record": "Slip" } }, "taint": 0, "at": [25, 39] },
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "New",
+              "record": "State",
+              "values": [
+                {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [26, 10] },
+                  "record": "State",
+                  "field": "owner",
+                  "type": "Key",
+                  "taint": 0,
+                  "at": [25, 51]
+                },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [27, 15] },
+                    "record": "State",
+                    "field": "urgent",
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [27, 15]
+                  },
+                  "right": {
+                    "node": "Cond",
+                    "cond": {
+                      "node": "GetField",
+                      "target": {
+                        "node": "DepositField",
+                        "target": {
+                          "node": "LocalRef",
+                          "local": 2,
+                          "type": { "deposit": { "record": "Slip" } },
+                          "taint": 0,
+                          "at": [27, 30]
+                        },
+                        "field": "memo",
+                        "type": { "record": "Slip" },
+                        "taint": 0,
+                        "at": [27, 30]
+                      },
+                      "record": "Slip",
+                      "field": "urgent",
+                      "type": "Bool",
+                      "taint": 0,
+                      "at": [27, 30]
+                    },
+                    "then": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [27, 46] },
+                    "otherwise": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [27, 57] },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [27, 27]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [27, 15]
+                },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [28, 13] },
+                    "record": "State",
+                    "field": "refs",
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [28, 13]
+                  },
+                  "right": {
+                    "node": "Coalesce",
+                    "option": {
+                      "node": "GetField",
+                      "target": {
+                        "node": "DepositField",
+                        "target": {
+                          "node": "LocalRef",
+                          "local": 2,
+                          "type": { "deposit": { "record": "Slip" } },
+                          "taint": 0,
+                          "at": [28, 24]
+                        },
+                        "field": "memo",
+                        "type": { "record": "Slip" },
+                        "taint": 0,
+                        "at": [28, 24]
+                      },
+                      "record": "Slip",
+                      "field": "ref",
+                      "type": { "option": "Int" },
+                      "taint": 0,
+                      "at": [28, 24]
+                    },
+                    "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [28, 38] },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [28, 24]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [28, 13]
+                },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [29, 14] },
+                    "record": "State",
+                    "field": "bonus",
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [29, 14]
+                  },
+                  "right": {
+                    "node": "Match",
+                    "scrutinee": {
+                      "node": "GetField",
+                      "target": {
+                        "node": "DepositField",
+                        "target": {
+                          "node": "LocalRef",
+                          "local": 2,
+                          "type": { "deposit": { "record": "Slip" } },
+                          "taint": 0,
+                          "at": [29, 31]
+                        },
+                        "field": "memo",
+                        "type": { "record": "Slip" },
+                        "taint": 0,
+                        "at": [29, 31]
+                      },
+                      "record": "Slip",
+                      "field": "kind",
+                      "type": { "enum": "Kind" },
+                      "taint": 0,
+                      "at": [29, 31]
+                    },
+                    "arms": [
+                      {
+                        "ctors": ["Bonus"],
+                        "fields": ["factor"],
+                        "binds": [{ "id": 3, "name": "factor", "type": "Int", "taint": 0, "at": [30, 17] }],
+                        "body": {
+                          "stmts": [],
+                          "result": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [30, 29] },
+                          "at": [30, 29]
+                        },
+                        "at": [30, 9]
+                      },
+                      {
+                        "ctors": ["Plain"],
+                        "fields": [],
+                        "binds": [],
+                        "body": {
+                          "stmts": [],
+                          "result": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [31, 18] },
+                          "at": [31, 18]
+                        },
+                        "at": [31, 9]
+                      }
+                    ],
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [29, 25]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [29, 14]
+                },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [33, 13] },
+                    "record": "State",
+                    "field": "tags",
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [33, 13]
+                  },
+                  "right": {
+                    "node": "ListProp",
+                    "op": "length",
+                    "list": {
+                      "node": "GetField",
+                      "target": {
+                        "node": "DepositField",
+                        "target": {
+                          "node": "LocalRef",
+                          "local": 2,
+                          "type": { "deposit": { "record": "Slip" } },
+                          "taint": 0,
+                          "at": [33, 23]
+                        },
+                        "field": "memo",
+                        "type": { "record": "Slip" },
+                        "taint": 0,
+                        "at": [33, 23]
+                      },
+                      "record": "Slip",
+                      "field": "tags",
+                      "type": { "list": "Bytes" },
+                      "taint": 0,
+                      "at": [33, 23]
+                    },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [33, 23]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [33, 13]
+                },
+                {
+                  "node": "MapFold",
+                  "map": {
+                    "node": "GetField",
+                    "target": {
+                      "node": "DepositField",
+                      "target": {
+                        "node": "LocalRef",
+                        "local": 2,
+                        "type": { "deposit": { "record": "Slip" } },
+                        "taint": 0,
+                        "at": [34, 15]
+                      },
+                      "field": "memo",
+                      "type": { "record": "Slip" },
+                      "taint": 0,
+                      "at": [34, 15]
+                    },
+                    "record": "Slip",
+                    "field": "shares",
+                    "type": { "map": ["Key", "Int"] },
+                    "taint": 0,
+                    "at": [34, 15]
+                  },
+                  "init": {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [34, 34] },
+                    "record": "State",
+                    "field": "shares",
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [34, 34]
+                  },
+                  "acc": { "id": 4, "name": "x", "type": "Int", "taint": 0, "at": [34, 45] },
+                  "k": { "id": 5, "name": "k", "type": "Key", "taint": 0, "at": [34, 45] },
+                  "v": { "id": 6, "name": "v", "type": "Int", "taint": 0, "at": [34, 45] },
+                  "body": {
+                    "stmts": [],
+                    "result": {
+                      "node": "Arith",
+                      "op": "+",
+                      "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [34, 58] },
+                      "right": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [34, 62] },
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [34, 58]
+                    },
+                    "at": [34, 45]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [34, 15]
+                },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [35, 14] },
+                    "record": "State",
+                    "field": "extra",
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [35, 14]
+                  },
+                  "right": {
+                    "node": "LedgerOp",
+                    "op": "lovelaceOf",
+                    "args": [
+                      {
+                        "node": "GetField",
+                        "target": {
+                          "node": "DepositField",
+                          "target": {
+                            "node": "LocalRef",
+                            "local": 2,
+                            "type": { "deposit": { "record": "Slip" } },
+                            "taint": 0,
+                            "at": [35, 25]
+                          },
+                          "field": "memo",
+                          "type": { "record": "Slip" },
+                          "taint": 0,
+                          "at": [35, 25]
+                        },
+                        "record": "Slip",
+                        "field": "extra",
+                        "type": "Value",
+                        "taint": 0,
+                        "at": [35, 25]
+                      }
+                    ],
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [35, 25]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [35, 14]
+                },
+                {
+                  "node": "SomeOf",
+                  "value": {
+                    "node": "GetField",
+                    "target": {
+                      "node": "DepositField",
+                      "target": {
+                        "node": "LocalRef",
+                        "local": 2,
+                        "type": { "deposit": { "record": "Slip" } },
+                        "taint": 0,
+                        "at": [36, 19]
+                      },
+                      "field": "memo",
+                      "type": { "record": "Slip" },
+                      "taint": 0,
+                      "at": [36, 19]
+                    },
+                    "record": "Slip",
+                    "field": "reply",
+                    "type": "Address",
+                    "taint": 0,
+                    "at": [36, 19]
+                  },
+                  "type": { "option": "Address" },
+                  "taint": 0,
+                  "at": [36, 14]
+                },
+                {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [26, 10] },
+                  "record": "State",
+                  "field": "keys",
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [25, 51]
+                },
+                {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [26, 10] },
+                  "record": "State",
+                  "field": "names",
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [25, 51]
+                },
+                {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [26, 10] },
+                  "record": "State",
+                  "field": "flag",
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [25, 51]
+                },
+                {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [26, 10] },
+                  "record": "State",
+                  "field": "pick",
+                  "type": { "option": "Int" },
+                  "taint": 0,
+                  "at": [25, 51]
+                },
+                {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "State" }, "taint": 0, "at": [26, 10] },
+                  "record": "State",
+                  "field": "kind",
+                  "type": { "enum": "Kind" },
+                  "taint": 0,
+                  "at": [25, 51]
+                }
+              ],
+              "type": { "record": "State" },
+              "taint": 0,
+              "at": [25, 51]
+            },
+            "at": [25, 39]
+          },
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [25, 12]
+        },
+        "at": [23, 31]
+      },
+      "at": [23, 3]
+    },
+    {
+      "kind": "action",
+      "name": "keyed",
+      "params": [],
+      "mods": [{ "name": "receives", "type": "Key" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "urgent",
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "refs",
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "bonus",
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "tags",
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "shares",
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "extra",
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "reply",
+              "type": { "option": "Address" },
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "keys", "type": "Int", "taint": 0, "at": [42, 30] },
+              "right": {
+                "node": "ListProp",
+                "op": "length",
+                "list": {
+                  "node": "FundsRef",
+                  "field": "deposits",
+                  "type": { "list": { "deposit": "Key" } },
+                  "taint": 0,
+                  "at": [42, 37]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [42, 37]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 30]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "names",
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "pick",
+              "type": { "option": "Int" },
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "kind",
+              "type": { "enum": "Kind" },
+              "taint": 0,
+              "at": [42, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [42, 12]
+        },
+        "at": [41, 31]
+      },
+      "at": [41, 3]
+    },
+    {
+      "kind": "action",
+      "name": "named",
+      "params": [],
+      "mods": [{ "name": "receives", "type": "Bytes" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "urgent",
+              "type": "Int",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "refs",
+              "type": "Int",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "bonus",
+              "type": "Int",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "tags",
+              "type": "Int",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "shares",
+              "type": "Int",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "extra",
+              "type": "Int",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "reply",
+              "type": { "option": "Address" },
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "keys",
+              "type": "Int",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "names", "type": "Int", "taint": 0, "at": [47, 31] },
+              "right": {
+                "node": "ListProp",
+                "op": "length",
+                "list": {
+                  "node": "FundsRef",
+                  "field": "deposits",
+                  "type": { "list": { "deposit": "Bytes" } },
+                  "taint": 0,
+                  "at": [47, 39]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [47, 39]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [47, 31]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "pick",
+              "type": { "option": "Int" },
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "kind",
+              "type": { "enum": "Kind" },
+              "taint": 0,
+              "at": [47, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [47, 12]
+        },
+        "at": [46, 33]
+      },
+      "at": [46, 3]
+    },
+    {
+      "kind": "action",
+      "name": "valued",
+      "params": [],
+      "mods": [{ "name": "receives", "type": "Value" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "urgent",
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "refs",
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "bonus",
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "tags",
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "shares",
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "extra",
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "reply",
+              "type": { "option": "Address" },
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "keys",
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "names", "type": "Int", "taint": 0, "at": [52, 31] },
+              "right": {
+                "node": "ListProp",
+                "op": "length",
+                "list": {
+                  "node": "FundsRef",
+                  "field": "deposits",
+                  "type": { "list": { "deposit": "Value" } },
+                  "taint": 0,
+                  "at": [52, 39]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [52, 39]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [52, 31]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "pick",
+              "type": { "option": "Int" },
+              "taint": 0,
+              "at": [52, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [52, 17] },
+              "record": "State",
+              "field": "kind",
+              "type": { "enum": "Kind" },
+              "taint": 0,
+              "at": [52, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [52, 12]
+        },
+        "at": [51, 34]
+      },
+      "at": [51, 3]
+    },
+    {
+      "kind": "action",
+      "name": "set",
+      "params": [
+        { "id": 7, "name": "newFlag", "type": "Bool", "taint": 0, "at": [56, 14] },
+        { "id": 8, "name": "newPick", "type": { "option": "Int" }, "taint": 0, "at": [56, 29] },
+        { "id": 9, "name": "newKind", "type": { "enum": "Kind" }, "taint": 0, "at": [56, 51] }
+      ],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [57, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "urgent",
+              "type": "Int",
+              "taint": 0,
+              "at": [57, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "refs",
+              "type": "Int",
+              "taint": 0,
+              "at": [57, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "bonus",
+              "type": "Int",
+              "taint": 0,
+              "at": [57, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "tags",
+              "type": "Int",
+              "taint": 0,
+              "at": [57, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "shares",
+              "type": "Int",
+              "taint": 0,
+              "at": [57, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "extra",
+              "type": "Int",
+              "taint": 0,
+              "at": [57, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "reply",
+              "type": { "option": "Address" },
+              "taint": 0,
+              "at": [57, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "keys",
+              "type": "Int",
+              "taint": 0,
+              "at": [57, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [57, 17] },
+              "record": "State",
+              "field": "names",
+              "type": "Int",
+              "taint": 0,
+              "at": [57, 12]
+            },
+            { "node": "LocalRef", "local": 7, "type": "Bool", "taint": 0, "at": [57, 30] },
+            { "node": "LocalRef", "local": 8, "type": { "option": "Int" }, "taint": 0, "at": [57, 45] },
+            { "node": "LocalRef", "local": 9, "type": { "enum": "Kind" }, "taint": 0, "at": [57, 60] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [57, 12]
+        },
+        "at": [56, 77]
+      },
+      "at": [56, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [61, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [61, 16] },
+            "at": [61, 5]
+          }
+        ],
+        "result": null,
+        "at": [60, 30]
+      },
+      "at": [60, 3]
+    }
+  ],
+  "warnings": []
+}

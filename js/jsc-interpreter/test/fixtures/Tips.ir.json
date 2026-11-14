@@ -1,0 +1,607 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "71732a22a527b2f45b8c3202e8c23f1f2bd6750c4f70df7621b57e13d646024b",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Tips",
+  "source": "Tips.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "1024" }, { "name": "assetSlots", "value": "4" }],
+  "records": [
+    { "name": "Note", "fields": [{ "name": "to", "type": "Key" }, { "name": "tag", "type": "Bytes" }], "at": [9, 1] },
+    { "name": "Last", "fields": [{ "name": "by", "type": "Key" }, { "name": "value", "type": "Value" }], "at": [10, 1] }
+  ],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "owner", "type": "Key" },
+      { "name": "credits", "type": { "map": ["Key", "Int"] } },
+      { "name": "taken", "type": "Value" },
+      { "name": "last", "type": { "option": { "record": "Last" } } }
+    ],
+    "at": [12, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [16, 21] },
+            { "node": "MapEmpty", "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [16, 38] },
+            { "node": "LedgerOp", "op": "none", "args": [], "type": "Value", "taint": 0, "at": [16, 58] },
+            { "node": "NoneLit", "type": { "option": { "record": "Last" } }, "taint": 0, "at": [16, 78] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [16, 12]
+        },
+        "at": [15, 10]
+      },
+      "at": [15, 3]
+    },
+    {
+      "kind": "action",
+      "name": "credit",
+      "params": [],
+      "mods": [{ "name": "receives", "type": { "record": "Note" } }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Not",
+              "operand": {
+                "node": "ListProp",
+                "op": "isEmpty",
+                "list": {
+                  "node": "FundsRef",
+                  "field": "deposits",
+                  "type": { "list": { "deposit": { "record": "Note" } } },
+                  "taint": 0,
+                  "at": [21, 14]
+                },
+                "type": "Bool",
+                "taint": 0,
+                "at": [21, 14]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [21, 13]
+            },
+            "message": "nothing deposited",
+            "at": [21, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 3, "name": "next", "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [22, 5] },
+            "value": {
+              "node": "Fold",
+              "list": {
+                "node": "FundsRef",
+                "field": "deposits",
+                "type": { "list": { "deposit": { "record": "Note" } } },
+                "taint": 0,
+                "at": [22, 18]
+              },
+              "init": {
+                "node": "StateField",
+                "field": "credits",
+                "type": { "map": ["Key", "Int"] },
+                "taint": 0,
+                "at": [22, 38]
+              },
+              "acc": { "id": 1, "name": "m", "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [22, 47] },
+              "x": { "id": 2, "name": "d", "type": { "deposit": { "record": "Note" } }, "taint": 0, "at": [22, 47] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "MapOp",
+                  "op": "set",
+                  "map": { "node": "LocalRef", "local": 1, "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [22, 57] },
+                  "args": [
+                    {
+                      "node": "GetField",
+                      "target": {
+                        "node": "DepositField",
+                        "target": {
+                          "node": "LocalRef",
+                          "local": 2,
+                          "type": { "deposit": { "record": "Note" } },
+                          "taint": 0,
+                          "at": [22, 63]
+                        },
+                        "field": "memo",
+                        "type": { "record": "Note" },
+                        "taint": 0,
+                        "at": [22, 63]
+                      },
+                      "record": "Note",
+                      "field": "to",
+                      "type": "Key",
+                      "taint": 0,
+                      "at": [22, 63]
+                    },
+                    {
+                      "node": "Arith",
+                      "op": "+",
+                      "left": {
+                        "node": "Coalesce",
+                        "option": {
+                          "node": "MapOp",
+                          "op": "get",
+                          "map": {
+                            "node": "LocalRef",
+                            "local": 1,
+                            "type": { "map": ["Key", "Int"] },
+                            "taint": 0,
+                            "at": [22, 75]
+                          },
+                          "args": [
+                            {
+                              "node": "GetField",
+                              "target": {
+                                "node": "DepositField",
+                                "target": {
+                                  "node": "LocalRef",
+                                  "local": 2,
+                                  "type": { "deposit": { "record": "Note" } },
+                                  "taint": 0,
+                                  "at": [22, 81]
+                                },
+                                "field": "memo",
+                                "type": { "record": "Note" },
+                                "taint": 0,
+                                "at": [22, 81]
+                              },
+                              "record": "Note",
+                              "field": "to",
+                              "type": "Key",
+                              "taint": 0,
+                              "at": [22, 81]
+                            }
+                          ],
+                          "type": { "option": "Int" },
+                          "taint": 0,
+                          "at": [22, 75]
+                        },
+                        "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [22, 95] },
+                        "type": "Int",
+                        "taint": 0,
+                        "at": [22, 75]
+                      },
+                      "right": {
+                        "node": "LedgerOp",
+                        "op": "lovelaceOf",
+                        "args": [
+                          {
+                            "node": "DepositField",
+                            "target": {
+                              "node": "LocalRef",
+                              "local": 2,
+                              "type": { "deposit": { "record": "Note" } },
+                              "taint": 0,
+                              "at": [22, 100]
+                            },
+                            "field": "value",
+                            "type": "Value",
+                            "taint": 0,
+                            "at": [22, 100]
+                          }
+                        ],
+                        "type": "Int",
+                        "taint": 0,
+                        "at": [22, 100]
+                      },
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [22, 74]
+                    }
+                  ],
+                  "type": { "map": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [22, 57]
+                },
+                "at": [22, 47]
+              },
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [22, 18]
+            },
+            "at": [22, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 6, "name": "assets", "type": "Value", "taint": 0, "at": [23, 5] },
+            "value": {
+              "node": "Fold",
+              "list": {
+                "node": "FundsRef",
+                "field": "deposits",
+                "type": { "list": { "deposit": { "record": "Note" } } },
+                "taint": 0,
+                "at": [23, 20]
+              },
+              "init": { "node": "LedgerOp", "op": "none", "args": [], "type": "Value", "taint": 0, "at": [23, 40] },
+              "acc": { "id": 4, "name": "v", "type": "Value", "taint": 0, "at": [23, 54] },
+              "x": { "id": 5, "name": "d", "type": { "deposit": { "record": "Note" } }, "taint": 0, "at": [23, 54] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "LedgerOp",
+                  "op": "add",
+                  "args": [
+                    { "node": "LocalRef", "local": 4, "type": "Value", "taint": 0, "at": [23, 64] },
+                    {
+                      "node": "CallStd",
+                      "module": "std/value",
+                      "name": "withoutLovelace",
+                      "args": [
+                        {
+                          "node": "DepositField",
+                          "target": {
+                            "node": "LocalRef",
+                            "local": 5,
+                            "type": { "deposit": { "record": "Note" } },
+                            "taint": 0,
+                            "at": [23, 84]
+                          },
+                          "field": "value",
+                          "type": "Value",
+                          "taint": 0,
+                          "at": [23, 84]
+                        }
+                      ],
+                      "type": "Value",
+                      "taint": 0,
+                      "at": [23, 68]
+                    }
+                  ],
+                  "type": "Value",
+                  "taint": 0,
+                  "at": [23, 64]
+                },
+                "at": [23, 54]
+              },
+              "type": "Value",
+              "taint": 0,
+              "at": [23, 20]
+            },
+            "at": [23, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 9, "name": "total", "type": "Value", "taint": 0, "at": [24, 5] },
+            "value": {
+              "node": "Fold",
+              "list": {
+                "node": "FundsRef",
+                "field": "deposits",
+                "type": { "list": { "deposit": { "record": "Note" } } },
+                "taint": 0,
+                "at": [24, 19]
+              },
+              "init": { "node": "LedgerOp", "op": "none", "args": [], "type": "Value", "taint": 0, "at": [24, 39] },
+              "acc": { "id": 7, "name": "v", "type": "Value", "taint": 0, "at": [24, 53] },
+              "x": { "id": 8, "name": "d", "type": { "deposit": { "record": "Note" } }, "taint": 0, "at": [24, 53] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "LedgerOp",
+                  "op": "add",
+                  "args": [
+                    { "node": "LocalRef", "local": 7, "type": "Value", "taint": 0, "at": [24, 63] },
+                    {
+                      "node": "DepositField",
+                      "target": {
+                        "node": "LocalRef",
+                        "local": 8,
+                        "type": { "deposit": { "record": "Note" } },
+                        "taint": 0,
+                        "at": [24, 67]
+                      },
+                      "field": "value",
+                      "type": "Value",
+                      "taint": 0,
+                      "at": [24, 67]
+                    }
+                  ],
+                  "type": "Value",
+                  "taint": 0,
+                  "at": [24, 63]
+                },
+                "at": [24, 53]
+              },
+              "type": "Value",
+              "taint": 0,
+              "at": [24, 19]
+            },
+            "at": [24, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [25, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [25, 12]
+            },
+            { "node": "LocalRef", "local": 3, "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [25, 33] },
+            {
+              "node": "LedgerOp",
+              "op": "add",
+              "args": [
+                { "node": "StateField", "field": "taken", "type": "Value", "taint": 0, "at": [25, 46] },
+                { "node": "LocalRef", "local": 6, "type": "Value", "taint": 0, "at": [25, 54] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [25, 46]
+            },
+            {
+              "node": "SomeOf",
+              "value": {
+                "node": "New",
+                "record": "Last",
+                "values": [
+                  { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [25, 84] },
+                  { "node": "LocalRef", "local": 9, "type": "Value", "taint": 0, "at": [25, 99] }
+                ],
+                "type": { "record": "Last" },
+                "taint": 0,
+                "at": [25, 73]
+              },
+              "type": { "option": { "record": "Last" } },
+              "taint": 0,
+              "at": [25, 68]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [25, 12]
+        },
+        "at": [20, 33]
+      },
+      "at": [20, 3]
+    },
+    {
+      "kind": "action",
+      "name": "claim",
+      "params": [],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 10, "name": "due", "type": "Int", "taint": 0, "at": [30, 5] },
+            "value": {
+              "node": "Coalesce",
+              "option": {
+                "node": "MapOp",
+                "op": "get",
+                "map": {
+                  "node": "StateField",
+                  "field": "credits",
+                  "type": { "map": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [30, 17]
+                },
+                "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [30, 29] }],
+                "type": { "option": "Int" },
+                "taint": 0,
+                "at": [30, 17]
+              },
+              "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [30, 40] },
+              "type": "Int",
+              "taint": 0,
+              "at": [30, 17]
+            },
+            "at": [30, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [31, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [31, 19] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [31, 13]
+            },
+            "message": "no credit",
+            "at": [31, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [32, 9] },
+            "amount": { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [32, 17] },
+            "at": [32, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [33, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [33, 12]
+            },
+            {
+              "node": "MapOp",
+              "op": "delete",
+              "map": {
+                "node": "StateField",
+                "field": "credits",
+                "type": { "map": ["Key", "Int"] },
+                "taint": 0,
+                "at": [33, 33]
+              },
+              "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [33, 48] }],
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [33, 33]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [33, 17] },
+              "record": "State",
+              "field": "taken",
+              "type": "Value",
+              "taint": 0,
+              "at": [33, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [33, 17] },
+              "record": "State",
+              "field": "last",
+              "type": { "option": { "record": "Last" } },
+              "taint": 0,
+              "at": [33, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [33, 12]
+        },
+        "at": [29, 23]
+      },
+      "at": [29, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Not",
+                  "operand": {
+                    "node": "CallStd",
+                    "module": "std/value",
+                    "name": "isEmpty",
+                    "args": [{ "node": "StateField", "field": "taken", "type": "Value", "taint": 0, "at": [39, 17] }],
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [39, 9]
+                  },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [39, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Send",
+                      "to": {
+                        "node": "LedgerOp",
+                        "op": "wallet",
+                        "args": [{ "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [40, 19] }],
+                        "type": "Address",
+                        "taint": 0,
+                        "at": [40, 12]
+                      },
+                      "value": { "node": "StateField", "field": "taken", "type": "Value", "taint": 0, "at": [40, 27] },
+                      "datum": {
+                        "node": "New",
+                        "record": "Last",
+                        "values": [
+                          { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [40, 45] },
+                          { "node": "StateField", "field": "taken", "type": "Value", "taint": 0, "at": [40, 59] }
+                        ],
+                        "type": { "record": "Last" },
+                        "taint": 0,
+                        "at": [40, 34]
+                      },
+                      "at": [40, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [39, 24]
+                },
+                "at": [39, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": false,
+            "at": [39, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [42, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [42, 16] },
+            "at": [42, 5]
+          }
+        ],
+        "result": null,
+        "at": [38, 30]
+      },
+      "at": [38, 3]
+    },
+    {
+      "kind": "view",
+      "name": "lastValue",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "option": { "record": "Last" } },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "StateField",
+          "field": "last",
+          "type": { "option": { "record": "Last" } },
+          "taint": 0,
+          "at": [45, 36]
+        },
+        "at": [45, 36]
+      },
+      "at": [45, 3]
+    }
+  ],
+  "warnings": []
+}

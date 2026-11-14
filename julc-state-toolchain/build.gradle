@@ -22,6 +22,8 @@ dependencies {
     testImplementation project(':examples:pool')
     testImplementation project(':examples:treasury')  // M1c review S1: a parameterised script, read beside its class
     testImplementation project(':examples:dex')       // ADR-0018 M2 (J11): the Java example the dex port is measured against
+    testImplementation project(':examples:oracle')    // ADR-0018 M2c (J11): the Java examples the oracle and fees ports are measured against
+    testImplementation project(':examples:fees')
     testImplementation libs.julc.vm.java
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes
@@ -35,6 +37,8 @@ tasks.named('test') {
     inputs.dir(rootProject.file('js/jsc-interpreter/src')).withPropertyName('jscInterpreterSources').withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('js/jsc-interpreter/bin')).withPropertyName('jscInterpreterBin').withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('js/jsc-interpreter/test/fixtures')).withPropertyName('jscInterpreterFixtures').withPathSensitivity(PathSensitivity.RELATIVE)
+    // EngineFixtureScriptsTest (M2c review r2, F9): the recorded oracle, so a change to fixtures/ alone runs it again.
+    inputs.dir(rootProject.file('fixtures')).withPropertyName('fixtures').withPathSensitivity(PathSensitivity.RELATIVE)
     dependsOn ':examples:counter:classes', ':examples:bank:classes', ':examples:vault:classes', ':examples:escrow:classes',
             ':examples:dsl:classes', ':examples:guild:classes', ':examples:token:classes', ':examples:treasury:classes',
             ':examples:market:classes', ':examples:fees:classes', ':examples:crowdfund:classes', ':examples:pool:classes',

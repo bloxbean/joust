@@ -54,29 +54,108 @@ public class ValueAdapter {
      * token name over 32 bytes, a quantity out of the 128-bit range (review r1, C1).
      */
     public static Value fromWire(Value v) {
-        String prevPolicy = null;
-        for (var e : v.toPlutusData().entries()) {
-            String p = HEX.formatHex(((PlutusData.BytesData) e.key()).value());
-            Require.that(prevPolicy == null || prevPolicy.compareTo(p) < 0, "fromWire: policies out of order or repeated");
-            prevPolicy = p;
-            var tokens = ((PlutusData.MapData) e.value()).entries();
-            Require.that(!tokens.isEmpty(), "fromWire: an empty token map");
-            var seen = new java.util.HashSet<String>();
-            for (var t : tokens) {
-                String n = HEX.formatHex(((PlutusData.BytesData) t.key()).value());
-                BigInteger q = ((PlutusData.IntData) t.value()).value();
-                Require.that(seen.add(n), "fromWire: a repeated token name");
-                Require.that(q.signum() != 0, "fromWire: a zero quantity");
-                Require.that(p.length() <= 64 && n.length() <= 64, "fromWire: a policy id or token name over 32 bytes");
-                inRange(q, "fromWire");
-            }
-        }
+        wire(v.toPlutusData(), "fromWire");
         return Assets.build(Assets.read(v));
     }
 
-    /** {@code f} with its offered and held values {@link #fromWire from the wire}: what a transition program hands a method. */
+    /** {@link #fromWire}'s rules on the data's own entries, in their own order (nothing normalised before the check). */
+    private static void wire(PlutusData d, String op) {
+        Require.that(d instanceof PlutusData.MapData, op + ": not a map");
+        String prevPolicy = null;
+        for (var e : ((PlutusData.MapData) d).entries()) {
+            Require.that(e.key() instanceof PlutusData.BytesData && e.value() instanceof PlutusData.MapData, op + ": not a value");
+            String p = HEX.formatHex(((PlutusData.BytesData) e.key()).value());
+            Require.that(prevPolicy == null || prevPolicy.compareTo(p) < 0, op + ": policies out of order or repeated");
+            prevPolicy = p;
+            var tokens = ((PlutusData.MapData) e.value()).entries();
+            Require.that(!tokens.isEmpty(), op + ": an empty token map");
+            var seen = new java.util.HashSet<String>();
+            for (var t : tokens) {
+                Require.that(t.key() instanceof PlutusData.BytesData && t.value() instanceof PlutusData.IntData, op + ": not a value");
+                String n = HEX.formatHex(((PlutusData.BytesData) t.key()).value());
+                BigInteger q = ((PlutusData.IntData) t.value()).value();
+                Require.that(seen.add(n), op + ": a repeated token name");
+                Require.that(q.signum() != 0, op + ": a zero quantity");
+                Require.that(p.length() <= 64 && n.length() <= 64, op + ": a policy id or token name over 32 bytes");
+                inRange(q, op);
+            }
+        }
+    }
+
+    /**
+     * {@code f} with its offered and held values, and (M2c, #85) each deposit's value, {@link #fromWire from the wire}: what a
+     * transition program hands a method, as the validator does.
+     */
     public static Funds fundsFromWire(Funds f) {
-        return new Funds(f.policy(), f.self(), fromWire(f.received()), fromWire(f.held()), f.deposits());
+        return new Funds(f.policy(), f.self(), fromWire(f.received()), fromWire(f.held()), claimsFromWire(f.deposits()));
+    }
+
+    /** Deposit claims with canonical values (M2c, #85): a claim's value is the registry's, in the wire's order. */
+    public static org.julclang.core.types.JulcList<DepositClaim> claimsFromWire(org.julclang.core.types.JulcList<DepositClaim> ds) {
+        if (ds.isEmpty()) return ds;
+        DepositClaim d = ds.head();
+        return claimsFromWire(ds.tail()).prepend(new DepositClaim(d.output(), d.by(), fromWire(d.value()), d.memo()));
+    }
+
+    // ------------------------------------------------------------------ stored values (M2c, ADR-0018 D5)
+
+    /**
+     * {@code v} in its wire form (M2c): the order cardano-client-lib's canonical CBOR writes a value as data, each policy's
+     * token names by their encoding (a shorter name first, then bytewise; policies keep the ledger's order, which agrees).
+     * A value stored in a datum (a field of the state, a record, a memo, a datum) is held so, so that the data a method
+     * returns equals the data the runtime writes. Precondition: {@code v} canonical, every policy lovelace's or 28 bytes
+     * (then the ledger's policy order is canonical CBOR's too: review r2, C6; {@link #fromData} refuses other policies).
+     */
+    public static Value toWire(Value v) {
+        var ps = new java.util.ArrayList<PlutusData.Pair>();
+        for (var p : Assets.read(v).entrySet()) {
+            var names = new java.util.ArrayList<>(p.getValue().keySet());
+            names.sort(java.util.Comparator.comparingInt(String::length).thenComparing(java.util.Comparator.naturalOrder()));
+            var ts = new java.util.ArrayList<PlutusData.Pair>();
+            for (String n : names) ts.add(new PlutusData.Pair(PlutusData.bytes(HEX.parseHex(n)), PlutusData.integer(p.getValue().get(n))));
+            ps.add(new PlutusData.Pair(PlutusData.bytes(HEX.parseHex(p.getKey())), new PlutusData.MapData(ts)));
+        }
+        return Value.fromPlutusData(new PlutusData.MapData(ps));
+    }
+
+    /** A value as data (M2c): the generated encoders' Value (on-chain a value is its data). */
+    public static PlutusData data(Value v) {
+        return v.toPlutusData();
+    }
+
+    /**
+     * A value decoded from data (a memo's or a read state's, M2c): {@link #fromWire}'s rules, so a malformed one fails. They
+     * are checked on the data as it came, before a {@code Value} is built from it, since that build normalises (it puts
+     * lovelace first, as the on-chain body does not: review r1, C3). And every policy is the ledger's: lovelace's (empty)
+     * or 28 bytes (review r2, C6). Data that crosses is written as canonical CBOR, whose map order (a shorter key first)
+     * agrees with the ledger's only for such policies; a value of policies of other lengths (both up to 32 bytes) could
+     * not come back in the order {@link #fromWire} requires. No value .jsc builds has another policy (Value.asset takes a
+     * Hash).
+     */
+    public static Value fromData(PlutusData d) {
+        wire(d, "fromData");
+        for (var e : ((PlutusData.MapData) d).entries()) {
+            int n = ((PlutusData.BytesData) e.key()).value().length;
+            Require.that(n == 0 || n == 28, "fromData: a policy id that is neither lovelace's nor 28 bytes");
+        }
+        return fromWire(Value.fromPlutusData(d));
+    }
+
+    /**
+     * Whether {@code v} may be deposited (M2c, ADR-0011 D3, §5.7): not empty, every quantity strictly positive, and no token
+     * name of a reserved kind (32 bytes; 29 starting 0x4F or 0x49) under any policy but lovelace's, as the output verifier
+     * requires of every deposit claim.
+     */
+    public static boolean depositable(Value v) {
+        var m = Assets.read(v);
+        if (m.isEmpty()) return false;
+        for (var p : m.entrySet()) {
+            for (var t : p.getValue().entrySet()) {
+                if (t.getValue().signum() <= 0) return false;
+                if (!p.getKey().isEmpty() && reserved(HEX.parseHex(t.getKey()))) return false;
+            }
+        }
+        return true;
     }
 
     /** The empty value. */

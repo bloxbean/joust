@@ -29,6 +29,19 @@ sealed interface Ty {
     record Prim(String name) implements Ty {}
 
     /**
+     * M2c: another contract's instance (ADR-0011 D2: its policy and 32-byte id), typed by its contract {@code C}
+     * ({@code Instance<C>}, D5): a params field only, the target of {@code deposit} and of {@code reads}. Not comparable,
+     * not stored elsewhere, never a checked input (the deployer fixes it).
+     */
+    record Instance(String contract) implements Ty {}
+
+    /**
+     * M2c: a deposit a receiving action sees (an element of {@code funds.deposits}, ADR-0011 D3): its value, and its memo
+     * when the action says {@code receives T} ({@code memo} is then T, else null: the memo is not read).
+     */
+    record DepositT(Ty memo) implements Ty {}
+
+    /**
      * A ledger type of M2 (D5): {@code Value}, {@code Address}, {@code Credential}. Not a {@link Prim}, so every
      * exhaustive walk over types states what it does with them.
      */
@@ -60,7 +73,14 @@ sealed interface Ty {
             case MapT m -> "Map<" + show(m.key()) + ", " + show(m.val()) + ">";
             case BigMapT m -> "BigMap<" + show(m.key()) + ", " + show(m.val()) + ">";
             case Ledger l -> l.name();
+            case Instance i -> "Instance<" + i.contract() + ">";
+            case DepositT d -> d.memo() == null ? "Deposit" : "Deposit<" + show(d.memo()) + ">";
         };
+    }
+
+    /** Whether a type is an imported contract's ({@code Oracle.State}, M2c): its name is qualified by the contract. */
+    static boolean foreign(String name) {
+        return name.indexOf('.') > 0;
     }
 
     /** Bytes, Key or Hash: a byte string at run time. */
@@ -79,11 +99,14 @@ sealed interface Ty {
             case Prim p -> isBytes(p) ? "Bytes" : p.name();
             case ListT l -> "List_" + mangle(l.elem());
             case OptT o -> "Opt_" + mangle(o.elem());
-            case Rec r -> r.name();
-            case EnumT e -> e.name();
+            // An imported contract's type (M2c): Oracle.State is Oracle_State; a declared name has no '_', so it cannot clash.
+            case Rec r -> r.name().replace('.', '_');
+            case EnumT e -> e.name().replace('.', '_');
             case MapT m -> "Map_" + mangle(m.key()) + "_" + mangle(m.val());
             case BigMapT m -> throw new IllegalStateException("a BigMap has no generated helpers by type");
             case Ledger l -> l.name();
+            case Instance i -> "Instance_" + i.contract();
+            case DepositT d -> d.memo() == null ? "Deposit" : "Deposit_" + mangle(d.memo());
         };
     }
 
@@ -112,6 +135,8 @@ sealed interface Ty {
             case BigMapT b -> true;
             case Prim p -> false;
             case Ledger l -> false;
+            case Instance i -> false;
+            case DepositT d -> false;
             case ListT l -> hasBigMap(l.elem(), components, seen);
             case OptT o -> hasBigMap(o.elem(), components, seen);
             case MapT m -> hasBigMap(m.val(), components, seen);
@@ -133,8 +158,12 @@ sealed interface Ty {
     private static boolean needsCheck(Ty t, Function<String, List<Ty>> components, Set<String> seen) {
         return switch (t) {
             case Prim p -> p.equals(KEY) || p.equals(HASH);
-            // An Address or a Credential holds hashes (28 bytes each, D5); a Value never crosses as an input (M2).
-            case Ledger l -> !l.equals(VALUE);
+            // An Address or a Credential holds hashes (28 bytes each, D5). A Value crosses only as a stored one, in a read
+            // state (M2c; an argument never holds one, JSC0341): its wire form is checked there, used or not (review r1, C4).
+            case Ledger l -> true;
+            // M2c: an instance is the deployer's (params); a deposit's memo is checked where the action starts (#memo:).
+            case Instance i -> false;
+            case DepositT d -> false;
             case ListT l -> needsCheck(l.elem(), components, seen);
             case OptT o -> needsCheck(o.elem(), components, seen);
             case Rec r -> seen.add(r.name()) && components.apply(r.name()).stream().anyMatch(f -> needsCheck(f, components, seen));

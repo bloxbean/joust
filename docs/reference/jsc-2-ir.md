@@ -63,7 +63,13 @@ reader refuses every program that uses it, at load, rather than misreading it: a
 `std/value` and `std/address` rows, and the arms `KeyCred`/`ScriptCred` of a match on a credential; they keep version 1.
 **M2b's are version 2's** (above): the top-level `params` (a Record named `Config`) and `invariants`, each present only
 when the contract declares them, the node `ParamsRef`, the statement `Emit`, and the modifiers `quorum` (with `keys` and
-`threshold` instead of `field`) and `authorized`. The JavaScript reader also refuses a condition or a
+`threshold` instead of `field`) and `authorized`. **M2c's are additive within version 2** (each refused at load by a
+reader without it, since both readers refuse unknown fields, kinds and modifiers, so none is dropped): the top-level
+`contracts` (present only when the contract imports another), a method's `reads` (present only when it has one), the
+modifier `receives` with an optional `type`, the types `{ "instance": C }` and `{ "deposit": T|null }`, the statement
+`Deposit`, a `Send`'s optional `datum`, the node `DepositField`, and `FundsRef`'s field `deposits`. A program without them
+exports byte for byte as before (examples/dsl's 25 earlier files: identical IR). The integration with M4a's version 2
+joins these too (the test it adds reads back an export with `contracts`, `reads` and a `receives` type as well). The JavaScript reader also refuses a condition or a
 boolean operand that is not of type `Bool` (a `Branch`'s, `Require`'s or `Cond`'s condition; `Logic`'s and `Not`'s
 operands), and an empty `branches` list. Additive changes keep version 1. A change to
 an existing node's fields, to the meaning of an existing node, operator, modifier or row, or to the program's top-level
@@ -101,11 +107,13 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   "enums": [{ "name": "Phase", "variants": [Record…], "at": [3, 1] }],
   "state": Record,
   "params": Record,
+  "contracts": [{ "name", "package", "state": Record, "records": [Record…], "enums": [Enum…], "timeFields": [name…],
+                  "receives": [Type|null…], "bigMaps" }],
   "timeFields": ["lastSeen"],
   "recursiveFns": ["fact"],
   "fns": [{ "name", "params": [Local…], "result": Type, "body": Block, "at" }],
   "methods": [{ "kind": "init|action|destroy|view", "name", "params": [Local…], "mods": [{ "name", "field"? }],
-                "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at" }],
+                "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at", "reads"? }],
   "invariants": [{ "name", "body": Block, "at" }],
   "warnings": [{ "line", "col", "code", "message" }]
 }
@@ -118,7 +126,16 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   the state (`StateRef`, `StateField`) and the params (`ParamsRef`), checked like a view's body. A modifier is
   `{ "name", "field"? }`; `quorum`'s is `{ "name": "quorum", "keys", "threshold" }`; `authorized`'s `field`, like
   `quorum`'s `keys` and `threshold`, is a state field or `params.f`.
+- **M2c.** `contracts` (present only when the contract imports another: `import contract { C } from "./C.jsc"`) states
+  each imported contract as its own checked IR does, sorted by name: its package, its state and declared records and
+  enums under qualified names (`C.State`, `C.Share`, variants `C.Open`), its time fields (a read state's field among them
+  is a time value), the memo type of each receiving action (`null` for one that reads none) and whether its state holds a
+  BigMap. A method's `reads` (present only when it reads another contract) lists `{ "local": Local, "field" }`: the
+  local holding the state the params field `field` (an `Instance<C>`) names, declared before the body. The modifier
+  `receives` is `{ "name": "receives" }`, or `{ "name": "receives", "type": T }` for `receives T`.
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),
+  `{ "instance": C }` (M2c, `Instance<C>`), `{ "deposit": T|null }` (M2c, an element of `funds.deposits`: its memo type,
+  or null),
   `{ "list": T }`, `{ "option": T }`, `{ "record": name }` (`"State"` for the state), `{ "enum": name }`,
   `{ "map": [K, V] }`, `{ "bigmap": [K, V] }`.
 - **Local** (where it is bound): `{ "id", "name", "type", "taint", "at", "fieldTaints"? }`. A reference to it is
@@ -135,7 +152,8 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `Let` | `local` (Local), `value` |
   | `Require` | `cond`, `message` |
   | `Pay` | `to`, `amount` |
-  | `Send` (M2) | `to`, `value` |
+  | `Send` (M2) | `to`, `value`, `datum` (M2c; present only when the send has one) |
+  | `Deposit` (M2c) | `target` (an `Instance`), `value`, `memo` |
   | `Mint` (M2) | `burn` (boolean: `burn(…)`), `name`, `qty` |
   | `Accept` (M2) | `value` |
   | `Emit` (M2b) | `event` (an `Event` value) |
@@ -172,8 +190,8 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `Compare` | `op` (`< <= > >=`), `left`, `right` | | `Coalesce` | `option`, `default` |
   | `Equals` | `negate`, `left`, `right`, `operand` (Type) | | `BlockValue` | `block` |
   | `Logic` | `op` (`&& \|\|`), `left`, `right` | | `IfValue` | `branches`, `otherwise` (Block) |
-  | `FundsRef` (M2) | `field` (`received held policy self`) | | `LedgerOp` (M2) | `op`, `args` (below) |
-  | `ParamsRef` (M2b) | `field` (of `Config`) | | | |
+  | `FundsRef` (M2) | `field` (`received held policy self`; M2c `deposits`) | | `LedgerOp` (M2) | `op`, `args` (below) |
+  | `ParamsRef` (M2b) | `field` (of `Config`) | | `DepositField` (M2c) | `target` (a deposit), `field` (`value memo`) |
 
   `LedgerOp`'s ops and argument counts: `none` 0, `lovelace` 1, `asset` 3 (policy, name, quantity), `add` 2, `sub` 2,
   `lovelaceOf` 1, `of` 3 (value, policy, name), `covers` 2; `keyCred` 1, `scriptCred` 1, `wallet` 1, `walletStaked` 2,
@@ -199,18 +217,22 @@ The differential tests pass calls to the JavaScript interpreter as JSON, in a ta
 | `BigMap` | `{ "bigmap": [[k, v]…] }`: its contents (*now*), in canonical order |
 | `Value` (M2) | `{ "value": [[policy, name, "q"]…] }`: policy and name as hex, the quantity as a decimal string, in the ledger's order (semantics §1.3) |
 | `Credential` (M2) | `{ "keyCred": hex }`, `{ "scriptCred": hex }` |
+| `Instance<C>` (M2c) | `{ "instance": [policy, id] }`, both hex |
 | `Address` (M2) | `{ "address": [credential, stake] }`, `stake` `null`, `{ "stakeHash": credential }` or `{ "stakePtr": ["slot", "tx", "cert"] }`. A pointer can be written (a vector may offer one) but is never a checked input's (semantics §4, r15) |
 
 A call is `{ "method", "state": v|null, "args": [v…], "tx": { "caller", "received", "balance", "validFrom",
 "validTo", "signers", "funds"?, "approvers"? }|null, "transition"?, "params"? }`, with `caller` and each of `signers` as hex and the other fields as
 decimal strings. `signers` (semantics §2.6) may be left out: the caller alone signs. `funds` (M2) is
-`{ "received": Value, "held": Value, "policy": hex, "self": hex }`, for a call that reads funds or moves native assets.
+`{ "received": Value, "held": Value, "policy": hex, "self": hex, "deposits"? }`, for a call that reads funds or moves
+native assets; `deposits` (M2c) lists `{ "value": Value, "memo": v|null }` for a receiving action. The tx's `reads` (M2c)
+maps each params field a method reads by to the state read, `{ "oracle": { "rec": "Oracle.State", … } }`.
 `approvers` (M2b, semantics §2.6) lists the scripts that approve the call, as hex (none when left out); `params` (M2b) is
 the `Config` record the contract is deployed with (§2). `"transition": true` runs the
 transition alone, without the modifiers (§2.6). An answer is
 `{ "refused": message, "class": "kind:detail" }` (semantics §2.5),
 `{ "ok": { "value": v|null, "payouts": [{ "to": hex, "lovelace": "n" }…], "sends"?, "mint"?, "accepted"?, "events"? } }`
-(M2: the sends `[{ "to": Address, "value": Value }…]`, the net mint and the accepted sum; M2b: the events `[v…]`, each
-present only when not empty), or
+(M2: the sends `[{ "to": Address, "value": Value, "datum"? }…]`, the net mint and the accepted sum; M2b: the events
+`[v…]`; M2c: a send's `datum` when it has one, and the deposits `[{ "target": Instance, "value": Value, "memo": v }…]`;
+each present only when not empty), or
 `{ "limit": message }` when the
 interpreter could not finish (semantics §2.4: no answer, a failure of that leg).

@@ -1,0 +1,31 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Stash",
+  "source": "Stash.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "n", "type": "Int", "data": "int" },
+      { "name": "held", "type": "Value", "data": "map<bytes, map<bytes, int>>" }
+    ] },
+  "params": { "name": "Config", "constr": 0, "fields": [
+      { "name": "v", "type": "Value", "data": "map<bytes, map<bytes, int>>" },
+      { "name": "h", "type": "Hash", "data": "bytes28" }
+    ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Stay", "constr": 0, "fields": [] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

@@ -61,13 +61,18 @@ tasks.named('processResources') { from(files(jscOut).builtBy(generateJsc)) { inc
 // an example's src/test holding anything the rule does not copy (a subpackage, a helper class, resources) stops the build.
 // ADR-0018 M2: dex too. A .jsc 2 contract's records have fixed names where the Java example chose its own: dex's state
 // record Pool is State, its result records Moved and Closed are Received and Settled (the port's ABI is the same).
+// ADR-0018 M2c: oracle and fees too, two contracts each (DescriptionTest becomes <first contract>DescriptionPortTest).
 // ADR-0018 M2b: treasury too; its tests use the governor script Guardian, which src/main/java copies as TreasuryGuardian (the
 // fourth element renames words; #84 review F7: the example itself stays off this class path, since its TreasuryValidator
 // shares its script's resource name with the port's).
 def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['Crowdfund', 'launch'],
              token: ['Token', 'create'], pool: ['Pool', null],
              dex: ['Dex', 'open', [Pool: 'State', Moved: 'Received', Closed: 'Settled']],
-             treasury: ['Treasury', 'open', [:], [Guardian: 'TreasuryGuardian']]]
+             treasury: ['Treasury', 'open', [:], [Guardian: 'TreasuryGuardian']],
+             // ADR-0018 M2c: oracle (Oracle and Shop; the port names the shop Kiosk, since examples/dsl's Shop.jsc is M4a's and
+             // JuLC writes a script by its validator's simple name) and fees (Pot and Stall).
+             oracle: ['Oracle', 'open', [:], [Shop: 'Kiosk', ShopClient: 'KioskClient', ShopValidator: 'KioskValidator']],
+             fees: ['Pot', null]]
 def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
 def copyPortTests = tasks.register('copyPortTests', Sync) {
     description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'

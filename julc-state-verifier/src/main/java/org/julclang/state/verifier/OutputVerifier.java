@@ -3,6 +3,8 @@ package org.julclang.state.verifier;
 import org.julclang.ledger.ScriptContext;
 import org.julclang.ledger.ScriptInfo;
 import org.julclang.state.api.OutputClaims;
+import org.julclang.state.api.ValueAdapter;
+import org.julclang.ledger.Value;
 import org.julclang.core.PlutusData;
 import org.julclang.ledger.TxInfo;
 import org.julclang.ledger.TxOutRef;
@@ -62,13 +64,15 @@ public class OutputVerifier {
     }
 
     /**
-     * A canonical, non-empty value (the strict builtin refuses anything else) with only positive amounts and no
-     * reserved-kind names under any policy (so an NFT whose name is a 32-byte hash cannot be deposited; send it instead).
+     * A well-formed, non-empty value with only positive amounts and no reserved-kind names under any policy (so an NFT
+     * whose name is a 32-byte hash cannot be deposited; send it instead). Well formed as the wire carries it (#85): the
+     * runtime writes the registry through cardano-client-lib's canonical CBOR, which orders a policy's token names by their
+     * encoding, not the ledger's way, so the value is read with {@code ValueAdapter.fromWire}'s rules (any token order; a
+     * repeated name, a zero quantity, an empty token map or policies out of order fail), as the offered assets are (C1).
      */
     static boolean positive(PlutusData v) {
-        PlutusData canonical = Builtins.valueData(Builtins.unValueData(v));
         // Not empty: a zero-value claim would let anyone add deposits (and memos) that carry nothing (review r3, L1).
-        boolean ok = Builtins.equalsData(canonical, v) && !Builtins.nullList(Builtins.unMapData(v));
+        boolean ok = !ValueAdapter.isEmpty(ValueAdapter.fromWire((Value) (Object) v));
         PlutusData ps = Builtins.unMapData(v);
         while (!Builtins.nullList(ps)) {
             PlutusData pair = Builtins.headList(ps);

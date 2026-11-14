@@ -23,7 +23,8 @@ public final class CorpusParse {
         var c = f.contract();
         var out = new ArrayList<String>();
         out.add("package " + f.pkg());
-        out.add("imports: " + join(f.imports().stream().map(i -> i.from() + "{" + String.join(",", i.names()) + "}").toList()));
+        // M2c: a contract import reads "contract ./Oracle.jsc{Oracle}", in source order among the others.
+        out.add("imports: " + join(f.imports().stream().map(i -> (i.contract() ? "contract " : "") + i.from() + "{" + String.join(",", i.names()) + "}").toList()));
         types(out, "", f.types(), f.enums(), f.fns());
         out.add("contract " + c.name() + "(" + join(c.options().stream().map(Syntax.Option::name).toList()) + ")");
         out.add("state: " + join(c.state().stream().map(Syntax.FieldDecl::name).toList()));
@@ -35,7 +36,9 @@ public final class CorpusParse {
         if (!c.invariants().isEmpty()) out.add("invariants: " + join(c.invariants().stream().map(Syntax.InvariantDecl::name).toList()));
         out.add("methods: " + String.join("; ", c.methods().stream().map(m -> {
             String kind = m.kind().name().toLowerCase();
-            String mods = String.join(" ", m.mods().stream().map(x -> x.arg() == null ? x.name() : x.name() + " " + x.arg()).toList());
+            // M2c: receives T names its memo type, written without spaces.
+            String mods = String.join(" ", m.mods().stream().map(x -> x.type() != null ? x.name() + " " + type(x.type())
+                    : x.arg() == null ? x.name() : x.name() + " " + x.arg()).toList());
             return kind + (m.kind() == Syntax.Kind.INIT ? "" : " " + m.name()) + "(" + join(m.params().stream().map(Syntax.Param::name).toList())
                     + ")" + (mods.isEmpty() ? "" : " " + mods);
         }).toList()));
@@ -47,6 +50,10 @@ public final class CorpusParse {
         out.add(where + "types: " + join(types.stream().map(t -> t.name() + "(" + join(t.fields().stream().map(Syntax.FieldDecl::name).toList()) + ")").toList()));
         out.add(where + "enums: " + join(enums.stream().map(e -> e.name() + "(" + join(e.variants().stream().map(Syntax.VariantDecl::name).toList()) + ")").toList()));
         out.add(where + "fns: " + join(fns.stream().map(x -> x.name() + "(" + join(x.params().stream().map(Syntax.Param::name).toList()) + ")").toList()));
+    }
+
+    private static String type(Syntax.TypeRef t) {
+        return t.name() + (t.args().isEmpty() ? "" : "<" + join(t.args().stream().map(CorpusParse::type).toList()) + ">");
     }
 
     private static String join(List<String> xs) {

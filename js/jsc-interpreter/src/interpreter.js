@@ -54,10 +54,17 @@ class Program {
     for (const e of p.enums) for (const v of e.variants) add(v);
     add(p.state);
     if (p.params) add(p.params);   // M2b: the params record, Config
+    // M2c: each imported contract's state and types, under their qualified names (Oracle.State).
+    for (const c of p.contracts ?? []) {
+      add(c.state);
+      for (const r of c.records) add(r);
+      for (const e of c.enums) for (const v of e.variants) add(v);
+    }
     this.invariants = p.invariants ?? [];
     this.params = null;
     this.variantTag = new Map();
     for (const e of p.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
+    for (const c of p.contracts ?? []) for (const e of c.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
     this.fns = new Map(p.fns.map((f) => [f.name, f]));
     this.methods = new Map(p.methods.map((m) => [m.name, m]));
   }
@@ -134,13 +141,38 @@ class Program {
     if ((m.kind === 'init') !== (state === null || state === undefined)) throw new Error('an init has no input state; others do');
     return depthGuard(() => {
       if (modifiers) this.#modifiers(m, state, tx);
-      const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [] };
+      const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [], deposits: [] };
       let env = null;
       m.params.forEach((l, i) => (env = bind(env, l, args[i])));
+      // M2c (ADR-0011 D2): each read state, from the transaction's reference inputs by the params field naming it.
+      const reads = m.reads ?? [];
+      for (const r of reads) {
+        if (!tx || !tx.reads || !(r.field in tx.reads)) throw new Error(`${m.name} reads params.${r.field}: its transaction needs that state`);
+        env = bind(env, r.local, tx.reads[r.field]);
+      }
       // §4: every checked parameter is well formed before any statement runs.
       for (const id of m.checked) {
         const l = m.params.find((x) => x.id === id);
         if (!this.wellFormed(lookup(env, id), l.type)) throw new Refused(`${l.name} is not a well-formed input`, 'input', l.name);
+      }
+      // §4 (M2c, review r3 C7): an init checks the params it is made under (the deployment's).
+      if (m.kind === 'init' && this.params && !this.#fieldsWellFormed(this.params, 'Config')) {
+        throw new Refused('the params are not well formed', 'input', 'params');
+      }
+      // §4 (M2c): then each read state, a checked input too.
+      for (const r of reads) {
+        if (!this.wellFormed(lookup(env, r.local.id), r.local.type)) {
+          throw new Refused(`${r.local.name} is not a well-formed state of ${r.field}`, 'input', r.local.name);
+        }
+      }
+      // §4 (M2c, ADR-0011 D3): receives T: every deposit's memo is a well-formed T, before the body runs.
+      const rv = m.mods.find((x) => x.name === 'receives');
+      if (rv && 'type' in rv) {
+        for (const d of funds(frame).deposits ?? []) {
+          if (d.memo === null || d.memo === undefined || !this.wellFormed(d.memo, rv.type)) {
+            throw new Refused(`a deposit's memo is not a well-formed ${JSON.stringify(rv.type)}`, 'input', 'deposits');
+          }
+        }
       }
       env = this.#exec(m.body.stmts, env, frame);
       const value = m.body.result === null ? null : this.#eval(m.body.result, env, frame);
@@ -148,7 +180,9 @@ class Program {
       if (accepts(m.body) && !frame.accepted.equals(funds(frame).received)) {
         throw new Refused('the method accepts other native assets than the caller offers', 'domain', 'accepted');
       }
-      const out = { value, payouts: frame.payouts, sends: frame.sends, mint: frame.mint, accepted: frame.accepted, events: frame.events };
+      const out = {
+        value, payouts: frame.payouts, sends: frame.sends, mint: frame.mint, accepted: frame.accepted, events: frame.events, deposits: frame.deposits,
+      };
       if (modifiers) this.#outputs(m, value);
       return out;
     });
@@ -266,7 +300,19 @@ class Program {
           if (to.payment.script && bytesEqual(to.payment.hash, funds(f).policy)) {
             throw new Refused("a send cannot go to the contract's own script", 'domain', 'send');
           }
-          f.sends.push({ to, value });
+          // M2c: the datum, evaluated after the value's checks (§5.1).
+          const datum = s.datum ? this.#eval(s.datum, env, f) : null;
+          f.sends.push({ to, value, datum });
+          break;
+        }
+        case 'Deposit': {
+          // §5.7 (M2c): target, value and memo, left to right; the value is not empty, every quantity strictly positive,
+          // and no token name of a reserved kind under any policy but lovelace's (the output verifier's rule).
+          const target = this.#eval(s.target, env, f);
+          const value = this.#eval(s.value, env, f);
+          const memo = this.#eval(s.memo, env, f);
+          if (!depositable(value)) throw new Refused('this value cannot be deposited', 'domain', 'deposit');
+          f.deposits.push({ target, value, memo });
           break;
         }
         case 'Mint': {
@@ -430,7 +476,11 @@ class Program {
       }
       case 'BigEmpty': return BigMapV.EMPTY;
       case 'BigOp': return this.#bigOp(e, env, f);
-      case 'FundsRef': return funds(f)[e.field];
+      case 'FundsRef': return e.field === 'deposits' ? Object.freeze([...(funds(f).deposits ?? [])]) : funds(f)[e.field];
+      case 'DepositField': {
+        const d = this.#eval(e.target, env, f);
+        return e.field === 'value' ? d.value : d.memo;
+      }
       case 'ParamsRef': return this.#paramsField(e.field);
       case 'LedgerOp': return ledger(e.op, e.args.map((x) => this.#eval(x, env, f)));
       default:
@@ -631,6 +681,10 @@ class Program {
       if (t === 'Credential') return v.hash.length === 28;
       // A staking part is none or a hash: a pointer is refused (review S1).
       if (t === 'Address') return v.payment.hash.length === 28 && (v.stake === NONE || (v.stake.value instanceof StakeHash && v.stake.value.credential.hash.length === 28));
+      // §4 (M2c, review r1 C2, r2 C6): a Value that arrives (a memo, a read state) is in the decoder's domain: every
+      // policy lovelace's (empty) or 28 bytes, every token name at most 32 bytes, every quantity in the signed 128-bit
+      // range (a ValueV keeps no zero).
+      if (t === 'Value') return v.entries.every(([p, n, q]) => (p.length === 0 || p.length === 56) && n.length <= 64 && inRange(q));
       return true;
     }
     if ('list' in t) return v.every((x) => this.wellFormed(x, t.list));
@@ -647,6 +701,7 @@ class Program {
       return true;
     }
     if ('bigmap' in t) return true;
+    if ('instance' in t || 'deposit' in t) return true;   // M2c: never a checked input (§4)
     throw new Error(`unknown type ${JSON.stringify(t)}`);
   }
 
@@ -679,6 +734,16 @@ function accepts(b) {
     || (s.stmt === 'If' && (s.branches.some((br) => accepts(br.then)) || accepts(s.otherwise)))
     || (s.stmt === 'For' && accepts(s.body))
     || (s.stmt === 'Match' && s.arms.some((a) => accepts(a.body))));
+}
+
+/** §5.7 (M2c): a deposit's value is not empty; every quantity strictly positive, no reserved-kind name under any policy but lovelace's. */
+function depositable(v) {
+  if (v.entries.length === 0) return false;
+  for (const [p, n, q] of v.entries) {
+    if (q <= 0n) return false;
+    if (p !== '' && reserved(fromHexBytes(n))) return false;
+  }
+  return true;
 }
 
 /** §5.1, §5.3: every quantity positive, no reserved name under the own policy, and, accepting, no lovelace. */

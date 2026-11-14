@@ -48,6 +48,9 @@ final class Abi {
             case Ty.EnumT e -> e.name();
             // M2: the ledger's schemas; a Value only as the native assets a redeemer carries (assetsIn).
             case Ty.Ledger l -> l.equals(Ty.VALUE) ? VALUE_SHAPE : l.name();
+            // M2c: an instance of another contract (a params field), the API's ForeignInstance.
+            case Ty.Instance i -> "ForeignInstance";
+            case Ty.DepositT d -> throw new IllegalStateException("a deposit is never encoded by this contract");
         };
     }
 
@@ -192,6 +195,11 @@ final class Abi {
                     field("present", "Bool", "bool", "        "), field("value", "Bytes", "bytes", "        ")), "      ") + "] }");
             types.add("    \"MerkleMap\": { \"kind\": \"api\", \"constructors\": [" + ctor("MerkleMap", 0, List.of(field("root", "Bytes", "bytes", "        "),
                     field("reads", "List<MapEntry>", "list<MapEntry>", "        "), field("writes", "List<MapEntry>", "list<MapEntry>", "        ")), "      ") + "] }");
+        }
+        // M2c: the params name another contract's instance (ADR-0011): the API's ForeignInstance (policy, instance id).
+        if (p.params() != null && p.params().fields().values().stream().anyMatch(t -> t instanceof Ty.Instance)) {
+            types.add("    \"ForeignInstance\": { \"kind\": \"api\", \"constructors\": [" + ctor("ForeignInstance", 0, List.of(
+                    field("policy", "Bytes", "bytes", "        "), field("instance", "Bytes", "bytes", "        ")), "      ") + "] }");
         }
         types.add("    \"TxOutRef\": { \"kind\": \"ledger\", \"constructors\": [" + ctor("TxOutRef", 0, List.of(field("txId", "Bytes", "bytes", "        "),
                 field("index", "Int", "int", "        ")), "      ") + "] }");

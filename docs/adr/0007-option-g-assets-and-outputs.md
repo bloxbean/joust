@@ -1,7 +1,8 @@
 # ADR-0007: Option G — native assets, minting and general outputs
 
 **Status:** Accepted with changes (r2): a security reviewer and Codex both returned "request changes"; resolved in §6.
-Amended 2026-11-13 (r3, by ADR-0018 r15 / PR #78): the offered assets are converted from the wire on-chain (§8)
+Amended 2026-11-13 (r3, by ADR-0018 r15 / PR #78): the offered assets are converted from the wire on-chain (§8).
+Amended 2026-11-13 (r4, by ADR-0018 r21 / M2c): deposit claims are read from the wire too (issue #85; §9)
 **Date:** 2026-11-07
 **Builds on:** ADR-0001 (A: I3 exact value, I7 tagged payouts), ADR-0003 (C: token kinds), ADR-0004 (D).
 **Stack:** #1–#7, then this.
@@ -368,3 +369,73 @@ are of r2 and stay as they were measured.
 A deposit of two token names of unequal length is therefore refused (it fails closed); no example deposits such a value.
 Fixing it changes the shared verifier's hash, and so every sending contract's script: issue #85.
 
+## 9. Amendment r4 (2026-11-13): deposit claims from the wire (ADR-0018 r21, M2c; issue #85)
+
+**What was wrong** (§8's "Not changed"). The runtime writes the output registry's redeemer through cardano-client-lib,
+whose canonical CBOR orders a policy's token names by their encoding (`01` before `00ff`). The output verifier required
+each deposit claim's value in the ledger's order (`positive`: `valueData(unValueData(v)) == v`, and `unValueData`
+refuses names out of the ledger's order), and the depositor's validator compared the claim with its native deposit as
+data (`equalsData`). So a deposit of two token names of one policy whose lengths differ was refused by the verifier (it
+failed closed), and a receiver's method was handed the claims' values in the wire's order, which the native builtins
+refuse. No shipped flow hit it: examples/fees deposits lovelace only.
+
+**What changed**, as §8 did for the offered assets:
+- **The output verifier** (`OutputVerifier.positive`) reads a claim's value with `ValueAdapter.fromWire`'s rules: any
+  token order; a repeated name, a zero quantity, an empty token map or policies out of order fail. It still requires a
+  non-empty value, positive quantities and no reserved-kind names.
+- **The depositor's validator** (`depositsMade`, I40) compares the claim's value with its deposit as values, each folded
+  with `methodValue` (any order), not as data. The memo is still compared as data (`equalsData`).
+- **The receiver's validator** hands its method each claim with its value converted (`ValueAdapter.claimsFromWire`), so a
+  method sees canonical values, as it sees `funds.received`; its value equation already folded the claims in any order.
+- **The transition programs** convert their `Funds`' deposits the same way (`ValueAdapter.fundsFromWire`, which converted
+  the offered and held values since §8).
+- `examples/fees`' `FeesTest.aClaimOfTokenNamesOfUnequalLength_passesTheVerifierAndTheReceiver` is the regression test
+  (fails at `d12d080`, passes after); the `.jsc` 2 five-way suite deposits and receives such values on every leg
+  (`JscV2M2cFourWayTest`: Pot, Tips, Tipper).
+
+**What it costs** (measured at the M2c head against `d12d080`, the head before the change).
+
+Script sizes (bytes, flat script; every contract that sends or deposits embeds the verifier's hash, so its script hash
+changes even where its size does not):
+
+| Script | Before | After |
+|---|---|---|
+| the output verifier (`OutputVerifier`, CBOR) | 1,365 | 1,572 |
+| dex `Dex` | 12,229 | 12,229 (another hash) |
+| market `Market` | 13,514 | 13,514 (another hash) |
+| locker `Locker` | 14,499 | 14,499 (another hash) |
+| locker `Safes` | 14,564 | 14,564 (another hash) |
+| fees `Pot` (receives) | 9,009 | 9,336 |
+| fees `Stall` (deposits) | 9,464 | 9,475 |
+| treasury `Treasury` (sends) | 9,297 | 9,297 (another hash) |
+| `.jsc` 2 `Treasury` (examples/dsl, the port) | 9,801 | 9,801 (another hash) |
+| `.jsc` 2 `Council` (examples/dsl) | 10,333 | 10,333 (another hash) |
+
+Execution units, per script, from the examples' harness tests (`DexTest`, `MarketTest`, `LockerTest`, `FeesTest`) at both
+heads:
+
+| Script, call | Δ CPU | Δ memory |
+|---|---|---|
+| output verifier, one send (dex swaps, market cancel, locker unlock) | +528,000 (+3.6%) | +3,300 (+6.0%) |
+| output verifier, market buy | +528,000 (+2.6%) | +3,300 (+4.2%) |
+| output verifier, fees sale (one deposit claim) | +3,855,745 (+9.2%) | +22,844 (+16.8%) |
+| fees `Stall` sell | +6,963,661 (+2.5%) | +26,705 (+3.0%) |
+| fees `Pot` collect | +10,354,983 (+4.9%) | +37,817 (+5.6%) |
+| market offer (mint) | +3,935,693 (+2.4%) | +10,709 (+2.1%) |
+| market cancel | +2,121,521 (+1.1%) | +4,029 (+0.6%) |
+| market relist (the listing's spend) | +9,992,907 (+4.4%) | +25,447 (+3.5%) |
+| market relist (the second spend) | +11,807,079 (+5.4%) | +32,127 (+4.6%) |
+| market buy | +2,121,521 (+0.6%) | +4,029 (+0.4%) |
+| locker lock | −3,935,693 (−1.7%) | −10,709 (−1.4%) |
+| locker unlock | −6,057,214 (−2.1%) | −14,738 (−1.6%) |
+| dex (every call), mint validators, map verifier | 0 | 0 |
+| treasury `Treasury` and its `.jsc` port, each of the 12 calls of `JscV2M2bGateTest` (init, fund, pay, rotate, freeze, close, each also at the council's maximum) | 0 | 0 |
+
+The verifier's conversion costs a deposit claim about 3.3M CPU (the sends' claims pay +0.5M for the code's layout); the
+receiver's conversion about 10M per collect. Market, locker and treasury do not deposit, and their scripts are
+byte-identical at both heads apart from the verifier's 28-byte hash (review r1 on #90, F6): their deltas come from
+evaluation paths that depend on that hash's bytes (for instance where the verifier's credential falls in an ordered map
+or list the script walks), not from any change in their code; treasury's measured calls happen to take none. The
+fixtures of the ADR-0015 oracle that hold the verifier's hash are recorded again on DevKit at this head, each group
+holding one recording (`FixturesTest` and `EngineFixtureScriptsTest` check it): `fixtures/m0` dex, fees, locker,
+market, staking and treasury; `fixtures/m3` dex, fees, locker, staking, treasury and treasury-governor.

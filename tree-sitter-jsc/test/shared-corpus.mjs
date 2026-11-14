@@ -213,7 +213,9 @@ function shape(file) {
     out.push(where + 'enums: ' + join(kids(n, 'enum_declaration').map((d) => `${text(fieldOf(d, 'name'))}(${join(kids(d, 'variant_declaration').map((v) => text(fieldOf(v, 'name'))))})`)));
     out.push(where + 'fns: ' + join(kids(n, 'function_declaration').map((d) => `${text(fieldOf(d, 'name'))}(${params(fieldOf(d, 'parameters'))})`)));
   };
-  out.push('imports: ' + join(kids(t, 'import_declaration').map((i) => `${text(fieldOf(i, 'source')).slice(1, -1)}{${join(fieldsOf(i, 'name').map(text))}}`)));
+  // M2c: a contract import reads 'contract <source>{<name>}', in source order with the other imports (as CorpusParse.shape).
+  out.push('imports: ' + join(t.children.filter((i) => i.kind === 'import_declaration' || i.kind === 'contract_import')
+    .map((i) => `${i.kind === 'contract_import' ? 'contract ' : ''}${text(fieldOf(i, 'source')).slice(1, -1)}{${join(fieldsOf(i, 'name').map(text))}}`)));
   decls(t, '');
   const c = kids(t, 'contract_declaration')[0];
   const opts = fieldOf(c, 'options');

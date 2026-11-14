@@ -27,8 +27,16 @@ public final class JscMain {
      * a v1 file's name is escaped instead, so existing v1 files keep rebuilding (ADR-0018 D16, review F16).
      */
     public static Lowered lowerWithWarnings(String source, String fileName) {
+        return lowerWithWarnings(source, fileName, null, org.julclang.state.dsl.v2.JscModules.NONE);
+    }
+
+    /**
+     * As {@link #lowerWithWarnings(String, String)}, for the module {@code id} of a build whose other {@code .jsc} files
+     * {@code modules} finds (M2c, ADR-0018 D9): a contract's {@code import contract} imports resolve there.
+     */
+    public static Lowered lowerWithWarnings(String source, String fileName, String id, org.julclang.state.dsl.v2.JscModules modules) {
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
-            var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName);
+            var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName, id, modules);
             return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
                     fileName, r.sourceMapJson(), r.abiJson(), r.irJson());
         }
@@ -141,11 +149,12 @@ public final class JscMain {
             }
         }
         int errors = 0, checked = 0;
+        var modules = modules(src, files);
         for (Path f : files) {
             String text = Files.readString(f);
             if (!org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
             String name = src.relativize(f).toString();
-            var lowered = org.julclang.state.dsl.v2.JscV2.lower(text, f.getFileName().toString());
+            var lowered = org.julclang.state.dsl.v2.JscV2.lower(text, f.getFileName().toString(), id(src, f), modules);
             String path = lowered.javaPath();
             String pkg = path.contains("/") ? path.substring(0, path.lastIndexOf('/')).replace('/', '.') : "";
             String contract = path.substring(path.lastIndexOf('/') + 1).replace(".java", "");
@@ -432,7 +441,22 @@ public final class JscMain {
      * {@code .jsc} 2 manifest is accepted, 1 on an error, 2 on a usage error.
      */
     public static int run(String[] args) throws IOException {
-        return run(args, JscMain::lowerWithWarnings);
+        return run(args, DEFAULT);
+    }
+
+    /** The front end of a build: {@link #lowerWithWarnings}, with the build's other files as modules (M2c). */
+    private static final FrontEnd DEFAULT = JscMain::lowerWithWarnings;
+
+    /** A file's module id in a build over {@code src}: its relative path, '/'-separated (ADR-0018 D9). */
+    static String id(Path src, Path f) {
+        return src.relativize(f).toString().replace('\\', '/');
+    }
+
+    /** The {@code .jsc} files of a source tree as modules, by id: what their {@code ./x.jsc} imports resolve to. */
+    static org.julclang.state.dsl.v2.JscModules modules(Path src, List<Path> files) throws IOException {
+        var texts = new java.util.LinkedHashMap<String, String>();
+        for (Path f : files) texts.put(id(src, f), Files.readString(f));
+        return org.julclang.state.dsl.v2.JscModules.of(texts);
     }
 
     /** How {@link #run} lowers one file's text: {@link #lowerWithWarnings}, or a test's stand-in. */
@@ -472,6 +496,8 @@ public final class JscMain {
         }
         int errors = 0;
         var written = new java.util.HashSet<Path>();
+        // M2c (ADR-0018 D9): a contract's import contract imports name other files of the same tree, by relative path.
+        var modules = modules(src, files);
         // Start clean: a deleted or renamed .jsc must not leave a stale contract behind.
         if (Files.isDirectory(out)) {
             try (Stream<Path> s = Files.walk(out)) {
@@ -482,7 +508,8 @@ public final class JscMain {
             String text = Files.readString(f);
             String name = src.relativize(f).toString();
             try {
-                var lowered = frontEnd.lower(text, f.getFileName().toString());
+                var lowered = frontEnd == DEFAULT ? lowerWithWarnings(text, f.getFileName().toString(), id(src, f), modules)
+                        : frontEnd.lower(text, f.getFileName().toString());
                 lowered.diagnostics().forEach(w -> System.err.println(w.format(name)));
                 String java = lowered.java();
                 Path target = out.resolve(outputPath(text));

@@ -26,11 +26,19 @@ import org.julclang.state.dsl.v2.Interpreter.FundsV;
 import org.julclang.state.dsl.v2.Interpreter.StakeHash;
 import org.julclang.state.dsl.v2.Interpreter.StakePtr;
 import org.julclang.state.dsl.v2.Interpreter.ValueV;
+import org.julclang.state.dsl.v2.Interpreter.InstV;
+import org.julclang.state.dsl.v2.Interpreter.DepositV;
+import org.julclang.state.dsl.v2.Interpreter.DepositOut;
+import org.julclang.state.api.Deposit;
+import org.julclang.state.api.DepositClaim;
+import org.julclang.state.api.ForeignInstance;
 import org.julclang.ledger.Address;
 import org.julclang.ledger.Credential;
 import org.julclang.ledger.OutputDatum;
 import org.julclang.ledger.PubKeyHash;
 import org.julclang.ledger.ScriptHash;
+import org.julclang.ledger.TxInInfo;
+import org.julclang.ledger.TxOut;
 import org.julclang.ledger.StakingCredential;
 import org.julclang.ledger.Value;
 import org.julclang.state.api.Assets;
@@ -109,15 +117,20 @@ final class FourWay {
      * interpreters read it as {@code params.f}, the JVM method and the transition program take it, and the harness's
      * script is applied to it ({@code StateHarness.of(spec, params)}).
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
     FourWay(String name, String jscSource, Map<String, String> transitions, Rec params) throws Exception {
+        this(name, jscSource, transitions, params, org.julclang.state.dsl.v2.JscModules.NONE);
+    }
+
+    /** M2c: a contract that imports others ({@code import contract}), which {@code modules} holds (by bare file name). */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    FourWay(String name, String jscSource, Map<String, String> transitions, Rec params, org.julclang.state.dsl.v2.JscModules modules) throws Exception {
         this.name = name;
         this.cls = Class.forName(PKG + "." + name);
         this.stateClass = Class.forName(PKG + "." + name + "$State");
-        Interpreter i = JscV2.interpreter(jscSource, name + ".jsc", HASHES);
+        Interpreter i = JscV2.interpreter(jscSource, name + ".jsc", name + ".jsc", modules, HASHES);
         this.params = params;
         this.interp = params == null ? i : i.withParams(params);
-        this.irJson = JscV2.lower(jscSource, name + ".jsc").irJson();
+        this.irJson = JscV2.lower(jscSource, name + ".jsc", name + ".jsc", modules).irJson();
         this.transitions = transitions;
         var spec = (org.julclang.state.runtime.ContractSpec) Class.forName(PKG + "." + name + "Client").getField("SPEC").get(null);
         this.harness = (StateHarness<Object>) (params == null ? StateHarness.of(spec) : StateHarness.of(spec, java(params)));
@@ -129,6 +142,10 @@ final class FourWay {
         for (Method m : cls.getDeclaredMethods()) {
             var ps = m.getParameterTypes();
             a |= ps.length > 0 && ps[ps.length - 1] == Funds.class;
+        }
+        // M2c: a contract that deposits (a result record with deposits) is asset-aware too (its step carries them).
+        for (Class<?> nested : cls.getDeclaredClasses()) {
+            if (nested.isRecord()) for (var rc : nested.getRecordComponents()) a |= rc.getName().equals("deposits");
         }
         this.assets = a;
     }
@@ -289,10 +306,14 @@ final class FourWay {
                 case ValueV x -> value(x);
                 case CredV x -> credential(x);
                 case AddrV x -> new Address(credential(x.payment()), x.stake().present() ? Optional.of(staking(x.stake().value())) : Optional.empty());
+                // M2c: an instance of another contract (a params field), the API's ForeignInstance.
+                case InstV x -> new ForeignInstance(x.policy().bytes(), x.id().bytes());
                 case Rec r -> {
                     // The Java example's state record may have another name (dex's Pool; M2).
                     String type = c == reference && r.type().equals("State") ? referenceState : r.type();
-                    Class<?> rc = Class.forName(c.getName() + "$" + type);
+                    // M2c: another contract's type (Oracle.State) is a nested class of that contract, in the same package.
+                    Class<?> rc = type.contains(".") ? Class.forName(c.getPackageName() + "." + type.replace('.', '$'))
+                            : Class.forName(c.getName() + "$" + type);
                     var comps = rc.getRecordComponents();
                     var types = new Class<?>[comps.length];
                     var vals = new Object[comps.length];
@@ -328,7 +349,21 @@ final class FourWay {
                 yield new org.julclang.core.PlutusData.MapData(pairs);
             }
             case Rec r -> new org.julclang.core.PlutusData.ConstrData(interp.tag(r.type()), r.fields().stream().map(this::raw).toList());
-            case ValueV x -> value(x).toPlutusData();
+            // M2c (D5): a value as data, in its wire form: each policy's token names by their encoding (shorter first, then
+            // bytewise), as cardano-client-lib writes a datum; written here from the rule, independently of ValueAdapter.toWire.
+            case ValueV x -> {
+                var ps = new ArrayList<org.julclang.core.PlutusData.Pair>();
+                for (var p : x.entries().entrySet()) {
+                    var names = new ArrayList<>(p.getValue().keySet());
+                    names.sort(java.util.Comparator.comparingInt(String::length).thenComparing(java.util.Comparator.naturalOrder()));
+                    var ts = new ArrayList<org.julclang.core.PlutusData.Pair>();
+                    for (String nm : names) ts.add(new org.julclang.core.PlutusData.Pair(org.julclang.core.PlutusData.bytes(HEX.parseHex(nm)),
+                            org.julclang.core.PlutusData.integer(p.getValue().get(nm))));
+                    ps.add(new org.julclang.core.PlutusData.Pair(org.julclang.core.PlutusData.bytes(HEX.parseHex(p.getKey())),
+                            new org.julclang.core.PlutusData.MapData(ts)));
+                }
+                yield new org.julclang.core.PlutusData.MapData(ps);
+            }
             case CredV x -> org.julclang.core.PlutusData.constr(x.script() ? 1 : 0, org.julclang.core.PlutusData.bytes(x.hash().bytes()));
             case AddrV x -> org.julclang.core.PlutusData.constr(0, raw(x.payment()), x.stake().present()
                     ? org.julclang.core.PlutusData.constr(0, x.stake().value() instanceof StakeHash h ? org.julclang.core.PlutusData.constr(0, raw(h.credential()))
@@ -336,6 +371,9 @@ final class FourWay {
                             org.julclang.core.PlutusData.integer(((StakePtr) x.stake().value()).txIndex()),
                             org.julclang.core.PlutusData.integer(((StakePtr) x.stake().value()).certIndex())))
                     : org.julclang.core.PlutusData.constr(1));
+            // M2c: an instance, as the API's ForeignInstance encodes (Constr 0 [policy, instance]).
+            case InstV x -> org.julclang.core.PlutusData.constr(0, org.julclang.core.PlutusData.bytes(x.policy().bytes()),
+                    org.julclang.core.PlutusData.bytes(x.id().bytes()));
             default -> throw new IllegalArgumentException("no argument form for " + v);
         };
     }
@@ -373,9 +411,26 @@ final class FourWay {
     }
 
     /** The Funds a JVM method gets for a transaction (none offered and none held when it does not say). */
-    static Funds javaFunds(Tx t) {
+    Funds javaFunds(Tx t) {
         FundsV f = t.funds();
-        return new Funds(f.policy().bytes(), f.self().bytes(), value(f.received()), value(f.held()), JulcList.empty());
+        // M2c: the deposits a receiving action sees, as the registry's claims (on this call's output, from the input the
+        // harness spends, each memo as D5 encodes it; an untyped receiver's memo is any data).
+        JulcList<DepositClaim> ds = JulcList.empty();
+        for (int k = f.deposits().size() - 1; k >= 0; k--) {
+            DepositV d = f.deposits().get(k);
+            ds = ds.prepend(new DepositClaim(BigInteger.ZERO, depositor(k), value(d.value()), memoData(d.memo())));
+        }
+        return new Funds(f.policy().bytes(), f.self().bytes(), value(f.received()), value(f.held()), ds);
+    }
+
+    /** M2c: the k-th depositor's input in a receiver's transaction (the registry names it as a claim's by). */
+    static org.julclang.ledger.TxOutRef depositor(int k) {
+        return new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x50 + k)), BigInteger.ZERO);
+    }
+
+    /** M2c: a memo as data: D5's encoding of the interpreter's value; an untyped receiver's (null) as Constr 0 []. */
+    org.julclang.core.PlutusData memoData(Object memo) {
+        return memo == null ? org.julclang.core.PlutusData.constr(0) : raw(memo);
     }
 
     /**
@@ -383,7 +438,7 @@ final class FourWay {
      * by their encoding (shorter first), not the ledger's way ({@code 01} before {@code 00ff}). The transition program
      * converts them back (ValueAdapter.fundsFromWire), as the validator converts the offered assets (review r1, C1).
      */
-    static org.julclang.core.PlutusData fundsData(Tx t) {
+    org.julclang.core.PlutusData fundsData(Tx t) {
         return StateHarness.data(javaFunds(t));
     }
 
@@ -393,15 +448,25 @@ final class FourWay {
         return ps.length > 0 && ps[ps.length - 1] == Funds.class;
     }
 
-    static JulcList<Send> sends(List<Interpreter.SendV> ss) {
+    JulcList<Send> sends(List<Interpreter.SendV> ss) {
         if (ss.isEmpty()) return JulcList.empty();
         var xs = new ArrayList<Send>();
         for (var x : ss) {
             AddrV a = x.to();
+            // M2c: a datum, encoded independently here by D5's rules (J17), inline.
+            OutputDatum d = x.datum() == null ? new OutputDatum.NoOutputDatum() : new OutputDatum.OutputDatumInline(StateHarness.data(raw(x.datum())));
             xs.add(new Send(new Address(credential(a.payment()), a.stake().present() ? Optional.of(staking(a.stake().value())) : Optional.empty()),
-                    value(x.value()), new OutputDatum.NoOutputDatum()));
+                    value(x.value()), d));
         }
         return JulcList.of(xs.toArray(new Send[0]));
+    }
+
+    /** M2c: an outcome's deposits as the API's Deposit list (each memo encoded independently by D5's rules). */
+    JulcList<Deposit> deposits(List<DepositOut> ds) {
+        if (ds == null || ds.isEmpty()) return JulcList.empty();
+        var xs = new ArrayList<Deposit>();
+        for (var d : ds) xs.add(new Deposit(d.target().policy().bytes(), d.target().id().bytes(), value(d.value()), StateHarness.data(raw(d.memo()))));
+        return JulcList.of(xs.toArray(new Deposit[0]));
     }
 
     /**
@@ -414,6 +479,12 @@ final class FourWay {
 
     /** The same, with (M2b) the events last when {@code evs} is not null (a contract with events). */
     static String step(Object next, JulcList<Payout> payouts, JulcList<Send> sends, Value mint, Value accepted, JulcList<?> evs) {
+        return step(next, payouts, sends, mint, accepted, evs, null);
+    }
+
+    /** The same, with (M2c) the deposits in their place (empty when null). */
+    static String step(Object next, JulcList<Payout> payouts, JulcList<Send> sends, Value mint, Value accepted, JulcList<?> evs,
+                       JulcList<Deposit> deposits) {
         var ps = new ArrayList<org.julclang.core.PlutusData>();
         if (payouts != null) for (Payout p : payouts) ps.add(StateHarness.data(p));
         var ss = new ArrayList<org.julclang.core.PlutusData>();
@@ -423,7 +494,7 @@ final class FourWay {
         var n = next == null ? org.julclang.core.PlutusData.constr(1) : org.julclang.core.PlutusData.constr(0, StateHarness.data(next));
         var fs = new ArrayList<>(List.of(n, new org.julclang.core.PlutusData.ListData(ps), new org.julclang.core.PlutusData.ListData(ss),
                 (mint == null ? Assets.none() : mint).toPlutusData(), (accepted == null ? Assets.none() : accepted).toPlutusData(),
-                new org.julclang.core.PlutusData.ListData(List.of())));
+                new org.julclang.core.PlutusData.ListData(depositsData(deposits))));
         if (evs != null) {
             var es = new ArrayList<org.julclang.core.PlutusData>();
             for (Object e : evs) es.add(StateHarness.data(e));
@@ -431,6 +502,22 @@ final class FourWay {
         }
         var d = new org.julclang.core.PlutusData.ConstrData(0, fs);
         return HEX.formatHex(org.julclang.core.cbor.PlutusDataCborEncoder.encode(d));
+    }
+
+    /**
+     * M2c: deposits as a transition program's step holds them: each value as the method returns it (the ledger's order,
+     * as a step's sends, mint and accepted are written here), each memo the data the method built (a Value in it in its
+     * wire form, D5).
+     */
+    static List<org.julclang.core.PlutusData> depositsData(JulcList<Deposit> ds) {
+        var out = new ArrayList<org.julclang.core.PlutusData>();
+        if (ds != null) {
+            for (Deposit d : ds) {
+                out.add(org.julclang.core.PlutusData.constr(0, org.julclang.core.PlutusData.bytes(d.policy()),
+                        org.julclang.core.PlutusData.bytes(d.instance()), d.value().toPlutusData(), d.memo()));
+            }
+        }
+        return out;
     }
 
     /** A component of a result record, or null when the record has none. */
@@ -479,7 +566,7 @@ final class FourWay {
     String encode(String method, Interpreter.Outcome o) {
         if (assets && !interp.kind(method).equals("view")) {
             return "ok:" + step(interp.kind(method).equals("destroy") ? null : java(o.value()), payouts(o.payouts()), sends(o.sends()),
-                    value(o.mint()), value(o.accepted()), events ? events(o) : null);
+                    value(o.mint()), value(o.accepted()), events ? events(o) : null, deposits(o.deposits()));
         }
         return switch (interp.kind(method)) {
             case "view" -> "ok:" + data(java(o.value())).serializeToHex();
@@ -501,6 +588,8 @@ final class FourWay {
         if (state != null) call.add(state);
         // M2b: the params directly after the state (first in an init).
         if (takesParams(method)) call.add(java(params));
+        // M2c: the read states directly after the params (ADR-0011 D2), as the transaction's reference inputs give them.
+        for (String f : interp.reads(method)) call.add(java(t.reads().get(f)));
         for (Object a : args) call.add(java(a));
         if (interp.usesTx(method)) call.add(ctx(t));
         if (takesFunds(method)) call.add(javaFunds(t));
@@ -583,7 +672,7 @@ final class FourWay {
         if (stateClass.isInstance(r)) return step(next, null, null, null, null, none);
         JulcList<?> evs = events ? (JulcList<?>) component(r, "events") : null;
         return step(next, (JulcList<Payout>) component(r, "payouts"), (JulcList<Send>) component(r, "sends"), (Value) component(r, "mint"),
-                (Value) component(r, "accepted"), events && evs == null ? none : evs);
+                (Value) component(r, "accepted"), events && evs == null ? none : evs, (JulcList<Deposit>) component(r, "deposits"));
     }
 
     /**
@@ -602,6 +691,14 @@ final class FourWay {
             var in = rawArgs(args);
             if (takesFunds(method)) {
                 var fs = new ArrayList<org.julclang.core.PlutusData>(List.of(fundsData(t)));
+                fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
+                in = new org.julclang.core.PlutusData.ConstrData(0, fs);
+            }
+            // M2c: the read states lead the Funds (the transition generator's leading fields: params, reads, funds).
+            if (!interp.reads(method).isEmpty()) {
+                var fs = new ArrayList<org.julclang.core.PlutusData>();
+                // As an attacker may write them (raw, not re-encoded canonically): a read state's map in its own order.
+                for (String f : interp.reads(method)) fs.add(raw(t.reads().get(f)));
                 fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
                 in = new org.julclang.core.PlutusData.ConstrData(0, fs);
             }
@@ -740,8 +837,8 @@ final class FourWay {
                     assertEquals(v.accepted(), b.accepted(), name + "." + method + ": the direct call and the intent disagree\n" + v + b);
                     batchRuns++;
                 } else if (!hasMaps()) {
-                    v = evaluate(method, o != null ? harness.act(live, redeemer, java(o.value()), payouts(o.payouts()), signer, c)
-                            : harness.act(live, redeemer, before, JulcList.empty(), signer, c));
+                    v = evaluate(method, withReads(method, o != null ? harness.act(live, redeemer, java(o.value()), payouts(o.payouts()), signer, c)
+                            : harness.act(live, redeemer, before, JulcList.empty(), signer, c), t));
                 } else {
                     Object after = o != null ? nextState(run(ms, method, before, args, t)) : before;
                     var p = ms.prepare(harness.policy(), (Class) stateClass, before, after, StateHarness.LIVE_REF);
@@ -753,8 +850,8 @@ final class FourWay {
                 // A destroy's balance is everything the instance holds, deposit included.
                 Object before = java(state);
                 var live = harness.live(before, t.balance().subtract(BigInteger.valueOf(harness.minAda())));
-                var tx = harness.destroy(live, redeemer, construct("BurnInstance", List.of()),
-                        o != null ? payouts(o.payouts()) : Payouts.of(signer, live.lovelace()), signer, c);
+                var tx = withReads(method, harness.destroy(live, redeemer, construct("BurnInstance", List.of()),
+                        o != null ? payouts(o.payouts()) : Payouts.of(signer, live.lovelace()), signer, c), t);
                 if (hasMaps()) {
                     if (o != null) run(ms, method, before, args, t);
                     tx = harness.withClaims(tx, ms.prepare(harness.policy(), (Class) stateClass, before, null, StateHarness.LIVE_REF).claims());
@@ -820,13 +917,80 @@ final class FourWay {
         Ctx c = interp.usesTx(method) ? ctx(t) : null;
         if (kind.equals("init")) return harness.createWith(redeemer, tr.next(), c, tr.accepted(), false, null);
         var h = held(kind, java(state), t);
-        return harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null : tr.next(), signer, c, null);
+        var tx = harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null : tr.next(), signer, c, null);
+        return composed(method, tx, t, tr, h);
+    }
+
+    /** M2c: an output holding {@code inst}'s token (and {@code extra}) at its script's address, as another JOUST instance sits. */
+    static TxOut instanceAt(InstV inst, Value extra) {
+        Value v = Assets.add(Assets.add(Assets.lovelace(BigInteger.valueOf(2_000_000)), Assets.of(inst.policy().bytes(), inst.id().bytes(), BigInteger.ONE)), extra);
+        return new TxOut(new Address(new Credential.ScriptCredential(new ScriptHash(inst.policy().bytes())), Optional.empty()), v,
+                new OutputDatum.OutputDatumInline(org.julclang.core.PlutusData.constr(0)), Optional.empty());
+    }
+
+    /**
+     * M2c: a call's transaction as the runtime composes it (ADR-0011): each read state a reference input holding its
+     * instance's token at its script's address, with the state as its inline datum (D2); each deposit the method makes
+     * into another instance, which the same transaction spends and continues holding the deposit, claimed in the registry
+     * by this call's input (D3); and for a receiving action, each deposit claimed on its own continuing output, which holds
+     * it, from a depositor's input. This harness evaluates its own spends (and the output verifier); the other contract's
+     * are its own harness's (CLAUDE.md: cross-contract transactions are checked with each contract's harness).
+     */
+    private org.julclang.state.testkit.TxModel composed(String method, org.julclang.state.testkit.TxModel tx, Tx t, Transition<?> tr,
+                                                         StateHarness.Held h) {
+        withReads(method, tx, t);
+        var claims = composedClaims(method, tx, t, tr, h);
+        if (!claims.isEmpty()) {
+            claims.sort(java.util.Comparator.comparing(DepositClaim::output));
+            tx.depositClaims = claims;
+        }
+        return tx;
+    }
+
+    /** M2c: each read state a reference input holding its instance's token at its script's address (ADR-0011 D2). */
+    org.julclang.state.testkit.TxModel withReads(String method, org.julclang.state.testkit.TxModel tx, Tx t) {
+        for (String f : interp.reads(method)) {
+            InstV inst = (InstV) params.fields().get(interp.paramsFields().indexOf(f));
+            var out = instanceAt(inst, Assets.none());
+            out = new TxOut(out.address(), out.value(), new OutputDatum.OutputDatumInline(raw(t.reads().get(f))), Optional.empty());
+            tx.referenceInputs.add(new TxInInfo(new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x60 + tx.referenceInputs.size())),
+                    BigInteger.ZERO), out));
+        }
+        return tx;
+    }
+
+    private List<DepositClaim> composedClaims(String method, org.julclang.state.testkit.TxModel tx, Tx t, Transition<?> tr, StateHarness.Held h) {
+        var claims = new ArrayList<DepositClaim>();
+        int k = 0;
+        for (Deposit d : tr.deposits()) {
+            InstV inst = new InstV(Bytes.of(d.policy()), Bytes.of(d.instance()));
+            tx.inputs.add(new TxInInfo(new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x70 + k)), BigInteger.ZERO),
+                    instanceAt(inst, Assets.none())));
+            tx.outputs.add(instanceAt(inst, d.value()));
+            claims.add(new DepositClaim(BigInteger.valueOf(tx.outputs.size() - 1), h.ref(), d.value(), d.memo()));
+            k++;
+        }
+        if (interp.receives(method) && t != null && t.funds() != null && !t.funds().deposits().isEmpty() && tx.stateOutput >= 0) {
+            Funds f = javaFunds(t);
+            Value total = Assets.none();
+            int j = 0;
+            for (DepositClaim d : f.deposits()) {
+                tx.inputs.add(new TxInInfo(d.by(), new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xD0)), Assets.lovelace(BigInteger.valueOf(50_000_000)),
+                        new OutputDatum.NoOutputDatum(), Optional.empty())));
+                claims.add(new DepositClaim(BigInteger.valueOf(tx.stateOutput), d.by(), d.value(), d.memo()));
+                total = Assets.add(total, d.value());
+                j++;
+            }
+            TxOut o = tx.outputs.get(tx.stateOutput);
+            tx.outputs.set(tx.stateOutput, new TxOut(o.address(), Assets.add(o.value(), total), o.datum(), o.referenceScript()));
+        }
+        return claims;
     }
 
     /** The interpreter's outcome as a transition. */
     private Transition<Object> transitionOf(String kind, Interpreter.Outcome o) {
         return Transition.full(kind.equals("destroy") ? null : java(o.value()), payouts(o.payouts()), sends(o.sends()), value(o.mint()),
-                value(o.accepted())).withEvents(events(o));
+                value(o.accepted())).withEvents(events(o)).withDeposits(deposits(o.deposits()));
     }
 
     /**
@@ -894,6 +1058,85 @@ final class FourWay {
         return v.accepted();
     }
 
+    // ------------------------------------------------------------------ hostile memos and read states as raw data (M2c, J15)
+
+    /**
+     * M2c: a receiving call whose deposits' memos are raw data ({@code memos}, one per deposit of {@code t}, in place of
+     * the honest ones): the transition program's result ("refused", or its step), and whether the validator accepts the
+     * transaction proposing {@code next} (null: the input state, nothing moved) with those claims on its output.
+     */
+    Object[] receiverRaw(String method, Rec state, Tx t, List<org.julclang.core.PlutusData> memos, Rec next, byte[] signer) throws Exception {
+        Funds honest = javaFunds(t);
+        JulcList<DepositClaim> ds = JulcList.empty();
+        var claims = new ArrayList<DepositClaim>();
+        int k = 0;
+        for (DepositClaim d : honest.deposits()) {
+            claims.add(new DepositClaim(d.output(), d.by(), d.value(), memos.get(k++)));
+        }
+        for (int i = claims.size() - 1; i >= 0; i--) ds = ds.prepend(claims.get(i));
+        var funds = new Funds(honest.policy(), honest.self(), honest.received(), honest.held(), ds);
+        String program = transitions.get(method);
+        PlutusData ctxData = interp.usesTx(method) ? data(ctx(t)) : NONE;
+        var in = new org.julclang.core.PlutusData.ConstrData(0, List.of(StateHarness.data(funds)));
+        String tp = evaluateRaw(program, List.of(julc(data(java(state))), julc(NONE), in, julc(ctxData)));
+        Object redeemer = assetRedeemer(method, List.of(), t, null);
+        Object nx = next == null ? java(state) : java(next);
+        var h = held(interp.kind(method), java(state), t);
+        var tx = harness.stepWith(h, redeemer, null, Transition.full(nx, JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none()), nx,
+                signer, interp.usesTx(method) ? ctx(t) : null, null);
+        Value total = Assets.none();
+        var onChain = new ArrayList<DepositClaim>();
+        for (DepositClaim d : claims) {
+            tx.inputs.add(new TxInInfo(d.by(), new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xD0)), Assets.lovelace(BigInteger.valueOf(50_000_000)),
+                    new OutputDatum.NoOutputDatum(), Optional.empty())));
+            onChain.add(new DepositClaim(BigInteger.valueOf(tx.stateOutput), d.by(), d.value(), d.memo()));
+            total = Assets.add(total, d.value());
+        }
+        TxOut o = tx.outputs.get(tx.stateOutput);
+        tx.outputs.set(tx.stateOutput, new TxOut(o.address(), Assets.add(o.value(), total), o.datum(), o.referenceScript()));
+        tx.depositClaims = onChain;
+        var v = harness.evaluate(tx);
+        lastVerdict = v;
+        return new Object[]{tp, v.accepted()};
+    }
+
+    /**
+     * M2c: a reading call whose read state is raw data ({@code datum}, in place of the honest one for the params field
+     * {@code field}): whether the validator accepts the transaction proposing the honest call's next state with that
+     * reference input (the transition program is handed what the engine fetched and decoded: the validator's shape check,
+     * ADR-0011 D2, is the guard; see the M2c report).
+     */
+    boolean readerRaw(String method, Rec state, List<Object> args, Tx t, String field, org.julclang.core.PlutusData datum, byte[] signer)
+            throws Exception {
+        var o = interp.transition(method, state, args, t);
+        String kind = interp.kind(method);
+        if (takesFunds(method)) {
+            // An asset-aware reader (review r1, C4): the call's composed transaction, its read state's datum replaced.
+            var tx = assetTx(method, assetRedeemer(method, args, t, null), state, t, signer, transitionOf(kind, o));
+            int k = interp.reads(method).indexOf(field);
+            var ref = tx.referenceInputs.get(k);
+            tx.referenceInputs.set(k, new TxInInfo(ref.outRef(), new TxOut(ref.resolved().address(), ref.resolved().value(),
+                    new OutputDatum.OutputDatumInline(datum), Optional.empty())));
+            var v = harness.evaluate(tx);
+            lastVerdict = v;
+            return v.accepted();
+        }
+        Ctx c = interp.usesTx(method) ? ctx(t) : null;
+        var redeemerArgs = new ArrayList<Object>();
+        for (Object a : args) redeemerArgs.add(java(a));
+        if (c != null) redeemerArgs.add(c);
+        Object encoded = construct(cap(method), redeemerArgs);
+        var live = harness.live(java(state), t == null ? BigInteger.ZERO : t.balance());
+        var tx = harness.act(live, encoded, java(o.value()), payouts(o.payouts()), signer, c);
+        InstV inst = (InstV) params.fields().get(interp.paramsFields().indexOf(field));
+        var out = instanceAt(inst, Assets.none());
+        tx.referenceInputs.add(new TxInInfo(new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x60)), BigInteger.ZERO),
+                new TxOut(out.address(), out.value(), new OutputDatum.OutputDatumInline(datum), Optional.empty())));
+        var v = harness.evaluate(tx);
+        lastVerdict = v;
+        return v.accepted();
+    }
+
     /** Values one step away: each entry ±1 (a zero result drops it), and one entry added (a token named 0x6d under the own policy). */
     List<Value> nearbyValues(Value v, boolean grow) {
         var out = new ArrayList<Value>();
@@ -946,6 +1189,52 @@ final class FourWay {
         return out;
     }
 
+    /** M2c: send lists whose one send's datum is one step away: dropped (none), or inline but other data. */
+    static List<JulcList<Send>> nearbyDatums(JulcList<Send> sends) {
+        var ss = new ArrayList<Send>();
+        for (Send x : sends) ss.add(x);
+        var out = new ArrayList<JulcList<Send>>();
+        for (int k = 0; k < ss.size(); k++) {
+            Send x = ss.get(k);
+            if (!(x.datum() instanceof OutputDatum.OutputDatumInline)) continue;
+            for (OutputDatum d : List.<OutputDatum>of(new OutputDatum.NoOutputDatum(),
+                    new OutputDatum.OutputDatumInline(org.julclang.core.PlutusData.constr(9)))) {
+                var l = new ArrayList<>(ss);
+                l.set(k, new Send(x.to(), x.value(), d));
+                out.add(sendList(l));
+            }
+        }
+        return out;
+    }
+
+    /** M2c: deposit lists one step away: one dropped, one lovelace less, its memo other data. */
+    static List<JulcList<Deposit>> nearbyDeposits(JulcList<Deposit> deposits) {
+        var ds = new ArrayList<Deposit>();
+        for (Deposit d : deposits) ds.add(d);
+        var out = new ArrayList<JulcList<Deposit>>();
+        for (int k = 0; k < ds.size(); k++) {
+            Deposit d = ds.get(k);
+            var dropped = new ArrayList<>(ds);
+            dropped.remove(k);
+            out.add(depositList(dropped));
+            if (Assets.lovelaceOf(d.value()).compareTo(BigInteger.ONE) > 0) {
+                var less = new ArrayList<>(ds);
+                less.set(k, new Deposit(d.policy(), d.instance(), Assets.subtract(d.value(), Assets.lovelace(BigInteger.ONE)), d.memo()));
+                out.add(depositList(less));
+            }
+            var memo = new ArrayList<>(ds);
+            memo.set(k, new Deposit(d.policy(), d.instance(), d.value(), org.julclang.core.PlutusData.constr(9)));
+            out.add(depositList(memo));
+        }
+        return out;
+    }
+
+    private static JulcList<Deposit> depositList(List<Deposit> ds) {
+        JulcList<Deposit> l = JulcList.empty();
+        for (int i = ds.size() - 1; i >= 0; i--) l = l.prepend(ds.get(i));
+        return l;
+    }
+
     private static JulcList<Send> sendList(List<Send> ss) {
         JulcList<Send> l = JulcList.empty();
         for (int i = ss.size() - 1; i >= 0; i--) l = l.prepend(ss.get(i));
@@ -982,6 +1271,15 @@ final class FourWay {
             }
             for (var q : nearbyValues(tr.accepted(), false)) {
                 txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), tr.payouts(), tr.sends(), tr.mint(), q)));
+            }
+            // M2c: a send's datum one step away (dropped, or other data), and the deposits one step away.
+            for (var q : nearbyDatums(tr.sends())) {
+                txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), tr.payouts(), q, tr.mint(), tr.accepted())
+                        .withEvents(events(o)).withDeposits(tr.deposits())));
+            }
+            for (var q : nearbyDeposits(tr.deposits())) {
+                txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), tr.payouts(), tr.sends(), tr.mint(), tr.accepted())
+                        .withEvents(events(o)).withDeposits(q)));
             }
         }
         var ok = evaluate(method, accepted);
@@ -1260,6 +1558,9 @@ final class FourWay {
                 return 0;
             }
         }
+        // M2c: the read states the call references, in every transaction (ADR-0011 D2).
+        accepted = withReads(method, accepted, t);
+        for (var x : txs) withReads(method, x, t);
         var ok = evaluate(method, accepted);
         assertTrue(ok.accepted(), name + "." + method + ": the unmutated transaction must be accepted\n" + ok);
         attacksRejected += org.julclang.state.testkit.Attacks.assertAllRejected(harness, accepted);
@@ -1364,6 +1665,13 @@ final class FourWay {
         return this;
     }
 
+    /** M2c: as {@link #reference(String, String)}, the Java example's contract named {@code javaName} (oracle's Shop for Kiosk). */
+    FourWay referenceNamed(String pkg, String javaName, String init) throws Exception {
+        this.reference = Class.forName(pkg + "." + javaName);
+        this.referenceInit = init;
+        return this;
+    }
+
     /** As {@link #reference(String, String)}, the Java example's state record named {@code state}. */
     FourWay reference(String pkg, String init, String state) throws Exception {
         this.referenceState = state;
@@ -1386,6 +1694,8 @@ final class FourWay {
         if (params != null && call.size() < found.getParameterCount() && found.getParameterTypes()[call.size()].getSimpleName().equals("Config")) {
             call.add(java(params, reference));
         }
+        // M2c: the read states, right after the params.
+        for (String f : interp.reads(method)) call.add(java(t.reads().get(f), reference));
         for (Object a : args) call.add(java(a, reference));
         // The Ctx and the Funds (M2) the Java method takes after its arguments, by type.
         for (int i = call.size(); i < found.getParameterCount(); i++) call.add(found.getParameterTypes()[i] == Funds.class ? javaFunds(t) : ctx(t));

@@ -1,0 +1,29 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import contract { Oracle } from "./Oracle.jsc"
+
+// examples/oracle's Shop in .jsc 2 (ADR-0018 M2c, J11; ADR-0011 D2), named Kiosk here (examples/dsl's Shop.jsc is M4a's).
+// It sells credits at the oracle's price. The oracle instance is fixed in the params, so its script and instance are
+// pinned at deploy; reads params.oracle is its state, read from a reference input the validator authenticates. The
+// price must be fresh: the whole validity window ends within maxAgeMs of the post (before, D11).
+contract Kiosk {
+  params { oracle: Instance<Oracle>, maxAgeMs: Int }
+  state { owner: Key, sold: Int }
+
+  init() {
+    return { owner: caller, sold: 0 }
+  }
+
+  // Buys qty credits, paying qty * price at a price posted at most maxAgeMs before the window ends.
+  action buy(price: reads params.oracle, qty: Int) payable {
+    require(qty > 0, "buy at least one credit")
+    require(before(price.updatedAt + params.maxAgeMs), "stale price")
+    require(received == qty * price.price, "pay exactly qty * price")
+    return { ...state, sold: sold + qty }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+}

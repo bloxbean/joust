@@ -2,7 +2,7 @@
 // vectors"). It needs no types: { "int": "…" }, true/false, { "bytes": hex }, [ … ], { "none": true }, { "some": v },
 // { "rec": name, "fields": [ … ] }, { "map": [[k, v] …] } (in the given order), { "bigmap": [[k, v] …] }.
 
-import { NONE, Some, some, Rec, MapV, BigMapV, Refused, Limit, hex, fromHex, keyCompare, ValueV, CredV, AddrV, StakeHash, StakePtr } from './values.js';
+import { NONE, Some, some, Rec, MapV, BigMapV, Refused, Limit, hex, fromHex, keyCompare, ValueV, CredV, AddrV, StakeHash, StakePtr, InstV } from './values.js';
 
 export function fromJson(j) {
   if (j === true || j === false) return j;
@@ -20,6 +20,8 @@ export function fromJson(j) {
     if ('value' in j) return valueFromJson(j);
     if ('keyCred' in j) return new CredV(false, fromHex(j.keyCred));
     if ('scriptCred' in j) return new CredV(true, fromHex(j.scriptCred));
+    // M2c: { "instance": [policy hex, id hex] }, another contract's instance (a params field).
+    if ('instance' in j) return new InstV(fromHex(j.instance[0]), fromHex(j.instance[1]));
     if ('address' in j) {
       const [pay, stake] = j.address;
       const s = stake === null ? NONE : 'stakeHash' in stake ? some(new StakeHash(fromJson(stake.stakeHash)))
@@ -41,6 +43,7 @@ export function toJson(v) {
   if (v instanceof MapV) return { map: v.keys.map((k, i) => [{ bytes: hex(k) }, toJson(v.values[i])]) };
   if (v instanceof ValueV) return valueToJson(v);
   if (v instanceof CredV) return v.script ? { scriptCred: hex(v.hash) } : { keyCred: hex(v.hash) };
+  if (v instanceof InstV) return { instance: [hex(v.policy), hex(v.id)] };
   if (v instanceof AddrV) {
     const s = v.stake === NONE ? null : v.stake.value instanceof StakeHash ? { stakeHash: toJson(v.stake.value.credential) }
       : { stakePtr: [v.stake.value.slot.toString(), v.stake.value.txIndex.toString(), v.stake.value.certIndex.toString()] };
@@ -67,7 +70,11 @@ export function txFromJson(t) {
     // M2: the native assets the call sees (absent: a call that reads none).
     funds: t.funds ? {
       received: valueFromJson(t.funds.received), held: valueFromJson(t.funds.held), policy: fromHex(t.funds.policy), self: fromHex(t.funds.self),
+      // M2c: the deposits claimed on the call's output (a receiving action's), each its value and its memo (null: not read).
+      deposits: (t.funds.deposits ?? []).map((d) => ({ value: valueFromJson(d.value), memo: d.memo === null || d.memo === undefined ? null : fromJson(d.memo) })),
     } : null,
+    // M2c: the states of other contracts' instances the transaction references, by the params field naming each.
+    reads: Object.fromEntries(Object.entries(t.reads ?? {}).map(([k, v]) => [k, fromJson(v)])),
     caller: fromHex(t.caller),
     received: BigInt(t.received),
     balance: BigInt(t.balance),
@@ -96,10 +103,16 @@ export function runCall(program, call) {
       payouts: o.payouts.map((p) => ({ to: hex(p.to), lovelace: p.lovelace.toString() })),
     };
     // M2's effects, only when there are any (an answer of M1's contracts keeps its form).
-    if (o.sends.length > 0) ok.sends = o.sends.map((x) => ({ to: toJson(x.to), value: valueToJson(x.value) }));
+    // M2c: a send's datum when it has one.
+    if (o.sends.length > 0) {
+      ok.sends = o.sends.map((x) => (x.datum === null || x.datum === undefined ? { to: toJson(x.to), value: valueToJson(x.value) }
+        : { to: toJson(x.to), value: valueToJson(x.value), datum: toJson(x.datum) }));
+    }
     if (o.mint.entries.length > 0) ok.mint = valueToJson(o.mint);
     if (o.accepted.entries.length > 0) ok.accepted = valueToJson(o.accepted);
     if (o.events.length > 0) ok.events = o.events.map(toJson);
+    // M2c: the deposits the call makes, in source order.
+    if ((o.deposits ?? []).length > 0) ok.deposits = o.deposits.map((d) => ({ target: toJson(d.target), value: valueToJson(d.value), memo: toJson(d.memo) }));
     return { ok };
   } catch (e) {
     if (e instanceof Refused) return { refused: e.message, class: e.refusal };

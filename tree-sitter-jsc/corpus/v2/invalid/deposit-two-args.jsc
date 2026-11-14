@@ -1,0 +1,15 @@
+jsc 2
+package app
+
+contract D {
+  state { owner: Key }
+
+  init() {
+    return { owner: caller }
+  }
+
+  action give() open {
+    deposit(params.pot, Value.lovelace(1))
+    return state
+  }
+}

@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r18)
+**Status:** Proposed (r21)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -8,7 +8,7 @@ Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
 **Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76),
-M2a and M2b implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+M2a, M2b and M2c implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -230,6 +230,19 @@ the annotation names the lowering imports are reserved; invariants and emitted e
 The IR format is version 2 (D15: version 1's Java reader dropped unknown top-level fields, so it would have lost
 invariants; both readers now refuse unknown fields at every level).
 
+**As built in M2c (r21).** `deposit(i, v, m)` lowers to the result component `deposits` (a list in source order, in the
+records after `accepted` and before `events`), with a generated check that the value is depositable (`#deposit:`: not
+empty, positive, no reserved-kind name under any policy: the output verifier's rule); the memo is built by a generated
+encoder (D5, J17). A deposit takes no `Funds` (fees' `sell` stays ADA-only), needs an audience (J16), and its target's
+contract must say `receives` with a memo type one of whose receivers decodes (JSC0449, JSC0450; ADR-0011 r3's rule that a
+target receives, checked statically where the target is a `.jsc` contract). `receives` / `receives T` lowers to
+`@Receives`; the action takes `Funds` (and `Ctx`), and `funds.deposits` are the claims on its output: their values, and for
+`receives T` their memos, each decoded and checked as a `T` where the action starts (`#memo:`). `send(to, v, d)` sends with
+the inline datum `d` (a generated encoder; JSC0429 is retired). A destroy that deposits returns `Settled`. JSC0426 stays:
+#81 is not fixed, so `accept` in an init is still refused. M2c also fixed issue #85 in the processor and the verifier
+(ADR-0007 §9): deposit claims are read from the wire as the offered assets are (C1), which changes the output verifier's
+hash and so every sending contract's script (fixtures re-recorded).
+
 **Lowering:** the method threads one accumulator per kind it uses (lists, or a `Value` for mint and accepted), as
 final locals; an `if`/`match` arm or a loop helper that may produce effects returns a generated record of
 `(value, effects…)`, the arm-helper scheme of ADR-0005 D3 (linear, lazy). Methods with no effects build no record.
@@ -254,14 +267,14 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
 | `Hash` | `byte[]` | a 28-byte script hash or policy id, same rules |
 | `Credential` | `Credential` | `keyCred(k)`, `scriptCred(h)`; `match` on `KeyCred { key }` / `ScriptCred { hash }`. Needed by `authorized` (ADR-0009 D3). As built (M2a): comparable, storable, a checked input (a 28-byte hash) |
 | `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`). As built (M2a): comparable, storable, a checked input: the ledger's encoding, every constructor tag and field count (decided on the data by `AddressAdapter`, one body on the JVM and on-chain), a 28-byte payment credential and staking hash, and **no staking pointer** (r15, review r1 S1: Conway gives pointers no staking meaning and the ledger bounds their parts by era, so a stored pointer could make every send to the address undeliverable; `wallet`/`script` never build one). It may be the contract's own script, to which every send fails (`#send:`): a contract that stores an address it sends to later refuses that where it takes it (semantics §5.1's guard idiom; review r2 S6), since the checked-input rule knows no policy |
-| `Value` | `Value` | `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`; as built, the API's `ValueAdapter`, whose JVM body fails where the PV11 builtins fail: a quantity outside the signed 128-bit range, a token name over 32 bytes, `covers` on a negative quantity). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos. M2a converts the one wire `Value` it has, what the caller offers (and a transition program's funds), with `ValueAdapter.fromWire` at the boundary (review r1 C1) |
+| `Value` | `Value` | **As built in M2c (r21):** a field of the state, the params, a record or a variant may be a `Value`, stored in its wire form (the generated code converts with `ValueAdapter.toWire` where a record is built and `ValueAdapter.fromWire` where a field is read, so the datum the method returns is the one the runtime writes); it is still never an element of a `List`, an `Option` or a `Map` (wrap it in a record), nor a method parameter (JSC0341: a redeemer field typed `Value` is not decoded alike on every leg; what a caller offers is `funds.received`). `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`; as built, the API's `ValueAdapter`, whose JVM body fails where the PV11 builtins fail: a quantity outside the signed 128-bit range, a token name over 32 bytes, `covers` on a negative quantity). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). (Superseded in M2c by the as-built text at the start of this cell: before M2c, `Value` appeared only in effects, `funds` and locals.) M2a converts the one wire `Value` it has, what the caller offers (and a transition program's funds), with `ValueAdapter.fromWire` at the boundary (review r1 C1) |
 | `List<T>` | `JulcList<T>` | literals `[a, b]`, `[x, ...xs]`; D7 |
 | `Map<K, V>` | `JulcMap<K, V>`, canonical | an inline map in the datum. `K` is `Bytes`, `Key` or `Hash`, at most 64 bytes (F19); keys strictly ascending in canonical order, unique. `Map.empty()`. D7 |
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | a Merkle map (ADR-0002/0014), state fields only; `K` as for `Map` (F14). Rules in D7 |
 | `Option<T>` | `java.util.Optional<T>` | `Some(x)`, `None`, `o ?? d` (lazy default), `match` (F20). `Option<Option<T>>` directly nested is rejected (the JS codec would lose `Some(None)`) |
 | `type R = { f: T, … }` | a generated record | user records; accessors through a typed local inside the arm or helper that needs them (D6) |
 | `enum E { A, B { x: Int } }` | a generated sealed interface with records | user sum types; `match` (D6). Variant constructor tags are the declaration order. Types, enums and variants share one namespace, as in Elm (no `E.A` qualification); a variant also clashes with a capitalised method name, since a method's redeemer is a class of the same name (r7) |
-| `Instance<C>` | `ForeignInstance` | another contract's instance (policy, 32-byte id), typed by its contract `C` (D9). Only in `params` (as ADR-0011 keeps `ForeignInstance`): the deployer fixes which script it trusts. A method parameter cannot claim to be an instance of `C`; `deposit` and `reads` take `params` instances |
+| `Instance<C>` | `ForeignInstance` | another contract's instance (policy, 32-byte id), typed by its contract `C` (D9). Only in `params` (as ADR-0011 keeps `ForeignInstance`): the deployer fixes which script it trusts. A method parameter cannot claim to be an instance of `C`; `deposit` and `reads` take `params` instances. As built (M2c): a params field's own type only (JSC0445), used whole, not comparable; `C`'s own types are `C.State`, `C.T`, read, never stored or encoded here (JSC0446), not matched |
 | ledger types for handlers | JuLC ledger types | `TxCert`, `Voter`, `Vote`, `GovernanceAction` are sealed types the handler `match`es on; `GovernanceActionId` and `ProposalProcedure` are records read by projection. Fields whose JuLC type maps to a `.jsc` type are readable; fields typed `PlutusData` (e.g. `GovernanceAction.ParameterChange.parameters`) are **inaccessible**, so a guardrail that must inspect proposed parameter changes stays in Java until a typed protocol-parameter view exists. No construction |
 | `LedgerMap<K, V>` | `JulcMap<K, V>` from ledger data | read-only maps in ledger order (e.g. `GovernanceAction`'s withdrawals `LedgerMap<Credential, Int>`): `get`, `has`, `size`, `any`/`all`/`fold`; keys any comparable type; never stored, so no canonical-order rule applies |
 
@@ -287,11 +300,24 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
 field counts, decided on the data (an unknown tag must not reach a typed accessor: a transition program decodes nothing
 before the method runs), 28-byte credentials and no staking pointer (r15). A failure is a
   located `require` failure. From M2, `Value` parameters are carried in the redeemer as data and decoded by the
-  generated wire-to-native conversion plus this check (CLAUDE.md: redeemer fields typed `Value` mis-decode in JuLC). The on-chain cost of the
-  checks is measured in M0 and budgeted in each milestone (J15, J16). A foreign datum that fails the checks makes that
-  instance unreadable by this contract: for JOUST contracts, whose validators fix their datum's shape, this can only
-  happen if the foreign contract itself accepted a non-canonical value, and the reader's author is warned at build time
-  that strict reads mean the foreign contract's state shape decides whether `reads` calls can run.
+  generated wire-to-native conversion plus this check (CLAUDE.md: redeemer fields typed `Value` mis-decode in JuLC; M2c
+  keeps `Value` out of method parameters, so this is not built). **As built in M2c (r21):** a `reads` state is a checked
+  input at `C.State` (`#read:`), after the arguments, but not a deep one: the validator checks its outer shape (ADR-0011
+  D2), and the generated check covers every nested `Key`/`Hash` length, every `Map`'s canonical order, every `Address`
+  and `Credential`'s hashes, and every stored `Value`'s wire form (used or not; review r1, C4), but **not the constructor
+  tags and field counts of its nested `Bool`s, `Option`s, enums and records**, which are taken as `C` wrote them. That
+  trust rests on `params.f` naming a `.jsc` build of `C`, whose validator refuses a malformed tag in any argument it
+  stores (pinned by `JscV2M2cHostileInputTest`, `Inbox.set`); it holds for `.jsc` contract imports only and **must be
+  decided again before M4b's `java:` contract imports** (a Java contract may hold raw `PlutusData`), for example by
+  decoding the read datum with the memo decoders, which needs the raw datum in the method (the `@Reads` parameter is
+  typed by the processor today). A `receives T` memo is decoded by a generated decoder that decides every tag and field
+  count on the data (`#memo:`); a memo is a checked input in full. The params are a checked input of the init
+  (`#params:`, review r3 on #90, C7): fixed for the deployment, they are checked where the instance is made, so a
+  `.jsc` writer never stores a value (from a `Value` param, or `Value.asset` of a `Hash` param) that a `.jsc` reader
+  refuses. The on-chain cost of the checks is measured in M0 and
+  budgeted in each milestone (J15, J16). A foreign datum that fails the checks makes that instance unreadable by this
+  contract: for JOUST contracts, whose validators fix their datum's shape, this can only happen if the foreign contract
+  itself accepted a non-canonical value. (No build-time warning says so: none is built, M2c review r1, F7.)
 
 ### D6. Expressions, equality, `match`, laziness
 
@@ -495,7 +521,8 @@ import { concat, slice, length } from "std/bytes"
     `Require` and `Assets` do, under `src/onchain/java`) is refused, except the JOUST API itself, whose variants are
     part of the trusted base and covered by its own differential tests (M2a's `ValueAdapter`:
     `ValueAdapterDifferentialTest`, every public function, JVM body against on-chain body, on canonical arguments, its
-    stated precondition; `AddressAdapter` keeps one body).
+    stated precondition, and on wires and raw data for the functions that take them; since M2c the test finds the public
+    functions by reflection, so a new one without vectors fails; `AddressAdapter` keeps one body).
   - Library records map to `.jsc` records with read-only fields where the projection is representation-verified;
     otherwise they are opaque.
 - **No `extern` declarations**: a `.jsc` author never writes a signature for Java code.
@@ -503,6 +530,13 @@ import { concat, slice, length } from "std/bytes"
   the contract's state type `Oracle.State` and `Instance<Oracle>` available, for `reads`, `deposit` and params. On
   Gradle the contract is in the same project or a dependency on the processor path; on npm, in `contracts/` or a
   library package. The checker reads a `.jsc` contract's checked AST, and a Java contract through javac attribution.
+  **As built in M2c (r21):** `.jsc` contracts of the same build (Gradle's `generateJsc` source tree, the npm toolchain's
+  files), by a path relative to the importing file, through M4a's `JscModules` (the same interface, so the integration
+  joins one). Each imported contract is parsed and checked on its own (its time fields its own fixed point); its state,
+  types, time fields and receiving actions' memo types reach the importer's IR (`contracts`). A cycle is refused
+  (JSC0743). `java:` contracts wait for M4b's attribution of `java:` sources (JSC0741); M4b's gate for them includes a
+  strict decode of a `java:` contract's read state (D5: the nested tags a `.jsc` reader trusts today), deciding every
+  nested constructor's tag and its field count (M2c review r2, security).
 - **Supply chain.** A committed `joust.lock` pins every library (`.jsc` and Java) by the hash of its on-chain sources;
   the build fails on a mismatch, and the build report lists every library with its hash (J12).
 
@@ -523,8 +557,8 @@ positions. Each row names the example whose port gates it (J11).
 | `@Quorum`, `@AuthorizedBy` | `quorum guardians threshold`, `authorized admin` (a `Credential` field or `params.f`) | treasury (M2), registry (M3) |
 | events | `event Sold { price: Int }`, `emit(Sold { price })` | treasury (M2b), market (M3) |
 | `Funds`, `Assets`, `Send`, mint | the built-in `funds` (`received`, `held`, `policy`, `self`, `deposits`); a contract is asset-aware when it uses `funds`, `send`, `mint`, `deposit` or `receives` (`assetSlots` defaults from that, `ContractReader.java:312-315`) | dex (M2), market (M3) |
-| `@Reads` | a parameter `oracle: reads params.oracle` typed `Oracle.State` | oracle (M2) |
-| `@Receives`, deposits | `action name(…) receives`, `deposit(…)` | fees (M2) |
+| `@Reads` | a parameter `oracle: reads params.oracle` typed `Oracle.State` | oracle (M2c) |
+| `@Receives`, deposits | `action name(…) receives [T]`, `deposit(target, value, memo)`, `funds.deposits` | fees (M2c) |
 | `@Owned`, `@OwnedInit/Action/Destroy`, `@Shared`, `@Into`, `@Admits` | `owned Account { … }`, `owned init/action/destroy`, a `shared` parameter, `into`, `admits` | bank, locker (M3), guild (M3: three owned types, moves, invariant) |
 | keyed objects (ADR-0016) | `owned Name keyed by key (signed, maxKeyBytes = 32, linkCooldownMs = …, linkWindowMs = …)`; `owned destroy … retire` | registry (M3) |
 | `@Withdraw`, `@Certify`, `@Votes`, `@Propose` | `withdraw(params, amount: Int, …args): sends`; `certify(params, cert: TxCert): Bool`; `vote(params, voter: Voter, action: GovernanceActionId, vote: Vote): Bool`; `propose(params, p: ProposalProcedure): Bool` (the shapes of `ContractReader.java:1332-1355`), with their required `quorum`/`authorized` | staking (M3) |
@@ -860,6 +894,12 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   `migrateJsc` says the new-script warning on every run that migrates.
 - Java contracts are unaffected.
 
+**D11 as built in M2c (r21).** A read state's field is a time value when it is a time field of its contract (from that
+contract's checked IR); its other fields are ordinary (Kiosk compares the oracle's `price`, and checks `updatedAt` only
+with `before`). A time value is never any part of a deposit's value (JSC0526, behind JSC0519). A send's datum or a
+deposit's memo may carry one, with a warning (JSC9009). A memo a receiving action reads is not a time value there: like
+an argument, whoever writes a depositing contract chooses it, so it is a checked input and nothing more.
+
 ## 4. Example (illustrative)
 
 ```
@@ -1028,7 +1068,7 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 |---|---|---|---|
 | M0 | Spike: version line, `const`, spread updates, shadowing rule, `fn` with direct recursion and the after-lowering recursion check (nested folds), a `fold`/`find`/`contains` helper and both `filter` lowerings, `Option` as `Optional` end to end (datum, redeemer, portable codec, JS; `Some(None)` rejected), one generated equality helper over a record with bytes, one checked input, one `std/crypto` and one `std/bytes` binding with domains, the binding test via javac attribution, positions on the npm path, the time dataflow pass | ADR accepted | builds on both paths; four-way agreement (J3) on hand vectors; size, budget and check-cost numbers recorded; javac attribution of library sources works inside the Web Image toolchain |
 | M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; five-way differential tests (four-way to M1a) and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten. M1c's thresholds (r11): "below 14 KB" is below 14,000 bytes; "the protocol maximum" is 10,000,000,000 CPU steps and 14,000,000 memory units (the pre-Plomin memory limit, the stricter one), summed over every script of the transaction, with a warning above 80%; the saturated state is the largest one the Java example accepts (its stored datum within `maxDatumBytes`), which the port must then accept; a batched action is measured at `Batcher.DEFAULT_MAX` intents too |
-| M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green. Split (r15) into stacked parts: **M2a** values and assets (`Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `std/value`, `std/address`; gated by dex), **M2b** params, invariants, events, quorum, authorized (gated by treasury), **M2c** composition (deposits and `receives`, `reads`, `Instance<C>`, `import contract`, send datums and memo encoders, stored `Value`s with the wire conversion; gated by oracle and fees) |
+| M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green. Split (r15) into stacked parts: **M2a** values and assets (`Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `std/value`, `std/address`; gated by dex), **M2b** params, invariants, events, quorum, authorized (gated by treasury), **M2c** composition (deposits and `receives`, `reads`, `Instance<C>`, `import contract`, send datums and memo encoders, stored `Value`s with the wire conversion; gated by oracle and fees). M2c as built (r21): the oracle (Oracle, Shop as Kiosk) and fees (Pot, Stall) ports within +4% of the Java examples' sizes and budgets, every transaction at most 11.6% of the CPU and 26.2% of the memory maximum (a pot collecting 8 deposits); report `jsc-2-m2c-report.md` |
 | M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green |
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12; a `.jsc` library called from Java and a Java library from `.jsc`; the template's tests run offline |
 | M5 | Language server | M3, M4 exit | — |
@@ -1280,3 +1320,16 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   After review r2: a view's described arguments leave the params out too; the Java IR reader refuses unknown fields at
   every level (the conditions for joining format 2 with M4a's are in the IR doc); the processor refuses a mixed
   `@Quorum` (S3), as JSC0439 does.
+- **r21** (2026-11-13, M2c; r19 and r20 are other PRs'): D4 records what M2c built (`deposit` and the `deposits`
+  component, `#deposit:`; `receives [T]` and `funds.deposits`, memos decoded and checked, `#memo:`; `send(to, v, d)` with a
+  generated datum encoder, JSC0429 retired; JSC0426 kept, #81 still open) and issue #85's fix (deposit claims from the
+  wire; ADR-0007 §9). D5: stored `Value`s (fields of the state, the params, records and variants, in their wire form;
+  never in a container or a method parameter), `Instance<C>` as built, read states and memos as checked inputs. D9:
+  `import contract` of `.jsc` contracts through M4a's `JscModules`; `java:` contracts deferred (JSC0741). D10: the
+  `@Reads` and `@Receives` rows gated by oracle and fees (M2c). D11 at the new positions (read states' time fields,
+  deposit values, datums and memos). §8: M2c's gates. Review round r2 (#90): memo decoders hold tags as `Int`s (S1) and
+  are named by the checked type (C1); both interpreters check an arriving `Value`'s domain (C2); the JVM `fromData` checks
+  the data as it came (C3); a read state's stored `Value`s are checked, used or not (C4); D5's read-state trust is scoped
+  to `.jsc` imports and re-decided before M4b (F4); D9's differential test covers M2c's `ValueAdapter` functions and is
+  checked by reflection (F3); stale D5 text removed (F7). Round r3: a Value that crosses as data holds only the
+  ledger's policies (C6). Round r4: the params are a checked input of the init (C7).
