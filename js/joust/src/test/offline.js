@@ -185,13 +185,17 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     // registers once and deregisters only when registered. Review r5 (C26): the amounts are the ledger's, never the
     // certificate's: an explicit amount that differs is refused, as Conway's DELEG rule does.
     const keyDeposit = BigInt(p.key_deposit);
+    // Review r6 (C30): Conway names both a wrong deposit and a wrong refund IncorrectDepositDELEG before protocol version 11,
+    // and DepositIncorrectDELEG / RefundIncorrectDELEG from 11 (hardforkConwayDELEGIncorrectDepositsAndRefunds).
+    const split = Number(p.protocol_major_ver ?? 11) > 10;
     const accounts = new Map(registered);
     for (const c of v.certificates) {
       const stake = rewardAddress(c.credential, 0);
       if (REGISTER.has(c.kind)) {
         if (accounts.has(stake)) throw new LedgerRefusal('StakeKeyRegisteredDELEG', `${stake} is already registered`);
         if (c.deposit !== null && c.deposit !== undefined && c.deposit !== keyDeposit) {
-          throw new LedgerRefusal('IncorrectDepositDELEG', `the certificate states a deposit of ${c.deposit}; the key deposit is ${keyDeposit}`);
+          throw new LedgerRefusal(split ? 'DepositIncorrectDELEG' : 'IncorrectDepositDELEG',
+            `the certificate states a deposit of ${c.deposit}; the key deposit is ${keyDeposit}`);
         }
         accounts.set(stake, keyDeposit);
         addValue(balance, 'lovelace', -keyDeposit);
@@ -199,7 +203,8 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
         if (!accounts.has(stake)) throw new LedgerRefusal('StakeKeyNotRegisteredDELEG', `${stake} is not registered`);
         const held = accounts.get(stake);
         if (c.deposit !== null && c.deposit !== undefined && c.deposit !== held) {
-          throw new LedgerRefusal('RefundIncorrectDELEG', `the certificate states a refund of ${c.deposit}; the account holds ${held}`);
+          throw new LedgerRefusal(split ? 'RefundIncorrectDELEG' : 'IncorrectDepositDELEG',
+            `the certificate states a refund of ${c.deposit}; the account holds ${held}`);
         }
         accounts.delete(stake);
         addValue(balance, 'lovelace', held);

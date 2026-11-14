@@ -315,32 +315,36 @@ test('a witness datum is needed or named by an output (C24)', async () => {
   await ledger.submit(await withDatum([{ address: a.address, lovelace: 9_700_000n, datumHash: datum.hash() }], ref));
 });
 
-test('deposits and refunds are the ledger\'s, not the certificate\'s (C26)', async () => {
-  const { ledger, a } = setup();
-  const cred = { type: Cardano.CredentialType.KeyHash, hash: a.keyHash };
-  const stake = L.rewardAddress({ type: 'key', hash: a.keyHash }, 0);
-  const deposit = BigInt(PARAMS.key_deposit);
-  for (const wrong of [0n, 1n]) {
-    const ref = ledger.fund(a.address, 10n * ADA);
-    await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n - wrong }], fee: 300_000n,
-      certificates: [{ __typename: Cardano.CertificateType.Registration, stakeCredential: cred, deposit: wrong }] })), 'IncorrectDepositDELEG');
+test('deposits and refunds are the ledger\'s, not the certificate\'s (C26), named by protocol version (C30)', async () => {
+  for (const [pv, depositRule, refundRule] of [[9, 'IncorrectDepositDELEG', 'IncorrectDepositDELEG'],
+    [10, 'IncorrectDepositDELEG', 'IncorrectDepositDELEG'], [11, 'DepositIncorrectDELEG', 'RefundIncorrectDELEG']]) {
+    const ledger = memoryLedger({ engine: stub, attacks: false, protocolParams: { ...PARAMS, protocol_major_ver: pv } });
+    const a = devWallet({ chain: { utxos: (x) => ledger.utxos(x), submit: (c) => ledger.submit(c) }, mnemonic: DEVKIT_MNEMONIC, index: 7 });
+    const cred = { type: Cardano.CredentialType.KeyHash, hash: a.keyHash };
+    const stake = L.rewardAddress({ type: 'key', hash: a.keyHash }, 0);
+    const deposit = BigInt(PARAMS.key_deposit);
+    for (const wrong of [0n, 1n]) {
+      const ref = ledger.fund(a.address, 10n * ADA);
+      await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n - wrong }], fee: 300_000n,
+        certificates: [{ __typename: Cardano.CertificateType.Registration, stakeCredential: cred, deposit: wrong }] })), depositRule);
+      assert.ok(await ledger.output(ref));
+      assert.equal((await ledger.account(stake)).registered, false);
+    }
+    let ref = ledger.fund(a.address, 10n * ADA);
+    await ledger.submit(await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n - deposit }], fee: 300_000n,
+      certificates: [{ __typename: Cardano.CertificateType.Registration, stakeCredential: cred, deposit }] })));
+    // Codex's oversized refund: 500 ADA back for a 2 ADA deposit.
+    ref = ledger.fund(a.address, 10n * ADA);
+    await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n + 500n * ADA }],
+      fee: 300_000n, certificates: [{ __typename: Cardano.CertificateType.Unregistration, stakeCredential: cred, deposit: 500n * ADA }] })),
+    refundRule);
     assert.ok(await ledger.output(ref));
+    assert.equal((await ledger.account(stake)).registered, true);
+    // The legacy certificate states no amount: the held deposit is refunded.
+    await ledger.submit(await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n + deposit }], fee: 300_000n,
+      certificates: [{ __typename: Cardano.CertificateType.StakeDeregistration, stakeCredential: cred }] })));
     assert.equal((await ledger.account(stake)).registered, false);
   }
-  let ref = ledger.fund(a.address, 10n * ADA);
-  await ledger.submit(await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n - deposit }], fee: 300_000n,
-    certificates: [{ __typename: Cardano.CertificateType.Registration, stakeCredential: cred, deposit }] })));
-  // Codex's oversized refund: 500 ADA back for a 2 ADA deposit.
-  ref = ledger.fund(a.address, 10n * ADA);
-  await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n + 500n * ADA }],
-    fee: 300_000n, certificates: [{ __typename: Cardano.CertificateType.Unregistration, stakeCredential: cred, deposit: 500n * ADA }] })),
-  'RefundIncorrectDELEG');
-  assert.ok(await ledger.output(ref));
-  assert.equal((await ledger.account(stake)).registered, true);
-  // The legacy certificate states no amount: the held deposit is refunded.
-  await ledger.submit(await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n + deposit }], fee: 300_000n,
-    certificates: [{ __typename: Cardano.CertificateType.StakeDeregistration, stakeCredential: cred }] })));
-  assert.equal((await ledger.account(stake)).registered, false);
 });
 
 test('a supplemental datum may be named by the collateral return (C27)', async () => {
