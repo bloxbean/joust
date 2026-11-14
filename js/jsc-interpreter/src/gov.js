@@ -1,6 +1,6 @@
 // M3c (ADR-0010, ADR-0018 D5; semantics §1.4, §2.10): the ledger types of the script purposes, as .jsc 2 reads them:
 // each sealed type's constructors in the ledger's tag order, and each record's fields, with their IR types. Written from
-// the semantics' table, independently of the Java front end's (Gov.java); JscV2M3cIrStrictTest compares the two. A field
+// the semantics' table, independently of the Java front end's (Gov.java); JscV2M3cGovTableTest compares the two. A field
 // of type "Data" (ParameterChange.parameters, PlutusData in the ledger) is carried, never read.
 
 const CRED = 'Credential';

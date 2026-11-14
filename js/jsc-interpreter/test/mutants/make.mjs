@@ -146,3 +146,74 @@ writeFileSync(new URL('./keyed-mutants.json', import.meta.url), JSON.stringify(k
   c.body.result.values[0] = lit('b0'.repeat(28), 'Key');
   out('keyed-key-changed', p);
 }
+
+// M3c (ADR-0010 D1, D2; ADR-0011 D4; K2, K39, K48): programs with script purposes or migration outside the checker's
+// shapes, which both readers refuse (purpose-strict.test.js, JscV2M3cIrStrictTest), each with the fragment both
+// readers' messages share (purpose-mutants.json): the code the checker gives the same program.
+const purposeMutants = [];
+const purpose = (n, base, edit, message) => {
+  const p = fixture(base);
+  const m = (name) => p.methods.find((x) => x.name === name);
+  edit(p, m);
+  out(`purpose-${n}`, p);
+  purposeMutants.push({ file: `purpose-${n}.json`, message });
+};
+const Q = () => ({ name: 'quorum', keys: 'params.council', threshold: 'params.quorum' });
+const stateField = (field, type) => ({ node: 'StateField', field, type, taint: 0, at });
+const payStmt = () => ({ stmt: 'Pay', to: lit('0a'.repeat(28), 'Key'), amount: lit('1', 'Int'), at });
+// A second method like m, its locals renumbered (a local id is declared once in a program).
+const twin = (m, name) => {
+  const renumber = (k, v) => (k === 'id' || k === 'local') && typeof v === 'number' ? v + 90000 : v;
+  const t = JSON.parse(JSON.stringify(m), renumber);
+  t.name = name;
+  return t;
+};
+const readsValidTo = (m) => {
+  m.usesCtx = true;
+  m.body.result = { node: 'Compare', op: '>', left: { node: 'CtxRef', name: 'validTo', type: 'Int', taint: 0, at }, right: lit('0', 'Int'),
+    type: 'Bool', taint: 0, at };
+};
+purpose('stakeself-2', 'StakedVault', (p) => { p.options[0].value = '2'; }, '(JSC1301)');
+purpose('stakeself-twice', 'StakedVault', (p) => { p.options.push({ ...p.options[0] }); }, '(JSC1301)');
+purpose('stakeself-no-certify', 'StakedVault', (p) => { p.methods = p.methods.filter((x) => x.kind !== 'certify'); }, '(JSC1302)');
+purpose('stakeself-no-withdraw', 'StakedVault', (p) => { p.methods = p.methods.filter((x) => x.kind !== 'withdraw'); }, '(JSC1302)');
+purpose('withdraw-twice', 'StakedVault', (p, m) => { p.methods.push(twin(m('collect'), 'collect2')); }, '(JSC1316)');
+purpose('certify-twice', 'StakedVault', (p, m) => { p.methods.push(twin(m('certificate'), 'certificate2')); }, '(JSC1316)');
+purpose('certify-voter', 'StakedVault', (p, m) => { m('certificate').params[0].type = 'Voter'; }, '(JSC1314)');
+purpose('vote-two-params', 'StakedVault', (p, m) => { m('vote').params.pop(); }, '(JSC1314)');
+purpose('withdraw-no-amount', 'StakedVault', (p, m) => { m('collect').params = []; m('collect').body = { stmts: [], result: null, at }; }, '(JSC1314)');
+purpose('withdraw-result', 'StakedVault', (p, m) => { m('collect').result = 'Bool'; m('collect').body.result = lit(true, 'Bool'); }, '(JSC1340)');
+purpose('certify-no-result', 'StakedVault', (p, m) => { m('certificate').result = null; m('certificate').body.result = null; }, '(JSC1341)');
+purpose('certify-ctx', 'StakedVault', (p, m) => { readsValidTo(m('certificate')); }, '(JSC1315)');
+purpose('propose-ctx', 'StakedVault', (p, m) => { readsValidTo(m('proposal')); }, '(JSC1315)');
+// K39: a handler sees no instance: a state field (the checker's JSC1318).
+purpose('certify-state', 'StakedVault', (p, m) => {
+  m('certificate').body.result = { node: 'Compare', op: '>', left: stateField('deposits', 'Int'), right: lit('0', 'Int'), type: 'Bool', taint: 0, at };
+}, '(JSC1318)');
+purpose('withdraw-state', 'StakedVault', (p, m) => {
+  const send = m('collect').body.stmts[0].branches[0].then.stmts[0];
+  send.value.args[0] = stateField('deposits', 'Int');
+}, '(JSC1318)');
+purpose('withdraw-pay', 'StakedVault', (p, m) => { m('collect').body.stmts.push(payStmt()); m('collect').pays = true; }, '(JSC1319)');
+purpose('propose-quorum', 'StakedVault', (p, m) => { m('proposal').mods = [Q()]; }, '(JSC1313)');
+purpose('vote-open', 'StakedVault', (p, m) => { m('vote').mods = []; }, '(JSC1312)');
+purpose('certify-open', 'StakedVault', (p, m) => { m('certificate').mods = []; }, '(JSC1312)');
+purpose('state-txcert', 'StakedVault', (p) => { p.state.fields[0].type = 'TxCert'; }, '(JSC1321)');
+purpose('params-ledgermap', 'StakedVault', (p) => { p.params.fields.push({ name: 'm', type: { ledgerMap: ['Credential', 'Int'] } }); }, '(JSC1321)');
+purpose('action-vote-param', 'StakedVault', (p, m) => { m('deposit').params.push({ id: 90101, name: 'v', type: 'Vote', taint: 0, at }); }, '(JSC1321)');
+purpose('withdraw-txcert-arg', 'StakedVault', (p, m) => { m('collect').params.push({ id: 90102, name: 'c', type: 'TxCert', taint: 0, at }); }, '(JSC1321)');
+// Migration: the adopting side (CounterV2) and the migrating destroy (CounterV1).
+purpose('migrate-from-missing', 'CounterV2', (p, m) => { m('migrate').from = 'nope'; }, '(JSC1335)');
+purpose('migrate-from-int', 'CounterV2', (p, m) => { p.params.fields.push({ name: 'n', type: 'Int' }); m('migrate').from = 'n'; }, '(JSC1335)');
+purpose('migrate-own-state', 'CounterV2', (p, m) => { m('migrate').old.type = { record: 'State' }; delete m('migrate').old.fieldTaints; }, '(JSC1336)');
+purpose('migrate-big-maps', 'CounterV2', (p) => { p.contracts[0].bigMaps = true; }, '(JSC1334)');
+purpose('migrate-twice', 'CounterV2', (p, m) => { p.methods.push(twin(m('migrate'), 'migrate2')); }, '(JSC1337)');
+purpose('migrate-with-send', 'CounterV2', (p, m) => { m('setStep').body.stmts.push(sendStmt()); }, '(JSC1334)');
+purpose('migrates-open', 'CounterV1', (p, m) => { m('upgrade').mods = m('upgrade').mods.filter((x) => x.name === 'migrates'); }, '(JSC1333)');
+purpose('migrates-pay', 'CounterV1', (p, m) => { m('upgrade').body.stmts.push(payStmt()); m('upgrade').pays = true; }, '(JSC1332)');
+purpose('migrates-int-field', 'CounterV1', (p, m) => { m('upgrade').mods.find((x) => x.name === 'migrates').field = 'count'; },
+  'migrates to names a Bytes or Hash state field');
+purpose('migrates-on-action', 'CounterV1', (p, m) => { m('setSuccessor').mods.push({ name: 'migrates', field: 'successor' }); },
+  'only an instance destroy migrates');
+purpose('migrates-with-send', 'CounterV1', (p, m) => { m('setSuccessor').body.stmts.push(sendStmt()); }, '(JSC1334)');
+writeFileSync(new URL('./purpose-mutants.json', import.meta.url), JSON.stringify(purposeMutants, null, 1) + '\n');

@@ -1,0 +1,367 @@
+{
+ "ir": 2,
+ "language": "jsc 2",
+ "sourceSha256": "a13c8aae2c8f15ffcb98cffdf02ae734c7b99d52614c3dd05269fd8479827fb7",
+ "package": "org.julclang.state.examples.dsl",
+ "contract": "CounterV1",
+ "source": "CounterV1.jsc",
+ "options": [],
+ "records": [],
+ "enums": [],
+ "state": {
+  "name": "State",
+  "fields": [
+   {
+    "name": "admin",
+    "type": "Key"
+   },
+   {
+    "name": "successor",
+    "type": "Bytes"
+   },
+   {
+    "name": "count",
+    "type": "Int"
+   }
+  ],
+  "at": [
+   7,
+   1
+  ]
+ },
+ "timeFields": [],
+ "recursiveFns": [],
+ "libraries": [],
+ "javaLibraries": [],
+ "fns": [],
+ "methods": [
+  {
+   "kind": "init",
+   "name": "init",
+   "params": [],
+   "mods": [
+    {
+     "name": "payable"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "CtxRef",
+       "name": "caller",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        11,
+        21
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "",
+       "type": "Bytes",
+       "taint": 0,
+       "at": [
+        11,
+        40
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "0",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        11,
+        50
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      11,
+      12
+     ]
+    },
+    "at": [
+     10,
+     18
+    ]
+   },
+   "at": [
+    10,
+    3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "increment",
+   "params": [],
+   "mods": [],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         15,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "admin",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        15,
+        12
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         15,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "successor",
+       "type": "Bytes",
+       "taint": 0,
+       "at": [
+        15,
+        12
+       ]
+      },
+      {
+       "node": "Arith",
+       "op": "+",
+       "left": {
+        "node": "StateField",
+        "field": "count",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         15,
+         31
+        ]
+       },
+       "right": {
+        "node": "Lit",
+        "value": "1",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         15,
+         39
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        15,
+        31
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      15,
+      12
+     ]
+    },
+    "at": [
+     14,
+     22
+    ]
+   },
+   "at": [
+    14,
+    3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "setSuccessor",
+   "params": [
+    {
+     "id": 1,
+     "name": "newSuccessor",
+     "type": "Bytes",
+     "taint": 0,
+     "at": [
+      18,
+      23
+     ]
+    }
+   ],
+   "mods": [
+    {
+     "name": "only",
+     "field": "admin"
+    }
+   ],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         19,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "admin",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        19,
+        12
+       ]
+      },
+      {
+       "node": "LocalRef",
+       "local": 1,
+       "type": "Bytes",
+       "taint": 0,
+       "at": [
+        19,
+        35
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         19,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "count",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        19,
+        12
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      19,
+      12
+     ]
+    },
+    "at": [
+     18,
+     55
+    ]
+   },
+   "at": [
+    18,
+    3
+   ]
+  },
+  {
+   "kind": "destroy",
+   "name": "upgrade",
+   "params": [],
+   "mods": [
+    {
+     "name": "only",
+     "field": "admin"
+    },
+    {
+     "name": "migrates",
+     "field": "count"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": null,
+   "body": {
+    "stmts": [],
+    "result": null,
+    "at": [
+     23,
+     54
+    ]
+   },
+   "at": [
+    23,
+    3
+   ]
+  }
+ ],
+ "warnings": [
+  {
+   "line": 18,
+   "col": 3,
+   "code": "JSC9014",
+   "message": "setSuccessor sets successor, the successor a migration moves the instance into: whoever may call it can change the successor until the migration, after users relied on it (ADR-0011 D4); to fix it once, require it unset: require(successor == #, \"the successor is set once\")"
+  }
+ ]
+}

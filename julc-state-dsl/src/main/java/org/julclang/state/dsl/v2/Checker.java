@@ -2361,7 +2361,8 @@ final class Checker {
 
     private Ir.Method methodIn(Syntax.Method m) {
         Ir.Kind ik = kind(m.kind());
-        boolean hasState = !ik.creates();
+        // M3c (K39): a script purpose's handler spends no instance, so it has no state (its fields are no names there: JSC1318).
+        boolean hasState = !ik.creates() && !ik.purpose();
         boolean ctx = usesCtx(m);
         var fx = effectsIn(m.body());
         boolean pays = fx.contains("pay");

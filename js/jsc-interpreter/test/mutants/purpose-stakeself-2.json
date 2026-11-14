@@ -1,0 +1,828 @@
+{
+ "ir": 2,
+ "language": "jsc 2",
+ "sourceSha256": "b877f8df0592a50bba0ba441e3e27c69110b8101f5c8e160859b08422a4e805d",
+ "package": "org.julclang.state.examples.dsl",
+ "contract": "StakedVault",
+ "source": "StakedVault.jsc",
+ "options": [
+  {
+   "name": "stakeSelf",
+   "value": "2"
+  }
+ ],
+ "records": [],
+ "enums": [],
+ "state": {
+  "name": "State",
+  "fields": [
+   {
+    "name": "deposits",
+    "type": "Int"
+   }
+  ],
+  "at": [
+   10,
+   1
+  ]
+ },
+ "params": {
+  "name": "Config",
+  "fields": [
+   {
+    "name": "council",
+    "type": {
+     "list": "Key"
+    }
+   },
+   {
+    "name": "quorum",
+    "type": "Int"
+   },
+   {
+    "name": "pool",
+    "type": "Bytes"
+   },
+   {
+    "name": "payee",
+    "type": "Key"
+   },
+   {
+    "name": "cap",
+    "type": "Int"
+   }
+  ],
+  "at": [
+   11,
+   3
+  ]
+ },
+ "timeFields": [],
+ "recursiveFns": [],
+ "libraries": [],
+ "javaLibraries": [],
+ "fns": [],
+ "methods": [
+  {
+   "kind": "init",
+   "name": "init",
+   "params": [],
+   "mods": [
+    {
+     "name": "payable"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "CtxRef",
+       "name": "received",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        15,
+        24
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      15,
+      12
+     ]
+    },
+    "at": [
+     14,
+     18
+    ]
+   },
+   "at": [
+    14,
+    3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "deposit",
+   "params": [],
+   "mods": [
+    {
+     "name": "payable"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Require",
+      "cond": {
+       "node": "Compare",
+       "op": ">",
+       "left": {
+        "node": "CtxRef",
+        "name": "received",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         19,
+         13
+        ]
+       },
+       "right": {
+        "node": "Lit",
+        "value": "0",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         19,
+         24
+        ]
+       },
+       "type": "Bool",
+       "taint": 0,
+       "at": [
+        19,
+        13
+       ]
+      },
+      "message": "deposit some ADA",
+      "at": [
+       19,
+       5
+      ]
+     }
+    ],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "Arith",
+       "op": "+",
+       "left": {
+        "node": "StateField",
+        "field": "deposits",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         20,
+         24
+        ]
+       },
+       "right": {
+        "node": "CtxRef",
+        "name": "received",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         20,
+         35
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        20,
+        24
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      20,
+      12
+     ]
+    },
+    "at": [
+     18,
+     28
+    ]
+   },
+   "at": [
+    18,
+    3
+   ]
+  },
+  {
+   "kind": "destroy",
+   "name": "close",
+   "params": [],
+   "mods": [
+    {
+     "name": "quorum",
+     "keys": "params.council",
+     "threshold": "params.quorum"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": true,
+   "result": null,
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Pay",
+      "to": {
+       "node": "ParamsRef",
+       "field": "payee",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        24,
+        9
+       ]
+      },
+      "amount": {
+       "node": "CtxRef",
+       "name": "balance",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        24,
+        23
+       ]
+      },
+      "at": [
+       24,
+       5
+      ]
+     }
+    ],
+    "result": null,
+    "at": [
+     23,
+     55
+    ]
+   },
+   "at": [
+    23,
+    3
+   ]
+  },
+  {
+   "kind": "withdraw",
+   "name": "collect",
+   "params": [
+    {
+     "id": 1,
+     "name": "amount",
+     "type": "Int",
+     "taint": 0,
+     "at": [
+      28,
+      20
+     ]
+    }
+   ],
+   "mods": [
+    {
+     "name": "quorum",
+     "keys": "params.council",
+     "threshold": "params.quorum"
+    }
+   ],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": null,
+   "body": {
+    "stmts": [
+     {
+      "stmt": "If",
+      "branches": [
+       {
+        "cond": {
+         "node": "Compare",
+         "op": ">",
+         "left": {
+          "node": "LocalRef",
+          "local": 1,
+          "type": "Int",
+          "taint": 0,
+          "at": [
+           29,
+           8
+          ]
+         },
+         "right": {
+          "node": "Lit",
+          "value": "0",
+          "type": "Int",
+          "taint": 0,
+          "at": [
+           29,
+           17
+          ]
+         },
+         "type": "Bool",
+         "taint": 0,
+         "at": [
+          29,
+          8
+         ]
+        },
+        "then": {
+         "stmts": [
+          {
+           "stmt": "Send",
+           "to": {
+            "node": "LedgerOp",
+            "op": "wallet",
+            "args": [
+             {
+              "node": "ParamsRef",
+              "field": "payee",
+              "type": "Key",
+              "taint": 0,
+              "at": [
+               30,
+               19
+              ]
+             }
+            ],
+            "type": "Address",
+            "taint": 0,
+            "at": [
+             30,
+             12
+            ]
+           },
+           "value": {
+            "node": "LedgerOp",
+            "op": "lovelace",
+            "args": [
+             {
+              "node": "LocalRef",
+              "local": 1,
+              "type": "Int",
+              "taint": 0,
+              "at": [
+               30,
+               49
+              ]
+             }
+            ],
+            "type": "Value",
+            "taint": 0,
+            "at": [
+             30,
+             34
+            ]
+           },
+           "at": [
+            30,
+            7
+           ]
+          }
+         ],
+         "result": null,
+         "at": [
+          29,
+          19
+         ]
+        },
+        "at": [
+         29,
+         5
+        ]
+       }
+      ],
+      "otherwise": null,
+      "pays": false,
+      "at": [
+       29,
+       5
+      ]
+     }
+    ],
+    "result": null,
+    "at": [
+     28,
+     69
+    ]
+   },
+   "at": [
+    28,
+    3
+   ]
+  },
+  {
+   "kind": "certify",
+   "name": "certificate",
+   "params": [
+    {
+     "id": 2,
+     "name": "cert",
+     "type": "TxCert",
+     "taint": 0,
+     "at": [
+      35,
+      23
+     ]
+    }
+   ],
+   "mods": [
+    {
+     "name": "quorum",
+     "keys": "params.council",
+     "threshold": "params.quorum"
+    }
+   ],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": "Bool",
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "Logic",
+     "op": "||",
+     "left": {
+      "node": "Logic",
+      "op": "||",
+      "left": {
+       "node": "CallStd",
+       "module": "std/certs",
+       "name": "isRegistration",
+       "args": [
+        {
+         "node": "LocalRef",
+         "local": 2,
+         "type": "TxCert",
+         "taint": 0,
+         "at": [
+          36,
+          20
+         ]
+        }
+       ],
+       "type": "Bool",
+       "taint": 0,
+       "at": [
+        36,
+        5
+       ]
+      },
+      "right": {
+       "node": "CallStd",
+       "module": "std/certs",
+       "name": "delegatesOnlyTo",
+       "args": [
+        {
+         "node": "LocalRef",
+         "local": 2,
+         "type": "TxCert",
+         "taint": 0,
+         "at": [
+          36,
+          45
+         ]
+        },
+        {
+         "node": "ParamsRef",
+         "field": "pool",
+         "type": "Bytes",
+         "taint": 0,
+         "at": [
+          36,
+          51
+         ]
+        }
+       ],
+       "type": "Bool",
+       "taint": 0,
+       "at": [
+        36,
+        29
+       ]
+      },
+      "type": "Bool",
+      "taint": 0,
+      "at": [
+       36,
+       5
+      ]
+     },
+     "right": {
+      "node": "CallStd",
+      "module": "std/certs",
+      "name": "isDRepLifecycle",
+      "args": [
+       {
+        "node": "LocalRef",
+        "local": 2,
+        "type": "TxCert",
+        "taint": 0,
+        "at": [
+         36,
+         83
+        ]
+       }
+      ],
+      "type": "Bool",
+      "taint": 0,
+      "at": [
+       36,
+       67
+      ]
+     },
+     "type": "Bool",
+     "taint": 0,
+     "at": [
+      36,
+      5
+     ]
+    },
+    "at": [
+     36,
+     5
+    ]
+   },
+   "at": [
+    35,
+    3
+   ]
+  },
+  {
+   "kind": "vote",
+   "name": "vote",
+   "params": [
+    {
+     "id": 3,
+     "name": "voter",
+     "type": "Voter",
+     "taint": 0,
+     "at": [
+      39,
+      13
+     ]
+    },
+    {
+     "id": 4,
+     "name": "action",
+     "type": "GovernanceActionId",
+     "taint": 0,
+     "at": [
+      39,
+      27
+     ]
+    },
+    {
+     "id": 5,
+     "name": "choice",
+     "type": "Vote",
+     "taint": 0,
+     "at": [
+      39,
+      55
+     ]
+    }
+   ],
+   "mods": [
+    {
+     "name": "quorum",
+     "keys": "params.council",
+     "threshold": "params.quorum"
+    }
+   ],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": "Bool",
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "Lit",
+     "value": true,
+     "type": "Bool",
+     "taint": 0,
+     "at": [
+      39,
+      107
+     ]
+    },
+    "at": [
+     39,
+     107
+    ]
+   },
+   "at": [
+    39,
+    3
+   ]
+  },
+  {
+   "kind": "propose",
+   "name": "proposal",
+   "params": [
+    {
+     "id": 6,
+     "name": "p",
+     "type": "ProposalProcedure",
+     "taint": 0,
+     "at": [
+      42,
+      20
+     ]
+    }
+   ],
+   "mods": [],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": "Bool",
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "Match",
+     "scrutinee": {
+      "node": "GetField",
+      "target": {
+       "node": "LocalRef",
+       "local": 6,
+       "type": "ProposalProcedure",
+       "taint": 0,
+       "at": [
+        42,
+        50
+       ]
+      },
+      "record": "ProposalProcedure",
+      "field": "governanceAction",
+      "type": "GovernanceAction",
+      "taint": 0,
+      "at": [
+       42,
+       50
+      ]
+     },
+     "arms": [
+      {
+       "ctors": [
+        "TreasuryWithdrawals"
+       ],
+       "fields": [
+        "withdrawals"
+       ],
+       "binds": [
+        {
+         "id": 7,
+         "name": "withdrawals",
+         "type": {
+          "ledgerMap": [
+           "Credential",
+           "Int"
+          ]
+         },
+         "taint": 0,
+         "at": [
+          43,
+          27
+         ]
+        }
+       ],
+       "body": {
+        "stmts": [],
+        "result": {
+         "node": "Compare",
+         "op": "<=",
+         "left": {
+          "node": "ListProp",
+          "op": "sum",
+          "list": {
+           "node": "MapOp",
+           "op": "values",
+           "map": {
+            "node": "LocalRef",
+            "local": 7,
+            "type": {
+             "ledgerMap": [
+              "Credential",
+              "Int"
+             ]
+            },
+            "taint": 0,
+            "at": [
+             43,
+             44
+            ]
+           },
+           "args": [],
+           "type": {
+            "list": "Int"
+           },
+           "taint": 0,
+           "at": [
+            43,
+            44
+           ]
+          },
+          "type": "Int",
+          "taint": 0,
+          "at": [
+           43,
+           44
+          ]
+         },
+         "right": {
+          "node": "ParamsRef",
+          "field": "cap",
+          "type": "Int",
+          "taint": 0,
+          "at": [
+           43,
+           72
+          ]
+         },
+         "type": "Bool",
+         "taint": 0,
+         "at": [
+          43,
+          44
+         ]
+        },
+        "at": [
+         43,
+         44
+        ]
+       },
+       "at": [
+        43,
+        5
+       ]
+      },
+      {
+       "ctors": [
+        "ParameterChange",
+        "HardForkInitiation",
+        "NoConfidence",
+        "UpdateCommittee",
+        "NewConstitution",
+        "InfoAction"
+       ],
+       "fields": [],
+       "binds": [],
+       "body": {
+        "stmts": [],
+        "result": {
+         "node": "Lit",
+         "value": true,
+         "type": "Bool",
+         "taint": 0,
+         "at": [
+          44,
+          10
+         ]
+        },
+        "at": [
+         44,
+         10
+        ]
+       },
+       "at": [
+        44,
+        5
+       ]
+      }
+     ],
+     "type": "Bool",
+     "taint": 0,
+     "at": [
+      42,
+      44
+     ]
+    },
+    "at": [
+     42,
+     44
+    ]
+   },
+   "at": [
+    42,
+    3
+   ]
+  }
+ ],
+ "warnings": []
+}

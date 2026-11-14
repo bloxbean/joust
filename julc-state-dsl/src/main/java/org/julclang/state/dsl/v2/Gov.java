@@ -14,7 +14,8 @@ import java.util.Set;
  * ({@code ParameterChange.parameters}) is {@link #DATA}: it exists, so its constructor's arity and tag are the ledger's,
  * but it is inaccessible (JSC1320). The table is the one definition the checker, the emitter, both reference interpreters
  * (the JavaScript one through the IR's types and this table's twin, {@code js/jsc-interpreter/src/gov.js}) and the ABI
- * read; {@code JscV2M3cCheckerTest} checks it against JuLC's records by reflection.
+ * read; {@code JscV2M3cGovTableTest} (julc-state-toolchain, beside JuLC's ledger) checks it against JuLC's records by
+ * reflection, and against the twin.
  */
 final class Gov {
     private Gov() {}
