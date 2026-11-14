@@ -353,7 +353,17 @@ a record (§1), compared and encoded as one. Owned methods name their type: `own
 - **A payable owned destroy** (M3a2): τ.`received` is paid in with the call, so its payouts may allocate `balance +
   received`. The instance's destroy is never payable.
 
-M3a3 adds moves between instances and invariants by type (refused until then, JSC1215).
+- **Moves** (M3a3, ADR-0012 D3). An owned action with a parameter `to: into` moves its object to another instance
+  of the contract: its outcome is the object's next value, held under that instance. τ.`into` is the destination's
+  state as the transaction's input holds it. The destination consents with an instance action `admits T`, whose first
+  parameter is the arriving object's id and whose optional second parameter (`obj: T`) is the arriving object as its
+  input holds it, before the move. Both halves are in one transaction, and each reads the other's input, never its
+  outcome. **The order is normative** (ADR-0018 D10, r25): a move's source half is evaluated first, then the admit, so
+  when both refuse, the source's refusal is the one reported. An object arrives only from an instance of the same
+  policy, so its datum is this contract's own output and not a checked input.
+- **Invariants by type** (M3a3, ADR-0012 D1): `invariant T.name = …` reads an object of type `T` (its fields as bare
+  names) and is checked on every continuing object of that type (an owned init's, an owned action's, a move's), never
+  on another type's objects or on the state. A type that keeps a `BigMap` has none (JSC1213).
 
 ## 3. Expressions
 

@@ -184,8 +184,10 @@ anyone could call it on anyone's object); say `open` when that is meant. A contr
 (M3a2): each type's objects have their own datum constructor (`Holding_T`), so a method only ever runs on its own type's
 objects, and each type needs its own owned init and escape hatch (`JSC1208`, `JSC1209`, at the type). An owned type may
 keep `BigMap`s (the instance then keeps none, `JSC1211`), and an owned init may write them and `accept` native assets;
-an owned destroy may be `payable`. An instance's `init` does not accept native assets (`JSC0426`). Moves between
-instances (`into`, `admits`) and invariants by type come in M3a3 (`JSC1215` until then).
+an owned destroy may be `payable`. An instance's `init` does not accept native assets (`JSC0426`). An owned action
+with a parameter `to: into` moves its object to another instance, which consents with an action `admits T` in the same
+transaction (first parameter the object's id, then optionally the arriving object, `obj: T`); each half reads the
+other's input, and the source's half comes first. `invariant T.name = …` holds for every object of type `T`.
 
 ```text
 contract Bank(maxDatumBytes = 160) {

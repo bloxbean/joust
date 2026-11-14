@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r24)
+**Status:** Proposed (r25)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -10,7 +10,7 @@ javac attribution and ADR-050 (library source type descriptions) for library imp
 **Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76),
 M2a, M2b and M2c, and M4a (`.jsc` libraries, r16), M4b (`java:` imports, r19) and M4c (packages, `joust.lock`, offline
 tests, r20) implement it, joined with the M1 hardening (r17) and ADR-0021's M5a language server in the `.jsc` 2
-integration (r22), M3a1 (owned objects, r23) and M3a2 (several owned types, owned BigMaps, r24), and their reports (`docs/research/jsc-2-m*-report.md`) record what was
+integration (r22), M3a1 (owned objects, r23), M3a2 (several owned types, owned BigMaps, r24) and M3a3 (moves, invariants by type, r25), and their reports (`docs/research/jsc-2-m*-report.md`) record what was
 built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
@@ -747,6 +747,21 @@ not reversed; a send of `funds.held` or to `wallet(k)`, `accept(Value.none())`, 
 `Int` map's `set` is one write), which keeps the locker ports under the runtime's 15,000-byte reference-script limit.
 Twenty-six earlier `.jsc` 2 scripts get 47 to 453 bytes smaller (the M3a2 report lists them); `pay`'s sign check stays.
 
+**As built in M3a3 (r25): moves and invariants by type** (ADR-0012 D1, D3; gated by guild's Guild and Armory and by
+market). An owned action with a parameter `to: into` moves its object to another instance; the destination consents
+with an instance action `admits T`, whose first parameter is the object's id and whose optional second is the arriving
+object as its input holds it. Both halves are in one transaction, and each reads the other's input, never its outcome
+(the processor's `@Into` and `@Admits`). `invariant T.name` is checked on every continuing object of type `T`. JSC1215
+is retired. One more decision the security review asked for:
+
+- **The order of a move's two halves (review A24).** The source's half is evaluated first, then the destination's
+  admit; when both refuse, the source's refusal is reported (the interpreters, the JVM and the transition program
+  report the class of the half they run; `JscV2M3a3FourWayTest` pins a move from a closed guild into a closed guild,
+  refused with the source's class). Neither half sees the other's outcome: the admit reads the arriving object's
+  input, and the move reads the destination's input (`JscV2M3a3AttackTest.admissionReadsTheArrivingInput_notTheMoveResult`).
+  An arriving object comes only from an instance of the same policy, so its datum is the contract's own output, not a
+  checked input.
+
 **The method modifiers** (r11, fixed in M1c; gated by vault, escrow and pool, which pass): an `init`, `action` or
 `destroy` header is followed by modifiers, in any order, each at most once (JSC0416): `payable` (not on a destroy),
 `open`, `only f` (`@SignedBy("f")`, `f` a `Key` state field), `after f` and `before f` (`@ValidAfter`/`@ValidBefore`,
@@ -1305,7 +1320,7 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 | M0 | Spike: version line, `const`, spread updates, shadowing rule, `fn` with direct recursion and the after-lowering recursion check (nested folds), a `fold`/`find`/`contains` helper and both `filter` lowerings, `Option` as `Optional` end to end (datum, redeemer, portable codec, JS; `Some(None)` rejected), one generated equality helper over a record with bytes, one checked input, one `std/crypto` and one `std/bytes` binding with domains, the binding test via javac attribution, positions on the npm path, the time dataflow pass | ADR accepted | builds on both paths; four-way agreement (J3) on hand vectors; size, budget and check-cost numbers recorded; javac attribution of library sources works inside the Web Image toolchain |
 | M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; five-way differential tests (four-way to M1a) and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten. M1c's thresholds (r11): "below 14 KB" is below 14,000 bytes; "the protocol maximum" is 10,000,000,000 CPU steps and 14,000,000 memory units (the pre-Plomin memory limit, the stricter one), summed over every script of the transaction, with a warning above 80%; the saturated state is the largest one the Java example accepts (its stored datum within `maxDatumBytes`), which the port must then accept; a batched action is measured at `Batcher.DEFAULT_MAX` intents too |
 | M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green. Split (r15) into stacked parts: **M2a** values and assets (`Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `std/value`, `std/address`; gated by dex), **M2b** params, invariants, events, quorum, authorized (gated by treasury), **M2c** composition (deposits and `receives`, `reads`, `Instance<C>`, `import contract`, send datums and memo encoders, stored `Value`s with the wire conversion; gated by oracle and fees). M2c as built (r21): the oracle (Oracle, Shop as Kiosk) and fees (Pot, Stall) ports within +4% of the Java examples' sizes and budgets, every transaction at most 11.6% of the CPU and 26.2% of the memory maximum (a pot collecting 8 deposits); report `jsc-2-m2c-report.md` |
-| M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green. Split (r23) into stacked parts: **M3a1** owned objects, one type, shared reads (bank; r23); **M3a2** several owned types, `BigMap`s in owned types, creations that take native assets with #81's fix (locker's Locker and Safes; r24); **M3a3** moves (`into`, `admits`) and invariants by type (guild's Guild and Armory, and market, moved from M3a2 in r24; r25); **M3b** keyed objects (registry); **M3c** script purposes, staking and migration (staking, upgrade). M3a1 as built (r23): the bank port within +2.3% of the Java example's size and +2.5% of its budget, every transaction at most 1.75% of the CPU and 3.98% of the memory maximum; report `jsc-2-m3a1-report.md`. M3a2 as built (r24): the locker ports (Locker, Safes) within +2.5% of the Java examples' sizes and +3.4% of their budgets, under the runtime's 15,000-byte limit; J11's 14 KB is exceeded by the Java examples (14,499 and 14,564 B) and the ports (14,812 and 14,935 B) alike, recorded as an exception; market moves to M3a3; report `jsc-2-m3a2-report.md` |
+| M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green. Split (r23) into stacked parts: **M3a1** owned objects, one type, shared reads (bank; r23); **M3a2** several owned types, `BigMap`s in owned types, creations that take native assets with #81's fix (locker's Locker and Safes; r24); **M3a3** moves (`into`, `admits`) and invariants by type (guild's Guild and Armory, and market, moved from M3a2 in r24; r25); **M3b** keyed objects (registry); **M3c** script purposes, staking and migration (staking, upgrade). M3a1 as built (r23): the bank port within +2.3% of the Java example's size and +2.5% of its budget, every transaction at most 1.75% of the CPU and 3.98% of the memory maximum; report `jsc-2-m3a1-report.md`. M3a2 as built (r24): the locker ports (Locker, Safes) within +2.5% of the Java examples' sizes and +3.4% of their budgets, under the runtime's 15,000-byte limit; J11's 14 KB is exceeded by the Java examples (14,499 and 14,564 B) and the ports (14,812 and 14,935 B) alike, recorded as an exception; market moves to M3a3; report `jsc-2-m3a2-report.md`. M3a3 as built (r25): the guild ports within -1.2% to -0.4% of the Java examples' sizes (below 14 KB) and +0.9% of their budgets; the market port +6.3% (14,372 B: over J11's 14 KB, under the runtime's 15,000-byte limit, stated as an exception with the numbers) and -7.9% to +6.5% of its budgets; report `jsc-2-m3a3-report.md` |
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12 (libraries from outside the sources pinned); a `.jsc` library called from Java and a Java library from `.jsc` (in `examples/dsl`; the plugin path waits for the toolchain's publication, D9 r19 amended); the template's tests run offline |
 | M5 | Language server | M3, M4 exit | — |
 
@@ -1688,6 +1703,9 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   `Guarded` (6,765 B) calling `java:` `AllowList`, Shop (7,646 B) on five legs with its library (285 calls), the
   template's offline tests. Issue #92's S12 is fixed here (the npm build's source walk skips `node_modules`,
   dot-directories and links).
+- **r25** (2026-11-14, M3a3: moves and invariants by type): D10 records what M3a3 built and the decision on the order
+  of a move's halves (A24: the source's first; each reads the other's input); §8 records M3a3's gates (the guild and
+  market ports; market over J11's 14 KB, stated as an exception with the numbers). JSC1215 is retired.
 - **r24** (2026-11-14, M3a2: several owned types, BigMaps in owned types, owned inits that accept, payable owned
   destroys): D10 records what M3a2 built and the size work of the lowering; §8 records M3a2's gates (the locker ports;
   J11's 14 KB bound exceeded by the Java examples and the ports alike, stated as an exception with the numbers) and moves
