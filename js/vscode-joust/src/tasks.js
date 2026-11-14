@@ -88,11 +88,30 @@ function abiCommands(folderPath, platform = process.platform, execPath = process
       accept: (c, h1, h2) => ({ ...b, args: [bin, 'build', `--accept-abi=${c}@${h1}..${h2}`] }),
     };
   }
+  // F5 on #99: in a multi-project build a bare task name runs in every project that has it (several diffs, one --out):
+  // refused there; the user runs :<project>:jscAbiDiff and acceptJscAbi themselves.
+  if (multiProject(b.cwd)) return { kind: 'gradle', multiProject: true };
   return {
     kind: 'gradle',
     diff: (c, out) => ({ ...b, args: ['jscAbiDiff', '--contract', c, '--out', out] }),
     accept: (c, h1, h2) => ({ ...b, args: ['acceptJscAbi', '--contract', c, '--committed-sha256', h1, '--sha256', h2] }),
   };
+}
+
+/** Whether the Gradle build at `folder` includes subprojects (its settings file, at most 64 KB, has an include). */
+function multiProject(folder) {
+  for (const f of ['settings.gradle', 'settings.gradle.kts']) {
+    try {
+      const p = path.join(folder, f);
+      const st = fs.lstatSync(p);
+      if (!st.isFile()) continue;
+      if (st.size > 64 * 1024) return true;   // unread: assumed multi-project (refused, never guessed)
+      if (/^\s*include\b/m.test(fs.readFileSync(p, 'utf8'))) return true;
+    } catch {
+      // no such file
+    }
+  }
+  return false;
 }
 
 function createTaskProvider(vscode) {

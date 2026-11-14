@@ -250,6 +250,9 @@ test('Accept ABI…: the project\'s own tool, bound to both manifests (D7a): npm
   assert.deepEqual(g.accept('Counter', 'b'.repeat(64), 'c'.repeat(64)).args,
     ['acceptJscAbi', '--contract', 'Counter', '--committed-sha256', 'b'.repeat(64), '--sha256', 'c'.repeat(64)]);
   assert.equal(abiCommands(join(tmp, 'none'), 'linux'), null);
+  // F5 on #99: a multi-project build is refused (a bare task name would run in every project).
+  writeFileSync(join(gradle, 'settings.gradle.kts'), 'rootProject.name = "x"\ninclude(":app", ":lib")\n');
+  assert.deepEqual(abiCommands(gradle, 'linux'), { kind: 'gradle', multiProject: true });
 });
 
 test('the manifest: M5b commands, F2 bound to JOUST: Rename Symbol in .jsc editors, addImport hidden, timeValue declared', () => {
@@ -259,6 +262,8 @@ test('the manifest: M5b commands, F2 bound to JOUST: Rename Symbol in .jsc edito
   const hidden = pkg.contributes.menus.commandPalette.filter((m) => m.when === 'false').map((m) => m.command);
   assert.ok(hidden.includes('joust.addImport') && hidden.includes('joust.applyFix'));
   assert.equal(pkg.contributes.menus.commandPalette.find((m) => m.command === 'joust.acceptAbi').when, 'isWorkspaceTrusted');
+  // F9 on #99: JOUST: Rename Symbol in a .jsc editor's context menu (VS Code's own Rename has no provider there).
+  assert.deepEqual(pkg.contributes.menus['editor/context'].map((m) => [m.command, m.when]), [['joust.renameSymbol', 'editorLangId == jsc']]);
   assert.deepEqual(pkg.contributes.keybindings, [{ command: 'joust.renameSymbol', key: 'f2', when: 'editorTextFocus && editorLangId == jsc && !editorReadonly' }]);
   assert.equal(pkg.contributes.semanticTokenModifiers[0].id, 'timeValue');
 });

@@ -155,6 +155,11 @@ function activate(ctx) {
     await client.sendRequest('joust/restartAnalysis');
   }));
   ctx.subscriptions.push(vscode.commands.registerCommand('joust.restartServer', restartServer));
+  // F9 on #99: a change of joust.buildOnSave reaches the running server (a restarted one reads it at initialize).
+  ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+    if (!e.affectsConfiguration('joust.buildOnSave') || !client || client.state !== State.Running) return;
+    client.sendNotification('joust/settings', { buildOnSave: vscode.workspace.getConfiguration('joust').get('buildOnSave') !== false });
+  }));
   ctx.subscriptions.push(vscode.commands.registerCommand('joust.showCompiler', async () => {
     const editor = vscode.window.activeTextEditor;
     const s = client && client.state === State.Running

@@ -213,6 +213,11 @@ function register(vscode, ctx, getClient) {
       vscode.window.showWarningMessage('JOUST: no npm project with @julclang/joust installed, or gradlew, at a workspace folder\'s root.');
       return { ran: false, reason: 'no project tool' };
     }
+    if (cmds.multiProject) {
+      vscode.window.showWarningMessage('JOUST: Accept ABI… does not run in a multi-project Gradle build (a task name would run in every project): '
+        + 'run ./gradlew :<project>:jscAbiDiff --contract <package.Name> and :<project>:acceptJscAbi yourself.');
+      return { ran: false, reason: 'multi-project Gradle build' };
+    }
     let contract = args && args.contract;
     if (!contract && e) contract = contractOfDocument(e.document);
     if (!contract) {

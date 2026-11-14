@@ -180,6 +180,13 @@
           "command": "joust.checkBuild",
           "when": "editorLangId == jsc"
         }
+      ],
+      "editor/context": [
+        {
+          "command": "joust.renameSymbol",
+          "when": "editorLangId == jsc",
+          "group": "1_modification@1"
+        }
       ]
     },
     "configuration": {
@@ -209,7 +216,7 @@
           "type": "boolean",
           "default": true,
           "scope": "window",
-          "description": "Build in memory on save (trusted workspaces, the project's own compiler, npm projects): the build's later stages' diagnostics and the ABI comparison, nothing written (ADR-0021 D4). Off: only JOUST: Check build (in memory)."
+          "description": "Build in memory on save (trusted workspaces, the project's own compiler, npm projects): the build's later stages' diagnostics and the ABI comparison, nothing written (ADR-0021 D4). Off: only JOUST: Check build (in memory). A change applies to the running server."
         }
       }
     },
