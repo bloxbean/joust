@@ -437,7 +437,9 @@ class JscV2CheckerTest {
         var two = assertThrows(JscException.class, () -> JscV2.lower("jsc 2\n" + body, "C.jsc"));
         assertEquals("JSC0113 1:5", two.code + " " + two.line + ":" + two.col);
         assertTrue(two.getMessage().contains("write 'jsc 1' or drop the line"), two.getMessage());
-        for (String head : List.of("jsc 3\n", "jsc 0\n", "jsc one\n", "jsc\n")) {
+        // #111 r1 (security S1, Codex C1): the version as written; an integer's '_' is not dropped from it.
+        for (String head : List.of("jsc 3\n", "jsc 0\n", "jsc one\n", "jsc\n", "jsc 1_\n", "jsc 1__\n", "jsc _1\n", "jsc 0_1\n", "jsc 01\n",
+                "jsc 2_\n")) {
             var e = assertThrows(JscException.class, () -> JscV2.lower(head + body, "C.jsc"), head);
             assertEquals("JSC0113", e.code, head);
             assertTrue(e.getMessage().contains("the header is 'jsc 1', or none"), e.getMessage());

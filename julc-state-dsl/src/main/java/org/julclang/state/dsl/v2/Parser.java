@@ -357,11 +357,14 @@ final class Parser {
         if (!at("jsc")) return;
         next();
         Tok v = next();
-        if (v.kind() == K.INT && v.text().equals("2")) {
+        // The version as written (#111 r1: security S1, Codex C1): the lexer drops an integer's '_', so 'jsc 1_' would
+        // read as 1; a version is one digit, spelt exactly.
+        boolean literal = v.kind() == K.INT && v.end() - v.col() == v.text().length();
+        if (literal && v.text().equals("2")) {
             throw v.pos().error("JSC0113", "'jsc 2' is no longer a header: the language is version 1, so write 'jsc 1' or drop the line"
                     + " (a file with no header is version 1)");
         }
-        if (v.kind() != K.INT || !v.text().equals("1")) {
+        if (!literal || !v.text().equals("1")) {
             throw v.pos().error("JSC0113", "this compiler reads .jsc version 1: the header is 'jsc 1', or none (a file with no header is"
                     + " version 1)");
         }
