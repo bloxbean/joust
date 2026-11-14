@@ -434,3 +434,68 @@ test('a specifier with a backslash is never joined into a path (S7); one byte un
     await lsp.stop();
   }
 });
+
+// ------------------------------------------------------------------ #110 (Codex C15, C16/S8, C18)
+
+test('a link whose target goes and comes back reschedules its importer (C15); a linked npm scope is no package (C16, S8)', { skip, timeout: 240_000 }, async () => {
+  const g = gradle();
+  mkdirSync(join(g.dir, 'shared'), { recursive: true });
+  writeFileSync(join(g.dir, 'shared', 'fees.jsc'), FEES);
+  symlinkSync('../../../../shared/fees.jsc', join(g.src, 'fees.jsc'));
+  const shop = SHOP.replace('import contract { Feed } from "./Feed.jsc"\n', '').replace('feed: Instance<Feed>, ', '')
+    .replace('f: reads params.feed, ', '').replace('    require(f.live, "the feed is closed")\n', '');
+  writeFileSync(join(g.src, 'Shop.jsc'), shop);
+  let lsp = await startLsp({ folders: [g.dir], args: ['--project-engine'] });
+  try {
+    const uri = uriOf(join(g.src, 'Shop.jsc'));
+    lsp.open(uri, shop);
+    assert.deepEqual((await lsp.diagnostics(uri, 1, 60_000)).diagnostics.filter((d) => d.severity === 1), []);
+    let n = lsp.published.length;
+    rmSync(join(g.dir, 'shared', 'fees.jsc'));
+    watched(lsp, join(g.dir, 'shared', 'fees.jsc'), 3);
+    await after(lsp, n, uri, (x) => x.diagnostics[0]?.code === 'JSC0706', 'refused while the target is gone');
+    n = lsp.published.length;
+    writeFileSync(join(g.dir, 'shared', 'fees.jsc'), FEES);
+    watched(lsp, join(g.dir, 'shared', 'fees.jsc'), 1);
+    await after(lsp, n, uri, (x) => x.diagnostics.length === 0, 'accepted once the target is back (the event names the target)');
+  } finally {
+    await lsp.stop();
+  }
+  // node_modules/@acme -> ../vendor: a linked scope directory; joust build refuses @acme/fees/fees.jsc (JSC0706), so does
+  // the server.
+  const n2 = npm();
+  mkdirSync(join(n2.dir, 'vendor', 'fees', 'joust-lib'), { recursive: true });
+  writeFileSync(join(n2.dir, 'vendor', 'fees', 'joust-lib', 'fees.jsc'), FEES.replace('library app', 'library acme.fees'));
+  symlinkSync('../vendor', join(n2.dir, 'node_modules', '@acme'));
+  const scoped = shop.replace('"./fees.jsc"', '"@acme/fees/fees.jsc"');
+  writeFileSync(join(n2.src, 'Shop.jsc'), scoped);
+  lsp = await startLsp({ folders: [n2.dir], args: ['--project-engine'] });
+  try {
+    const uri = uriOf(join(n2.src, 'Shop.jsc'));
+    lsp.open(uri, scoped);
+    assert.equal((await lsp.diagnostics(uri, 1, 60_000)).diagnostics[0]?.code, 'JSC0706');
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('a backslash specifier is never joined or read, though the reader would resolve it (C18, S7)', { timeout: 60_000 }, async () => {
+  // On the stub engine: a project file whose imported file says DEPHANG never returns. Had the server joined the
+  // specifier and read what it resolves to, the analysis would hang.
+  const { dir, src } = gradle();
+  // D4b's reader splits a path on both separators, so ./x\..\fees.jsc would reach app/fees.jsc: it says DEPHANG.
+  writeFileSync(join(src, 'fees.jsc'), 'jsc 2 DEPHANG');
+  // In .jsc a backslash in a string is written \\ (the lexer's escape): the specifier is ./x\..\fees.jsc.
+  const shop = 'jsc 2 import { fee } from "./x\\\\..\\\\fees.jsc"';
+  writeFileSync(join(src, 'Shop.jsc'), shop);
+  const lsp = await startLsp({ engineDir: STUB, folders: [dir], args: ['--project-engine'], hostOptions: { analysisMs: 600, graceMs: 200, backoffMs: 100, backoffMaxMs: 400 } });
+  try {
+    const uri = uriOf(join(src, 'Shop.jsc'));
+    lsp.open(uri, shop);
+    const p = await lsp.diagnostics(uri, 1, 20_000);
+    assert.deepEqual(p.diagnostics, [], 'analysed without the backslash file (no hang, no internal error)');
+    assert.equal((await lsp.stats()).quarantined, 0);
+  } finally {
+    await lsp.stop();
+  }
+});

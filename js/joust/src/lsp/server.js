@@ -268,7 +268,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * `{ id, files, deps, advisory }` (deps: the real paths read, for rescheduling importers), or null: the file is not in a
    * project's contracts directory (analysed on its own, as before).
    */
-  async function projectOf(uri, text, sel) {
+  async function projectOf(uri, text, sel, previous = new Map()) {
     if (!sel.contracts || !sel.folder) return null;
     const file = localFileOf(uri);
     if (!file || !inside(file, sel.folder)) return null;
@@ -286,6 +286,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     const files = { [id]: text };
     const deps = new Set();
+    const resolved = new Map(previous);   // lexical path -> what it resolved to (this analysis, else an earlier one)
     let chars = text.length;
     let advisory = null;
     const todo = [id];
@@ -317,6 +318,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       // 'package'
       const root = await confined(pkgRoot);
       if (!root) return null;
+      // #110 C16/S8: only node_modules/<pkg> or node_modules/@scope/<pkg> may be a link; a scope directory resolves to
+      // itself (libraryPackages() lists a scope's packages only when it is a directory).
+      if (basename(dirname(pkgRoot)).startsWith('@') && (await confined(dirname(pkgRoot))) !== dirname(pkgRoot)) return null;
       const below = relative(pkgRoot, path).split(sep);
       return r === join(root, ...below) ? r : null;
     };
@@ -369,6 +373,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         // #98 C9, N1: every path looked for is an edge, read or not (missing, refused, over a bound): a file that appears,
         // shrinks or comes back later reschedules this importer.
         deps.add(path);
+        // #110 C15: what this path resolved to last time stays an edge while it does not resolve now (a linked
+        // dependency whose target is gone): its target coming back reschedules this importer.
+        if (previous.has(path)) deps.add(previous.get(path));
         if (Object.keys(files).length >= MAX_PROJECT_FILES) {
           advisory ??= `the file's imports reach more than ${MAX_PROJECT_FILES} files, more than the language server reads: analysed in part`;
           break;
@@ -376,6 +383,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         const realPath = await locate(path, { links, base: sel.contracts, pkgRoot });
         if (!realPath) continue;   // missing or refused: the engine reports the import as the build does
         deps.add(realPath);
+        resolved.set(path, realPath);
         let body = open.get(realPath);
         if (body === undefined) {
           const r = await reader.read(sel.folder, relative(sel.folder, realPath).split(sep).join('/'), { cap: MAX_FILE_CHARS });
@@ -398,7 +406,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         todo.push(target);
       }
     }
-    return { id, files, deps, advisory };
+    return { id, files, deps, advisory, resolved };
   }
 
   /** Every open document whose last analysis read `realPath` (it imports it, directly or not): analysed again. */
@@ -436,11 +444,12 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // The project files its imports reach (r7a); a java: import or a bound reached makes it advisory (D3a; #98 F3, F4).
     // #98 C14: the per-file bound is in UTF-8 bytes, for the document, its open imports and their files on disk alike.
     const tooLarge = Buffer.byteLength(text, 'utf8') > MAX_FILE_CHARS;
-    const project = tooLarge ? null : await projectOf(uri, text, sel);
+    const project = tooLarge ? null : await projectOf(uri, text, sel, s.resolved);
     if (state.get(uri) !== s || s.seq !== seq || documents.get(uri)?.version !== version) return;
     const eff = project?.advisory && sel.mode !== 'advisory' ? { ...sel, mode: 'advisory', reason: project.advisory } : sel;
     s.selection = eff;
     s.deps = project?.deps ?? new Set();
+    s.resolved = project?.resolved ?? s.resolved;
     s.realPath = await realPathOf(uri, sel);
     connection.sendNotification('joust/status', statusOf(uri, eff));
     const label = sourceLabel(eff);

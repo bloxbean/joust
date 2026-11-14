@@ -441,6 +441,26 @@ class JscV2IrTest {
         assertTrue(e.getMessage().contains("is listed twice"), e.getMessage());
     }
 
+    /** #110 C17: a java: library listed twice is refused, as in the JS reader. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void aJavaLibraryListedTwice_isRefused() throws Exception {
+        String json = Files.readString(JS_FIXTURES.resolve("java/Guarded.ir.json"));
+        var root = (java.util.Map<String, Object>) AbiCheck.Json.parseStrict(json);
+        var libs = (java.util.List<Object>) root.get("javaLibraries");
+        libs.add(AbiCheck.Json.parseStrict(json.substring(0, 0) + printed(libs.get(0))));
+        var sb = new StringBuilder();
+        IrJson.print(root, sb, "");
+        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(sb.toString()));
+        assertTrue(e.getMessage().contains("is listed twice"), e.getMessage());
+    }
+
+    private static String printed(Object o) {
+        var sb = new StringBuilder();
+        IrJson.print(o, sb, "");
+        return sb.toString();
+    }
+
     /** Every JSON object below {@code node}, type objects included; a local's fieldTaints (a map of its own kind) aside. */
     @SuppressWarnings("unchecked")
     private static void collectAll(Object node, java.util.List<Object> path, java.util.List<java.util.List<Object>> out) {
