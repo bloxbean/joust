@@ -110,8 +110,10 @@ final class JavaEmitter {
         var deps = new ArrayList<Ir.Library>();
         for (Ir.Library x : p.libraries()) if (x != l) deps.add(x);
         String pkg = l.qualified().substring(0, l.qualified().lastIndexOf('.'));
+        // #98 review C1: with the build's Java libraries too, whose records the library's code may compare or build.
         return new Ir.Program(pkg, l.fileName(), l.simpleName(), List.of(), l.records(), l.enums(), null, List.of(), l.fns(),
-                java.util.Set.of(), java.util.Set.of(), List.of(), true, List.copyOf(deps));
+                java.util.Set.of(), java.util.Set.of(), List.of(), null, List.of(), java.util.Map.of(), true, List.copyOf(deps),
+                p.javaLibraries());
     }
 
     /** Emits the program only for the messages it can trace. */
@@ -2198,7 +2200,7 @@ final class JavaEmitter {
                 var en = p.enumType(e.name());
                 int tag = 0;
                 for (Ir.RecordType v : en.variants().values()) {
-                    cases.append("            case ").append(v.name()).append(" x__ -> ").append(constr(tag++ + "L", v, "x__")).append(";\n");
+                    cases.append("            case ").append(qual(v.name())).append(" x__ -> ").append(constr(tag++ + "L", v, "x__")).append(";\n");
                 }
                 yield "return switch (v__) {\n" + cases + "        };";
             }
@@ -2331,7 +2333,8 @@ final class JavaEmitter {
             i++;
         }
         sb.append("Require.that(Builtins.nullList(f").append(i).append("__), ").append(k).append(");\n        ");
-        sb.append("return new ").append(r.name()).append("(").append(String.join(", ", args)).append(");");
+        // #98 review S4: a library's record or variant through its class (qual), as jt() names its type.
+        sb.append("return new ").append(qual(r.name())).append("(").append(String.join(", ", args)).append(");");
         return sb.toString();
     }
 
