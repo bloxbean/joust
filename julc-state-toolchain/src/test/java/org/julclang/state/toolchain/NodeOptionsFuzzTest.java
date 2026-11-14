@@ -115,9 +115,18 @@ class NodeOptionsFuzzTest {
         return new NodeRun(p.exitValue(), out, err);
     }
 
+    /**
+     * The {@code --conditions} values Node reads from these arguments: Node stops reading options at the first argument
+     * that is not one (CI found it: {@code --conditions=b "q r"-x --conditions=c} gives Node {@code [b]}), so the values
+     * after it are not read. The port splits; which arguments Node then reads as options is Node's rule, restated here.
+     */
     static List<String> conditions(List<?> args) {
         var out = new ArrayList<String>();
-        for (Object a : args) if (((String) a).startsWith("--conditions=")) out.add(((String) a).substring("--conditions=".length()));
+        for (Object o : args) {
+            String a = (String) o;
+            if (!a.startsWith("-")) break;
+            if (a.startsWith("--conditions=")) out.add(a.substring("--conditions=".length()));
+        }
         return out;
     }
 
