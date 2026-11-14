@@ -1013,8 +1013,7 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
 19. **The first outline** (round r6, F12). VS Code caches a document's outline per version and turns an empty answer
     into none, so the outline, folding and selection-range requests that arrive while the current version's first
     analysis is pending wait for it, up to the analysis cap; an early empty answer would otherwise stay until the text
-    changed (the stable smoke test's flake). `joust/status` carries the version that has a model. Windows device names are refused in absolute paths on Windows only (a POSIX `aux` directory is a directory);
-    repository-relative text refuses them everywhere.
+    changed (the stable smoke test's flake). `joust/status` carries the version that has a model.
 
 ## Revision history
 
