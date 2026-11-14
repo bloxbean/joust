@@ -254,12 +254,13 @@ jobs:
           node --test test/*.test.js 2>&1 | tee "$RUNNER_TEMP/create-joust.tap"
           if grep -q '# SKIP' "$RUNNER_TEMP/create-joust.tap"; then echo "::error::the template build was skipped"; exit 1; fi
 
-      # ADR-0021 M5a: the language core in this commit's engine. JscLangTest writes the JVM's document models; the
-      # engine's must be byte-identical, its diagnostics must be joust.build's (L1, on the path the server runs), and the
-      # nesting cap must hold on the main thread and the server's 4 MB worker, cold (M5a's exit).
+      # ADR-0021 M5a, M5b: the language core in this commit's engine. JscLangTest writes the JVM's document models; the
+      # engine's must be byte-identical, the build's errors must be among its diagnostics (L1, on the path the server
+      # runs), and the nesting cap must hold on the main thread and the server's 4 MB worker, cold (M5a's exit).
+      # JscLangRecoveryTest is M5b's mutation corpus (L1 recovered, L13) and L5 (the build job runs it too).
       - name: Test the language core in the engine
         run: |
-          ./gradlew :julc-state-dsl:test --tests '*JscLangTest' --stacktrace
+          ./gradlew :julc-state-dsl:test --tests '*JscLangTest' --tests '*JscLangRecoveryTest' --stacktrace
           node --experimental-wasm-exnref julc-state-toolchain/src/test/js/lang-in-node.mjs julc-state-toolchain/build/wasm julc-state-dsl/build/lang-parity.json
 
       # ADR-0021 M5a: the language server's protocol, watchdog, confinement, input and edit tests on this commit's
@@ -275,6 +276,8 @@ jobs:
           ln -sfn ../../joust-runtime js/node_modules/@julclang/joust-runtime
           cd js/joust
           node --test --test-concurrency=1 test/lsp/*.test.js
+          # ADR-0021 D7a: the ABI diff and the bound acceptance through the CLI, on this engine.
+          node --test test/abi.test.js test/accept-abi.test.js
           node test/lsp/measure-l10.mjs --check
 
       # For the cli job: the engines of this commit, so its npm build is real.

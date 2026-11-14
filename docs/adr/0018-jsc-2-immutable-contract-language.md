@@ -931,6 +931,12 @@ validator never accepts it (r17, #76 review S5, S6).
   `checkJscAbi` after `compileJava`, part of `check`. It compares structures, from the datum and the redeemers through
   every schema they reach (a type used only inside a method is not part of the ABI); a reached schema the description
   lacks, an API type included, is a difference. The manifest is checked against independently written CBOR golden vectors (J17).
+  *(ADR-0021 r7, §3a item 5)* Acceptance can also be per contract and bound to both manifests: `joust abi diff <Contract>`
+  (Gradle: `jscAbiDiff --contract <C>`) prints the committed manifest and the new one with their SHA-256 (`none` when
+  nothing is committed), and `joust build --accept-abi=<Contract>@<committed-sha256>..<new-sha256>` (Gradle:
+  `acceptJscAbi --contract <C> --committed-sha256 <h1> --sha256 <h2>`, task options) accepts that contract only, and
+  refuses when the committed manifest is no longer `h1` or the build now computes another manifest than `h2`. The
+  editor's **Accept ABI…** runs only this form; the bare `--accept-abi` stays for a terminal.
 
 ### D13. Editor support
 
