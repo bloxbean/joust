@@ -553,6 +553,16 @@ public final class Interpreter {
         return method(method).on();
     }
 
+    /** M3a: whether the method reads the instance's state by reference ({@code shared}). */
+    public boolean takesShared(String method) {
+        return method(method).owned() != null && method(method).owned().shared() != null;
+    }
+
+    /** M3a: whether the method moves its object ({@code into}). */
+    public boolean takesInto(String method) {
+        return method(method).owned() != null && method(method).owned().into() != null;
+    }
+
     /** M3a: the contract's owned types, in declaration order. */
     public List<String> ownedTypes() {
         return p.owned();
