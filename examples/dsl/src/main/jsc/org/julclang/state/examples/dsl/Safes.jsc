@@ -1,0 +1,31 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/locker's Safes in .jsc 2 (ADR-0018 M3a, J11; ADR-0012 D2, ADR-0014): each safe is an owned object holding a
+// native token and a BigMap of notes about it. Opening takes the tokens in and writes the first note at creation;
+// emptying sends the tokens back.
+contract Safes(assetSlots = 2) {
+  state { keeper: Key, isOpen: Bool }
+
+  owned Safe { owner: Key, tokenPolicy: Hash, tokenName: Bytes, quantity: Int, notes: BigMap<Bytes, Int> }
+
+  init() {
+    return { keeper: caller, isOpen: true }
+  }
+
+  owned init Safe.openSafe(s: shared, tokenPolicy: Hash, tokenName: Bytes, qty: Int) payable {
+    require(s.isOpen, "closed")
+    require(qty > 0, "put something in")
+    accept(Value.asset(tokenPolicy, tokenName, qty))
+    return { owner: caller, tokenPolicy, tokenName, quantity: qty, notes: BigMap.empty().set(tokenName, qty) }
+  }
+
+  owned action Safe.note(key: Bytes, value: Int) only owner {
+    return { ...state, notes: notes.set(key, value) }
+  }
+
+  owned destroy Safe.empty() only owner {
+    pay(owner, balance)
+    send(wallet(owner), funds.held)
+  }
+}

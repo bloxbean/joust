@@ -130,11 +130,14 @@ class JscV2M2CheckerTest {
         bad("action a() payable { require(funds.received == Value.none(), \"x\")\n return state }", "state exactly which with accept(…)", 0, 1);
         // A payable method that reads no funds takes lovelace only: no accept, no Funds.
         assertTrue(java("action a() payable { require(received > 0, \"x\")\n return state }").contains("public static State a(State s__, Ctx ctx)"));
+        // M3a2: issue #81 is fixed, so a payable init that reads funds states what it accepts like any payable method
+        // (JSC0423), and an init's accept lowers to the Created record (JSC0426 is retired).
         badSource(coins("").replace("init(to: Address, guard: Credential)", "init(to: Address, guard: Credential) payable")
                 .replace("n: 0, deadline: 0 } }", "n: 0, deadline: 0, }  }").replace("{ owner: caller, to, guard, n: 0, deadline: 0, }",
-                        "{ owner: caller, to, guard, n: 0, deadline: funds.received.lovelace }"), "a payable init that uses funds", 5, 3);
-        badSource(coins("").replace("init(to: Address, guard: Credential)", "init(to: Address, guard: Credential) payable")
-                .replace("{ return { owner: caller,", "{ accept(funds.received)\n return { owner: caller,"), "accept in an init is not supported yet", 5, 50);
+                        "{ owner: caller, to, guard, n: 0, deadline: funds.received.lovelace }"), "state exactly which with accept(…)", 5, 3);
+        String accepting = JscV2.lower(coins("").replace("init(to: Address, guard: Credential)", "init(to: Address, guard: Credential) payable")
+                .replace("{ return { owner: caller,", "{ accept(funds.received)\n return { owner: caller,"), "C.jsc").java();
+        assertTrue(accepting.contains("public record Created(State state, Value accepted) {}"), accepting);
         // A destroy may not be payable, so it cannot accept either; it must move value out.
         bad("destroy d() only owner { accept(Value.none())\n pay(owner, balance) }", "the method must be payable", 0, 26);
         bad("destroy d() only owner { require(n == 0, \"x\") }", "pay(…), send(…), mint(…), burn(…) or deposit(…) at least once", 0, 1);

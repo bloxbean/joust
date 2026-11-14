@@ -144,9 +144,9 @@ class JscV2M3a1CheckerTest {
         // only/after/before name the object's fields; the instance's are not bare names there.
         bad("  owned action Account.x() @@only admin { return state }", "JSC0310", "no Account field admin");
         bad("  owned action Account.x() only owner { require(@@paused, \"no\"); return state }", "JSC0217", "unknown name 'paused'");
-        // An owned init takes only payable; an owned destroy is not payable yet.
+        // An owned init takes only payable; an owned destroy may be payable (M3a2), the instance's destroy never.
         bad("  owned init Account.y() @@only owner { return { owner: caller, saved: 0 } }", "JSC0405", "an owned init takes only 'payable'");
-        bad("  owned destroy Account.z() @@payable only owner { pay(owner, balance) }", "JSC0406", "an owned destroy cannot be payable yet");
+        lower(bank(BASICS + "  owned destroy Account.z() payable only owner { pay(owner, balance + received) }"));
         // A creation's results and an object's ends (D4).
         bad("  owned init Account.y() { @@pay(caller, 1); return { owner: caller, saved: 0 } }", "JSC0404", "an owned init cannot pay");
         bad("  @@owned destroy Account.z() only owner { require(true, \"x\") }", "JSC0409", "an owned destroy ends its object");
@@ -157,22 +157,14 @@ class JscV2M3a1CheckerTest {
         assertTrue(w.warnings().stream().anyMatch(x -> x.contains("JSC9010") && x.contains("anyone can call it on anyone's Account")), w.warnings().toString());
         assertFalse(lower(bank(BASICS + "  owned action Account.bump() open { return { ...state, saved: saved + 1 } }")).warnings().stream()
                 .anyMatch(x -> x.contains("JSC9010")), "'open' says that is meant");
-        // #81 is open: a creation takes no native assets (JSC0426, as M2's init).
-        bad("  owned init Account.y() payable { @@accept(Value.none()); return { owner: caller, saved: 0 } }", "JSC0426", "accept in an owned init");
+        // M3a2: #81 is fixed, so an owned init may accept (its result record is AccountCreated).
+        assertTrue(lower(bank(BASICS + "  owned init Account.y() payable { accept(Value.none()); return { owner: caller, saved: 0 } }")).java()
+                .contains("public record AccountCreated(Account state, Value accepted) {}"));
     }
 
     @Test
     void laterParts_areRefusedHere() {
-        badSource(bank(BASICS + "  owned @@Loan { owner: Key }"), "JSC1215", "a second owned type");
-        badSource("""
-                jsc 2
-                package t
-                contract C {
-                  state { a: Key }
-                  owned Vault { owner: Key, items: @@BigMap<Bytes, Int> }
-                  init() { return { a: caller } }
-                }
-                """, "JSC1215", "a BigMap in an owned type");
+        // (A second owned type and a BigMap in an owned type are M3a2's: JscV2M3a2CheckerTest.)
         bad("  owned action Account.move(@@d: into) only owner { return state }", "JSC1215", "an into parameter");
         bad("  action enlist(id: Bytes) @@admits Account { return state }", "JSC1215", "admits is not supported yet");
         bad("  @@invariant Account.positive = saved >= 0", "JSC1215", "an owned type's invariant");

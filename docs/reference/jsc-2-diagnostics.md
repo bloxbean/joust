@@ -157,7 +157,9 @@ As M2a's and M2b's, these are refused **in every contract**, whether it composes
 
 `reads` and `deposit` are not reserved: `reads` is a word only after a parameter's `:`, and `deposit` was an effect
 word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a datum, deferred) is retired: M2c's
-`send(to, value, datum)` takes it, and the code is not reused.
+`send(to, value, datum)` takes it, and the code is not reused. `JSC0426` (M2: `accept` in an init, deferred for issue
+#81) is retired in M3a2: #81 is fixed, so an init and an owned init take native assets as any payable method does, and
+the code is not reused.
 
 ### Names M3a reserves (ADR-0018 D16)
 
@@ -250,7 +252,6 @@ cardano-client-lib's `Account` there.
 | JSC0423 | error | … is payable and uses funds, send, mint or burn, so it can take native assets: state exactly which with accept(…), or accept(Value.none()) for none (ADR-0007 r2, ADR-0018 D4) | Checker |
 | JSC0424 | error | a contract with native assets (a method uses funds, send, mint, burn or accept) cannot have batched actions: intents carry only lovelace (ADR-0007 r2, ADR-0018 D4) | Checker |
 | JSC0425 | error | a batched action cannot emit events: an intent's owner is its caller, not an authenticated signer of the batch (ADR-0009 D5) | Checker (M2b) |
-| JSC0426 | error | accept in an init is not supported yet … / a payable init that uses funds would take native assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred). Both: `accept` in an init, and any payable init that reads `funds`. The processor's creation transition program is wrong for an init returning `(state, accepted)`, Java contracts included: [#81](https://github.com/bloxbean/joust/issues/81); lifted in M2b or M2c once it is fixed | Checker |
 | JSC0427 | error | funds is part of the transaction: it is not available in a view or fn (pass what you need as an argument) | Checker |
 | JSC0430 | error | a require message may not contain '#word:', the form of the checks the lowering generates (ADR-0018 D12): reword it | Checker |
 | JSC0431 | error | the params are declared once: params { … } | Parser (M2b) |
@@ -472,11 +473,11 @@ rule is the processor's (ContractReader), refused at the `.jsc` position.
 | JSC1212 | error | admits goes on an instance action: objects arrive at an instance (ADR-0012 D3) / an admits action cannot be batched … / admits …: … is not an owned type of this contract / an admits action's first parameter is the arriving object's id, a Bytes … / an admits action cannot read another contract yet | Checker (M3a) |
 | JSC1213 | error | the owned type … holds a BigMap, so it cannot have invariants: on chain only the opened reads are visible, so the JVM and the chain would disagree (ADR-0009 r2, ADR-0012 D2) | Checker (M3a) |
 | JSC1214 | error | … moves a … to another instance, which must consent: declare an action admits … (ADR-0012 D3) / … admits …, but no owned action moves a … (an into parameter): no object could ever arrive through it (ADR-0012 D3) | Checker (M3a) |
-| JSC1215 | error | admits / an into parameter / an owned type's invariant / a second owned type / a BigMap in an owned type is not supported yet: … comes in M3a2 or M3a3 (ADR-0012) | Checker (M3a1) |
+| JSC1215 | error | admits / an into parameter / an owned type's invariant is not supported yet: … comes in M3a3 (ADR-0012) | Checker (M3a1; M3a2 builds several owned types and BigMaps in owned types) |
 
-M3a also changes three rules of earlier sections where they meet owned methods. An owned init takes only `payable`
-(JSC0405); an owned destroy is not payable in M3a1 (JSC0406); and an owned init's accept is refused like an init's
-(JSC0426: issue #81 is open). The rules on bindings (JSC0213), the client's names (JSC0216: an owned method's lambdas
+M3a also changes rules of earlier sections where they meet owned methods. An owned init takes only `payable`
+(JSC0405); an owned destroy may be payable from M3a2 (examples/market's `buy`; the instance's destroy may not, JSC0406);
+and from M3a2 an init's and an owned init's `accept` is allowed (issue #81 is fixed, JSC0426 retired). The rules on bindings (JSC0213), the client's names (JSC0216: an owned method's lambdas
 bind `o`, `sh`, `seed`, `inst`; a move's redeemer `into`) and effects (JSC0404, JSC0409, JSC0410, JSC0411) read an owned
 method's object as an instance method reads the state.
 

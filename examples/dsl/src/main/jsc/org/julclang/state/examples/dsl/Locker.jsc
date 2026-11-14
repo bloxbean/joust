@@ -1,0 +1,35 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/locker's Locker in .jsc 2 (ADR-0018 M3a, J11; ADR-0014): a token locker. One instance holds a native token
+// for any number of users, and each user's balance sits in a BigMap, so the datum stays small. Locking takes the tokens
+// in (accept), unlocking sends them back.
+contract Locker(assetSlots = 2) {
+  state { admin: Key, tokenPolicy: Hash, tokenName: Bytes, total: Int, balances: BigMap<Key, Int> }
+
+  init(tokenPolicy: Hash, tokenName: Bytes) {
+    return { admin: caller, tokenPolicy, tokenName, total: 0, balances: BigMap.empty() }
+  }
+
+  // Locks qty of the token for the caller.
+  action lock(qty: Int) payable {
+    require(qty > 0, "lock a positive amount")
+    require(received == 0, "the locker takes the token, not ADA")
+    accept(Value.asset(tokenPolicy, tokenName, qty))
+    return { ...state, total: total + qty, balances: balances.set(caller, balances[caller] + qty) }
+  }
+
+  // Sends qty of the caller's locked token back to the caller; an emptied balance leaves the map.
+  action unlock(qty: Int) open {
+    const had = balances[caller]
+    require(qty > 0 && qty <= had, "not that many locked")
+    send(wallet(caller), Value.asset(tokenPolicy, tokenName, qty))
+    return { ...state, total: total - qty, balances: balances.set(caller, had - qty) }
+  }
+
+  // Closes an empty locker.
+  destroy close() only admin {
+    require(total == 0, "tokens are still locked")
+    pay(admin, balance)
+  }
+}
