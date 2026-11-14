@@ -12,7 +12,7 @@
 // differs, or is missing, fails unless accepted (--accept-abi: src/abi.js), so an encoding change cannot strand
 // deployed instances.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, lstatSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { buildInWorker, engineLimits } from './toolchain.js';
@@ -22,13 +22,24 @@ import { deploymentsShape, scriptDigest } from './deploy.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-function sources(dir, keep = () => true) {
+/**
+ * The project's contract sources under `dir`: every .java and .jsc file, by path relative to it. Issue #92 (S12, review
+ * of #82): a package's code is never project code, so the walk skips node_modules and dot-directories (.git, .joust, an
+ * editor's) at any depth, and follows no link (a link to a file or a directory is skipped, as libraries.js skips them
+ * under joust-lib/): with `contracts: "."`, or a package installed under contracts/, a package's sources would otherwise
+ * escape the split-package rule and joust.lock, and could replace the project's own Require.
+ */
+export function sources(dir, keep = () => true) {
   const out = {};
   const walk = (d) => {
     for (const n of readdirSync(d)) {
       const p = join(d, n);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith('.java') || p.endsWith('.jsc')) {
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        if (n === 'node_modules' || n.startsWith('.')) continue;
+        walk(p);
+      } else if (st.isFile() && (p.endsWith('.java') || p.endsWith('.jsc'))) {
         const text = readFileSync(p, 'utf8');
         if (keep(relative(dir, p), text)) out[relative(dir, p)] = text;
       }
