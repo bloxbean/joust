@@ -62,17 +62,40 @@ final class Syntax {
      */
     record Contract(String name, List<Option> options, List<FieldDecl> state, List<Method> methods, List<Fn> fns,
                     List<TypeDecl> types, List<EnumDecl> enums, Pos pos, List<FieldDecl> params, Pos paramsPos,
-                    List<VariantDecl> events, List<InvariantDecl> invariants) {}
+                    List<VariantDecl> events, List<InvariantDecl> invariants, List<TypeDecl> owned) {
+        Contract(String name, List<Option> options, List<FieldDecl> state, List<Method> methods, List<Fn> fns,
+                 List<TypeDecl> types, List<EnumDecl> enums, Pos pos, List<FieldDecl> params, Pos paramsPos,
+                 List<VariantDecl> events, List<InvariantDecl> invariants) {
+            this(name, options, state, methods, fns, types, enums, pos, params, paramsPos, events, invariants, List.of());
+        }
+    }
 
-    /** {@code invariant name = e} (ADR-0009 D4): a Bool over the state and the params, checked on every new state. */
-    record InvariantDecl(String name, Block body, Pos pos) {}
+    /**
+     * {@code invariant name = e} (ADR-0009 D4): a Bool over the state and the params, checked on every new state. M3a
+     * (ADR-0012 D1): {@code invariant T.name = e} ({@code on} the owned type T), over the object's fields, checked on every
+     * object of that type a call makes or continues; {@code on} is null for the state's.
+     */
+    record InvariantDecl(String name, Block body, Pos pos, String on) {
+        InvariantDecl(String name, Block body, Pos pos) {
+            this(name, body, pos, null);
+        }
+    }
 
-    enum Kind { INIT, ACTION, DESTROY, VIEW }
+    /** M3a (ADR-0003, ADR-0012): {@code owned init T.m}, {@code owned action T.m}, {@code owned destroy T.m}. */
+    enum Kind { INIT, ACTION, DESTROY, VIEW, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY }
 
-    /** A parameter; {@code reads} (M2c): {@code name: reads params.f}, the params field it reads (its type is then null). */
-    record Param(String name, TypeRef type, Pos pos, String reads) {
+    /**
+     * A parameter; {@code reads} (M2c): {@code name: reads params.f}, the params field it reads (its type is then null).
+     * M3a: {@code role} {@code shared} ({@code name: shared}, the instance's state read by reference, ADR-0003) or
+     * {@code into} ({@code name: into}, a move's destination state, ADR-0012 D3), its type then null; else null.
+     */
+    record Param(String name, TypeRef type, Pos pos, String reads, String role) {
+        Param(String name, TypeRef type, Pos pos, String reads) {
+            this(name, type, pos, reads, null);
+        }
+
         Param(String name, TypeRef type, Pos pos) {
-            this(name, type, pos, null);
+            this(name, type, pos, null, null);
         }
     }
 
@@ -83,7 +106,16 @@ final class Syntax {
         }
     }
 
-    record Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos) {}
+    /** A method; {@code on} (M3a): an owned method's type, {@code T} of {@code owned action T.m}, else null. */
+    record Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos, String on) {
+        Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos) {
+            this(kind, name, params, mods, body, viewType, pos, null);
+        }
+
+        boolean owned() {
+            return on != null;
+        }
+    }
 
     record Fn(String name, List<Param> params, TypeRef ret, Block body, Pos pos) {}
 
