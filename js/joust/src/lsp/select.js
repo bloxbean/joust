@@ -56,6 +56,9 @@ export const workerKey = (engine) => `engine:${engine.id}`;
  * - Installing is coalesced by digest within the process, and a copy another process published first is reused once its
  *   bytes check, never removed (Codex C5 on #83). A copy is immutable once published.
  */
+/** How often put installs a copy again that another window's collector took before put could mark it used. */
+export const MAX_REINSTALLS = 8;
+
 export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 1000, fs = realFs } = {}) {
   const root = join(storageDir, 'engines');
   const installing = new Map();
@@ -331,12 +334,17 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
         installing.set(id, p);
       }
       let dir = await p;
-      try {
-        await fs.writeFile(join(dir, '.used'), String(Date.now()));
-      } catch {
-        // Claimed by a collector in another window between the install and the touch: install again (C18).
-        dir = await install(id, js, wasm, jsHash, wasmHash);
-        await fs.writeFile(join(dir, '.used'), String(Date.now()));
+      // Another window's collector may claim the copy between the install and the touch, and again between a reinstall
+      // and its touch (#95's CI: ENOENT on .used). ENOENT or ENOTDIR on the touch means the copy was collected: install
+      // again, a bounded number of times; any other error is real (C18).
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await fs.writeFile(join(dir, '.used'), String(Date.now()));
+          break;
+        } catch (e) {
+          if ((e?.code !== 'ENOENT' && e?.code !== 'ENOTDIR') || attempt >= MAX_REINSTALLS) throw e;
+          dir = await install(id, js, wasm, jsHash, wasmHash);
+        }
       }
       await evict(id, typeof inUse === 'function' ? inUse : () => inUse);
       return { id, file: join(dir, ENGINE_JS) };
