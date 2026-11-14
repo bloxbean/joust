@@ -60,8 +60,6 @@ final class Checker {
             "Stepped", "Invariant", "Params", "Quorum", "AuthorizedBy",
             // M2c: the API names composition lowers to (reads, deposits, receives, instances)
             "ForeignInstance", "Deposit", "Deposits", "Reads", "Receives", "Instance",
-            // M3a: the annotations owned objects and moves lower to (ADR-0003, ADR-0012): a type of the name would shadow them
-            "Owned", "OwnedInit", "OwnedAction", "OwnedDestroy", "Shared", "Into", "Admits",
             "Payable", "SignedBy", "ValidAfter", "ValidBefore", "Batched", "StateContract", "String", "Object", "Boolean",
             "Integer", "Long", "Byte", "Math", "System", "Record", "Override",
             // .jsc 2 type names and helper-name fragments: a declared type of the same name would share a helper (C6)
@@ -137,6 +135,9 @@ final class Checker {
      * {@code state}, the modifiers and the time fields (D11) are read against it.
      */
     private String inputRec = "State";
+
+    /** #101 review F3: whether owned actions and destroys may take, send, mint or deposit native assets (M3a2). */
+    private static final boolean ASSETS_IN_OWNED = false;
 
     /**
      * M3a1: what later parts of M3a build is refused here (JSC1215): several owned types and BigMaps in owned types (M3a2),
@@ -1198,8 +1199,18 @@ final class Checker {
         };
     }
 
+    /**
+     * M3a: the annotations owned objects and moves lower to (ADR-0003, ADR-0012). Only a contract with owned types imports
+     * them, so only there would a type of the name shadow one (#101 review F10: reserved there, not in every contract).
+     */
+    static final Set<String> OWNED_ANNOTATIONS = Set.of("Owned", "OwnedInit", "OwnedAction", "OwnedDestroy", "Shared", "Into", "Admits");
+
     /** M2b: {@code Config} names the params record and {@code Event} the events' type, when the contract has them. */
     private static void generatedTypeName(String n, Pos p, Contract c) {
+        if (!c.owned().isEmpty() && OWNED_ANNOTATIONS.contains(n)) {
+            throw p.error("JSC0211", "'" + n + "' is reserved in a contract with owned types (the annotation owned objects lower to) and"
+                    + " cannot be a type name");
+        }
         // M3a: the records generated for owned types (TOutcome, TReceived, TCreated) and the owned datum, by their names.
         for (TypeDecl o : c.owned()) {
             for (String g : List.of(o.name() + "Outcome", o.name() + "Received", o.name() + "Created")) {
@@ -1827,9 +1838,13 @@ final class Checker {
             if (methods.stream().noneMatch(m -> m.kind() == Ir.Kind.OWNED_INIT && o.equals(m.on()))) {
                 throw t.pos().error("JSC1208", "the owned type " + o + " needs an owned init to create its objects: owned init " + o + ".open(…) { … }");
             }
-            if (methods.stream().noneMatch(m -> m.kind() == Ir.Kind.OWNED_DESTROY && o.equals(m.on()) && m.owned().shared() == null)) {
+            // #101 review S3: an escape hatch reads no instance (shared) and has no deadline (before, after), so neither the
+            // instance's state nor the clock can trap an object. That the body can succeed is the author's (JSC1209 is syntactic).
+            if (methods.stream().noneMatch(m -> m.kind() == Ir.Kind.OWNED_DESTROY && o.equals(m.on()) && m.owned().shared() == null
+                    && m.mods().stream().noneMatch(md -> md.name().equals("before") || md.name().equals("after")))) {
                 throw t.pos().error("JSC1209", "objects of the owned type " + o + " need an escape hatch: an owned destroy on " + o + " without a"
-                        + " shared parameter, so an owner can always close their object whatever the instance's state (ADR-0003 r2, ADR-0012 D1)");
+                        + " shared parameter, before or after, so an owner can always close their object whatever the instance's state and the"
+                        + " time (ADR-0003 r2, ADR-0012 D1)");
             }
         }
         for (Syntax.Method m : c.methods()) {
@@ -1942,6 +1957,16 @@ final class Checker {
             throw m.pos().error("JSC0426", "a payable " + (ik == Ir.Kind.INIT ? "init" : "owned init") + " that uses funds would take native"
                     + " assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred; issue #81); drop payable, or"
                     + " create it and take the assets in an action");
+        }
+        // #101 review F3: native assets in an owned action or destroy come with M3a2, which specifies τ.funds for an object
+        // (what it holds, what the call offers, its own token) and tests each effect on every leg. Until then they are
+        // refused (an owned init's accept is JSC0426 above).
+        if (ik.owned() && !ASSETS_IN_OWNED && (usesFunds(m.body()) || fx.contains("send") || fx.contains("mint") || fx.contains("accept")
+                || fx.contains("deposit"))) {
+            Pos at = fx.contains("send") || fx.contains("mint") || fx.contains("accept") || fx.contains("deposit")
+                    ? firstEffect(m.body(), Set.of("accept", "send", "mint", "deposit")) : m.pos();
+            throw at.error("JSC1215", "native assets in an owned method (accept, send, mint, burn, deposit, funds) are not supported yet: they"
+                    + " come in M3a2, which specifies funds for an object (ADR-0012 D2)");
         }
         if (fx.contains("accept") && !payable) {
             throw firstEffect(m.body(), Set.of("accept")).error("JSC0422", "accept states the native assets a method takes in, so the method must"
@@ -2230,6 +2255,14 @@ final class Checker {
                 }
                 resultType = null;
                 if (!mentions(b, "balance")) {
+                    // #101 review S3: an owned destroy that is an escape hatch (no shared, before or after) and never reads
+                    // balance could never pay out what its object holds, so every object would be locked: an error.
+                    boolean hatch = m.kind() == Kind.OWNED_DESTROY && m.params().stream().noneMatch(p -> p.role() != null)
+                            && m.mods().stream().noneMatch(md -> md.name().equals("before") || md.name().equals("after"));
+                    if (hatch) {
+                        throw m.pos().error("JSC1216", m.name() + " is its type's escape hatch but never reads balance: an owned destroy pays out"
+                                + " everything the object holds (the validator refuses any other allocation), so no object could ever be closed");
+                    }
                     warn(m.pos(), "JSC9001", m.name() + " never reads balance; a destroy must pay out everything the "
                             + (m.kind() == Kind.DESTROY ? "instance" : "object") + " holds");
                 }
@@ -2250,18 +2283,15 @@ final class Checker {
     }
 
     /**
-     * A creation's parameter (D3): it may share the name of a field the creation makes, never a built-in's; in an owned init
-     * (M3a), never a shared state's field's either (D3), which the parameter would be read in place of.
+     * A creation's parameter (D3): it may share the name of a field the creation makes, never a built-in's. In an owned init
+     * it may share a shared state's field's name too (#101 review F4): that state is read only by projection.
      */
     private Ir.Local initLocal(Param p, Sc sc, Ty t, int taint, Map<String, Integer> fieldTaints) {
         checkUserName(p.name(), p.pos(), "parameter");
         if (BUILTINS.contains(p.name())) throw p.pos().error("JSC0214", "'" + p.name() + "' is a built-in name");
         if (sc.lookup(p.name()) != null) throw p.pos().error("JSC0309", "duplicate parameter " + p.name());
-        if (sc.kind == Ir.Kind.OWNED_INIT && stateFields.containsKey(p.name())
-                && file.contract().methods().stream().anyMatch(x -> x.name().equals(sc.owner) && x.params().stream().anyMatch(y -> "shared".equals(y.role())))) {
-            throw p.pos().error("JSC0213", "'" + p.name() + "' would hide the shared state's field of the same name; choose another name (e.g. new"
-                    + Character.toUpperCase(p.name().charAt(0)) + p.name().substring(1) + ")");
-        }
+        // #101 review F4: no rule against a shared state's field names: the shared state is read only by projection
+        // (s.f), so a parameter of the same name hides nothing.
         return sc.put(p.name(), t, taint, p.pos(), false, fieldTaints);
     }
 
@@ -2285,7 +2315,8 @@ final class Checker {
      */
     private Ir.Read read(Syntax.Method m, Param p, Sc sc, boolean batched) {
         if (m.kind() != Kind.ACTION && m.kind() != Kind.DESTROY) {
-            throw p.pos().error("JSC0443", "reads is for an action or destroy: an init, a view or a fn reads no other contract (ADR-0011 D2)");
+            throw p.pos().error("JSC0443", "reads is for an action or destroy of the instance: an init, an owned method, a view or a fn reads no"
+                    + " other contract (ADR-0011 D2; an owned method reads its instance through shared)");
         }
         if (batched) throw p.pos().error("JSC0443", "a batched action cannot read another contract yet (ADR-0009, ADR-0011 D2)");
         if (paramsFields == null) {

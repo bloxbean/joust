@@ -217,27 +217,30 @@ class Program {
   }
 
   /**
-   * §2.7 (M2b): what the validator checks of every state it accepts as an output, after the body. At a creation, each
-   * quorum naming params is well formed; then for an init's or action's next state each quorum naming state fields
+   * §2.7 (M2b): what the validator checks of every state it accepts as an output, after the body. At the instance's init,
+   * each quorum naming params (any method's, an owned one's too) is well formed; then for an init's or action's next state
+   * (or object) each quorum naming its fields
    * (every pair any method's quorum names, once, in source order) is well formed, class invariant:quorum <keys>
    * <threshold>; then each invariant holds, in declaration order, class invariant:<name>.
    */
   #outputs(m, next) {
     if (!['init', 'action', 'ownedInit', 'ownedAction'].includes(m.kind)) return;
-    // M3a (§2.8): an object's output checks are its type's: the quorums its type's methods name, its type's invariants.
+    // M3a (§2.8): an object's output checks are its type's: the quorums over fields its type's methods name, its type's
+    // invariants. The params are the deployment's (#101 review S1, C1): every params quorum any method names, an owned
+    // one's too, is checked at the instance's init, and at no other creation, as the validator checks them.
     const on = m.on ?? null;
     const pairs = [];
     for (const x of this.ir.methods) {
-      if ((x.on ?? null) !== on) continue;
       for (const mod of x.mods) {
         if (mod.name !== 'quorum') continue;
+        const ofParams = mod.keys.startsWith('params.');
+        if (ofParams ? m.kind !== 'init' : (x.on ?? null) !== on) continue;
         const pair = `${mod.keys} ${mod.threshold}`;
         if (!pairs.includes(pair)) pairs.push(pair);
       }
     }
     for (const pair of pairs) {
       const [k, t] = pair.split(' ');
-      if (k.startsWith('params.') && m.kind !== 'init' && m.kind !== 'ownedInit') continue;
       if (!wellFormedQuorum(this.#modField(next, k), this.#modField(next, t))) {
         throw new Refused(`the quorum ${pair} is not well formed`, 'invariant', `quorum ${pair}`);
       }

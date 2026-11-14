@@ -107,6 +107,19 @@ const PRELUDE_ARITY = { min: 2, max: 2, abs: 1, asKey: 1, asHash: 1 };
 const MAP_ARITY = { get: 1, has: 1, set: 2, delete: 1, size: 0, keys: 0, values: 0, isEmpty: 0, at: 1 };
 // M3a (ADR-0003, ADR-0012): an owned method's kinds.
 const KINDS = set('init', 'action', 'destroy', 'view', 'ownedInit', 'ownedAction', 'ownedDestroy');
+// #101 review F2: the parts of M3a the checker produces so far (1: owned objects of one type with shared reads; 2: native
+// assets in owned methods, payable owned destroys; 3: moves and invariants by type), as the Java reader's OWNED_STAGE.
+const OWNED_STAGE = 1;
+
+/** Whether raw IR holds a statement or expression node of one of the names, at any depth. */
+function hasNode(json, names) {
+  if (Array.isArray(json)) return json.some((v) => hasNode(v, names));
+  if (json !== null && typeof json === 'object') {
+    if (names.includes(json.stmt) || names.includes(json.node)) return true;
+    return Object.values(json).some((v) => hasNode(v, names));
+  }
+  return false;
+}
 
 export function validate(p) {
   const fail = (where, what) => {
@@ -463,6 +476,17 @@ export function validate(p) {
     const admits = m.mods.find((x) => x && x.name === 'admits');
     if (admits && (m.kind !== 'action' || !owned.includes(admits.field))) fail(where, 'admits is an instance action\'s, naming an owned type');
     if ('arriving' in m && !admits) fail(where, 'only an admits action has an arriving object');
+    // #101 review F2: an owned program as strict as the checker, staged with M3a's parts (OWNED_STAGE).
+    if (ownedKind(m.kind) && m.mods.some((x) => x && x.name === 'receives')) {
+      fail(where, 'an owned method receives no deposits: a deposit\'s target is an instance (JSC0447)');
+    }
+    if (OWNED_STAGE < 2 && m.kind === 'ownedDestroy' && m.mods.some((x) => x && x.name === 'payable')) {
+      fail(where, 'a payable owned destroy is not produced yet (M3a2; JSC0406)');
+    }
+    if (OWNED_STAGE < 2 && ownedKind(m.kind) && hasNode(m.body, ['Send', 'Mint', 'Deposit', 'Accept', 'FundsRef'])) {
+      fail(where, 'native assets in an owned method (accept, send, mint, burn, deposit, funds) are not produced yet (M3a2; JSC1215)');
+    }
+    if (OWNED_STAGE < 3 && ('into' in m || 'arriving' in m || admits)) fail(where, 'moves (into, admits) are not produced yet (M3a3; JSC1215)');
     const scope = new Set();
     if ('shared' in m) {
       decl(m.shared, where, scope);
@@ -518,6 +542,15 @@ export function validate(p) {
       && (m.mods.some((x) => !NO_CTX.has(x.name)) || readsTx(m.body)));
     if (usesCtx !== m.usesCtx) fail(where, `usesCtx is ${m.usesCtx}, but the method ${usesCtx ? 'reads' : 'does not read'} the transaction`);
   }
+  // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy without
+  // shared, before or after.
+  for (const o of owned) {
+    if (!p.methods.some((m) => m.kind === 'ownedInit' && m.on === o)) fail('owned', `the owned type ${o} has no owned init (JSC1208)`);
+    if (!p.methods.some((m) => m.kind === 'ownedDestroy' && m.on === o && !('shared' in m)
+      && !m.mods.some((x) => x && (x.name === 'before' || x.name === 'after')))) {
+      fail('owned', `the owned type ${o} has no escape hatch: an owned destroy without shared, before or after (JSC1209)`);
+    }
+  }
   for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${n}`);
   // M2b: invariants, each a Bool over the state and the params, with names of their own.
   if ('invariants' in p) {
@@ -526,6 +559,7 @@ export function validate(p) {
       const where = `invariant ${inv.name}`;
       keys(inv, ['name', ...('on' in inv ? ['on'] : []), 'body', 'at'], where);
       if ('on' in inv && !owned.includes(inv.on)) fail(where, `${inv.on} is not an owned type`);
+      if ('on' in inv && OWNED_STAGE < 3) fail(where, 'an owned type\'s invariant is not produced yet (M3a3; JSC1215)');
       if (names.has(inv.name) || methodNames.has(inv.name) || fnNames.has(inv.name)) fail(where, 'a name taken by another method, fn or invariant');
       names.add(inv.name);
       inputRec = inv.on ?? 'State';
