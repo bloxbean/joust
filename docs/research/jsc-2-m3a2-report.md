@@ -14,7 +14,7 @@ between markets (`relist` with `into`, `enlist` with `admits`), which are M3a3's
 |---|---|---|
 | **Several owned types** (ADR-0012 D1): each type's objects a constructor of the sealed `Holding_T`, in declaration order; the processor's rules per type, refused at the type that breaks them (JSC1208, JSC1209) | `Checker` (JSC1215 now refuses only M3a3's parts); the processor's `Holding_T` | `JscV2M3a2CheckerTest`; five-way (Studio) |
 | **`BigMap`s in owned types** (ADR-0012 D2, ADR-0014): claims owned by the object's input or, at creation, its seed; an owned init may write them; still none in the instance with owned types (JSC1211) | `Checker` | `bigMapsInOwnedTypes_butNotInTheInstance`; five-way (Safes); `JscV2M3a2AttackTest` |
-| **Owned inits that accept** (issue #81): the transition program of a creation returning `(state, accepted)` gives the state and what it accepted | `TransitionsGenerator.creation`, `createdType` | `CreationAcceptsTransitionTest` (examples/market's offer); five-way (Safes' openSafe on five legs) |
+| **Owned inits that accept** (issue #81): the transition program of a creation returning `(state, accepted)` gives the state and what it accepted; only a creation ContractReader classifies as returning a result record (RESULT) is unwrapped, so a state or object with a component named `state` is kept whole (#104 review C1) | `TransitionsGenerator.creation`, `createdType` | `CreationAcceptsTransitionTest` (examples/market's offer; `aComponentNamedState_isNotUnwrapped`, which fails on the earlier generator); five-way (Safes' openSafe on five legs) |
 | **An instance init still does not accept** (JSC0426, with the reason): the processor reads the state's type from what `@Init` returns, so an `@Init` cannot return `(state, accepted)` | `Checker` | `JscV2M2CheckerTest` (unchanged), `creationsThatAccept_andPayableOwnedDestroys` |
 | **Payable owned destroys** (examples/market's buy): payouts allocate `balance + received` | `Checker` (JSC0406 only for the instance's destroy) | five-way (Studio's release) |
 | **The size work**: checks that hold for every value are not generated (below) | `JavaEmitter`; `MerkleMaps.setInt`, `ValueAdapter.acceptableAsset` (both API sources) | every five-way suite; `ValueAdapterDifferentialTest` (acceptableAsset is acceptable(asset(…)) on every leg) |
@@ -163,6 +163,11 @@ in place of putInt's (`JscV2M1eR2BuildTest`). These ports are not in `fixtures/m
   again with `--no-watch-fs` from a clean build (below).
 
 ## Builds and DevKit
+
+Round r2 (after #101's and #104's round-r1 reviews), at `ec6cff08`: `./gradlew clean build -PnoDevnet --continue
+--no-watch-fs` gives 1,024 JVM tests, 0 failures (1 skipped): julc-state-dsl 221, julc-state-toolchain 201, examples/dsl
+121. The DevKit, Web Image and npm results below were measured at the round-r1 head (`600511f1`; the round's changes touch
+no runtime code):
 
 `./gradlew clean build -PnoDevnet --continue --no-watch-fs` at `600511f1`: 1,007 JVM tests, 0 failures (1 skipped). DevKit: `:examples:dsl:test` 134 tests, 0 failures (`LockerDevnetPortTest` among them). `toolchainWasmTest` (the Web Image against the JVM): 140 build outputs identical, 117 language-server models byte-identical, 3,612/3,612 S2 cases, 21 depth cases. npm: `js/jsc-interpreter` 50/50, `tree-sitter-jsc` 20/20 and the shared corpus in agreement, `js/state-client` 48/48, `js/joust` 157/159 (1 skipped) and `js/joust-runtime` 35/37 (1 skipped). The one failure in each is environmental and is the same as on M3a1: `joust dev … redeploys on save` (Node's recursive `fs.watch` fires no events in this sandbox) and the Ogmios provider test (it probes the M0 fixtures' transactions; after a devnet reset only 3 of the 5 reference-script outputs it needs are on chain).
 
