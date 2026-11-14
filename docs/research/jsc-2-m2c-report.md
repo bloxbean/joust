@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M2c: report (ADR-0018 §8, r21)
 
-Date 2026-11-13; round r2 2026-11-14. Branch `feat/jsc-2-m2c`, stacked on `feat/jsc-2-m2b` (`d12d080`, #84, approved; ADR-0018 r18). JuLC
+Date 2026-11-13; rounds r2 to r4 2026-11-14. Branch `feat/jsc-2-m2c`, stacked on `feat/jsc-2-m2b` (`d12d080`, #84, approved; ADR-0018 r18). JuLC
 `v0.1.0-pre21-rc1`, cardano-client-lib `0.8.0-pre7`, JDK 25, Node 22, macOS arm64, Yaci DevKit. Every number below was
 measured at this branch's head, by the test named with it.
 
@@ -219,6 +219,21 @@ fix a `.jsc` deposit of tokens with unequal-length names would fail on chain whi
 | S3 (P3) `Instance<C>` is deployer trust | semantics §5.9, the reference | |
 | S5 (P3) deposits are unauthenticated | semantics §5.8, the reference | |
 | C5 (P3) the gate compared a constant | `collect @ max` compares the pot's next state; the composed sale includes it | `JscV2M2cGateTest` (same budgets) |
+
+## Round r4 (the r3 reviews of #90)
+
+Design and security approved round r3; Codex found C7 and C8.
+
+| Finding | What changed | Evidence |
+|---|---|---|
+| C7 (P2) a `.jsc` writer could store a value its `.jsc` reader refuses | The params are a checked input of the init (`#params:`, class `input:params`), by the checked-input rule: every `Key` and `Hash` 28 bytes, maps canonical, addresses the ledger's, every `Value` of lovelace's or 28-byte policies. Fixed for the deployment, they are checked where the instance is made; every other method trusts them. So a `Value` param of another policy, or a `Hash` param that `Value.asset` would make one of, never reaches a stored state. Both interpreters check the same | `Stash.jsc` (params `{ v: Value, h: Hash }`, storing `params.v + Value.asset(params.h, #01, 1)`) and `StashReader.jsc`: four params (a 1-byte, a 29-byte and mixed-length policies; a 27-byte Hash) refused by the init on all five legs; the reader reads every state the writer makes and refuses one holding a 1-byte policy (`input:got`) |
+| C8 (P3) the m0 guard was per group | Each recorded deployment of a contract without parameters must mint under this head's script hash, its own transaction decoded; a copy of the wallet group with one of its two Counter deployments made stale is reported | `[fixtures m0] 28 deployments`; `aGroupWithOneStaleDeploymentIsReported` |
+
+Inits whose params hold such types grow: the `.jsc` Treasury 9,801 → 9,910 B (+6.6% over Java's 9,297, within J11) and Council
+10,333 → 10,389 B; `JscV2M2bGateTest`'s Treasury init is +4.9% CPU / +6.3% memory over Java's (was +2.7% / +3.7%), at
+the council's maximum +7.3% / +9.4% (was +6.4% / +8.3%). Council's malformed board key is now refused by the params
+check (`input:params`) before the quorum invariant. Kiosk's, Stall's and Tipper's params (an instance and an `Int`)
+need no check: their scripts do not change.
 
 ## Round r3 (the r2 reviews of #90)
 
