@@ -17,6 +17,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { buildInWorker, ENGINE_STACK_MB } from './toolchain.js';
 import { abiGate } from './abi.js';
+import { libraryPackages, lockGate } from './libraries.js';
 import { deploymentsShape, scriptDigest } from './deploy.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -39,14 +40,24 @@ function sources(dir, keep = () => true) {
 
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
 export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep,
-  acceptAbi = false } = {}) {
+  acceptAbi = false, acceptLock = false, traces = false } = {}) {
   const files = sources(resolve(root, src), keep);
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
+  // ADR-0018 D14 (M4c): the libraries the project's npm packages ship under joust-lib/ (.jsc, and Java on-chain sources).
+  let packages;
+  let javaLibraries;
+  try {
+    ({ packages, javaLibraries } = libraryPackages(root));
+  } catch (e) {
+    return { ok: false, contracts: [], diagnostics: [{ severity: 'error', message: e.message }] };
+  }
+  // ADR-0018 D12: joust build --traces keeps the contracts' traces in the scripts (Gradle: -Pjoust.traces).
+  if (traces) options = { ...options, 'joust.traces': 'true' };
   const t = Date.now();
   let r;
   try {
     // On a worker with a set stack (ENGINE_STACK_MB), so a cold engine builds what the JVM builds (ADR-0018 J18, r12).
-    r = await buildInWorker({ files, options });
+    r = await buildInWorker({ files, options, packages, javaLibraries });
   } catch (e) {
     // The engine's stack ran out past the front end (whose nesting cap keeps it within the stack, ADR-0018 J18): in
     // JuLC's passes, on a contract far larger than a script can be. Web Image surfaces that as a TypeError; the build
@@ -80,6 +91,10 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   }
   if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics, ...(abiErrors.length ? { abiErrors } : {}) };
   if (abiErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, abiErrors };
+  // ADR-0018 J12: the build names every library it used with its hash; joust.lock pins those from outside the sources.
+  const lockErrors = lockGate({ generated: r.generated ?? [], libraries: r.libraries ?? [], root, acceptLock, log });
+  for (const e of lockErrors) console.error(e);
+  if (lockErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, lockErrors };
   mkdirSync(dir, { recursive: true });
   const bundle = [];
   // ADR-0018 D12 (r12): each .jsc 2 contract's message map (the source map's `messages`): what every message its script

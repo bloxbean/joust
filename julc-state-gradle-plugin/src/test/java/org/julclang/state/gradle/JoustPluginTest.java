@@ -121,7 +121,14 @@ class JoustPluginTest {
         assertThat(gen.getSystemProperties()).doesNotContainKey("joust.acceptAbi");
         var genArgs = new java.util.ArrayList<String>();
         gen.getArgumentProviders().forEach(a -> a.asArguments().forEach(genArgs::add));
-        assertThat(genArgs).doesNotContain("--accept-abi").hasSize(2);
+        assertThat(genArgs).doesNotContain("--accept-abi").doesNotContain("--accept-lock").hasSize(4);
+        // ADR-0018 J12: joust.lock is checked at every lowering; only acceptJoustLock writes it.
+        assertThat(genArgs.get(2)).isEqualTo("--lock");
+        assertThat(genArgs.get(3).replace('\\', '/')).endsWith("/joust.lock");
+        JavaExec acceptLock = (JavaExec) p.getTasks().getByName("acceptJoustLock");
+        var lockArgs = new java.util.ArrayList<String>();
+        acceptLock.getArgumentProviders().forEach(a -> a.asArguments().forEach(lockArgs::add));
+        assertThat(lockArgs).contains("--accept-lock");
         JavaExec accept = (JavaExec) p.getTasks().getByName("acceptJscAbi");
         assertThat(accept.getMainClass().get()).isEqualTo("org.julclang.state.dsl.JscMain");
         var acceptArgs = new java.util.ArrayList<String>();
@@ -188,9 +195,10 @@ class JoustPluginTest {
         JavaExec gen = (JavaExec) p.getTasks().getByName("generateJsc");
         var genArgs = new java.util.ArrayList<String>();
         gen.getArgumentProviders().forEach(a -> a.asArguments().forEach(genArgs::add));
-        assertThat(genArgs).hasSize(4);
+        assertThat(genArgs).hasSize(6);
         assertThat(genArgs.get(2)).isEqualTo("--java-libraries");
         assertThat(genArgs.get(3).replace('\\', '/')).endsWith("build/joust/library-sources");
+        assertThat(genArgs.get(4)).isEqualTo("--lock");
         // Review r2 S3: the extracted sources are no source directory; only the certified closure generateJsc writes is.
         var main = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets().getByName("main");
         assertThat(main.getJava().getSrcDirs()).doesNotContain(p.getLayout().getBuildDirectory().dir("joust/library-sources").get().getAsFile());

@@ -31,7 +31,8 @@ public final class JoustToolchainWasm {
      * {@code javaLibraries}: the on-chain sources of the Java libraries {@code .jsc} files may import with {@code java:}
      * (ADR-0018 D9, M4b), by path; may be absent.
      */
-    public record BuildRequest(Map<String, String> files, Map<String, String> options, Map<String, String> javaLibraries) {}
+    public record BuildRequest(Map<String, String> files, Map<String, String> options, Map<String, String> javaLibraries,
+                               Map<String, String> packages) {}
 
     /** {@code code}: a {@code .jsc} 2 diagnostic's stable code (ADR-0018 D12), else null. */
     public record Diagnostic(String severity, String message, String file, long line, long col, String source, String code) {}
@@ -47,11 +48,18 @@ public final class JoustToolchainWasm {
                             int scriptSizeBytes, List<Param> params) {}
 
     /** The Java a {@code .jsc} file lowered to, its source map, ABI manifest and checked IR (ADR-0018 D12, D15; null for v1). */
-    public record Generated(String jscFile, String javaFile, String java, String sourceMap, String abi, String ir) {}
+    public record Generated(String jscFile, String javaFile, String java, String sourceMap, String abi, String ir, List<Library> libraries) {}
+
+    /**
+     * A library a lowering used (ADR-0018 D9, J12): {@code kind} jsc or java; {@code name} its module id
+     * ({@code pkg:@acme/fees/fees.jsc} from an npm package) or {@code java:<class>}; its sources' SHA-256; whether
+     * joust.lock pins it ({@code external}).
+     */
+    public record Library(String kind, String name, String sha256, boolean external) {}
 
     /** {@code joust}, {@code julc}: the versions that built it (review r3 F9). */
     public record BuildResult(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics,
-                              List<Generated> generated, String joust, String julc) {}
+                              List<Generated> generated, String joust, String julc, List<Library> libraries) {}
 
     /** A transition program (script CBOR hex) and its Data arguments (CBOR hex). */
     public record RunRequest(String program, List<String> args) {}
@@ -128,7 +136,8 @@ public final class JoustToolchainWasm {
     static ServiceResult<BuildResult> build(BuildRequest request) {
         var r = Toolchain.build(request.files() == null ? Map.of() : request.files(),
                 request.options() == null ? Map.of() : request.options(),
-                request.javaLibraries() == null ? Map.of() : request.javaLibraries());
+                request.javaLibraries() == null ? Map.of() : request.javaLibraries(),
+                request.packages() == null ? Map.of() : request.packages());
         return ServiceResult.ok(new BuildResult(r.ok(),
                 r.contracts().stream().map(c -> new Contract(c.name(), c.packageName(), c.validatorName(), c.validatorSource(),
                         c.scriptCborHex(), c.scriptHash(), c.scriptSizeBytes(), c.descriptionJson(), c.transitionsSource(),
@@ -137,7 +146,10 @@ public final class JoustToolchainWasm {
                         v.scriptHash(), v.scriptSizeBytes(), v.params().stream().map(p -> new Param(p.name(), p.type())).toList())).toList(),
                 r.diagnostics().stream().map(d -> new Diagnostic(d.severity().name().toLowerCase(), d.message(), d.file(), d.line(),
                         d.col(), d.source(), d.code())).toList(),
-                r.generated().stream().map(g -> new Generated(g.jscFile(), g.javaFile(), g.java(), g.sourceMapJson(), g.abiJson(), g.irJson())).toList(),
-                VERSION, JULC_VERSION));
+                r.generated().stream().map(g -> new Generated(g.jscFile(), g.javaFile(), g.java(), g.sourceMapJson(), g.abiJson(), g.irJson(),
+                        g.libraries().stream().map(u -> new Library(u.kind(), u.name(), u.sha256(), u.external())).toList())).toList(),
+                VERSION, JULC_VERSION,
+                // Review r2 (#82 C7): the Java libraries hand-written Java contracts import, which joust.lock pins too.
+                r.libraries().stream().map(u -> new Library(u.kind(), u.name(), u.sha256(), u.external())).toList()));
     }
 }

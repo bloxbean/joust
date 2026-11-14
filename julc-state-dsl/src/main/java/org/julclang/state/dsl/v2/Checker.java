@@ -272,9 +272,14 @@ final class Checker {
     }
 
     private static JscException noModule(Pos p, String spec, String from) {
+        if (JscModules.isPackage(spec)) {
+            return p.error("JSC0706", "no .jsc library " + spec + " in the project's npm packages (a package ships its libraries under"
+                    + " joust-lib/: " + JscModules.packageOf(spec) + "/joust-lib/" + spec.substring(JscModules.packageOf(spec).length() + 1) + ")");
+        }
         if (!JscModules.isRelative(spec)) {
             return p.error("JSC0706", "'" + spec + "' is not a module: a .jsc library is imported by its path relative to this file,"
-                    + " ending in .jsc (import { fee } from \"./fees.jsc\"); the standard library is std/…, a Java library java:…");
+                    + " ending in .jsc (import { fee } from \"./fees.jsc\"), or from an npm package (\"@acme/fees/fees.jsc\"); the standard"
+                    + " library is std/…, a Java library java:…");
         }
         return p.error("JSC0706", "no .jsc library " + spec + (from == null ? " (this file is lowered on its own, so it imports no libraries)"
                 : " beside " + from + " under the sources (a library is imported by its path relative to the importing file, and never from"
@@ -316,7 +321,7 @@ final class Checker {
                 // reaches the checker, which refuses it (read-only, JSC0724).
                 if (im.from().startsWith("java:")) for (String n : im.names()) if (Character.isUpperCase(n.charAt(0))) types.add(n);
                 if (!isModuleSpec(im.from()) || deps.containsKey(im.from())) continue;
-                JscModules.Source s = JscModules.isRelative(im.from()) ? modules.resolve(id, im.from()) : null;
+                JscModules.Source s = JscModules.isRelative(im.from()) || JscModules.isPackage(im.from()) ? modules.resolve(id, im.from()) : null;
                 if (s == null) throw noModule(im.pos(), im.from(), id == null ? null : id);
                 Module d = load(s, im.pos());
                 deps.put(im.from(), d);
@@ -351,7 +356,7 @@ final class Checker {
                 for (Import im : imports) {
                     if (im.from().startsWith("java:")) for (String n : im.names()) if (Character.isUpperCase(n.charAt(0))) types.add(n);
                     if (!isModuleSpec(im.from()) || deps.containsKey(im.from())) continue;
-                    JscModules.Source d = JscModules.isRelative(im.from()) ? modules.resolve(s.id(), im.from()) : null;
+                    JscModules.Source d = JscModules.isRelative(im.from()) || JscModules.isPackage(im.from()) ? modules.resolve(s.id(), im.from()) : null;
                     if (d == null) throw inLibrary(s.id(), at, noModule(im.pos(), im.from(), s.id()));
                     Module dm = load(d, at);
                     deps.put(im.from(), dm);
@@ -1156,7 +1161,7 @@ final class Checker {
         var libs = new ArrayList<Ir.Library>();
         for (Module m : libraries) {
             libs.add(new Ir.Library(m.qualified(), m.fileName, IrJson.sourceHash(m.text), recordsOf(m), enumsIrOf(m),
-                    List.copyOf(byModule.getOrDefault(m, List.of()))));
+                    List.copyOf(byModule.getOrDefault(m, List.of())), m.id));
         }
         List<Ir.Fn> own = List.copyOf(byModule.getOrDefault(main, List.of()));
         List<Ir.JavaLib> java = List.copyOf(javaUsed.values());

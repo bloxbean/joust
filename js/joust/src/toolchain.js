@@ -31,7 +31,7 @@ const pending = new Map();
  * what the JVM builds; one worker per process, kept for later builds (joust dev). A failure of the engine (its stack
  * exhausted past the front end) is a rejected promise, never a crash.
  */
-export function buildInWorker({ files, options = {}, dir } = {}) {
+export function buildInWorker({ files, options = {}, dir, javaLibraries = {}, packages = {} } = {}) {
   if (!worker) {
     worker = new Worker(new URL('./toolchain-worker.js', import.meta.url), { resourceLimits: { stackSizeMb: ENGINE_STACK_MB } });
     worker.unref();
@@ -52,6 +52,6 @@ export function buildInWorker({ files, options = {}, dir } = {}) {
   worker.ref();
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    worker.postMessage({ id, files, options, dir });
+    worker.postMessage({ id, files, options, dir, javaLibraries, packages });
   });
 }

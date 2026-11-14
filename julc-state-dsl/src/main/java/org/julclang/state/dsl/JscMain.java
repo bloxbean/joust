@@ -45,7 +45,7 @@ public final class JscMain {
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
             var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName, id, modules, javaLibraries);
             return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
-                    fileName, r.sourceMapJson(), r.abiJson(), r.irJson());
+                    fileName, r.sourceMapJson(), r.abiJson(), r.irJson(), r.libraries());
         }
         // .jsc v1 (ADR-0005): frozen, not removed (ADR-0018 D16): it compiles exactly as before, so a deployed v1 script stays
         // rebuildable, and every build says it is deprecated and how to migrate.
@@ -54,7 +54,7 @@ public final class JscMain {
         var first = Lexer.lex(source).get(0);
         warnings.add(new Warning(first.line(), first.col(), "JSC9006", DEPRECATED));
         warnings.addAll(r.warnings());
-        return new Lowered(r.java(), List.copyOf(warnings), fileName, null, null, null);
+        return new Lowered(r.java(), List.copyOf(warnings), fileName, null, null, null, List.of());
     }
 
     /** The v1 deprecation warning (ADR-0018 D16), at the first token of every v1 file. */
@@ -78,7 +78,7 @@ public final class JscMain {
      * the checked IR as JSON (D15, M1b), null for v1.
      */
     public record Lowered(String java, java.util.List<Warning> diagnostics, String fileName, String sourceMapJson, String abiJson,
-                          String irJson) {
+                          String irJson, java.util.List<org.julclang.state.dsl.v2.JscV2.LibraryUse> libraries) {
         /** The warnings, each formatted {@code file:line:col: warning: message}. */
         public java.util.List<String> warnings() {
             return diagnostics.stream().map(w -> w.format(fileName)).toList();
@@ -621,8 +621,12 @@ public final class JscMain {
         // library jar's META-INF/plutus-sources, extracted), anywhere after the mode; certified once, when needed.
         var rest = new ArrayList<String>();
         Path javaDir = null;
+        Path lock = null;
+        boolean acceptLock = false;
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--java-libraries") && i + 1 < args.length) javaDir = Path.of(args[++i]);
+            else if (args[i].equals("--lock") && i + 1 < args.length) lock = Path.of(args[++i]);   // J12: joust.lock
+            else if (args[i].equals("--accept-lock")) acceptLock = true;
             else rest.add(args[i]);
         }
         args = rest.toArray(new String[0]);
@@ -657,6 +661,7 @@ public final class JscMain {
         var written = new java.util.HashSet<Path>();
         // ADR-0018 D9 (M4): the .jsc libraries the files import are files of the same tree, by relative path.
         var modules = modules(src, files);
+        var used = new java.util.TreeMap<String, org.julclang.state.dsl.v2.JscV2.LibraryUse>();
         // Start clean: a deleted or renamed .jsc must not leave a stale contract behind.
         if (Files.isDirectory(out)) {
             try (Stream<Path> s = Files.walk(out)) {
@@ -670,15 +675,16 @@ public final class JscMain {
             String text = Files.readString(f);
             String name = src.relativize(f).toString();
             try {
-                var used = new java.util.TreeSet<String>();
+                var javaUsed = new java.util.TreeSet<String>();
                 var all = javaLibraries;
                 org.julclang.state.dsl.v2.JavaLibraries tracked = fqcn -> {
                     var l = all.describe(fqcn);
-                    if (l != null) used.add(fqcn);
+                    if (l != null) javaUsed.add(fqcn);
                     return l;
                 };
                 var lowered = lowerWithWarnings(text, f.getFileName().toString(), id(src, f), modules, tracked);
                 lowered.diagnostics().forEach(w -> System.err.println(w.format(name)));
+                for (var u : lowered.libraries()) used.put(u.name(), u);
                 String java = lowered.java();
                 String rel = outputPath(text, f.getFileName().toString());
                 Path target = out.resolve(rel);
@@ -699,9 +705,9 @@ public final class JscMain {
                 }
                 Files.createDirectories(target.getParent());
                 Files.writeString(target, java);
-                if (!used.isEmpty()) {
+                if (!javaUsed.isEmpty()) {
                     var classes = new java.util.TreeSet<String>();
-                    for (String fqcn : used) {
+                    for (String fqcn : javaUsed) {
                         var lib = all.describe(fqcn);
                         classes.addAll(lib.classes());
                         for (String path : lib.sources()) {
@@ -738,8 +744,73 @@ public final class JscMain {
                 errors++;
             }
         }
+        // ADR-0018 J12: every library the build used, with its hash; the external ones pinned by joust.lock.
+        for (var u : used.values()) {
+            System.out.println("jsc: library " + u.name() + " sha256 " + u.sha256() + (u.external() ? (u.kind().equals("java")
+                    ? " (statically certified; pinned)" : " (pinned)") : " (the project's)"));
+        }
+        // Review r2 (#82 S6): only acceptJoustLock (--accept-lock) writes the lock; --accept-abi does not.
+        if (lock != null) errors += checkLock(lock, used.values(), acceptLock);
         if (errors > 0) return 1;
         System.out.println("jsc: lowered " + files.size() + " file(s) into " + out);
         return 0;
+    }
+
+    /**
+     * ADR-0018 J12: {@code joust.lock} pins every library from outside the project's sources (a Java library; an npm
+     * package's {@code .jsc} library) by the SHA-256 of its on-chain sources. A library whose hash differs from its pin, or
+     * that has none, fails the build (JSC0731, JSC0732); {@code accept} ({@code acceptJoustLock}, {@code joust build
+     * --accept-lock}) writes the lock instead, to be reviewed and committed. The project's own {@code .jsc} libraries are
+     * its code, pinned by its version control. 0 when every pin holds.
+     */
+    public static int checkLock(Path lock, java.util.Collection<org.julclang.state.dsl.v2.JscV2.LibraryUse> used, boolean accept) throws IOException {
+        var now = new java.util.TreeMap<String, String>();
+        for (var u : used) if (u.external()) now.put(u.name(), u.sha256());
+        var pinned = new java.util.TreeMap<String, String>();
+        boolean exists = Files.exists(lock);
+        if (exists) {
+            Object j;
+            try {
+                j = org.julclang.state.dsl.v2.AbiCheck.Json.parse(Files.readString(lock));
+            } catch (RuntimeException e) {
+                j = null;
+            }
+            if (j instanceof java.util.Map<?, ?> m && "1".equals(String.valueOf(m.get("lock"))) && m.get("libraries") instanceof java.util.Map<?, ?> libs) {
+                libs.forEach((k, v) -> pinned.put(String.valueOf(k), String.valueOf(v)));
+            } else if (!accept) {
+                System.err.println(lock + ":1:1: error[JSC0732]: joust.lock is not a version 1 lock ({\"lock\": 1, \"libraries\": {...}}): fix it,"
+                        + " or rewrite it with the acceptJoustLock task (npm: joust build --accept-lock)");
+                return 1;
+            }
+        }
+        if (now.equals(pinned) && (exists || now.isEmpty())) return 0;
+        if (accept) {
+            var json = new StringBuilder("{\n  \"lock\": 1,\n  \"libraries\": {");
+            int i = 0;
+            for (var e : now.entrySet()) json.append(i++ == 0 ? "\n" : ",\n").append("    \"").append(e.getKey()).append("\": \"").append(e.getValue()).append('"');
+            json.append(now.isEmpty() ? "}\n}\n" : "\n  }\n}\n");
+            Files.writeString(lock, json.toString());
+            System.err.println(lock + ": note: wrote joust.lock (" + now.size() + " pinned librar" + (now.size() == 1 ? "y" : "ies") + "): review and commit it");
+            return 0;
+        }
+        int errors = 0;
+        for (var e : now.entrySet()) {
+            String pin = pinned.get(e.getKey());
+            if (pin == null) {
+                System.err.println(lock + ":1:1: error[JSC0731]: the library " + e.getKey() + " (sha256 " + e.getValue() + ") is not pinned in"
+                        + " joust.lock: a library from outside the sources is pinned by the hash of its on-chain sources (ADR-0018 J12); pin it"
+                        + " with the acceptJoustLock task (npm: joust build --accept-lock), review the library, and commit joust.lock");
+                errors++;
+            } else if (!pin.equals(e.getValue())) {
+                System.err.println(lock + ":1:1: error[JSC0732]: the library " + e.getKey() + " has other on-chain sources than joust.lock pins (sha256 "
+                        + e.getValue() + ", pinned " + pin + "): its code changed; review the change, then accept it with the acceptJoustLock task"
+                        + " (npm: joust build --accept-lock)");
+                errors++;
+            }
+        }
+        for (String k : pinned.keySet()) {
+            if (!now.containsKey(k)) System.err.println(lock + ": note: joust.lock pins " + k + ", which the build no longer uses (accepting removes it)");
+        }
+        return errors;
     }
 }
