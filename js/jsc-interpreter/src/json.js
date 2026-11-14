@@ -75,6 +75,11 @@ export function txFromJson(t) {
     } : null,
     // M2c: the states of other contracts' instances the transaction references, by the params field naming each.
     reads: Object.fromEntries(Object.entries(t.reads ?? {}).map(([k, v]) => [k, fromJson(v)])),
+    // M3a (§2.8): the instance's state an owned method reads (shared), a move's destination (into), an admits action's
+    // arriving object; absent when the call has none.
+    shared: t.shared == null ? null : fromJson(t.shared),
+    into: t.into == null ? null : fromJson(t.into),
+    arriving: t.arriving == null ? null : fromJson(t.arriving),
     caller: fromHex(t.caller),
     received: BigInt(t.received),
     balance: BigInt(t.balance),

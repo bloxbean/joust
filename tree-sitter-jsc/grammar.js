@@ -144,7 +144,9 @@ module.exports = grammar({
 
     parameters: $ => seq('(', optional(sep1($.parameter, ',')), ')'),
 
-    parameter: $ => seq(field('name', $.identifier), ':', choice(field('type', $.type), field('reads', $.reads_clause))),
+    parameter: $ => seq(field('name', $.identifier), ':', choice(field('type', $.type), field('reads', $.reads_clause),
+      // M3a (ADR-0003 D1, ADR-0012 D3): the instance's state by reference, a move's destination.
+      field('role', choice('shared', 'into')))),
 
     // M2c (ADR-0011 D2): a parameter that reads another contract's state, through an Instance<C> of the params.
     reads_clause: $ => seq('reads', $.params_field),
@@ -180,6 +182,29 @@ module.exports = grammar({
       $.params_declaration,
       $.event_declaration,
       $.invariant_declaration,
+      // M3a (ADR-0003, ADR-0012): owned types and their methods.
+      $.owned_declaration,
+      $.owned_init_declaration,
+      $.owned_action_declaration,
+      $.owned_destroy_declaration,
+    ),
+
+    owned_declaration: $ => seq('owned', field('name', $.identifier), field('fields', $.field_list)),
+
+    // owned init T.m(…): a method of the owned type T (named, always).
+    owned_init_declaration: $ => seq(
+      'owned', 'init', field('type', $.identifier), '.', field('name', $.identifier), field('parameters', $.parameters),
+      repeat($.modifier), field('body', $.block),
+    ),
+
+    owned_action_declaration: $ => seq(
+      'owned', 'action', field('type', $.identifier), '.', field('name', $.identifier), field('parameters', $.parameters),
+      repeat($.modifier), field('body', $.block),
+    ),
+
+    owned_destroy_declaration: $ => seq(
+      'owned', 'destroy', field('type', $.identifier), '.', field('name', $.identifier), field('parameters', $.parameters),
+      repeat($.modifier), field('body', $.block),
     ),
 
     state_declaration: $ => seq('state', field('fields', $.field_list)),
@@ -191,7 +216,8 @@ module.exports = grammar({
     event_declaration: $ => seq('event', field('name', $.identifier), optional(field('fields', $.field_list))),
 
     invariant_declaration: $ => seq(
-      'invariant', field('name', $.identifier),
+      // M3a (ADR-0012 D1): invariant T.name, an owned type's.
+      'invariant', optional(seq(field('type', $.identifier), '.')), field('name', $.identifier),
       choice(seq('=', field('value', $._expression)), field('body', $.block)),
     ),
 
@@ -225,6 +251,8 @@ module.exports = grammar({
       seq('authorized', field('field', $._field_ref)),
       // M2c (ADR-0011 D3): the action takes deposits; the type, when given, is the memos'.
       seq('receives', optional(field('memo', $.type))),
+      // M3a (ADR-0012 D3): objects of the owned type arrive through the action.
+      seq('admits', field('type', $.identifier)),
     ),
 
     _field_ref: $ => choice($.identifier, $.params_field),

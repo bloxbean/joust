@@ -159,6 +159,22 @@ As M2a's and M2b's, these are refused **in every contract**, whether it composes
 word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a datum, deferred) is retired: M2c's
 `send(to, value, datum)` takes it, and the code is not reused.
 
+### Names M3a reserves (ADR-0018 D16)
+
+As the earlier parts', these are refused **in every contract**, whether it declares owned types or not.
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Owned`, `OwnedInit`, `OwnedAction`, `OwnedDestroy`, `Shared`, `Into`, `Admits` (the annotations owned objects and moves lower to) | a type, enum, variant, field, binding or method name | JSC0211 |
+| `admits` (a method modifier) | a field or binding name | JSC0211 |
+| `Holding`, `Created`, `Exchanged` and, for an owned type `T`, `TOutcome`, `TReceived`, `TCreated` (the owned datum and the result records) | a method name whose redeemer would take it (`holding`, `created`, …) | JSC0203 |
+| the client's lookup of an owned type `T` (`t`, its name with a lower-case first letter: `account` for `Account`) | a method name | JSC1204 |
+
+`owned`, `shared` and `into` are not reserved: `owned` is a word only where a contract member starts, and `shared` and
+`into` only as a parameter's type (a type is capitalised). `Account` is no longer refused as a type name (JSC0220): the
+generated client names a contract's types by their qualified names, so examples/bank's owned `Account` does not meet
+cardano-client-lib's `Account` there.
+
 ## Types and values (ADR-0018 D5, D6)
 
 | Code | Severity | Message | Raised by |
@@ -433,6 +449,37 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 | JSC1027 | error | ...rest needs a List | Checker |
 | JSC1028 | error | the type of this list is unknown here: give it one (const xs: List<Int> = []) | Checker |
 
+## Owned objects (ADR-0018 D10, M3a; ADR-0003, ADR-0012)
+
+An owned type is declared `owned T { … }`; its methods are `owned init T.m(…)`, `owned action T.m(…)` and
+`owned destroy T.m(…)`; `name: shared` reads the instance's state by reference, `name: into` is a move's destination,
+`admits T` an instance action through which objects arrive, and `invariant T.name = …` an owned type's invariant. Each
+rule is the processor's (ContractReader), refused at the `.jsc` position.
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1201 | error | an owned method names its type and itself: owned … ….name(…) / after 'owned' comes an owned type (owned Account { owner: Key }) or an owned method (owned init Account.open(…), owned action Account.name(…), owned destroy Account.name(…)) | Parser (M3a) |
+| JSC1202 | error | the owned type … needs at least one field: owned … { owner: Key } | Checker (M3a) |
+| JSC1203 | error | owned … ….…: … is not an owned type of this contract (…) / invariant ….…: … is not an owned type of this contract | Checker (M3a) |
+| JSC1204 | error | the method … has the name of the generated client's lookup of the owned type … (…(objectId)); rename it | Checker (M3a) |
+| JSC1205 | error | a shared parameter is for owned methods: an instance method has the state already (ADR-0003 D1) / an into parameter is for an owned action, which moves its object to that instance (ADR-0012 D3) / a move cannot read another contract yet | Checker (M3a) |
+| JSC1206 | error | a method has at most one … parameter / the … parameter comes first(, after shared if there is one) (ADR-0003 D1, ADR-0012 D3) | Checker (M3a) |
+| JSC1207 | error | a method parameter cannot be (or hold) an owned type: an object is its own UTxO, read by its methods, never passed as an argument … / an owned type is no field of another value: an object is its own UTxO (ADR-0003 D2) | Checker (M3a) |
+| JSC1208 | error | the owned type … needs an owned init to create its objects: owned init ….open(…) { … } | Checker (M3a) |
+| JSC1209 | error | objects of the owned type … need an escape hatch: an owned destroy on … without a shared parameter, so an owner can always close their object whatever the instance's state (ADR-0003 r2, ADR-0012 D1) | Checker (M3a) |
+| JSC1210 | error | a contract with owned objects cannot destroy its instance: objects that read it (shared) would be locked forever (ADR-0003 r2); end the objects with their owned destroys | Checker (M3a) |
+| JSC1211 | error | a contract with owned objects keeps no BigMap state: a shared read has no proof path for its maps (ADR-0003 r2); a BigMap may be a field of an owned type instead (ADR-0012 D2) | Checker (M3a) |
+| JSC1212 | error | admits goes on an instance action: objects arrive at an instance (ADR-0012 D3) / an admits action cannot be batched … / admits …: … is not an owned type of this contract / an admits action's first parameter is the arriving object's id, a Bytes … / an admits action cannot read another contract yet | Checker (M3a) |
+| JSC1213 | error | the owned type … holds a BigMap, so it cannot have invariants: on chain only the opened reads are visible, so the JVM and the chain would disagree (ADR-0009 r2, ADR-0012 D2) | Checker (M3a) |
+| JSC1214 | error | … moves a … to another instance, which must consent: declare an action admits … (ADR-0012 D3) / … admits …, but no owned action moves a … (an into parameter): no object could ever arrive through it (ADR-0012 D3) | Checker (M3a) |
+| JSC1215 | error | admits / an into parameter / an owned type's invariant / a second owned type / a BigMap in an owned type is not supported yet: … comes in M3a2 or M3a3 (ADR-0012) | Checker (M3a1) |
+
+M3a also changes three rules of earlier sections where they meet owned methods. An owned init takes only `payable`
+(JSC0405); an owned destroy is not payable in M3a1 (JSC0406); and an owned init's accept is refused like an init's
+(JSC0426: issue #81 is open). The rules on bindings (JSC0213), the client's names (JSC0216: an owned method's lambdas
+bind `o`, `sh`, `seed`, `inst`; a move's redeemer `into`) and effects (JSC0404, JSC0409, JSC0410, JSC0411) read an owned
+method's object as an instance method reads the state.
+
 ## Migration from .jsc v1 (ADR-0018 D16)
 
 `joust migrate` (Gradle: `migrateJsc`; `JscMain --migrate`) refuses, at the v1 position, what it cannot translate.
@@ -463,3 +510,4 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 | JSC9007 | warning | this line starts with '-', which continues the expression on the line above (a subtraction): newlines do not end statements in .jsc; if that is meant, join the lines or put the expression in parentheses; if the line is meant to stand alone, end the line above with ';' | Checker |
 | JSC9008 | warning | this event carries a time value: whoever submits the transaction chooses the window, so a value of it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2b) |
 | JSC9009 | warning | … carries a time value: whoever submits the transaction chooses the window, so it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2c) |
+| JSC9010 | warning | … has no audience: anyone can call it on anyone's … (and keep its owner's own calls failing); add 'only <field>', or 'open' if that is meant (ADR-0003 r2) | Checker (M3a) |

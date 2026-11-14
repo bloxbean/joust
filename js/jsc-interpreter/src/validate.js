@@ -86,7 +86,7 @@ export const STMTS = {
 };
 // batched is M1c's (#67): known here so that its IR loads; like every modifier but open and only, it makes a method
 // read the transaction (review F11).
-const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched', 'quorum', 'authorized', 'receives');
+const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched', 'quorum', 'authorized', 'receives', 'admits');
 // M2b: quorum and authorized read the signatories and withdrawals in the validator, so like open and only they do not
 // make a method read the transaction (Ctx).
 const NO_CTX = set('open', 'only', 'quorum', 'authorized');
@@ -105,7 +105,8 @@ const LEDGER_ARITY = {
 const CRED_FIELDS = { KeyCred: 'key', ScriptCred: 'hash' };
 const PRELUDE_ARITY = { min: 2, max: 2, abs: 1, asKey: 1, asHash: 1 };
 const MAP_ARITY = { get: 1, has: 1, set: 2, delete: 1, size: 0, keys: 0, values: 0, isEmpty: 0, at: 1 };
-const KINDS = set('init', 'action', 'destroy', 'view');
+// M3a (ADR-0003, ADR-0012): an owned method's kinds.
+const KINDS = set('init', 'action', 'destroy', 'view', 'ownedInit', 'ownedAction', 'ownedDestroy');
 
 export function validate(p) {
   const fail = (where, what) => {
@@ -130,7 +131,8 @@ export function validate(p) {
   // ---- top level and declarations
   // M2b (additive): "params" and "invariants" appear only when the contract declares them.
   // M2c (additive): "contracts" appears only when the contract imports another.
-  const optional = ['params', 'invariants', 'contracts'].filter((k) => k in p);
+  // M3a (additive): "owned" appears only when the contract declares owned types.
+  const optional = ['params', 'invariants', 'contracts', 'owned'].filter((k) => k in p);
   for (const k of optional) if (p[k] === null || typeof p[k] !== 'object') fail('program', `"${k}" is ${JSON.stringify(p[k])}: an absent ${k} is not written`);
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
     'recursiveFns', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings', ...optional], 'program');
@@ -256,6 +258,9 @@ export function validate(p) {
   for (const k of ['timeFields', 'recursiveFns']) for (const x of p[k]) str(x, k);
   for (const w of p.warnings) keys(w, ['line', 'col', 'code', 'message'], 'warning');
 
+  /** M3a: the record a body's StateRef and StateField read: State, or an owned method's (or invariant's) type. */
+  let inputRec = 'State';
+
   // ---- bodies: locals declared once (ids unique in the program), referenced only in scope (review S7)
   const locals = new Map();
   const decl = (l, where, scope) => {
@@ -310,9 +315,9 @@ export function validate(p) {
     }
   };
   /** M2b: a quorum's or authorized's field, a state field or params.f, of the type its check reads. */
-  const modField = (ref, want, where) => {
+  const modField = (ref, want, where, input = 'State') => {
     const params = typeof ref === 'string' && ref.startsWith('params.');
-    const fs = shapes.get(params ? 'Config' : 'State') ?? [];
+    const fs = shapes.get(params ? 'Config' : input) ?? [];
     const f = fs.find((x) => x.name === (params ? ref.slice(7) : ref));
     if (!f) fail(where, `no field ${JSON.stringify(ref)}`);
     if (JSON.stringify(f.type) !== JSON.stringify(want)) fail(where, `${ref} is not ${JSON.stringify(want)}`);
@@ -389,7 +394,8 @@ export function validate(p) {
     if (e.node === 'New') arity(where, `the record ${e.record}`, e.values.length, shapes.get(e.record).length);
     if (e.node === 'Variant') arity(where, `the variant ${e.variant}`, e.values.length, shapes.get(e.variant).length);
     if (e.node === 'GetField' && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${e.record} has no field ${e.field}`);
-    if (e.node === 'StateField' && !shapes.get('State').some((f) => f.name === e.field)) fail(where, `the state has no field ${e.field}`);
+    // M3a: in an owned method or an owned type's invariant, the input is the object.
+    if (e.node === 'StateField' && !shapes.get(inputRec).some((f) => f.name === e.field)) fail(where, `the ${inputRec === 'State' ? 'state' : inputRec} has no field ${e.field}`);
     if (e.node === 'ParamsRef' && !(shapes.get('Config') ?? []).some((f) => f.name === e.field)) fail(where, `the params have no field ${e.field}`);
   }
   function stmt(s, scope) {
@@ -420,16 +426,42 @@ export function validate(p) {
   }
   const methodNames = new Set();
   const stateFields = new Map(p.state.fields.map((f) => [f.name, f.type]));
+  // M3a: the owned types, each a record of "records", none twice.
+  const owned = p.owned ?? [];
+  if ('owned' in p) {
+    if (!Array.isArray(p.owned) || p.owned.length === 0) fail('owned', 'a non-empty list, absent when there are none');
+    for (const o of p.owned) if (!p.records.some((r) => r.name === o) || p.owned.indexOf(o) !== p.owned.lastIndexOf(o)) fail('owned', `${o} is not one record`);
+  }
+  const ownedKind = (k) => k === 'ownedInit' || k === 'ownedAction' || k === 'ownedDestroy';
   for (const m of p.methods) {
     const where = `method ${m.name}`;
-    // M2c (additive): "reads" appears only when the method reads another contract.
-    keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...('reads' in m ? ['reads'] : []), 'usesCtx', 'pays', 'result', 'body', 'at'], where);
+    // M2c (additive): "reads" appears only when the method reads another contract; M3a: "on", "shared", "into" and
+    // "arriving" only for owned methods, moves and admits actions.
+    const extra = ['reads', 'on', 'shared', 'into', 'arriving'].filter((k) => k in m);
+    keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...extra, 'usesCtx', 'pays', 'result', 'body', 'at'], where);
     if (!Array.isArray(m.mods)) fail(where, 'mods is not a list');
     if (!KINDS.has(m.kind)) fail(where, `unknown kind ${m.kind}`);
     if (methodNames.has(m.name)) fail(where, 'two methods of that name');
     methodNames.add(m.name);
+    if (ownedKind(m.kind) !== ('on' in m) || ('on' in m && !owned.includes(m.on))) fail(where, 'an owned method, and only one, names an owned type (on)');
+    if (('shared' in m && !ownedKind(m.kind)) || ('into' in m && m.kind !== 'ownedAction')) fail(where, 'shared is an owned method\'s, into an owned action\'s');
+    const admits = m.mods.find((x) => x && x.name === 'admits');
+    if (admits && (m.kind !== 'action' || !owned.includes(admits.field))) fail(where, 'admits is an instance action\'s, naming an owned type');
+    if ('arriving' in m && !admits) fail(where, 'only an admits action has an arriving object');
     const scope = new Set();
+    if ('shared' in m) {
+      decl(m.shared, where, scope);
+      if (JSON.stringify(m.shared.type) !== JSON.stringify({ record: 'State' })) fail(where, 'the shared state is a State');
+    }
+    if ('into' in m) {
+      decl(m.into, where, scope);
+      if (JSON.stringify(m.into.type) !== JSON.stringify({ record: 'State' })) fail(where, 'a move\'s destination is a State');
+    }
     m.params.forEach((l) => decl(l, where, scope));
+    if ('arriving' in m) {
+      decl(m.arriving, where, scope);
+      if (JSON.stringify(m.arriving.type) !== JSON.stringify({ record: admits.field })) fail(where, `the arriving object is a ${admits.field}`);
+    }
     // M2c: each read: a local of the instance's state type, named by a params field Instance<C>.
     for (const r of m.reads ?? []) {
       keys(r, ['local', 'field'], where);
@@ -438,9 +470,13 @@ export function validate(p) {
       decl(r.local, where, scope);
       if (JSON.stringify(r.local.type) !== JSON.stringify({ record: `${f.type.instance}.State` })) fail(where, `a read of ${f.type.instance} has its state's type`);
     }
-    modifiers(m, where, fail, keys, stateFields, modField, type);
+    // M3a: an owned method's modifiers read its object's fields.
+    const input = 'on' in m ? new Map(p.records.find((r) => r.name === m.on).fields.map((f) => [f.name, f.type])) : stateFields;
+    modifiers(m, where, fail, keys, input, (ref, want, w) => modField(ref, want, w, 'on' in m ? m.on : 'State'), type);
     if (m.result !== null) type(m.result, where);
+    inputRec = m.on ?? 'State';
     block(m.body, where, scope);
+    inputRec = 'State';
     // #80 review C4, S7: a pay only where the checker allows one (JSC0413): in the method's statement blocks, never in
     // an expression's block (a value block, a value if or match, a lambda), so the statement walk below is complete.
     noPayInExpressions(m.body, false, (what) => fail(where, what));
@@ -454,13 +490,14 @@ export function validate(p) {
       fail(where, 'it pays, sends, mints, burns or deposits, so it says who may call it (only f, open, quorum or authorized)');
     }
     // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409).
-    if (m.kind === 'destroy' && !moves) fail(where, 'a destroy pays out what the instance holds: it has no pay, send, mint, burn or deposit');
+    if ((m.kind === 'destroy' || m.kind === 'ownedDestroy') && !moves) fail(where, `a destroy pays out what ${m.kind === 'destroy' ? 'the instance' : 'its object'} holds: it has no pay, send, mint, burn or deposit`);
     // F7: the checker's two decisions, recomputed from their definitions.
     const checked = m.kind === 'view' ? [] : m.params.filter((l) => needsCheck(l.type, shapes, enums)).map((l) => l.id);
     if (JSON.stringify(checked) !== JSON.stringify(m.checked)) {
       fail(where, `checked is ${JSON.stringify(m.checked)}, but the parameters whose types hold a Key, a Hash or a Map are ${JSON.stringify(checked)}`);
     }
-    const usesCtx = m.kind === 'destroy' || (m.kind !== 'view'
+    // M3a: an owned destroy reads it as a destroy does; a method with a shared or into parameter takes it (as the Java examples do).
+    const usesCtx = m.kind === 'destroy' || m.kind === 'ownedDestroy' || 'shared' in m || 'into' in m || (m.kind !== 'view'
       && (m.mods.some((x) => !NO_CTX.has(x.name)) || readsTx(m.body)));
     if (usesCtx !== m.usesCtx) fail(where, `usesCtx is ${m.usesCtx}, but the method ${usesCtx ? 'reads' : 'does not read'} the transaction`);
   }
@@ -470,10 +507,13 @@ export function validate(p) {
     const names = new Set();
     for (const inv of p.invariants) {
       const where = `invariant ${inv.name}`;
-      keys(inv, ['name', 'body', 'at'], where);
+      keys(inv, ['name', ...('on' in inv ? ['on'] : []), 'body', 'at'], where);
+      if ('on' in inv && !owned.includes(inv.on)) fail(where, `${inv.on} is not an owned type`);
       if (names.has(inv.name) || methodNames.has(inv.name) || fnNames.has(inv.name)) fail(where, 'a name taken by another method, fn or invariant');
       names.add(inv.name);
+      inputRec = inv.on ?? 'State';
       block(inv.body, where, new Set());
+      inputRec = 'State';
       if (inv.body.result === null) fail(where, 'an invariant has a value');
       bool(inv.body.result, where, 'an invariant');
       at(inv.at, where);
@@ -504,7 +544,7 @@ function modifiers(m, where, fail, keys, state, modField, type) {
     if (seen.has(w)) fail(where, `the modifier ${w} is given twice`);
     seen.add(w);
     if (m.kind === 'view') fail(where, `a view takes no modifiers, not ${w}`);
-    if (m.kind === 'init' && w !== 'payable') fail(where, `an init takes only payable, not ${w}`);
+    if ((m.kind === 'init' || m.kind === 'ownedInit') && w !== 'payable') fail(where, `an init takes only payable, not ${w}`);
     if (w === 'payable' || w === 'open') {
       if (field !== null) fail(where, `${w} names no field, not ${JSON.stringify(field)}`);
       if (w === 'payable' && m.kind === 'destroy') fail(where, 'a destroy cannot be payable');
@@ -527,7 +567,11 @@ function modifiers(m, where, fail, keys, state, modField, type) {
     } else if (w === 'receives') {
       // M2c (ADR-0011 D3, JSC0447): receives, or receives T (the memo type), on an action.
       if ('type' in mod) type(mod.type, where);
-      if (m.kind !== 'action') fail(where, 'only an action receives');
+      if (m.kind !== 'action' && m.kind !== 'ownedAction') fail(where, 'only an action receives');
+    } else if (w === 'admits') {
+      // M3a (ADR-0012 D3, JSC1212): an instance action, naming an owned type (checked with the method).
+      if (typeof field !== 'string') fail(where, 'admits names an owned type');
+      if (m.kind !== 'action') fail(where, 'only an action admits objects');
     } else if (w === 'batched') {
       if (field !== null && field !== 'only') fail(where, `batched is plain or "batched only", not ${JSON.stringify(field)}`);
       if (m.kind !== 'action') fail(where, `only an action can be batched, not a${m.kind === 'init' ? 'n' : ''} ${m.kind}`);

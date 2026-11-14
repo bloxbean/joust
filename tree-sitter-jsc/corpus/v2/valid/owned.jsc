@@ -1,0 +1,35 @@
+jsc 2
+package t
+
+// M3a (ADR-0018 D10): owned types, their methods, shared and into parameters, admits, an owned type's invariant.
+contract Guilds {
+  state { master: Key, isOpen: Bool }
+  owned Hero { owner: Key, level: Int }
+  owned Vault { owner: Key, items: BigMap<Bytes, Int> }
+
+  init() {
+    return { master: caller, isOpen: true }
+  }
+
+  action admit(heroId: Bytes, hero: Hero) admits Hero {
+    require(hero.level > 0, "a hero")
+    return state
+  }
+
+  owned init Hero.recruit(guild: shared) {
+    require(guild.isOpen, "closed")
+    return { owner: caller, level: 1 }
+  }
+
+  owned action Hero.levelUp() only owner {
+    return { ...state, level: level + 1 }
+  }
+
+  owned action Hero.transfer(source: shared, destination: into) only owner {
+    return state
+  }
+
+  owned destroy Hero.retire() only owner { pay(owner, balance) }
+
+  invariant Hero.positive = level > 0
+}

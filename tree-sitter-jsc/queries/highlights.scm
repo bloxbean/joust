@@ -69,7 +69,7 @@
 (version) @keyword.directive
 
 [
-  "package" "library" "import" "from" "type" "enum" "fn" "contract" "state" "init" "action" "destroy" "view" "params" "event" "invariant"
+  "package" "library" "import" "from" "type" "enum" "fn" "contract" "state" "init" "action" "destroy" "view" "params" "event" "invariant" "owned"
 ] @keyword
 
 [
@@ -78,7 +78,7 @@
 
 [ "if" "else" ] @keyword.conditional
 
-[ "payable" "open" "only" "after" "before" "batched" "quorum" "authorized" "receives" "ada" ] @keyword.modifier
+[ "payable" "open" "only" "after" "before" "batched" "quorum" "authorized" "receives" "admits" "shared" "into" "ada" ] @keyword.modifier
 
 ; Operators and punctuation
 

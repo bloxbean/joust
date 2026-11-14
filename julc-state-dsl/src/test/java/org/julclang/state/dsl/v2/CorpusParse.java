@@ -68,13 +68,21 @@ public final class CorpusParse {
         if (!c.events().isEmpty()) {
             out.add("events: " + join(c.events().stream().map(e -> e.name() + "(" + join(e.fields().stream().map(Syntax.FieldDecl::name).toList()) + ")").toList()));
         }
-        if (!c.invariants().isEmpty()) out.add("invariants: " + join(c.invariants().stream().map(Syntax.InvariantDecl::name).toList()));
+        // M3a: the owned types, and an owned type's invariant as T.name, only when the contract declares some.
+        if (!c.owned().isEmpty()) {
+            out.add("owned: " + join(c.owned().stream().map(t -> t.name() + "(" + join(t.fields().stream().map(Syntax.FieldDecl::name).toList()) + ")").toList()));
+        }
+        if (!c.invariants().isEmpty()) {
+            out.add("invariants: " + join(c.invariants().stream().map(i -> i.on() == null ? i.name() : i.on() + "." + i.name()).toList()));
+        }
         out.add("methods: " + String.join("; ", c.methods().stream().map(m -> {
-            String kind = m.kind().name().toLowerCase();
+            // M3a: owned init T.m, owned action T.m, owned destroy T.m.
+            String kind = m.owned() ? "owned " + m.kind().name().toLowerCase().substring(6) + " " + m.on() + "."
+                    : m.kind().name().toLowerCase();
             // M2c: receives T names its memo type, written without spaces.
             String mods = String.join(" ", m.mods().stream().map(x -> x.type() != null ? x.name() + " " + type(x.type())
                     : x.arg() == null ? x.name() : x.name() + " " + x.arg()).toList());
-            return kind + (m.kind() == Syntax.Kind.INIT ? "" : " " + m.name()) + "(" + join(m.params().stream().map(Syntax.Param::name).toList())
+            return kind + (m.kind() == Syntax.Kind.INIT ? "" : (m.owned() ? "" : " ") + m.name()) + "(" + join(m.params().stream().map(Syntax.Param::name).toList())
                     + ")" + (mods.isEmpty() ? "" : " " + mods);
         }).toList()));
         types(out, "contract ", c.types(), c.enums(), c.fns());
