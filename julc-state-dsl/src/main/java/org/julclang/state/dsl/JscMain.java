@@ -116,6 +116,79 @@ public final class JscMain {
      *
      * @return the diagnostic to print, or null when the manifest is accepted
      */
+    /**
+     * ADR-0021 D7a (ADR-0018 D12 as amended): an acceptance of one contract, bound to the committed manifest's SHA-256
+     * ({@code none} when nothing is committed) and the new one's: {@code --accept-abi=<Contract>@<committed>..<new>}
+     * (Gradle: {@code acceptJscAbi --contract C --committed-sha256 h1 --sha256 h2}).
+     */
+    public record Bound(String contract, String committed, String now) {
+        static Bound parse(String arg) {
+            // S5, F5 on #99: the contract by its qualified name (app.A), or a simple name only when it is unambiguous.
+            var m = java.util.regex.Pattern.compile("([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)@(none|[0-9a-f]{64})\\.\\.([0-9a-f]{64})").matcher(arg);
+            return m.matches() ? new Bound(m.group(1), m.group(2), m.group(3)) : null;
+        }
+    }
+
+    /**
+     * S5, F5 on #99: the one {@code .jsc} 2 contract file {@code contract} names among {@code files}: by its qualified
+     * name ({@code app.A}), or by its simple name when exactly one contract has it. {@code {file, null}}, or
+     * {@code {null, error}}.
+     */
+    static Object[] resolveContract(Path src, List<Path> files, String contract) throws IOException {
+        var hits = new ArrayList<Path>();
+        var names = new ArrayList<String>();
+        for (Path f : files) {
+            String rel;
+            try {
+                rel = outputPath(Files.readString(f), f.getFileName().toString());
+            } catch (RuntimeException e) {
+                continue;
+            }
+            String qualified = rel.substring(0, rel.length() - ".java".length()).replace('/', '.');
+            String simple = qualified.substring(qualified.lastIndexOf('.') + 1);
+            if (contract.contains(".") ? qualified.equals(contract) : simple.equals(contract)) {
+                hits.add(f);
+                names.add(qualified + " (" + src.relativize(f) + ")");
+            }
+        }
+        if (hits.size() == 1) return new Object[]{hits.get(0), null};
+        if (hits.isEmpty()) return new Object[]{null, "no .jsc 2 contract " + contract + " under " + src};
+        return new Object[]{null, "the name " + contract + " is ambiguous: " + String.join(", ", names) + "; name the contract by its qualified name"};
+    }
+
+    static String sha256(String text) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * The bound acceptance's check of one contract's manifest: null to accept it (and write it), else the refusal. The
+     * committed manifest must still be the reviewed one, and the manifest the build computes the reviewed new one.
+     */
+    static String checkBound(Path committed, String abi, String name, Bound bound) throws IOException {
+        boolean exists = Files.exists(committed);
+        String old = exists ? Files.readString(committed) : null;
+        String was = old == null ? "none" : sha256(old);
+        String now = sha256(abi);
+        if (!was.equals(bound.committed())) {
+            return name + ":1:1: error[JSC0002]: not accepted: the committed manifest " + committed.getFileName() + " is " + (old == null ? "gone"
+                    : "now " + was) + ", not the " + (bound.committed().equals("none") ? "absent one" : bound.committed()) + " that was"
+                    + " reviewed (it changed, a git pull say); review the diff again (jscAbiDiff, Accept ABI…)";
+        }
+        if (!now.equals(bound.now())) {
+            return name + ":1:1: error[JSC0002]: not accepted: the manifest the build computes now is " + now + ", not the reviewed "
+                    + bound.now() + " (a source changed since the diff); review the diff again (jscAbiDiff, Accept ABI…)";
+        }
+        if (abi.equals(old)) return null;
+        Files.writeString(committed, abi);
+        System.err.println(name + ": note: " + (exists ? "accepted the changed" : "created the") + " ABI manifest " + committed.getFileName()
+                + " (" + bound.committed() + " -> " + now + "): commit it beside the .jsc file");
+        return null;
+    }
+
     static String checkAbi(Path committed, String abi, String name, boolean accept) throws IOException {
         boolean exists = Files.exists(committed);
         String old = exists ? Files.readString(committed) : null;
@@ -676,6 +749,73 @@ public final class JscMain {
         return org.julclang.state.dsl.v2.JscModules.of(texts);
     }
 
+    /**
+     * ADR-0021 D7a: the committed ABI manifest of {@code contract} and the one the build computes now, each with its SHA-256
+     * ({@code none} when nothing is committed); printed, and with {@code out} written as JSON there (the extension's own
+     * storage). Nothing is written into the project. 0, or 1 when there is no such .jsc 2 contract or it does not lower.
+     */
+    static int abiDiff(Path src, String contract, Path out) throws IOException {
+        List<Path> files = new ArrayList<>();
+        if (Files.isDirectory(src)) {
+            try (Stream<Path> s = Files.walk(src)) {
+                s.filter(p -> p.toString().endsWith(".jsc")).sorted().forEach(files::add);
+            }
+        }
+        var modules = modules(src, files);
+        Object[] target = resolveContract(src, files, contract);
+        if (target[0] == null) {
+            System.err.println("jsc: " + target[1]);
+            return 1;
+        }
+        for (Path f : List.of((Path) target[0])) {
+            String text = Files.readString(f);
+            String rel = outputPath(text, f.getFileName().toString());
+            String qualified = rel.substring(0, rel.length() - ".java".length()).replace('/', '.');
+            contract = qualified.substring(qualified.lastIndexOf('.') + 1);
+            Lowered lowered;
+            try {
+                lowered = lowerWithWarnings(text, f.getFileName().toString(), id(src, f), modules, javaLibraries);
+            } catch (JscException e) {
+                System.err.println(e.format(src.relativize(f).toString()));
+                return 1;
+            }
+            if (lowered.abiJson() == null) continue;
+            Path committed = f.resolveSibling(contract + ".abi.json");
+            String old = Files.exists(committed) ? Files.readString(committed) : null;
+            String was = old == null ? "none" : sha256(old);
+            String now = sha256(lowered.abiJson());
+            System.out.println("--- committed " + src.relativize(committed) + " sha256 " + was);
+            System.out.println(old == null ? "(none)" : old);
+            System.out.println("+++ now sha256 " + now);
+            System.out.println(lowered.abiJson());
+            System.out.println(was.equals(now) ? "unchanged" : "accept it with: ./gradlew acceptJscAbi --contract " + qualified
+                    + " --committed-sha256 " + was + " --sha256 " + now);
+            if (out != null) {
+                // C10 on #99 r2: one base for both backends: "path" is relative to the tool's working directory (the project:
+                // npm's joust runs at its root, Gradle's JavaExec at the project's directory), as joust abi diff writes it;
+                // "file" is the .jsc file under the sources directory. A manifest outside the working directory: absolute.
+                Path cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+                Path abs = committed.toAbsolutePath().normalize();
+                String path = (abs.startsWith(cwd) ? cwd.relativize(abs) : abs).toString().replace('\\', '/');
+                var o = new StringBuilder("{\"contract\":");
+                org.julclang.state.dsl.v2.JscLangJson.str(o, qualified);
+                o.append(",\"file\":");
+                org.julclang.state.dsl.v2.JscLangJson.str(o, src.relativize(f).toString().replace('\\', '/'));
+                o.append(",\"path\":");
+                org.julclang.state.dsl.v2.JscLangJson.str(o, path);
+                o.append(",\"committed\":{\"sha256\":\"").append(was).append("\",\"text\":");
+                org.julclang.state.dsl.v2.JscLangJson.str(o, old);
+                o.append("},\"now\":{\"sha256\":\"").append(now).append("\",\"text\":");
+                org.julclang.state.dsl.v2.JscLangJson.str(o, lowered.abiJson());
+                o.append("}}\n");
+                Files.writeString(out, o.toString());
+            }
+            return 0;
+        }
+        System.err.println("jsc: no .jsc 2 contract " + contract + " under " + src);
+        return 1;
+    }
+
     public static void main(String[] args) throws IOException {
         int code = run(args);
         if (code != 0) System.exit(code);
@@ -730,9 +870,18 @@ public final class JscMain {
             return migrate(Path.of(args[1]), Path.of(args[2]), inPlace);
         }
         if (args.length == 4 && args[0].equals("--remap")) return remap(Path.of(args[1]), Path.of(args[2]), Path.of(args[3]));
+        // ADR-0021 D7a: JscMain --abi-diff <srcDir> <Contract> [<out.json>]: the committed manifest and the new one.
+        if ((args.length == 3 || args.length == 4) && args[0].equals("--abi-diff")) {
+            return abiDiff(Path.of(args[1]), args[2], args.length == 4 ? Path.of(args[3]) : null);
+        }
+        Bound bound = args.length == 3 && args[2].startsWith("--accept-abi=") ? Bound.parse(args[2].substring("--accept-abi=".length())) : null;
+        if (args.length == 3 && args[2].startsWith("--accept-abi=") && bound == null) {
+            System.err.println("usage: JscMain <srcDir> <outDir> --accept-abi=<Contract>@<committed-sha256 or none>..<new-sha256>");
+            return 2;
+        }
         boolean accept = args.length == 3 && args[2].equals("--accept-abi");
-        if (args.length != 2 && !accept) {
-            System.err.println("usage: JscMain <srcDir> <outDir> [--accept-abi]");
+        if (args.length != 2 && !accept && bound == null) {
+            System.err.println("usage: JscMain <srcDir> <outDir> [--accept-abi[=<Contract>@<committed>..<new>]]");
             return 2;
         }
         Path src = Path.of(args[0]);
@@ -745,6 +894,16 @@ public final class JscMain {
             }
         }
         int errors = 0;
+        Path boundFile = null;
+        if (bound != null) {
+            Object[] target = resolveContract(src, files, bound.contract());
+            if (target[0] == null) {
+                // Nothing accepted, nothing written (S5 on #99: never another contract of the same simple name).
+                System.err.println("jsc: error[JSC0002]: --accept-abi=" + bound.contract() + "@…: " + target[1] + "; nothing accepted");
+                return 1;
+            }
+            boundFile = (Path) target[0];
+        }
         var written = new java.util.HashSet<Path>();
         // ADR-0018 D9: the .jsc libraries the files import (M4) and the contracts they import (M2c) are files of the same
         // tree, by relative path.
@@ -784,8 +943,9 @@ public final class JscMain {
                 if (lowered.abiJson() != null) {
                     // ADR-0018 D12: the ABI manifest is committed beside the .jsc file. Checked first: Java whose
                     // manifest is refused is not written, so nothing can compile it (security S9).
-                    String refused = checkAbi(f.resolveSibling(target.getFileName().toString().replace(".java", ".abi.json")), lowered.abiJson(),
-                            name, accept);
+                    Path committedAbi = f.resolveSibling(target.getFileName().toString().replace(".java", ".abi.json"));
+                    String refused = f.equals(boundFile) ? checkBound(committedAbi, lowered.abiJson(), name, bound)
+                            : checkAbi(committedAbi, lowered.abiJson(), name, accept);
                     if (refused != null) {
                         System.err.println(refused);
                         errors++;

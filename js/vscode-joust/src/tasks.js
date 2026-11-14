@@ -4,6 +4,9 @@
 const fs = require('fs');
 const path = require('path');
 
+/** The engine heap (MB) for the project's CLI run on Electron as Node (below Electron's 4 GB worker heap cap). */
+const ELECTRON_ENGINE_MB = 3072;
+
 function inside(child, parent) {
   const c = path.resolve(child).split(path.sep).filter(Boolean);
   const p = path.resolve(parent).split(path.sep).filter(Boolean);
@@ -57,12 +60,77 @@ function buildCommand(folderPath, platform = process.platform, execPath = proces
     const rel = meta && (typeof meta.bin === 'string' ? meta.bin : meta.bin && meta.bin.joust);
     const bin = typeof rel === 'string' ? realOrNull(path.join(dir, rel)) : null;
     if (!bin || !inside(bin, dir)) return null;
-    // The project's CLI on the extension host's Node (an absolute path), run as Node.
-    return { kind: 'npm', command: execPath, args: [bin, 'build'], cwd: folder, env: { ELECTRON_RUN_AS_NODE: '1' } };
+    // The project's CLI on the extension host's Node (an absolute path), run as Node. Electron's V8 caps a worker's heap
+    // below the CLI's default 4096 MB (its heap check then refuses to build: found by the abi scenario, F4 on #99), so
+    // the engine gets 3072 MB unless the user's environment sets JOUST_ENGINE_MEMORY_MB.
+    return { kind: 'npm', command: execPath, args: [bin, 'build'], cwd: folder,
+      env: { ELECTRON_RUN_AS_NODE: '1', ...(process.env.JOUST_ENGINE_MEMORY_MB ? {} : { JOUST_ENGINE_MEMORY_MB: String(ELECTRON_ENGINE_MB) }) } };
   }
   const gradlew = realOrNull(path.join(folder, platform === 'win32' ? 'gradlew.bat' : 'gradlew'));
   if (gradlew && inside(gradlew, folder)) return { kind: 'gradle', command: gradlew, args: ['build'], cwd: folder, env: {} };
   return null;
+}
+
+/**
+ * D7a: the project's own tool for Accept ABI…, at the folder's root (as buildCommand finds it): `{ kind, diff(contract,
+ * out), accept(contract, committedSha, newSha) }`, each giving `{ command, args, cwd, env }`, or null. npm: `joust abi
+ * diff <C> --out <file>` and `joust build --accept-abi=<C>@<committed>..<new>`; Gradle: `jscAbiDiff --contract <C>
+ * --out <file>` and `acceptJscAbi --contract <C> --committed-sha256 <h1> --sha256 <h2>` (task options, never properties).
+ */
+function abiCommands(folderPath, platform = process.platform, execPath = process.execPath) {
+  const b = buildCommand(folderPath, platform, execPath);
+  if (!b) return null;
+  if (b.kind === 'npm') {
+    const bin = b.args[0];
+    return {
+      kind: 'npm',
+      diff: (c, out) => ({ ...b, args: [bin, 'abi', 'diff', c, '--out', out] }),
+      accept: (c, h1, h2) => ({ ...b, args: [bin, 'build', `--accept-abi=${c}@${h1}..${h2}`] }),
+    };
+  }
+  // F5 on #99: in a multi-project build a bare task name runs in every project that has it (several diffs, one --out):
+  // refused there; the user runs :<project>:jscAbiDiff and acceptJscAbi themselves.
+  if (multiProject(b.cwd)) return { kind: 'gradle', multiProject: true };
+  return {
+    kind: 'gradle',
+    diff: (c, out) => ({ ...b, args: ['jscAbiDiff', '--contract', c, '--out', out] }),
+    accept: (c, h1, h2) => ({ ...b, args: ['acceptJscAbi', '--contract', c, '--committed-sha256', h1, '--sha256', h2] }),
+  };
+}
+
+/** Whether the Gradle build at `folder` includes subprojects (its settings file, at most 64 KB, has an include). */
+function multiProject(folder) {
+  for (const f of ['settings.gradle', 'settings.gradle.kts']) {
+    try {
+      const p = path.join(folder, f);
+      const st = fs.lstatSync(p);
+      if (!st.isFile()) continue;
+      if (st.size > 64 * 1024) return true;   // unread: assumed multi-project (refused, never guessed)
+      if (/^\s*include\b/m.test(fs.readFileSync(p, 'utf8'))) return true;
+    } catch {
+      // no such file
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the manifest at `rel` now has SHA-256 `sha` (Accept ABI… reads back what was written: S5 on #99). `rel` is
+ * relative to the folder, the tool's working directory, on both backends (C10 on #99 r2: Gradle's
+ * src/main/jsc/app/A.abi.json, npm's contracts/app/A.abi.json); it must stay inside the folder, by real path.
+ */
+function manifestWritten(folderPath, rel, sha) {
+  if (typeof rel !== 'string' || !rel || path.isAbsolute(rel)) return false;
+  try {
+    const root = fs.realpathSync.native(folderPath);
+    const file = fs.realpathSync.native(path.join(root, rel));
+    if (!inside(file, root) || file === root) return false;
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size > 4 * 1024 * 1024) return false;
+    return require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex') === sha;
+  } catch {
+    return false;
+  }
 }
 
 function createTaskProvider(vscode) {
@@ -90,4 +158,4 @@ function createTaskProvider(vscode) {
   };
 }
 
-module.exports = { createTaskProvider, buildCommand, inside };
+module.exports = { createTaskProvider, buildCommand, abiCommands, inside, manifestWritten };

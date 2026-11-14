@@ -74,6 +74,14 @@ final class Lexer {
      * as it compiles (Trojan Source). A leading byte-order mark is allowed.
      */
     static void noFormatCharacters(String src) {
+        noFormatCharacters(src, null, null);
+    }
+
+    /**
+     * ADR-0021 D5 (M5b): with {@code errors}, every refused character is recorded there, and its offset in
+     * {@code offsets}, instead of the first one being thrown (the language core's recovering mode; the build passes null).
+     */
+    static void noFormatCharacters(String src, List<JscException> errors, java.util.Set<Integer> offsets) {
         int line = 1, col = 1;
         for (int i = 0; i < src.length(); i++) {
             char c = src.charAt(i);
@@ -87,6 +95,11 @@ final class Lexer {
             // could hide the code after them: they are refused.
             if (c == '\r' && (i + 1 >= src.length() || src.charAt(i + 1) != '\n') || c == '\u0085' || c == '\u2028' || c == '\u2029'
                     || c == '\u000B' || c == '\u000C') {
+                if (record(errors, offsets, i, line, col, "JSC0147", "U+%04X breaks a line for some readers but not for .jsc:"
+                        + " end lines with LF (or CRLF), so that a comment cannot hide the code after it", c)) {
+                    col++;
+                    continue;
+                }
                 throw new JscException(line, col, "JSC0147", String.format("U+%04X breaks a line for some readers but not for .jsc:"
                         + " end lines with LF (or CRLF), so that a comment cannot hide the code after it", (int) c));
             }
@@ -94,11 +107,23 @@ final class Lexer {
             // LF and the CR of a CRLF. A terminal or a viewer may act on one (U+001C..U+001E, ESC) and show text that
             // differs from what compiles.
             if (Character.getType(c) == Character.CONTROL && c != '\t' && c != '\r') {
+                if (record(errors, offsets, i, line, col, "JSC0148", "control character U+%04X: .jsc files hold no control"
+                        + " characters but TAB and line ends (LF or CRLF), even in comments and strings, so that the text reads as"
+                        + " it compiles", c)) {
+                    col++;
+                    continue;
+                }
                 throw new JscException(line, col, "JSC0148", String.format("control character U+%04X: .jsc files hold no control"
                         + " characters but TAB and line ends (LF or CRLF), even in comments and strings, so that the text reads as"
                         + " it compiles", (int) c));
             }
             if (Character.getType(c) == Character.FORMAT && !(i == 0 && c == '\uFEFF')) {
+                if (record(errors, offsets, i, line, col, "JSC0145", "invisible format character U+%04X: .jsc files may not hold"
+                        + " bidirectional controls or other format characters, even in comments and strings, so that the text"
+                        + " reads as it compiles", c)) {
+                    col++;
+                    continue;
+                }
                 throw new JscException(line, col, "JSC0145", String.format("invisible format character U+%04X: .jsc files may not hold"
                         + " bidirectional controls or other format characters, even in comments and strings, so that the text"
                         + " reads as it compiles", (int) c));
@@ -112,18 +137,53 @@ final class Lexer {
     }
 
     /**
+     * The lexer's errors a recovering lex records at most (S2 on #99): past it a refused character is still skipped, but
+     * no message is built. The model reports {@link JscLang#MAX_ERRORS} at most.
+     */
+    static final int MAX_RECORDED = 1000;
+
+    /**
+     * Records the error {@code e} makes when recovering (and the offset of the character it is about), up to
+     * {@link #MAX_RECORDED}; false when not recovering.
+     */
+    private static boolean record(List<JscException> errors, java.util.Set<Integer> offsets, int offset, int line, int col, String code,
+                                  String format, char c) {
+        if (errors == null) return false;
+        if (offsets != null) offsets.add(offset);
+        if (errors.size() < MAX_RECORDED) errors.add(new JscException(line, col, code, String.format(format, (int) c)));
+        return true;
+    }
+
+    static List<Tok> lex(String src, List<int[]> comments) {
+        return lex(src, comments, null);
+    }
+
+    /**
      * The tokens; when {@code comments} is not null, each comment's {@code {startLine, startCol, endLine, endCol}} is added
      * to it (ADR-0021: the language core's folding ranges; the tokens are the same either way).
      */
-    static List<Tok> lex(String src, List<int[]> comments) {
-        noFormatCharacters(src);
+    /**
+     * ADR-0021 D5 (M5b): with {@code errors}, the lexer recovers. Each error is recorded (at the position and with the code
+     * the build reports for it) and lexing continues: a refused character is skipped (inside a string too), a string or a
+     * comment that does not end ends where the line or the file does, an unknown escape is dropped, an odd {@code #hex}
+     * gets a leading zero. Without {@code errors} (the build) the first error is thrown, as before; the tokens of a file
+     * without errors are the same either way.
+     */
+    static List<Tok> lex(String src, List<int[]> comments, List<JscException> errors) {
+        var skip = errors == null ? null : new java.util.HashSet<Integer>();
+        noFormatCharacters(src, errors, skip);
+        var seen = errors == null ? null : new java.util.HashSet<String>();
+        java.util.function.Consumer<JscException> fail = e -> {
+            if (errors == null) throw e;
+            if (errors.size() < MAX_RECORDED && seen.add(e.line + ":" + e.col)) errors.add(e);
+        };
         var out = new ArrayList<Tok>();
         int i = 0, line = 1, col = 1;
         if (src.startsWith("\uFEFF")) i = 1;
         while (i < src.length()) {
             char c = src.charAt(i);
             if (c == '\n') { i++; line++; col = 1; continue; }
-            if (Character.isWhitespace(c)) { i++; col++; continue; }
+            if (Character.isWhitespace(c) || skip != null && skip.contains(i)) { i++; col++; continue; }
             if (src.startsWith("//", i)) {
                 int from = i;
                 while (i < src.length() && src.charAt(i) != '\n') i++;
@@ -134,7 +194,17 @@ final class Lexer {
             }
             if (src.startsWith("/*", i)) {
                 int end = src.indexOf("*/", i + 2);
-                if (end < 0) throw new JscException(line, col, "JSC0101", "unterminated comment");
+                if (end < 0) {
+                    fail.accept(new JscException(line, col, "JSC0101", "unterminated comment"));
+                    // Recovering: the comment runs to the end of the file.
+                    int cl = line, cc = col;
+                    for (int j = i; j < src.length(); j++) {
+                        if (src.charAt(j) == '\n') { line++; col = 1; } else col++;
+                    }
+                    if (comments != null) comments.add(new int[]{cl, cc, line, col});
+                    i = src.length();
+                    continue;
+                }
                 int cl = line, cc = col;
                 for (int j = i; j < end + 2; j++) {
                     if (src.charAt(j) == '\n') { line++; col = 1; } else col++;
@@ -147,16 +217,20 @@ final class Lexer {
             // Security S6: identifiers are ASCII, so no two names can look alike (no mixed scripts or confusables:
             // a Cyrillic 'с' in 'сaller' is not 'caller'); strings and comments may hold any other text.
             if (Character.isLetter(c) && !identStart(c)) {
-                throw new JscException(sl, sc, "JSC0146", String.format("'%c' (U+%04X) is not an ASCII letter: names in .jsc are"
-                        + " written with ASCII letters, digits and '_', so that no two names can look alike", c, (int) c));
+                fail.accept(new JscException(sl, sc, "JSC0146", String.format("'%c' (U+%04X) is not an ASCII letter: names in .jsc are"
+                        + " written with ASCII letters, digits and '_', so that no two names can look alike", c, (int) c)));
+                i++;
+                col++;
+                continue;
             }
             if (identStart(c)) {
                 int j = i;
                 while (j < src.length() && identPart(src.charAt(j))) j++;
-                if (j < src.length() && Character.isLetterOrDigit(src.charAt(j))) {
+                if (j < src.length() && Character.isLetterOrDigit(src.charAt(j)) && !(skip != null && skip.contains(j))) {
                     char d = src.charAt(j);
-                    throw new JscException(sl, sc + (j - i), "JSC0146", String.format("'%c' (U+%04X) is not an ASCII letter or digit: names"
-                            + " in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike", d, (int) d));
+                    // Recovering: the name ends before it; the character is skipped next, reported once.
+                    fail.accept(new JscException(sl, sc + (j - i), "JSC0146", String.format("'%c' (U+%04X) is not an ASCII letter or digit: names"
+                            + " in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike", d, (int) d)));
                 }
                 col += j - i;
                 out.add(new Tok(K.IDENT, src.substring(i, j), sl, sc, col));
@@ -179,7 +253,10 @@ final class Lexer {
                 int j = i + 1;
                 while (j < src.length() && Character.digit(src.charAt(j), 16) >= 0) j++;
                 String hex = src.substring(i + 1, j).toLowerCase();
-                if (hex.length() % 2 != 0) throw new JscException(sl, sc, "JSC0102", "a #hex literal needs an even number of digits");
+                if (hex.length() % 2 != 0) {
+                    fail.accept(new JscException(sl, sc, "JSC0102", "a #hex literal needs an even number of digits"));
+                    hex = "0" + hex;
+                }
                 col += j - i;
                 out.add(new Tok(K.HEX, hex, sl, sc, col));
                 i = j;
@@ -188,22 +265,38 @@ final class Lexer {
             if (c == '"') {
                 int j = i + 1;
                 var sb = new StringBuilder();
+                boolean open = false;
                 while (j < src.length() && src.charAt(j) != '"') {
                     char d = src.charAt(j);
-                    if (d == '\n' || d == '\r') throw new JscException(sl, sc, "JSC0103", "unterminated string: a string ends on its line");
+                    if (d == '\n' || d == '\r' && !(skip != null && skip.contains(j))) {
+                        fail.accept(new JscException(sl, sc, "JSC0103", "unterminated string: a string ends on its line"));
+                        open = true;   // recovering: the string ends at the line's end
+                        break;
+                    }
+                    if (skip != null && skip.contains(j)) {
+                        j++;
+                        continue;
+                    }
                     // Control characters (tab, carriage return, …) are refused rather than copied into generated Java
                     // (Codex C8): a string holds printable text; write \n for a new line.
                     if (d < 0x20 || d == 0x7f) {
-                        throw new JscException(sl, sc + (j - i), "JSC0104", String.format("control character U+%04X in a string: write printable text (\\n for a new line)", (int) d));
+                        fail.accept(new JscException(sl, sc + (j - i), "JSC0104", String.format("control character U+%04X in a string: write printable text (\\n for a new line)", (int) d)));
+                        j++;
+                        continue;
                     }
                     if (d == '\\') {
-                        if (j + 1 >= src.length()) throw new JscException(sl, sc, "JSC0105", "unterminated string");
+                        if (j + 1 >= src.length()) {
+                            fail.accept(new JscException(sl, sc, "JSC0105", "unterminated string"));
+                            j++;
+                            open = true;
+                            break;
+                        }
                         char e = src.charAt(j + 1);
                         switch (e) {
                             case '"' -> sb.append('"');
                             case '\\' -> sb.append('\\');
                             case 'n' -> sb.append('\n');
-                            default -> throw new JscException(line, col + (j - i), "JSC0106", "unknown escape \\" + e);
+                            default -> fail.accept(new JscException(line, col + (j - i), "JSC0106", "unknown escape \\" + e));
                         }
                         j += 2;
                         continue;
@@ -211,10 +304,13 @@ final class Lexer {
                     sb.append(d);
                     j++;
                 }
-                if (j >= src.length()) throw new JscException(sl, sc, "JSC0105", "unterminated string");
-                col += j + 1 - i;
+                if (!open && j >= src.length()) {
+                    fail.accept(new JscException(sl, sc, "JSC0105", "unterminated string"));
+                    open = true;
+                }
+                col += (open ? j : j + 1) - i;
                 out.add(new Tok(K.STRING, sb.toString(), sl, sc, col));
-                i = j + 1;
+                i = open ? j : j + 1;
                 continue;
             }
             String p = null;
@@ -222,8 +318,11 @@ final class Lexer {
                 if (src.startsWith(q, i)) { p = q; break; }
             }
             if (p == null) {
-                if (c == '&' || c == '|') throw new JscException(sl, sc, "JSC0107", "unexpected character '" + c + "': write " + c + c + " for the logical operator");
-                throw new JscException(sl, sc, "JSC0108", "unexpected character '" + c + "'");
+                if (c == '&' || c == '|') fail.accept(new JscException(sl, sc, "JSC0107", "unexpected character '" + c + "': write " + c + c + " for the logical operator"));
+                else fail.accept(new JscException(sl, sc, "JSC0108", "unexpected character '" + c + "'"));
+                i++;
+                col++;
+                continue;
             }
             i += p.length(); col += p.length();
             out.add(new Tok(K.PUNCT, p, sl, sc, col));

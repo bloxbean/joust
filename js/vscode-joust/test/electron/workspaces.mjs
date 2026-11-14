@@ -15,6 +15,26 @@ export function templateWorkspace(base) {
   return { folder };
 }
 
+/**
+ * The template with the project's own CLI installed (F4 on #99): @julclang/joust (bin, src, engine) and the
+ * state-client's codegen and joust-runtime's engine loader copied into node_modules, inside the folder, as npm would. Accept ABI… runs that CLI.
+ */
+export function abiWorkspace(base, engineDir) {
+  const { folder } = templateWorkspace(base);
+  const pkg = join(folder, 'node_modules', '@julclang', 'joust');
+  for (const d of ['bin', 'src']) cpSync(join(repo, 'js', 'joust', d), join(pkg, d), { recursive: true });
+  copyFileSync(join(repo, 'js', 'joust', 'package.json'), join(pkg, 'package.json'));
+  mkdirSync(join(pkg, 'engine'), { recursive: true });
+  for (const f of ['joust-toolchain.js', 'joust-toolchain.js.wasm', 'package.json']) copyFileSync(join(engineDir, f), join(pkg, 'engine', f));
+  // The build path's other two packages (their codegen and the engine loader import nothing else).
+  for (const p of ['state-client', 'joust-runtime']) {
+    const d = join(folder, 'node_modules', '@julclang', p);
+    cpSync(join(repo, 'js', p, 'src'), join(d, 'src'), { recursive: true });
+    copyFileSync(join(repo, 'js', p, 'package.json'), join(d, 'package.json'));
+  }
+  return { folder };
+}
+
 /** A module that, if anything ever loads it, writes the sentinel (beside the workspace's parent). */
 const planted = (sentinel) => `require('fs').writeFileSync(${JSON.stringify(sentinel)}, 'loaded ' + __filename);\nmodule.exports = {};\n`;
 

@@ -9,6 +9,7 @@ tasks.named('test') {
     systemProperty 'jsc.writeShapes', System.getProperty('jsc.writeShapes', 'false')
     // -Djsc.writeModels=true: JscLangTest rewrites the language core's golden document models (ADR-0021 D12).
     systemProperty 'jsc.writeModels', System.getProperty('jsc.writeModels', 'false')
+    systemProperty 'jsc.profileScaling', System.getProperty('jsc.profileScaling', 'false')
     inputs.dir(rootProject.file('tree-sitter-jsc/corpus')).withPropertyName('jscCorpus').withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('js/create-joust/variants/jsc/contracts')).withPropertyName('jscTemplate').withPathSensitivity(PathSensitivity.RELATIVE)
     // JscLangTest writes build/lang-parity.json for the Wasm engine's parity test (julc-state-toolchain's toolchainWasmTest).

@@ -103,6 +103,37 @@ class JoustPluginTest {
         assertThat(p.getTasks().findByName("generateJsc")).isNull();
     }
 
+    /**
+     * C1 on #99, at the task-option boundary: acceptJscAbi with none of its options is the bare acceptance; with all three,
+     * the bound one; with any incomplete set (or a malformed one), it refuses before JscMain runs, so nothing is written.
+     */
+    @org.junit.jupiter.api.Test
+    void acceptJscAbiNeverTurnsPartialOptionsIntoTheBareAcceptance() throws IOException {
+        Files.createDirectories(dir.resolve("src/main/jsc/app"));
+        Project p = project();
+        String h = "a".repeat(64);
+        java.util.function.Function<String[], java.util.List<String>> args = (opts) -> {
+            AcceptJscAbi t = p.getTasks().register("accept" + java.util.UUID.randomUUID().toString().replace("-", ""), AcceptJscAbi.class).get();
+            if (opts[0] != null) t.getContract().set(opts[0]);
+            if (opts[1] != null) t.getCommittedSha256().set(opts[1]);
+            if (opts[2] != null) t.getSha256().set(opts[2]);
+            return t.acceptance();
+        };
+        assertThat(args.apply(new String[]{null, null, null})).containsExactly("--accept-abi");
+        assertThat(args.apply(new String[]{"app.A", "none", h})).containsExactly("--accept-abi=app.A@none.." + h);
+        for (String[] partial : new String[][]{{null, "none", h}, {"A", null, h}, {"A", "none", null}, {null, null, h}, {null, "none", null},
+                {"A", null, null}, {"A b", "none", h}, {"A", "x", h}, {"A", "none", "y"}}) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> args.apply(partial)).isInstanceOf(org.gradle.api.GradleException.class)
+                    .hasMessageContaining("nothing was accepted");
+        }
+        // The registered task's argument provider asks acceptance() when the task runs: a partial set fails it there.
+        AcceptJscAbi registered = (AcceptJscAbi) p.getTasks().getByName("acceptJscAbi");
+        registered.getSha256().set(h);
+        var failing = new java.util.ArrayList<String>();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> registered.getArgumentProviders().forEach(a -> a.asArguments().forEach(failing::add)))
+                .isInstanceOf(org.gradle.api.GradleException.class);
+    }
+
     @org.junit.jupiter.api.Test
     void jscWhenThereAreJscSources() throws IOException {
         Files.createDirectories(dir.resolve("src/main/jsc/app"));

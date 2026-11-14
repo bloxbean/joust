@@ -163,13 +163,13 @@ class JscLangTest {
             """;
 
     @Test
-    void anErrorHidesTheWarningsAroundItAndTheFixedFileShowsThem() {
+    void anErrorKeepsTheWarningsOfTheOtherDeclarationsAndTheFixedFileShowsThemAll() {
+        // M5b (D5): recovering, the checker checks each method on its own: b's error, and a's and c's warnings.
         var broken = JscLang.analyze(WARNED.formatted("missing"), "W.jsc");
         assertFalse(broken.accepted());
-        assertEquals(1, broken.diagnostics().size(), broken.diagnostics().toString());
-        var e = broken.diagnostics().get(0);
-        assertEquals("error", e.severity());
-        assertThrowsTheSame(WARNED.formatted("missing"), e);
+        assertEquals(List.of("warning JSC9001@6:3", "error JSC0217@7:38", "warning JSC9001@8:3"), broken.diagnostics().stream()
+                .map(d -> d.severity() + " " + d.code() + "@" + d.line() + ":" + d.col()).toList());
+        assertThrowsTheSame(WARNED.formatted("missing"), broken.diagnostics().get(1));
 
         var fixed = JscLang.analyze(WARNED.formatted("n + 1"), "W.jsc");
         assertTrue(fixed.accepted());
@@ -188,15 +188,21 @@ class JscLangTest {
     void aParseErrorKeepsTheDeclarationsBeforeItMarkedPartial() {
         String src = "jsc 2\npackage t\ntype P = { a: Int }\ncontract C {\n  state { n: Int }\n  action go() {\n    let x = 1\n  }\n}\n";
         var m = JscLang.analyze(src, "C.jsc");
-        assertEquals("JSC0128", m.diagnostics().get(0).code());
-        assertEquals(new JscLang.Range(6, 4, 6, 7), m.diagnostics().get(0).range());   // the 'let' token
+        var let = m.diagnostics().stream().filter(d -> "JSC0128".equals(d.code())).findFirst().orElseThrow();
+        assertEquals(new JscLang.Range(6, 4, 6, 7), let.range());   // the 'let' token
+        // M5b: the parser recovers at the statement, so nothing ends early. The missing init is not judged: go was dropped
+        // (its statement broke), and a file-level rule cannot be judged on a file with a dropped member (L13).
+        assertFalse(m.diagnostics().stream().anyMatch(d -> "JSC0401".equals(d.code())), m.diagnostics().toString());
         var p = m.declarations().stream().filter(d -> d.name().equals("P")).findFirst().orElseThrow();
         assertFalse(p.partial());
         var go = m.declarations().stream().filter(d -> d.name().equals("go")).findFirst().orElseThrow();
-        assertTrue(go.partial());
         var c = m.declarations().stream().filter(d -> d.name().equals("C")).findFirst().orElseThrow();
-        assertTrue(c.partial());
+        assertFalse(c.partial());
         assertEquals(go.parent(), c.id());
+        // A member whose head does not parse ends where the parser resumed, partial.
+        var head = JscLang.analyze("jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  action go( {\n  }\n  init() { return { n: 0 } }\n}\n", "C.jsc");
+        assertTrue(head.declarations().stream().filter(d -> d.name().equals("go")).findFirst().orElseThrow().partial());
+        assertTrue(head.declarations().stream().anyMatch(d -> d.kind().equals("init")));
     }
 
     // ------------------------------------------------------------------ L11: UTF-16 positions
@@ -206,14 +212,13 @@ class JscLangTest {
         String line = "    require(true, \"\uD83D\uDE00\uD83D\uDE00\") /* \uD83D\uDCA9 */; const t = nope";
         String src = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a() {\n" + line
                 + "\n    return state\n  }\n}\n";
-        var d = JscLang.analyze(src, "C.jsc").diagnostics().get(0);
+        var d = JscLang.analyze(src, "C.jsc").diagnostics().stream().filter(x -> "JSC0217".equals(x.code())).findFirst().orElseThrow();
         int col = line.indexOf("nope");   // UTF-16 index (Java strings are UTF-16)
         assertEquals(col + 1, d.col(), d.toString());
         assertEquals(new JscLang.Range(6, col, 6, col + 4), d.range());
         // A character rule underlines the character: a non-BMP character (a surrogate pair) is two code units.
         String bad = "jsc 2\npackage t\ncontract C {\n  state { n\uD835\uDC00: Int }\n}\n";
-        var e = JscLang.analyze(bad, "C.jsc").diagnostics().get(0);
-        assertEquals("JSC0108", e.code());
+        var e = JscLang.analyze(bad, "C.jsc").diagnostics().stream().filter(x -> "JSC0108".equals(x.code())).findFirst().orElseThrow();
         assertEquals(new JscLang.Range(3, 11, 3, 13), e.range());
         // A bidirectional control (JSC0145) in a comment: one code unit.
         var f = JscLang.analyze("jsc 2\npackage t\n// x\u202Ey\ncontract C { state { n: Int } }\n", "C.jsc").diagnostics().get(0);
@@ -234,7 +239,7 @@ class JscLangTest {
         return out;
     }
 
-    private static String name(Path p) {
+    static String name(Path p) {
         String n = p.getFileName().toString();
         try {
             JscV2.checkFileName(n);
@@ -277,10 +282,12 @@ class JscLangTest {
             strict = modules == null ? JscV2.lower(src, file) : JscV2.lower(src, file, id, modules);
         } catch (JscException e) {
             assertNull(a.lowered());
-            assertEquals(1, a.model().diagnostics().size(), file + ": " + a.model().diagnostics());
-            var d = a.model().diagnostics().get(0);
-            assertEquals(List.of("error", String.valueOf(e.code), e.line, e.col, e.getMessage()),
-                    List.of(d.severity(), String.valueOf(d.code()), d.line(), d.col(), d.message()), file);
+            // M5b (L1 recovered): the build's error is among the recovering mode's, at its code, position and message;
+            // the others are L13's (JscLangRecoveryTest).
+            var want = List.<Object>of("error", String.valueOf(e.code), e.line, e.col, e.getMessage());
+            assertTrue(a.model().diagnostics().stream().anyMatch(d -> List.<Object>of(d.severity(), String.valueOf(d.code()), d.line(), d.col(),
+                    d.message()).equals(want)), file + ": " + want + " not in " + a.model().diagnostics());
+            assertFalse(a.model().accepted(), file);
             return;
         }
         assertTrue(a.model().accepted(), file);
@@ -350,7 +357,7 @@ class JscLangTest {
             assertTrue(m.accepted(), f + ": " + m.diagnostics());
         }
         var g = JscLang.analysis(Examples.files().get(Examples.DIR + "Guarded.jsc"), "Guarded.jsc", Examples.DIR + "Guarded.jsc", modules, false).model();
-        assertEquals("JSC0720", g.diagnostics().get(0).code());
+        assertTrue(g.diagnostics().stream().anyMatch(d -> "JSC0720".equals(d.code())), g.diagnostics().toString());
         // The corpus file of M2's declarations: accepted, with params, events and invariants in its outline.
         var composed = JscLang.analysis(Files.readString(Path.of("src/test/resources/lang/Composed.jsc")), "Composed.jsc", false).model();
         assertTrue(composed.accepted(), composed.diagnostics().toString());
@@ -358,7 +365,7 @@ class JscLangTest {
                 .filter(d -> d.outline() && List.of("params", "event", "invariant").contains(d.kind())).map(JscLang.Declaration::kind).toList());
         // On its own (no project), an import is the build's on-its-own error, never a crash.
         var alone = JscLang.analysis(Examples.files().get(Examples.DIR + "Kiosk.jsc"), "Kiosk.jsc", false).model();
-        assertEquals("JSC0742", alone.diagnostics().get(0).code());
+        assertTrue(alone.diagnostics().stream().anyMatch(d -> "JSC0742".equals(d.code())), alone.diagnostics().toString());
     }
 
     static final JscModules EXAMPLES = Examples.modules();
@@ -391,14 +398,14 @@ class JscLangTest {
     void nestingPastTheCapIsTheCatalogued() {
         String deep = "(".repeat(70) + "1" + ")".repeat(70);
         String src = "jsc 2\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: " + deep + " } }\n}\n";
-        var d = JscLang.analyze(src, "D.jsc").diagnostics().get(0);
-        assertEquals("JSC0149", d.code());
+        assertTrue(JscLang.analyze(src, "D.jsc").diagnostics().stream().anyMatch(x -> "JSC0149".equals(x.code())));
         sameAsTheBuild(src, "D.jsc");
     }
 
     @Test
     void aBadFileNameIsTheBuildsError() {
-        var d = JscLang.analyze("jsc 2\npackage t\ncontract C { state { n: Int } }\n", "my file.jsc").diagnostics().get(0);
+        var d = JscLang.analyze("jsc 2\npackage t\ncontract C { state { n: Int } }\n", "my file.jsc").diagnostics().stream()
+                .filter(x -> "JSC0001".equals(x.code())).findFirst().orElseThrow();
         assertEquals("JSC0001", d.code());
         assertEquals(new JscLang.Range(0, 0, 0, 1), d.range());
     }

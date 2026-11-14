@@ -45,7 +45,12 @@ test('the advertised capabilities are exactly the allow-list (D10, S18)', { skip
   const vsc = await startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: false } });
   try {
     assert.deepEqual(vsc.init.capabilities, capabilities({ edits: true }));
-    assert.deepEqual(vsc.init.capabilities.executeCommandProvider, { commands: ['joust.applyFix'] });
+    assert.deepEqual(vsc.init.capabilities.executeCommandProvider, { commands: ['joust.applyFix', 'joust.addImport'] });
+    // M5b: completion for the verified client; rename through JOUST: Rename Symbol only, never textDocument/rename (D4a).
+    assert.deepEqual(vsc.init.capabilities.completionProvider, { triggerCharacters: ['.'] });
+    assert.equal(vsc.init.capabilities.renameProvider, undefined);
+    for (const k of ['hoverProvider', 'definitionProvider', 'referencesProvider']) assert.equal(vsc.init.capabilities[k], true, k);
+    assert.ok(vsc.init.capabilities.semanticTokensProvider.legend.tokenModifiers.includes('timeValue'));
   } finally {
     await vsc.stop();
   }
@@ -58,7 +63,7 @@ test('the advertised capabilities are exactly the allow-list (D10, S18)', { skip
   }
 });
 
-test('diagnostics as you type: the first error with its code and link, then the warnings once fixed (D5, D7, L2)', { skip }, async () => {
+test('diagnostics as you type: every error with its code and link and the other declarations\' warnings, then the warnings once fixed (D5, D7, L2)', { skip }, async () => {
   const dir = tmp();
   const lsp = await startLsp({ folders: [dir] });
   try {
@@ -68,8 +73,10 @@ test('diagnostics as you type: the first error with its code and link, then the 
     lsp.open(uri, src('missing'));
     const p1 = await lsp.diagnostics(uri, 1);
     assert.equal(p1.version, 1);
-    assert.equal(p1.diagnostics.length, 1, JSON.stringify(p1));
-    const e = p1.diagnostics[0];
+    // M5b (D5): recovering, b's error and a's and c's warnings.
+    assert.deepEqual(p1.diagnostics.map((d) => [d.code, d.severity, d.range.start.line]), [['JSC9001', 2, 5], ['JSC0217', 1, 6], ['JSC9001', 2, 7]],
+      JSON.stringify(p1));
+    const e = p1.diagnostics[1];
     assert.equal(e.severity, 1);
     assert.equal(e.code, 'JSC0217');
     assert.match(e.codeDescription.href, /^https:\/\/github\.com\/bloxbean\/joust\/blob\/main\/docs\/reference\/jsc-2-diagnostics\.md#:~:text=JSC0217,-error$/);

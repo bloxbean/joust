@@ -56,9 +56,13 @@ final class Parser {
         this(toks, null);
     }
 
-        private Parser(List<Tok> toks, Spans spans) {
+    /** ADR-0021 D5: the recovering mode (the language core's parse only). */
+    private final boolean recover;
+
+    private Parser(List<Tok> toks, Spans spans) {
         this.toks = toks;
         this.spans = spans;
+        this.recover = spans != null && spans.recover;
         for (int k = 0; k + 1 < toks.size(); k++) {
             if (toks.get(k).is("type") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
             // M2b: an event is a variant of the contract's Event, so it starts a constructor too: Paid { to, amount }.
@@ -102,18 +106,41 @@ final class Parser {
      * spans into it (ADR-0021 D6). The tree, its positions and every error are the same with or without spans (L5).
      */
     static File parse(String src, Set<String> importedTypes, Spans spans) {
-        var p = new Parser(Lexer.lex(src, spans == null ? null : spans.comments), spans);
+        boolean recover = spans != null && spans.recover;
+        // Recovering, the loader lexed the file once already (its imports came from those tokens).
+        List<Tok> lexed = recover && spans.lexed != null ? spans.lexed : Lexer.lex(src, spans == null ? null : spans.comments, recover ? spans.errors : null);
+        var p = new Parser(lexed, spans);
         p.typeNames.addAll(importedTypes);
         if (spans != null) spans.toks = p.toks;
+        int lexical = recover ? spans.errors.size() : 0;
         File f;
         try {
             f = p.file();
         } catch (JscException e) {
             if (spans != null) spans.stop(p.i > 0 ? p.toks.get(p.i - 1) : null);
-            throw hinted(e, p.leadingMinus, p.members());
+            if (!recover) throw hinted(e, p.leadingMinus, p.members());
+            // ADR-0021 D5: an error the recovering parser cannot resume after (the file's head): recorded, no tree.
+            spans.errors.add(e);
+            f = null;
         } catch (RuntimeException | Error e) {
             if (spans != null) spans.stop(p.i > 0 ? p.toks.get(p.i - 1) : null);
             throw e;
+        }
+        if (recover) {
+            // The parser's errors get the build's note on a leading '-' (the lexer's never do: the build throws them first).
+            var members = p.members();
+            // The first ones only: a model reports JscLang.MAX_ERRORS (N1 on #99: the search is per error and member).
+            for (int k = lexical; k < Math.min(spans.errors.size(), lexical + 10 * JscLang.MAX_ERRORS); k++) {
+                spans.errors.set(k, hinted(spans.errors.get(k), p.leadingMinus, members));
+            }
+            if (f == null) return null;
+            try {
+                Depth.check(f);
+            } catch (JscException e) {
+                spans.errors.add(e);
+                return null;
+            }
+            return f;
         }
         Depth.check(f);
         return f;
@@ -121,6 +148,148 @@ final class Parser {
 
     /** A file's header: its package, whether it is a library, and its contract's name (null for a library). */
     record Header(String pkg, boolean library, String contract) {}
+
+    // ------------------------------------------------------------------ recovery (ADR-0021 D5; the language core only)
+
+    /** Where the recovering parser resumes at a file's top level, and among a contract's members. */
+    private static final Set<String> FILE_SYNC = Set.of("import", "type", "enum", "fn", "contract", "function", "class");
+    private static final Set<String> MEMBER_SYNC = Set.of("state", "params", "event", "invariant", "init", "action", "destroy", "view",
+            "fn", "type", "enum", "function");
+    /** Where it resumes among a block's statements (a keyword that starts a statement, at the start of its line). */
+    private static final Set<String> STMT_SYNC = Set.of("const", "let", "var", "require", "pay", "for", "if", "match", "return", "send",
+            "mint", "burn", "accept", "emit", "deposit", "while", "do", "function");
+
+    /** The recovering mode's errors so far (0 when not recovering). */
+    private int errors() {
+        return recover ? spans.errors.size() : 0;
+    }
+
+    /**
+     * Records {@code e} (recovering) and skips to where parsing resumes: from the construct that started at token
+     * {@code from}, at brace depth 0 relative to it, the next token of {@code sync} (for statements: at the start of a
+     * line, or just after a ';'), or a '}' that closes the enclosing block ({@code stopAtClose}). Declarations opened
+     * since {@code spansDepth} end there, partial; the nesting count is restored.
+     */
+    private boolean eofReported;
+
+    /** The '{' of the innermost block or contract body being read (recovery reads the layout around it). */
+    private Tok openedAt;
+
+    /** Whether the '}' here starts its line deeper than the line of {@code open} (recovering: not {@code open}'s close). */
+    private boolean strayClose(Tok open) {
+        Tok t = peek();
+        boolean lineStart = i == 0 || toks.get(i - 1).line() < t.line();
+        return t.is("}") && lineStart && t.line() > open.line() && t.col() > indentOf(open);
+    }
+
+    /** The column of each line's first token (0: none), built once (N1 on #99: a token search per call was quadratic). */
+    private int[] lineIndent;
+
+    /** The column of the first token on {@code t}'s line. */
+    private int indentOf(Tok t) {
+        if (lineIndent == null) {
+            int max = 0;
+            for (Tok x : toks) max = Math.max(max, x.line());
+            lineIndent = new int[max + 2];
+            for (Tok x : toks) if (x.line() >= 0 && lineIndent[x.line()] == 0) lineIndent[x.line()] = x.col();
+        }
+        int c = t.line() >= 0 && t.line() < lineIndent.length ? lineIndent[t.line()] : 0;
+        return c == 0 ? t.col() : c;
+    }
+
+    /** The number of declarations when the current top-level member started (its own are dropped with it). */
+    private int memberDecls = Integer.MAX_VALUE;
+
+    private void recovered(JscException e, int from, int spansDepth, int nesting, Set<String> sync, boolean stopAtClose, boolean statement) {
+        // One error at the end of the file: the enclosing constructs that end there with it add none.
+        Tok eof = toks.get(toks.size() - 1);
+        boolean atEof = e.line == eof.line() && e.col == eof.col();
+        if (!(atEof && eofReported)) spans.errors.add(e);
+        if (atEof) eofReported = true;
+        spans.incomplete = true;
+        // Every name the dropped member declared (an import's names, an enum's variants) is unchecked from now on.
+        for (int k = memberDecls; k < spans.decls.size(); k++) {
+            Spans.Decl x = spans.decls.get(k);
+            if (x.name != null && !statement) spans.droppedNames.add(x.name);
+        }
+        var beyond = spans.openBeyond(spansDepth);
+        for (Spans.Decl d : beyond) {
+            if (d.name != null) spans.droppedNames.add(d.name);
+            spans.droppedNames.add("#" + d.kind);
+        }
+        // A member dropped without a name (or the state, the params, the contract's head): every unknown name is unchecked.
+        // A statement's error drops its member, which dropMember judges.
+        if (!statement && (beyond.isEmpty() || beyond.get(0).name == null || beyond.get(0).kind.equals("state")
+                || beyond.get(0).kind.equals("params") || beyond.get(0).kind.equals("contract"))) {
+            spans.namelessDropped = true;
+        }
+        // A member cut short ends with the token the error was found at, so the error lies inside it.
+        spans.unwind(spansDepth, peek().kind() == K.EOF ? toks.get(Math.max(i - 1, 0)) : peek());
+        depth = nesting;
+        int d = 0;
+        for (int k = from; k < i; k++) {
+            if (toks.get(k).is("{")) d++;
+            else if (toks.get(k).is("}")) d = Math.max(0, d - 1);
+        }
+        boolean moved = i > from;
+        boolean first = true;
+        while (peek().kind() != K.EOF) {
+            Tok t = peek();
+            if (statement && t.is("}") && d == 0) {
+                // In a block, a '}' that does not start its line and is followed by a token on a later line closed something
+                // of the broken statement (an object whose '{' went wrong), not the block; so is a stray '}' the error was
+                // found at. A '}' that starts its line, or is followed on its line ({ return x } }), closes the block.
+                boolean lineStart = i == 0 || toks.get(i - 1).line() < t.line();
+                boolean followedOnLine = peek(1).line() == t.line() && peek(1).kind() != K.EOF;
+                // A '}' that starts its line deeper than the line that opened the block closes something inside it.
+                boolean deeper = lineStart && openedAt != null && t.col() > indentOf(openedAt);
+                boolean own = !lineStart && (first || !followedOnLine) || deeper;
+                if (!own) return;
+                i++;
+                moved = true;
+                first = false;
+                continue;
+            }
+            first = false;
+            if (moved && d == 0) {
+                // A keyword resumes only at the start of its line (`import contract { … }` holds `contract`, a lambda `fn`…).
+                if (t.kind() == K.IDENT && sync.contains(t.text()) && startsLine()) return;
+                if (statement && t.is(";")) {
+                    i++;
+                    return;
+                }
+            }
+            if (t.is("{")) d++;
+            else if (t.is("}")) {
+                if (d == 0) {
+                    // Among a contract's members, a '}' followed by a member keyword on a later line is the broken member's
+                    // own (its '{' is what went wrong), not the contract's: it is skipped.
+                    Tok next = peek(1);
+                    boolean lineStart = i == 0 || toks.get(i - 1).line() < t.line();
+                    boolean own = !statement && stopAtClose && (next.line() > t.line()
+                            && (next.kind() == K.IDENT && MEMBER_SYNC.contains(next.text()) || next.is("}"))
+                            || lineStart && openedAt != null && t.col() > indentOf(openedAt));
+                    if (stopAtClose && !own) return;
+                } else d--;
+            }
+            i++;
+            moved = true;
+        }
+    }
+
+    /** The member whose first declaration is {@code decls[at]} is dropped: its name becomes unchecked (D5, L13). */
+    private void dropMember(int at) {
+        spans.incomplete = true;
+        Spans.Decl d = at < spans.decls.size() ? spans.decls.get(at) : null;
+        if (d != null) spans.droppedNames.add("#" + d.kind);
+        if (d == null || d.name == null || d.kind.equals("state") || d.kind.equals("params") || d.kind.equals("contract")) spans.namelessDropped = true;
+        else spans.droppedNames.add(d.name);
+    }
+
+    /** A member's list back to {@code size}: the member had a recovered error inside it, so it is dropped (D5). */
+    private static <T> void truncate(List<T> list, int size) {
+        while (list.size() > size) list.remove(list.size() - 1);
+    }
 
     // ------------------------------------------------------------------ spans (ADR-0021 D6; no-ops without Spans)
 
@@ -185,6 +354,48 @@ final class Parser {
      * so their type names start constructors here. Only top-level {@code import} declarations count; a malformed one is
      * reported as the parse would report it.
      */
+    /**
+     * ADR-0021 D5 (M5b): the imports the recovering mode can read: each one that parses (a broken one is skipped, and the
+     * main parse reports it), from tokens lexed with recovery.
+     */
+    static List<Import> importsRecovering(String src) {
+        return importsRecovering(Lexer.lex(src, null, new ArrayList<>()));
+    }
+
+    /** The same from tokens already lexed (recovering, the main file is lexed once). */
+    static List<Import> importsRecovering(List<Tok> toks) {
+        var out = new ArrayList<Import>();
+        int depth = 0;
+        for (int k = 0; k < toks.size(); k++) {
+            Tok t = toks.get(k);
+            if (t.is("{") || t.is("(") || t.is("[")) depth++;
+            else if (t.is("}") || t.is(")") || t.is("]")) depth = Math.max(0, depth - 1);
+            else if (depth == 0 && t.is("import") && t.kind() != K.STRING) {
+                // Leniently: `import [contract] { names… } from "spec"`, whatever else is broken in it.
+                int j = k + 1;
+                boolean contract = j < toks.size() && toks.get(j).is("contract");
+                if (contract) j++;
+                if (j >= toks.size() || !toks.get(j).is("{")) continue;
+                var names = new ArrayList<String>();
+                j++;
+                while (j < toks.size() && !toks.get(j).is("}") && toks.get(j).kind() != K.EOF && toks.get(j).line() - t.line() < 50) {
+                    if (toks.get(j).kind() == K.IDENT) names.add(toks.get(j).text());
+                    j++;
+                }
+                if (j + 1 < toks.size() && toks.get(j).is("}") && !names.isEmpty()) {
+                    // The module string, a token or two after the '}' (a missing or mangled 'from' is the main parse's error).
+                    int at = j + 1;
+                    while (at < Math.min(toks.size(), j + 4) && toks.get(at).kind() != K.STRING) at++;
+                    if (at < toks.size() && toks.get(at).kind() == K.STRING) {
+                        out.add(new Import(names, toks.get(at).text(), t.pos(), contract));
+                        k = at;
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
     static List<Import> imports(String src) {
         var toks = Lexer.lex(src);
         var out = new ArrayList<Import>();
@@ -264,6 +475,8 @@ final class Parser {
      * not where the error is found (a block without its value, an unknown name).
      */
     static JscException hinted(JscException e, List<Pos> leadingMinus, List<int[]> members) {
+        // No line starts with '-': nothing to note (N1 on #99: the member search below is per error).
+        if (leadingMinus.isEmpty()) return e;
         // The member (declaration, method) the error is in, by span: a leading '-' there, the nearest on or before the
         // error's line, else the first after it within the member, since an error found at a construct's start (a value
         // block without its value) comes before its cause (review r3 F12). A '-' of another member is never named, even
@@ -382,6 +595,11 @@ final class Parser {
         while (peek().kind() != K.EOF) {
             Tok t = peek();
             int[] member = startMember();
+            int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth, errs = errors();
+            int declsBefore = spans == null ? 0 : spans.decls.size();
+            memberDecls = declsBefore;
+            int[] sizes = {imports.size(), types.size(), enums.size(), fns.size()};
+            try {
             if (t.is("import")) imports.add(importDecl());
             else if (t.is("type")) types.add(typeDecl());
             else if (t.is("enum")) enums.add(enumDecl());
@@ -395,10 +613,27 @@ final class Parser {
             else if (t.is("class")) throw t.pos().error("JSC0116", "there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }'");
             else if (t.is("const") || t.is("let") || t.is("var")) throw t.pos().error("JSC0117", "a file holds imports, types, fns and one contract: put constants in a fn (fn limit(): Int = 10)");
             else throw t.pos().error("JSC0118", "expected import, type, enum, fn or contract but found " + t);
+            } catch (JscException e) {
+                if (!recover) throw e;
+                recovered(e, from, sd, nesting, FILE_SYNC, false, false);
+            }
+            if (recover && errors() > errs && !t.is("contract")) {
+                // An error inside the member: it is dropped (its name, if read, is unknown to the checker, not wrong).
+                truncate(imports, sizes[0]);
+                truncate(types, sizes[1]);
+                truncate(enums, sizes[2]);
+                truncate(fns, sizes[3]);
+                dropMember(declsBefore);
+            }
             if (!t.is("contract")) endMember(member);
             semis();
         }
-        if (contract == null && !library) throw peek().pos().error("JSC0119", "the file declares no contract (a library starts 'library <package>')");
+        if (contract == null && !library) {
+            JscException e = peek().pos().error("JSC0119", "the file declares no contract (a library starts 'library <package>')");
+            if (!recover) throw e;
+            // A contract dropped by an earlier error is not missing.
+            if (!spans.incomplete) spans.errors.add(e);
+        }
         return new File(pkg.toString(), library, imports, types, enums, fns, contract, List.copyOf(leadingMinus), members());
     }
 
@@ -409,15 +644,18 @@ final class Parser {
         if (contract) next();
         expect("{");
         var names = new ArrayList<String>();
+        var nameToks = new ArrayList<Tok>();
         do {
             Tok nt = peek();
             names.add(ident("a name to import"));
             leafDecl("import", nt);
+            nameToks.add(nt);
         } while (eat(","));
         expect("}");
         expect("from");
         Tok s = next();
         if (s.kind() != K.STRING) throw s.pos().error("JSC0701", "expected a module string such as \"std/crypto\"");
+        if (spans != null) for (Tok nt : nameToks) spans.importNames.add(new Object[]{nt, s.text(), contract});
         if (contract && names.size() != 1) {
             throw p.error("JSC0740", "import contract names one contract, the one its file declares: import contract { Oracle } from \"./Oracle.jsc\"");
         }
@@ -492,12 +730,14 @@ final class Parser {
     }
 
     private TypeRef typeRef(Pos p) {
+        Tok first = peek();
         String n = ident("a type");
         // M2c: a type of an imported contract, qualified by the contract: Oracle.State.
         if (at(".") && peek(1).kind() == K.IDENT && peek(1).line() == peek().line()) {
             next();
             n = n + "." + ident("a type of " + n);
         }
+        Tok last = toks.get(i - 1);
         var args = new ArrayList<TypeRef>();
         if (eat("<")) {
             do {
@@ -505,7 +745,9 @@ final class Parser {
             } while (eat(","));
             expect(">");
         }
-        return new TypeRef(n, args, p);
+        var tr = new TypeRef(n, args, p);
+        if (spans != null) spans.typeUse(tr, first, last);
+        return tr;
     }
 
     private Fn fn() {
@@ -544,6 +786,7 @@ final class Parser {
                     next();
                     next();
                     expect(".");
+                    late(peek(), "params");
                     ps.add(new Param(n, null, p, ident("a params field after 'reads params.'")));
                 } else {
                     ps.add(new Param(n, type(), p));
@@ -589,9 +832,23 @@ final class Parser {
         var fns = new ArrayList<Fn>();
         var types = new ArrayList<TypeDecl>();
         var enums = new ArrayList<EnumDecl>();
-        while (!at("}")) {
+        int contractErrors = errors();
+        openedAt = clb;
+        while (!at("}") || recover && errors() > contractErrors && strayClose(clb)) {
+            if (at("}")) {
+                i++;
+                continue;
+            }
+            // Recovering: the end of the file after an error inside the contract is that error's consequence, no error
+            // of its own (the build stopped at the first).
+            if (recover && peek().kind() == K.EOF && errors() > contractErrors) break;
             Tok t = peek();
             int[] member = startMember();
+            int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth, errs = errors();
+            int declsBefore = spans == null ? 0 : spans.decls.size();
+            memberDecls = declsBefore;
+            int[] sizes = {methods.size(), fns.size(), types.size(), enums.size(), events.size(), invariants.size()};
+            try {
             if (t.is("state")) {
                 if (state != null) throw t.pos().error("JSC0121", "the state is declared once: state { … }");
                 openDecl("state");
@@ -686,13 +943,37 @@ final class Parser {
             } else {
                 throw t.pos().error("JSC0125", "expected state, params, event, invariant, init, action, destroy, view, fn, type or enum but found " + t);
             }
+            } catch (JscException e) {
+                if (!recover) throw e;
+                recovered(e, from, sd, nesting, MEMBER_SYNC, true, false);
+                if (peek().kind() == K.EOF) break;
+            }
+            if (recover && errors() > errs) {
+                truncate(methods, sizes[0]);
+                truncate(fns, sizes[1]);
+                truncate(types, sizes[2]);
+                truncate(enums, sizes[3]);
+                truncate(events, sizes[4]);
+                truncate(invariants, sizes[5]);
+                dropMember(declsBefore);
+            }
             endMember(member);
             semis();
         }
-        expect("}");
-        braces(clb);
+        if (recover && peek().kind() == K.EOF) {
+            // The contract's '}' is missing: the error at the end of the file is recorded already.
+            spans.incomplete = true;
+        } else {
+            expect("}");
+            braces(clb);
+        }
         closeDecl();
-        if (state == null) throw p.error("JSC0126", "the contract declares no state { … }");
+        if (state == null) {
+            JscException e = p.error("JSC0126", "the contract declares no state { … }");
+            if (!recover) throw e;
+            if (!spans.incomplete) spans.errors.add(e);
+            state = List.of();
+        }
         return new Contract(name, options, state, methods, fns, types, enums, p, params, paramsPos, events, invariants);
     }
 
@@ -705,6 +986,7 @@ final class Parser {
                 mods.add(new Mod(t.text(), null, t.pos()));
             } else if (t.is("only") || t.is("after") || t.is("before")) {
                 next();
+                late(peek(), "state");
                 mods.add(new Mod(t.text(), ident("a state field after '" + t.text() + "'"), t.pos()));
             } else if (t.is("quorum")) {
                 // M2b (ADR-0009 D2): quorum <keys> <threshold>, each a state field or params.f.
@@ -748,9 +1030,16 @@ final class Parser {
         if (at("params") && peek(1).is(".")) {
             next();
             next();
+            late(peek(), "params");
             return "params." + ident(what);
         }
+        late(peek(), "state");
         return ident(what);
+    }
+
+    /** ADR-0021 D6: a name read outside an expression (a modifier's field), resolved by the language core by name. */
+    private void late(Tok t, String kind) {
+        if (spans != null && t.kind() == K.IDENT) spans.lateRefs.add(new Object[]{t, kind});
     }
 
     // ------------------------------------------------------------------ statements
@@ -765,11 +1054,31 @@ final class Parser {
 
     private Block blockBody() {
         Tok lb = expect("{");
+        Tok outerOpen = openedAt;
+        openedAt = lb;
+        try {
+            return blockBody(lb);
+        } finally {
+            openedAt = outerOpen;
+        }
+    }
+
+    private Block blockBody(Tok lb) {
         Pos p = lb.pos();
         var stmts = new ArrayList<Stmt>();
         Expr result = null;
         Pos returnPos = null;
-        while (!at("}")) {
+        var consts = new ArrayList<Spans.Decl>();
+        int blockErrors = errors();
+        while (!at("}") || recover && errors() > blockErrors && strayClose(lb)) {
+            if (at("}")) {
+                // After an error in this block: a '}' deeper than the block's own line closes something the error broke.
+                i++;
+                continue;
+            }
+            if (recover && peek().kind() == K.EOF && (errors() > blockErrors || eofReported)) break;
+            int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth;
+            try {
             if (result != null) throw result.pos().error("JSC0127", "an expression's value is unused here: only the last one is the block's value");
             Tok t = peek();
             if (t.is("const")) {
@@ -782,6 +1091,7 @@ final class Parser {
                 TypeRef ty = eat(":") ? type() : null;
                 expect("=");
                 stmts.add(new Const(n, ty, expr(), cp));
+                if (spans != null) consts.add(spans.current());
                 closeDecl();
             } else if (t.is("let") || t.is("var")) {
                 throw t.pos().error("JSC0128", "values are immutable in .jsc: write 'const " + peek(1).text() + " = …'");
@@ -842,10 +1152,23 @@ final class Parser {
                 }
                 result = e;
             }
+            } catch (JscException e) {
+                if (!recover) throw e;
+                recovered(e, from, sd, nesting, STMT_SYNC, true, true);
+                // The block has lost a statement: its value is unknown (the member is dropped anyway).
+                result = null;
+                if (peek().kind() == K.EOF) break;
+            }
             semis();
         }
-        expect("}");
+        if (recover && peek().kind() == K.EOF) {
+            spans.incomplete = true;
+            return new Block(stmts, result, returnPos, p);
+        }
+        Tok rb = expect("}");
         braces(lb);
+        // A const is visible from after its statement to its block's end.
+        if (spans != null) for (Spans.Decl d : consts) spans.scopes.put(d, new int[]{d.endLine, d.endCol, rb.line(), rb.end()});
         return new Block(stmts, result, returnPos, p);
     }
 
@@ -921,7 +1244,10 @@ final class Parser {
         Tok mlb = expect("{");
         var arms = new ArrayList<Arm>();
         while (!at("}")) {
+            int armFrom = i;
+            int bindsFrom = spans == null ? 0 : spans.decls.size();
             Pattern pat = pattern();
+            int bindsTo = spans == null ? 0 : spans.decls.size();
             Tok arrow = peek();
             if (arrow.is("-") || arrow.is(":")) throw arrow.pos().error("JSC0902", "a match arm is written 'Pattern => value'");
             expect("=>");
@@ -940,6 +1266,8 @@ final class Parser {
                 body = new Block(List.of(), e, e.pos());
             }
             arms.add(new Arm(pat, body, pat.pos()));
+            // A pattern's bindings are visible in its arm.
+            if (spans != null) for (int k = bindsFrom; k < bindsTo; k++) spans.scope(spans.decls.get(k), toks.get(armFrom), toks.get(i - 1));
             if (!eat(",")) eat(";");
         }
         expect("}");
@@ -962,6 +1290,7 @@ final class Parser {
             Tok bt = peek();
             binds.add(new Bind(null, ident("a name for the value"), bp));
             leafDecl("binding", bt);
+            if (spans != null) spans.anchor(spans.last(), bp.line(), bp.col(), bt.text());
             expect(")");
         } else if (at("{")) {
             next();
@@ -979,6 +1308,8 @@ final class Parser {
                 }
                 binds.add(new Bind(field, name, bp));
                 leafDecl("binding", bt);
+                // The checker records a binding at its pattern field's position.
+                if (spans != null) spans.anchor(spans.last(), bp.line(), bp.col(), name);
                 if (!eat(",")) break;
             }
             expect("}");
@@ -1045,17 +1376,38 @@ final class Parser {
      */
     static final int CHAIN = 8;
 
+    /** A binary node; its extent (ADR-0021 D6) runs from its left operand's start to its right operand's end. */
+    private Binary bin(String op, Expr l, Expr r, Pos p) {
+        var b = new Binary(op, l, r, p);
+        merge(b, l, r);
+        return b;
+    }
+
+    /** {@code e}'s extent: from {@code first}'s (with its parentheses) to {@code last}'s. */
+    private void merge(Expr e, Expr first, Expr last) {
+        if (spans == null) return;
+        int[] a = spans.outer(first);
+        int[] b = spans.outer(last);
+        if (a != null && b != null) spans.exprs.put(e, new int[]{a[0], a[1], b[2], b[3]});
+    }
+
+    /** Records {@code e}'s extent: from the token at {@code from} to the last token read. */
+    private <E extends Expr> E ext(E e, int from) {
+        if (spans != null && e != null) spans.expr(e, toks.get(from), toks.get(Math.max(i - 1, from)));
+        return e;
+    }
+
     private Expr chain(List<Expr> ts, List<String> ops, int lo, int hi, boolean flip) {
         if (hi - lo < CHAIN) {
             Expr l = ts.get(lo);
-            for (int j = lo + 1; j <= hi; j++) l = new Binary(flip ? flipped(ops.get(j)) : ops.get(j), l, ts.get(j), startOf(l));
+            for (int j = lo + 1; j <= hi; j++) l = bin(flip ? flipped(ops.get(j)) : ops.get(j), l, ts.get(j), startOf(l));
             return l;
         }
         int mid = (lo + hi + 1) / 2;
         Expr l = chain(ts, ops, lo, mid - 1, flip);
         String op = flip ? flipped(ops.get(mid)) : ops.get(mid);
         Expr r = chain(ts, ops, mid, hi, flip ^ op.equals("-"));
-        return new Binary(op, l, r, startOf(l));
+        return bin(op, l, r, startOf(l));
     }
 
     private static String flipped(String op) {
@@ -1073,7 +1425,9 @@ final class Parser {
             Expr a = expr();
             expect(":");
             Expr b = expr();
-            return new Cond(c, a, b, startOf(c));
+            Cond k = new Cond(c, a, b, startOf(c));
+            merge(k, c, b);
+            return k;
         }
         return c;
     }
@@ -1085,7 +1439,7 @@ final class Parser {
             noMixedLogic(l);
             Expr r = or();
             noMixedLogic(r);
-            l = new Binary("??", l, r, startOf(l));
+            l = bin("??", l, r, startOf(l));
         }
         return l;
     }
@@ -1122,7 +1476,7 @@ final class Parser {
         while (at("==") || at("!=") || at("===") || at("!==")) {
             Tok t = next();
             if (t.text().length() == 3) throw t.pos().error("JSC0133", "write " + t.text().substring(0, 2) + ": .jsc equality is always by value");
-            l = new Binary(t.text(), l, comparison(), startOf(l));
+            l = bin(t.text(), l, comparison(), startOf(l));
         }
         return l;
     }
@@ -1131,7 +1485,7 @@ final class Parser {
         Expr l = additive();
         if (at("<") || at("<=") || at(">") || at(">=")) {
             Tok t = next();
-            l = new Binary(t.text(), l, additive(), startOf(l));
+            l = bin(t.text(), l, additive(), startOf(l));
             if (at("<") || at("<=") || at(">") || at(">=")) throw peek().pos().error("JSC0134", "comparisons do not chain: use &&");
         }
         return l;
@@ -1158,11 +1512,12 @@ final class Parser {
         }
         if (ops.stream().skip(1).allMatch("*"::equals)) return chain(ts, ops, 0, ts.size() - 1, false);
         Expr l = ts.get(0);
-        for (int j = 1; j < ts.size(); j++) l = new Binary(ops.get(j), l, ts.get(j), startOf(l));
+        for (int j = 1; j < ts.size(); j++) l = bin(ops.get(j), l, ts.get(j), startOf(l));
         return l;
     }
 
     private Expr unary() {
+        int from = i;
         if (at("++") || at("--")) {
             throw peek().pos().error("JSC0135", "values are immutable in .jsc: there is no " + peek().text() + "; build a new value, e.g. return { ...state, x: x + 1 }");
         }
@@ -1171,25 +1526,29 @@ final class Parser {
             enter(t.pos());
             Expr operand = unary();
             leave();
-            return new Unary(t.text(), operand, t.pos());
+            return ext(new Unary(t.text(), operand, t.pos()), from);
         }
         return postfix();
     }
 
     private Expr postfix() {
+        int from = i;
         Expr e = primary();
         while (true) {
             if (at(".")) {
                 Pos p = next().pos();
+                Tok nt = peek();
                 String n = ident("a field or method name");
                 // A property (xs.length) and a record field (r.length) are both Field: the checker decides by type (C7).
                 e = at("(") && peek().line() == toks.get(i - 1).line() ? new MethodCall(e, n, args(), startOf(e)) : new Field(e, n, startOf(e));
+                if (spans != null) spans.member(e, nt);
+                ext(e, from);
             } else if (at("[") && peek().line() == toks.get(i - 1).line()) {
                 // m[k] on the same line (a '[' on the next line starts a new expression).
                 next();
                 Expr k = expr();
                 expect("]");
-                e = new Index(e, k, startOf(e));
+                e = ext(new Index(e, k, startOf(e)), from);
             } else {
                 return e;
             }
@@ -1215,22 +1574,36 @@ final class Parser {
             Tok lt = peek();
             String n = next().text();
             leafDecl("lambdaParam", lt);
+            Spans.Decl d = spans == null ? null : spans.last();
+            int from = i - 1;
             next();
-            return new Lambda(List.of(n), lambdaBody(), p);
+            Lambda l = ext(new Lambda(List.of(n), lambdaBody(), p), from);
+            if (spans != null) spans.scope(d, lt, toks.get(i - 1));
+            return l;
         }
         if (at("(") && isLambdaParams()) {
+            int from = i;
+            Tok open = peek();
             Pos p = next().pos();
             var ps = new ArrayList<String>();
+            var decls = new ArrayList<Spans.Decl>();
             if (!at(")")) {
                 do {
                     Tok lt = peek();
                     ps.add(ident("a lambda parameter"));
                     leafDecl("lambdaParam", lt);
+                    if (spans != null) {
+                        decls.add(spans.last());
+                        // The checker records a lambda's parameters at the lambda's position (its '(').
+                        spans.anchor(spans.last(), open.line(), open.col(), lt.text());
+                    }
                 } while (eat(","));
             }
             expect(")");
             expect("=>");
-            return new Lambda(ps, lambdaBody(), p);
+            Lambda l = ext(new Lambda(ps, lambdaBody(), p), from);
+            for (Spans.Decl d : decls) spans.scope(d, open, toks.get(i - 1));
+            return l;
         }
         return expr();
     }
@@ -1243,7 +1616,10 @@ final class Parser {
             Block b = block();
             if (b.result() == null) throw b.pos().error("JSC1006", "a lambda's block must end in its value");
             if (b.stmts().isEmpty()) return b.result();
-            return new BlockExpr(b, b.pos());
+            int[] x = spans == null ? null : spans.blocks.isEmpty() ? null : spans.blocks.get(spans.blocks.size() - 1);
+            var be = new BlockExpr(b, b.pos());
+            if (x != null) spans.exprs.put(be, x.clone());
+            return be;
         }
         return expr();
     }
@@ -1261,6 +1637,15 @@ final class Parser {
     }
 
     private Expr primary() {
+        int from = i;
+        Expr e = primary0();
+        // A parenthesised expression keeps its own extent; its parentheses are recorded beside it (merge reads them).
+        if (spans != null && toks.get(from).is("(") && parenthesised.contains(e)) spans.paren(e, toks.get(from), toks.get(i - 1));
+        else ext(e, from);
+        return e;
+    }
+
+    private Expr primary0() {
         Tok t = peek();
         switch (t.kind()) {
             case INT -> {

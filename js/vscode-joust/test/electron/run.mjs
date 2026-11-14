@@ -5,7 +5,9 @@
 //                      the nesting cap, no code action on save, the Quick Fix on request;
 //   hostile-trusted    a hostile workspace, trusted: only the project's two engine files load (sentinels never appear),
 //                      serverInfo names the project's compiler, settings that would act on save apply nothing;
-//   hostile-restricted the same workspace in Restricted Mode: the bundled compiler, advisory; no task; no sentinel.
+//   hostile-restricted the same workspace in Restricted Mode: the bundled compiler, advisory; no task; no sentinel;
+//   abi                the template with its own CLI: Accept ABI… refuses unsaved buffers, diffs app.Counter by its
+//                      qualified name, refuses a bound acceptance after the source changed, accepts after a new diff.
 // Usage: node test/electron/run.mjs [--vsix <file>] [--versions 1.109.0,stable] [--only <scenario>]
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
@@ -13,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { downloadAndUnzipVSCode, resolveCliArgsFromVSCodeExecutablePath } from '@vscode/test-electron';
-import { hostileWorkspace, templateWorkspace } from './workspaces.mjs';
+import { abiWorkspace, hostileWorkspace, templateWorkspace } from './workspaces.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const argv = process.argv.slice(2);
@@ -29,6 +31,7 @@ const scenarios = [
   { name: 'smoke', short: 's', trusted: true, make: (base) => templateWorkspace(base) },
   { name: 'hostile-trusted', short: 'ht', trusted: true, make: (base) => hostileWorkspace(base, engine) },
   { name: 'hostile-restricted', short: 'hr', trusted: false, make: (base) => hostileWorkspace(base, engine) },
+  { name: 'abi', short: 'ab', trusted: true, make: (base) => abiWorkspace(base, engine) },
 ].filter((s) => !only || s.name === only);
 
 let failed = 0;
@@ -65,7 +68,9 @@ for (const version of versions) {
         `--extensionTestsPath=${join(root, 'test', 'electron', 'suite', 'index.js')}`,
         `--extensionDevelopmentPath=${join(root, 'test', 'electron', 'harness')}`];
       const env = { ...process.env, JOUST_LSP_DEBUG: process.env.JOUST_TRACE ?? '',
-        JOUST_SCENARIO: s.name, JOUST_WS: ws.folder, JOUST_SENTINEL: sentinel, JOUST_VSCODE: version };
+        JOUST_SCENARIO: s.name, JOUST_WS: ws.folder, JOUST_SENTINEL: sentinel, JOUST_VSCODE: version,
+        // N2 on #99 r2: the commands take their test arguments only with this set.
+        JOUST_EXTENSION_TESTS: '1' };
       delete env.ELECTRON_RUN_AS_NODE;
       const code = await new Promise((ok) => {
         const p = spawn(exe, args, { env, stdio: 'inherit' });

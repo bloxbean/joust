@@ -1,10 +1,10 @@
 // ADR-0018 D12 (review F1, S3): the ABI gate of joust build and joust dev. Needs nothing but Node.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { abiGate, firstDifference } from '../src/abi.js';
+import { abiDiff, abiGate, firstDifference, parseBoundAcceptance, sha256 } from '../src/abi.js';
 import { build } from '../src/build.js';
 
 const abi = (n) => `{\n  "abi": 2,\n  "datum": { "name": "State", "constr": 0, "fields": [${'x'.repeat(n)}] }\n}\n`;
@@ -116,4 +116,76 @@ test('firstDifference', () => {
   assert.equal(firstDifference('a\nb\n', 'a\nc\n'), 'line 2: committed b, now c');
   assert.equal(firstDifference('a\n', 'a\nb'), 'line 2: committed , now b');
   assert.equal(firstDifference('{ "by" }\n]\n', '{ "by" },\n{ "ctx" }\n]\n'), 'line 2: committed ], now { "ctx" }');
+});
+
+// ADR-0021 D7a (ADR-0018 D12 amended): --accept-abi=<Contract>@<committed>..<new>, bound to the manifests reviewed.
+test('a bound acceptance accepts the one contract when both manifests are the reviewed ones', () => {
+  const root = project();
+  writeFileSync(manifest(root), abi(1));
+  const two = [{ jscFile: 'app/Counter.jsc', javaFile: 'app/Counter.java', abi: abi(2) }, { jscFile: 'app/Vault.jsc', javaFile: 'app/Vault.java', abi: abi(3) }];
+  const d = abiDiff({ generated: two, srcDir: 'contracts', root, contract: 'Counter' });
+  assert.equal(d.committed.sha256, sha256(abi(1)));
+  assert.equal(d.now.sha256, sha256(abi(2)));
+  assert.equal(d.committed.text, abi(1));
+  const bound = parseBoundAcceptance(`Counter@${d.committed.sha256}..${d.now.sha256}`);
+  const errors = abiGate({ generated: two, srcDir: 'contracts', root, acceptAbi: bound, log: () => {} });
+  assert.equal(readFileSync(manifest(root), 'utf8'), abi(2), 'Counter accepted');
+  // Vault's missing manifest is not accepted by Counter's acceptance.
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /JSC0003.*Vault/);
+  assert.equal(existsSync(join(root, 'contracts', 'app', 'Vault.abi.json')), false);
+});
+
+test('a bound acceptance is refused when the committed manifest changed (a git pull) or the source changed since the diff', () => {
+  const root = project();
+  writeFileSync(manifest(root), abi(1));
+  const g = (n) => [{ jscFile: 'app/Counter.jsc', javaFile: 'app/Counter.java', abi: abi(n) }];
+  const d = abiDiff({ generated: g(2), srcDir: 'contracts', root, contract: 'Counter' });
+  const bound = parseBoundAcceptance(`Counter@${d.committed.sha256}..${d.now.sha256}`);
+  // The source changed: the build now computes another manifest.
+  const refused = new Set();
+  let errors = abiGate({ generated: g(3), srcDir: 'contracts', root, acceptAbi: bound, log: () => {}, refused });
+  assert.match(errors[0], /not accepted: the manifest the build computes now/);
+  assert.equal(readFileSync(manifest(root), 'utf8'), abi(1));
+  assert.ok(refused.has('app/Counter.java'));
+  // The committed manifest changed under the review.
+  writeFileSync(manifest(root), abi(4));
+  errors = abiGate({ generated: g(2), srcDir: 'contracts', root, acceptAbi: bound, log: () => {} });
+  assert.match(errors[0], /not accepted: the committed manifest/);
+  assert.equal(readFileSync(manifest(root), 'utf8'), abi(4));
+  // No manifest committed yet: `none` binds that.
+  rmSync(manifest(root));
+  const fresh = abiDiff({ generated: g(2), srcDir: 'contracts', root, contract: 'Counter' });
+  assert.equal(fresh.committed.sha256, 'none');
+  assert.deepEqual(abiGate({ generated: g(2), srcDir: 'contracts', root, acceptAbi: parseBoundAcceptance(`Counter@none..${fresh.now.sha256}`), log: () => {} }), []);
+  assert.equal(readFileSync(manifest(root), 'utf8'), abi(2));
+  assert.equal(parseBoundAcceptance('Counter@abc..def'), null);
+  assert.equal(parseBoundAcceptance('../x@none..' + 'a'.repeat(64)), null);
+  assert.match(abiDiff({ generated: g(2), srcDir: 'contracts', root, contract: 'Nope' }).error, /no \.jsc 2 contract Nope/);
+});
+
+// #99 S5, F5: a contract is its package plus name. A simple name two contracts share is refused; the qualified one works.
+test('the bound acceptance and the diff name a contract by package; an ambiguous simple name accepts nothing', () => {
+  const root = project();
+  mkdirSync(join(root, 'contracts', 'other'), { recursive: true });
+  const two = [{ jscFile: 'app/Counter.jsc', javaFile: 'app/Counter.java', abi: abi(2) },
+    { jscFile: 'other/Counter.jsc', javaFile: 'other/Counter.java', abi: abi(3) }];
+  const amb = abiDiff({ generated: two, srcDir: 'contracts', root, contract: 'Counter' });
+  assert.match(amb.error, /Counter is ambiguous: app\.Counter \(app\/Counter\.jsc\), other\.Counter \(other\/Counter\.jsc\)/);
+  const d = abiDiff({ generated: two, srcDir: 'contracts', root, contract: 'other.Counter' });
+  assert.equal(d.contract, 'other.Counter');
+  assert.equal(d.file, 'other/Counter.jsc');
+  assert.equal(d.path, join('contracts', 'other', 'Counter.abi.json'));
+  const errors = abiGate({ generated: two, srcDir: 'contracts', root, acceptAbi: parseBoundAcceptance(`Counter@none..${d.now.sha256}`), log: () => {} });
+  assert.match(errors[0], /--accept-abi=Counter@…: Counter is ambiguous.*nothing accepted/);
+  assert.equal(existsSync(join(root, 'contracts', 'other', 'Counter.abi.json')), false);
+  assert.equal(existsSync(manifest(root)), false);
+  const ok = abiGate({ generated: two, srcDir: 'contracts', root, acceptAbi: parseBoundAcceptance(`other.Counter@none..${d.now.sha256}`), log: () => {} });
+  assert.equal(readFileSync(join(root, 'contracts', 'other', 'Counter.abi.json'), 'utf8'), abi(3));
+  assert.equal(existsSync(manifest(root)), false, 'app.Counter is not accepted');
+  assert.equal(ok.length, 1);
+  assert.match(ok[0], /JSC0003.*app\/Counter/);
+  // A unique simple name still works, and resolves to the qualified contract.
+  assert.equal(abiDiff({ generated: [two[0]], srcDir: 'contracts', root, contract: 'Counter' }).contract, 'app.Counter');
+  assert.equal(parseBoundAcceptance('app..Counter@none..' + 'a'.repeat(64)), null);
 });

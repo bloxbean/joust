@@ -1,7 +1,7 @@
 {
   "name": "vscode-joust",
   "displayName": "JOUST .jsc",
-  "description": "JOUST's contract language, .jsc 2, in VS Code: diagnostics as you type from the build's own front end, the outline, folding, highlighting, and JOUST: Build with clickable build errors (ADR-0021). Language preview.",
+  "description": "JOUST's contract language, .jsc 2, in VS Code: diagnostics as you type from the build's own front end (with recovery), hover, go to definition, references, completion, rename, semantic highlighting, the outline, folding, quick fixes, the generated Java, build diagnostics on save, Accept ABI…, and JOUST: Build with clickable build errors (ADR-0021). Language preview.",
   "version": "0.1.0",
   "private": true,
   "preview": true,
@@ -101,6 +101,41 @@
         "command": "joust._status",
         "title": "JOUST status (internal)",
         "category": "JOUST"
+      },
+      {
+        "command": "joust.renameSymbol",
+        "title": "Rename Symbol",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.removeInvisible",
+        "title": "Remove invisible characters…",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.showGeneratedJava",
+        "title": "Show generated Java",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.peekGeneratedJava",
+        "title": "Peek generated Java",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.checkBuild",
+        "title": "Check build (in memory)",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.acceptAbi",
+        "title": "Accept ABI…",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.addImport",
+        "title": "Add a JOUST import",
+        "category": "JOUST"
       }
     ],
     "menus": {
@@ -116,6 +151,41 @@
         {
           "command": "joust.build",
           "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "joust.addImport",
+          "when": "false"
+        },
+        {
+          "command": "joust.acceptAbi",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "joust.renameSymbol",
+          "when": "editorLangId == jsc"
+        },
+        {
+          "command": "joust.removeInvisible",
+          "when": "editorLangId == jsc"
+        },
+        {
+          "command": "joust.showGeneratedJava",
+          "when": "editorLangId == jsc"
+        },
+        {
+          "command": "joust.peekGeneratedJava",
+          "when": "editorLangId == jsc"
+        },
+        {
+          "command": "joust.checkBuild",
+          "when": "editorLangId == jsc"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "joust.renameSymbol",
+          "when": "editorLangId == jsc",
+          "group": "1_modification@1"
         }
       ]
     },
@@ -141,6 +211,12 @@
           "default": "off",
           "scope": "window",
           "description": "Traces the messages between VS Code and the JOUST language server."
+        },
+        "joust.buildOnSave": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Build in memory on save (trusted workspaces, the project's own compiler, npm projects): the build's later stages' diagnostics and the ABI comparison, nothing written (ADR-0021 D4). Off: only JOUST: Check build (in memory). A change applies to the running server."
         }
       }
     },
@@ -154,9 +230,11 @@
           "task": {
             "type": "string",
             "enum": [
-              "build"
+              "build",
+              "abi diff",
+              "accept abi"
             ],
-            "description": "The project command: build (joust build, or ./gradlew build)."
+            "description": "The project command: build (joust build, or ./gradlew build); abi diff and accept abi run from Accept ABI…."
           }
         }
       }
@@ -186,6 +264,29 @@
           "severity": 4,
           "code": 5,
           "message": 6
+        }
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "joust.renameSymbol",
+        "key": "f2",
+        "when": "editorTextFocus && editorLangId == jsc && !editorReadonly"
+      }
+    ],
+    "semanticTokenModifiers": [
+      {
+        "id": "timeValue",
+        "description": "A time value (ADR-0018 D11): it depends on the validity window or a time state field"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "jsc",
+        "scopes": {
+          "*.timeValue": [
+            "markup.italic"
+          ]
         }
       }
     ]

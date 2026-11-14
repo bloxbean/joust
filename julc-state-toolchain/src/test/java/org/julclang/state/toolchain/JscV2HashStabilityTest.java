@@ -42,7 +42,8 @@ class JscV2HashStabilityTest {
         }
     }
 
-    record Built(String hash, int size) {}
+    /** The script hash, its size, and the file's ABI manifest (#99 F8). */
+    record Built(String hash, int size, String abi) {}
 
     /** M2c: the contracts a file imports ({@code import contract { C } from "./C.jsc"}), by name. */
     static List<String> imported(String text) {
@@ -106,7 +107,8 @@ class JscV2HashStabilityTest {
         // A contract with params (M2b) has no hash until they are applied: its unapplied script's digest stands for it
         // (the applied script's hash moves exactly when the unapplied script does).
         String hash = !c.scriptHash().isEmpty() ? c.scriptHash() : "unapplied:" + sha256(c.scriptCborHex());
-        return new Built(hash, c.scriptSizeBytes());
+        String abi = r.generated().stream().filter(g -> g.jscFile().equals(PKG + file)).map(Toolchain.Generated::abiJson).findFirst().orElse(null);
+        return new Built(hash, c.scriptSizeBytes(), abi);
     }
 
     static String sha256(String hex) {

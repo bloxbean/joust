@@ -7,6 +7,7 @@ const vscode = require('vscode');
 const { CloseAction, ErrorAction, LanguageClient, State, TransportKind } = require('vscode-languageclient/node');
 const { createHandleApplyEdit } = require('./apply-edit');
 const { createTaskProvider } = require('./tasks');
+const commands = require('./commands');
 
 let client;
 let context;
@@ -81,12 +82,15 @@ function makeClient() {
   watchers.forEach((w) => context.subscriptions.push(w));
   const c = new LanguageClient('joust', 'JOUST language server', { run, debug: run }, {
     documentSelector: [{ language: 'jsc', scheme: 'file' }, { language: 'jsc', scheme: 'untitled' }],
+    // The generated Java (joust-gen:) and manifests (joust-abi:) are the extension's own read-only documents: never sent.
     initializationOptions: {
       client: 'vscode-joust',
       trusted: vscode.workspace.isTrusted,
       storageDir: context.globalStorageUri.fsPath,
       workspaceFile: workspaceFilePath(),
       allowedRoots: allowedRoots(),
+      // Q7: builds on save can only be turned off by a setting (they never run in Restricted Mode or advisory mode).
+      buildOnSave: vscode.workspace.getConfiguration('joust').get('buildOnSave') !== false,
     },
     synchronize: { fileEvents: watchers },
     // D10: no markdown is ever trusted.
@@ -151,6 +155,11 @@ function activate(ctx) {
     await client.sendRequest('joust/restartAnalysis');
   }));
   ctx.subscriptions.push(vscode.commands.registerCommand('joust.restartServer', restartServer));
+  // F9 on #99: a change of joust.buildOnSave reaches the running server (a restarted one reads it at initialize).
+  ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+    if (!e.affectsConfiguration('joust.buildOnSave') || !client || client.state !== State.Running) return;
+    client.sendNotification('joust/settings', { buildOnSave: vscode.workspace.getConfiguration('joust').get('buildOnSave') !== false });
+  }));
   ctx.subscriptions.push(vscode.commands.registerCommand('joust.showCompiler', async () => {
     const editor = vscode.window.activeTextEditor;
     const s = client && client.state === State.Running
@@ -184,6 +193,8 @@ function activate(ctx) {
     trusted: vscode.workspace.isTrusted,
   })));
   ctx.subscriptions.push(vscode.tasks.registerTaskProvider('joust', createTaskProvider(vscode)));
+  // M5b: Rename Symbol, Remove invisible characters…, Show/peek generated Java, Check build (in memory), Accept ABI….
+  commands.register(vscode, ctx, () => client);
   // Trust granted mid-session: the server selects again (D3).
   ctx.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => {
     if (client) client.sendNotification('joust/trust', { trusted: true });

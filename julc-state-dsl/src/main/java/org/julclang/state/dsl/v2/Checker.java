@@ -245,6 +245,17 @@ final class Checker {
     /** The Java library records that are opaque: no fields to read, no equality, never written as a type. */
     private final Set<String> javaOpaque = new HashSet<>();
 
+    /** ADR-0021 (M5b): the language core's facts, and its recovering mode; null on every build path (L5). */
+    private Facts facts;
+
+    /**
+     * Recovering (D5): a name the file uses that the language core cannot judge (a declaration the parser dropped, or a
+     * name of another file it does not read until M5c) stops the declaration's check without an error of its own.
+     */
+    private void unchecked(String name) {
+        if (facts != null && facts.suppressed(name)) throw Facts.poisonedUse(name);
+    }
+
     private Checker(Module main, List<Module> libraries, JavaLibraries javaLibraries, JscModules modules, List<String> loading) {
         this.file = main.file;
         this.fileName = main.fileName;
@@ -356,24 +367,56 @@ final class Checker {
             this.modules = modules;
         }
 
+        /** ADR-0021 D5 (M5b): the language core's recovering load: each failing import recorded, its names poisoned. */
+        Facts facts;
+        /** Recovering a file on its own: its imports of other files are not read (not wrong: unchecked, advisory). */
+        boolean alone;
+
         Module main(String source, String fileName, String id, Spans spans) {
             if (id != null) stack.push(id);
             var deps = new LinkedHashMap<String, Module>();
             var types = new HashSet<String>();
-            for (Import im : Parser.imports(source)) {
+            List<Import> imports;
+            if (facts != null && spans != null && spans.recover) {
+                // Recovering: the file is lexed once (errors and comments recorded), its imports read leniently from those
+                // tokens (a broken one is the main parse's error), and the parse reads the same tokens.
+                spans.lexed = Lexer.lex(source, spans.comments, spans.errors);
+                imports = Parser.importsRecovering(spans.lexed);
+            } else {
+                imports = Parser.imports(source);
+            }
+            for (Import im : imports) {
                 // A Java library's records (M4b): a capitalised imported name is read as a type, so a constructor of one
                 // reaches the checker, which refuses it (read-only, JSC0724).
                 if (im.from().startsWith("java:")) for (String n : im.names()) if (Character.isUpperCase(n.charAt(0))) types.add(n);
                 // M2c: import contract { C } is not a library import; importContracts checks it (its types are C.T).
                 if (im.contract() || !isModuleSpec(im.from()) || deps.containsKey(im.from())) continue;
                 JscModules.Source s = JscModules.isRelative(im.from()) || JscModules.isPackage(im.from()) ? modules.resolve(id, im.from()) : null;
-                if (s == null) throw noModule(im.pos(), im.from(), id == null ? null : id);
-                Module d = load(s, im.pos());
-                deps.put(im.from(), d);
-                types.addAll(d.typeNames());
+                try {
+                    if (s == null) throw noModule(im.pos(), im.from(), id == null ? null : id);
+                    Module d = load(s, im.pos());
+                    deps.put(im.from(), d);
+                    types.addAll(d.typeNames());
+                } catch (JscException e) {
+                    if (facts == null) throw e;
+                    // Recovering: the import is reported (unless the file is analysed alone, when its libraries are not
+                    // read at all); what it names is unknown, not wrong, and a capitalised name may start a constructor.
+                    facts.errors.add(e);
+                    facts.unresolvedImports.add(im.from());
+                    facts.poisoned.addAll(im.names());
+                    for (String n : im.names()) if (Character.isUpperCase(n.charAt(0))) types.add(n);
+                }
             }
             File f = Parser.parse(source, types, spans);
-            String cls = f.library() ? libraryClass(fileName, f, new Pos(1, 1)) : null;
+            if (f == null) return null;
+            String cls;
+            try {
+                cls = f.library() ? libraryClass(fileName, f, new Pos(1, 1)) : null;
+            } catch (JscException e) {
+                if (facts == null) throw e;
+                facts.errors.add(e);
+                cls = "Library";
+            }
             return new Module(id, fileName, source, f, cls, null, deps);
         }
 
@@ -464,27 +507,87 @@ final class Checker {
     private void visible(String name, Pos p) {
         Module o = owner.get(name);
         if (o == null || o == current || current.visible.contains(name)) return;
+        unchecked(name);   // recovering: a name whose import failed is not wrong here
         String what = variantEnum.containsKey(name) ? "the variant " + name + " of " + variantEnum.get(name) + ", which is declared in "
                 + o.where() + ": import { " + variantEnum.get(name) + " }" : "'" + name + "' is declared in " + o.where() + ": import { " + name + " }";
         throw p.error("JSC0710", what + " from it to use it here (a library's declarations are seen only where they are imported)");
     }
 
+    /**
+     * ADR-0021 D5 (M5b): the language core's check of one file, recovering. Each method, fn and invariant is checked on
+     * its own: an error ends that one's check only, and is recorded in {@code facts}; a declaration-level error (the
+     * file's declarations, its imports) ends the check, recorded. The rounds of time fields stop at the first round with
+     * an error, as the build stops there (L1). Imports of other files are not read (M5c): their names are poisoned
+     * ({@link Facts#suppressed}). Null when nothing could be checked. Never on a build path.
+     */
+    static Ir.Program checkRecovering(String source, String fileName, String id, JscModules modules, Spans spans, Facts facts) {
+        var loader = new Loader(modules == null ? JscModules.NONE : modules);
+        loader.facts = facts;
+        loader.alone = modules == null;
+        Module main;
+        try {
+            main = loader.main(source, fileName, id, spans);
+        } catch (JscException e) {
+            facts.errors.add(e);
+            return null;
+        }
+        if (main == null) return null;
+        // A file whose contract the parser could not read has nothing for the checker (the build stopped before it).
+        if (main.file.contract() == null && !main.file.library()) return null;
+        // What the parser dropped is unknown to the checker, not wrong (L13): by name, or everything when a dropped member
+        // had no name or was the state or the params.
+        facts.poisoned.addAll(spans.droppedNames);
+        if (spans.namelessDropped) facts.incomplete = true;
+        try {
+            return checkFile(main, loader.order, JavaLibraries.NONE, modules == null ? JscModules.NONE : modules, List.of(), facts);
+        } catch (JscException e) {
+            if (!Facts.isPoisoned(e)) facts.errors.add(facts.errors.size() < 10 * JscLang.MAX_ERRORS ? Parser.hinted(e, main.file.leadingMinus(), main.file.members()) : e);   // N1: the first ones hinted
+            return null;
+        }
+    }
+
+    /** Runs {@code r} for one declaration when recovering: an error ends it, recorded (a poisoned name: silently). */
+    private boolean guard(Runnable r) {
+        if (facts == null) {
+            r.run();
+            return true;
+        }
+        try {
+            r.run();
+            return true;
+        } catch (JscException e) {
+            if (!Facts.isPoisoned(e)) facts.errors.add(facts.errors.size() < 10 * JscLang.MAX_ERRORS ? Parser.hinted(e, file.leadingMinus(), file.members()) : e);   // N1: the first ones hinted
+            return false;
+        }
+    }
+
     private static Ir.Program checkFile(Module main, List<Module> libraries, JavaLibraries javaLibraries, JscModules modules,
                                         List<String> loading) {
+        return checkFile(main, libraries, javaLibraries, modules, loading, null);
+    }
+
+    private static Ir.Program checkFile(Module main, List<Module> libraries, JavaLibraries javaLibraries, JscModules modules,
+                                        List<String> loading, Facts facts) {
         var c = new Checker(main, libraries, javaLibraries, modules, loading);
+        c.facts = facts;
         File file = main.file;
-        c.importContracts();
-        c.declare();
+        // Recovering, an error in the imports or the declarations ends the check, recorded (guard); on a build path guard
+        // runs them plainly.
+        if (!c.guard(c::importContracts) || !c.guard(c::declare)) return null;
         Ir.Program p;
         int round = 0;
         while (true) {
             c.resetRound();
+            if (facts != null) facts.clearRound();
+            int before = facts == null ? 0 : facts.errors.size();
             p = c.checkAll();
+            // Recovering: the build stops in the first round with an error, so this does too (L1).
+            if (facts != null && facts.errors.size() > before) break;
             if (c.nextTimeFields.equals(c.timeFields)) break;
             c.timeFields = new TreeSet<>(c.nextTimeFields);
             if (++round > c.stateFields.size() + 1) throw new IllegalStateException("time fields did not converge");
         }
-        c.checkRecursion();
+        if (facts == null || facts.errors.isEmpty()) c.guard(c::checkRecursion);
         for (Pos m : file.leadingMinus()) {
             c.warn(m, "JSC9007", "this line starts with '-', which continues the expression on the line above (a subtraction):"
                     + " newlines do not end statements in .jsc; if that is meant, join the lines or put the expression in parentheses;"
@@ -532,6 +635,14 @@ final class Checker {
                         + " file (import contract { " + name + " } from \"./" + name + ".jsc\")");
             }
             JscModules.Source src = modules.resolve(id, im.from());
+            if (src == null && facts != null) {
+                // Recovering a file on its own, or a contract the project does not have: C and C.T are unchecked.
+                facts.unresolvedImports.add(im.from());
+                facts.poisoned.add(name);
+                facts.errors.add(im.pos().error("JSC0742", "no contract " + im.from() + (id == null ? " (this file is lowered on its own, so it imports no"
+                        + " contracts)" : " beside " + id + " under the sources")));
+                continue;
+            }
             if (src == null) {
                 throw im.pos().error("JSC0742", "no contract " + im.from() + (id == null ? " (this file is lowered on its own, so it imports no"
                         + " contracts)" : " beside " + id + " under the sources"));
@@ -912,16 +1023,38 @@ final class Checker {
                         + " that name would clash with it: rename one of them");
             }
         }
-        if (c.methods().stream().noneMatch(m -> m.kind() == Kind.INIT)) throw c.pos().error("JSC0401", "the contract needs an init(…)");
+        if (c.methods().stream().noneMatch(m -> m.kind() == Kind.INIT)) {
+            unchecked("init");   // recovering: an init the parser dropped is not missing
+            throw c.pos().error("JSC0401", "the contract needs an init(…)");
+        }
     }
 
     /** A module's imports: std rows into its {@code std} set, a library's declarations into {@code visible} (D8, D9). */
     private void imports(Module m) {
         for (Import im : m.file.imports()) {
             if (im.contract()) continue;   // M2c: import contract, loaded first (importContracts)
+            if (facts != null) {
+                // ADR-0021 D5: recovering, an import that fails is recorded (as the build reports it), and what it names
+                // is unchecked, not wrong: no cascade (L13).
+                if (facts.unresolvedImports.contains(im.from()) && m.deps.get(im.from()) == null && isModuleSpec(im.from())) continue;
+                try {
+                    importOne(m, im);
+                } catch (JscException e) {
+                    facts.errors.add(e);
+                    facts.unresolvedImports.add(im.from());
+                    facts.poisoned.addAll(im.names());
+                }
+                continue;
+            }
+            importOne(m, im);
+        }
+    }
+
+    private void importOne(Module m, Import im) {
+        {
             if (im.from().startsWith("java:")) {
                 javaImport(m, im);
-                continue;
+                return;
             }
             if (isModuleSpec(im.from())) {
                 Module dep = m.deps.get(im.from());
@@ -935,7 +1068,7 @@ final class Checker {
                     // An imported enum brings its variants, which build and match its values.
                     if (enums.containsKey(n)) m.visible.addAll(enums.get(n).keySet());
                 }
-                continue;
+                return;
             }
             for (String n : im.names()) {
                 Std.Binding b = Std.ROWS.get(n);
@@ -1204,6 +1337,7 @@ final class Checker {
             case "Instance" -> {
                 // M2c (D5): another contract's instance, a params field only (instanceOk), typed by an imported contract.
                 if (n != 1 || !t.args().get(0).args().isEmpty() || !contracts.containsKey(t.args().get(0).name())) {
+                    if (n == 1) unchecked(t.args().get(0).name());   // recovering: an import that failed is not a wrong name
                     throw t.pos().error("JSC0445", "Instance<C> names an imported contract C (import contract { C } from \"./C.jsc\")");
                 }
                 if (!inst) {
@@ -1219,6 +1353,7 @@ final class Checker {
                     // M2c: an imported contract's type, C.State or C.T.
                     String c = t.name().substring(0, t.name().indexOf('.'));
                     if (!contracts.containsKey(c)) {
+                        unchecked(t.name());
                         throw t.pos().error("JSC0307", "unknown type '" + t.name() + "': " + c + " is not an imported contract (import contract { " + c
                                 + " } from \"./" + c + ".jsc\")");
                     }
@@ -1240,6 +1375,7 @@ final class Checker {
         if (ty == null && variantEnum.containsKey(t.name())) {
             throw t.pos().error("JSC0911", t.name() + " is a variant of " + variantEnum.get(t.name()) + ", not a type: write " + variantEnum.get(t.name()));
         }
+        if (ty == null) unchecked(t.name());
         if (ty == null || (n > 0 && !(ty instanceof Ty.ListT || ty instanceof Ty.OptT || ty instanceof Ty.MapT || ty instanceof Ty.BigMapT
                 || ty instanceof Ty.Instance))) {
             throw t.pos().error("JSC0307", "unknown type '" + t.name() + "' (Int, Bool, Bytes, Key, Hash, Value, Address, Credential, List<T>,"
@@ -1507,6 +1643,7 @@ final class Checker {
         Ir.Local put(String n, Ty t, int taint, Pos p, boolean isConst, Map<String, Integer> fieldTaints) {
             declaredName(n, p);
             var l = new Ir.Local(n, t, taint, p, ++seq, fieldTaints);
+            if (facts != null) facts.locals.add(l);
             vars.put(n, l);
             if (isConst) consts.add(l);
             else used.add(l);
@@ -1575,13 +1712,14 @@ final class Checker {
             // batched actions in one (ADR-0007 r2), so the checker does, at the batched modifier.
             // M2c: deposits and receives make a contract asset-aware too (D10; ADR-0011 D3).
             assetAware = c.methods().stream().anyMatch(m -> usesFunds(m.body()) || effectsIn(m.body()).contains("deposit") || receives(m));
-            for (Syntax.Method m : c.methods()) methods.add(method(m));
+            // ADR-0021 D5: recovering, each method is checked on its own (guard runs it plainly on a build path).
+            for (Syntax.Method m : c.methods()) guard(() -> methods.add(method(m)));
         }
         // Every fn of the build, each in its module's scope: the program's own, then each library's (the interpreters
         // evaluate library fns from the program's IR; D9, M4).
         var byModule = new HashMap<Module, List<Ir.Fn>>();
         for (Syntax.Fn f : fns.values()) {
-            byModule.computeIfAbsent(owner.get(f.name()), k -> new ArrayList<>()).add(checkFn(f, new int[f.params().size()]));
+            guard(() -> byModule.computeIfAbsent(owner.get(f.name()), k -> new ArrayList<>()).add(checkFn(f, new int[f.params().size()])));
         }
         var libs = new ArrayList<Ir.Library>();
         for (Module m : libraries) {
@@ -1595,7 +1733,7 @@ final class Checker {
                     Set.of(), Set.of(), List.of(), null, List.of(), Map.of(), true, List.copyOf(libs), java);
         }
         var invariants = new ArrayList<Ir.Invariant>();
-        for (Syntax.InvariantDecl inv : c.invariants()) invariants.add(invariant(inv, c));
+        for (Syntax.InvariantDecl inv : c.invariants()) guard(() -> invariants.add(invariant(inv, c)));
         return new Ir.Program(file.pkg(), fileName, c.name(), options, recordsOf(main), enumsIrOf(main),
                 new Ir.RecordType("State", stateFields, c.pos()), methods, own, Set.of(), Set.of(), List.of(),
                 paramsFields == null ? null : new Ir.RecordType(Ir.PARAMS, paramsFields, c.paramsPos()), invariants, Map.of(), false,
@@ -1915,6 +2053,7 @@ final class Checker {
         }
         if (batched) throw p.pos().error("JSC0443", "a batched action cannot read another contract yet (ADR-0009, ADR-0011 D2)");
         if (paramsFields == null) {
+            unchecked("#params");   // recovering: params the parser dropped are not missing
             throw p.pos().error("JSC0444", "reads params." + p.reads() + ": the contract declares no params { … }; the instance it reads is a"
                     + " params field Instance<C> (ADR-0011 r2)");
         }
@@ -1943,6 +2082,7 @@ final class Checker {
     private void modField(String ref, Ty want, Pos p, String mod) {
         if (ref.startsWith("params.")) {
             String f = ref.substring("params.".length());
+            if (paramsFields == null) unchecked("#params");
             if (paramsFields == null) throw p.error("JSC0434", "'" + mod + " " + ref + "': the contract declares no params { … }");
             Ty t = paramsFields.get(f);
             if (t == null) throw p.error("JSC0310", "'" + mod + " " + ref + "': the params have no field " + f);
@@ -2279,6 +2419,7 @@ final class Checker {
                     // carries exactly these. Events are the contract's Event (each 'event X { … }').
                     effectAllowed(em.pos(), sc, "emit(…)");
                     if (!enums.containsKey(Ir.EVENT) || file.contract().events().isEmpty()) {
+                        unchecked("#event");   // recovering: events the parser dropped are not missing
                         throw em.pos().error("JSC0438", "the contract declares no events: declare one with event Name { field: Type } (ADR-0009 D5)");
                     }
                     Ty et = new Ty.EnumT(Ir.EVENT);
@@ -2469,7 +2610,9 @@ final class Checker {
             throw c.args().get(0).pos().error("JSC0505", "this threshold depends on the current call's validity window, which can invert "
                     + c.fn() + "(t): use a stored or given time (ADR-0018 D11)");
         }
-        return new Ir.TimePred(c.fn().equals("after"), t, Ty.BOOL, 0, c.pos());
+        Ir.Expr tp = new Ir.TimePred(c.fn().equals("after"), t, Ty.BOOL, 0, c.pos());
+        if (facts != null) facts.typed.put(c, tp);   // ADR-0021 D6: a require's after/before is checked here, not by expr
+        return tp;
     }
 
     // ------------------------------------------------------------------ expressions
@@ -2480,6 +2623,13 @@ final class Checker {
     }
 
     Ir.Expr expr(Expr e, Sc sc, Ty expected) {
+        Ir.Expr r = expr0(e, sc, expected);
+        // ADR-0021 D6 (M5b): the language core's facts: each expression's IR (its type, taint and what a name is).
+        if (facts != null) facts.typed.put(e, r);
+        return r;
+    }
+
+    private Ir.Expr expr0(Expr e, Sc sc, Ty expected) {
         return switch (e) {
             case IntLit i -> new Ir.Lit(i.value(), Ty.INT, i.pos());
             case BoolLit b -> new Ir.Lit(b.value(), Ty.BOOL, b.pos());
@@ -2559,6 +2709,7 @@ final class Checker {
             default -> {
             }
         }
+        unchecked(n.name());
         throw n.pos().error("JSC0217", "unknown name '" + n.name() + "'");
     }
 
@@ -2596,6 +2747,7 @@ final class Checker {
 
     /** {@code params.f} (M2b, ADR-0009 D1): in a method or invariant of a contract with params; never a time value. */
     private Ir.Expr paramsRef(Field f, Sc sc) {
+        if (paramsFields == null) unchecked("#params");
         if (paramsFields == null) throw f.pos().error("JSC0434", "the contract declares no params { … }, so there is no params." + f.name());
         if (sc.kind == null) {
             throw f.pos().error("JSC0433", "params is not available in a fn: pass params." + f.name() + " as an argument");
@@ -2698,6 +2850,7 @@ final class Checker {
         if (javaFnLib.containsKey(fn)) return javaCall(c, sc);
         Std.Binding b = Std.ROWS.get(fn);
         if (b != null) {
+            if (!current.std.contains(fn)) unchecked(fn);
             if (!current.std.contains(fn)) throw c.pos().error("JSC0704", fn + " is in " + b.module() + ": import { " + fn + " } from \"" + b.module() + "\"");
             return stdCall(b, c, sc);
         }
@@ -2768,7 +2921,10 @@ final class Checker {
                 expectType(Ty.KEY, stake, c.args().get(1).pos());
                 return new Ir.LedgerOp(fn + "Staked", List.of(h, stake), Ty.ADDRESS, h.taint() | stake.taint(), c.pos());
             }
-            default -> throw c.pos().error("JSC0324", "unknown function '" + fn + "'");
+            default -> {
+                unchecked(fn);
+                throw c.pos().error("JSC0324", "unknown function '" + fn + "'");
+            }
         }
     }
 
@@ -3157,7 +3313,10 @@ final class Checker {
                 visible(o.type(), o.pos());
                 return variantLit(o, sc);
             }
-            if (!records.containsKey(o.type())) throw o.pos().error("JSC0329", "unknown type " + o.type());
+            if (!records.containsKey(o.type())) {
+                unchecked(o.type());
+                throw o.pos().error("JSC0329", "unknown type " + o.type());
+            }
             visible(o.type(), o.pos());
             javaReadOnly(o.type(), o.pos());
             recName = o.type();

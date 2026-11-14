@@ -280,9 +280,10 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
     }
   }
+  /** The copy's directory, and whether this call published it (with its .used staged inside, #100): `{ dir, fresh }`. */
   async function install(id, js, wasm, jsHash, wasmHash) {
     const dir = join(root, id);
-    if (await valid(dir, jsHash, wasmHash)) return dir;
+    if (await valid(dir, jsHash, wasmHash)) return { dir, fresh: false };
     await fs.mkdir(root, { recursive: true });
     const tmp = await fs.mkdtemp(join(root, '.tmp-'));
     try {
@@ -298,9 +299,9 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       for (let attempt = 0; ; attempt++) {
         try {
           await fs.rename(tmp, dir);
-          return dir;
+          return { dir, fresh: true };
         } catch (e) {
-          if (await valid(dir, jsHash, wasmHash)) return dir;
+          if (await valid(dir, jsHash, wasmHash)) return { dir, fresh: false };
           if (attempt >= 8) throw e;
           const there = await fs.stat(dir).then(() => true, () => false);
           if (there) {
@@ -308,7 +309,7 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
             await fs.rename(dir, damaged).catch(() => {});
             if (await valid(damaged, jsHash, wasmHash)) {
               // A valid copy after all (put back meanwhile): it goes straight back, and this install is not needed.
-              if (await fs.rename(damaged, dir).then(() => true, () => false)) return dir;
+              if (await fs.rename(damaged, dir).then(() => true, () => false)) return { dir, fresh: false };
             }
           }
           await new Promise((r) => setTimeout(r, 5 * (attempt + 1)));
@@ -330,13 +331,22 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
         p = install(id, js, wasm, jsHash, wasmHash).finally(() => installing.delete(id));
         installing.set(id, p);
       }
-      let dir = await p;
-      try {
-        await fs.writeFile(join(dir, '.used'), String(Date.now()));
-      } catch {
-        // Claimed by a collector in another window between the install and the touch: install again (C18).
-        dir = await install(id, js, wasm, jsHash, wasmHash);
-        await fs.writeFile(join(dir, '.used'), String(Date.now()));
+      const { dir, fresh } = await p;
+      // #100: a copy this call published carries its .used already (staged inside the directory, landing with the
+      // rename: S16), so it is not touched again. A copy that was there is marked used now; if another window's collector
+      // took it between the check and the touch (ENOENT or ENOTDIR), the copy is missing: put fails with ENGINE_COLLECTED
+      // and the caller selects again, with its backoff (the selector caches no failed selection; the server retries
+      // it). Never another install here.
+      if (!fresh) {
+        try {
+          await fs.writeFile(join(dir, '.used'), String(Date.now()));
+        } catch (e) {
+          if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') {
+            throw Object.assign(new Error('the engine copy was collected by another window before it was marked used; select again'),
+              { code: 'ENGINE_COLLECTED' });
+          }
+          throw e;
+        }
       }
       await evict(id, typeof inUse === 'function' ? inUse : () => inUse);
       return { id, file: join(dir, ENGINE_JS) };
@@ -454,7 +464,7 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
       // file's imports resolve to.
       const jsc = await reader.resolveIn(folder, 'src/main/jsc', { base: project.rel });
       return advisory(`Gradle project${v ? ` (plugin ${v})` : ''}: the bundled compiler, advisory`,
-        { ...at, gradlePlugin: v, kind: 'gradle', ...(jsc.error ? {} : { contracts: jsc.path }) });
+        { ...at, gradlePlugin: v, kind: 'gradle', ...(jsc.error ? {} : { contracts: jsc.path, contractsRel: jsc.segments }) });
     }
     if (workspaceFileDir && !inside(folder, workspaceFileDir) && !allowedRoots.some((r) => inside(folder, r))) {
       return advisory('this folder lies outside the .code-workspace file\'s directory: its compiler is not loaded', at);
@@ -490,7 +500,9 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
     engine.version = info.joust ?? pkg.version;
     const inContracts = !contracts.error && inside(realFile, contracts.path);
     return {
-      key, engine, source: 'project', folder, root, kind: 'npm', ...(contracts.error ? {} : { contracts: contracts.path }),
+      key, engine, source: 'project', folder, root, kind: 'npm',
+      // M5b: where the build reads its sources (the contracts directory, real path, inside the folder), for builds on save.
+      ...(contracts.error ? {} : { contracts: contracts.path, contractsRel: contracts.segments }),
       mode: inContracts ? 'project-matched' : 'advisory',
       reason: inContracts ? 'the project\'s own compiler' : 'the file is not in the project\'s contracts directory',
     };

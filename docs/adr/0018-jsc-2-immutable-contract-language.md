@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r22)
+**Status:** Proposed (r23)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -931,6 +931,15 @@ validator never accepts it (r17, #76 review S5, S6).
   `checkJscAbi` after `compileJava`, part of `check`. It compares structures, from the datum and the redeemers through
   every schema they reach (a type used only inside a method is not part of the ABI); a reached schema the description
   lacks, an API type included, is a difference. The manifest is checked against independently written CBOR golden vectors (J17).
+  *(ADR-0021 r7, §3a item 5)* Acceptance can also be per contract and bound to both manifests: `joust abi diff <Contract>`
+  (Gradle: `jscAbiDiff --contract <C>`) prints the committed manifest and the new one with their SHA-256 (`none` when
+  nothing is committed), and `joust build --accept-abi=<Contract>@<committed-sha256>..<new-sha256>` (Gradle:
+  `acceptJscAbi --contract <C> --committed-sha256 <h1> --sha256 <h2>`, task options) accepts that contract only, and
+  refuses when the committed manifest is no longer `h1` or the build now computes another manifest than `h2`. The
+  editor's **Accept ABI…** runs only this form; the bare `--accept-abi` stays for a terminal. *(r23)* `<Contract>` is
+  the contract's package and name (`app.Counter`); a simple name is taken only when one contract of the build has it,
+  and an ambiguous one is refused with nothing accepted. `acceptJscAbi` gives the bare acceptance only when none of its
+  three options is set: a partial or malformed set fails the task, nothing accepted.
 
 ### D13. Editor support
 
@@ -1645,3 +1654,8 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   keeps the build's Java libraries in an imported library's checks (C1) and names library types in memo decoders and
   datum encoders (S4); an imported contract's class is held in the Java import names (C2); §8's M2 and M4 rows record
   their exits, and the M5 row its gates.
+- **r23** (2026-11-14, ADR-0021 M5b, #99; ADR-0021 §3a item 5): D12's acceptance may be per contract and bound to both
+  manifests (`joust abi diff <Contract>`, `joust build --accept-abi=<Contract>@<committed-sha256|none>..<new-sha256>`;
+  Gradle: `jscAbiDiff`, `acceptJscAbi --contract --committed-sha256 --sha256`); the contract is named by package and
+  name (a simple name only when one contract has it; an ambiguous one accepts nothing); a partial set of the Gradle
+  options accepts nothing; the bare `--accept-abi` stays for terminals. Recorded in D12 *(ADR-0021 r7, §3a item 5)*.

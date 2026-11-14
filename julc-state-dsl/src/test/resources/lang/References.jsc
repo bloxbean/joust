@@ -1,0 +1,52 @@
+jsc 2
+package lang.refs
+
+// ADR-0021 D12 (M5b): hand-written expectations for references, built-ins and types, written without the implementation.
+//   @def K: the next name declares K;  @ref K: the next name refers to K;  @builtin B: the next name is the built-in or
+//   std row B;  @type T: an expression of type T starts at the next token;  @time: a time value starts there (D11).
+
+import { /*@builtin std/crypto.sha2_256*/sha2_256 } from "std/crypto"
+
+type /*@def Line*/Line = { /*@def Line.qty*/qty: Int, /*@def Line.price*/price: Int }
+
+enum /*@def Phase*/Phase {
+  /*@def Open*/Open,
+  /*@def Closed*/Closed { /*@def Closed.at*/since: Int }
+}
+
+fn /*@def cost*/cost(/*@def cost.l*/l: /*@ref Line*/Line): Int = /*@type Int*//*@ref cost.l*/l./*@ref Line.qty*/qty * l./*@ref Line.price*/price
+
+contract /*@def Refs*/Refs {
+  params { /*@def cap*/cap: Int }
+  state { /*@def owner*/owner: Key, /*@def total*/total: Int, /*@def phase*/phase: /*@ref Phase*/Phase, /*@def deadline*/deadline: Int }
+
+  event /*@def Paid*/Paid { /*@def Paid.to*/to: Key, /*@def Paid.amount*/amount: Int }
+
+  init(/*@def init.deadline*/deadline: Int) {
+    return { owner: /*@builtin caller*/caller, total: 0, phase: /*@ref Open*/Open, /*@ref deadline*//*@ref init.deadline*/deadline }
+  }
+
+  action /*@def add*/add(/*@def add.lines*/lines: List<Line>) only owner {
+    const /*@def add.sum*/sum = /*@ref add.lines*/lines.fold(0, (/*@def add.acc*/acc, /*@def add.x*/x) => /*@ref add.acc*/acc + /*@ref cost*/cost(/*@ref add.x*/x))
+    require(/*@ref add.sum*/sum <= params./*@ref cap*/cap, "over the cap")
+    const /*@def add.h*/h = /*@type Bytes*//*@builtin std/crypto.sha2_256*/sha2_256(#00)
+    require(h != #01, "never")
+    return { .../*@builtin state*/state, /*@ref total*/total: /*@ref total*/total + sum }
+  }
+
+  action /*@def close*/close() {
+    const /*@def close.since*/was = match /*@ref phase*/phase {
+      /*@ref Closed*/Closed { /*@ref Closed.at*//*@def close.at*/since } => /*@ref close.at*/since,
+      /*@ref Open*/Open => 0
+    }
+    require(/*@builtin prelude.after*/after(/*@ref deadline*/deadline), "too early")
+    emit(/*@ref Paid*/Paid { /*@ref Paid.to*/to: /*@ref owner*/owner, /*@ref Paid.amount*/amount: /*@ref close.since*/was })
+    return { ...state, phase: /*@ref Closed*/Closed { /*@ref Closed.at*/since: was }, deadline: /*@time*//*@builtin validTo*/validTo }
+  }
+
+  view /*@def current*/current(): Int = /*@ref total*/total
+
+  destroy /*@def end*/end() only owner {
+    pay(owner, /*@builtin balance*/balance)
+  }
+}

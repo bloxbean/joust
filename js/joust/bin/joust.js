@@ -26,7 +26,8 @@ delete process.env.JOUST_DEFERRED;
 const handedOver = deferredTo === SELF;
 
 const COMMANDS = {
-  build: 'build [--accept-abi] [--accept-lock] [--traces]   compile contracts/ (.java, .jsc) into build/joust/',
+  build: 'build [--accept-abi[=<Contract>@<committed>..<new>]] [--accept-lock] [--traces]   compile contracts/ (.java, .jsc) into build/joust/',
+  abi: 'abi diff <Contract> [--out <file>]   (<Contract>: package.Name, or a Name only one contract has) the committed ABI manifest and the one the build computes now, with their SHA-256',
   test: 'test [-- <node --test args>]   build, then run test/*.test.js offline (an in-memory ledger: @julclang/joust/test)',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
   dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
@@ -115,9 +116,53 @@ async function project() {
   switch (cmd) {
     case 'build': {
       const { build } = await import('../src/build.js');
-      const r = await build({ src: flag('src') ?? config.contracts, out: flag('out') ?? config.out, acceptAbi: args.includes('--accept-abi'),
+      // ADR-0021 D7a (ADR-0018 D12 amended): --accept-abi=<Contract>@<committed-sha256|none>..<new-sha256> accepts that one
+      // contract, bound to the two manifests reviewed; a bare --accept-abi accepts every changed manifest, as before.
+      const bound = args.find((a) => a.startsWith('--accept-abi='));
+      let acceptAbi = args.includes('--accept-abi');
+      if (bound) {
+        const { parseBoundAcceptance } = await import('../src/abi.js');
+        acceptAbi = parseBoundAcceptance(bound.slice('--accept-abi='.length));
+        if (!acceptAbi) {
+          console.error('joust build: --accept-abi=<Contract>@<committed-sha256 or none>..<new-sha256> (from joust abi diff <Contract>)');
+          return 2;
+        }
+      }
+      const r = await build({ src: flag('src') ?? config.contracts, out: flag('out') ?? config.out, acceptAbi,
         acceptLock: args.includes('--accept-lock'), traces: args.includes('--traces') });
       return r.ok ? 0 : 1;
+    }
+    case 'abi': {
+      // ADR-0021 D7a: `joust abi diff <Contract>`, what Accept ABI… shows before anything is accepted. Writes nothing into
+      // the project (the build runs in memory); --out writes the diff as JSON (the extension's own storage).
+      if (args[1] !== 'diff' || !args[2] || args[2].startsWith('-')) {
+        console.error(`usage: joust ${COMMANDS.abi}`);
+        return 2;
+      }
+      const { compile } = await import('../src/build.js');
+      const { abiDiff } = await import('../src/abi.js');
+      const r = await compile({ src: flag('src') ?? config.contracts });
+      if (!r.generated?.length) {
+        for (const d of r.diagnostics ?? []) console.error(`${d.severity}${d.code ? `[${d.code}]` : ''}: ${d.message}`);
+        return 1;
+      }
+      const d = abiDiff({ generated: r.generated, srcDir: flag('src') ?? config.contracts, contract: args[2] });
+      if (d.error) {
+        console.error(`joust abi diff: ${d.error}`);
+        return 1;
+      }
+      console.log(`${d.contract} (${d.file})`);
+      console.log(`--- committed ${d.path} sha256 ${d.committed.sha256}`);
+      console.log(d.committed.text ?? '(none)');
+      console.log(`+++ now sha256 ${d.now.sha256}`);
+      console.log(d.now.text);
+      console.log(d.committed.sha256 === d.now.sha256 ? 'unchanged' : `accept it with: joust build --accept-abi=${d.contract}@${d.committed.sha256}..${d.now.sha256}`);
+      const out = flag('out');
+      if (out) {
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync(out, JSON.stringify(d, null, 2) + '\n');
+      }
+      return 0;
     }
     case 'migrate': {
       const { migrate } = await import('../src/migrate.js');

@@ -25,7 +25,7 @@ public final class JscLang {
     private JscLang() {}
 
     /** The document model's version: a change to its shape or meaning is a new version (the server checks it). */
-    public static final int MODEL_VERSION = 1;
+    public static final int MODEL_VERSION = 2;
 
     /**
      * The {@code lang} protocol the engine speaks (ADR-0021 D3: an engine is eligible as a project's compiler only at a
@@ -37,10 +37,12 @@ public final class JscLang {
      * {@code modules} (the integration with ADR-0018 M2c and M4): {@code lang.analyze} takes a project's files, which a
      * file's library and contract imports resolve to as in the build.
      */
-    public static final List<String> FEATURES = List.of("analyze", "modules");
+    public static final List<String> FEATURES = List.of("analyze", "modules", "std", "lower");
 
     /** D2a: a model's bounds. Over either, the analysis reports one diagnostic instead of the model. */
     public static final int MAX_ENTRIES = 200_000;
+    /** The errors a model reports at most (S2 on #99; javac's -Xmaxerrs is 100): the build's first among them (L1). */
+    public static final int MAX_ERRORS = 100;
 
     public static final int MAX_JSON_CHARS = 16 * 1024 * 1024;
 
@@ -74,10 +76,17 @@ public final class JscLang {
      * selection ranges grow through.
      */
     public record Model(String language, String file, boolean accepted, String contract, List<Diagnostic> diagnostics,
-                        List<Declaration> declarations, List<Range> blocks, List<Folding> folding) {
+                        List<Declaration> declarations, List<Range> blocks, List<Folding> folding, JscLangIndex index,
+                        List<String> advisory) {
+
+        Model(String language, String file, boolean accepted, String contract, List<Diagnostic> diagnostics,
+              List<Declaration> declarations, List<Range> blocks, List<Folding> folding) {
+            this(language, file, accepted, contract, diagnostics, declarations, blocks, folding, null, List.of());
+        }
 
         int entries() {
-            return diagnostics.size() + declarations.size() + blocks.size() + folding.size();
+            return diagnostics.size() + declarations.size() + blocks.size() + folding.size()
+                    + (index == null ? 0 : index.refs.size() + index.exprs.size() + index.types.size());
         }
 
         /** The model's JSON, with a fixed key order: the bytes the JVM and the Web Image must agree on (D12). */
@@ -119,7 +128,32 @@ public final class JscLang {
                 range(o, d.nameRange());
                 o.append(",\"range\":");
                 range(o, d.range());
-                o.append(",\"partial\":").append(d.partial()).append(",\"outline\":").append(d.outline()).append('}');
+                // Model v2 (L10): a flag is written only when it holds (absent: false).
+                if (d.partial()) o.append(",\"partial\":true");
+                if (d.outline()) o.append(",\"outline\":true");
+                // M5b (model v2): what the checker knows of it.
+                JscLangIndex.Meta mt = index == null ? null : index.meta.get(d.id());
+                if (mt != null) {
+                    if (mt.type != null) {
+                        o.append(",\"type\":");
+                        str(o, mt.type);
+                    }
+                    if (mt.detail != null) {
+                        o.append(",\"detail\":");
+                        str(o, mt.detail);
+                    }
+                    if (mt.abi) o.append(",\"abi\":true");
+                    if (mt.scope != null) {
+                        o.append(",\"scope\":[").append(mt.scope[0]).append(',').append(mt.scope[1]).append(',').append(mt.scope[2]).append(',')
+                                .append(mt.scope[3]).append(']');
+                    }
+                    if (mt.context != null) {
+                        o.append(",\"context\":");
+                        str(o, mt.context);
+                    }
+                }
+                if (index != null && index.shorthandBindings.contains(d.id())) o.append(",\"shorthand\":true");
+                o.append('}');
             }
             o.append("],\"blocks\":[");
             for (int k = 0; k < blocks.size(); k++) {
@@ -134,7 +168,49 @@ public final class JscLang {
                 str(o, f.kind());
                 o.append(']');
             }
-            return o.append("]}").toString();
+            o.append(']');
+            if (index != null) {
+                o.append(",\"references\":[");
+                int k = 0;
+                for (JscLangIndex.Ref r : index.refs) {
+                    if (r.decl() < 0) continue;
+                    if (k++ > 0) o.append(',');
+                    o.append('[').append(r.line()).append(',').append(r.col()).append(',').append(r.endLine()).append(',').append(r.endCol())
+                            .append(',').append(r.decl()).append(',').append(r.flags()).append(']');
+                }
+                o.append("],\"builtins\":[");
+                k = 0;
+                for (JscLangIndex.Ref r : index.refs) {
+                    if (r.decl() >= 0) continue;
+                    if (k++ > 0) o.append(',');
+                    o.append('[').append(r.line()).append(',').append(r.col()).append(',').append(r.endLine()).append(',').append(r.endCol())
+                            .append(',');
+                    str(o, r.builtin());
+                    o.append(']');
+                }
+                o.append("],\"types\":[");
+                for (int t = 0; t < index.types.size(); t++) {
+                    if (t > 0) o.append(',');
+                    str(o, index.types.get(t));
+                }
+                o.append("],\"exprs\":[");
+                for (int t = 0; t < index.exprs.size(); t++) {
+                    JscLangIndex.Expr x = index.exprs.get(t);
+                    if (t > 0) o.append(',');
+                    o.append('[').append(x.line()).append(',').append(x.col()).append(',').append(x.endLine()).append(',').append(x.endCol())
+                            .append(',').append(x.type()).append(',').append(x.taint()).append(']');
+                }
+                o.append(']');
+            }
+            if (advisory != null && !advisory.isEmpty()) {
+                o.append(",\"advisory\":[");
+                for (int t = 0; t < advisory.size(); t++) {
+                    if (t > 0) o.append(',');
+                    str(o, advisory.get(t));
+                }
+                o.append(']');
+            }
+            return o.append('}').toString();
         }
     }
 
@@ -145,7 +221,7 @@ public final class JscLang {
             "params", "event", "invariant");
 
     /** Diagnostics on one character (D7: the lexer's character rules underline the offending character). */
-    private static final Set<String> ONE_CHARACTER = Set.of("JSC0104", "JSC0106", "JSC0107", "JSC0108", "JSC0145", "JSC0146",
+    private static final Set<String> ONE_CHARACTER = Set.of("JSC0001", "JSC0104", "JSC0106", "JSC0107", "JSC0108", "JSC0145", "JSC0146",
             "JSC0147", "JSC0148");
 
     /** The model's JSON, or, over D2a's bounds, a model holding one diagnostic that says so. */
@@ -180,7 +256,7 @@ public final class JscLang {
         var d = new Diagnostic("error", null, "analysis stopped: this file's document model is larger than the language server"
                 + " handles (" + m.entries() + " entries; at most " + maxEntries + " entries and " + maxChars + " characters)", 1, 1,
                 new Range(0, 0, 0, 0), "model-too-large");
-        return new Model(m.language(), m.file(), m.accepted(), m.contract(), List.of(d), List.of(), List.of(), List.of());
+        return new Model(m.language(), m.file(), m.accepted(), m.contract(), List.of(d), List.of(), List.of(), List.of(), null, List.of());
     }
 
     /** The document model of {@code source}, named {@code fileName} (a bare file name, as the build passes it). */
@@ -226,30 +302,66 @@ public final class JscLang {
         if (source == null) source = "";
         if (!JscV2.isV2(source)) return analyseV1(source, fileName);
         var spans = new Spans();
+        var facts = new Facts();
         var diagnostics = new ArrayList<Diagnostic>();
         JscV2.Lowered lowered = null;
         String contract = null;
+        Ir.Program program = null;
+        // ADR-0021 D5 (M5b): the recovering front end. Every error the lexer, the parser and the checker find, each at the
+        // position the build reports it, the build's first among them (L1); the warnings of what checked.
+        var errors = new ArrayList<JscException>();
         try {
-            List<Ir.Warning> warnings;
-            if (lower) {
-                lowered = modules == null ? JscV2.lower(source, fileName, spans)
-                        : JscV2.lower(source, fileName, id, modules, JavaLibraries.NONE, spans);
-                String path = lowered.javaPath();
-                contract = path.substring(0, path.length() - ".java".length()).replace('/', '.');
-                warnings = lowered.diagnostics().stream().map(w -> new Ir.Warning(w.line(), w.col(), w.code(), w.message())).toList();
-            } else {
-                Ir.Program p = modules == null ? JscV2.check(source, fileName, spans)
-                        : JscV2.check(source, fileName, id, modules, JavaLibraries.NONE, spans);
-                contract = p.pkg() + "." + p.name();
-                warnings = p.warnings();
-            }
-            for (Ir.Warning w : warnings) diagnostics.add(diagnostic("warning", w.code(), w.message(), w.line(), w.col(), source, spans));
-        } catch (JscException e) {
-            diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, source, spans));
+            program = JscV2.checkRecovering(source, fileName, id, modules, spans, facts);
         } catch (RuntimeException | Error e) {
             // As the toolchain reports it (Toolchain.build): a coded internal error at 1:1, never a crash (ADR-0018 J18).
             diagnostics.add(diagnostic("error", "JSC0005", JscMain.internalError(e), 1, 1, source, spans));
         }
+        errors.addAll(spans.errors);
+        errors.addAll(facts.errors);
+        var where = new Where(source, spans);
+        var seen = new HashSet<String>();
+        // A file-level completeness rule (the contract needs an init, its state a field, …), reported at the contract's
+        // head, cannot be judged when the parser dropped a member: the build stopped at that member's error first (L1),
+        // and the rule's error would be a cascade (L13).
+        int[] head = null;
+        for (Spans.Decl d : spans.decls) if (d.kind.equals("contract")) head = new int[]{d.startLine, d.startCol};
+        var fromChecker = new HashSet<JscException>(facts.errors);
+        // S2 on #99: MAX_ERRORS at most, in the order found (the build's first is the first found, L1); the rest are counted.
+        int more = 0;
+        for (JscException e : errors) {
+            if (Facts.isPoisoned(e) || !seen.add(e.code + ":" + e.line + ":" + e.col)) continue;
+            if (spans.incomplete && head != null && fromChecker.contains(e) && e.line == head[0] && e.col == head[1]) continue;
+            if (diagnostics.size() >= MAX_ERRORS) {
+                more++;
+                continue;
+            }
+            diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, where));
+        }
+        boolean clean = diagnostics.isEmpty();
+        if (program != null) {
+            contract = program.pkg() + "." + program.name();
+            for (Ir.Warning w : program.warnings()) diagnostics.add(diagnostic("warning", w.code(), w.message(), w.line(), w.col(), where));
+            if (lower && clean) {
+                try {
+                    lowered = JscV2.lowerChecked(program, source, fileName);
+                } catch (JscException e) {
+                    diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, where));
+                } catch (RuntimeException | Error e) {
+                    diagnostics.add(diagnostic("error", "JSC0005", JscMain.internalError(e), 1, 1, where));
+                }
+            }
+        }
+        diagnostics.sort((x, y) -> x.line() != y.line() ? Integer.compare(x.line(), y.line()) : Integer.compare(x.col(), y.col()));
+        JscLangIndex index;
+        try {
+            index = new JscLangIndex(spans, facts, program).build();
+        } catch (RuntimeException e) {
+            // The index is the editor's; a failure in it never costs the diagnostics.
+            index = new JscLangIndex(spans, null, null);
+        }
+        var advisory = new ArrayList<String>();
+        if (!facts.unresolvedImports.isEmpty()) advisory.add("imports");
+        if (more > 0) advisory.add("more-errors");   // S2 on #99: past MAX_ERRORS (the server says so)
         var decls = new ArrayList<Declaration>();
         for (Spans.Decl d : spans.decls) {
             if (d.name == null || d.endLine < 0) continue;
@@ -271,8 +383,12 @@ public final class JscLang {
         var blocks = new ArrayList<Range>();
         for (int[] b : spans.blocks) blocks.add(new Range(b[0] - 1, b[1] - 1, b[2] - 1, b[3] - 1));
         boolean accepted = diagnostics.stream().noneMatch(d -> d.severity().equals("error"));
+        for (Spans.Decl d : spans.decls) {
+            int[] sc = spans.scopes.get(d);
+            if (sc != null) index.meta(d).scope = new int[]{sc[0] - 1, sc[1] - 1, sc[2] - 1, sc[3] - 1};
+        }
         return new Analysis(new Model("jsc2", fileName, accepted, contract, List.copyOf(diagnostics), List.copyOf(fixed),
-                List.copyOf(blocks), folding(source, spans, fixed)), lowered);
+                List.copyOf(blocks), folding(source, spans, fixed), index, List.copyOf(advisory)), lowered);
     }
 
     /** A {@code .jsc} v1 file: what the build reports for it (its first error, or its warnings); no spans (ADR-0018 D16). */
@@ -293,24 +409,70 @@ public final class JscLang {
     }
 
     /**
+     * The file's line starts and its tokens, indexed once per analysis (S2 on #99): each diagnostic finds its line and
+     * its token by binary search, so a file with many errors costs O(n log n), not O(n²).
+     */
+    static final class Where {
+        final String source;
+        final List<Lexer.Tok> toks;
+        private int[] lineStarts;
+
+        Where(String source, Spans spans) {
+            this.source = source;
+            this.toks = spans == null ? null : spans.toks;
+        }
+
+        /** The text of 1-based line {@code l}, without its line end, or null past the end. */
+        String lineText(int l) {
+            if (lineStarts == null) {
+                int n = 1;
+                for (int i = 0; i < source.length(); i++) if (source.charAt(i) == '\n') n++;
+                lineStarts = new int[n];
+                for (int i = 0, k = 1; i < source.length(); i++) if (source.charAt(i) == '\n') lineStarts[k++] = i + 1;
+            }
+            if (l < 1 || l > lineStarts.length) return null;
+            int from = lineStarts[l - 1];
+            int to = l < lineStarts.length ? lineStarts[l] - 1 : source.length();
+            String s = source.substring(from, to);
+            return s.endsWith("\r") ? s.substring(0, s.length() - 1) : s;
+        }
+
+        /** The token that starts at {@code l:c} (not EOF), or null. */
+        Lexer.Tok tokenAt(int l, int c) {
+            if (toks == null) return null;
+            int lo = 0, hi = toks.size() - 1;
+            while (lo <= hi) {
+                int mid = (lo + hi) >>> 1;
+                Lexer.Tok t = toks.get(mid);
+                int cmp = t.line() != l ? Integer.compare(t.line(), l) : Integer.compare(t.col(), c);
+                if (cmp == 0) return t.kind() == Lexer.K.EOF ? null : t;
+                if (cmp < 0) lo = mid + 1;
+                else hi = mid - 1;
+            }
+            return null;
+        }
+    }
+
+    private static Diagnostic diagnostic(String severity, String code, String message, int line, int col, String source, Spans spans) {
+        return diagnostic(severity, code, message, line, col, new Where(source, spans));
+    }
+
+    /**
      * A diagnostic at the build's position, with a range: the token that starts there, or one character for the
      * character rules and wherever no token starts. A position before the file (the toolchain's line -1, F10) is 1:1.
      */
-    private static Diagnostic diagnostic(String severity, String code, String message, int line, int col, String source, Spans spans) {
+    private static Diagnostic diagnostic(String severity, String code, String message, int line, int col, Where w) {
         int l = Math.max(line, 1), c = Math.max(col, 1);
         if (line < 1) c = 1;
-        String text = lineText(source, l);
+        String text = w.lineText(l);
         int start = c - 1;
         int end = start;
         boolean found = false;
-        if (spans != null && spans.toks != null && (code == null || !ONE_CHARACTER.contains(code))) {
-            for (Lexer.Tok t : spans.toks) {
-                if (t.line() == l && t.col() == c && t.kind() != Lexer.K.EOF) {
-                    end = t.end() - 1;
-                    found = true;
-                    break;
-                }
-                if (t.line() > l) break;
+        if (code == null || !ONE_CHARACTER.contains(code)) {
+            Lexer.Tok t = w.tokenAt(l, c);
+            if (t != null) {
+                end = t.end() - 1;
+                found = true;
             }
         }
         if (!found && text != null && start < text.length()) {
@@ -318,19 +480,6 @@ public final class JscLang {
                     && Character.isLowSurrogate(text.charAt(start + 1)) ? 2 : 1);
         }
         return new Diagnostic(severity, code, message, line, col, new Range(l - 1, start, l - 1, end), null);
-    }
-
-    /** The text of 1-based line {@code l}, without its line end, or null past the end. */
-    private static String lineText(String source, int l) {
-        int from = 0;
-        for (int k = 1; k < l; k++) {
-            int nl = source.indexOf('\n', from);
-            if (nl < 0) return null;
-            from = nl + 1;
-        }
-        int nl = source.indexOf('\n', from);
-        String s = nl < 0 ? source.substring(from) : source.substring(from, nl);
-        return s.endsWith("\r") ? s.substring(0, s.length() - 1) : s;
     }
 
     /**
@@ -421,6 +570,138 @@ public final class JscLang {
             }
         }
         o.append('"');
+    }
+
+    // ------------------------------------------------------------------ M5b: the catalogue and the lowering on request
+
+    /** The types written as types (D7: completion in a type position). */
+    static final List<String> TYPES = List.of("Int", "Bool", "Bytes", "Key", "Hash", "Value", "Address", "Credential", "List", "Option", "Map",
+            "BigMap", "Instance");
+
+    /** The method modifiers offered after a method's parameters (D7). */
+    static final List<String> MODIFIERS = List.of("only", "authorized", "after", "before", "payable", "open", "quorum", "receives", "batched");
+
+    /** What follows a '.' on a value of each container type (D7), as the checker reads it: properties and methods. */
+    static final java.util.Map<String, List<String[]>> MEMBERS = java.util.Map.of(
+            "List", List.of(new String[]{"length", "property", "Int"}, new String[]{"isEmpty", "property", "Bool"}, new String[]{"head", "property", "Option<T>"},
+                    new String[]{"map", "method", "map(x => …): List<U>"}, new String[]{"filter", "method", "filter(x => …): List<T>"},
+                    new String[]{"fold", "method", "fold(init, (acc, x) => …)"}, new String[]{"any", "method", "any(x => …): Bool"},
+                    new String[]{"all", "method", "all(x => …): Bool"}, new String[]{"find", "method", "find(x => …): Option<T>"},
+                    new String[]{"contains", "method", "contains(x): Bool"}, new String[]{"sum", "method", "sum(): Int"},
+                    new String[]{"reverse", "method", "reverse(): List<T>"}, new String[]{"take", "method", "take(n): List<T>"},
+                    new String[]{"drop", "method", "drop(n): List<T>"}, new String[]{"concat", "method", "concat(ys): List<T>"}),
+            "Map", List.of(new String[]{"size", "property", "Int"}, new String[]{"isEmpty", "property", "Bool"}, new String[]{"keys", "property", "List<K>"},
+                    new String[]{"values", "property", "List<V>"}, new String[]{"get", "method", "get(k): Option<V>"},
+                    new String[]{"has", "method", "has(k): Bool"}, new String[]{"set", "method", "set(k, v): Map<K, V>"},
+                    new String[]{"delete", "method", "delete(k): Map<K, V>"}, new String[]{"any", "method", "any((k, v) => …): Bool"},
+                    new String[]{"all", "method", "all((k, v) => …): Bool"}),
+            "BigMap", List.of(new String[]{"get", "method", "get(k): Option<V>"}, new String[]{"has", "method", "has(k): Bool"},
+                    new String[]{"set", "method", "set(k, v): BigMap<K, V>"}, new String[]{"delete", "method", "delete(k): BigMap<K, V>"},
+                    new String[]{"isEmpty", "property", "Bool (in a destroy)"}));
+
+    /**
+     * The {@code lang.std} answer (M5b, D7, D8): every {@code std} row (module, name, {@code .jsc} signature, domain, Java
+     * target), the prelude, the type names, the container members and the modifiers: what hover and completion offer.
+     */
+    public static String stdJson() {
+        var o = new StringBuilder("{\"rows\":[");
+        int k = 0;
+        for (Std.Binding b : Std.ROWS.values()) {
+            if (k++ > 0) o.append(',');
+            var sig = new StringBuilder(b.name()).append('(');
+            for (int i = 0; i < b.params().size(); i++) {
+                if (i > 0) sig.append(", ");
+                sig.append(Ty.show(b.params().get(i)));
+            }
+            sig.append("): ").append(Ty.show(b.result()));
+            o.append("{\"module\":");
+            str(o, b.module());
+            o.append(",\"name\":");
+            str(o, b.name());
+            o.append(",\"signature\":");
+            str(o, sig.toString());
+            o.append(",\"domain\":");
+            str(o, b.domain());
+            o.append(",\"target\":");
+            str(o, b.policy() == Std.Policy.GENERATED ? "(generated)" : b.target());
+            o.append(",\"timeTotal\":").append(b.timeTotal()).append('}');
+        }
+        for (String n : new java.util.TreeSet<>(Checker.PRELUDE)) {
+            if (n.equals("Some")) continue;
+            o.append(",{\"module\":\"prelude\",\"name\":");
+            str(o, n);
+            o.append(",\"signature\":");
+            str(o, n + "(…)");
+            o.append('}');
+        }
+        o.append("],\"types\":[");
+        for (int i = 0; i < TYPES.size(); i++) {
+            if (i > 0) o.append(',');
+            str(o, TYPES.get(i));
+        }
+        o.append("],\"modifiers\":[");
+        for (int i = 0; i < MODIFIERS.size(); i++) {
+            if (i > 0) o.append(',');
+            str(o, MODIFIERS.get(i));
+        }
+        o.append("],\"members\":{");
+        int t = 0;
+        for (String type : new java.util.TreeSet<>(MEMBERS.keySet())) {
+            if (t++ > 0) o.append(',');
+            str(o, type);
+            o.append(":[");
+            List<String[]> ms = MEMBERS.get(type);
+            for (int i = 0; i < ms.size(); i++) {
+                if (i > 0) o.append(',');
+                o.append("{\"name\":");
+                str(o, ms.get(i)[0]);
+                o.append(",\"kind\":");
+                str(o, ms.get(i)[1]);
+                o.append(",\"signature\":");
+                str(o, ms.get(i)[2]);
+                o.append('}');
+            }
+            o.append(']');
+        }
+        return o.append("}}").toString();
+    }
+
+    /**
+     * The {@code lang.lower} answer (M5b, D7's generated-Java view, run on request only): the Java the file lowers to (on
+     * its own, or as the module {@code id} of {@code files}), its path, and its source map's lines as {@code [jscLine,
+     * javaLine]} (each {@code .jsc} line's first Java line); or {@code ok} false with the first error.
+     */
+    public static String lowerJson(String source, String fileName, String id, java.util.Map<String, String> files) {
+        var o = new StringBuilder();
+        try {
+            JscModules modules = modulesOf(files);
+            JscV2.Lowered l = modules == null ? JscV2.lower(source, fileName) : JscV2.lower(source, fileName, id, modules);
+            o.append("{\"ok\":true,\"javaFile\":");
+            str(o, l.javaPath());
+            o.append(",\"contract\":");
+            str(o, l.javaPath().substring(0, l.javaPath().length() - ".java".length()).replace('/', '.'));
+            o.append(",\"java\":");
+            str(o, l.java());
+            o.append(",\"lines\":[");
+            var seen = new HashSet<Integer>();
+            int k = 0;
+            for (int[] e : l.sourceMap()) {
+                if (!seen.add(e[1])) continue;
+                if (k++ > 0) o.append(',');
+                o.append('[').append(e[1]).append(',').append(e[0]).append(']');
+            }
+            return o.append("]}").toString();
+        } catch (JscException e) {
+            o.setLength(0);
+            o.append("{\"ok\":false,\"error\":");
+            str(o, "the file does not lower: " + (e.code == null ? "" : "error[" + e.code + "] ") + e.line + ":" + e.col + ": " + e.getMessage());
+            return o.append('}').toString();
+        } catch (RuntimeException | Error e) {
+            o.setLength(0);
+            o.append("{\"ok\":false,\"error\":");
+            str(o, JscMain.internalError(e));
+            return o.append('}').toString();
+        }
     }
 
     /** The {@code lang.info} answer: the protocol, the model version and the features (ADR-0021 D3). */

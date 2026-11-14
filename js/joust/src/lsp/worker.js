@@ -1,5 +1,5 @@
 // ADR-0021 D2a: an engine worker. It loads ONE engine file (the bundled engine, or the checked private copy of a project's,
-// D3b), answers lang.info and lang.analyze, and does no other I/O: the protocol thread reads every input and posts
+// D3b), answers lang.info, lang.analyze, lang.std, lang.lower and (a build worker) joust.build, and does no other I/O: the protocol thread reads every input and posts
 // contents only. The engine's loader requires only Node built-ins (ADR-0021 §1), which Node always prefers to a file of
 // the same name. A restart is always a new worker (F8: an engine cannot be loaded twice in one thread).
 import { createRequire } from 'node:module';
@@ -62,22 +62,47 @@ export async function runEngineWorker({ engineFile }) {
     info = null;
   }
   parentPort.postMessage({ ready: true, info, version: typeof api.version === 'string' ? api.version : null });
-  parentPort.on('message', (m) => {
-    if (!m || m.op !== 'analyze') return;
-    let r;
-    try {
+  // M5b: lang.std (the catalogue), lang.lower (the generated Java, on request) and, in a build worker, joust.build.
+  const OPS = {
+    analyze: (m) => {
       // A project's files go only to an engine that takes them (lang.info's "modules": the integration with ADR-0018 M2c
       // and M4); an older engine analyses the file on its own.
       const modules = m.files && Array.isArray(info?.features) && info.features.includes('modules');
-      r = api.lang.analyze(modules ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source });
+      const r = api.lang.analyze(modules ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source });
+      return r && r.ok ? { model: r.model } : { failed: String(r?.error ?? 'the engine returned no result') };
+    },
+    std: () => {
+      if (typeof api.lang?.std !== 'function') return { model: null };
+      const r = api.lang.std({});
+      return r && r.ok ? { model: r.json } : { failed: String(r?.error ?? 'the engine returned no result') };
+    },
+    lower: (m) => {
+      if (typeof api.lang?.lower !== 'function') return { failed: 'this engine has no lang.lower' };
+      const r = api.lang.lower(m.files ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source });
+      return r && r.ok ? { model: r.json } : { failed: String(r?.error ?? 'the engine returned no result') };
+    },
+    build: (m) => {
+      // ADR-0018 D9, D14 (M4): the npm packages' libraries (.jsc, by <package>/<path>) and Java library sources, as the
+      // CLI's build passes them. Web Image gives Java longs as BigInts: numbers in the JSON.
+      const r = api.joust.build({ files: m.files, options: m.options ?? {}, javaLibraries: m.javaLibraries ?? {}, packages: m.packages ?? {} });
+      return { model: JSON.stringify(r, (k, v) => (typeof v === 'bigint' ? Number(v) : v)) };
+    },
+  };
+  parentPort.on('message', (m) => {
+    const op = m && OPS[m.op];
+    if (!op) return;
+    let r;
+    try {
+      r = op(m);
     } catch (e) {
       // Web Image surfaces a Java failure that escaped as a TypeError (F7), a Wasm stack overflow as a RangeError.
       parentPort.postMessage({ id: m.id, failed: `${e?.name ?? 'Error'}: ${e?.message ?? e}` });
       return;
     }
-    if (!r || !r.ok) parentPort.postMessage({ id: m.id, failed: String(r?.error ?? 'the engine returned no result') });
-    else if (typeof r.model !== 'string' || r.model.length > MAX_MODEL_CHARS) parentPort.postMessage({ id: m.id, tooLarge: true });
-    else parentPort.postMessage({ id: m.id, model: r.model });
+    if (r.failed) parentPort.postMessage({ id: m.id, failed: r.failed });
+    else if (r.model !== null && (typeof r.model !== 'string' || r.model.length > MAX_MODEL_CHARS * (m.op === 'build' ? 4 : 1))) {
+      parentPort.postMessage({ id: m.id, tooLarge: true });
+    } else parentPort.postMessage({ id: m.id, model: r.model });
   });
 }
 

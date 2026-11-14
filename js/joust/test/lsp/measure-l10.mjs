@@ -9,7 +9,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Worker } from 'node:worker_threads';
 import { EngineHost } from '../../src/lsp/host.js';
 import { ENGINE, HAS_ENGINE } from './client.js';
 
@@ -44,44 +43,57 @@ for (const [name, src] of files) {
   }
   out.latency[name] = { lines, median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2), modelChars: (await host.analyze('a', engine, { file: 'Ledger.jsc', source: src })).model.length };
 }
+// F3 on #99: the 1,889-line file's lowering in the same worker (warm), the yardstick of a hardware-independent guard.
+{
+  const src = files[2][1];
+  const ts = [];
+  for (let k = 0; k < 23; k++) {
+    const t = performance.now();
+    const r = await host.request('a', engine, { op: 'lower', file: 'Ledger.jsc', source: src + ' '.repeat(k) }, { input: `lower${k}`, what: 'the lowering', timeoutMs: 30000 });
+    if (!r.model) throw new Error(`lowering failed: ${r.internal?.message}`);
+    if (k >= 3) ts.push(performance.now() - t);
+  }
+  out.latency.lower1889 = { median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2) };
+  out.latency.ratio = +(out.latency['Ledger1889.jsc'].median / out.latency.lower1889.median).toFixed(3);
+}
 out.rss.oneAnalysisWorker = mb();
 await host.info('b', { ...engine, id: 'measure-b' });
 await host.analyze('b', { ...engine, id: 'measure-b' }, { file: 'Ledger.jsc', source: ledger });
 out.rss.twoAnalysisWorkers = mb();
-// A build worker as M5b will start it (joust build's: 8 MB stack, D2a's 384 MB heap), three Ledger builds.
-const build = new Worker(new URL('../../src/toolchain-worker.js', import.meta.url), { resourceLimits: { stackSizeMb: 8, maxOldGenerationSizeMb: 384 } });
+// M5b's build worker, as the server starts it (EngineHost with joust build's 8 MB stack and D2a's 384 MB heap, the
+// worker's build operation): three Ledger builds.
+const buildHost = new EngineHost({ workerEntry: new URL('../../src/lsp/worker.js', import.meta.url), stackSizeMb: 8, maxOldGenerationSizeMb: 384,
+  analysisMs: 120000, maxWorkers: 1 });
 const builds = [];
 for (let k = 0; k < 3; k++) {
   const t = performance.now();
-  // The build worker's protocol since #80 (M1h): it says it is ready, then that a build started, then the result; only
-  // the result answers (the integration of M1h with M5a).
-  const r = await new Promise((resolve, reject) => {
-    const on = (m) => {
-      if (m?.id !== k || (m.result === undefined && m.error === undefined)) return;
-      build.off('message', on);
-      resolve(m);
-    };
-    build.on('message', on);
-    build.once('error', reject);
-    build.postMessage({ id: k, files: { 'org/julclang/state/examples/dsl/Ledger.jsc': ledger }, options: {}, dir: ENGINE });
-  });
-  if (r.error || !r.result?.ok) throw new Error(`build failed: ${r.error ?? JSON.stringify(r.result?.diagnostics)}`);
+  const r = await buildHost.request('build', { ...engine, id: 'measure-build' }, { op: 'build',
+    files: { 'org/julclang/state/examples/dsl/Ledger.jsc': ledger + ' '.repeat(k) }, options: {} }, { input: String(k), what: 'the build', timeoutMs: 120000 });
+  const result = r.model ? JSON.parse(r.model) : null;
+  if (!result?.ok) throw new Error(`build failed: ${r.internal?.message ?? JSON.stringify(result?.diagnostics)}`);
   builds.push(Math.round(performance.now() - t));
 }
 out.rss.twoAnalysisWorkersAndABuildWorker = mb();
 out.builds = builds;
-await build.terminate();
+buildHost.dispose();
 host.dispose();
 console.log(JSON.stringify(out, null, 2));
 
 const bound = (v, strict, loose) => (check ? v <= loose : true) && { v, strict, withinStrict: v <= strict };
 const results = [
   // CI's runner measured 86.7 ms (run 43350031856); its bound is set about 3x above that, to catch regressions without
-  // flaking on a noisy runner (#83 review F9). L10's strict 50 ms is for §1's reference machine.
-  ['p95 (1,889 lines)', bound(out.latency['Ledger1889.jsc'].p95, 50, 250)],
+  // flaking on a noisy runner (#83 review F9). L10's strict bound (60 ms since r7, #99 F3) is for §1's reference machine.
+  ['p95 (1,889 lines)', bound(out.latency['Ledger1889.jsc'].p95, 60, 250)],
   ['RSS, one analysis worker (MB)', bound(out.rss.oneAnalysisWorker, 600, 900)],
   ['RSS, two analysis workers and a build worker (MB)', bound(out.rss.twoAnalysisWorkersAndABuildWorker, 1229, 1800)],
 ];
+// F3 on #99: guards that do not depend on the runner. The model of the 1,889-line file is deterministic (239,874
+// characters at M5b): a budget 5% above it. And the analysis's median against the same worker's warm lowering of the
+// same file, measured in the same job (M5b: about 0.3): at most 0.5.
+results.push(['model of 1,889 lines (characters)', check ? out.latency['Ledger1889.jsc'].modelChars <= 252000 && { v: out.latency['Ledger1889.jsc'].modelChars, strict: 252000, withinStrict: true }
+  : { v: out.latency['Ledger1889.jsc'].modelChars, strict: 252000, withinStrict: out.latency['Ledger1889.jsc'].modelChars <= 252000 }]);
+results.push(['analysis / lowering, median (1,889 lines)', check ? out.latency.ratio <= 0.5 && { v: out.latency.ratio, strict: 0.5, withinStrict: true }
+  : { v: out.latency.ratio, strict: 0.5, withinStrict: out.latency.ratio <= 0.5 }]);
 let failed = 0;
 for (const [what, r] of results) {
   if (!r) {

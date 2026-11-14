@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { promises as fsp, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, posix, relative, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   CancellationTokenSource, CodeActionKind, CodeActionTriggerKind, TextDocumentSyncKind, TextDocuments,
 } from 'vscode-languageserver/node';
@@ -17,14 +17,20 @@ import { EngineHost } from './host.js';
 import { createReader } from './inputs.js';
 import { scanImports } from './imports.js';
 import {
-  diagnostics as toDiagnostics, documentSymbols, fixFor, foldingRanges, internalDiagnostic, parseModel, selectionRanges,
+  diagnostics as toDiagnostics, MAX_PUBLISHED, documentSymbols, fixFor, foldingRanges, internalDiagnostic, MODEL_VERSION, parseModel, selectionRanges,
 } from './model.js';
+import {
+  completion, completionModel, definition, hover, importEdit, invisibleOccurrences, references, renamePlan, renamePreserves, semanticTokens, TOKEN_MODIFIERS,
+  TOKEN_TYPES,
+} from './features.js';
 import { inside, localPath } from './paths.js';
 import { createSelector, createStore, ENGINE_JS, ENGINE_WASM, engineId, workerKey } from './select.js';
 import { createHash } from 'node:crypto';
 
 /** D4: a file over this many characters is not analysed (one diagnostic says so). */
 export const MAX_FILE_CHARS = 1024 * 1024;
+/** The invisible characters one Remove invisible characters… lists and removes at most (S2 on #99). */
+export const MAX_INVISIBLE = 10_000;
 
 /** The project files one analysis reads at most (its imports, transitively; the integration with ADR-0018 M2c, M4). */
 export const MAX_PROJECT_FILES = 64;
@@ -34,23 +40,78 @@ export const MAX_PROJECT_CHARS = 8 * 1024 * 1024;
 /** The import specifiers read from one project file at most (#98 S1): MAX_PROJECT_FILES × 2. */
 export const MAX_IMPORTS_PER_FILE = 128;
 export const DEBOUNCE_MS = 150;
+/** D7: Show generated Java runs the lowering on request only, with its own cap (§12 note 10's latency budget). */
+export const LOWER_MS = 10000;
+/** D2a, D4: the build worker's limits (joust build's ENGINE_STACK_MB; the build heap of §1), its cap and idle stop. */
+export const BUILD_STACK_MB = 8;
+export const BUILD_HEAP_MB = 384;
+export const BUILD_MS = 120000;
+export const BUILD_IDLE_MS = 5 * 60 * 1000;
+/** D4: at most this many source files in a build snapshot. */
+export const MAX_BUILD_FILES = 500;
+/** S7 on #99: at most this many characters in a build snapshot (sources and libraries). */
+export const MAX_BUILD_CHARS = 16 * 1024 * 1024;
+/** D4: a script over this many bytes is reported on save (a transaction holds at most 16 KB, scripts included). */
+export const SCRIPT_WARN_BYTES = 14 * 1024;
 export const SERVER_NAME = 'joust-lsp';
 const FIX_COMMAND = 'joust.applyFix';
+const IMPORT_COMMAND = 'joust.addImport';
+/** Opaque ids (fixes, imports, generated documents, invisible-character removals) expire after this. */
+const ID_MS = 10 * 60 * 1000;
+
+/**
+ * L6 for an edit that should add nothing: every diagnostic of `after` (the edited snapshot's model) is one `before` had,
+ * by severity, code and line (lines shifted by the edits' added or removed line ends), except `gone` (the fixed one),
+ * which must not be in `after`. `{ ok }`, or `{ ok: false, reason }`.
+ */
+export function addsNoDiagnostic(before, after, edits, gone = null) {
+  const shifts = edits.map((e) => ({ end: e.range.end, delta: (e.newText.match(/\n/g) ?? []).length - (e.range.end.line - e.range.start.line) }));
+  // A position at or after an edit's end moves by the line ends the edit adds or removes.
+  const lineAfter = (l, c) => l + shifts.filter((x) => l > x.end.line || (l === x.end.line && c >= x.end.character)).reduce((a, x) => a + x.delta, 0);
+  const key = (sev, code, line) => `${sev}|${code}|${line}`;
+  const had = new Map();
+  for (const d of before.diagnostics) {
+    if (gone && d.code === gone.code && d.range.join() === gone.range.join()) continue;
+    const k = key(d.severity, d.code, lineAfter(d.range[0], d.range[1]));
+    had.set(k, (had.get(k) ?? 0) + 1);
+  }
+  for (const d of after.diagnostics) {
+    if (d.internal) return { ok: false, reason: d.message };
+    const k = key(d.severity, d.code, d.range[0]);
+    const n = had.get(k) ?? 0;
+    if (!n) return { ok: false, reason: `it would add ${d.code ?? 'a diagnostic'} at ${d.range[0] + 1}:${d.range[1] + 1}: ${d.message}` };
+    had.set(k, n - 1);
+  }
+  return { ok: true };
+}
 
 const hash = (b) => createHash('sha256').update(b).digest('hex');
 
-/** The advertised capabilities (D10's allow-list for M5a): nothing else is ever advertised. */
-export function capabilities({ edits }) {
+/**
+ * The advertised capabilities (D10's allow-list): nothing else is ever advertised. M5b adds hover, definition,
+ * references and semantic tokens to every client; completion, code actions and their commands only to clients that apply
+ * edits through a verified, versioned path (D4a: the VS Code extension's handleApplyEdit, or another client enabled by
+ * flag); `textDocument/rename` only to such another client (VS Code renames through JOUST: Rename Symbol).
+ */
+export function capabilities({ edits, rename = false }) {
   return {
     // Open, change, close and save; no willSave and no willSaveWaitUntil (S18).
     textDocumentSync: { openClose: true, change: TextDocumentSyncKind.Incremental, save: { includeText: false } },
     documentSymbolProvider: true,
     foldingRangeProvider: true,
     selectionRangeProvider: true,
-    // Code actions only to clients that apply edits through a verified, versioned path (D4a): the VS Code extension's
-    // handleApplyEdit, or another client enabled by flag. Offered only on Invoked requests (D7, C8).
-    ...(edits ? { codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] }, executeCommandProvider: { commands: [FIX_COMMAND] } } : {}),
-    experimental: { joust: { protocol: 1, modelVersion: 1 } },
+    hoverProvider: true,
+    definitionProvider: true,
+    referencesProvider: true,
+    semanticTokensProvider: { legend: { tokenTypes: TOKEN_TYPES, tokenModifiers: TOKEN_MODIFIERS }, full: true },
+    // Code actions offered only on Invoked requests (D7, C8).
+    ...(edits ? {
+      codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
+      executeCommandProvider: { commands: [FIX_COMMAND, IMPORT_COMMAND] },
+      completionProvider: { triggerCharacters: ['.'] },
+    } : {}),
+    ...(edits && rename ? { renameProvider: true } : {}),
+    experimental: { joust: { protocol: 1, modelVersion: MODEL_VERSION } },
   };
 }
 
@@ -109,16 +170,29 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // C18: a worker loading a store copy holds a lease on it; engines outside the store (the bundled one) need none.
     lease: (engine) => (store?.root && engine.file.startsWith(store.root + sep) ? store.lease(engine.id) : () => {}),
   });
+  // D2a, D4 (M5b): the build worker, started on the first save or Check build, stopped after 5 idle minutes: joust
+  // build's 8 MB stack (ENGINE_STACK_MB) and a 384 MB heap, a 120 s cap, at most one per window.
+  const buildHost = new EngineHost({
+    workerEntry, stackSizeMb: BUILD_STACK_MB, maxOldGenerationSizeMb: BUILD_HEAP_MB, analysisMs: BUILD_MS, maxWorkers: 1, idleMs: BUILD_IDLE_MS,
+    ...(hostOptions.build ?? {}), onStart: (engine) => store?.touch?.(engine.id),
+    lease: (engine) => (store?.root && engine.file.startsWith(store.root + sep) ? store.lease(engine.id) : () => {}),
+  });
   const reader = createReader();
   // uri -> the state of ONE open lifetime of the document (review C2 on #83): every asynchronous result checks that the
   // state it started with is still the current one, so a close and a reopen at the same version never mix lifetimes.
   const state = new Map();   // uri -> { lastPublished, model, modelVersion, modelGen, outlineModel, timer, cts, selection }
   const fixes = new Map();   // opaque single-use fix id -> { uri, st, version, gen, engineId, code, range, issued }
+  const imports = new Map(); // opaque single-use import id -> { uri, st, gen, name, module, issued }
+  const generatedDocs = new Map(); // opaque id -> { text, issued } (the Show generated Java documents, D4b)
+  const removals = new Map(); // opaque single-use id -> { uri, st, version, gen, ranges, issued }
+  const stdCache = new Map(); // engine id -> Promise<catalogue | null>
   let selector;
   let bundled;
   let isVscode = false;
   let edits = false;
   let unavailableShown = false;
+  // Q7: builds on save are on in trusted project-matched npm projects unless the client turns them off.
+  let buildOnSave = true;
 
   const log = (m) => connection.console.log(m);
   const missing = new Map();   // engine id -> consecutive missing-copy results (S10)
@@ -127,12 +201,15 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   function reselectAll(delay = 0) {
     selector.invalidate();
     fixes.clear();
+    imports.clear();
+    removals.clear();
     for (const uri of state.keys()) schedule(uri, delay);
   }
 
   connection.onInitialize(async (params) => {
     const io = params.initializationOptions ?? {};
     isVscode = io.client === 'vscode-joust';
+    if (io.buildOnSave === false) buildOnSave = false;
     // Other editors have no workspace trust: their project's engine loads only with --project-engine (D3b).
     const trusted = isVscode ? io.trusted === true : flags.projectEngine === true;
     const ws = params.capabilities?.workspace ?? {};
@@ -173,7 +250,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     let first = { source: 'bundled', engine: bundled, mode: 'advisory', reason: trusted ? 'no folder' : 'restricted' };
     if (folders.length) first = await selector.select(join(folders[0], '.joust-probe.jsc')).catch(() => first);
     return {
-      capabilities: capabilities({ edits }),
+      capabilities: capabilities({ edits, rename: !isVscode && edits }),
       // The project's compiler is project-matched for the project's contracts (a file elsewhere is advisory: joust/status).
       serverInfo: { name: SERVER_NAME, version: `${serverVersion}; compiler JOUST ${first.engine.version} (${first.source}, `
         + `${first.source === 'project' ? 'project-matched' : 'advisory'})` },
@@ -207,7 +284,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (s.lastPublished != null && version < s.lastPublished) return;
     s.lastPublished = version;
     s.lastDiagnostics = diags;
-    connection.sendDiagnostics({ uri, version, diagnostics: diags });
+    // D4 (M5b): a build's diagnostics belong to the version they were computed for; withdrawn once a newer one exists.
+    const extra = s.build && s.build.version === version && s.build.gen === selector.generation ? s.build.diagnostics : [];
+    connection.sendDiagnostics({ uri, version, diagnostics: [...diags, ...extra].slice(0, MAX_PUBLISHED + 1) });
   }
 
   function schedule(uri, delay = DEBOUNCE_MS) {
@@ -516,11 +595,21 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     s.model = model;
     s.modelVersion = version;
     s.modelGen = gen;
+    // C4, F1 on #99: the last model without an error, with its text: completion maps it onto a newer text it has no
+    // complete model of (features.reconcile keeps only what the edit did not touch).
+    if (!model.diagnostics.some((d) => d.severity === 'error')) {
+      s.goodModel = model;
+      s.goodText = text;
+      s.goodGen = gen;
+    }
     s.modelEngine = sel.engine.id;
     // C9: an accepted model replaces the outline even when it has no declarations (a v1 file, an emptied contract); a
     // file the front end stopped in early keeps the last outline only while its own model has none.
     if (model.declarations.length || model.accepted) s.outlineModel = model;
-    publish(uri, version, toDiagnostics(model, label));
+    // M5b: a file whose imports from other files the language server does not read yet (M5c) is analysed advisory for
+    // them: the build checks those imports (L1 holds for snapshots the server reads in full).
+    const imports = Array.isArray(model.advisory) && model.advisory.includes('imports');
+    publish(uri, version, toDiagnostics(model, imports && sel.mode === 'project-matched' ? `${label.slice(0, -1)}; imports from other files advisory)` : label));
     settle(s);
     // The status says which version has a model (the extension's tests wait for it, F12).
     // #98 C10: the effective selection (a java: import or a bound reached keeps the file advisory, with its reason).
@@ -541,6 +630,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     state.set(e.document.uri, { lastPublished: null });
     schedule(e.document.uri, 0);
+    withdrawDisk(e.document.uri, e.document.getText()).catch(() => {});
     // A buffer opened for a file an importer looked for (perhaps missing on disk) is now what it reads (#98 N1).
     rescheduleImporters([localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
   });
@@ -549,6 +639,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const s = state.get(e.document.uri);
     // An analysis of an older version still running is cancelled (after the grace period its worker is replaced).
     s.cts?.cancel();
+    // A newer generation: every build result is withdrawn (L8), this document's at its next publish, the others' now
+    // (their snapshot read this buffer).
+    if (s.build) s.build = null;
+    withdrawBuilds(e.document.uri);
     schedule(e.document.uri);
     // The open files that import this one (a library, a contract they read) are analysed again after it, and only they
     // (#98 F4): their last analysis read its path.
@@ -558,6 +652,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const s = state.get(e.document.uri);
     // Its importers read its buffer: they are analysed again with its file on disk (#98 F3d).
     rescheduleImporters([s?.realPath, localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
+    // C7 on #99: a build that read this buffer no longer describes anything open: withdrawn, and one in flight cancelled.
+    withdrawBuilds(e.document.uri);
     if (s) {
       clearTimeout(s.timer);
       s.cts?.cancel();
@@ -566,6 +662,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (s) settle(s);
     // A close ends the lifetime: its unexecuted fixes go, and executing ones fail their identity check (C2).
     for (const [id, f] of fixes) if (f.uri === e.document.uri) fixes.delete(id);
+    for (const [id, f] of imports) if (f.uri === e.document.uri) imports.delete(id);
+    for (const [id, f] of removals) if (f.uri === e.document.uri) removals.delete(id);
     connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
   });
 
@@ -620,13 +718,31 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   });
 
   connection.onExecuteCommand(async (p, token) => {
-    if (!edits || p.command !== FIX_COMMAND) return { applied: false, reason: 'unknown command' };
+    if (!edits || (p.command !== FIX_COMMAND && p.command !== IMPORT_COMMAND)) return { applied: false, reason: 'unknown command' };
     // S17: exactly one argument, an opaque id this server issued, used once; no edit text, no paths.
     if (!Array.isArray(p.arguments) || p.arguments.length !== 1 || typeof p.arguments[0] !== 'string') return { applied: false, reason: 'refused' };
-    const id = p.arguments[0];
+    return p.command === IMPORT_COMMAND ? addImport(p.arguments[0], token) : applyFix(p.arguments[0], token);
+  });
+
+  /** Analyses `source` as the file `uri` with its current selection; the parsed model, or null. */
+  async function analyseText(uri, sel, source, token) {
+    // With the project's files the document's imports reach, as its analysis has them (else an edit's check would see
+    // the file alone and refuse it for its imports).
+    const project = await projectOf(uri, source, sel);
+    const r = await host.analyze(sel.key, sel.engine, { file: fileNameOf(uri), source, scope: scopeOf(sel),
+      ...(project ? { moduleId: project.id, files: project.files } : {}) }, token);
+    if (!r.model) return null;
+    try {
+      return parseModel(r.model);
+    } catch {
+      return null;
+    }
+  }
+
+  async function applyFix(id, token) {
     const f = fixes.get(id);
     fixes.delete(id);
-    if (!f || Date.now() - f.issued > 10 * 60 * 1000) return { applied: false, reason: 'unknown or used fix' };
+    if (!f || Date.now() - f.issued > ID_MS) return { applied: false, reason: 'unknown or used fix' };
     const doc = documents.get(f.uri);
     const s = state.get(f.uri);
     // The same open lifetime (C2), text version and selection generation (C4) as when the fix was offered.
@@ -640,29 +756,690 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const fix = fixFor(text, d, doc.getText({ start: { line: d.range[0], character: 0 }, end: { line: d.range[0] + 1, character: 0 } }));
     if (!fix) return { applied: false, reason: 'stale fix' };
     const fixed = TextDocument.applyEdits(doc, fix.edits);
-    const sel = s.selection;
-    const r = await host.analyze(sel.key, sel.engine, { file: fileNameOf(f.uri), source: fixed, scope: scopeOf(sel) }, token);
-    if (!r.model) return { applied: false, reason: 'the fix could not be checked' };
+    const after = await analyseText(f.uri, s.selection, fixed, token);
+    if (!after) return { applied: false, reason: 'the fix could not be checked' };
     if (!current()) return { applied: false, reason: 'stale fix' };
-    const after = parseModel(r.model);
-    const at = (x) => x.line * 1e6 + x.col;
+    // M5b's full L6 (recovery reports every error): every diagnostic after the fix is one the file had (by code and line,
+    // lines shifted by the fix), and the fixed one is gone. A model without recovery (an M5a engine) holds the first error
+    // only, so there the M5a rule stays: no error at or before the fix's position.
+    const recovered = s.model.modelVersion >= 2;
     const fixedAt = (d.range[0] + 1) * 1e6 + d.range[1] + 1;
-    // M5a's model holds the first error only: the fix's diagnostic must be gone, and no error may come at or before its
-    // position (one there is the fix's own doing, review S2 on #83: `let k` becoming `const k` that hides a state field);
-    // a later error was hidden behind it, not added.
-    const bad = after.diagnostics.some((x) => x.severity === 'error' && (x.internal || (x.code === d.code && x.range.join() === d.range.join())
-      || at(x) <= fixedAt));
+    const at = (x) => x.line * 1e6 + x.col;
+    const bad = recovered ? !addsNoDiagnostic(s.model, after, fix.edits, d).ok
+      : after.diagnostics.some((x) => x.severity === 'error' && (x.internal || (x.code === d.code && x.range.join() === d.range.join()) || at(x) <= fixedAt));
     if (bad) return { applied: false, reason: 'the fix did not check' };
     if (!current()) return { applied: false, reason: 'stale fix' };
-    // D4a: applied by the client only through a versioned workspace/applyEdit (the extension's handleApplyEdit refuses
-    // it if the document is closed or has another version).
-    // S9, C19 on #83: the SHA-256 of the whole document text the fix was validated on goes along (joustExpected), and the
-    // extension's handler compares it with the document right before applying: a close and reopen at a reused version
-    // with other text anywhere (not only in the replaced range) refuses the edit.
-    const expected = [{ uri: f.uri, sha256: hash(text) }];
-    const res = await connection.workspace.applyEdit({ label: fix.title, edit: { documentChanges: [{ textDocument: { uri: f.uri, version: f.version },
-      edits: fix.edits }] }, joustExpected: expected });
+    return applyVerified(f.uri, f.version, text, fix.edits, fix.title);
+  }
+
+  /**
+   * D4a: an edit is applied by the client only through a versioned workspace/applyEdit (the extension's handleApplyEdit
+   * refuses it if the document is closed or has another version). S9, C19 on #83: the SHA-256 of the whole document text
+   * the edit was validated on goes along (joustExpected), and the extension's handler compares it with the document right
+   * before applying.
+   */
+  async function applyVerified(uri, version, text, editsToApply, label) {
+    const expected = [{ uri, sha256: hash(text) }];
+    const res = await connection.workspace.applyEdit({ label, edit: { documentChanges: [{ textDocument: { uri, version },
+      edits: editsToApply }] }, joustExpected: expected });
     return { applied: res.applied === true };
+  }
+
+  /**
+   * joust.addImport (D7, D4a): the import a completion item needs, added after the item was inserted. The id binds the
+   * document's open lifetime and the selection generation; the edit is computed on the text at execution, re-checked
+   * (it adds no diagnostic), and bound to that text's version.
+   */
+  async function addImport(id, token) {
+    const imp = imports.get(id);
+    imports.delete(id);
+    if (!imp || Date.now() - imp.issued > ID_MS) return { applied: false, reason: 'unknown or used import' };
+    const doc = documents.get(imp.uri);
+    if (!doc || state.get(imp.uri) !== imp.st || selector.generation !== imp.gen) return { applied: false, reason: 'stale import' };
+    const version = doc.version;
+    const text = doc.getText();
+    const e = importEdit(text, imp.name, imp.module);
+    if (!e) return { applied: false, reason: 'already imported' };
+    const sel = imp.st.selection;
+    const current = () => state.get(imp.uri) === imp.st && documents.get(imp.uri)?.version === version && selector.generation === imp.gen;
+    const before = await analyseText(imp.uri, sel, text, token);
+    const after = before && await analyseText(imp.uri, sel, TextDocument.applyEdits(doc, [e]), token);
+    if (!before || !after) return { applied: false, reason: 'the import could not be checked' };
+    if (!current()) return { applied: false, reason: 'stale import' };
+    // Every JSC0704 for this name goes; nothing else may change.
+    const keep = { ...before, diagnostics: before.diagnostics.filter((d) => !(d.code === 'JSC0704' && d.message.startsWith(`${imp.name} is in ${imp.module}:`))) };
+    if (!addsNoDiagnostic(keep, after, [e]).ok) return { applied: false, reason: 'the import did not check' };
+    return applyVerified(imp.uri, version, text, [e], `Import ${imp.name} from "${imp.module}"`);
+  }
+
+  // ------------------------------------------------------------------ M5b: lookups in the model (D7)
+
+  /** The model of the current text and selection, or null (edits are computed only from one, D4a). */
+  function freshModel(uri) {
+    const doc = documents.get(uri);
+    const s = state.get(uri);
+    if (!doc || !s?.model || s.modelVersion !== doc.version || s.modelGen !== selector.generation) return null;
+    return { doc, s, model: s.model };
+  }
+
+  /** The engine's std catalogue ({ rows, types, members, modifiers }), once per engine; null for an engine without one. */
+  function stdOf(sel) {
+    if (!sel) return Promise.resolve(null);
+    let p = stdCache.get(sel.engine.id);
+    if (!p) {
+      p = host.request(sel.key, sel.engine, { op: 'std' }, { scope: scopeOf(sel), input: 'std', what: 'the std catalogue' }).then((r) => {
+        if (r.model === null) return null;   // an engine without lang.std: nothing to ask again
+        if (typeof r.model !== 'string') {
+          stdCache.delete(sel.engine.id);
+          return null;
+        }
+        return JSON.parse(r.model);
+      }).catch(() => {
+        stdCache.delete(sel.engine.id);
+        return null;
+      });
+      stdCache.set(sel.engine.id, p);
+    }
+    return p;
+  }
+
+  // C4 on #99: hover, definition, references and completion answer from the model of the version they are asked about
+  // (waiting for its analysis, bounded as waitModel is), never from an older one: names and ranges move with every edit.
+  async function currentModel(uri) {
+    await waitModel(uri);
+    return freshModel(uri);
+  }
+  connection.onHover(async (p) => {
+    const f = await currentModel(p.textDocument.uri);
+    if (!f) return null;
+    const std = await stdOf(f.s.selection);
+    return freshModel(p.textDocument.uri)?.model === f.model ? hover(f.model, p.position, std) : null;
+  });
+  connection.onDefinition(async (p) => {
+    const f = await currentModel(p.textDocument.uri);
+    return f ? definition(f.model, p.textDocument.uri, p.position) : null;
+  });
+  connection.onReferences(async (p) => {
+    const f = await currentModel(p.textDocument.uri);
+    return f ? references(f.model, p.textDocument.uri, p.position, p.context?.includeDeclaration === true) : [];
+  });
+  connection.languages.semanticTokens.on(async (p) => {
+    await waitModel(p.textDocument.uri);
+    const m = state.get(p.textDocument.uri)?.model;
+    return m ? semanticTokens(m) : { data: [] };
+  });
+
+  // D7, D4a (C13): computed for the version the server holds when the request arrives and dropped if a newer one has
+  // arrived; text edits replace only the word being completed; an import an item needs comes from its joust.addImport
+  // command (an opaque, single-use id), never from additionalTextEdits.
+  connection.onCompletion(async (p) => {
+    if (!edits) return null;
+    const uri = p.textDocument.uri;
+    const doc = documents.get(uri);
+    const s = state.get(uri);
+    if (!doc || !s) return null;
+    const version = doc.version;
+    // C4 on #99: the model of this version (waited for); without one, no name of the file is offered (only keywords,
+    // built-ins and std), and the list says it is incomplete.
+    const fresh = await currentModel(uri);
+    const std = (await stdOf(s.selection)) ?? {};
+    const now = documents.get(uri);
+    if (!now || now.version !== version || state.get(uri) !== s) return null;
+    const current = freshModel(uri);
+    const usable = fresh && current && current.model === fresh.model ? fresh.model : null;
+    // A model with an error (a member recovery dropped or stopped checking, the usual state while typing) or none: the
+    // last model without one, reconciled with this text (C4, F1).
+    // C8: the current model's own declarations first; the good model's only where the current one lacks them.
+    const good = s.goodModel && s.goodGen === selector.generation && (!usable || usable.diagnostics.some((d) => d.severity === 'error'))
+      ? completionModel(usable, s.goodModel, s.goodText, now.getText()) : null;
+    // The previous list's import ids go: only the latest list's items can still be chosen.
+    for (const [id, x] of imports) if (x.uri === uri || Date.now() - x.issued > ID_MS) imports.delete(id);
+    const model = good ?? usable ?? { declarations: [], references: [], builtins: [], exprs: [], types: [], diagnostics: [] };
+    const items = completion(now.getText(), p.position, model, std).map((it) => {
+      if (!it.needsImport) return it;
+      const { needsImport, ...rest } = it;
+      const id = randomBytes(18).toString('base64url');
+      imports.set(id, { uri, st: s, gen: selector.generation, ...needsImport, issued: Date.now() });
+      return { ...rest, command: { title: `Import ${needsImport.name}`, command: IMPORT_COMMAND, arguments: [id] } };
+    });
+    // Not from a clean model of this version: the client asks again as typing goes on.
+    return { isIncomplete: !usable || !!good, items };
+  });
+
+  // ------------------------------------------------------------------ M5b: rename (D7, L6)
+
+  /** The rename at `position`, validated on the current snapshot: `{ plan, version, text, st }` or `{ error }`. */
+  async function validatedRename(uri, position, newName, token) {
+    const f = freshModel(uri);
+    if (!f) return { error: 'the file changed or is still being analysed: try again' };
+    if (f.model.modelVersion < 2) return { error: 'this compiler predates rename (JOUST M5b)' };
+    const plan = renamePlan(f.model, position, newName);
+    if (plan.error) return plan;
+    const version = f.doc.version;
+    const text = f.doc.getText();
+    const after = await analyseText(uri, f.s.selection, TextDocument.applyEdits(f.doc, plan.edits), token);
+    if (!after) return { error: 'the rename could not be checked' };
+    const ok = renamePreserves(f.model, after, plan.edits);
+    if (!ok.ok) return { error: ok.reason };
+    if (!freshModel(uri) || documents.get(uri)?.version !== version) return { error: 'the file changed: try again' };
+    // F2 on #99: a name other files can see is renamed only when no file imports this one (renaming across files comes
+    // with M5c's project index). C11 (r2): checked last, on the buffers open now, just before the edit is applied.
+    if (plan.visible) {
+      const imp = await importersOf(uri, f.s.selection ?? await selectionFor(uri));
+      if (imp.error) return { error: `'${plan.decl.name}' can be named by other files, and ${imp.error}: rename it by hand (renaming across files comes with M5c)` };
+      if (imp.importers.length) {
+        return { error: `'${plan.decl.name}' can be named by the files that import this one (${imp.importers.slice(0, 3).join(', ')}${imp.importers.length > 3 ? ', …' : ''}):`
+          + ' renaming across files comes with M5c; rename it by hand' };
+      }
+      if (!freshModel(uri) || documents.get(uri)?.version !== version) return { error: 'the file changed: try again' };
+    }
+    return { plan, version, text, st: f.s };
+  }
+
+  const abiWarning = (d) => `'${d.name}' is recorded in the ABI manifest: renaming it changes the manifest, the generated client and the`
+    + ' description (the script does not change), and the next build\'s ABI gate asks you to accept the new manifest (Accept ABI…).';
+
+  // VS Code: JOUST: Rename Symbol sends this; the server validates and applies through workspace/applyEdit (D4a).
+  connection.onRequest('joust/rename', async (p, token) => {
+    if (!edits) return { applied: false, error: 'edits are off for this client' };
+    if (!p || typeof p.uri !== 'string' || typeof p.newName !== 'string' || !p.position) return { applied: false, error: 'refused' };
+    const r = await validatedRename(p.uri, p.position, p.newName, token);
+    if (r.error) return { applied: false, error: r.error };
+    if (r.plan.abi && p.confirm !== true) return { applied: false, needsConfirmation: true, warning: abiWarning(r.plan.decl) };
+    return applyVerified(p.uri, r.version, r.text, r.plan.edits, `Rename '${r.plan.decl.name}' to '${p.newName}'`);
+  });
+  connection.onRequest('joust/prepareRename', (p) => {
+    const f = p && freshModel(p.uri);
+    if (!f) return { error: 'the file changed or is still being analysed: try again' };
+    const plan = renamePlan(f.model, p.position, '__joust_probe__');
+    return plan.error && !plan.decl ? { error: plan.error } : { name: plan.decl.name, kind: plan.decl.kind, abi: plan.abi };
+  });
+
+  // Other editors with edits enabled (flag): the standard rename, versioned (D4a); an ABI-recorded name is refused there,
+  // since no warning can come first.
+  // S8 on #99: registered whatever the client (isVscode is known only at initialize); VS Code gets no rename capability,
+  // and the handler refuses there too.
+  {
+    connection.onRenameRequest(async (p, token) => {
+      if (!edits || isVscode) return null;
+      const r = await validatedRename(p.textDocument.uri, p.position, p.newName, token);
+      if (r.error) throw new Error(r.error);
+      if (r.plan.abi) throw new Error(`${abiWarning(r.plan.decl)} Rename it in VS Code (with its warning), or by hand.`);
+      return { documentChanges: [{ textDocument: { uri: p.textDocument.uri, version: r.version }, edits: r.plan.edits }] };
+    });
+  }
+
+  // ------------------------------------------------------------------ M5b: Remove invisible characters… (D7)
+
+  // Lists every invisible or control character (JSC0145, JSC0148) of the current text; the extension shows them in a modal
+  // and only on confirmation sends joust/removeInvisible with the single-use id, which deletes exactly those characters
+  // from exactly that version.
+  connection.onRequest('joust/invisible', (p) => {
+    const f = p && freshModel(p.uri);
+    if (!f) return { error: 'the file changed or is still being analysed: try again' };
+    const all = invisibleOccurrences(f.model, f.doc.getText());
+    if (!all.length) return { occurrences: [] };
+    // Bounded (S2 on #99): the first MAX_INVISIBLE, the count of the rest said; a second run removes them.
+    const occurrences = all.slice(0, MAX_INVISIBLE);
+    for (const [k, x] of removals) if (x.uri === p.uri || Date.now() - x.issued > ID_MS) removals.delete(k);
+    const id = randomBytes(18).toString('base64url');
+    removals.set(id, { uri: p.uri, st: f.s, version: f.doc.version, gen: selector.generation, ranges: occurrences.map((o) => o.range), issued: Date.now() });
+    return { id, version: f.doc.version, occurrences: occurrences.map(({ range, ...o }) => o), more: all.length - occurrences.length };
+  });
+  connection.onRequest('joust/removeInvisible', async (p) => {
+    if (!edits) return { applied: false, error: 'edits are off for this client' };
+    const x = p && typeof p.id === 'string' && removals.get(p.id);
+    if (p && typeof p.id === 'string') removals.delete(p.id);
+    if (!x || Date.now() - x.issued > ID_MS) return { applied: false, error: 'unknown or used id' };
+    const doc = documents.get(x.uri);
+    if (!doc || state.get(x.uri) !== x.st || doc.version !== x.version || selector.generation !== x.gen) return { applied: false, error: 'the file changed' };
+    const del = x.ranges.map((r) => ({ range: { start: { line: r[0], character: r[1] }, end: { line: r[2], character: r[3] } }, newText: '' }));
+    return applyVerified(x.uri, x.version, doc.getText(), del, 'Remove invisible characters');
+  });
+
+  // ------------------------------------------------------------------ M5b: Show generated Java (D7)
+
+  // On request only (§12 note 10): the current text lowered by the file's compiler (lang.lower), kept under an opaque id
+  // and served as a read-only document (joust-gen:, D4b), with the Java line the source map gives for the cursor.
+  connection.onRequest('joust/generatedJava', async (p, token) => {
+    const doc = p && documents.get(p.uri);
+    const s = p && state.get(p.uri);
+    if (!doc || !s) return { error: 'the file is not open' };
+    const sel = s.selection ?? await selectionFor(p.uri);
+    const text = doc.getText();
+    if (text.length > MAX_FILE_CHARS) return { error: 'the file is larger than the language server reads' };
+    const project = await projectOf(p.uri, text, sel);
+    const r = await host.request(sel.key, sel.engine, { op: 'lower', file: fileNameOf(p.uri), source: text, ...(project ? { moduleId: project.id, files: project.files } : {}) },
+      { scope: scopeOf(sel), input: project ? JSON.stringify([text, project.id, Object.entries(project.files).sort()]) : text, what: 'the lowering',
+        timeoutMs: LOWER_MS }, token);
+    if (!r.model) return { error: r.internal?.message ?? (r.cancelled ? 'cancelled' : 'the lowering is unavailable') };
+    const g = JSON.parse(r.model);
+    if (!g.ok) return { error: g.error ?? 'the file does not lower', diagnostic: g.diagnostic ?? null };
+    const keep = [...generatedDocs.entries()].sort((a, b) => b[1].issued - a[1].issued).slice(19);
+    for (const [k] of keep) generatedDocs.delete(k);
+    const id = randomBytes(18).toString('base64url');
+    generatedDocs.set(id, { text: g.java, issued: Date.now(), javaFile: g.javaFile });
+    const want = (p.position?.line ?? 0) + 1;
+    // The Java line of the nearest mapped .jsc line at or before the cursor's.
+    let line = 0;
+    let best = -1;
+    for (const [jscLine, javaLine] of g.lines ?? []) {
+      if (jscLine <= want && jscLine > best) {
+        best = jscLine;
+        line = javaLine - 1;
+      }
+    }
+    return { id, javaFile: g.javaFile, line: Math.max(0, line), contract: g.contract };
+  });
+  connection.onRequest('joust/generatedContent', (p) => {
+    const g = p && typeof p.id === 'string' && generatedDocs.get(p.id);
+    return g ? { text: g.text, javaFile: g.javaFile } : { error: 'this generated document is gone: show it again' };
+  });
+
+  // ------------------------------------------------------------------ M5b: builds on save, in memory (D4)
+
+  let buildSeq = 0;
+  /** S7, C13: at most this many characters in a build snapshot (a test may lower it). */
+  const buildChars = Number.isInteger(hostOptions.buildChars) ? hostOptions.buildChars : MAX_BUILD_CHARS;
+  const builtFrom = new Map();   // uri of an open document -> the build seq that read it
+
+  const inFlight = new Map();   // build seq -> { uris (the open buffers its snapshot read), cts }
+
+  const builtDisk = new Map();   // build seq -> its snapshot's files read from disk (real path -> SHA-256), while shown
+
+  /**
+   * C9 on #99 r2: a buffer opened on a file a build read from disk, with other text, ends that build's results (shown or
+   * in flight): they describe a file the server no longer reads.
+   */
+  async function withdrawDisk(uri, text) {
+    const p = localFileOf(uri);
+    const r = p && ((await real(p)) ?? p);
+    if (!r) return;
+    const h = hash(text);
+    const differs = (disk) => disk && disk.has(r) && disk.get(r) !== h;
+    for (const b of inFlight.values()) if (differs(b.disk)) b.cts?.cancel();
+    for (const [seq, disk] of builtDisk) {
+      if (!differs(disk)) continue;
+      builtDisk.delete(seq);
+      for (const [u, st] of state) {
+        if (st.build && st.build.seq === seq) {
+          st.build = null;
+          if (st.lastPublished != null) connection.sendDiagnostics({ uri: u, version: st.lastPublished, diagnostics: st.lastDiagnostics ?? [] });
+        }
+      }
+    }
+  }
+
+  /** Withdraws every build result whose snapshot read `uri` (it changed); a build in flight that read it is cancelled (F7). */
+  function withdrawBuilds(uri) {
+    for (const b of inFlight.values()) if (b.uris.has(uri)) b.cts?.cancel();
+    const seq = builtFrom.get(uri);
+    if (seq === undefined) return;
+    builtFrom.delete(uri);
+    for (const [u, st] of state) {
+      if (st.build && st.build.seq === seq) {
+        st.build = null;
+        if (u !== uri && st.lastPublished != null) connection.sendDiagnostics({ uri: u, version: st.lastPublished, diagnostics: st.lastDiagnostics ?? [] });
+      }
+    }
+  }
+
+  /**
+   * The sources a build of `sel` reads: every .jsc and .java under the project's contracts directory (D4b: confined,
+   * regular files, capped, no directory symlinks), each open buffer in place of its file. `{ files, versions, dir }`
+   * (versions: uri -> version of every open buffer read) or `{ error }`. Without a contracts directory (advisory, or
+   * restricted mode), the one file `uri`.
+   */
+  async function buildSnapshot(uri, sel) {
+    const files = {};
+    const versions = new Map();
+    // C7 on #99: each open buffer's lifetime (its state object) with its version: a close and a reopen at the same
+    // version is another buffer.
+    const states = new Map();
+    const disk = new Map();   // the real path of each file read from disk -> the SHA-256 of what was read (C9)
+    const overBudget = `the project's sources and libraries are larger than the language server builds (${buildChars} characters)`;
+    let chars = 0;
+    const digest = createHash('sha256');
+    const keep = (f, text) => {
+      chars += text.length;
+      digest.update(`${f.length}:${f}${text.length}:`).update(text);
+    };
+    const openByPath = new Map();
+    for (const d of documents.all()) {
+      const p = localFileOf(d.uri);
+      if (p) openByPath.set((await real(p)) ?? p, d);
+    }
+    if (!sel.contracts || !sel.folder || !sel.contractsRel) {
+      const doc = documents.get(uri);
+      if (!doc) return { error: 'the file is not open' };
+      files[fileNameOf(uri)] = doc.getText();
+      versions.set(uri, doc.version);
+      states.set(uri, state.get(uri));
+      keep(fileNameOf(uri), doc.getText());
+      return { files, versions, states, disk, dir: null, packages: {}, javaLibraries: {}, digest: digest.digest('hex') };
+    }
+    const rel = sel.contractsRel.join('/');
+    const listed = await reader.list(sel.folder, rel, { max: MAX_BUILD_FILES, kind: sel.kind === 'gradle' ? 'gradle' : 'npm' });
+    if (listed.error) return { error: listed.error === 'too-many' ? `more than ${MAX_BUILD_FILES} source files` : `the contracts directory cannot be read (${listed.error})` };
+    for (const f of listed.files) {
+      const full = join(listed.path, ...f.split('/'));
+      const open = openByPath.get(full);
+      if (open) {
+        files[f] = open.getText();
+        versions.set(open.uri, open.version);
+        states.set(open.uri, state.get(open.uri));
+        if (chars + files[f].length > buildChars) return { error: overBudget };
+      } else {
+        // C13 on #99 r2: the total is debited before anything is kept; a file past what is left is not read.
+        const left = buildChars - chars;
+        const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: Math.min(MAX_FILE_CHARS * 2, left) });
+        if (r.error === 'too-large' && left < MAX_FILE_CHARS * 2) return { error: overBudget };
+        if (r.error) return { error: `${f} cannot be read (${r.error})` };
+        files[f] = r.bytes.toString('utf8');
+        // C9 on #99 r2: a file read from disk is an input too: a buffer opened on it later with other text makes the
+        // snapshot stale.
+        disk.set(full, hash(files[f]));
+      }
+      keep(f, files[f]);
+      if (chars > buildChars) return { error: overBudget };
+    }
+    // C6 on #99: the npm packages' libraries (joust-lib/: .jsc by <package>/<path>, Java sources by path), as joust
+    // build passes them (libraries.js), read confined, within what is left of the same budget (C13).
+    const libs = sel.kind === 'gradle' ? { packages: {}, javaLibraries: {} } : await buildLibraries(sel, buildChars - chars);
+    if (libs.error) return { error: libs.error };
+    for (const [k, v] of [...Object.entries(libs.packages), ...Object.entries(libs.javaLibraries)]) keep(`lib:${k}`, v);
+    if (chars > buildChars) return { error: overBudget };
+    return { files, versions, states, disk, dir: listed.path, packages: libs.packages, javaLibraries: libs.javaLibraries, digest: digest.digest('hex') };
+  }
+
+  /**
+   * C6 on #99: the libraries the project's npm packages ship under joust-lib/ (libraries.js libraryPackages' rules: every
+   * package of node_modules, scoped ones included, its joust-lib/'s .jsc and .java files), read through the confined
+   * reader: a package root may be a link (confined); a joust-lib/ or anything below it reached by a link is left out
+   * (as projectOf's package imports). `{ packages, javaLibraries }` or `{ error }` (one Java class shipped twice: JSC0709; a bound).
+   */
+  async function buildLibraries(sel, budget = buildChars) {
+    let left = budget;
+    const packages = {};
+    const javaLibraries = {};
+    const javaFrom = {};
+    if (!sel.root || !inside(sel.root, sel.folder)) return { packages, javaLibraries };
+    const rootRel = relative(sel.folder, sel.root).split(sep).join('/') || '.';
+    const dirs = async (rel) => {
+      const r = await reader.resolveIn(sel.folder, rel);
+      if (r.error) return [];
+      try {
+        // A package may be a link (resolved confined later); a scope (@x) is a directory, as libraries.js reads them.
+        return (await fsp.readdir(r.path, { withFileTypes: true }))
+          .filter((e) => !e.name.startsWith('.') && (e.isDirectory() || (e.isSymbolicLink() && !e.name.startsWith('@')))).map((e) => e.name).sort();
+      } catch {
+        return [];
+      }
+    };
+    const names = [];
+    for (const n of await dirs(`${rootRel}/node_modules`)) {
+      if (n.startsWith('@')) for (const m of await dirs(`${rootRel}/node_modules/${n}`)) names.push(`${n}/${m}`);
+      else names.push(n);
+    }
+    let count = 0;
+    for (const name of names) {
+      // As libraries.js and projectOf's package imports (#98 C12): the package root may be a link, resolved inside the
+      // folder; joust-lib/ and nothing below it may be one.
+      const pkgRel = `${rootRel}/node_modules/${name}`;
+      const libRel = `${pkgRel}/joust-lib`;
+      const root = await reader.resolveIn(sel.folder, pkgRel);
+      const lib = await reader.resolveIn(sel.folder, libRel);
+      if (root.error || lib.error || lib.path !== join(root.path, 'joust-lib')) continue;   // missing, or a link
+      const listed = await reader.list(sel.folder, libRel, { max: MAX_BUILD_FILES, kind: 'gradle' });
+      if (listed.error) return { error: listed.error === 'too-many' ? `the package ${name} ships more than ${MAX_BUILD_FILES} library files` : `${name}/joust-lib cannot be read` };
+      for (const f of listed.files) {
+        if (++count > MAX_BUILD_FILES) return { error: `the npm packages ship more than ${MAX_BUILD_FILES} library files` };
+        // C13 on #99 r2: debited before it is kept; a file past what is left of the budget is not read at all.
+        const r = await reader.read(sel.folder, `${libRel}/${f}`, { cap: Math.max(0, Math.min(MAX_FILE_CHARS * 2, left)) });
+        if (r.error === 'too-large' && left < MAX_FILE_CHARS * 2) {
+          return { error: `the project's sources and libraries are larger than the language server builds (${buildChars} characters)` };
+        }
+        if (r.error) return { error: `${name}/joust-lib/${f} cannot be read (${r.error})` };
+        const text = r.bytes.toString('utf8');
+        left -= text.length;
+        if (left < 0) return { error: `the project's sources and libraries are larger than the language server builds (${buildChars} characters)` };
+        if (f.endsWith('.jsc')) packages[`${name}/${f}`] = text;
+        else if (f.endsWith('.java')) {
+          if (f in javaLibraries) return { error: `error[JSC0709]: the npm packages ${javaFrom[f]} and ${name} both ship joust-lib/${f}: one Java class twice` };
+          javaLibraries[f] = text;
+          javaFrom[f] = name;
+        }
+      }
+    }
+    return { packages, javaLibraries };
+  }
+
+  /**
+   * F2 on #99: the project files whose imports name the file `uri` (relative imports resolved as projectOf does; the
+   * project's sources, or the folder's without a known project, listed by the build's walk, open buffers in place of
+   * their files, each read bounded): `{ importers }` (paths), or `{ error }` when they cannot all be read (too many
+   * files, a file too large).
+   */
+  async function importersOf(uri, sel) {
+    if (!sel?.folder) return { error: 'the file is outside every workspace folder' };
+    // The project's contracts directory, or (no project known: a bare folder, Restricted Mode) the whole folder.
+    const project = sel.contracts && sel.contractsRel;
+    const base = project ? sel.contracts : sel.folder;
+    // A buffer not on disk yet is named by its own path (importers name it so).
+    const own = localFileOf(uri);
+    const self = (await realPathOf(uri, sel)) ?? (own && inside(own, sel.folder) ? own : null);
+    if (!self || !inside(self, base)) return { error: 'the file is outside its project\'s contracts directory' };
+    const id = relative(base, self).split(sep).join('/');
+    const rel = project ? sel.contractsRel.join('/') : '.';
+    const listed = await reader.list(sel.folder, rel, { exts: ['.jsc'], max: MAX_BUILD_FILES, kind: sel.kind === 'gradle' ? 'gradle' : 'npm' });
+    if (listed.error) return { error: listed.error === 'too-many' ? `the project has more than ${MAX_BUILD_FILES} source files` : 'the contracts directory cannot be read' };
+    const open = new Map();
+    for (const d of documents.all()) {
+      const p = await realPathOf(d.uri, sel);
+      if (p) open.set(p, d.getText());
+    }
+    const importers = [];
+    const imports = (f, text) => {
+      const scanned = scanImports(text, MAX_IMPORTS_PER_FILE);
+      if (scanned.truncated) return null;
+      return scanned.imports.some(({ spec }) => (spec.startsWith('./') || spec.startsWith('../')) && !spec.includes('\\') && !spec.includes('//')
+        && posix.normalize(posix.join(posix.dirname(f), spec)) === id);
+    };
+    for (const f of listed.files) {
+      if (f === id) continue;
+      const full = join(listed.path, ...f.split('/'));
+      let text = open.get(full);
+      if (text === undefined) {
+        const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: MAX_FILE_CHARS });
+        if (r.error) return { error: `${f} cannot be read (${r.error})` };
+        text = r.bytes.toString('utf8');
+      }
+      const yes = imports(f, text);
+      if (yes === null) return { error: `${f} has more imports than the language server reads` };
+      if (yes) importers.push(f);
+    }
+    // C11 on #99 r2: and every open buffer of a file there that is not on disk (yet), under the same walk rules.
+    const listedSet = new Set(listed.files);
+    for (const d of documents.all()) {
+      if (d.uri === uri) continue;
+      const p = localFileOf(d.uri);
+      if (!p || !p.endsWith('.jsc') || !inside(p, base)) continue;
+      const f = relative(base, p).split(sep).join('/');
+      if (listedSet.has(f) || f === id) continue;
+      if (sel.kind !== 'gradle' && f.split('/').slice(0, -1).some((x) => x === 'node_modules' || x.startsWith('.'))) continue;
+      if (Buffer.byteLength(d.getText(), 'utf8') > MAX_FILE_CHARS) return { error: `${f} is larger than the language server reads` };
+      const yes = imports(f, d.getText());
+      if (yes === null) return { error: `${f} has more imports than the language server reads` };
+      if (yes) importers.push(f);
+    }
+    return { importers };
+  }
+
+  /** `file://` URI of a build diagnostic's file (relative to the snapshot's directory), or null. */
+  const uriOfBuilt = (dir, f, fallback) => {
+    if (!dir) return fallback;
+    if (typeof f !== 'string' || !f || f.includes('..')) return null;
+    return pathToFileURL(join(dir, ...f.replace(/\\/g, '/').split('/'))).toString();
+  };
+
+  /**
+   * One build of the snapshot on the build worker (writes nothing: no build/joust/, no generated Java, no manifest):
+   * the later stages' diagnostics (processor, JuLC, the ABI comparison with each committed manifest, script size), each
+   * published with its document's version, and dropped when anything the snapshot read changed meanwhile (D4a).
+   */
+  async function runBuild(uri, sel, engine, token) {
+    const seq = ++buildSeq;
+    const gen = selector.generation;
+    const snap = await buildSnapshot(uri, sel);
+    if (snap.error) return { error: snap.error };
+    if (token?.isCancellationRequested) return { error: 'cancelled' };
+    inFlight.set(seq, { uris: new Set(snap.versions.keys()), disk: snap.disk, cts: token?.cts });
+    let r;
+    try {
+      r = await buildHost.request(`build:${engine.id}`, engine,
+        { op: 'build', files: snap.files, options: {}, packages: snap.packages, javaLibraries: snap.javaLibraries },
+        { scope: sel.root ?? sel.folder ?? '', input: snap.digest, what: 'the build', timeoutMs: BUILD_MS }, token);
+    } finally {
+      inFlight.delete(seq);
+    }
+    // C7 on #99: every buffer the snapshot read is still the same lifetime at the same version. C9 (r2): and no file it
+    // read from disk is now open with other text (a buffer opened during the build).
+    const openOnDisk = async () => {
+      for (const d of documents.all()) {
+        if (snap.versions.has(d.uri)) continue;
+        const p = localFileOf(d.uri);
+        const r = p && ((await real(p)) ?? p);
+        if (r && snap.disk.has(r) && snap.disk.get(r) !== hash(d.getText())) return true;
+      }
+      return false;
+    };
+    const stale = async () => selector.generation !== gen
+      || [...snap.versions].some(([u, v]) => documents.get(u)?.version !== v || state.get(u) !== snap.states.get(u))
+      || await openOnDisk();
+    if (!r.model) return { error: r.internal?.message ?? (r.cancelled ? 'cancelled' : r.unavailable ? 'builds are unavailable' : 'the build did not run') };
+    if (await stale()) return { error: 'the sources changed while it built: not shown' };
+    const result = JSON.parse(r.model);
+    const label = `joust build (${sel.source} ${engine.version}, in memory)`;
+    const byUri = new Map();
+    const add = (u, d) => {
+      if (!u) return;
+      if (!byUri.has(u)) byUri.set(u, []);
+      byUri.get(u).push(d);
+    };
+    let errors = 0;
+    for (const d of result.diagnostics ?? []) {
+      const line = Math.max(0, Number(d.line ?? 1) - 1);
+      const col = Math.max(0, Number(d.col ?? 1) - 1);
+      const target = uriOfBuilt(snap.dir, d.file, uri);
+      // The front end's own diagnostics are the analysis's already, where that document's analysis shows the same code on
+      // the same line (C6 on #99: a front-end error the analysis does not show, a library the analysis did not read say,
+      // is the build's explanation, and is shown).
+      const frontEnd = d.source === 'jsc' || (d.code && /^JSC0[1-9]/.test(d.code) && d.source !== 'julc' && d.source !== 'javac');
+      if (frontEnd && (state.get(target)?.lastDiagnostics ?? []).some((x) => x.code === d.code && x.range?.start?.line === line)) continue;
+      if (d.severity === 'error') errors++;
+      add(target ?? uri, { range: { start: { line, character: col }, end: { line, character: col + 1 } },
+        severity: d.severity === 'error' ? 1 : d.severity === 'warning' ? 2 : 3, ...(d.code ? { code: d.code } : {}), source: label,
+        message: `${d.message}${d.source ? ` (${d.source})` : ''}` });
+    }
+    // The ABI comparison with the committed <Contract>.abi.json beside each .jsc file (JSC0002, JSC0003); never accepted here.
+    for (const g of result.generated ?? []) {
+      if (!g.abi || !snap.dir) continue;
+      const name = g.javaFile.split('/').pop().replace(/\.java$/, '');
+      const jscDir = g.jscFile.includes('/') ? g.jscFile.slice(0, g.jscFile.lastIndexOf('/') + 1) : '';
+      const committed = await reader.read(sel.folder, `${sel.contractsRel.join('/')}/${jscDir}${name}.abi.json`, { cap: 4 * 1024 * 1024 });
+      const old = committed.error ? null : committed.bytes.toString('utf8');
+      if (old === g.abi) continue;
+      errors++;
+      add(uriOfBuilt(snap.dir, g.jscFile, uri), { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 1,
+        code: old === null ? 'JSC0003' : 'JSC0002', source: label,
+        message: old === null ? `no ABI manifest ${name}.abi.json: the encoding of the datum and redeemers must be committed; create it with Accept ABI… (joust build --accept-abi), review it and commit it`
+          : `the ABI manifest differs from the committed ${name}.abi.json: a datum or redeemer encoding changed, which strands deployed instances; if it is intended, run Accept ABI… and commit the new manifest` });
+    }
+    for (const c of result.contracts ?? []) {
+      if (c.scriptSizeBytes > SCRIPT_WARN_BYTES) {
+        const g = (result.generated ?? []).find((x) => x.javaFile === `${c.packageName.replaceAll('.', '/')}/${c.name}.java`);
+        add(g ? uriOfBuilt(snap.dir, g.jscFile, uri) : uri, { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 2,
+          source: label, message: `${c.name}'s script is ${c.scriptSizeBytes} bytes: a transaction holds at most 16 KB, scripts included (deploy it as a reference script)` });
+      }
+    }
+    // A failed build always says why (C6): with no error of its own to show, it says so where it was asked.
+    if (result.ok !== true && errors === 0) {
+      errors++;
+      const first = (result.diagnostics ?? []).find((d) => d.severity === 'error');
+      add(uri, { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 1, source: label,
+        message: `the build failed${first ? `: ${first.file ? `${first.file}:${first.line ?? 1}: ` : ''}${first.message}` : ' without a diagnostic'}` });
+    }
+    if (await stale()) return { error: 'the sources changed while it built: not shown' };
+    // Published for every open document the snapshot read (or the build named), each with the version it read.
+    const targets = new Set([...snap.versions.keys(), ...byUri.keys()]);
+    for (const u of targets) {
+      const st = state.get(u);
+      const doc = documents.get(u);
+      if (!st || !doc) continue;
+      // C9 (r2): a document gets the build's results only for the buffer the snapshot read (its lifetime and version), or,
+      // read from disk, while its buffer still holds exactly that text; never the recipient's own version instead.
+      let version = snap.versions.get(u);
+      if (version === undefined) {
+        const p = localFileOf(u);
+        const r = p && ((await real(p)) ?? p);
+        if (!r || !snap.disk.has(r) || snap.disk.get(r) !== hash(doc.getText())) continue;
+        version = doc.version;
+      } else if (snap.states.get(u) !== st) continue;
+      st.build = { seq, gen, version, diagnostics: byUri.get(u) ?? [] };
+      builtDisk.set(seq, snap.disk);
+      builtFrom.set(u, seq);
+      if (st.lastPublished === st.build.version) {
+        connection.sendDiagnostics({ uri: u, version: st.lastPublished, diagnostics: [...(st.lastDiagnostics ?? []), ...st.build.diagnostics].slice(0, MAX_PUBLISHED + 1) });
+      }
+    }
+    // Only the snapshots still shown are kept.
+    const shown = new Set([...state.values()].map((st) => st.build?.seq).filter((x) => x !== undefined));
+    for (const k of builtDisk.keys()) if (!shown.has(k)) builtDisk.delete(k);
+    return { ok: result.ok === true && errors === 0, errors, contracts: (result.contracts ?? []).length };
+  }
+
+  // D4, D10, Q7: on save, in trusted project-matched npm projects only (a user setting can turn it off).
+  // F7 on #99: coalesced: one build in flight and at most one pending per project (the latest save's); a build whose
+  // inputs change while it runs is cancelled (withdrawBuilds).
+  // C12 on #99 r2: per project (its root, else its contracts directory): a save replaces only its own project's pending
+  // build; each project with a pending save gets its build, in the order saved.
+  let saveRunning = false;
+  const savePending = new Map();   // project -> { uri, sel }: the latest save of each
+  async function buildOnSaveLoop(next) {
+    const key = next.sel.root ?? next.sel.contracts ?? next.uri;
+    savePending.delete(key);
+    savePending.set(key, next);
+    if (saveRunning) return;
+    saveRunning = true;
+    try {
+      while (savePending.size) {
+        const [key0, { uri, sel }] = savePending.entries().next().value;
+        savePending.delete(key0);
+        if (!state.has(uri)) continue;
+        const cts = new CancellationTokenSource();
+        const token = Object.assign(cts.token, { cts });
+        await runBuild(uri, sel, sel.engine, token).catch((err) => log(`build on save failed: ${err?.stack ?? err}`));
+        cts.dispose();
+      }
+    } finally {
+      saveRunning = false;
+    }
+  }
+  documents.onDidSave((e) => {
+    const s = state.get(e.document.uri);
+    const sel = s?.selection;
+    if (!sel || buildOnSave === false || !selector.trusted || sel.source !== 'project' || sel.mode !== 'project-matched' || !sel.contracts) return;
+    buildOnSaveLoop({ uri: e.document.uri, sel });
+  });
+
+  // JOUST: Check build (in memory): one build on request, on the bundled engine unless the file is project-matched, in any
+  // mode, under the same caps (D4, D10).
+  connection.onRequest('joust/checkBuild', async (p, token) => {
+    const s = p && state.get(p.uri);
+    if (!s) return { error: 'the file is not open' };
+    const sel = s.selection ?? await selectionFor(p.uri);
+    const engine = sel.source === 'project' && sel.mode === 'project-matched' ? sel.engine : bundled;
+    return runBuild(p.uri, sel, engine, token);
   });
 
   connection.onRequest('joust/status', async (p) => {
@@ -687,6 +1464,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   });
 
   // Trust granted mid-session (D3): select again, restart the workers on the project's engine when now eligible.
+  // F9 on #99: the extension forwards a change of joust.buildOnSave.
+  connection.onNotification('joust/settings', (p) => {
+    if (isVscode && typeof p?.buildOnSave === 'boolean') buildOnSave = p.buildOnSave;
+  });
   connection.onNotification('joust/trust', (p) => {
     if (!isVscode || p?.trusted !== true) return;
     selector.invalidate({ trusted: true });
@@ -717,13 +1498,17 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   if (flags.testHooks) {
     connection.onRequest('joust/test/stats', () => ({
-      ...host.stats, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
+      ...host.stats, builds: { ...buildHost.stats }, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
     }));
   }
 
-  connection.onShutdown(() => host.dispose());
+  connection.onShutdown(() => {
+    host.dispose();
+    buildHost.dispose();
+  });
   connection.onExit(() => {
     host.dispose();
+    buildHost.dispose();
     process.exit(0);
   });
 
