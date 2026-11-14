@@ -480,16 +480,16 @@ class JscV2M2cFourWayTest {
         bad.put("a 27-byte Hash", stashParams(vv(TOKEN_POLICY, N01, n(1)), new byte[27]));
         // #90 review C9: the state each one's init would make without the check (params.v + Value.asset(params.h, #01, 1)),
         // the mint validator's candidate output: the validator leg runs, and refuses it.
-        var made = new LinkedHashMap<String, Rec>();
-        made.put("a Value of a 1-byte policy", rec("State", n(7), vv(new byte[]{1}, N01, n(1), h, N01, n(1))));
-        made.put("a Value of policies #0000 and #ff", rec("State", n(7), vv(new byte[]{0, 0}, N01, n(1), new byte[]{(byte) 0xFF}, N01, n(1), h, N01, n(1))));
-        made.put("a Value of a 29-byte policy", rec("State", n(7), vv(JscV2M2FourWayTest.bytes(29, 0x70), N01, n(1), h, N01, n(1))));
-        made.put("a 27-byte Hash", rec("State", n(7), vv(TOKEN_POLICY, N01, n(1), new byte[27], N01, n(1))));
+        var unchecked = new LinkedHashMap<String, Rec>();
+        unchecked.put("a Value of a 1-byte policy", rec("State", n(7), vv(new byte[]{1}, N01, n(1), h, N01, n(1))));
+        unchecked.put("a Value of policies #0000 and #ff", rec("State", n(7), vv(new byte[]{0, 0}, N01, n(1), new byte[]{(byte) 0xFF}, N01, n(1), h, N01, n(1))));
+        unchecked.put("a Value of a 29-byte policy", rec("State", n(7), vv(JscV2M2FourWayTest.bytes(29, 0x70), N01, n(1), h, N01, n(1))));
+        unchecked.put("a 27-byte Hash", rec("State", n(7), vv(TOKEN_POLICY, N01, n(1), new byte[27], N01, n(1))));
         int refused = 0;
         for (var e : bad.entrySet()) {
             var w = new FourWay("Stash", SOURCES.get("Stash.jsc"), TRANSITIONS.get("Stash"), e.getValue(), MODULES);
             int runs = w.validatorRuns;
-            assertEquals("refused", w.check("init", null, List.of(), at(fill(0x0A), 0, 0), fill(0x0A), made.get(e.getKey())), e.getKey());
+            assertEquals("refused", w.check("init", null, List.of(), at(fill(0x0A), 0, 0), fill(0x0A), unchecked.get(e.getKey())), e.getKey());
             assertEquals("input:params", w.lastRefusal, e.getKey());
             assertEquals(runs + 1, w.validatorRuns, e.getKey() + ": the mint validator ran on the unchecked writer's output");
             JsLeg.check(w);
