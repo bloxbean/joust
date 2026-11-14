@@ -34,6 +34,16 @@ dependencies {
     testImplementation libs.julc.annotation.processor
 }
 
+// Mutation testing (gradle/pitest.gradle): the value and address adapters (julc-state-api's JVM bodies, against their
+// on-chain bodies in the differential and hostile-input tests here) and the java: library certifier.
+ext.pitTargets = ['org.julclang.state.api.ValueAdapter', 'org.julclang.state.api.AddressAdapter',
+                  'org.julclang.state.toolchain.JavaLibraryCertifier*']
+ext.pitTests = ['org.julclang.state.toolchain.ValueAdapterDifferentialTest', 'org.julclang.state.toolchain.JscV2M2HostileInputTest',
+                'org.julclang.state.toolchain.JscV2M2cHostileInputTest', 'org.julclang.state.toolchain.JscV2JavaLibraryTest',
+                'org.julclang.state.toolchain.JscV2JavaLibraryR2Test']
+ext.pitMutableCodePaths = [project(':julc-state-api')]
+apply from: rootProject.file('gradle/pitest.gradle')
+
 apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
 fuzzTargets 'org.julclang.state.toolchain.FiveWayFuzzTest.generatedContractsAgree',
         'org.julclang.state.toolchain.ValueAdapterFuzzTest.decoders',

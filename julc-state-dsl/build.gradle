@@ -28,3 +28,8 @@ fuzzTargets 'org.julclang.state.dsl.v2.IrReaderFuzzTest.readersAgree'
 tasks.withType(Test).matching { it.name.startsWith('fuzz') }.configureEach {
     inputs.dir(rootProject.file('js/jsc-interpreter/src')).withPropertyName('jscInterpreterSources').withPathSensitivity(PathSensitivity.RELATIVE)
 }
+
+// Mutation testing (gradle/pitest.gradle): the .jsc 2 checker (D5's checked inputs, the subset's rules) and joust.lock.
+ext.pitTargets = ['org.julclang.state.dsl.v2.Checker*', 'org.julclang.state.dsl.JscMain']
+ext.pitTests = ['org.julclang.state.dsl.v2.*CheckerTest', 'org.julclang.state.dsl.v2.JscV2PackageLockTest', 'org.julclang.state.dsl.*Test']
+apply from: rootProject.file('gradle/pitest.gradle')

@@ -1,0 +1,49 @@
+// Mutation testing with PIT (pitest.org), so a test that cannot fail is caught mechanically: each mutant (a condition
+// negated, a boundary moved, a return value replaced, a call removed) must make some test fail. A module applies this file
+// and names its security-relevant classes and the tests that cover them:
+//     ext.pitTargets = ['org.julclang.state.api.ValueAdapter*']
+//     ext.pitTests = ['org.julclang.state.toolchain.ValueAdapterDifferentialTest']
+//     ext.pitMutableCodePaths = [project(':julc-state-api')]   // classes of other modules to mutate (optional)
+//     apply from: rootProject.file('gradle/pitest.gradle')
+//
+//   ./gradlew :<module>:pitest                                    the module's whole set (the baseline)
+//   ./gradlew :<module>:pitest -Ppit.targetClasses=a.B,a.C        only these classes (CI: the changed ones, scripts/pit-changed.sh)
+//   -Ppit.threshold=N                                             fail below N% killed (default 0: report only)
+//
+// The report is build/reports/pitest/ (HTML, and mutations.xml for scripts/pit-summary.py). Not part of `check`: PIT
+// runs the covering tests once per mutant, which is minutes to hours.
+apply plugin: 'info.solidsoft.pitest'
+
+def targets = providers.gradleProperty('pit.targetClasses').map { it.split(',').collect { it.trim() }.findAll { it } }
+        .orElse(project.ext.pitTargets)
+
+pitest {
+    pitestVersion = '1.30.1'
+    junit5PluginVersion = '1.2.3'
+    targetClasses = targets
+    targetTests = project.ext.pitTests
+    if (project.ext.has('pitMutableCodePaths')) {
+        additionalMutableCodePaths = providers.provider {
+            project.ext.pitMutableCodePaths.collectMany { it.sourceSets.main.output.classesDirs.files } as Set
+        }
+    }
+    threads = Math.max(1, Runtime.runtime.availableProcessors().intdiv(2))
+    outputFormats = ['XML', 'HTML']
+    timestampedReports = false
+    exportLineCoverage = true
+    // The defaults (conditionals, boundaries, math, increments, negations, return values, void calls).
+    mutators = ['DEFAULTS']
+    timeoutConstInMillis = 20000
+    jvmArgs = ['-Xmx2g', '-Djoust.mapStore=memory', '--enable-native-access=ALL-UNNAMED']
+    mutationThreshold = providers.gradleProperty('pit.threshold').map { it as Integer }.orElse(0)
+    // Fuzz targets replay only their seeds here; DevKit tests need a devnet.
+    excludedTestClasses = ['*DevnetTest', '*FuzzTest']
+    useClasspathFile = true
+}
+
+tasks.named('pitest') {
+    group = 'verification'
+    // The tests' own inputs (the JS interpreter, fixtures) are read relative to the module, as in `test`.
+    dependsOn tasks.named('testClasses')
+    if (project.ext.has('pitMutableCodePaths')) project.ext.pitMutableCodePaths.each { dependsOn it.tasks.named('classes') }
+}
