@@ -121,7 +121,11 @@ if (!isMainThread) {
     let n = 0;
     for (const p of parity) {
       if (!p.source.trimStart().startsWith('jsc')) continue;
-      const model = JSON.parse(p.model);
+      // The build builds the file as a file of a project (t/<file> when it is not an example), so the model compared is
+      // the server's for a project file: lang.analyze with the same id and files (the integration with M2c and M4; a
+      // file on its own says "lowered on its own" where the build names the project).
+      const model = p.id ? JSON.parse(p.model) : JSON.parse(engine.lang.analyze({ file: p.file, source: p.source, id: `t/${p.file}`,
+        files: { [`t/${p.file}`]: p.source } }).model);
       // A project's file is built with the project (its imports resolve), and only its own diagnostics are compared.
       const files = p.id ? { ...reachable(modules, p.id), [p.id]: p.source } : { [`t/${p.file}`]: p.source };
       const r = engine.joust.build({ files, options: {} });
