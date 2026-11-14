@@ -10,7 +10,7 @@
     ] },
   "redeemers": {
     "spend": [
-      { "name": "Read", "constr": 0, "fields": [] }
+      { "name": "Peek", "constr": 0, "fields": [] }
     ],
     "mint": [
       { "name": "CreateInstance", "constr": 0, "fields": [

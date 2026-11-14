@@ -705,9 +705,11 @@ test('§2.7 step 1: a params quorum is checked at creation; a failing invariant 
   assert.ok('ok' in init(keys(K1, K2, K3), 2));
   const cls = 'invariant:quorum params.board params.boardQuorum';
   for (const [board, q] of [[keys(K2, K1, K3), 2], [keys(K1, K1, K3), 2], [keys(K1, K2, K3), 0], [keys(K1, K2, K3), -1],
-    [keys(K1, K2, K3), 4], [keys('00'.repeat(27), K2, K3), 2], [[], 1]]) {
+    [keys(K1, K2, K3), 4], [[], 1]]) {
     assert.equal(init(board, q).class, cls, JSON.stringify([board, q]));
   }
+  // M2c (review r3, C7): the params are a checked input of the init: a malformed key is refused before the invariant.
+  assert.equal(init(keys('00'.repeat(27), K2, K3), 2).class, 'input:params');
   // The transition alone (§2.6) computes the creation; the output check is the validator's.
   assert.ok('ok' in runCall(council, { method: 'init', state: null, args: [keys(A, B), { int: '1' }, { keyCred: '4e'.repeat(28) }], tx,
     params: { rec: 'Config', fields: [keys(K2, K1, K3), { int: '2' }, { keyCred: 'ad'.repeat(28) }, { int: '50000000' }] }, transition: true }));

@@ -12,7 +12,7 @@ contract StashReader {
     return { n: 0 }
   }
 
-  action read(s: reads params.stash) open {
-    return { n: s.n }
+  action peek(got: reads params.stash) open {
+    return { n: got.n }
   }
 }

@@ -487,15 +487,15 @@ class JscV2M2cFourWayTest {
             refused++;
         }
         // The reader reads what the writer made (its stored Value checked, though read is only n); a state holding a Value
-        // the writer can no longer make is refused (input:s).
+        // the writer can no longer make is refused (input:got).
         var r = LEGS.get("StashReader");
         Rec reader = rec("State", n(0));
         ok(r.check("init", null, List.of(), at(fill(0x0A), 0, 0), fill(0x0A)));
-        ok(r.check("read", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash", rec("Stash.State", n(7), held))), null));
-        assertEquals("refused", r.check("read", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash",
+        ok(r.check("peek", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash", rec("Stash.State", n(7), held))), null));
+        assertEquals("refused", r.check("peek", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash",
                 rec("Stash.State", n(7), vv(new byte[]{1}, N01, n(1))))), null));
-        assertEquals("input:s", r.lastRefusal);
-        r.mutants("read", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash", rec("Stash.State", n(7), held))), null);
+        assertEquals("input:got", r.lastRefusal);
+        r.mutants("peek", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash", rec("Stash.State", n(7), held))), null);
         JsLeg.check(r);
         System.out.println("[M2c five-way] Stash: " + refused + " params refused by the init on every leg (input:params); StashReader reads"
                 + " every state Stash makes");

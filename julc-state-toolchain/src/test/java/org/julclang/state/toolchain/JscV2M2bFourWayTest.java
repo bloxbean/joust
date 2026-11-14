@@ -245,6 +245,13 @@ class JscV2M2bFourWayTest {
     void paramsQuorums_areCheckedAtCreation() throws Exception {
         for (var e : BAD_PARAMS.entrySet()) {
             var f = e.getValue();
+            if (e.getKey().equals("a 27-byte key")) {
+                // M2c (review r3, C7): the params are a checked input of the init, so a malformed key is refused before the
+                // quorum invariant, by the method on every leg (the transition program included).
+                assertEquals("refused", f.check("init", null, List.of(keys(A, B), n(1), keyCred(KEEPER)), at(OWNER, 0, 0), OWNER));
+                assertEquals("input:params", f.lastRefusal);
+                continue;
+            }
             f.invariantRefused("invariant:quorum params.board params.boardQuorum", "init", null, List.of(keys(A, B), n(1), keyCred(KEEPER)),
                     at(OWNER, 0, 0), OWNER);
             System.out.println("[M2b five-way] Council deployed with a board quorum of " + e.getKey() + ": init refused on all legs ("

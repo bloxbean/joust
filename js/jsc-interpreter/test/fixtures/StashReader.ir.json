@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "10ed7db43440575fbc75709e9b523eb2f21a618b8175be89a24af1047c25baff",
+  "sourceSha256": "60fa7c4a5c3a9f1b72024d7a192d6d70df506a901a11dc71648af7bd719ee553",
   "package": "org.julclang.state.examples.dsl",
   "contract": "StashReader",
   "source": "StashReader.jsc",
@@ -55,7 +55,7 @@
     },
     {
       "kind": "action",
-      "name": "read",
+      "name": "peek",
       "params": [],
       "mods": [{ "name": "open" }],
       "checked": [],
@@ -63,7 +63,7 @@
         {
           "local": {
             "id": 1,
-            "name": "s",
+            "name": "got",
             "type": { "record": "Stash.State" },
             "taint": 0,
             "at": [15, 15],
@@ -95,7 +95,7 @@
           "taint": 0,
           "at": [16, 12]
         },
-        "at": [15, 43]
+        "at": [15, 45]
       },
       "at": [15, 3]
     }
