@@ -108,7 +108,7 @@ saturation (fixed-width states and objects; Armory's map at depth).
 
 ## Builds and DevKit
 
-BUILD_RESULTS
+`./gradlew clean build -PnoDevnet --continue --no-watch-fs` at `79228781`: 1,051 JVM tests, 0 failures (1 skipped); julc-state-dsl 217, julc-state-toolchain 205, examples/dsl 148. DevKit: `:examples:dsl:test` 164 tests, 0 failures (`GuildDevnetPortTest` 2 and `MarketDevnetPortTest` among them). `toolchainWasmTest` (the Web Image against the JVM): 146 build outputs identical, 120 language-server models byte-identical, 3,660/3,660 S2 cases, 21 depth cases. npm: `js/jsc-interpreter` 50/50, `tree-sitter-jsc` 20/20 and the shared corpus (91 corpus, 49 repository, 70 research files) in agreement, `js/state-client` 48/48, `js/joust` 157/159 (1 skipped) and `js/joust-runtime` 35/37 (1 skipped). Each of the last two has the one environmental failure M3a1 and M3a2 have too: `joust dev … redeploys on save` (Node's recursive `fs.watch` fires no events in this sandbox) and the Ogmios provider test (it probes the M0 fixtures' transactions, not all on a reset devnet).
 
 ## Decisions for the maintainers
 
