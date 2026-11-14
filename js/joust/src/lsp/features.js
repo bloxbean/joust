@@ -439,7 +439,8 @@ export function completion(text, pos, model, std = {}) {
       add(d.name, 20, declOf(model, d.parent)?.name, fs.length ? { insert: `${d.name} { ${fs.map((f, k) => `${f}: \${${k + 1}}`).join(', ')} }`, snippet: true } : undefined);
     }
   }
-  add('Some', 20, 'Option<T>');
+  // Some is a constructor, never a bare name: it is inserted with its parentheses.
+  add('Some', 20, 'Option<T>', { insert: 'Some(${1})', snippet: true });
   add('None', 20, 'Option<T>');
   const imported = new Map();   // name -> module
   for (const d of model.declarations) if (d.kind === 'import' && d.name) imported.set(d.name, d.detail);
