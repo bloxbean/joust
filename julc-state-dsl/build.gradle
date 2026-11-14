@@ -25,7 +25,8 @@ dependencies {
 }
 apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
 fuzzTargets 'org.julclang.state.dsl.v2.IrReaderFuzzTest.readersAgree'
-tasks.withType(Test).matching { it.name.startsWith('fuzz') }.configureEach {
+// IrReaderFuzzTest runs the JavaScript reader: a change to it reruns the replays too.
+tasks.withType(Test).configureEach {
     inputs.dir(rootProject.file('js/jsc-interpreter/src')).withPropertyName('jscInterpreterSources').withPathSensitivity(PathSensitivity.RELATIVE)
 }
 

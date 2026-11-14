@@ -79,7 +79,7 @@ The npm suites CI runs:
   `cli` and `deploy`;
 - engines job, on that commit's engines:
   - js/joust's `abi`, `cold-engine`, `libraries`, `migrate`, `offline-ledger`, `sources`, `worker-limits` and `lsp/*`;
-  - js/joust-runtime's `compat`, `exnref`, `keyed-window`, `messages` and `mirror`;
+  - js/joust-runtime's `compat`, `keyed-window`, `messages` and `mirror`;
   - create-joust built with the engine;
 - vscode job: the packaged extension in VS Code.
 
@@ -87,7 +87,9 @@ The npm suites CI runs:
 
 - js/joust's `create`, `dev` and `page`, and js/joust-runtime's `devkit`, `examples` and `providers`, which need a
   running DevKit (and Chromium for `page`);
-- js/joust-runtime's `preview`, which needs a Blockfrost preview key.
+- js/joust-runtime's `preview`, which needs a Blockfrost preview key;
+- js/joust-runtime's `exnref`, whose second case assumes a Node 22 with Wasm exnref off, which the runner's current
+  Node 22 is not (it fails there on its expectation, not on the runtime).
 
 Run those yourself when a change touches what they cover.
 

@@ -184,6 +184,16 @@ export function validate(p) {
   for (const k of ['options', 'records', 'enums', 'timeFields', 'recursiveFns', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings']) {
     if (!Array.isArray(p[k])) fail('program', `${show(k)} is a list`);
   }
+  // Every entry of a top-level list of declarations is an object, before anything reads its fields (IrReaderFuzzTest: a
+  // fn that was null made the fns' arity table throw a TypeError).
+  for (const k of ['options', 'records', 'enums', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings']) {
+    for (const x of p[k]) if (!x || typeof x !== 'object' || Array.isArray(x)) fail(k, 'an entry is not an object');
+  }
+  for (const l of [...p.libraries, ...p.javaLibraries]) {
+    for (const k of ['records', 'enums', 'fns']) {
+      if (Array.isArray(l[k])) for (const x of l[k]) if (!x || typeof x !== 'object' || Array.isArray(x)) fail(k, 'an entry is not an object');
+    }
+  }
   // Version 2 (ADR-0018 M4): the .jsc libraries the program imports, each with its declarations. A build's names are one
   // namespace: a library's records, enums and fns join the program's, and no name is declared twice across them.
   if (!Array.isArray(p.libraries)) fail('program', 'libraries is a list');
