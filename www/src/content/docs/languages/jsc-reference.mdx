@@ -186,8 +186,13 @@ objects, and each type needs its own owned init and escape hatch (`JSC1208`, `JS
 keep `BigMap`s (the instance then keeps none, `JSC1211`), and an owned init may write them and `accept` native assets;
 an owned destroy may be `payable`. An instance's `init` does not accept native assets (`JSC0426`). An owned action
 with a parameter `to: into` moves its object to another instance, which consents with an action `admits T` in the same
-transaction (first parameter the object's id, then optionally the arriving object, `obj: T`); each half reads the
-other's input, and the source's half comes first. `invariant T.name = …` holds for every object of type `T`.
+transaction (first parameter the object's id, then optionally the arriving object, `obj: T`). Each half reads the
+other's input, never its outcome; each half is its own call, with its own refusal class; the transaction is accepted
+only if both halves are, and `Compose` reports the first refusal in the order its calls were added. An admission's
+conditions hold for the object as it arrives (its input), not for the object that lands: if the move changes what the
+admission reads, check it on the move's side too. A destination admits one object per transaction (it has one
+redeemer), and an object that keeps a `BigMap` cannot move yet (`JSC1212`). `invariant T.name = …` holds for every
+object of type `T`.
 
 ```text
 contract Bank(maxDatumBytes = 160) {

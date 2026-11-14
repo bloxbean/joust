@@ -1,10 +1,17 @@
 jsc 2
 package org.julclang.state.examples.dsl
 
-// ADR-0018 M3a3 coverage (#107 review C2, K22): moves that change the very field the destination's admission reads.
-// lift raises a pass by 2 as it moves, lower drops it by 2; board admits a pass of at least the ferry's level, as the
-// pass arrives (its input, before the move). A ferry of level 3 refuses a level-1 pass lifted to 3, and boards a
-// level-3 pass lowered to 1.
+// ADR-0018 M3a3 coverage (#107 reviews C2, round r2 F1, F5, C4): each half of a move reads the other half's input,
+// never its outcome, and both halves change what the other half reads.
+// - lift raises a pass by 2 as it moves, lower drops it by 2. board admits a pass of at least the ferry's level as the
+//   pass arrives (its input, before the move). A ferry of level 3 refuses a level-1 pass lifted to 3 and boards a
+//   level-3 pass lowered to 1 (K22).
+// - board counts an arrival. lift reads the ferry's arrivals as its input holds them (room for one more below 2), and
+//   lower reads them too (only onto a ferry that has already boarded a pass). A move into a ferry with 1 arrival is
+//   lifted although the ferry leaves with 2, and a pass is not lowered onto an empty ferry although it leaves with 1
+//   (design F1).
+// - A pass's level is at most 5, an invariant by type that a move (lift from 4) and an owned init (issueAt 6) can break
+//   (design F5).
 contract Ferry {
   state { keeper: Key, minLevel: Int, arrivals: Int }
 
@@ -19,12 +26,18 @@ contract Ferry {
     return { owner: caller, level: 1 }
   }
 
+  owned init Pass.issueAt(f: shared, lv: Int) {
+    return { owner: caller, level: lv }
+  }
+
   owned action Pass.lift(to: into) only owner {
+    require(to.arrivals < 2, "the ferry is full")
     return { ...state, level: level + 2 }
   }
 
   owned action Pass.lower(to: into) only owner {
     require(level > 2, "too low to lower")
+    require(to.arrivals > 0, "the ferry has not sailed yet")
     return { ...state, level: level - 2 }
   }
 
@@ -36,4 +49,6 @@ contract Ferry {
   owned destroy Pass.scrap() only owner {
     pay(owner, balance)
   }
+
+  invariant Pass.cap = level <= 5
 }

@@ -1347,7 +1347,11 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 when it is below 14,000 bytes, or, when its Java example is itself 14,000 bytes or more, when it is within +15% of the
 example and at most the runtime's 15,000-byte reference-script limit (`StateContractHandle.scriptFor`). Such a port's
 gate test pins its recorded size with a stated slack (100 bytes), so any growth has to be justified again. Locker
-(14,812 B) and Safes (14,935 B) are the first ports under this rule.
+(14,812 B) and Safes (14,935 B) are the first ports under this rule. A port whose Java example is below 14,000 bytes
+but whose own checks (ones the example does not make) take it over may also be accepted, as a maintainers' decision,
+on the same terms (+15%, at most 15,000 bytes, pinned) and with each group of those checks measured in bytes (r25,
+after #107's review F3): Market (14,372 B against 13,514 B; its `#input:`, `#pay:`, `#send:` and `#funds:` checks
+cost 804 B, `JscV2M3a3GateTest.marketsChecks_theirBytes`).
 
 **Recommendation gate.** `.jsc` 2 becomes the recommended language for JS developers when M2 and M4 have exited (the
 features most dApps need, and offline tests) **and** an independent security review of the lowering, the generated

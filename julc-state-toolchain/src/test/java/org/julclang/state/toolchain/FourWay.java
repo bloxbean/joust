@@ -96,7 +96,8 @@ final class FourWay {
     final Class<?> stateClass;
     final Interpreter interp;
     final Map<String, String> transitions;
-    final StateHarness<Object> harness;
+    /** The validator's harness; {@link #useScript} replaces it with another build of the contract (a mutant). */
+    StateHarness<Object> harness;
     final LinkedHashMap<String, Boolean> bigMaps;
     final InMemoryNodeStore store = new InMemoryNodeStore();
     /** Each root this harness built, with its contents (key hex → stored bytes), for the transition leg's reads. */
@@ -167,6 +168,7 @@ final class FourWay {
         while (lm.find()) libraries.add(lm.group(1));
         this.transitions = transitions;
         var spec = (org.julclang.state.runtime.ContractSpec) Class.forName(PKG + "." + name + "Client").getField("SPEC").get(null);
+        this.spec = spec;
         this.harness = (StateHarness<Object>) (params == null ? StateHarness.of(spec) : StateHarness.of(spec, java(params)));
         this.events = interp.methods().keySet().stream().anyMatch(interp::carriesEvents);
         this.bigMaps = interp.bigMaps();
@@ -186,6 +188,28 @@ final class FourWay {
 
     /** Whether a method takes Funds (M2): an asset-aware contract's legs carry its native assets. */
     final boolean assets;
+
+    /** The contract's spec, as generated. */
+    @SuppressWarnings("rawtypes")
+    final org.julclang.state.runtime.ContractSpec spec;
+
+    /**
+     * #107 round-r2 review C4: this leg's validator becomes {@code cborHex}, another build of the contract (a mutant with
+     * a defence removed). The policy is that script's, and every transaction is built for it; the other legs are unchanged,
+     * so a vector whose defence is gone fails on "validator vs interpreter".
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void useScript(String cborHex) throws Exception {
+        var comps = org.julclang.state.runtime.ContractSpec.class.getRecordComponents();
+        var types = new Class<?>[comps.length];
+        var vals = new Object[comps.length];
+        for (int i = 0; i < comps.length; i++) {
+            types[i] = comps[i].getType();
+            vals[i] = comps[i].getName().equals("scriptCborHex") ? cborHex : comps[i].getAccessor().invoke(spec);
+        }
+        var mutant = (org.julclang.state.runtime.ContractSpec) org.julclang.state.runtime.ContractSpec.class.getDeclaredConstructor(types).newInstance(vals);
+        harness = (StateHarness<Object>) (params == null ? StateHarness.of(mutant) : StateHarness.of(mutant, java(params)));
+    }
 
     /** The deploy-time params (M2b), or null. */
     final Rec params;
@@ -303,6 +327,8 @@ final class FourWay {
     /** A move's half, the object continuing under the destination: adds the destination spent with its admits action. */
     org.julclang.state.testkit.TxModel withDestination(org.julclang.state.testkit.TxModel tx, Rec object, Tx t) throws Exception {
         assertNotNull(partner, "a move's transaction needs the destination's half: set partner");
+        // #107 round-r2 review F1: the legs see the destination the validator's transaction spends, never another state.
+        assertEquals(partner.state(), t.into(), "the move's into (what the legs read) is the destination the validator spends");
         var admitArgs = new ArrayList<Object>();
         admitArgs.add(Bytes.of(harness.objectId()));
         admitArgs.addAll(partner.args());
@@ -327,6 +353,8 @@ final class FourWay {
      */
     org.julclang.state.testkit.TxModel withArrival(org.julclang.state.testkit.TxModel tx, Tx t) throws Exception {
         assertNotNull(partner, "an admits action's transaction needs the arriving object's move: set partner");
+        // #107 round-r2 review F1: the legs see the arriving object the validator's transaction spends, never another one.
+        assertEquals(partner.state(), t.arriving(), "the arriving object (what the legs read) is the input the validator spends");
         Ctx c = new Ctx(t.caller().bytes(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo());
         Tx mt = new Tx(t.caller(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo(), t.signers(), null, List.of(), Map.of(),
                 partner.shared(), partner.destination(), null);
@@ -1073,6 +1101,10 @@ final class FourWay {
             lastVerdict = v;
             return v.accepted();
         }
+        // #107 round-r2 review C4: a refused instance action may propose its unguarded outcome too (FourWay.unguarded).
+        Rec unNext = ok ? null : unguardedNext;
+        unguardedNext = null;
+        unguardedEvents = null;
         var redeemerArgs = new ArrayList<Object>();
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
         for (Object a : args) redeemerArgs.add(java(a));
@@ -1130,7 +1162,7 @@ final class FourWay {
                     batchRuns++;
                 } else if (!hasMaps()) {
                     v = evaluate(method, t, signer, withReads(method, ok ? harness.act(live, redeemer, nextJ, paysJ, signer, c)
-                            : harness.act(live, redeemer, before, JulcList.empty(), signer, c), t));
+                            : harness.act(live, redeemer, unNext != null ? java(unNext) : before, JulcList.empty(), signer, c), t));
                 } else {
                     Object after = ok ? nextState(run(ms, method, before, args, t)) : before;
                     var p = ms.prepare(harness.policy(), (Class) stateClass, before, after, StateHarness.LIVE_REF);
