@@ -159,13 +159,33 @@ public class JoustPlugin implements Plugin<Project> {
         // missing or changed one fails it. Only this task accepts: it writes the manifests, to be reviewed and committed.
         // No property switches the gate off.
         Provider<Directory> scratch = project.getLayout().getBuildDirectory().dir("tmp/acceptJscAbi");
-        project.getTasks().register("acceptJscAbi", JavaExec.class, t -> {
+        // ADR-0021 D7a: --contract C --committed-sha256 h1 --sha256 h2 accepts that one contract, bound to both manifests.
+        project.getTasks().register("acceptJscAbi", AcceptJscAbi.class, t -> {
             t.setGroup("build");
-            t.setDescription("Writes the ABI manifests of " + MAIN_JSC + "/**/*.jsc, accepting new and changed ones");
+            t.setDescription("Writes the ABI manifests of " + MAIN_JSC + "/**/*.jsc, accepting new and changed ones (--contract C"
+                    + " --committed-sha256 h1 --sha256 h2: that one, bound to the manifests jscAbiDiff showed)");
             t.setClasspath(tool);
             t.getMainClass().set("org.julclang.state.dsl.JscMain");
             t.dependsOn(extract);
-            t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), scratch.get().getAsFile().getAbsolutePath(), "--accept-abi"));
+            t.getArgumentProviders().add(() -> {
+                var args = new java.util.ArrayList<String>(List.of(src.getAbsolutePath(), scratch.get().getAsFile().getAbsolutePath()));
+                args.addAll(t.acceptance());
+                return args;
+            });
+            t.getArgumentProviders().add(javaLibraries);
+        });
+        // ADR-0021 D7a: the diff the acceptance is bound to.
+        project.getTasks().register("jscAbiDiff", JscAbiDiff.class, t -> {
+            t.setGroup("build");
+            t.setDescription("Prints the committed ABI manifest of --contract C and the one the build computes now, with their SHA-256");
+            t.setClasspath(tool);
+            t.getMainClass().set("org.julclang.state.dsl.JscMain");
+            t.dependsOn(extract);
+            t.getArgumentProviders().add(() -> {
+                var args = new java.util.ArrayList<String>(List.of("--abi-diff", src.getAbsolutePath(), t.getContract().get()));
+                if (t.getOut().isPresent()) args.add(t.getOut().get());
+                return args;
+            });
             t.getArgumentProviders().add(javaLibraries);
         });
         SourceSet main = project.getExtensions().getByType(JavaPluginExtension.class).getSourceSets()

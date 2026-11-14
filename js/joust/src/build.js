@@ -60,6 +60,17 @@ export function diagnosticLine(d) {
   return `${where}${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${d.message}`;
 }
 
+/**
+ * ADR-0021 D7a: the build's lowering only, in memory (`joust abi diff`): the engine's { ok, diagnostics, generated }, nothing
+ * written.
+ */
+export async function compile({ root = process.cwd(), src = 'contracts', options = {} } = {}) {
+  const files = sources(resolve(root, src));
+  if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
+  const { packages, javaLibraries } = libraryPackages(root);
+  return buildInWorker({ files, options, packages, javaLibraries });
+}
+
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
 export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep,
   acceptAbi = false, acceptLock = false, traces = false } = {}) {
