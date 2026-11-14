@@ -42,7 +42,21 @@ class NodeOptionsFuzzTest {
     static final Path SERVER = Path.of("src/test/js/node-options-server.mjs");
     static final Path TOOLCHAIN = Path.of("../js/joust/src/toolchain.js");
     static final FuzzData.Tally TALLY = new FuzzData.Tally("NodeOptionsFuzzTest");
-    static final String PROBE = "const { getOptionValue } = require('internal/options'); process.stdout.write(JSON.stringify(getOptionValue('--conditions')))";
+    /** Node's conditions, then V8's heap limit (review r1, security S4: V8 is the heap flags' oracle, not a restated rule). */
+    static final String PROBE = "const { getOptionValue } = require('internal/options'); process.stdout.write(JSON.stringify(getOptionValue('--conditions'))"
+            + " + ' ' + require('v8').getHeapStatistics().heap_size_limit)";
+    static Long defaultHeap;
+
+    /** The conditions part of a probe's output. */
+    static String conditionsOut(String out) {
+        int sp = out.lastIndexOf(' ');
+        return sp < 0 ? out : out.substring(0, sp);
+    }
+
+    /** The heap limit part of a probe's output. */
+    static long heapOut(String out) {
+        return Long.parseLong(out.substring(out.lastIndexOf(' ') + 1).strip());
+    }
     static Process port;
     static BufferedWriter toPort;
     static BufferedReader fromPort;
@@ -177,13 +191,17 @@ class NodeOptionsFuzzTest {
                 TALLY.count("Node refuses an argument (no comparison)");
                 return;
             }
-            var nodeConditions = (List<?>) AbiCheck.Json.parse(n.out());
+            var nodeConditions = (List<?>) AbiCheck.Json.parse(conditionsOut(n.out()));
             assertEquals(conditions(args), nodeConditions, "the port and Node read different --conditions: " + what);
             TALLY.count("conditions agree");
             if (args.stream().anyMatch(x -> heapFlag((String) x))) {
                 NodeRun s = node((String) a.get("stripped"));
                 if (s.exit() == 0 && s.out().startsWith("[")) {
-                    assertEquals(nodeConditions, AbiCheck.Json.parse(s.out()), "Node reads other conditions after the strip: " + what);
+                    assertEquals(nodeConditions, AbiCheck.Json.parse(conditionsOut(s.out())), "Node reads other conditions after the strip: " + what);
+                    // V8 itself: after the strip no heap flag is left, so the heap limit is Node's default.
+                    if (defaultHeap == null) defaultHeap = heapOut(node("").out());
+                    assertEquals(defaultHeap.longValue(), heapOut(s.out()), "a heap flag survives the strip (V8's heap_size_limit): " + what);
+                    TALLY.count("heap limit is the default after the strip");
                     TALLY.count("conditions agree after the strip");
                 } else {
                     fail("Node does not start with the stripped value " + a.get("stripped") + ": " + s.err() + "\n" + what);

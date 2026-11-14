@@ -49,12 +49,12 @@ final class JscGen {
     private JscGen() {}
 
     /** The grammar's version, saved with every failure. */
-    static final String VERSION = "JscGen r1";
+    static final String VERSION = "JscGen r2";
     static final String PKG = "org.julclang.state.fuzz";
     static final String DIR = "org/julclang/state/fuzz/";
     static final BigInteger T0 = BigInteger.valueOf(1_800_000_000_000L);
     static final BigInteger WINDOW = BigInteger.valueOf(120_000);
-    static final byte[] OWNER = fill(28, 0x0A), STRANGER = fill(28, 0x5A);
+    static final byte[] OWNER = fill(28, 0x0A), STRANGER = fill(28, 0x5A), THIRD = fill(28, 0x3C);
 
     static byte[] fill(int n, int b) {
         byte[] x = new byte[n];
@@ -107,7 +107,7 @@ final class JscGen {
 
     // ------------------------------------------------------------------ types and scopes
 
-    enum T { INT, BOOL, BYTES, KEY, LIST, OPT, TIER, PT }
+    enum T { INT, BOOL, BYTES, KEY, LIST, OPT, TIER, PT, MAP }
 
     record Var(String name, T type) {}
 
@@ -129,7 +129,19 @@ final class JscGen {
     }
 
     /** A call of the sequence: on the chained state (the last accepted one), or on a state of its own. */
-    record Step(String method, Rec state, List<Object> args, byte[] caller, long received) {}
+    /**
+     * A call of the sequence: on the chained state (the last accepted one), or on a state of its own. {@code cosigners} sign
+     * the transaction beside the caller (who always signs, semantics §2); {@code mutants}: the accepted call's transaction is
+     * also checked with every next state, payout and event one step away, and the attack suite ({@link FourWay#mutants}:
+     * the validator must refuse each); {@code candidate}: for an init, the first state a creation proposes when the
+     * interpreters refuse it (the validator must refuse that creation too, review r1 Codex C2).
+     */
+    record Step(String method, Rec state, List<Object> args, byte[] caller, long received, List<byte[]> cosigners, boolean mutants,
+                Rec candidate, BigInteger[] window, org.julclang.state.dsl.v2.Interpreter.ValueV offered) {
+        Step(String method, Rec state, List<Object> args, byte[] caller, long received) {
+            this(method, state, args, caller, received, List.of(), false, null, null, null);
+        }
+    }
 
     /** A generated program: its files, the contract's name and file, the params (or null) and the calls. */
     record Plan(String name, Map<String, String> files, String contractFile, Rec params, List<Step> steps, List<String> features,
@@ -158,7 +170,7 @@ final class JscGen {
         final StringBuilder lib = new StringBuilder(), top = new StringBuilder(), body = new StringBuilder();
         final TreeSet<String> math = new TreeSet<>(), bytes = new TreeSet<>(), crypto = new TreeSet<>(), value = new TreeSet<>();
         final List<String> features = new ArrayList<>();
-        boolean library, params, invariant, events, values, time, tier, pt;
+        boolean library, params, invariant, events, values, time, tier, pt, maps, assets;
         /** The library's (or the file's) fns: name, parameter types, and whether it is the recursive one. */
         final List<String[]> fns = new ArrayList<>();
         int consts, msgs, binders;
@@ -170,6 +182,8 @@ final class JscGen {
         final Map<String, String> kinds = new LinkedHashMap<>();
         final Map<String, List<T>> methodParams = new LinkedHashMap<>();
         final Map<String, Boolean> payableMethods = new LinkedHashMap<>();
+        /** The method that accepts native assets (M2a), or null. */
+        String assetMethod;
 
         G(Src s) {
             this.s = s;
@@ -258,7 +272,13 @@ final class JscGen {
                     yield "match " + tierExpr(sc, d - 1) + " { Lo => (" + integer(sc, d - 1) + "), Hi { k: " + bk + " } => (" + bk + " + "
                             + integer(sc.with(new Var(bk, T.INT)), d - 1) + ") }";
                 }
-                case 18 -> pt ? ptExpr(sc, d - 1) + "." + (s.coin() ? "x" : "y") : integer(sc, d - 1);
+                case 18 -> {
+                    if (var(sc, T.MAP) != null && s.coin()) {
+                        yield s.coin() ? "(" + mapExpr(sc, d - 1) + ".get(" + bytesExpr(sc, d - 1) + ") ?? " + integer(sc, d - 1) + ")"
+                                : mapExpr(sc, d - 1) + ".size";
+                    }
+                    yield pt ? ptExpr(sc, d - 1) + "." + (s.coin() ? "x" : "y") : integer(sc, d - 1);
+                }
                 case 19 -> callFn(sc, d - 1);
                 case 20 -> {
                     if (!values) yield integer(sc, d - 1);
@@ -299,7 +319,7 @@ final class JscGen {
                 case 0 -> "(" + integer(sc, d - 1) + new String[]{" < ", " <= ", " > ", " >= "}[s.pick(0, 3)] + integer(sc, d - 1) + ")";
                 case 1 -> {
                     T t = T.values()[s.pick(0, T.values().length - 1)];
-                    if ((t == T.TIER && !tier) || (t == T.PT && !pt)) t = T.INT;
+                    if ((t == T.TIER && !tier) || (t == T.PT && !pt) || (t == T.MAP && var(sc, T.MAP) == null)) t = T.INT;
                     yield "(" + expr(sc, t, d - 1) + (s.coin() ? " == " : " != ") + expr(sc, t, d - 1) + ")";
                 }
                 case 2 -> "!(" + bool(sc, d - 1) + ")";
@@ -320,7 +340,8 @@ final class JscGen {
                     }
                     yield "Value.lovelace(" + integer(sc, d - 1) + ").covers(Value.lovelace(" + integer(sc, d - 1) + "))";
                 }
-                case 10 -> "(" + keyExpr(sc) + " == " + keyExpr(sc) + ")";
+                case 10 -> var(sc, T.MAP) != null && s.coin() ? (s.coin() ? mapExpr(sc, d - 1) + ".has(" + bytesExpr(sc, d - 1) + ")" : mapExpr(sc, d - 1) + ".isEmpty")
+                        : "(" + keyExpr(sc) + " == " + keyExpr(sc) + ")";
                 default -> "(" + integer(sc, d - 1) + (s.coin() ? " == " : " != ") + integer(sc, d - 1) + ")";
             };
         }
@@ -413,6 +434,16 @@ final class JscGen {
             return "Pt { x: " + integer(sc, d - 1) + ", y: " + integer(sc, d - 1) + " }";
         }
 
+        /** A Map<Bytes, Int>: a variable, or one set or deleted (a key over 64 bytes fails Map.set: domain:Map.set). */
+        String mapExpr(Scope sc, int d) {
+            // Only where a map variable is in scope: Map.empty() has no type of its own outside a typed position.
+            String v = var(sc, T.MAP);
+            if (d <= 0 || s.chance(3)) return v;
+            String inner = mapExpr(sc, d - 1);
+            return s.coin() ? inner + ".set(" + bytesExpr(sc, d - 1) + ", " + integer(sc, d - 1) + ")"
+                    : inner + ".delete(" + bytesExpr(sc, d - 1) + ")";
+        }
+
         String expr(Scope sc, T t, int d) {
             return switch (t) {
                 case INT -> integer(sc, d);
@@ -423,6 +454,7 @@ final class JscGen {
                 case OPT -> opt(sc, d);
                 case TIER -> tierExpr(sc, d);
                 case PT -> ptExpr(sc, d);
+                case MAP -> mapExpr(sc, d);
             };
         }
 
@@ -436,6 +468,7 @@ final class JscGen {
                 case OPT -> "Option<Int>";
                 case TIER -> "Tier";
                 case PT -> "Pt";
+                case MAP -> "Map<Bytes, Int>";
             };
         }
 
@@ -446,6 +479,7 @@ final class JscGen {
                     new Var("f", T.BOOL), new Var("xs", T.LIST), new Var("o", T.OPT)));
             if (tier) vs.add(new Var("t", T.TIER));
             if (pt) vs.add(new Var("p", T.PT));
+            if (maps) vs.add(new Var("mp", T.MAP));
             return vs;
         }
 
@@ -465,6 +499,14 @@ final class JscGen {
                 case PT -> "Pt { x: (" + integer(sc, d) + ") % 1_000_003, y: (" + integer(sc, d) + ") % 1_000_003 }";
                 case KEY -> keyExpr(sc);
                 case BOOL -> bool(sc, d);
+                // At most a few entries, each value reduced (a state is stored; its size is bounded, see the class comment).
+                case MAP -> {
+                    bytes.add("take");
+                    String m0 = var(sc, T.MAP);
+                    if (m0 == null || s.chance(4)) yield "Map.empty()";
+                    yield s.coin() ? m0 : "(if " + m0 + ".size < 4 { " + m0 + " } else { " + m0 + ".delete(#) }).set(take(" + bytesExpr(sc, d) + ", 16), ("
+                            + integer(sc, d) + ") % 1_000_003)";
+                }
             };
         }
 
@@ -572,12 +614,16 @@ final class JscGen {
             invariant = s.chance(5);
             events = s.chance(4);
             values = s.chance(3);
+            maps = s.chance(3);
+            assets = s.chance(4);
             time = s.chance(3);
             if (library) features.add("M4 library");
             if (params) features.add("M2b params");
             if (invariant) features.add("M2b invariant");
             if (events) features.add("M2b events");
             if (values) features.add("M2 values");
+            if (maps) features.add("M1 map");
+            if (assets) features.add("M2 assets (mint, send, accept)");
             if (time) features.add("time");
             if (tier) features.add("enum");
             if (pt) features.add("record");
@@ -631,7 +677,7 @@ final class JscGen {
                 var ps = new ArrayList<Var>();
                 for (int j = s.pick(0, 3); j > 0; j--) {
                     T t = T.values()[s.pick(0, T.values().length - 1)];
-                    if ((t == T.TIER && !tier) || (t == T.PT && !pt)) t = T.KEY;
+                    if ((t == T.TIER && !tier) || (t == T.PT && !pt) || (t == T.MAP && !maps)) t = T.KEY;
                     ps.add(new Var("p" + i + "_" + ps.size(), t));
                 }
                 boolean payable = values && s.coin();
@@ -653,6 +699,26 @@ final class JscGen {
                 kinds.put(name, "action");
                 methodParams.put(name, ps.stream().map(Var::type).toList());
                 payableMethods.put(name, payable);
+            }
+
+            // M2a (review r1, design F2): an action that accepts what is offered, mints the own policy's token #6d and
+            // sometimes sends what it minted to the caller; the rest stays in the instance's output.
+            if (assets) {
+                String name = "x" + kinds.size();
+                var vs = new ArrayList<Var>(sv);
+                vs.add(new Var("q", T.INT));
+                Scope sc = new Scope(vs, true, true, true);
+                String k = "c" + (consts++);
+                c.append("  action ").append(name).append("(q: Int) payable open {\n");
+                c.append("    accept(funds.received)\n");
+                c.append("    const ").append(k).append(" = (").append(integer(sc, 2)).append(") % 7\n");
+                c.append("    mint(#6d, ").append(k).append(")\n");
+                if (s.coin()) c.append("    send(wallet(caller), Value.asset(funds.policy, #6d, ").append(s.coin() ? k : "abs(" + k + ")").append("))\n");
+                c.append("    return { ...state, n: (n + ").append(k).append(") % 1_000_003 }\n  }\n\n");
+                kinds.put(name, "action");
+                methodParams.put(name, List.of(T.INT));
+                payableMethods.put(name, true);
+                assetMethod = name;
             }
 
             // views
@@ -702,7 +768,8 @@ final class JscGen {
             head.append(imports("std/math", math)).append(imports("std/bytes", bytes)).append(imports("std/crypto", crypto))
                     .append(imports("std/value", value)).append('\n');
             if (!library) head.append(decls).append(fnText).append('\n');
-            head.append("contract ").append(name).append("(maxDatumBytes = 2048) {\n").append(src).append("}\n");
+            head.append("contract ").append(name).append(assets ? "(maxDatumBytes = 2048, assetSlots = 4) {\n" : "(maxDatumBytes = 2048) {\n")
+                    .append(src).append("}\n");
             files.put(DIR + name + ".jsc", head.toString());
 
             Rec params = this.params ? new Rec("Config", List.of(value(T.INT))) : null;
@@ -713,7 +780,8 @@ final class JscGen {
 
         List<Step> steps(List<Var> sv) {
             var out = new ArrayList<Step>();
-            out.add(new Step("init", null, List.of(value(T.INT), value(T.BYTES)), s.chance(8) ? STRANGER : OWNER, 0));
+            out.add(new Step("init", null, List.of(value(T.INT), value(T.BYTES)), s.chance(8) ? STRANGER : OWNER, 0, cosigners(),
+                    !s.chance(3), state(sv), window(), null));
             var methods = new ArrayList<>(kinds.keySet());
             methods.remove("init");
             for (int i = s.pick(1, 7); i > 0 && !methods.isEmpty(); i--) {
@@ -724,9 +792,51 @@ final class JscGen {
                 byte[] caller = s.chance(4) ? STRANGER : OWNER;
                 long received = Boolean.TRUE.equals(payableMethods.get(m))
                         ? new long[]{0, 1, 999_999, 1_000_000, 2_000_000, 50_000_000}[s.pick(0, 5)] : 0;
-                out.add(new Step(m, state, args, caller, received));
+                // Native assets offered only to the method that accepts them (one without accept must be offered none:
+                // the validator's rule, which the interpreters do not state, semantics §5.4).
+                var offered = m.equals(assetMethod) ? offered() : null;
+                out.add(new Step(m, state, args, caller, received, cosigners(), !s.chance(3), null, window(), offered));
             }
             return out;
+        }
+
+        /**
+         * The call's validity window [validFrom, validTo): mostly the default [T0, T0 + 2 min] (null); sometimes zero width,
+         * as wide as maxValidityMs allows (an hour), ending at T0, or starting at 0 (review r1, design F2). The time
+         * constants after/before read sit at these edges. An unbounded end is the validator's alone to refuse (an interval
+         * the interpreters cannot express): FiveWayFuzzTest checks it as a transaction-level attack.
+         */
+        BigInteger[] window() {
+            if (!s.chance(3)) return null;
+            BigInteger hour = BigInteger.valueOf(3_600_000);
+            return switch (s.pick(0, 4)) {
+                case 0 -> new BigInteger[]{T0, T0};
+                case 1 -> new BigInteger[]{T0, T0.add(hour)};
+                case 2 -> new BigInteger[]{T0.subtract(WINDOW), T0};
+                case 3 -> new BigInteger[]{T0.add(WINDOW), T0.add(WINDOW).add(BigInteger.ONE)};
+                default -> new BigInteger[]{BigInteger.ZERO, BigInteger.ONE};
+            };
+        }
+
+        /** What a call offers the accepting method: nothing, one foreign token in an amount, or two policies' tokens. */
+        org.julclang.state.dsl.v2.Interpreter.ValueV offered() {
+            var m = new java.util.TreeMap<String, java.util.TreeMap<String, BigInteger>>();
+            String p1 = "70".repeat(28), p2 = "71".repeat(28), name = HexFormat.of().formatHex("HOSKY".getBytes(StandardCharsets.UTF_8));
+            switch (s.pick(0, 3)) {
+                case 0 -> { }
+                case 1, 2 -> m.computeIfAbsent(p1, k -> new java.util.TreeMap<>()).put(name, BigInteger.valueOf(s.pick(1, 9)));
+                default -> {
+                    m.computeIfAbsent(p1, k -> new java.util.TreeMap<>()).put(name, BigInteger.valueOf(s.pick(1, 9)));
+                    m.computeIfAbsent(p2, k -> new java.util.TreeMap<>()).put("01", BigInteger.ONE);
+                }
+            }
+            return new org.julclang.state.dsl.v2.Interpreter.ValueV(m);
+        }
+
+        /** Keys that sign beside the caller: none mostly; the owner, a stranger or a third key sometimes. */
+        List<byte[]> cosigners() {
+            if (!s.chance(4)) return List.of();
+            return List.of(new byte[][]{OWNER, STRANGER, THIRD}[s.pick(0, 2)]);
         }
 
         Object value(T t) {
@@ -744,6 +854,30 @@ final class JscGen {
                 case OPT -> s.coin() ? Opt.NONE : Opt.some(value(T.INT));
                 case TIER -> s.coin() ? new Rec("Lo", List.of()) : new Rec("Hi", List.of(value(T.INT)));
                 case PT -> new Rec("Pt", List.of(value(T.INT), value(T.INT)));
+                // A map argument travels raw (FourWay.raw): sometimes its keys out of order, repeated or too long, which the
+                // checked-input rule refuses (input:<parameter>) on every leg.
+                case MAP -> {
+                    var ks = new ArrayList<Bytes>();
+                    var vs = new ArrayList<Object>();
+                    for (int i = s.pick(0, 3); i > 0; i--) {
+                        ks.add(Bytes.of(fill(s.chance(8) ? 65 : s.pick(0, 3), s.pick(0, 255))));
+                        vs.add(value(T.INT));
+                    }
+                    if (!s.chance(4)) {
+                        // Mostly canonical: ascending by the canonical key order, no repeated key.
+                        var sorted = new java.util.TreeMap<String, Object>();
+                        for (int i = 0; i < ks.size(); i++) sorted.put(HexFormat.of().formatHex(ks.get(i).bytes()), vs.get(i));
+                        ks.clear();
+                        vs.clear();
+                        var keys = new ArrayList<>(sorted.keySet());
+                        keys.sort(java.util.Comparator.comparingInt(String::length).thenComparing(java.util.Comparator.naturalOrder()));
+                        for (String k : keys) {
+                            ks.add(Bytes.of(HexFormat.of().parseHex(k)));
+                            vs.add(sorted.get(k));
+                        }
+                    }
+                    yield new org.julclang.state.dsl.v2.Interpreter.MapV(ks, vs);
+                }
             };
         }
 
@@ -762,6 +896,21 @@ final class JscGen {
                     case OPT -> s.coin() ? Opt.NONE : Opt.some(BigInteger.valueOf(s.pick(-1_000_002, 1_000_002)));
                     case TIER -> s.coin() ? new Rec("Lo", List.of()) : new Rec("Hi", List.of(BigInteger.valueOf(s.pick(-1_000_002, 1_000_002))));
                     case PT -> new Rec("Pt", List.of(BigInteger.valueOf(s.pick(-1_000_002, 1_000_002)), BigInteger.valueOf(s.pick(-9, 9))));
+                    // A stored map is canonical: the validator never writes another.
+                    case MAP -> {
+                        var sorted = new java.util.TreeMap<String, Object>(java.util.Comparator.comparingInt(String::length)
+                                .thenComparing(java.util.Comparator.naturalOrder()));
+                        for (int i = s.pick(0, 3); i > 0; i--) {
+                            sorted.put(HexFormat.of().formatHex(fill(s.pick(0, 3), s.pick(0, 255))), BigInteger.valueOf(s.pick(-1_000_002, 1_000_002)));
+                        }
+                        var ks = new ArrayList<Bytes>();
+                        var vals = new ArrayList<Object>();
+                        sorted.forEach((k, q) -> {
+                            ks.add(Bytes.of(HexFormat.of().parseHex(k)));
+                            vals.add(q);
+                        });
+                        yield new org.julclang.state.dsl.v2.Interpreter.MapV(ks, vals);
+                    }
                     default -> value(v.type());
                 };
                 fs.add(x);

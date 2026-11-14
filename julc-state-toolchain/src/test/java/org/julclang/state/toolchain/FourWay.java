@@ -1989,8 +1989,15 @@ final class FourWay {
         if (ti != null && (signer != null || signers != null) && tx.signers.stream().noneMatch(k -> java.util.Arrays.equals(k, ti.caller().bytes()))) {
             tx.signers.add(ti.caller().bytes());
         }
+        if (txTweak != null) txTweak.accept(tx);
         return harness.evaluate(tx);
     }
+
+    /**
+     * A change made to the next validator transactions before they are evaluated (null: none): what an attacker may do
+     * to an honest transaction that the interpreters' form cannot express, such as an unbounded validity end (FiveWayFuzzTest).
+     */
+    java.util.function.Consumer<org.julclang.state.testkit.TxModel> txTweak;
 
     /** The class of the last refusal {@link #check} saw (semantics §2.5), or null when it was accepted. */
     String lastRefusal;
