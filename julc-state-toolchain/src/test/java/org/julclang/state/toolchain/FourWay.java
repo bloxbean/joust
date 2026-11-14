@@ -265,9 +265,29 @@ final class FourWay {
         return false;
     }
 
-    /** M3a: an object's datum, the validator's Holding(instance, value) (one owned type in M3a1). */
+    /**
+     * M3a: an object's datum, the validator's Holding(instance, value); with several owned types (M3a2, ADR-0012 D1) the
+     * sealed Holding_T of the value's type.
+     */
     Object holding(Object value) throws Exception {
-        return construct("Holding", List.of(harness.instanceId(), value));
+        String typed = "Holding_" + value.getClass().getSimpleName();
+        return construct(exists(PKG + "." + name + "Validator$" + typed) ? typed : "Holding", List.of(harness.instanceId(), value));
+    }
+
+    /** M3a2: the generated record of the method's owned type. */
+    Class<?> ownedClass(String method) throws Exception {
+        return Class.forName(cls.getName() + "$" + interp.ownedType(method));
+    }
+
+    /** M3a2: whether a record keeps BigMaps (MerkleMap components): its calls carry map claims (ADR-0014). */
+    static boolean keepsMaps(Class<?> record) {
+        for (var rc : record.getRecordComponents()) if (rc.getType() == MerkleMap.class) return true;
+        return false;
+    }
+
+    /** M3a2: the transaction with the native assets an owned call sees: under this harness's policy and the object's token. */
+    Tx objectFunds(Tx t, ValueV received, ValueV held) {
+        return t.withFunds(new FundsV(received, held, Bytes.of(harness.policy()), Bytes.of(harness.objectId())));
     }
 
     /**
@@ -720,8 +740,12 @@ final class FourWay {
     }
 
     private static Object nextState(Object r) throws Exception {
-        // M3a: an owned action's record is <T>Outcome.
-        if (r.getClass().getSimpleName().endsWith("Outcome")) return r.getClass().getMethod("state").invoke(r);
+        // M3a: an owned action's record is <T>Outcome; a creation that accepts returns Created or <T>Created (M3a2), an
+        // action that takes assets Received or <T>Received: each holds the next value as its state.
+        String n = r.getClass().getSimpleName();
+        if (r.getClass().isRecord() && (n.endsWith("Outcome") || n.endsWith("Created") || n.endsWith("Received"))) {
+            return r.getClass().getMethod("state").invoke(r);
+        }
         return r;
     }
 
@@ -746,16 +770,26 @@ final class FourWay {
         Object r = run(ms, method, before, args, t);
         if (r == null) return "refused";
         if (kind.equals("view")) return "ok:" + data(r).serializeToHex();
-        if (assets) return "ok:" + jvmStep(r, kind, stateClass, events);
+        // M3a2: the subject is the state or the method's owned type; its maps are stored as the runtime stores them.
+        Class<?> subject = owned(method) ? ownedClass(method) : stateClass;
+        if (assets) {
+            if (kind.equals("destroy") || !keepsMaps(subject)) return "ok:" + jvmStep(r, kind, subject, events);
+            Object next = subject.isInstance(r) ? r : component(r, "state");
+            return "ok:" + jvmStep(r, kind, subject, events, stored(ms, method, subject, kind, before, next));
+        }
         if (r instanceof JulcList<?> l) return "ok:" + encoded(null, (JulcList<Payout>) l, null);
         if (kind.equals("destroy")) return "ok:" + encoded(null, outcomePayouts(r), outcomeEvents(r));
         Object next = nextState(r);
-        if (hasMaps()) {
-            // The state the runtime stores: each map's new root, its witnesses dropped.
-            next = kind.equals("init") ? ms.prepareCreation(harness.policy(), (Class) stateClass, next, harness.seed()).stored()
-                    : ms.prepare(harness.policy(), (Class) stateClass, before, next, StateHarness.LIVE_REF).stored();
-        }
+        // The state the runtime stores: each map's new root, its witnesses dropped.
+        if (keepsMaps(subject)) next = stored(ms, method, subject, kind, before, next);
         return "ok:" + encoded(next, outcomePayouts(r), outcomeEvents(r));
+    }
+
+    /** M3a2: {@code next} as the runtime stores it (each map's new root, its witnesses dropped), for the state or an object. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Object stored(MerkleSupport ms, String method, Class<?> subject, String kind, Object before, Object next) {
+        return kind.equals("init") ? ms.prepareCreation(harness.policy(), (Class) subject, next, harness.seed()).stored()
+                : ms.prepare(harness.policy(), (Class) subject, before, next, owned(method) ? StateHarness.OBJECT_REF : StateHarness.LIVE_REF).stored();
     }
 
     /** An asset-aware method's JVM result as a step (M2): the next state, payouts, sends, mint and accepted, read by name. */
@@ -764,11 +798,16 @@ final class FourWay {
     }
 
     /** The same; with {@code events} (M2b), the step's events last. */
-    @SuppressWarnings("unchecked")
     static String jvmStep(Object r, String kind, Class<?> stateClass, boolean events) {
+        return jvmStep(r, kind, stateClass, events, kind.equals("destroy") || r instanceof JulcList<?> ? null
+                : stateClass.isInstance(r) ? r : component(r, "state"));
+    }
+
+    /** The same, with the step's next value given (M3a2: as the runtime stores its maps). */
+    @SuppressWarnings("unchecked")
+    static String jvmStep(Object r, String kind, Class<?> stateClass, boolean events, Object next) {
         JulcList<?> none = events ? JulcList.empty() : null;
         if (r instanceof JulcList<?> l) return step(null, (JulcList<Payout>) l, null, null, null, none);
-        Object next = kind.equals("destroy") ? null : stateClass.isInstance(r) ? r : component(r, "state");
         if (stateClass.isInstance(r)) return step(next, null, null, null, null, none);
         JulcList<?> evs = events ? (JulcList<?>) component(r, "events") : null;
         return step(next, (JulcList<Payout>) component(r, "payouts"), (JulcList<Send>) component(r, "sends"), (Value) component(r, "mint"),
@@ -786,7 +825,8 @@ final class FourWay {
         assertNotNull(program, name + " has no transition program " + method);
         var javaArgs = args.stream().map(this::java).toArray();
         PlutusData ctxData = interp.usesTx(method) ? data(ctx(t)) : NONE;
-        if (!hasMaps() || state == null) {
+        Class<?> subject = owned(method) ? ownedClass(method) : stateClass;
+        {
             // M2: a method with Funds takes them first in its arguments' record (the transition generator's leading fields).
             var in = rawArgs(args);
             if (takesFunds(method)) {
@@ -810,14 +850,27 @@ final class FourWay {
             }
             // M3a: an owned method's shared state is the program's second argument (the transition generator's "shared").
             PlutusData shared = interp.takesShared(method) ? data(java(t.shared())) : NONE;
-            return evaluateRaw(program, List.of(julc(state == null ? NONE : data(java(state))), julc(shared), in, julc(ctxData)));
+            if (!keepsMaps(subject) || state == null) {
+                String res = evaluateRaw(program, List.of(julc(state == null ? NONE : data(java(state))), julc(shared), in, julc(ctxData)));
+                if (!keepsMaps(subject) || res.equals("refused")) return res;
+                // M3a2: a creation that writes its maps (Safes' openSafe): the program's step holds the writes as the JVM's
+                // result does; what the runtime stores is the new roots.
+                Object out = run(new MerkleSupport(store), method, null, args, t);
+                assertNotNull(out, name + "." + method + ": the transition program accepts what the JVM refuses");
+                String jvmSame = assets ? "ok:" + jvmStep(out, kindOf(method), subject, events)
+                        : "ok:" + encoded(nextState(out), outcomePayouts(out), outcomeEvents(out));
+                assertEquals(jvmSame, res, name + "." + method + ": transition program vs the JVM (a creation's map writes)");
+                return jvm(method, state, args, t);
+            }
+            programIn = in;
+            programShared = shared;
         }
         Object before = java(state);
         var proven = new LinkedHashMap<String, List<MapEntry>>();   // root hex -> proven entries, in discovery order
         ReadDiscoveryTest.Run r = null;
         int round = 1;
         for (; round <= ROUND_LIMIT; round++) {
-            r = ReadDiscoveryTest.run(program, List.of(julc(data(opened(before, proven))), julc(NONE), rawArgs(args), julc(ctxData)), true);
+            r = ReadDiscoveryTest.run(program, List.of(julc(data(opened(before, proven))), julc(programShared), programIn, julc(ctxData)), true);
             boolean fresh = false;
             for (String[] read : r.rootedReads()) {
                 var entries = proven.computeIfAbsent(read[0], k -> new ArrayList<>());
@@ -843,15 +896,21 @@ final class FourWay {
                 throw new IllegalStateException(e);
             }
         });
-        String jvmSame = out == null ? "refused" : kindOf(method).equals("destroy") ? "ok:" + encoded(null, outcomePayouts(out), outcomeEvents(out))
+        String jvmSame = out == null ? "refused" : assets ? "ok:" + jvmStep(out, kindOf(method), subject, events)
+                : kindOf(method).equals("destroy") ? "ok:" + encoded(null, outcomePayouts(out), outcomeEvents(out))
                 : "ok:" + encoded(nextState(out), outcomePayouts(out), outcomeEvents(out));
         assertEquals(jvmSame, r.result(), name + "." + method + ": transition program vs the JVM on the same reads");
         return r.result().equals("refused") ? "refused" : jvm(method, state, args, t);
     }
 
+    /** M3a2: the transition program's arguments' record and shared state, for the map discovery rounds. */
+    private PlutusData programShared = NONE;
+    private org.julclang.core.PlutusData programIn;
+
     /** {@code state} with each map opened with the reads proven for its root (as the engine opens it). */
     private Object opened(Object state, Map<String, List<MapEntry>> proven) throws Exception {
-        var comps = stateClass.getRecordComponents();
+        Class<?> rc = state.getClass();   // the state, or an object (M3a2)
+        var comps = rc.getRecordComponents();
         var types = new Class<?>[comps.length];
         var vals = new Object[comps.length];
         for (int i = 0; i < comps.length; i++) {
@@ -864,7 +923,7 @@ final class FourWay {
                 vals[i] = new MerkleMap(m.root(), reads, JulcList.empty());
             }
         }
-        return stateClass.getDeclaredConstructor(types).newInstance(vals);
+        return rc.getDeclaredConstructor(types).newInstance(vals);
     }
 
     /**
@@ -1003,9 +1062,12 @@ final class FourWay {
      */
     private Object assetRedeemer(String method, List<Object> args, Tx t, JulcList<Object> evs) throws Exception {
         String kind = kindOf(method);
-        String variant = kind.equals("init") ? "CreateInstance" : cap(method);
+        boolean object = owned(method);
+        String variant = kind.equals("init") && !object ? "CreateInstance" : cap(method);
         var redeemerArgs = new ArrayList<Object>();
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
+        // M3a2: an owned init's redeemer names the instance after the seed (ADR-0003).
+        if (kind.equals("init") && object) redeemerArgs.add(harness.instanceId());
         for (Object a : args) redeemerArgs.add(java(a));
         if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
         Class<?> rc = Class.forName(PKG + "." + name + "Validator$" + variant);
@@ -1015,7 +1077,7 @@ final class FourWay {
         if (interp.carriesEvents(method)) redeemerArgs.add(evs == null ? JulcList.empty() : evs);
         var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(construct(variant, redeemerArgs));
         var fields = new ArrayList<>(encoded.fields());
-        int offset = kind.equals("init") ? 1 : 0;
+        int offset = kind.equals("init") ? object ? 2 : 1 : 0;
         for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
         return new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
     }
@@ -1041,12 +1103,62 @@ final class FourWay {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private org.julclang.state.testkit.TxModel assetTx(String method, Object redeemer, Rec state, Tx t, byte[] signer, Transition tr)
             throws Exception {
+        if (owned(method)) return ownedAssetTx(method, redeemer, state, t, signer, tr);
         String kind = kindOf(method);
         Ctx c = interp.usesTx(method) ? ctx(t) : null;
-        if (kind.equals("init")) return harness.createWith(redeemer, tr.next(), c, tr.accepted(), false, null);
+        if (kind.equals("init")) {
+            var tx = harness.createWith(redeemer, tr.next(), c, tr.accepted(), false, null);
+            return hasMaps() ? harness.withClaims(tx, mapClaims(method, stateClass, null, kind, t, harness.seed())) : tx;
+        }
         var h = held(kind, java(state), t);
         var tx = harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null : tr.next(), signer, c, null);
-        return composed(method, tx, t, tr, h);
+        tx = composed(method, tx, t, tr, h);
+        // M3a2: an instance's BigMaps with native assets (examples/locker's Locker): the honest call's claims.
+        return hasMaps() ? harness.withClaims(tx, mapClaims(method, stateClass, java(state), kind, t, StateHarness.LIVE_REF)) : tx;
+    }
+
+    /**
+     * M3a2: the arguments of the call whose transactions {@link #assetTx} builds: its maps' claims are the honest JVM run's
+     * (the witnesses the runtime would supply, whatever next value a mutant proposes).
+     */
+    private List<Object> assetArgs = List.of();
+
+    /** M3a2: the map claims of the honest JVM run of a call on {@code before} (null for a creation), owned by {@code ref}. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private List<org.julclang.state.api.mpf.MapClaim> mapClaims(String method, Class<?> type, Object before, String kind, Tx t,
+                                                               org.julclang.ledger.TxOutRef ref) throws Exception {
+        var ms = new MerkleSupport(store);
+        Object r = run(ms, method, before, assetArgs, t);
+        if (kind.equals("init")) {
+            return r == null ? List.of() : ms.prepareCreation(harness.policy(), (Class) type, nextState(r), ref).claims();
+        }
+        Object after = kind.equals("destroy") ? null : r == null ? before : nextState(r);
+        return ms.prepare(harness.policy(), (Class) type, before, after, ref).claims();
+    }
+
+    /**
+     * M3a2: an owned call in an asset-aware contract, as the runtime builds it (OwnedObject's asset paths): a creation mints
+     * the object's token from the seed with the instance as a reference input and holds what it accepted; an action or
+     * destroy spends the object (its native assets held), with the instance by reference when it reads it; an object's
+     * BigMaps carry the honest call's claims, owned by the seed or the object's input.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private org.julclang.state.testkit.TxModel ownedAssetTx(String method, Object redeemer, Rec state, Tx t, byte[] signer, Transition tr)
+            throws Exception {
+        String kind = kindOf(method);
+        Ctx c = interp.usesTx(method) ? ctx(t) : null;
+        Object shared = interp.takesShared(method) ? java(t.shared()) : null;
+        boolean maps = keepsMaps(ownedClass(method));
+        if (kind.equals("init")) {
+            var tx = harness.createWith(redeemer, holding(tr.next()), c, tr.accepted(), true, shared == null ? java(defaultShared) : shared);
+            return maps ? harness.withClaims(tx, mapClaims(method, ownedClass(method), null, kind, t, harness.seed())) : tx;
+        }
+        Object before = java(state);
+        BigInteger funds = t.balance().subtract(kind.equals("destroy") ? BigInteger.valueOf(harness.minAda()) : BigInteger.ZERO);
+        var h = harness.heldObject(holding(before), funds, heldOf(t));
+        var tx = harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null : holding(tr.next()), signer, c,
+                shared);
+        return maps ? harness.withClaims(tx, mapClaims(method, ownedClass(method), before, kind, t, StateHarness.OBJECT_REF)) : tx;
     }
 
     /** M2c: an output holding {@code inst}'s token (and {@code extra}) at its script's address, as another JOUST instance sits. */
@@ -1129,6 +1241,7 @@ final class FourWay {
      */
     Boolean validatorAssets(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate, Interpreter.Outcome o) throws Exception {
         String kind = kindOf(method);
+        assetArgs = args;
         Object redeemer = assetRedeemer(method, args, t, o == null ? null : events(o));
         Transition<Object> tr;
         if (o != null) {
@@ -1174,9 +1287,10 @@ final class FourWay {
     boolean validatorRaw(String method, Rec state, List<Object> honest, List<org.julclang.core.PlutusData> raw, Tx t, byte[] signer,
             org.julclang.core.PlutusData next) throws Exception {
         String kind = kindOf(method);
+        assetArgs = honest;
         var encoded = (org.julclang.core.PlutusData.ConstrData) assetRedeemer(method, honest, t, null);
         var fields = new ArrayList<>(encoded.fields());
-        int offset = kind.equals("init") ? 1 : 0;
+        int offset = kind.equals("init") ? owned(method) ? 2 : 1 : 0;
         for (int i = 0; i < raw.size(); i++) fields.set(offset + i, raw.get(i));
         var redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
         Transition<Object> tr = next != null ? Transition.full(next, JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none())
@@ -1375,6 +1489,7 @@ final class FourWay {
      */
     int mutantsAssets(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
         String kind = kindOf(method);
+        assetArgs = args;
         var o = interp.transition(method, state, args, t);
         Object redeemer = assetRedeemer(method, args, t, events(o));
         var tr = transitionOf(kind, o);
@@ -1382,7 +1497,7 @@ final class FourWay {
         var txs = new ArrayList<org.julclang.state.testkit.TxModel>();
         var accepted = assetTx(method, redeemer, state, t, signer, tr);
         if (!kind.equals("destroy")) {
-            for (Object m : nearbyStates(tr.next())) txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(m, tr.payouts(), tr.sends(), tr.mint(), tr.accepted())));
+            for (Object m : nearbyRecords(tr.next())) txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(m, tr.payouts(), tr.sends(), tr.mint(), tr.accepted())));
         }
         if (!kind.equals("init")) {
             for (var q : nearbyPayouts(tr.payouts(), caller, kind.equals("action"))) {
@@ -1623,7 +1738,7 @@ final class FourWay {
         redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
         Ctx c = interp.usesTx(method) ? ctx(t) : null;
         Object shared = interp.takesShared(method) ? java(t.shared()) : null;
-        return switch (kind) {
+        var tx = switch (kind) {
             case "init" -> {
                 Object first = ok ? next : candidate == null ? null : java(candidate);
                 yield first == null ? null : harness.createObject(redeemer, holding(first), shared == null ? java(defaultShared) : shared, c);
@@ -1637,10 +1752,18 @@ final class FourWay {
                 // An owned destroy's balance is everything the object holds, deposit included.
                 Object before = java(state);
                 var live = harness.liveObject(holding(before), t.balance().subtract(BigInteger.valueOf(harness.minAda())));
-                yield harness.destroyObject(live, redeemer, construct("BurnInstance", List.of()), ok ? pays : Payouts.of(signer, live.lovelace()),
+                var d = harness.destroyObject(live, redeemer, construct("BurnInstance", List.of()), ok ? pays : Payouts.of(signer, live.lovelace()),
                         signer, c);
+                // M3a2: an owned destroy that reads the instance (examples/market's buy; Studio's release) has it by reference.
+                if (shared != null) d.referenceInputs.add(harness.instanceReference(shared));
+                yield d;
             }
         };
+        // M3a2: an object's BigMaps (without native assets) carry the honest call's claims.
+        if (tx == null || !keepsMaps(ownedClass(method))) return tx;
+        assetArgs = args;
+        return harness.withClaims(tx, mapClaims(method, ownedClass(method), kind.equals("init") ? null : java(state), kind, t,
+                kind.equals("init") ? harness.seed() : StateHarness.OBJECT_REF));
     }
 
     /** M3a: the instance state a creation that reads none still finds as its reference input (the runtime always adds it). */
