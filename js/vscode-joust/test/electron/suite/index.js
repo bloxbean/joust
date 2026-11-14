@@ -91,8 +91,11 @@ async function saveChangesNothing(doc) {
 
 async function noRenameOrFormatting() {
   const caps = (await status()).capabilities;
+  // M5b: completion is offered to the extension (its edits replace the word only; imports come by joust.addImport); rename
+  // only through JOUST: Rename Symbol, never textDocument/rename (D4a).
   for (const k of ['renameProvider', 'documentFormattingProvider', 'documentRangeFormattingProvider', 'documentOnTypeFormattingProvider',
-    'linkedEditingRangeProvider', 'completionProvider', 'inlayHintProvider', 'codeLensProvider']) assert.equal(caps[k], undefined, k);
+    'linkedEditingRangeProvider', 'inlayHintProvider', 'codeLensProvider']) assert.equal(caps[k], undefined, k);
+  assert.ok(caps.completionProvider && caps.hoverProvider && caps.definitionProvider && caps.semanticTokensProvider);
   assert.equal(caps.textDocumentSync.willSaveWaitUntil, undefined);
 }
 
@@ -138,13 +141,79 @@ async function smoke() {
   // The same id again is refused (single use): the text stays.
   const again = await vscode.commands.executeCommand(fix.command.command, ...fix.command.arguments);
   assert.equal(again && again.applied, false);
+  // M5b: every error is reported at once, so JSC0133 was there before the let fix: wait for the fixed version's model.
+  await waitFor(async () => (await status()).statuses.find((x) => x.uri === fixes.uri.toString() && x.modelVersion >= fixes.version),
+    'the fixed version\'s model');
   const eq = await waitCode(fixes, 'JSC0133');
-  const eqActions = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', fixes.uri, eq.range);
+  const eqActions = await waitFor(async () => {
+    const as = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', fixes.uri, eq.range);
+    return as.find((a) => a.command && a.command.command === 'joust.applyFix') ? as : null;
+  }, 'the === fix offered');
   const eqFix = eqActions.find((a) => a.command && a.command.command === 'joust.applyFix');
   await vscode.commands.executeCommand(eqFix.command.command, ...eqFix.command.arguments);
   await waitFor(() => /by == 1/.test(fixes.getText()), 'the === fix applied');
   // No project CLI here: no build task.
   assert.deepEqual(await vscode.tasks.fetchTasks({ type: 'joust' }), []);
+  await m5b(doc);
+}
+
+/** M5b in the installed extension: hover, definition, completion, Rename Symbol, Show generated Java, invisible characters. */
+async function m5b(doc) {
+  await vscode.window.showTextDocument(doc);
+  const s = await analysed(doc);
+  await waitFor(async () => (await status()).statuses.find((x) => x.uri === doc.uri.toString() && x.modelVersion >= doc.version), 'the current model');
+  const text = doc.getText();
+  const use = doc.positionAt(text.indexOf('count + by') + 9);
+  const hovers = await waitFor(async () => {
+    const h = await vscode.commands.executeCommand('vscode.executeHoverProvider', doc.uri, use);
+    return h && h.length && h;
+  }, 'a hover');
+  assert.match(hovers.map((h) => h.contents.map((c) => c.value ?? c).join('\n')).join('\n'), /by: Int/);
+  const defs = await vscode.commands.executeCommand('vscode.executeDefinitionProvider', doc.uri, use);
+  assert.equal(defs[0].range.start.line, doc.positionAt(text.indexOf('by: Int')).line);
+  const list = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', doc.uri, doc.positionAt(text.indexOf('count + by')));
+  const labels = list.items.map((i) => (typeof i.label === 'string' ? i.label : i.label.label));
+  assert.ok(labels.includes('by') && labels.includes('count') && labels.includes('caller'), JSON.stringify(labels.slice(0, 40)));
+  assert.ok(list.items.every((i) => !i.additionalTextEdits || i.additionalTextEdits.length === 0));
+  const tokens = await vscode.commands.executeCommand('vscode.provideDocumentSemanticTokens', doc.uri);
+  assert.ok(tokens && tokens.data.length > 10);
+  // JOUST: Rename Symbol (F2 here), validated by the server and applied through the verified workspace/applyEdit.
+  const editor = await vscode.window.showTextDocument(doc);
+  editor.selection = new vscode.Selection(use, use);
+  // by is an action's parameter: recorded in the ABI manifest, so the rename warns first (declined: nothing changes).
+  const warned = await within(vscode.commands.executeCommand('joust.renameSymbol', { newName: 'amount', confirm: false }), 'the rename');
+  assert.equal(warned.applied, false);
+  assert.match(warned.warning, /ABI manifest/);
+  assert.ok(/count \+ by/.test(doc.getText()));
+  const r = await within(vscode.commands.executeCommand('joust.renameSymbol', { newName: 'amount', confirm: true }), 'the rename');
+  assert.equal(r && r.applied, true, JSON.stringify(r));
+  await waitFor(() => /count \+ amount/.test(doc.getText()) && /amount: Int/.test(doc.getText()), 'the rename applied');
+  // Shadowing a state field: refused, nothing changes.
+  await waitFor(async () => (await status()).statuses.find((x) => x.uri === doc.uri.toString() && x.modelVersion >= doc.version), 'the renamed model');
+  const at = doc.positionAt(doc.getText().indexOf('count + amount') + 9);
+  editor.selection = new vscode.Selection(at, at);
+  const no = await vscode.commands.executeCommand('joust.renameSymbol', { newName: 'owner', confirm: true });
+  assert.equal(no.applied, false, JSON.stringify(no));
+  // Show generated Java: a read-only joust-gen: document.
+  const g = await within(vscode.commands.executeCommand('joust.showGeneratedJava'), 'Show generated Java');
+  assert.equal(g.shown, true, JSON.stringify(g));
+  const gen = vscode.workspace.textDocuments.find((d) => d.uri.scheme === 'joust-gen');
+  assert.ok(gen && /@StateContract/.test(gen.getText()));
+  // Remove invisible characters…: listed, removed only with the confirmation.
+  fs.writeFileSync(path.join(WS, 'contracts', 'app', 'Hidden.jsc'), doc.getText().replace('"increment must be positive"', '"increment\u200B must be positive"')
+    .replace('contract Counter', 'contract Hidden'));
+  const hidden = await open('contracts/app/Hidden.jsc');
+  await waitCode(hidden, 'JSC0145');
+  const declined = await vscode.commands.executeCommand('joust.removeInvisible', { confirm: false });
+  assert.equal(declined.applied, false);
+  assert.ok(hidden.getText().includes('\u200B'));
+  const removed = await vscode.commands.executeCommand('joust.removeInvisible', { confirm: true });
+  assert.equal(removed.applied, true, JSON.stringify(removed));
+  await waitFor(() => !hidden.getText().includes('\u200B'), 'the character removed');
+  // Accept ABI… needs the project's own tool: none here (no CLI in the folder).
+  const abi = await vscode.commands.executeCommand('joust.acceptAbi', { contract: 'Counter', confirm: false });
+  assert.equal(abi.ran, false);
+  step(`m5b checks passed (${s.mode})`);
   // joust.applyFix is not in the command palette (S17): only the manifest can say so; checked in client.test.mjs.
 }
 
@@ -215,6 +284,9 @@ async function hostileRestricted() {
   // The Build command runs nothing here (it checks trust before it asks for any task). Fetching tasks is not done: in
   // Restricted Mode VS Code answers it with its trust dialog. The provider's own refusal is in client.test.mjs.
   assert.deepEqual(await within(vscode.commands.executeCommand('joust.build'), 'JOUST: Build'), { ran: false, reason: 'restricted' });
+  // Nor Accept ABI… (D7a: never in Restricted Mode).
+  assert.deepEqual(await within(vscode.commands.executeCommand('joust.acceptAbi', { contract: 'Counter', confirm: true }), 'Accept ABI…'),
+    { ran: false, reason: 'restricted' });
 }
 
 async function run() {

@@ -13,7 +13,7 @@ import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { createHandleApplyEdit } = require('../src/apply-edit.js');
-const { buildCommand, createTaskProvider } = require('../src/tasks.js');
+const { abiCommands, buildCommand, createTaskProvider } = require('../src/tasks.js');
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function fakeVscode(docs) {
@@ -227,4 +227,38 @@ test('applyEdit: the same replaced text in a different document is refused (C19:
   const b = { ...a, getText: () => validated };
   const f2 = fakeVscode([b]);
   assert.deepEqual(await createHandleApplyEdit(f2.vscode, () => client())(p), { applied: true });
+});
+
+test('Accept ABI…: the project\'s own tool, bound to both manifests (D7a): npm and Gradle commands', () => {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'joust-abi-')));
+  const npm = join(tmp, 'npm');
+  mkdirSync(join(npm, 'node_modules', '@julclang', 'joust', 'bin'), { recursive: true });
+  writeFileSync(join(npm, 'package.json'), JSON.stringify({ dependencies: { '@julclang/joust': '1' } }));
+  writeFileSync(join(npm, 'node_modules', '@julclang', 'joust', 'package.json'), JSON.stringify({ bin: { joust: 'bin/joust.js' } }));
+  writeFileSync(join(npm, 'node_modules', '@julclang', 'joust', 'bin', 'joust.js'), '');
+  const bin = join(npm, 'node_modules', '@julclang', 'joust', 'bin', 'joust.js');
+  const n = abiCommands(npm, 'linux', '/abs/node');
+  assert.equal(n.kind, 'npm');
+  assert.deepEqual(n.diff('Counter', '/s/d.json').args, [bin, 'abi', 'diff', 'Counter', '--out', '/s/d.json']);
+  assert.deepEqual(n.accept('Counter', 'none', 'a'.repeat(64)).args, [bin, 'build', `--accept-abi=Counter@none..${'a'.repeat(64)}`]);
+  assert.equal(n.diff('Counter', '/s/d.json').command, '/abs/node');
+  const gradle = join(tmp, 'gradle');
+  mkdirSync(gradle);
+  writeFileSync(join(gradle, 'gradlew'), '');
+  const g = abiCommands(gradle, 'linux');
+  assert.deepEqual(g.diff('Counter', '/s/d.json').args, ['jscAbiDiff', '--contract', 'Counter', '--out', '/s/d.json']);
+  assert.deepEqual(g.accept('Counter', 'b'.repeat(64), 'c'.repeat(64)).args,
+    ['acceptJscAbi', '--contract', 'Counter', '--committed-sha256', 'b'.repeat(64), '--sha256', 'c'.repeat(64)]);
+  assert.equal(abiCommands(join(tmp, 'none'), 'linux'), null);
+});
+
+test('the manifest: M5b commands, F2 bound to JOUST: Rename Symbol in .jsc editors, addImport hidden, timeValue declared', () => {
+  const ids = pkg.contributes.commands.map((c) => c.command);
+  for (const c of ['joust.renameSymbol', 'joust.removeInvisible', 'joust.showGeneratedJava', 'joust.peekGeneratedJava', 'joust.checkBuild', 'joust.acceptAbi',
+    'joust.addImport']) assert.ok(ids.includes(c), c);
+  const hidden = pkg.contributes.menus.commandPalette.filter((m) => m.when === 'false').map((m) => m.command);
+  assert.ok(hidden.includes('joust.addImport') && hidden.includes('joust.applyFix'));
+  assert.equal(pkg.contributes.menus.commandPalette.find((m) => m.command === 'joust.acceptAbi').when, 'isWorkspaceTrusted');
+  assert.deepEqual(pkg.contributes.keybindings, [{ command: 'joust.renameSymbol', key: 'f2', when: 'editorTextFocus && editorLangId == jsc && !editorReadonly' }]);
+  assert.equal(pkg.contributes.semanticTokenModifiers[0].id, 'timeValue');
 });

@@ -65,6 +65,30 @@ function buildCommand(folderPath, platform = process.platform, execPath = proces
   return null;
 }
 
+/**
+ * D7a: the project's own tool for Accept ABI…, at the folder's root (as buildCommand finds it): `{ kind, diff(contract,
+ * out), accept(contract, committedSha, newSha) }`, each giving `{ command, args, cwd, env }`, or null. npm: `joust abi
+ * diff <C> --out <file>` and `joust build --accept-abi=<C>@<committed>..<new>`; Gradle: `jscAbiDiff --contract <C>
+ * --out <file>` and `acceptJscAbi --contract <C> --committed-sha256 <h1> --sha256 <h2>` (task options, never properties).
+ */
+function abiCommands(folderPath, platform = process.platform, execPath = process.execPath) {
+  const b = buildCommand(folderPath, platform, execPath);
+  if (!b) return null;
+  if (b.kind === 'npm') {
+    const bin = b.args[0];
+    return {
+      kind: 'npm',
+      diff: (c, out) => ({ ...b, args: [bin, 'abi', 'diff', c, '--out', out] }),
+      accept: (c, h1, h2) => ({ ...b, args: [bin, 'build', `--accept-abi=${c}@${h1}..${h2}`] }),
+    };
+  }
+  return {
+    kind: 'gradle',
+    diff: (c, out) => ({ ...b, args: ['jscAbiDiff', '--contract', c, '--out', out] }),
+    accept: (c, h1, h2) => ({ ...b, args: ['acceptJscAbi', '--contract', c, '--committed-sha256', h1, '--sha256', h2] }),
+  };
+}
+
 function createTaskProvider(vscode) {
   const task = (folder) => {
     if (folder.uri.scheme !== 'file' || folder.uri.authority) return null;
@@ -90,4 +114,4 @@ function createTaskProvider(vscode) {
   };
 }
 
-module.exports = { createTaskProvider, buildCommand, inside };
+module.exports = { createTaskProvider, buildCommand, abiCommands, inside };
