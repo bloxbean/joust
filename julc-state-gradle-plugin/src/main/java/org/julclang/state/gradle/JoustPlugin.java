@@ -140,7 +140,11 @@ public class JoustPlugin implements Plugin<Project> {
             });
             t.into(librarySources);
         });
-        CommandLineJavaLibraries javaLibraries = new CommandLineJavaLibraries(libraries, librarySources);
+        // Configuration cache (#95's cli job): the tasks hold no Configuration and no Project, only values and providers.
+        // Whether there are joustLibrary dependencies is decided once the build script has declared them.
+        Provider<Boolean> hasLibraries = project.provider(() -> !libraries.getDependencies().isEmpty());
+        CommandLineJavaLibraries javaLibraries = new CommandLineJavaLibraries(hasLibraries, librarySources);
+        File lockFile = project.file("joust.lock");
         TaskProvider<JavaExec> generate = project.getTasks().register("generateJsc", JavaExec.class, t -> {
             t.setGroup("build");
             t.setDescription("Lowers " + MAIN_JSC + "/**/*.jsc to Java @StateContract sources");
@@ -152,8 +156,8 @@ public class JoustPlugin implements Plugin<Project> {
             t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), out.get().getAsFile().getAbsolutePath()));
             t.getArgumentProviders().add(javaLibraries);
             // ADR-0018 J12: joust.lock pins the libraries from outside the sources; a mismatch fails the build.
-            t.getInputs().files(project.files("joust.lock")).withPropertyName("lock");
-            t.getArgumentProviders().add(() -> List.of("--lock", project.file("joust.lock").getAbsolutePath()));
+            t.getInputs().files(lockFile).withPropertyName("lock");
+            t.getArgumentProviders().add(() -> List.of("--lock", lockFile.getAbsolutePath()));
         });
         // ADR-0018 D12 (review F1): generateJsc never accepts a .jsc 2 file's ABI manifest (Name.abi.json beside it); a
         // missing or changed one fails it. Only this task accepts: it writes the manifests, to be reviewed and committed.
@@ -184,7 +188,7 @@ public class JoustPlugin implements Plugin<Project> {
             t.getMainClass().set("org.julclang.state.dsl.JscMain");
             t.dependsOn(extract);
             t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), lockScratch.get().getAsFile().getAbsolutePath(), "--lock",
-                    project.file("joust.lock").getAbsolutePath(), "--accept-lock"));
+                    lockFile.getAbsolutePath(), "--accept-lock"));
             t.getArgumentProviders().add(javaLibraries);
         });
         // ADR-0018 D12 (review F12, S10): after compileJava, every .jsc 2 file's ABI manifest is checked against the
@@ -283,17 +287,18 @@ public class JoustPlugin implements Plugin<Project> {
 
     /** {@code --java-libraries <dir>}, when the project has joustLibrary dependencies (ADR-0018 D9, M4b). */
     static final class CommandLineJavaLibraries implements org.gradle.process.CommandLineArgumentProvider {
-        private final Configuration libraries;
+        /** Whether the project declares joustLibrary dependencies: a provider, so no Configuration reaches the task. */
+        private final Provider<Boolean> present;
         private final Provider<Directory> dir;
 
-        CommandLineJavaLibraries(Configuration libraries, Provider<Directory> dir) {
-            this.libraries = libraries;
+        CommandLineJavaLibraries(Provider<Boolean> present, Provider<Directory> dir) {
+            this.present = present;
             this.dir = dir;
         }
 
         @Override
         public Iterable<String> asArguments() {
-            return libraries.getDependencies().isEmpty() ? List.of() : List.of("--java-libraries", dir.get().getAsFile().getAbsolutePath());
+            return !present.get() ? List.of() : List.of("--java-libraries", dir.get().getAsFile().getAbsolutePath());
         }
     }
 
