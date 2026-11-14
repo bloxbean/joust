@@ -26,7 +26,7 @@ contract /*@def Refs*/Refs {
     return { owner: /*@builtin caller*/caller, total: 0, phase: /*@ref Open*/Open, /*@ref deadline*//*@ref init.deadline*/deadline }
   }
 
-  action /*@def add*/add(/*@def add.lines*/lines: List<Line>) only /*@ref owner*/owner {
+  action /*@def add*/add(/*@def add.lines*/lines: List<Line>) only owner {
     const /*@def add.sum*/sum = /*@ref add.lines*/lines.fold(0, (/*@def add.acc*/acc, /*@def add.x*/x) => /*@ref add.acc*/acc + /*@ref cost*/cost(/*@ref add.x*/x))
     require(/*@ref add.sum*/sum <= params./*@ref cap*/cap, "over the cap")
     const /*@def add.h*/h = /*@type Bytes*//*@builtin std/crypto.sha2_256*/sha2_256(#00)

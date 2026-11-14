@@ -371,6 +371,14 @@ class JscLangRecoveryTest {
             checked++;
         }
         assertTrue(checked >= 40, checked + " markers");
+        // A modifier's field (`only owner`, read outside any expression) refers to the state field. Checked here, not by a
+        // marker: tree-sitter's shape of a modifier keeps a comment inside it (the shared corpus compares shapes).
+        int addLine = -1;
+        for (int l = 0; l < lines.length; l++) if (lines[l].contains("action /*@def add*/add(")) addLine = l;
+        int ownerCol = lines[addLine].indexOf(" only owner {") + " only ".length();
+        int ownerDecl = declAt.get(defs.get("owner")[0] + ":" + defs.get("owner")[1]);
+        final int al = addLine;
+        assertTrue(ix.refs.stream().anyMatch(r -> r.line() == al && r.col() == ownerCol && r.decl() == ownerDecl), "only owner -> the state field");
         // A shorthand is flagged; what the ABI manifest records is flagged; bindings have scopes and types.
         String json = m.json();
         assertTrue(json.contains("\"modelVersion\":2"));
