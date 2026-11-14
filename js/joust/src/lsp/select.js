@@ -257,6 +257,8 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       await fs.writeFile(join(tmp, ENGINE_WASM), wasm);
       // The loader is CommonJS; this keeps any package.json above the storage from deciding how it loads.
       await fs.writeFile(join(tmp, 'package.json'), '{ "type": "commonjs" }\n');
+      // S16 on #83: published already marked as used, so no collector can take it between the rename and put's touch.
+      await fs.writeFile(join(tmp, '.used'), String(Date.now()));
       // Another window may publish, claim or put back this digest at any moment (CI's S13 churn found a put-back landing
       // between a check and the rename): the rename is retried, a valid copy in place is reused, and an invalid one is
       // moved aside (checked again there) rather than deleted.
