@@ -6,6 +6,18 @@
 // is skipped. Imports in comments and strings are never read. At most `max` specifiers are returned; `truncated` says
 // whether more were there. Nothing here touches the filesystem.
 
+/**
+ * Java's Character.isWhitespace, which the lexer uses (#98 C13): the ASCII controls 9–13 and 28–31, and the Unicode
+ * space, line and paragraph separators except the no-break spaces (U+00A0, U+2007, U+202F).
+ */
+const UNICODE_SPACE = /[\p{Zs}\p{Zl}\p{Zp}]/u;
+export function isWhitespace(c) {
+  const n = c.charCodeAt(0);
+  if ((n >= 9 && n <= 13) || (n >= 0x1c && n <= 0x1f)) return true;
+  if (n === 0xa0 || n === 0x2007 || n === 0x202f) return false;
+  return UNICODE_SPACE.test(c);
+}
+
 const IDENT_START = /[A-Za-z_]/;
 const IDENT = /[A-Za-z0-9_]/;
 
@@ -15,7 +27,7 @@ function* tokens(text) {
   let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
   while (i < n) {
     const c = text[i];
-    if (c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v') {
+    if (isWhitespace(c)) {
       i++;
       continue;
     }

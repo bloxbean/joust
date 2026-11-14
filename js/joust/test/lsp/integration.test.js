@@ -5,7 +5,7 @@
 //   - the outline holds M2b's params, events and invariants.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ENGINE, HAS_ENGINE, startLsp, STUB, tmp, uriOf } from './client.js';
@@ -280,6 +280,156 @@ test('an importer quarantined for its library is analysed again once the library
     lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(join(src, 'fees.jsc')), type: 2 }] });
     await lsp.until(() => lsp.published.slice(before).find((x) => x.uri === uri && x.diagnostics.length === 0), 20_000, 'Shop analysed again');
     assert.ok((await lsp.stats()).calls > calls, 'analysed, not answered from the quarantine');
+  } finally {
+    await lsp.stop();
+  }
+});
+
+// ------------------------------------------------------------------ round r3 of #98 (Codex C9-C14, security S7, design N1, N2)
+
+test('the scan takes the lexer\'s Unicode whitespace between import tokens (C13)', () => {
+  const t = 'jsc 2\npackage app\nimport\u2000{ fee }\u3000from\u2028"./fees.jsc"\n';
+  assert.deepEqual(scanImports(t).imports, [{ spec: './fees.jsc', contract: false }]);
+});
+
+/** A notification published for `uri` after `from`, matching `pred`. */
+const after = (lsp, from, uri, pred, what) => lsp.until(() => lsp.published.slice(from).find((p) => p.uri === uri && pred(p)), 20_000, what);
+const watched = (lsp, path, type) => lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(path), type }] });
+
+test('a missing, deleted or oversized import that comes right later reschedules its importer, and only it (C9, N1)', { skip, timeout: 240_000 }, async () => {
+  const { dir, src } = gradle();
+  const shop = SHOP.replace('import contract { Feed } from "./Feed.jsc"\n', '').replace('feed: Instance<Feed>, ', '')
+    .replace('f: reads params.feed, ', '').replace('    require(f.live, "the feed is closed")\n', '');
+  writeFileSync(join(src, 'Shop.jsc'), shop);
+  writeFileSync(join(src, 'Other.jsc'), FEED);
+  const lsp = await startLsp({ folders: [dir], args: ['--project-engine'] });
+  try {
+    const uri = uriOf(join(src, 'Shop.jsc'));
+    const other = uriOf(join(src, 'Other.jsc'));
+    lsp.open(other, FEED);
+    await lsp.diagnostics(other, 1, 60_000);
+    lsp.open(uri, shop);
+    let p = await lsp.diagnostics(uri, 1, 60_000);
+    assert.equal(p.diagnostics[0]?.code, 'JSC0706');
+    // 1. Created on disk.
+    let n = lsp.published.length;
+    writeFileSync(join(src, 'fees.jsc'), FEES);
+    watched(lsp, join(src, 'fees.jsc'), 1);
+    p = await after(lsp, n, uri, (x) => x.diagnostics.length === 0, 'accepted once fees.jsc exists');
+    // 2. Deleted, then created again.
+    n = lsp.published.length;
+    rmSync(join(src, 'fees.jsc'));
+    watched(lsp, join(src, 'fees.jsc'), 3);
+    await after(lsp, n, uri, (x) => x.diagnostics[0]?.code === 'JSC0706', 'refused once fees.jsc is gone');
+    n = lsp.published.length;
+    writeFileSync(join(src, 'fees.jsc'), FEES);
+    watched(lsp, join(src, 'fees.jsc'), 1);
+    await after(lsp, n, uri, (x) => x.diagnostics.length === 0, 'accepted once fees.jsc is back');
+    // 3. Over the per-file bound (advisory), then shrunk.
+    n = lsp.published.length;
+    writeFileSync(join(src, 'fees.jsc'), FEES + '// ' + 'x'.repeat(1_100_000) + '\n');
+    watched(lsp, join(src, 'fees.jsc'), 2);
+    await after(lsp, n, uri, (x) => x.diagnostics[0]?.code === 'JSC0706', 'fees.jsc over the bound is not read');
+    n = lsp.published.length;
+    writeFileSync(join(src, 'fees.jsc'), FEES);
+    watched(lsp, join(src, 'fees.jsc'), 2);
+    await after(lsp, n, uri, (x) => x.diagnostics.length === 0, 'accepted once fees.jsc is small again');
+    // Other.jsc imports nothing: none of this re-analysed it.
+    assert.equal(lsp.published.filter((x) => x.uri === other).length, 1, 'the unrelated file was not rescheduled');
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('the advisory reason stays after the model, and in a status request (C10)', { skip, timeout: 180_000 }, async () => {
+  const n = npm();
+  const text = 'jsc 2\npackage app\n\nimport { isAllowed } from "java:com.example.compliance.AllowList"\n\ncontract C {\n  state { n: Int }\n'
+    + '  init() {\n    return { n: 0 }\n  }\n}\n';
+  writeFileSync(join(n.src, 'C.jsc'), text);
+  const lsp = await startLsp({ folders: [n.dir], args: ['--project-engine'] });
+  try {
+    const uri = uriOf(join(n.src, 'C.jsc'));
+    lsp.open(uri, text);
+    await lsp.until(() => lsp.statuses.find((x) => x.uri === uri && x.modelVersion === 1), 60_000, 'the model\'s status');
+    const last = lsp.statuses.filter((x) => x.uri === uri).at(-1);
+    assert.equal(last.mode, 'advisory', JSON.stringify(last));
+    assert.match(last.reason, /java: import/);
+    const asked = await lsp.request('joust/status', { uri });
+    assert.equal(asked.mode, 'advisory');
+    assert.match(asked.reason, /java: import/);
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('the walk rules at each build\'s boundary: a Gradle file link and an npm package root link are read; a directory link is not (C12)', { skip, timeout: 240_000 }, async () => {
+  // Gradle: src/main/jsc/app/fees.jsc -> ../../../../shared/fees.jsc (a file link, confined) is read, as Files.walk reads it.
+  const g = gradle();
+  mkdirSync(join(g.dir, 'shared'), { recursive: true });
+  writeFileSync(join(g.dir, 'shared', 'fees.jsc'), FEES);
+  symlinkSync('../../../../shared/fees.jsc', join(g.src, 'fees.jsc'));   // relative: D4b's reader refuses absolute link targets
+  const shop = SHOP.replace('import contract { Feed } from "./Feed.jsc"\n', '').replace('feed: Instance<Feed>, ', '')
+    .replace('f: reads params.feed, ', '').replace('    require(f.live, "the feed is closed")\n', '');
+  // And a directory link: src/main/jsc/app/linked -> ../../../../shared (not walked by Files.walk): refused.
+  symlinkSync('../../../../shared', join(g.src, 'linked'));
+  const viaDir = shop.replace('"./fees.jsc"', '"./linked/fees.jsc"');
+  writeFileSync(join(g.src, 'Shop.jsc'), shop);
+  writeFileSync(join(g.src, 'Dir.jsc'), viaDir.replace('contract Shop', 'contract Dir'));
+  let lsp = await startLsp({ folders: [g.dir], args: ['--project-engine'] });
+  try {
+    const a = uriOf(join(g.src, 'Shop.jsc'));
+    lsp.open(a, shop);
+    assert.deepEqual((await lsp.diagnostics(a, 1, 60_000)).diagnostics.filter((d) => d.severity === 1), []);
+    const b = uriOf(join(g.src, 'Dir.jsc'));
+    lsp.open(b, viaDir.replace('contract Shop', 'contract Dir'));
+    assert.equal((await lsp.diagnostics(b, 1, 60_000)).diagnostics[0]?.code, 'JSC0706');
+  } finally {
+    await lsp.stop();
+  }
+  // npm: node_modules/fees -> ../packages/fees (a workspace package, its root a link) is read, as libraryPackages() reads it.
+  const n = npm();
+  mkdirSync(join(n.dir, 'packages', 'fees', 'joust-lib'), { recursive: true });
+  writeFileSync(join(n.dir, 'packages', 'fees', 'joust-lib', 'fees.jsc'), FEES.replace('library app', 'library vendor.fees'));
+  symlinkSync('../packages/fees', join(n.dir, 'node_modules', 'fees'));
+  const pk = shop.replace('"./fees.jsc"', '"fees/fees.jsc"');
+  writeFileSync(join(n.src, 'Shop.jsc'), pk);
+  lsp = await startLsp({ folders: [n.dir], args: ['--project-engine'] });
+  try {
+    const uri = uriOf(join(n.src, 'Shop.jsc'));
+    lsp.open(uri, pk);
+    assert.deepEqual((await lsp.diagnostics(uri, 1, 60_000)).diagnostics.filter((d) => d.severity === 1), []);
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('a specifier with a backslash is never joined into a path (S7); one byte unit for open and closed imports (C14)', { skip, timeout: 180_000 }, async () => {
+  const { dir, src } = gradle();
+  writeFileSync(join(src, 'fees.jsc'), FEES);
+  const shop = SHOP.replace('import contract { Feed } from "./Feed.jsc"\n', '').replace('feed: Instance<Feed>, ', '')
+    .replace('f: reads params.feed, ', '').replace('    require(f.live, "the feed is closed")\n', '');
+  const slash = shop.replace('"./fees.jsc"', '"./x\\\\..\\\\fees.jsc"');
+  writeFileSync(join(src, 'Slash.jsc'), slash.replace('contract Shop', 'contract Slash'));
+  // 400,000 '中' in a comment: 400,048 UTF-16 units, 1,200,048 UTF-8 bytes: over the bound open or closed.
+  const big = FEES + '// ' + '中'.repeat(400_000) + '\n';
+  writeFileSync(join(src, 'huge.jsc'), big);   // not big.jsc: macOS file names ignore case (Big.jsc)
+  const usesBig = shop.replace('"./fees.jsc"', '"./huge.jsc"').replace('contract Shop', 'contract Big');
+  writeFileSync(join(src, 'Big.jsc'), usesBig);
+  const lsp = await startLsp({ folders: [dir], args: ['--project-engine'] });
+  try {
+    const s1 = uriOf(join(src, 'Slash.jsc'));
+    lsp.open(s1, slash.replace('contract Shop', 'contract Slash'));
+    assert.equal((await lsp.diagnostics(s1, 1, 60_000)).diagnostics[0]?.code, 'JSC0706');
+    const b = uriOf(join(src, 'Big.jsc'));
+    lsp.open(b, usesBig);
+    const closed = await lsp.diagnostics(b, 1, 60_000);
+    assert.equal(closed.diagnostics[0]?.code, 'JSC0706', 'closed: not read');
+    lsp.open(uriOf(join(src, 'huge.jsc')), big);
+    const n = lsp.published.length;
+    lsp.change(b, 2, usesBig + '\n');
+    const opened = await lsp.diagnostics(b, 2, 60_000);
+    assert.equal(opened.diagnostics[0]?.code, 'JSC0706', 'open: not read either');
+    assert.ok(n >= 0);
   } finally {
     await lsp.stop();
   }

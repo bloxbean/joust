@@ -1136,3 +1136,16 @@ test('a modifier\'s present null is refused, never normalised away (Joined, Trea
   b.mods.find((x) => x.name === 'batched').field = null;
   refused(p, /batched names no field or "only", not null/);
 });
+
+// #98 review C11: a duplicate java: fn cannot hide a malformed signature: listed twice is refused, in both readers.
+test('a java: fn listed twice is refused, whichever copy is malformed', () => {
+  const text = readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8');
+  for (const bad of [(f) => { f.result = { record: 'Nonexistent', futureField: true }; }, (f) => { f.params = [{ list: 'Int', futureField: true }]; }]) {
+    const p = JSON.parse(text);
+    const fns = p.javaLibraries[0].fns;
+    const copy = structuredClone(fns[0]);
+    bad(copy);
+    fns.unshift(copy);
+    assert.throws(() => load(JSON.stringify(p)), /listed twice|a bad type/);
+  }
+});
