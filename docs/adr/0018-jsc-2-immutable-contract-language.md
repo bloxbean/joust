@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r21)
+**Status:** Proposed (r22)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -9,7 +9,8 @@ javac attribution and ADR-050 (library source type descriptions) for library imp
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
 **Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76),
 M2a, M2b and M2c, and M4a (`.jsc` libraries, r16), M4b (`java:` imports, r19) and M4c (packages, `joust.lock`, offline
-tests, r20) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+tests, r20) implement it, joined with the M1 hardening (r17) and ADR-0021's M5a language server in the `.jsc` 2
+integration (r22), and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -1612,4 +1613,26 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   the data as it came (C3); a read state's stored `Value`s are checked, used or not (C4); D5's read-state trust is scoped
   to `.jsc` imports and re-decided before M4b (F4); D9's differential test covers M2c's `ValueAdapter` functions and is
   checked by reflection (F3); stale D5 text removed (F7). Round r3: a Value that crosses as data holds only the
-  ledger's policies (C6). Round r4: the params are a checked input of the init (C7).
+  ledger's policies (C6). Round r4: the params are a checked input of the init (C7); this supersedes r18's M2b gate
+  numbers for the port: the `.jsc` Treasury is 9,910 B (+6.6% over Java) and its init +4.9% CPU / +6.3% memory (at the
+  21-key maximum +7.3% / +9.4%), Council 10,389 B (#90 review F11).
+- **r22** (2026-11-14, the `.jsc` 2 integration of M1h #80, M2 #78/#84/#90, M4 #77/#79/#82 and ADR-0021 M5a #83, on
+  `feat/jsc-2-int2`): one IR format 2 carries both sets of additions (M2b's `params` and `invariants`, M2c's `contracts`,
+  `reads` and `receives` types, M4's `libraries`, `javaLibraries` and `CallJava`); both readers stay strict at every
+  level (the Java reader by its field lists and by checking that every field was read), and a test reads back an export
+  carrying all of them and refuses an unknown field in each of its objects (`docs/reference/jsc-2-ir.md`). D10: M1h's
+  strict modifier shapes cover `quorum`, `authorized` and `receives`, and a method that sends, mints, burns or deposits
+  needs an audience as one that pays does (JSC0408, JSC0409). D9: one checker entry joins M4's module loader and `java:`
+  imports with M2c's `import contract` through one `JscModules` (M4c's copy); a library imports no contracts, an
+  imported `.jsc` library is not a contract (JSC0742), and an imported contract whose state or memos use a library's
+  type is refused until the foreign view can name it (JSC0746). ADR-0021 L1 with imports: the language core analyses a
+  file of a project with the project's files (`lang.analyze`'s `id` and `files`, feature `modules`), the server reads the
+  files a document's `.jsc`, contract and package imports reach (D4b), and the outline holds params, events and
+  invariants; `java:` imports are not read by the server (M5c). **M2's exit is met**: treasury (9,910 B, +6.6% over
+  examples/treasury's 9,297; init +4.9% CPU / +6.3% memory, +7.3% / +9.4% at the 21-key maximum, its other calls from
+  −0.2% to +4.5%), oracle (5,843 B, +0.9%; its Shop as Kiosk 6,450 B, +2.1%), fees (Pot 9,439 B, +1.1%; Stall 9,846 B, +3.9%) and
+  dex (13,492 B against 12,229, +10.3%, below 14,000) are ported within J11, with the five-way, mutation and attack
+  suites of M2a–M2c passing on this branch. **M4's exit is met**: J7 and J12, `JavaShop` calling `fees.jsc` and
+  `Guarded` (6,765 B) calling `java:` `AllowList`, Shop (7,646 B) on five legs with its library (285 calls), the
+  template's offline tests. Issue #92's S12 is fixed here (the npm build's source walk skips `node_modules`,
+  dot-directories and links).

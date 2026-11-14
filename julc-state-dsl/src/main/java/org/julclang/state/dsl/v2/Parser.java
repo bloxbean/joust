@@ -48,8 +48,17 @@ final class Parser {
         depth--;
     }
 
+    /** ADR-0021 D6: the language core's spans, or null (the build's parse records none). */
+    private final Spans spans;
+
+    /** A parse that records no spans (the header and import scans, M4). */
     private Parser(List<Tok> toks) {
+        this(toks, null);
+    }
+
+        private Parser(List<Tok> toks, Spans spans) {
         this.toks = toks;
+        this.spans = spans;
         for (int k = 0; k + 1 < toks.size(); k++) {
             if (toks.get(k).is("type") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
             // M2b: an event is a variant of the contract's Event, so it starts a constructor too: Paid { to, amount }.
@@ -76,7 +85,7 @@ final class Parser {
     }
 
     static File parse(String src) {
-        return parse(src, Set.of());
+        return parse(src, Set.of(), null);
     }
 
     /**
@@ -84,13 +93,31 @@ final class Parser {
      * (ADR-0018 D9, M4): like the file's own, only these start a constructor {@code Name { … }}.
      */
     static File parse(String src, Set<String> importedTypes) {
-        var p = new Parser(Lexer.lex(src));
+        return parse(src, importedTypes, null);
+    }
+
+    /** {@link #parse(String)}, recording the language core's spans into {@code spans} (ADR-0021 D6). */
+    static File parse(String src, Spans spans) {
+        return parse(src, Set.of(), spans);
+    }
+
+    /**
+     * Parses {@code src} with the type names its imports bring (M4); with {@code spans}, also records the language core's
+     * spans into it (ADR-0021 D6). The tree, its positions and every error are the same with or without spans (L5).
+     */
+    static File parse(String src, Set<String> importedTypes, Spans spans) {
+        var p = new Parser(Lexer.lex(src, spans == null ? null : spans.comments), spans);
         p.typeNames.addAll(importedTypes);
+        if (spans != null) spans.toks = p.toks;
         File f;
         try {
             f = p.file();
         } catch (JscException e) {
+            if (spans != null) spans.stop(p.i > 0 ? p.toks.get(p.i - 1) : null);
             throw hinted(e, p.leadingMinus, p.members());
+        } catch (RuntimeException | Error e) {
+            if (spans != null) spans.stop(p.i > 0 ? p.toks.get(p.i - 1) : null);
+            throw e;
         }
         Depth.check(f);
         return f;
@@ -98,6 +125,32 @@ final class Parser {
 
     /** A file's header: its package, whether it is a library, and its contract's name (null for a library). */
     record Header(String pkg, boolean library, String contract) {}
+
+    // ------------------------------------------------------------------ spans (ADR-0021 D6; no-ops without Spans)
+
+    private void openDecl(String kind) {
+        if (spans != null) spans.open(kind, peek());
+    }
+
+    private void openDecl(String kind, Tok start) {
+        if (spans != null) spans.open(kind, start);
+    }
+
+    private void named(Tok t) {
+        if (spans != null) spans.name(t);
+    }
+
+    private void closeDecl() {
+        if (spans != null) spans.close(toks.get(Math.max(i - 1, 0)));
+    }
+
+    private void leafDecl(String kind, Tok name) {
+        if (spans != null) spans.leaf(kind, name);
+    }
+
+    private void braces(Tok lbrace) {
+        if (spans != null) spans.block(lbrace, toks.get(Math.max(i - 1, 0)));
+    }
 
     /**
      * The header of a file, from its tokens: what {@code a/b/Name.java} a lowering writes, without checking the body
@@ -362,7 +415,9 @@ final class Parser {
         expect("{");
         var names = new ArrayList<String>();
         do {
+            Tok nt = peek();
             names.add(ident("a name to import"));
+            leafDecl("import", nt);
         } while (eat(","));
         expect("}");
         expect("from");
@@ -375,41 +430,61 @@ final class Parser {
     }
 
     private TypeDecl typeDecl() {
+        openDecl("type");
         Pos p = next().pos();
+        Tok nt = peek();
         String name = ident("a type name");
+        named(nt);
         expect("=");
-        return new TypeDecl(name, fieldBlock(), p);
+        var t = new TypeDecl(name, fieldBlock("field"), p);
+        closeDecl();
+        return t;
     }
 
     /** {@code enum E { A, B { x: Int } }}: variants separated by commas (or semicolons); fields as in a type. */
     private EnumDecl enumDecl() {
+        openDecl("enum");
         Pos p = next().pos();
+        Tok nt = peek();
         String name = ident("an enum name");
+        named(nt);
         if (at("=")) throw peek().pos().error("JSC0901", "an enum is written 'enum " + name + " { A, B { x: Int } }', without '='");
-        expect("{");
+        Tok lb = expect("{");
         var variants = new ArrayList<VariantDecl>();
         while (!at("}")) {
+            openDecl("variant");
             Pos vp = peek().pos();
+            Tok vt = peek();
             String v = ident("a variant name");
-            List<FieldDecl> fields = at("{") ? fieldBlock() : List.of();
+            named(vt);
+            List<FieldDecl> fields = at("{") ? fieldBlock("field") : List.of();
             variants.add(new VariantDecl(v, fields, vp));
+            closeDecl();
             if (!eat(",")) eat(";");
         }
         expect("}");
+        braces(lb);
+        closeDecl();
         return new EnumDecl(name, variants, p);
     }
 
-    private List<FieldDecl> fieldBlock() {
-        expect("{");
+    /** {@code { f: T, … }}; {@code kind} names its fields for the language core's spans ({@code field}, {@code stateField}). */
+    private List<FieldDecl> fieldBlock(String kind) {
+        Tok lb = expect("{");
         var fields = new ArrayList<FieldDecl>();
         while (!at("}")) {
+            openDecl(kind);
             Pos p = peek().pos();
+            Tok nt = peek();
             String n = ident("a field name");
+            named(nt);
             expect(":");
             fields.add(new FieldDecl(n, type(), p));
+            closeDecl();
             if (!eat(",")) eat(";");
         }
         expect("}");
+        braces(lb);
         return fields;
     }
 
@@ -439,8 +514,11 @@ final class Parser {
     }
 
     private Fn fn() {
+        openDecl("fn");
         Pos p = next().pos();
+        Tok nt = peek();
         String name = ident("a function name");
+        named(nt);
         var params = params();
         expect(":");
         TypeRef ret = type();
@@ -451,6 +529,7 @@ final class Parser {
         } else {
             body = block();
         }
+        closeDecl();
         return new Fn(name, params, ret, body, p);
     }
 
@@ -459,8 +538,11 @@ final class Parser {
         var ps = new ArrayList<Param>();
         if (!at(")")) {
             do {
+                openDecl("param");
                 Pos p = peek().pos();
+                Tok nt = peek();
                 String n = ident("a parameter name");
+                named(nt);
                 expect(":");
                 if (at("reads") && peek(1).is("params")) {
                     // M2c (ADR-0011 D2): name: reads params.f, the state of the instance params.f names.
@@ -475,6 +557,7 @@ final class Parser {
                 } else {
                     ps.add(new Param(n, type(), p));
                 }
+                closeDecl();
             } while (eat(","));
         }
         expect(")");
@@ -484,8 +567,11 @@ final class Parser {
     // ------------------------------------------------------------------ contract
 
     private Contract contract() {
+        openDecl("contract");
         Pos p = next().pos();
+        Tok cnt = peek();
         String name = ident("a contract name");
+        named(cnt);
         var options = new ArrayList<Option>();
         if (eat("(")) {
             if (!at(")")) {
@@ -502,7 +588,7 @@ final class Parser {
             }
             expect(")");
         }
-        expect("{");
+        Tok clb = expect("{");
         List<FieldDecl> state = null;
         List<FieldDecl> params = null;
         Pos paramsPos = null;
@@ -518,12 +604,17 @@ final class Parser {
             int[] member = startMember();
             if (t.is("owned") && peek(1).kind() == K.IDENT && peek(2).is("{")) {
                 // M3a (ADR-0003 D1, ADR-0012 D1): owned T { … }, an owned object's record.
+                openDecl("owned");
                 next();
                 Pos tp = peek().pos();
+                Tok nt = peek();
                 String n = ident("an owned type's name");
-                owned.add(new TypeDecl(n, fieldBlock(), tp));
+                named(nt);
+                owned.add(new TypeDecl(n, fieldBlock("field"), tp));
+                closeDecl();
             } else if (t.is("owned") && (peek(1).is("init") || peek(1).is("action") || peek(1).is("destroy"))) {
                 // M3a: owned init T.m(…), owned action T.m(…), owned destroy T.m(…): a method of the owned type T.
+                openDecl(peek(1).text());
                 next();
                 Tok k = next();
                 String on = ident("the owned type of an owned " + k.text() + " (owned " + k.text() + " Account.name(…))");
@@ -531,42 +622,59 @@ final class Parser {
                     throw peek().pos().error("JSC1201", "an owned method names its type and itself: owned " + k.text() + " " + on + ".name(…)");
                 }
                 next();
+                Tok nt = peek();
                 String n = ident("a method name");
+                named(nt);
                 var ps = params();
                 var mods = mods();
                 Kind kind = k.is("init") ? Kind.OWNED_INIT : k.is("action") ? Kind.OWNED_ACTION : Kind.OWNED_DESTROY;
                 methods.add(new Method(kind, n, ps, mods, block(), null, t.pos(), on));
+                closeDecl();
             } else if (t.is("owned")) {
                 throw peek(1).pos().error("JSC1201", "after 'owned' comes an owned type (owned Account { owner: Key }) or an owned method"
                         + " (owned init Account.open(…), owned action Account.name(…), owned destroy Account.name(…))");
             } else if (t.is("state")) {
                 if (state != null) throw t.pos().error("JSC0121", "the state is declared once: state { … }");
+                openDecl("state");
+                named(t);
                 next();
                 if (!at("{")) throw peek().pos().error("JSC0122", "the state is a block: state { count: Int, owner: Key }");
-                state = fieldBlock();
+                state = fieldBlock("stateField");
+                closeDecl();
             } else if (t.is("params") && peek(1).is("{")) {
                 // M2b (ADR-0009 D1): the deploy-time parameters, read as params.f.
                 if (params != null) throw t.pos().error("JSC0431", "the params are declared once: params { … }");
+                openDecl("params");
+                named(t);
                 next();
                 paramsPos = t.pos();
-                params = fieldBlock();
+                params = fieldBlock("field");
+                closeDecl();
             } else if (t.is("event")) {
                 // M2b (ADR-0009 D5): an event, a variant of the contract's Event.
+                openDecl("event");
                 next();
                 Pos vp = peek().pos();
+                Tok nt = peek();
                 String n = ident("an event name");
-                events.add(new VariantDecl(n, at("{") ? fieldBlock() : List.of(), vp));
+                named(nt);
+                events.add(new VariantDecl(n, at("{") ? fieldBlock("field") : List.of(), vp));
+                closeDecl();
             } else if (t.is("invariant")) {
                 // M2b (ADR-0009 D4): invariant name = e, or invariant name { … e }.
+                openDecl("invariant");
                 next();
+                Tok nt = peek();
                 String n = ident("an invariant name");
                 String on = null;
                 if (at(".")) {
                     // M3a (ADR-0012 D1): invariant T.name = e, an invariant of the owned type T.
                     next();
                     on = n;
+                    nt = peek();
                     n = ident("an invariant name after '" + on + ".'");
                 }
+                named(nt);
                 Block body;
                 if (eat("=")) {
                     Expr e = expr();
@@ -575,20 +683,31 @@ final class Parser {
                     body = block();
                 }
                 invariants.add(new InvariantDecl(n, body, t.pos(), on));
+                closeDecl();
             } else if (t.is("init")) {
+                openDecl("init");
+                named(t);
                 next();
                 var ps = params();
                 var mods = mods();
                 methods.add(new Method(Kind.INIT, "init", ps, mods, block(), null, t.pos()));
+                closeDecl();
             } else if (t.is("action") || t.is("destroy")) {
+                openDecl(t.text());
                 next();
+                Tok nt = peek();
                 String n = ident("a method name");
+                named(nt);
                 var ps = params();
                 var mods = mods();
                 methods.add(new Method(t.is("action") ? Kind.ACTION : Kind.DESTROY, n, ps, mods, block(), null, t.pos()));
+                closeDecl();
             } else if (t.is("view")) {
+                openDecl("view");
                 next();
+                Tok nt = peek();
                 String n = ident("a view name");
+                named(nt);
                 var ps = params();
                 expect(":");
                 TypeRef vt = type();
@@ -600,6 +719,7 @@ final class Parser {
                     body = block();
                 }
                 methods.add(new Method(Kind.VIEW, n, ps, List.of(), body, vt, t.pos()));
+                closeDecl();
             } else if (t.is("fn")) {
                 fns.add(fn());
             } else if (t.is("type")) {
@@ -619,6 +739,8 @@ final class Parser {
             semis();
         }
         expect("}");
+        braces(clb);
+        closeDecl();
         if (state == null) throw p.error("JSC0126", "the contract declares no state { … }");
         return new Contract(name, options, state, methods, fns, types, enums, p, params, paramsPos, events, invariants, owned);
     }
@@ -695,7 +817,8 @@ final class Parser {
     }
 
     private Block blockBody() {
-        Pos p = expect("{").pos();
+        Tok lb = expect("{");
+        Pos p = lb.pos();
         var stmts = new ArrayList<Stmt>();
         Expr result = null;
         Pos returnPos = null;
@@ -703,12 +826,16 @@ final class Parser {
             if (result != null) throw result.pos().error("JSC0127", "an expression's value is unused here: only the last one is the block's value");
             Tok t = peek();
             if (t.is("const")) {
+                openDecl("const");
                 next();
                 Pos cp = t.pos();
+                Tok nt = peek();
                 String n = ident("a name");
+                named(nt);
                 TypeRef ty = eat(":") ? type() : null;
                 expect("=");
                 stmts.add(new Const(n, ty, expr(), cp));
+                closeDecl();
             } else if (t.is("let") || t.is("var")) {
                 throw t.pos().error("JSC0128", "values are immutable in .jsc: write 'const " + peek(1).text() + " = …'");
             } else if (t.is("require")) {
@@ -722,12 +849,16 @@ final class Parser {
                 expect("(");
                 if (!at("const")) throw peek().pos().error("JSC1001", "loops are 'for (const x of xs) { … }'; accumulate with xs.fold(init, (acc, x) => …)");
                 next();
+                openDecl("loopVar", t);
+                Tok vt = peek();
                 String v = ident("a loop variable");
+                named(vt);
                 if (at("in")) throw peek().pos().error("JSC1002", "'for … in' iterates keys in JavaScript; write 'for (const " + v + " of list)'");
                 expect("of");
                 Expr list = expr();
                 expect(")");
                 stmts.add(new For(v, list, block(), t.pos()));
+                closeDecl();
             } else if (t.is("while") || t.is("do")) {
                 throw t.pos().error("JSC1003", "there are no while loops in .jsc: use xs.fold(init, (acc, x) => …), range(a, b), or a recursive fn");
             } else if (t.is("if")) {
@@ -767,6 +898,7 @@ final class Parser {
             semis();
         }
         expect("}");
+        braces(lb);
         return new Block(stmts, result, returnPos, p);
     }
 
@@ -839,7 +971,7 @@ final class Parser {
     private Match match() {
         Pos p = next().pos();
         Expr scrutinee = expr();
-        expect("{");
+        Tok mlb = expect("{");
         var arms = new ArrayList<Arm>();
         while (!at("}")) {
             Pattern pat = pattern();
@@ -864,6 +996,7 @@ final class Parser {
             if (!eat(",")) eat(";");
         }
         expect("}");
+        braces(mlb);
         if (arms.isEmpty()) throw p.error("JSC0904", "a match needs at least one arm");
         return new Match(scrutinee, arms, p);
     }
@@ -879,15 +1012,26 @@ final class Parser {
             if (peek().kind() == K.IDENT && (peek(1).is("{") || peek(1).is("("))) {
                 throw bp.error("JSC0930", "nested patterns are not supported: bind the value, Some(v), and match v again");
             }
+            Tok bt = peek();
             binds.add(new Bind(null, ident("a name for the value"), bp));
+            leafDecl("binding", bt);
             expect(")");
         } else if (at("{")) {
             next();
             while (!at("}")) {
                 Pos bp = peek().pos();
+                Tok ft = peek();
                 String field = ident("a field name");
-                String name = eat(":") ? ident("a name to bind") : field;
+                Tok bt = ft;
+                String name;
+                if (eat(":")) {
+                    bt = peek();
+                    name = ident("a name to bind");
+                } else {
+                    name = field;
+                }
                 binds.add(new Bind(field, name, bp));
+                leafDecl("binding", bt);
                 if (!eat(",")) break;
             }
             expect("}");
@@ -1121,7 +1265,9 @@ final class Parser {
     private Expr argument() {
         if (peek().kind() == K.IDENT && peek(1).is("=>")) {
             Pos p = peek().pos();
+            Tok lt = peek();
             String n = next().text();
+            leafDecl("lambdaParam", lt);
             next();
             return new Lambda(List.of(n), lambdaBody(), p);
         }
@@ -1130,7 +1276,9 @@ final class Parser {
             var ps = new ArrayList<String>();
             if (!at(")")) {
                 do {
+                    Tok lt = peek();
                     ps.add(ident("a lambda parameter"));
+                    leafDecl("lambdaParam", lt);
                 } while (eat(","));
             }
             expect(")");

@@ -328,7 +328,12 @@ final class Checker {
 
     /** As above, with the certified Java libraries {@code java:} imports may name (D9, M4b). */
     static Ir.Program check(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries) {
-        return check(source, fileName, id, modules, javaLibraries, List.of());
+        return check(source, fileName, id, modules, javaLibraries, List.of(), null);
+    }
+
+    /** As above, recording the language core's spans of {@code source} (ADR-0021 D6): the same checks with or without. */
+    static Ir.Program check(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries, Spans spans) {
+        return check(source, fileName, id, modules, javaLibraries, List.of(), spans);
     }
 
     /**
@@ -336,9 +341,9 @@ final class Checker {
      * (M2c: a cycle of contract imports is refused, JSC0743).
      */
     private static Ir.Program check(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries,
-                                    List<String> loading) {
+                                    List<String> loading, Spans spans) {
         var loader = new Loader(modules);
-        Module main = loader.main(source, fileName, id);
+        Module main = loader.main(source, fileName, id, spans);
         try {
             return checkFile(main, loader.order, javaLibraries, modules, loading);
         } catch (JscException e) {
@@ -392,7 +397,7 @@ final class Checker {
             this.modules = modules;
         }
 
-        Module main(String source, String fileName, String id) {
+        Module main(String source, String fileName, String id, Spans spans) {
             if (id != null) stack.push(id);
             var deps = new LinkedHashMap<String, Module>();
             var types = new HashSet<String>();
@@ -408,7 +413,7 @@ final class Checker {
                 deps.put(im.from(), d);
                 types.addAll(d.typeNames());
             }
-            File f = Parser.parse(source, types);
+            File f = Parser.parse(source, types, spans);
             String cls = f.library() ? libraryClass(fileName, f, new Pos(1, 1)) : null;
             return new Module(id, fileName, source, f, cls, null, deps);
         }
@@ -587,7 +592,7 @@ final class Checker {
             deeper.add(id == null ? fileName : id);
             try {
                 // Checked as the build checks it: with its own .jsc and java: library imports (M4).
-                op = check(src.text(), src.fileName(), src.id(), modules, javaLibraries, deeper);
+                op = check(src.text(), src.fileName(), src.id(), modules, javaLibraries, deeper, null);
             } catch (JscException e) {
                 throw im.pos().error("JSC0745", "the contract " + im.from() + " does not check: " + src.fileName() + ":" + e.line + ":" + e.col
                         + ": " + e.getMessage());

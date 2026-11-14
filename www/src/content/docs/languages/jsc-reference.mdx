@@ -552,8 +552,8 @@ Ledger.jsc:34:13: error[JSC0502]: a time value cannot decide here: compare times
 Ledger.jsc:72:3: warning[JSC9001]: settle never reads balance; a destroy must pay out everything the instance holds
 ```
 
-`joust build` prints the same fields in the order `error[JSC0502]: <file>:<line>:<col>: <message>`, the file relative to
-the contracts folder.
+`joust build` prints the same shape, the file relative to the contracts folder (ADR-0021 D9: one shape, which the VS Code
+extension's `$joust` problem matcher reads).
 
 A code names one rule and is never reused; a message may change wording, its code does not. The full list, checked
 against the sources by a test, is the

@@ -79,13 +79,56 @@ public final class JoustToolchainWasm {
 
     public record MigrateResult(List<Migrated> files, String newScript) {}
 
+    /**
+     * ADR-0021 D2: one {@code .jsc} file to analyse: its bare file name (as the build passes it) and its text; and, for a
+     * file of a project (the integration with ADR-0018 M2c and M4), its module {@code id} and the project's other
+     * {@code .jsc} files by id ({@code pkg:<package>/<path>} for a package's library), which its imports resolve to as in
+     * the build. Without {@code files}: the file on its own.
+     */
+    public record AnalyzeRequest(String file, String source, String id, Map<String, String> files) {}
+
+    /**
+     * The document model's JSON ({@link org.julclang.state.dsl.v2.JscLang}), or, when the analysis itself failed (never a
+     * front-end diagnostic: those are in the model), {@code ok} false and the failure's class and message.
+     */
+    public record AnalyzeResult(boolean ok, String model, String error) {}
+
+    /** {@code lang.info} takes nothing. */
+    public record LangInfoRequest() {}
+
+    /** The {@code lang} protocol, the model version, JOUST's version and the features, as JSON (ADR-0021 D3). */
+    public record LangInfo(String info) {}
+
     public static void main(String[] args) {
         var api = new ApiRegistry();
         new VmApi().register(api);
         api.add("joust.build", BuildRequest.class, JoustToolchainWasm::build);
         api.add("joust.run", RunRequest.class, JoustToolchainWasm::run);
         api.add("joust.migrate", MigrateRequest.class, JoustToolchainWasm::migrate);
-        JsApi.install(api, new EngineInfo("joustToolchain", "joust-toolchain", VERSION, List.of("vm", "debug", "joust")));
+        // ADR-0021 (M5a): the language core's entries. The ADR's "joust.lang.*" are the engine's lang group, since an
+        // engine operation is named group.operation (julc-wasm's ApiRegistry): lang.info and lang.analyze.
+        api.add("lang.info", LangInfoRequest.class, JoustToolchainWasm::langInfo);
+        api.add("lang.analyze", AnalyzeRequest.class, JoustToolchainWasm::analyze);
+        JsApi.install(api, new EngineInfo("joustToolchain", "joust-toolchain", VERSION, List.of("vm", "debug", "joust", "lang")));
+    }
+
+    static ServiceResult<LangInfo> langInfo(LangInfoRequest request) {
+        return ServiceResult.ok(new LangInfo(org.julclang.state.dsl.v2.JscLang.infoJson(VERSION)));
+    }
+
+    /**
+     * ADR-0021 D2: every lang entry catches any Throwable and returns it as one internal-error result, so a Java failure
+     * never reaches the protocol layer as an unexplained TypeError (F7).
+     */
+    static ServiceResult<AnalyzeResult> analyze(AnalyzeRequest request) {
+        try {
+            String file = request.file() == null ? "File.jsc" : request.file();
+            String model = request.files() == null ? org.julclang.state.dsl.v2.JscLang.analyzeJson(request.source(), file)
+                    : org.julclang.state.dsl.v2.JscLang.analyzeJson(request.source(), file, request.id(), request.files());
+            return ServiceResult.ok(new AnalyzeResult(true, model, null));
+        } catch (Throwable t) {
+            return ServiceResult.ok(new AnalyzeResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
+        }
     }
 
     private static final org.julclang.vm.JulcVm VM = org.julclang.vm.JulcVm.create();

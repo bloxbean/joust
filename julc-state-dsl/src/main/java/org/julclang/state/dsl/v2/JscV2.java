@@ -162,8 +162,15 @@ public final class JscV2 {
      * no other contract.
      */
     public static Lowered lower(String source, String fileName) {
-        checkFileName(fileName);
-        return lowered(Checker.check(Parser.parse(source), fileName), source, fileName);
+        return lower(source, fileName, null);
+    }
+
+    /**
+     * {@link #lower}, recording the language core's spans into {@code spans} when it is not null (ADR-0021 D6): the same
+     * steps, so the lowering and every error are the same with or without (L5).
+     */
+    static Lowered lower(String source, String fileName, Spans spans) {
+        return lowered(check(source, fileName, spans), source, fileName);
     }
 
     /**
@@ -180,8 +187,12 @@ public final class JscV2 {
 
     /** As above, with the certified Java libraries its {@code java:} imports may name (D9, M4b). */
     public static Lowered lower(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries) {
-        checkFileName(fileName);
-        return lowered(Checker.check(source, fileName, id, modules, javaLibraries), source, fileName);
+        return lower(source, fileName, id, modules, javaLibraries, null);
+    }
+
+    /** As above, recording the language core's spans of {@code source} (ADR-0021 D6; the integration with M2/M4). */
+    static Lowered lower(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries, Spans spans) {
+        return lowered(check(source, fileName, id, modules, javaLibraries, spans), source, fileName);
     }
 
     /** Whether a {@code .jsc} 2 source is a library ({@code library <package>}): read from its header only. */
@@ -201,6 +212,26 @@ public final class JscV2 {
         return new Lowered(e.java(), warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(e.java(), fileName, javaPath, e.checks()),
                 p.library() ? null : Abi.of(p), p.library() ? null : IrJson.write(p, IrJson.sourceHash(source)), List.copyOf(sites),
                 List.copyOf(uses));
+    }
+
+    /**
+     * The front end alone: the file name's check, parse and check (with the language core's spans when {@code spans} is
+     * not null). Every coded diagnostic of {@link #lower} comes from here: the emitter, the ABI manifest and the IR
+     * export raise only internal errors (JSC0005 on the build paths).
+     */
+    static Ir.Program check(String source, String fileName, Spans spans) {
+        checkFileName(fileName);
+        return Checker.check(Parser.parse(source, spans), fileName);
+    }
+
+    /**
+     * The front end alone for the module {@code id} of a build (its library and contract imports resolved in
+     * {@code modules}), with the language core's spans of {@code source} when {@code spans} is not null: the language
+     * server's analysis of a file of a project (ADR-0021 L1, with M2c's and M4's imports).
+     */
+    static Ir.Program check(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries, Spans spans) {
+        checkFileName(fileName);
+        return Checker.check(source, fileName, id, modules, javaLibraries, spans);
     }
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */

@@ -12,7 +12,7 @@
 // differs, or is missing, fails unless accepted (--accept-abi: src/abi.js), so an encoding change cannot strand
 // deployed instances.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, lstatSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { buildInWorker, engineLimits } from './toolchain.js';
@@ -22,13 +22,24 @@ import { deploymentsShape, scriptDigest } from './deploy.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-function sources(dir, keep = () => true) {
+/**
+ * The project's contract sources under `dir`: every .java and .jsc file, by path relative to it. Issue #92 (S12, review
+ * of #82): a package's code is never project code, so the walk skips node_modules and dot-directories (.git, .joust, an
+ * editor's) at any depth, and follows no link (a link to a file or a directory is skipped, as libraries.js skips them
+ * under joust-lib/): with `contracts: "."`, or a package installed under contracts/, a package's sources would otherwise
+ * escape the split-package rule and joust.lock, and could replace the project's own Require.
+ */
+export function sources(dir, keep = () => true) {
   const out = {};
   const walk = (d) => {
     for (const n of readdirSync(d)) {
       const p = join(d, n);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith('.java') || p.endsWith('.jsc')) {
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        if (n === 'node_modules' || n.startsWith('.')) continue;
+        walk(p);
+      } else if (st.isFile() && (p.endsWith('.java') || p.endsWith('.jsc'))) {
         const text = readFileSync(p, 'utf8');
         if (keep(relative(dir, p), text)) out[relative(dir, p)] = text;
       }
@@ -36,6 +47,17 @@ function sources(dir, keep = () => true) {
   };
   if (existsSync(dir)) walk(dir);
   return out;
+}
+
+/**
+ * One diagnostic as both build paths print it (ADR-0021 D9; the catalogue's shape, as Gradle's JscMain prints it):
+ * `app/Counter.jsc:12:5: error[JSC0502]: message`, the file relative to the contracts directory; `error: message` when
+ * there is no file. The `$joust` problem matcher of the VS Code extension reads this shape.
+ */
+export function diagnosticLine(d) {
+  const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
+  // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
+  return `${where}${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${d.message}`;
 }
 
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
@@ -71,11 +93,7 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
       + ' build it on Gradle, or split it (please report it, with the file)' }],
       generated: [] };
   }
-  for (const d of r.diagnostics) {
-    const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
-    // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
-    (d.severity === 'error' ? console.error : log)(`${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${where}${d.message}`);
-  }
+  for (const d of r.diagnostics) (d.severity === 'error' ? console.error : log)(diagnosticLine(d));
   const dir = resolve(root, out);
   // ADR-0018 D12: the ABI gate first. Accepting is for a build that succeeded only.
   const refused = new Set();
