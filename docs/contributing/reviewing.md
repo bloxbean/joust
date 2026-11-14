@@ -96,14 +96,34 @@ line that no test can fail on.
 |---|---|---|
 | `ValueAdapter`, `AddressAdapter` (julc-state-api's JVM bodies), `JavaLibraryCertifier` | julc-state-toolchain (its differential and hostile-input tests) | `./gradlew :julc-state-toolchain:pitest` |
 | the `.jsc` 2 checker, `JscMain` (joust.lock) | julc-state-dsl | `./gradlew :julc-state-dsl:pitest` |
-| `src/lsp/select.js`, `src/build.js`, `src/toolchain*.js` | js/joust | `(cd js/mutation && npm ci --ignore-scripts) && cd js/joust && node ../mutation/node_modules/@stryker-mutator/core/bin/stryker.js run ../mutation/stryker.config.mjs` |
+| `src/lsp/select.js`, `src/build.js`, `src/toolchain.js`, `src/toolchain-heap.js` | js/joust | `(cd js/mutation && npm ci --ignore-scripts) && cd js/joust && node ../mutation/node_modules/@stryker-mutator/core/bin/stryker.js run ../mutation/stryker.config.mjs` |
 
 In CI the `mutation` job runs both only on what changed since the base (`scripts/pit-changed.py`,
-`scripts/stryker-changed.sh`). PIT must kill at least 60% of the changed classes' mutants, and Stryker must detect at
-least 50% of the changed files' mutants. Both thresholds sit below the baselines, so a timeout does not fail a run, but a
-change whose new lines no test guards does. `-Ppit.targetClasses=a.B` and `JOUST_MUTATE=src/build.js` narrow a local run
-in the same way. The baselines, measured on the whole set when this was added, are in the pull request that added it
-(#95). Update them when a module's tests change a lot.
+`scripts/stryker-changed.sh`; `--all` runs the whole set, as does the Build workflow's manual run with `mutation_all`).
+PIT must kill at least 40% of the changed classes' mutants, and Stryker must detect at least 10% of the changed files'
+mutants. Each tool mutates whole classes and files, not only the changed lines, so the thresholds sit below every
+class's and file's baseline. That way a slow test does not fail a run, but a file whose tests stop reaching it does.
+Read the survivors in the report: they are what review should look at. `-Ppit.targetClasses=a.B` and
+`JOUST_MUTATE=src/build.js` narrow a local run in the same way.
+
+The baselines, measured on the whole set when this was added (#95, base 375fb00):
+
+| Set | Mutants | Killed or detected | Score |
+|---|---:|---:|---:|
+| julc-state-toolchain (PIT: `ValueAdapter`, `AddressAdapter`, `JavaLibraryCertifier`) | 461 | 336 | 72.9% |
+| of which `ValueAdapter` | 128 | 125 | 98% |
+| of which `AddressAdapter` | 72 | 46 | 64% |
+| julc-state-dsl (PIT: `Checker`, `JscMain`) | 2,063 | 1,362 | 66.0% |
+| of which `JscMain` (joust.lock among it) | 343 | 158 | 46% |
+| js/joust (Stryker, without the engines) | 1,463 | 563 | 38.5% |
+| of which `src/build.js` | 283 | 30 | 11% |
+| of which `src/lsp/select.js` | 696 | 239 | 34% |
+| of which `src/toolchain.js` | 381 | 263 | 69% |
+
+The Stryker figures were measured without the Wasm engines, so the engine-backed language-server cases skipped; the CI
+job runs with this commit's engines. `src/toolchain-host.js` and `src/toolchain-worker.js` are not mutated: they run only
+in the forked engine host and its worker, where Stryker's coverage cannot follow (0 of 68 mutants covered). Update the
+baselines when a module's tests change a lot.
 
 ## 5. What is left to the reviewer
 

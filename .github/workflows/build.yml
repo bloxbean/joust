@@ -495,7 +495,7 @@ jobs:
 
   # Mutation testing of what changed: PIT on the changed classes among gradle/pitest.gradle's targets (julc-state-api's
   # ValueAdapter and AddressAdapter, the certifier, the checker, joust.lock), Stryker on the changed files among
-  # js/mutation/stryker.config.mjs's (src/lsp/select.js, src/build.js, src/toolchain*.js), with this commit's engines so
+  # js/mutation/stryker.config.mjs's (src/lsp/select.js, src/build.js, src/toolchain.js, src/toolchain-heap.js), with this commit's engines so
   # the engine-backed tests run. Thresholds below the baselines (docs/contributing/reviewing.md), so a change that leaves
   # its mutants alive fails while a flaky timeout does not; both scores are reported either way.
   mutation:
@@ -551,7 +551,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build/mutation
-          python3 scripts/pit-changed.py "$BASE" --threshold 60 | tee build/mutation/pit.md | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/pit-changed.py "$BASE" --threshold 40 | tee build/mutation/pit.md | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Stryker on the changed security-relevant JavaScript
         if: always()
@@ -567,7 +567,7 @@ jobs:
           mkdir -p js/node_modules/@julclang
           ln -sfn ../../state-client js/node_modules/@julclang/state-client
           ln -sfn ../../joust-runtime js/node_modules/@julclang/joust-runtime
-          bash scripts/stryker-changed.sh "$BASE" 50 | tee build/mutation/stryker.md | tee -a "$GITHUB_STEP_SUMMARY"
+          bash scripts/stryker-changed.sh "$BASE" 10 | tee build/mutation/stryker.md | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the mutation reports
         if: always()

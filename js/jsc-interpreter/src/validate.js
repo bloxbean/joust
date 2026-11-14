@@ -106,6 +106,9 @@ const CRED_FIELDS = { KeyCred: 'key', ScriptCred: 'hash' };
 const PRELUDE_ARITY = { min: 2, max: 2, abs: 1, asKey: 1, asHash: 1 };
 const MAP_ARITY = { get: 1, has: 1, set: 2, delete: 1, size: 0, keys: 0, values: 0, isEmpty: 0, at: 1 };
 const KINDS = set('init', 'action', 'destroy', 'view');
+// The fields below the top level whose value is always a list (docs/reference/jsc-2-ir.md); branches is checked where it is read.
+const NESTED_LISTS = set('args', 'arms', 'binds', 'checked', 'ctors', 'enums', 'fields', 'fns', 'items', 'mods', 'params',
+  'reads', 'receives', 'records', 'stmts', 'timeFields', 'values', 'variants');
 
 export function validate(p) {
   const fail = (where, what) => {
@@ -135,6 +138,20 @@ export function validate(p) {
   // M2c (additive): "contracts" appears only when the contract imports another.
   // An export that is not an object is refused as such (IrReaderFuzzTest: 'in' on a number threw a TypeError).
   if (!p || typeof p !== 'object' || Array.isArray(p)) fail('program', 'not an object');
+  // Every field the format holds a list in is a list at every level, before anything iterates it: a string would iterate
+  // as characters, or as nothing when empty (IrReaderFuzzTest: a block's stmts "" was read as no statements). The
+  // top-level lists are checked below; a top-level "params" is the params record (M2b), a nested one a list.
+  const walkLists = (v, top) => {
+    if (Array.isArray(v)) {
+      for (const x of v) walkLists(x, false);
+    } else if (v && typeof v === 'object') {
+      for (const [k, x] of Object.entries(v)) {
+        if (!top && NESTED_LISTS.has(k) && !Array.isArray(x)) fail('program', `"${k}" is not a list`);
+        walkLists(x, false);
+      }
+    }
+  };
+  walkLists(p, true);
   const optional = ['params', 'invariants', 'contracts'].filter((k) => k in p);
   for (const k of optional) if (p[k] === null || typeof p[k] !== 'object') fail('program', `"${k}" is ${JSON.stringify(p[k])}: an absent ${k} is not written`);
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
@@ -272,7 +289,14 @@ export function validate(p) {
   for (const c of contracts.values()) for (const t of c.receives) if (t !== null) type(t, `imported contract ${c.name}`);
   for (const [name, fields] of shapes) for (const f of fields) type(f.type, `${name}.${f.name}`);
   for (const k of ['timeFields', 'recursiveFns']) for (const x of p[k]) str(x, k);
-  for (const w of p.warnings) keys(w, ['line', 'col', 'code', 'message'], 'warning');
+  for (const w of p.warnings) {
+    keys(w, ['line', 'col', 'code', 'message'], 'warning');
+    // Of the kinds the Java reader reads (IrReaderFuzzTest: a warning's code that was a node was accepted here).
+    nat(w.line, 'warning');
+    nat(w.col, 'warning');
+    str(w.code, 'warning');
+    str(w.message, 'warning');
+  }
 
   // ---- bodies: locals declared once (ids unique in the program), referenced only in scope (review S7)
   const locals = new Map();
@@ -296,12 +320,15 @@ export function validate(p) {
   /** A block's statements in order in a scope of its own (a const is in scope from its statement on). */
   const block = (b, where, outer) => {
     keys(b, ['stmts', 'result', 'at'], where);
+    // A list, not anything iterable (IrReaderFuzzTest: stmts "" was read as no statements).
+    if (!Array.isArray(b.stmts)) fail(where, 'stmts is not a list');
     const scope = new Set(outer);
     for (const st of b.stmts) stmt(st, scope);
     if (b.result !== null) expr(b.result, scope);
     at(b.at, where);
   };
   const arms = (as, where, scope, scrutineeType) => {
+    if (!Array.isArray(as)) fail(where, 'arms is not a list');
     for (const a of as) {
       keys(a, ['ctors', 'fields', 'binds', 'body', 'at'], where);
       // An arm's position and lists are checked like any other's (IrReaderFuzzTest: [24, 7, 0] was accepted here).
@@ -438,6 +465,7 @@ export function validate(p) {
   for (const f of allFns) {
     keys(f, ['name', 'params', 'result', 'body', 'at'], 'fn');
     at(f.at, 'fn');   // its position too (IrReaderFuzzTest)
+    if (!(QUALIFIED.test(str(f.name, 'fn')) || IDENT.test(f.name))) fail('fn', `a bad name ${f.name}`);
     if (fnNames.has(f.name)) fail('fn', `two fns named ${f.name}`);
     fnNames.add(f.name);
     const scope = new Set();   // a fn sees its parameters only
@@ -455,6 +483,7 @@ export function validate(p) {
     const reads = m && typeof m === 'object' && 'reads' in m;
     keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...(reads ? ['reads'] : []), 'usesCtx', 'pays', 'result', 'body', 'at'], where);
     at(m.at, where);   // its position too (IrReaderFuzzTest)
+    if (!IDENT.test(str(m.name, where))) fail(where, `a bad name ${m.name}`);   // IrReaderFuzzTest: a name [] was accepted
     if (!Array.isArray(m.mods)) fail(where, 'mods is not a list');
     if (!KINDS.has(m.kind)) fail(where, `unknown kind ${m.kind}`);
     if (methodNames.has(m.name)) fail(where, 'two methods of that name');
@@ -502,6 +531,7 @@ export function validate(p) {
     for (const inv of p.invariants) {
       const where = `invariant ${inv.name}`;
       keys(inv, ['name', 'body', 'at'], where);
+      if (!IDENT.test(str(inv.name, where))) fail(where, `a bad name ${inv.name}`);   // IrReaderFuzzTest: a name [] was accepted
       if (names.has(inv.name) || methodNames.has(inv.name) || fnNames.has(inv.name)) fail(where, 'a name taken by another method, fn or invariant');
       names.add(inv.name);
       block(inv.body, where, new Set());
