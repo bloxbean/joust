@@ -1,4 +1,4 @@
-# `.jsc` 2, milestone M3b: report (ADR-0018 §8, r26)
+# `.jsc` 2, milestone M3b: report (ADR-0018 §8, r27)
 
 Date 2026-11-14. Branch `feat/jsc-2-m3b`, stacked on M3a3 (`feat/jsc-2-m3a3`, #107), M3a2 (#104) and M3a1 (#101), which
 hold the `.jsc` 2 integration (#98). JuLC `v0.1.0-pre21-rc1`, cardano-client-lib `0.8.0-pre7`, JDK 25, Node 22, macOS
@@ -6,8 +6,7 @@ arm64, Yaci DevKit. Every number below was measured at this branch's head, by th
 
 M3b builds keyed objects (ADR-0016): an owned type whose objects are unique by a key within an instance, each a node of
 a sorted on-chain list. It is gated by examples/registry's Registry (keyed types Ballot and Entry). ADR-0018 amendment
-**r26** (the `.jsc` v1 removal, in progress on `feat/jsc-v1-removal`, had not taken it: no ADR change there, not
-pushed).
+**r27** (r26 is the `.jsc` v1 removal's, #111; M3c takes r28).
 
 ## What M3b built
 
@@ -22,7 +21,7 @@ pushed).
 | **The ABI manifest**: the list's datums (`Head_T`, `Keyed_T`, `Retired_T`, in their tags), the inserts (`Insert_m(instance, anchor, …)`), `Remove_T(anchor, removed)`, `Link`, and a `keyed` section (key, index, options, typeId, tags, the Link and Remove_T indexes, the methods by role), checked against the description's `x-joust.keyed` | `Abi.of`, `Abi.keyed`, `Abi.removable`; `AbiCheck.compare` | `checkJscAbi` (43 manifests); `JscV2M3bGateTest.encoding_equalsTheJavaExample` |
 | **FourWay** (the five-way harness): a keyed contract's creation with its heads; an insert spending its anchor with Link and minting the key's token; a keyed action continuing its node; a retire continuing it as Retired_T; a removal spending the node and its predecessor and burning the token; keyed mutants (the next object, payouts, and the list's structure one step away) and the attack suite (a retire's "one lovelace added" left out: a builder may top a retired node up); an approval names the object's token; a keyed call is signed only where it needs a signer | `FourWay` (keyed section) | `JscV2M3bFourWayTest` |
 | **Grammars and the language server**: tree-sitter (`keyed_clause`, `keyed_options`, `retire`), TextMate (`keyed`, `by`, `retire`), the shared corpus (`keyed.jsc`, two refusals) and its shapes (a keyed type with its key and options), the language server's model (keyed types in the outline as owned types) | `tree-sitter-jsc`, `js/vscode-joust`, `CorpusParse`, `JscLang` | `npm test` (tree-sitter), `JscCorpusTest`, `JscTextMateTest`, `JscLangTest` |
-| Docs | ADR-0018 r26, the semantics (§2.9, §2.5's `keyed:<rule>`), the IR format, the language reference ("Keyed objects"), the diagnostics catalogue ("Keyed objects", "Names M3b reserves") | `JscV2DiagnosticsTest` |
+| Docs | ADR-0018 r27, the semantics (§2.9, §2.5's `keyed:<rule>`), the IR format, the language reference ("Keyed objects"), the diagnostics catalogue ("Keyed objects", "Names M3b reserves") | `JscV2DiagnosticsTest` |
 
 ### What earlier contracts keep
 
