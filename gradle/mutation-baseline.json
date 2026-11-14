@@ -1,5 +1,5 @@
 {
-  "_comment": "Mutation baselines per class (PIT) and per file (Stryker): score in percent and mutant count. CI's mutation job (scripts/pit-changed.py, scripts/stryker-changed.sh) fails a changed unit that scores more than 5 points below its entry; a unit with no entry needs the job's default floor. Written with scripts/pit-summary.py and scripts/stryker-summary.py --write-baseline from a whole-set run (the Build workflow's manual run with mutation_all). A change that means to lower one updates it here, visibly.",
+  "_comment": "Mutation baselines per class (PIT) and per file (Stryker): score in percent and mutant count. CI's mutation and stryker jobs (scripts/pit-changed.py, scripts/stryker-changed.sh) fail a changed unit that scores more than 5 points below its entry; a unit with no entry needs the job's default floor. Written with scripts/pit-summary.py and scripts/stryker-summary.py --write-baseline from a whole-set CI run (the Build workflow's manual run with mutation_all). Where CI's whole-set runs differ (a mutant that stops on a timeout counts as detected, and whether it stops depends on the runner's speed), the entry is the lowest score measured: js/joust/src/toolchain-heap.js 88.6-97.1 and src/toolchain.js 80.1-85.9 over runs 43629689255, 43629816769 and 43643527993; every other unit scored the same in all three. A change that means to lower one updates it here, visibly.",
   "pit": {
     "org.julclang.state.api.AddressAdapter": {
       "mutants": 72,
@@ -77,7 +77,7 @@
     },
     "js/joust/src/toolchain-heap.js": {
       "mutants": 35,
-      "score": 97.1
+      "score": 88.6
     },
     "js/joust/src/toolchain.js": {
       "mutants": 382,
