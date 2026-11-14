@@ -2543,6 +2543,8 @@ final class FourWay {
 
     /** The Java example's state record (dex's is Pool; M2). */
     String referenceState = "State";
+    /** M3c: the Java example's @Migrate method (examples/upgrade's CounterV2.adopt). */
+    String referenceMigrate = "adopt";
 
     /** Also runs every vector on the Java example {@code pkg.<name>}, whose init is {@code init}, and records differences. */
     FourWay reference(String pkg, String init) throws Exception {
@@ -2570,7 +2572,8 @@ final class FourWay {
         String kind = kindOf(method);
         Class<?> rs = Class.forName(reference.getName() + "$" + referenceState);
         Object before = state == null ? null : java(state, reference);
-        String m = interp.kind(method).equals("init") ? referenceInit : method;   // M3a: an owned init keeps its name
+        // M3a: an owned init keeps its name; M3c: an init migrate is the Java example's @Migrate method (examples/upgrade's adopt).
+        String m = interp.kind(method).equals("init") ? referenceInit : interp.kind(method).equals("migrate") ? referenceMigrate : method;
         Method found = null;
         for (Method x : reference.getDeclaredMethods()) if (x.getName().equals(m) && java.lang.reflect.Modifier.isStatic(x.getModifiers())) found = x;
         assertNotNull(found, reference.getName() + "." + m);
@@ -2585,6 +2588,8 @@ final class FourWay {
         }
         // M2c: the read states, right after the params.
         for (String f : interp.reads(method)) call.add(java(t.reads().get(f), reference));
+        // M3c: an init migrate's adopted state, right after the params.
+        if (interp.adoptsFrom(method) != null) call.add(java(t.prior().state(), reference));
         for (Object a : args) call.add(java(a, reference));
         // The Ctx and the Funds (M2) the Java method takes after its arguments, by type.
         for (int i = call.size(); i < found.getParameterCount(); i++) call.add(found.getParameterTypes()[i] == Funds.class ? javaFunds(t) : ctx(t));
@@ -2676,8 +2681,9 @@ final class FourWay {
         // M2b: so are the output checks (an invariant, a quorum's shape: semantics §2.7), which only the validator makes.
         // M3b: so are a keyed call's list rules (semantics §2.9: the anchor, the window, the cooldown, the key's length, signer,
         // place and fixity), which the validator's policy and node arms check.
+        // M3c: so are a migration's halves (semantics §2.11: the successor minted, the instance adopted), the validators'.
         boolean modifier = refused != null && (refused.refusal().startsWith("modifier:") || refused.refusal().startsWith("invariant:")
-                || refused.refusal().startsWith("keyed:"));
+                || refused.refusal().startsWith("keyed:") || refused.refusal().startsWith("migrate:"));
         String body = modifier ? interpreted(method, state, args, ti) : want;
         if (o != null) JsLeg.canonical(o.value(), what);
         assertEquals(body, jvm(method, state, args, t), "JVM vs interpreter: " + what);
