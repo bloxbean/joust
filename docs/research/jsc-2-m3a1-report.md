@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M3a1: report (ADR-0018 §8, r23)
 
-Date 2026-11-14. Branch `feat/jsc-2-m3a1`, on the `.jsc` 2 integration `feat/jsc-2-int2` (`3b2f8ef`, ADR-0018 r22). JuLC
+Date 2026-11-14. Branch `feat/jsc-2-m3a1`, on the `.jsc` 2 integration `feat/jsc-2-int2` (#98, `b9a6d42e`, ADR-0018 r22). JuLC
 `v0.1.0-pre21-rc1`, cardano-client-lib `0.8.0-pre7`, JDK 25, Node 22, macOS arm64, Yaci DevKit. Every number below was
 measured at this branch's head, by the test named with it.
 
@@ -32,7 +32,7 @@ report is M3a1's.
 ### What earlier contracts keep
 
 Every earlier `.jsc` file of examples/dsl lowers to byte-identical Java, IR, source maps and ABI manifests:
-`generateJsc`'s output on this branch diffed against `3b2f8ef`'s (`diff -r`: only the new files differ). The names M3a
+`generateJsc`'s output on this branch diffed against the base's (`b9a6d42e`) (`diff -r`: only the new files differ). The names M3a
 reserves (the annotations owned objects lower to; `admits`) are taken by no earlier file. `Account` is no longer refused
 as a type name (JSC0220): the generated client names a contract's types by their qualified names.
 
@@ -48,19 +48,20 @@ tests (`copyPortTests`) map `.balance()` to `.saved()`; `BankPortTest` passes ag
 **Encoding** (`JscV2M3a1GateTest.encoding_equalsTheJavaExample`): the manifest matches examples/bank's description
 structurally (datum, Holding, every redeemer, CreateInstance, BurnInstance, Open), but for the three stated names.
 
-**Execution units** (`JscV2M3a1GateTest.budgets`; each transaction as the runtime builds it; "saturated": savings of 560
+**Execution units** (`JscV2M3a1GateTest.budgets`; each transaction as the runtime builds it; "saturated": savings of 656
 bits, which fill the 160-byte datum):
 
 | Call | Java CPU | `.jsc` 2 CPU | Δ CPU | Java memory | `.jsc` 2 memory (Δ) | % of max (CPU / mem) |
 |---|---|---|---|---|---|---|
 | init | 91,412,987 | 91,412,987 | +0.0% | 287,753 | 287,753 (+0.0%) | 0.91% / 2.06% |
 | setPaused | 79,201,471 | 79,288,714 | +0.1% | 232,139 | 232,671 (+0.2%) | 0.79% / 1.66% |
+| setLimit | 79,257,131 | 79,344,374 | +0.1% | 233,545 | 234,077 (+0.2%) | 0.79% / 1.67% |
 | open (owned init, bank by reference) | 124,526,434 | 124,526,434 | +0.0% | 393,970 | 393,970 (+0.0%) | 1.25% / 2.81% |
 | deposit | 105,924,158 | 106,011,401 | +0.1% | 323,036 | 323,568 (+0.2%) | 1.06% / 2.31% |
 | withdraw (bank by reference) | 171,412,130 | 173,497,633 | +1.2% | 547,205 | 556,900 (+1.8%) | 1.73% / 3.98% |
 | close | 114,868,809 | 116,954,312 | +1.8% | 395,227 | 404,922 (+2.5%) | 1.17% / 2.89% |
-| deposit (saturated) | 107,852,246 | 107,939,489 | +0.1% | 323,060 | 323,592 (+0.2%) | 1.08% / 2.31% |
-| withdraw (saturated) | 173,340,218 | 175,425,721 | +1.2% | 547,229 | 556,924 (+1.8%) | 1.75% / 3.98% |
+| deposit (saturated) | 108,334,268 | 108,421,511 | +0.1% | 323,066 | 323,598 (+0.2%) | 1.08% / 2.31% |
+| withdraw (saturated) | 173,822,240 | 175,907,743 | +1.2% | 547,235 | 556,930 (+1.8%) | 1.76% / 3.98% |
 | close (saturated) | 114,868,809 | 116,954,312 | +1.8% | 395,227 | 404,922 (+2.5%) | 1.17% / 2.89% |
 
 ## Five-way agreement, mutation rejection, attacks (J3, J15)
@@ -108,7 +109,7 @@ belongs to; these are M3a1's (owned objects of one type), each with its test or 
 | A7 object minting | `Attacks` on every owned init's accepted creation ("seed not consumed", "two thread tokens minted", "an extra token minted under the policy", I1) |
 | A8 the escape hatch | `theContractsRules_atTheirPositions` (JSC1208, JSC1209, JSC1210 at their positions); copied `close_escapeHatchWorksWhilePaused`; DevKit `BankDevnetPortTest` (close while paused) |
 | A9 an owned action without `only` | `ownedMethods_readTheirObject` (JSC9010, `open`); `modifiers_perMethod_equalTheJavaExample` |
-| A10 modifiers name the object's fields | five-way: Members' `score` signed by the club's owner is a modifier refusal on every leg; `securityReview_atTheChecker` (the lowering binds the object's `owner`); the mutants move the continuing object's `owner` |
+| A10 modifiers name the object's fields | five-way: Members' `score` signed by the club's owner is a modifier refusal on the interpreters, the JVM and the transition program, and refused by the validator; `securityReview_atTheChecker` (the lowering binds the object's `owner`); the mutants move the continuing object's `owner` |
 | A11 time fields per type | `securityReview_atTheChecker` (the state's `until` untimed through a shared read, the object's timed; a timed quorum count, JSC0524); two owned types sharing a field name is M3a2's |
 | A12 invariants by type | M3a3 (refused here, JSC1215) |
 | A13 an object's balance and payouts | `twoObjectsCannotShareOnePayout`; the five-way mutants move payouts by one; Bank's withdrawals over the savings |
@@ -119,10 +120,10 @@ belongs to; these are M3a1's (owned objects of one type), each with its test or 
 | A18 owned methods with deposits | decision in ADR-0018 D10 (r23): deposits target instances; `securityReview_atTheChecker` (JSC0447) |
 | A19 checker bypass by syntax | `securityReview_atTheChecker` (`Type . name` with spacing and a comment; an owned type named like a variant; `<T>Outcome/Received/Created` and `Holding` as user types; an owned type as a params, state or event field, in a List, an Option or a parameter); `sharedParameters_whereTheProcessorTakesThem` (shared after an ordinary parameter, in an instance method); the shared corpus (`owned.jsc`, two refusals) parsed alike by tree-sitter. `into`, `admits` and keyed names are M3a3's and M3b's |
 | A20–A45 | moves (M3a3), keyed objects (M3b), purposes and migration (M3c) |
-| A46 refusal-class parity | the five-way harness asserts each refusal's class on every leg (`modifier`, `input:guardians`, `input:by`, `invariant:quorum guardians needed`) |
+| A46 refusal-class parity | the five-way harness asserts each refusal's class on the two interpreters (the JVM and the transition program refuse or accept; the validator leg gives accept or reject: #101 review S2) (`modifier`, `input:guardians`, `input:by`, `invariant:quorum guardians needed`) |
 | A47 mutants per transaction shape | 57 mutants (Bank 24, Members 33), table above |
 | A48 byte-identical earlier contracts | `generateJsc` diffed against the base (below) |
-| A49 size and budget at saturation | the gates above (Bank saturated at 560 bits); several types, moves and maps are M3a2's and M3a3's |
+| A49 size and budget at saturation | the gates above (Bank saturated at 656 bits, the largest the 160-byte datum takes: `theSaturatedAccount_isTheLargestTheBoundAccepts`); several types, moves and maps are M3a2's and M3a3's |
 | K1 five-way agreement | `JscV2M3a1FourWayTest` (43 calls, five legs) |
 | K2 IR | `JscV2IrTest` with the Bank and Members fixtures, both readers strict on `owned`, `on`, `shared` |
 | K3 ABI tags and positions | `checkJscAbi` (Bank, Members); `encoding_equalsTheJavaExample` |
@@ -148,10 +149,34 @@ belongs to; these are M3a1's (owned objects of one type), each with its test or 
 
 ## Builds and DevKit
 
-`./gradlew build -PnoDevnet --continue`: 982 JVM tests, 0 failures. `toolchainWasmTest` (the Web Image against the JVM): 134
-build outputs identical, 114 language-server models byte-identical, 3,583/3,583 S2 cases and 21 depth cases. npm: `js/jsc-interpreter` 50/50, `tree-sitter-jsc` 20/20 and the shared corpus in agreement, `js/state-client` 48/48, the language server 75/76 (1 skipped).
+Round r2 (after #101's round-r1 reviews), at `99020d31`: `./gradlew clean build -PnoDevnet --continue --no-watch-fs` gives
+997 JVM tests, 0 failures (1 skipped): julc-state-dsl 215, julc-state-toolchain 187, examples/dsl 114. `toolchainWasmTest`
+(the Web Image against the JVM): 140 build outputs identical, 117 language-server models byte-identical, 3,595/3,595 S2
+cases, 21 depth cases. npm: `js/jsc-interpreter` 56/56 (the owned-program mutants among them), `tree-sitter-jsc` and the
+shared corpus in agreement, the language server 86/87 (1 skipped). (`--no-watch-fs`: Gradle's file-system watching
+misses edits in the sandbox these ran in.)
 
 `./gradlew :examples:dsl:test` on Yaci DevKit (after a devnet reset): **126 tests, 0 failures**, including `BankDevnetPortTest` (examples/bank's DevKit test against the port: two customers in parallel, the owner and limit refusals, a pause, the escape hatch while paused) and the earlier ports' DevKit tests. The `js/joust` DevKit flows pass (the MerkleMap page included), except `joust dev … redeploys on save`: Node's recursive `fs.watch` never fires in this sandbox (a 10-line probe in a fresh tmpdir got no event), so the watcher does not rebuild. `js/joust-runtime`'s Ogmios provider test fails after the devnet reset because it probes the M0 fixtures' transactions, which are not on the fresh chain. M3a1 touches neither the dev server nor the runtime.
+
+## Review round r1 (#101)
+
+| Item | What changed | Test |
+|---|---|---|
+| F1 | the integration's §8 M4 and M5 rows restored | the ADR diff against the base |
+| F2 (K2) | both IR readers refuse receives on an owned method, a non-State shared local, an owned type without an owned init or an escape hatch, and (until their part, `OWNED_STAGE`) a payable owned destroy, native assets in an owned method, into, admits and an invariant's on | `JscV2M3a1IrStrictTest`, `owned-strict.test.js` |
+| F3 | native assets in an owned action or destroy are JSC1215 until M3a2 | `reviewRound1_rules` |
+| S1, C1 | every params quorum, an owned method's too, checked at the instance's init and at no owned init, in both interpreters | Vouch on five legs (thresholds 1, 0, 2) |
+| C2 | a refusal's vector can propose the body's unguarded outcome (`FourWay.unguarded`); the input:by vector does | `JscV2M3a1GuardMutationTest` (the validator without the guard accepts it) |
+| S2 | the token-kind checks on a contract whose State and Holding decode alike | `alikeShapes_theTokenKindDecides` (Twin) |
+| S3 | an escape hatch has no before or after (JSC1209); one that never reads balance is JSC1216; JSC0443 names the owned kinds | `reviewRound1_rules` |
+| F4 | an owned init's parameters may take the shared state's field names | `sharedParameters_whereTheProcessorTakesThem` |
+| F5 | D10: `shared` taking `Ctx` is a port-fidelity choice | |
+| F6 (K9) | the 160-byte datum takes savings of up to 656 bits (not 560): the saturated rows use them; setLimit's row | `theSaturatedAccount_isTheLargestTheBoundAccepts`, `budgets` |
+| F7 | the numbers above are this head's | |
+| F8 | owned methods are ownedInit/ownedAction/ownedDestroy declarations named T.m; TextMate highlights owned as a declaration keyword | the language-server goldens |
+| F9 | the IR format and the readers say what M3a2 and M3a3 produce | |
+| F10 | the owned annotations' names are reserved only in contracts with owned types | `reviewRound1_rules` |
+| F11 | a reader of a contract with owned types never reads an object | `aReaderOfAContractWithOwnedTypes_neverReadsAnObject` (TwinReader) |
 
 ## Found on the way
 
