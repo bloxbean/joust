@@ -143,3 +143,66 @@ test('C33: a moved-aside copy whose bytes fail their digest is removed', async (
   assert.deepEqual(damagedOf(engines, id), []);
   assert.ok(!existsSync(join(engines, id)));
 });
+
+test('C34 (C31 ownership): a second collector never acts on a claim the first is recovering', async () => {
+  const storage = tmp('joust-lsp-store-');
+  const engines = join(storage, 'engines');
+  const b = createStore(storage, { maxCopies: 10, recentMs: 0 });   // B: no use of this engine
+  let gated = 0;
+  const a = createStore(storage, { maxCopies: 10, recentMs: 0, fs: { ...fsp,
+    rename: async (from, to) => {
+      // A is between hashing its claim and putting it back: B sweeps now.
+      if (!gated && basename(String(from)).startsWith('.evicted-') && HEX.test(basename(String(to)))) {
+        gated++;
+        const [jb, wb] = stubBytes('c34-own-b');
+        await b.put(jb, wb);
+      }
+      return fsp.rename(from, to);
+    } } });
+  // An abandoned claim with no lease (its crashed collector held none), wanted only by A, whose server uses it now.
+  const [js, wasm] = stubBytes('c34-own');
+  const c = await a.put(js, wasm);
+  renameSync(join(engines, c.id), join(engines, `.evicted-${c.id}-${deadPid()}-${Date.now() - 5 * 60_000}`));
+  const [ja, wa] = stubBytes('c34-own-a');
+  await a.put(ja, wa, new Set([c.id]));
+  assert.equal(gated, 1, 'A reached its put-back');
+  // Without ownership B would see the abandoned claim too, find it unwanted (B does not use it) and delete it under A.
+  assert.equal(readFileSync(join(engines, c.id, ENGINE_JS), 'utf8'), js.toString(), 'the copy A uses is back');
+  assert.deepEqual(readdirSync(engines).filter((n) => n.startsWith('.evicted-')), []);
+});
+
+test('C34 (C31 post-move check): a valid copy restored between the check and the move is put back, never deleted', async () => {
+  const storage = tmp('joust-lsp-store-');
+  const engines = join(storage, 'engines');
+  const [js, wasm] = stubBytes('c34-move');
+  let id;
+  let injected = 0;
+  const store = createStore(storage, { maxCopies: 10, recentMs: 0, fs: { ...fsp,
+    rename: async (from, to) => {
+      if (!injected && id && String(from) === join(engines, id) && basename(String(to)).startsWith('.damaged-')) {
+        // Another window put back a valid copy, leased by its worker, right after this collector found the destination
+        // invalid and right before it moves the destination aside.
+        injected++;
+        await fsp.rm(join(engines, id), { recursive: true, force: true });
+        await fsp.mkdir(join(engines, id));
+        await fsp.writeFile(join(engines, id, ENGINE_JS), js);
+        await fsp.writeFile(join(engines, id, ENGINE_WASM), wasm);
+        await fsp.writeFile(join(engines, id, '.lease-B'), '');
+      }
+      return fsp.rename(from, to);
+    } } });
+  const c = await store.put(js, wasm);
+  id = c.id;
+  await store.lease(c.id);
+  renameSync(join(engines, c.id), join(engines, `.evicted-${c.id}-${deadPid()}-${Date.now() - 5 * 60_000}`));
+  // An invalid copy under the digest name: the put-back finds the destination there and invalid.
+  await fsp.mkdir(join(engines, c.id));
+  await fsp.writeFile(join(engines, c.id, ENGINE_JS), 'broken');
+  await fsp.writeFile(join(engines, c.id, ENGINE_WASM), wasm);
+  const [j1, w1] = stubBytes('c34-move-1');
+  await store.put(j1, w1);
+  assert.equal(injected, 1, 'the put-back moved the destination aside');
+  assert.ok(existsSync(join(engines, c.id, '.lease-B')), 'the copy restored meanwhile, with its lease, is in place');
+  assert.equal(readFileSync(join(engines, c.id, ENGINE_JS), 'utf8'), js.toString());
+  assert.deepEqual(readdirSync(engines).filter((n) => n.startsWith('.evicted-') || n.startsWith('.damaged-')), []);
+});

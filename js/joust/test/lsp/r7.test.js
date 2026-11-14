@@ -88,6 +88,8 @@ test('C30: a claim whose bytes cannot be read now is kept; a later sweep restore
   }
 });
 
+// A smoke test only: the race it runs rarely interleaves, and it passes with both C31 protections removed (C34 on #83).
+// The deterministic tests, each failing without its protection, are in r8.test.js.
 test('C31: two collectors recovering the same abandoned claim leave exactly one valid copy, its lease intact', async () => {
   for (let round = 0; round < 10; round++) {
     const storage = tmp('joust-lsp-store-');
