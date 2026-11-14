@@ -452,8 +452,20 @@ export function reconcile(model, oldText, newText) {
     const b = map(r[2], r[3]);
     return a && b ? [a[0], a[1], b[0], b[1]] : undefined;
   };
+  // C8 on #99: a name is kept only when it lies wholly outside the edited region and the new text still spells it there.
+  const nameKept = (r, name) => {
+    if (!r) return true;
+    const a = (so[r[0]] ?? oldText.length) + r[1];
+    const b = (so[r[2]] ?? oldText.length) + r[3];
+    if (!(b <= p || a >= oldEnd)) return false;
+    const na = a <= p ? a : a + delta;
+    const nb = na + (b - a);
+    // The same word: an edit that extends it (`left` to `leftQ`) touches it at its end.
+    return newText.slice(na, nb) === name && !identChar(newText[nb] ?? ' ') && !identChar(newText[na - 1] ?? ' ');
+  };
   const declarations = [];
   for (const d of model.declarations) {
+    if (d.name && !nameKept(d.nameRange, d.name)) continue;
     const nameRange = range(d.nameRange);
     const r = range(d.range);
     const scope = range(d.scope);
@@ -461,6 +473,37 @@ export function reconcile(model, oldText, newText) {
     declarations.push({ ...d, nameRange, range: r, scope });
   }
   return { ...model, declarations, references: [], exprs: [], diagnostics: [], reconciled: true };
+}
+
+/**
+ * C8 on #99: the model completion answers from. `current` (this version's; null when it has none yet) when it has no
+ * error; otherwise its own declarations first, and from `good` (the last model without an error, of `goodText`),
+ * reconciled with `text`, only the declarations `current` lacks (by kind, name and place): the members recovery
+ * dropped or did not check. Parents are linked by the merged ids.
+ */
+export function completionModel(current, good, goodText, text) {
+  const errors = (m) => m.diagnostics.some((d) => d.severity === 'error');
+  if (current && !errors(current)) return current;
+  if (!good) return current;
+  const old = reconcile(good, goodText, text);
+  if (!current) return old;
+  const key = (d) => `${d.kind}|${d.name}|${d.nameRange ? d.nameRange.join() : ''}`;
+  const have = new Map(current.declarations.map((d) => [key(d), d.id]));
+  let next = current.declarations.reduce((m, d) => Math.max(m, d.id), -1) + 1;
+  const ids = new Map();
+  const added = [];
+  for (const d of old.declarations) {
+    const same = have.get(key(d));
+    if (same !== undefined) {
+      ids.set(d.id, same);
+      continue;
+    }
+    ids.set(d.id, next++);
+    added.push(d);
+  }
+  const merged = [...current.declarations,
+    ...added.map((d) => ({ ...d, id: ids.get(d.id), parent: d.parent >= 0 ? ids.get(d.parent) ?? -1 : d.parent }))];
+  return { ...current, declarations: merged, reconciled: true, _byId: undefined };
 }
 
 /**

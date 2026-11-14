@@ -13,7 +13,7 @@ import v8 from 'node:v8';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { completion, importEdit, normalise, reconcile } from '../../src/lsp/features.js';
+import { completion, completionModel, importEdit, normalise } from '../../src/lsp/features.js';
 import { hasExnref } from '../../src/lsp/worker.js';
 import { ENGINE, HAS_ENGINE } from './client.js';
 
@@ -116,9 +116,9 @@ test('inside a method with an error, completion offers what the valid file offer
         if (!bad.diagnostics.some((d) => d.severity === 'error')) continue;   // e.g. an unused const in a fn: a warning
         positions++;
         const where = `${f}:${pos.line + 1} (${what})`;
-        const viaGood = labels(completion(broken, at, reconcile(model, src, broken), std));
+        const viaGood = labels(completion(broken, at, completionModel(bad, model, src, broken), std));
         const missing = [...valid].filter((l) => !viaGood.has(l));
-        const extra = [...viaGood].filter((l) => !valid.has(l));
+        const extra = [...viaGood].filter((l) => !valid.has(l) && l !== 'unusedQ');
         if (missing.length || extra.length) failures.push(`${where}, reconciled: missing ${missing}, extra ${extra}`);
         const viaBroken = labels(completion(broken, at, bad, std));
         const wrong = [...viaBroken].filter((l) => !valid.has(l) && l !== 'unusedQ');
@@ -129,6 +129,31 @@ test('inside a method with an error, completion offers what the valid file offer
       }
     }
   }
+  // C8 on #99 r2: a declaration renamed before its uses (the uses now an error): its new name is offered after it, the
+  // old one is not.
+  let renamed = 0;
+  for (const f of readdirSync(DSL).filter((x) => x.endsWith('.jsc')).sort()) {
+    const src = readFileSync(join(DSL, f), 'utf8');
+    const model = analyse(src, f);
+    if (!model.accepted) continue;
+    const doc = TextDocument.create('x', 'jsc', 1, src);
+    for (const m of [...src.matchAll(/\bconst ([a-z][A-Za-z0-9_]*) = /g)].slice(0, 3)) {
+      const use = src.indexOf('require(', m.index);
+      if (use < 0) continue;
+      const pos = doc.positionAt(use + 'require('.length);
+      const name = m[1];
+      if (!labels(completion(src, pos, model, std)).has(name)) continue;   // not in scope at that require
+      const at = m.index + 'const '.length;
+      const broken = src.slice(0, at) + name + 'Q' + src.slice(at + name.length);
+      const bad = analyse(broken, f);
+      if (!bad.diagnostics.some((d) => d.severity === 'error')) continue;
+      const got = labels(completion(broken, { line: pos.line, character: pos.character + (pos.line === doc.positionAt(at).line ? 1 : 0) },
+        completionModel(bad, model, src, broken), std));
+      renamed++;
+      if (got.has(name) || !got.has(`${name}Q`)) failures.push(`${f}: const ${name} renamed ${name}Q: old ${got.has(name)}, new ${got.has(`${name}Q`)}`);
+    }
+  }
+  console.log(`[completion] C8: ${renamed} declarations renamed before their uses`);
   console.log(`[completion] F1: ${positions} positions inside a method with an error; ${failures.length} failures`);
   assert.deepEqual(failures.slice(0, 20), []);
   assert.ok(positions > 30, `${positions} positions`);
