@@ -15,9 +15,10 @@ name: Build
 #   cli       the native joust (ADR-0017 D8), end to end with this commit's modules, plugin and engines.
 #   vscode    the VS Code extension (ADR-0021), packaged with this commit's engine and tested in VS Code. Publishes
 #             `vscode-joust-vsix` (the .vsix and its digest).
-#   mutation  PIT on the changed security-relevant Java and Stryker on the changed security-relevant JavaScript (the
-#             classes and files gradle/pitest.gradle's modules and js/mutation/stryker.config.mjs name), with a reported
-#             score and a threshold. Publishes `mutation`.
+#   mutation  PIT on the changed security-relevant Java (the classes gradle/pitest.gradle's modules name), with a
+#             reported score and a threshold. Publishes `mutation`.
+#   stryker   Stryker on the changed security-relevant JavaScript, one job per js/mutation set (joust, joust-heap,
+#             state-client), with a reported score and a threshold. Each publishes `stryker-<set>`.
 # bloxbean-snapshot.yml publishes only commits whose push run of this workflow passed: every job must pass.
 #
 # Every action is pinned by its commit SHA. No job reads a repository secret; the engine and CLI jobs pass the run's
@@ -522,14 +523,13 @@ jobs:
         working-directory: js/vscode-joust
         run: xvfb-run -a node test/electron/run.mjs --versions 1.109.0,stable
 
-  # Mutation testing of what a change can weaken (review r1, design F6): PIT on gradle/pitest.gradle's targets
-  # (julc-state-api's ValueAdapter and AddressAdapter, the certifier, the checker, JscMain's joust.lock) and Stryker on
-  # js/mutation's two sets (js/joust's select.js, build.js, toolchain.js, toolchain-heap.js; state-client's verify.js and
-  # keyed.js), each whole when its tests or mutation configuration changed, else on the changed classes and files only,
-  # with this commit's engines so the engine-backed tests run (and must not skip). Each class and file must score at least
-  # its baseline in gradle/mutation-baseline.json less 5 points. The manual run's mutation_all runs everything.
+  # Mutation testing of what a change can weaken (review r1, design F6), in parallel jobs: PIT here, on
+  # gradle/pitest.gradle's targets (julc-state-api's ValueAdapter and AddressAdapter, the certifier, the checker, JscMain's
+  # joust.lock); Stryker in the stryker job, one job per js/mutation set. Each set runs whole when its tests or mutation
+  # configuration changed, else on the changed classes and files only. Each class and file must score at least its
+  # baseline in gradle/mutation-baseline.json less 5 points. The manual run's mutation_all runs everything.
   mutation:
-    needs: engines
+    needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.mutation_all && 330 || 150 }}
     steps:
@@ -551,6 +551,64 @@ jobs:
           # Only this job's own cache, never another job's (review r1, security S2): setup-gradle otherwise falls back to
           # any job's entry on the same OS.
           gradle-home-cache-strict-match: true
+
+      - name: The base to compare with
+        id: base
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          ALL: ${{ inputs.mutation_all }}
+        run: |
+          set -euo pipefail
+          if [[ "$ALL" == "true" ]]; then echo "base=--all" >> "$GITHUB_OUTPUT"; echo "Mutation testing the whole set" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          elif [[ -n "$BASE_REF" ]]; then base="origin/$BASE_REF"
+          elif [[ -n "$BEFORE" && "$BEFORE" != 0000000000000000000000000000000000000000 ]]; then base="$BEFORE"
+          else base="HEAD~1"; fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "Mutation testing what changed since $base: $(git rev-parse "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: PIT on the changed security-relevant Java
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          set -o pipefail
+          mkdir -p build/mutation
+          python3 scripts/pit-changed.py "$BASE" --floor 40 | tee build/mutation/pit.md | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Stage the mutation reports
+        if: always()
+        run: >-
+          bash scripts/stage-artifact.sh build/artifact-mutation 'build/mutation/**' 'julc-state-toolchain/build/reports/pitest/**'
+          'julc-state-dsl/build/reports/pitest/**'
+
+      - name: Upload the mutation reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation
+          path: build/artifact-mutation/
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Stryker, one js/mutation set per job (scripts/stryker-changed.sh): joust (js/joust's select.js, build.js,
+  # toolchain.js), joust-heap (toolchain-heap.js, with worker-limits' slow heap cases, which the joust set skips) and
+  # state-client (verify.js, keyed.js). It uses this commit's engines, so the engine-backed tests run and must not skip.
+  stryker:
+    needs: engines
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.mutation_all && 330 || 150 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        set: [joust, joust-heap, state-client]
+    name: stryker (${{ matrix.set }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -579,38 +637,34 @@ jobs:
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "Mutation testing what changed since $base: $(git rev-parse "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: PIT on the changed security-relevant Java
-        env:
-          BASE: ${{ steps.base.outputs.base }}
-        run: |
-          set -o pipefail
-          mkdir -p build/mutation
-          python3 scripts/pit-changed.py "$BASE" --floor 40 | tee build/mutation/pit.md | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Stryker on the changed security-relevant JavaScript
-        if: always()
         shell: bash
         env:
           BASE: ${{ steps.base.outputs.base }}
+          JOUST_STRYKER_SETS: ${{ matrix.set }}
         run: |
           set -euo pipefail
+          mkdir -p build/mutation
           (cd js && sha256sum -c engines.sha256)
           (cd js/mutation && npm ci --ignore-scripts)
           bash scripts/setup-js.sh
-          JOUST_REQUIRE_ENGINES=1 bash scripts/stryker-changed.sh "$BASE" 10 | tee build/mutation/stryker.md | tee -a "$GITHUB_STEP_SUMMARY"
+          JOUST_REQUIRE_ENGINES=1 bash scripts/stryker-changed.sh "$BASE" 10 | tee "build/mutation/stryker-$JOUST_STRYKER_SETS.md" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Stage the mutation reports
+      - name: Stage the Stryker reports
         if: always()
+        env:
+          SET: ${{ matrix.set }}
         run: >-
-          bash scripts/stage-artifact.sh build/artifact-mutation 'build/mutation/**' 'julc-state-toolchain/build/reports/pitest/**'
-          'julc-state-dsl/build/reports/pitest/**' 'js/joust/reports/mutation/**' 'js/state-client/reports/mutation/**'
+          bash scripts/stage-artifact.sh build/artifact-stryker 'build/mutation/**' "js/joust/reports/mutation/$SET/**"
+          "js/state-client/reports/mutation/$SET/**"
 
-      - name: Upload the mutation reports
+      - name: Upload the Stryker reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: mutation
-          path: build/artifact-mutation/
+          name: stryker-${{ matrix.set }}
+          path: build/artifact-stryker/
           if-no-files-found: warn
           retention-days: 14
 

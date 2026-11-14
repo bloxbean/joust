@@ -13,17 +13,17 @@
 #   --run               a specific run of build.yml (default: the newest qualifying run for <sha>); it is checked exactly as
 #                       a run the script picks itself
 #   --allow-fork        accept a run whose head repository is a fork (its engines are binaries the fork's workflow wrote)
-#   --allow-incomplete  accept a run whose build or mutation job has not succeeded (the engines job must still have)
+#   --allow-incomplete  accept a run whose build, mutation or stryker jobs have not succeeded (the engines job must still have)
 #
 # What it does, failing closed at every step:
 #   1. finds the run for <sha> and reads its record from GitHub's API (your own gh login): the repository and the head
 #      repository must both be bloxbean/joust (pinned here, not taken from your origin, which may be a fork), the workflow
 #      file .github/workflows/build.yml, the event pull_request or push, the head <sha>, and the engines job a success.
-#      Every job's conclusion is printed; an unfinished or failed build or mutation job stops it (--allow-incomplete);
+#      Every job's conclusion is printed; an unfinished or failed build, mutation or stryker job stops it (--allow-incomplete);
 #   2. downloads the artifacts with `gh run download` into <worktree>/build/ci/<sha>/: engines, vscode-joust-vsix,
-#      verification and mutation (the last two when present);
+#      verification, mutation and stryker-<set> (the last ones when present);
 #   3. checks the engines against engines.sha256, that it lists exactly the engine files, that engines.head names <sha>,
-#      and the .vsix against its digest; verification and mutation carry their own SHA256SUMS, checked too;
+#      and the .vsix against its digest; verification, mutation and stryker-<set> carry their own SHA256SUMS, checked too;
 #   4. installs the engines atomically into js/joust/engine and js/joust-runtime/engine (copied to a temporary directory
 #      and checked there, then moved in); on any failure the engines directories are removed, never left half-replaced.
 # Text taken from the artifacts is printed with control characters removed.
@@ -118,10 +118,10 @@ jobs="$(gh api "repos/$REPO/actions/runs/$run/jobs?per_page=100" --jq '.jobs[] |
 incomplete=0
 while IFS=$'\t' read -r name status conclusion; do
   printf '  %-12s %s %s\n' "$(clean <<<"$name")" "$status" "$conclusion"
-  case "$name" in build|mutation) [[ "$status" == completed && "$conclusion" == success ]] || incomplete=1 ;; esac
+  case "$name" in build|mutation|"stryker ("*")") [[ "$status" == completed && "$conclusion" == success ]] || incomplete=1 ;; esac
 done <<<"$jobs"
 if [[ $incomplete -eq 1 ]]; then
-  [[ $allow_incomplete -eq 1 ]] || die "run $run's build or mutation job has not succeeded: its results are incomplete (--allow-incomplete)"
+  [[ $allow_incomplete -eq 1 ]] || die "run $run's build, mutation or stryker jobs have not succeeded: its results are incomplete (--allow-incomplete)"
   echo "fetch-ci-build: WARNING: run $run is incomplete; its results are partial" >&2
 fi
 
@@ -131,7 +131,8 @@ dest="$worktree/build/ci/$full"
 rm -rf "$dest"
 mkdir -p "$dest"
 gh run download "$run" --repo "$REPO" -n engines -D "$dest/engines"
-for a in vscode-joust-vsix verification mutation; do
+STRYKER_SETS="stryker-joust stryker-joust-heap stryker-state-client"
+for a in vscode-joust-vsix verification mutation $STRYKER_SETS; do
   gh run download "$run" --repo "$REPO" -n "$a" -D "$dest/$a" 2>/dev/null || echo "fetch-ci-build: no $a artifact in run $run"
 done
 
@@ -144,7 +145,7 @@ present="$(cd "$dest/engines" && find joust/engine joust-runtime/engine -type f 
 if [[ -f "$dest/vscode-joust-vsix/vscode-joust.vsix.sha256" ]]; then
   ( cd "$dest/vscode-joust-vsix" && sha256 -c vscode-joust.vsix.sha256 ) || die "the .vsix does not match its digest"
 fi
-for a in verification mutation; do
+for a in verification mutation $STRYKER_SETS; do
   if [[ -f "$dest/$a/SHA256SUMS" ]]; then
     ( cd "$dest/$a" && sha256 -c SHA256SUMS >/dev/null ) || die "the $a artifact does not match its SHA256SUMS"
   elif [[ -d "$dest/$a" ]]; then
@@ -171,5 +172,5 @@ if [[ -f "$dest/verification/build/verification/summary.md" ]]; then
   echo "fetch-ci-build: the head's results: $dest/verification/build/verification/ (summary.md, five-way.txt, fuzz.txt, tests.txt)"
   head -n 3 "$dest/verification/build/verification/summary.md" | clean
 fi
-[[ -d "$dest/mutation" ]] && echo "fetch-ci-build: mutation reports: $dest/mutation/"
+for a in mutation $STRYKER_SETS; do [[ -d "$dest/$a" ]] && echo "fetch-ci-build: $a reports: $dest/$a/"; done
 exit 0

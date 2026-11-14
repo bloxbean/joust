@@ -35,12 +35,12 @@ bash scripts/setup-js.sh ../review-<n>     # the JS packages' dependencies and l
   (pinned in the script, not taken from your `origin`, which may be a fork). The workflow must be
   `.github/workflows/build.yml`, the event `pull_request` or `push`, the head the commit you named, and the `engines`
   job a success. This holds for a run you name with `--run` too.
-- It prints every job's conclusion, and stops when the `build` or `mutation` job has failed or not finished
+- It prints every job's conclusion, and stops when the `build`, `mutation` or a `stryker` job has failed or not finished
   (`--allow-incomplete` to accept a partial run).
 - It refuses a run of a fork's head unless you pass `--allow-fork`.
 - It downloads the artifacts into `build/ci/<sha>/` of the worktree. It checks the engines against `engines.sha256`,
   that the digests list exactly the engine files, and that `engines.head` names the commit. It checks the `.vsix`
-  against its digest, and `verification` and `mutation` against their `SHA256SUMS`.
+  against its digest, and `verification`, `mutation` and each `stryker-<set>` against their `SHA256SUMS`.
 - It installs the engines atomically into `js/joust/engine` and `js/joust-runtime/engine`. It stages and checks them,
   then moves them in. On any failure it removes those directories, so they never hold another head's engines or a
   half-installed copy.
@@ -71,7 +71,8 @@ anything (§2 lists them), as do `toolchainWasmTest`'s Node scripts and the VS C
 | `vscode-joust-vsix` | `vscode-joust.vsix` and its digest |
 | `verification` | `build/verification/`: `summary.md` (the job summary), `five-way.txt` (every four-way and five-way count line the tests printed), `fuzz.txt` (each fuzz target's tally, and libFuzzer's final `DONE` line for the public targets), `tests.txt` (tests, failures and skips per module and npm package). Also the JUnit XML of every JVM test and of the build job's npm suites, every fuzz target's summary, and the failure records and `crash-*` inputs of the **public** targets only (§3). `SHA256SUMS` over all of it |
 | `npm-test-results-engines` | the JUnit XML of the engines job's npm suites |
-| `mutation` | `build/mutation/pit.md` and `stryker.md` (scores, floors and surviving mutants), the HTML and XML/JSON reports, `SHA256SUMS` |
+| `mutation` | `build/mutation/pit.md` (PIT's scores, floors and surviving mutants), PIT's HTML and XML reports, `SHA256SUMS` |
+| `stryker-<set>` | for each set (`joust`, `joust-heap`, `state-client`): `build/mutation/stryker-<set>.md` (scores, floors and surviving mutants), Stryker's HTML and JSON reports, `SHA256SUMS` |
 
 The npm suites CI runs:
 
@@ -182,13 +183,17 @@ line that no test can fail on.
 |---|---|---|
 | `ValueAdapter`, `AddressAdapter` (julc-state-api's JVM bodies), `JavaLibraryCertifier` | julc-state-toolchain (its differential, four-way, hostile-input and fuzz-replay tests) | `./gradlew :julc-state-toolchain:pitest` |
 | the `.jsc` 2 checker, `JscMain` (joust.lock) | julc-state-dsl (the checker and lock tests) | `./gradlew :julc-state-dsl:pitest` |
-| js/joust's `src/lsp/select.js`, `src/build.js`, `src/toolchain.js`, `src/toolchain-heap.js` | js/joust | `bash scripts/stryker-changed.sh --all` |
-| js/state-client's `src/verify.js`, `src/keyed.js` (the verifiers that protect a signer) | js/state-client | the same |
+| set `joust`: js/joust's `src/lsp/select.js`, `src/build.js`, `src/toolchain.js` | js/joust, without worker-limits' two slow heap cases | `bash scripts/stryker-changed.sh --all` (`JOUST_STRYKER_SETS=joust` for one set) |
+| set `joust-heap`: js/joust's `src/toolchain-heap.js` | js/joust, every case | the same |
+| set `state-client`: js/state-client's `src/verify.js`, `src/keyed.js` (the verifiers that protect a signer) | js/state-client | the same |
+
+worker-limits' cases that grow a worker's heap to its limit take 112 of that file's 129 seconds. Run for every mutant
+they cover, they kept CI's Stryker past its timeout, so only the `joust-heap` set, whose mutants they guard, runs them.
 
 Stryker runs in place: it mutates the working files and puts them back. Commit or stash your work first. The tests reach
 outside the package (the repository's `fixtures/`, `../joust-runtime`, the engines), which a sandbox copy would not have.
 
-In CI, the `mutation` job runs a set **whole** when the change touches what decides whether its mutants die: the
+In CI, the `mutation` job (PIT) and the `stryker` jobs (one per set, in parallel) run a set **whole** when the change touches what decides whether its mutants die: the
 module's or package's tests, `ext.pitTargets`/`ext.pitTests`, `gradle/pitest.gradle`, `js/mutation/**`, the scripts or
 the baseline file. Otherwise it runs only the changed classes and files (`scripts/pit-changed.py`,
 `scripts/stryker-changed.sh`). The Build workflow's manual run with `mutation_all` runs everything. It runs Stryker with

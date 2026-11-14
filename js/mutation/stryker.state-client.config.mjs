@@ -21,8 +21,8 @@ export default {
   timeoutMS: 15000,
   timeoutFactor: 2,
   reporters: ['clear-text', 'progress', 'html', 'json'],
-  htmlReporter: { fileName: 'reports/mutation/mutation.html' },
-  jsonReporter: { fileName: 'reports/mutation/mutation.json' },
+  htmlReporter: { fileName: 'reports/mutation/state-client/mutation.html' },
+  jsonReporter: { fileName: 'reports/mutation/state-client/mutation.json' },
   tempDirName: '.stryker-tmp',
   cleanTempDir: 'always',
 };
