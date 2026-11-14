@@ -1419,3 +1419,8 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   datum; the project's packages are those of its own sources, never a package library's. Discovery leaves out
   reserved-package sources and retries without an offered source javac refuses, so a broken or duplicate file no contract
   reaches no longer fails a build; one that is reached is named by its `joust-lib/` path.
+  *Review round r6 (Codex C29–C31; security S11):* a source belongs to the project by its exact identity (the path the
+  build gave it), never by a name suffix; a library a Java contract uses is refused when its closure breaks the
+  reserved-package or one-source rule, as JSC0721 refuses it for a `java:` import; every diagnostic on an offered source
+  names its `joust-lib/` path, also when its file name is not its class's; the ledger names a wrong deposit or refund as
+  Conway does at each protocol version.

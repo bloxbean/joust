@@ -170,6 +170,12 @@ class JscV2ToolchainTest {
                 Map.of("acme/fees/L.java", javaLib), Map.of("@acme/fees/fees.jsc", fees));
         assertTrue(extra.ok(), extra.diagnostics().toString());
         assertEquals(plain.contracts().get(0).scriptHash(), extra.contracts().get(0).scriptHash());
+        // Codex C29 (r6): ownership by exact source identity: a project Fees.java (package app) at the root of the sources is
+        // not the package library's acme/fees/Fees.java.
+        var sameName = Toolchain.build(Map.of("app/C.jsc", c, "Fees.java", "package app;\npublic class Fees {}\n"), Map.of(),
+                Map.of("acme/fees/L.java", javaLib), Map.of("@acme/fees/fees.jsc", fees));
+        assertTrue(sameName.ok(), sameName.diagnostics().toString());
+        assertEquals(plain.contracts().get(0).scriptHash(), sameName.contracts().get(0).scriptHash());
 
         // A Java contract that uses no package library, beside a broken source and a duplicate of JOUST's Require.
         String counter = Files.readString(Path.of("../js/create-joust/template/contracts/app/Counter.java"));
@@ -195,6 +201,43 @@ class JscV2ToolchainTest {
         assertFalse(broken.ok());
         assertTrue(broken.diagnostics().stream().anyMatch(d -> d.message().contains("other/Broken.java:2")
                 && d.message().contains("org/julclang/state/api/Require.java")), broken.diagnostics().toString());
+    }
+
+    /**
+     * Review r6: security S11 (a Java contract's library that adds a class to JOUST's namespace is refused, as JSC0721
+     * refuses it for a java: import), Codex C31 (a reserved source a used closure brings back is named by its joust-lib/
+     * path) and security's observation (a source whose file name is not its class is named by its path too).
+     */
+    @Test
+    void closureRulesHoldForJavaContracts_andOfferedSourcesAreNamedByPath() throws Exception {
+        String counter = Files.readString(Path.of("../js/create-joust/template/contracts/app/Counter.java"));
+        String uses = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport acme.allow.Limits;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(Limits.cap(BigInteger.ONE), ctx.caller());");
+        String head = "import java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n";
+        String limits = "package acme.allow;\n" + head + "import org.julclang.state.api.ZHelper;\n@OnchainLibrary\npublic class Limits {\n"
+                + "    public static BigInteger cap(BigInteger x) { return ZHelper.id(x); }\n}\n";
+        String zhelper = "package org.julclang.state.api;\n" + head + "@OnchainLibrary\npublic class ZHelper {\n"
+                + "    public static BigInteger id(BigInteger x) { return BigInteger.ZERO; }\n}\n";
+        var s11 = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("acme/allow/Limits.java", limits, "acme/allow/ZHelper.java", zhelper));
+        assertFalse(s11.ok());
+        assertTrue(s11.diagnostics().stream().anyMatch(d -> d.message().contains("the Java library acme.allow.Limits, which a Java contract uses,"
+                + " is refused") && d.message().contains("acme/allow/ZHelper.java declares org.julclang.state.api.ZHelper")), s11.diagnostics().toString());
+        // C31: Codex's L calling org.julclang.state.api.Require.that, beside an offered duplicate of Require.
+        String l = "package lib;\n" + head + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() {\n"
+                + "        org.julclang.state.api.Require.that(true, \"hi\");\n        return BigInteger.ONE;\n    }\n}\n";
+        String usesL = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport lib.L;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(L.f(), ctx.caller());");
+        var c31 = Toolchain.build(Map.of("app/Counter.java", usesL), Map.of(), Map.of("lib/L.java", l, "org/julclang/state/api/Require.java",
+                "package org.julclang.state.api;\npublic class Require {\n    public static void that(boolean ok, String message) {}\n}\n"));
+        assertFalse(c31.ok());
+        assertTrue(c31.diagnostics().stream().anyMatch(d -> d.message().contains("org/julclang/state/api/Require.java")), c31.diagnostics().toString());
+        // Security's observation: javac names acme/allow/JulcListX.java by its class (JulcList.java); the build names its path.
+        var offered = Map.of("acme/allow/JulcListX.java", "package org.julclang.core.types;\npublic interface JulcList<T> {}\n");
+        assertTrue(Toolchain.withOfferedPaths("JulcList.java:1: duplicate class", "JulcList.java", offered)
+                .contains("(offered as joust-lib/acme/allow/JulcListX.java)"));
+        // ...and a contract that reaches no library builds beside it (discovery drops it and retries).
+        var unreached = Toolchain.build(Map.of("app/Counter.java", counter), Map.of(), offered);
+        assertTrue(unreached.ok(), unreached.diagnostics().toString());
     }
 
     /** Review r2 (#82 S6): --accept-abi accepts the ABI manifest only; only --accept-lock writes joust.lock. */

@@ -159,7 +159,14 @@ public final class Toolchain {
             return new Result(false, List.of(), List.of(), List.of(new Diagnostic(Severity.ERROR, "internal error: the compiler ran out of"
                     + " stack (please report it, with the file)", null, -1, "toolchain")), List.copyOf(generated));
         }
-        var diagnostics = new ArrayList<>(remap(r.diagnostics(), generated, files.keySet()));
+        var diagnostics = new ArrayList<Diagnostic>();
+        // Review r6 (Codex C31, security's observation): a diagnostic on an offered library source names it by its joust-lib/
+        // path too (javac names it by its class's file name only).
+        for (Diagnostic d : remap(r.diagnostics(), generated, files.keySet())) {
+            boolean project = d.file() != null && files.containsKey(d.file().replace('\\', '/').replaceFirst("^/+", ""));
+            diagnostics.add(project || d.file() == null || javaLibrarySources.isEmpty() ? d : new Diagnostic(d.severity(),
+                    withOfferedPaths(d.message(), d.file(), javaLibrarySources), d.file(), d.line(), d.col(), d.source(), d.code()));
+        }
         // ADR-0018 D12 (review F2): every .jsc 2 manifest agrees with the processor's description of the contract.
         for (Contract c : r.contracts()) {
             for (Generated g : generated) {
@@ -205,13 +212,13 @@ public final class Toolchain {
             if (first == null) first = d;
             if (d.libraryErrors().isEmpty()) return d;
             var bad = new java.util.TreeSet<String>();
-            for (String e : d.libraryErrors()) bad.addAll(offeredPaths(e, offered.keySet()));
+            for (String e : d.libraryErrors()) bad.addAll(offeredPaths(e, offered));
             if (bad.isEmpty()) break;
             bad.forEach(offered::remove);
         }
         var errors = new ArrayList<String>();
         for (String e : first.libraryErrors()) {
-            var paths = offeredPaths(e, javaLibrarySources.keySet());
+            var paths = offeredPaths(e, javaLibrarySources);
             errors.add(e + (paths.isEmpty() ? "" : " (offered as " + String.join(", ", paths.stream().map(x -> "joust-lib/" + x).toList()) + ")"));
         }
         return new Discovery(first.classes(), first.packages(), errors);
@@ -224,14 +231,33 @@ public final class Toolchain {
     }
 
     /** The offered paths a javac error names by file (javac names a library unit by its simple file name). */
-    static java.util.Set<String> offeredPaths(String error, java.util.Set<String> paths) {
-        var out = new java.util.TreeSet<String>();
+    static java.util.Set<String> offeredPaths(String error, Map<String, String> offered) {
         int colon = error.indexOf(':');
-        String file = colon < 0 ? "" : error.substring(0, colon);
-        if (file.isEmpty()) return out;
+        return offeredFiles(colon < 0 ? "" : error.substring(0, colon), offered);
+    }
+
+    /**
+     * The offered sources a file name javac reports may be: javac names a library unit by its class's file name
+     * ({@code Require.java}), which is the offered file's own name or, when they differ (security's r5 observation:
+     * {@code JulcListX.java} declaring {@code JulcList}), the name of a type it declares.
+     */
+    static java.util.Set<String> offeredFiles(String file, Map<String, String> offered) {
+        var out = new java.util.TreeSet<String>();
+        if (file == null || !file.endsWith(".java")) return out;
         String simple = file.substring(file.lastIndexOf('/') + 1);
-        for (String p : paths) if (p.equals(file) || p.endsWith("/" + file) || p.equals(simple) || p.endsWith("/" + simple)) out.add(p);
+        String type = simple.substring(0, simple.length() - ".java".length());
+        var declares = java.util.regex.Pattern.compile("\\b(class|record|interface|enum)\\s+" + java.util.regex.Pattern.quote(type) + "\\b");
+        offered.forEach((p, text) -> {
+            if (p.equals(file) || p.endsWith("/" + file) || p.equals(simple) || p.endsWith("/" + simple) || declares.matcher(text).find()) out.add(p);
+        });
         return out;
+    }
+
+    /** {@code message}, naming the offered sources {@code file} may be by their joust-lib/ paths, when there are any. */
+    static String withOfferedPaths(String message, String file, Map<String, String> offered) {
+        var paths = offeredFiles(file, offered);
+        return paths.isEmpty() || message.contains("(offered as ") ? message
+                : message + " (offered as " + String.join(", ", paths.stream().map(x -> "joust-lib/" + x).toList()) + ")";
     }
 
     static Discovery referencedClasses(Map<String, String> javaFiles, Map<String, String> javaLibrarySources, java.util.Set<String> owned) {
@@ -241,6 +267,8 @@ public final class Toolchain {
         LibrarySourceResolver.scanClasspathSources(Toolchain.class.getClassLoader(), problem -> {})
                 .values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
         javaLibrarySources.values().forEach(t -> pool.add(JavacFrontend.Unit.jar(t)));
+        var ownedPaths = new java.util.HashSet<java.nio.file.Path>();
+        for (String n : owned) ownedPaths.add(java.nio.file.Path.of(n).toAbsolutePath().normalize());
         Discovery found = JavacFrontend.shared().attribute(roots, pool, a -> {
             var out = new java.util.TreeSet<String>();
             var packages = new java.util.TreeSet<String>();
@@ -254,8 +282,10 @@ public final class Toolchain {
             }
             if (a.trees() == null) return new Discovery(out, packages, errors);
             for (var unit : a.roots()) {
-                String unitName = unit.getSourceFile().getName().replace('\\', '/');
-                boolean own = owned.stream().anyMatch(n -> unitName.equals(n) || unitName.endsWith("/" + n));
+                // Codex C29 (r6): ownership by the source's exact identity, never by a suffix (a project Fees.java is not
+                // acme/fees/Fees.java): the front end names a root by its path made absolute, so each owned key is compared
+                // through the same transformation.
+                boolean own = ownedPaths.contains(java.nio.file.Path.of(unit.getSourceFile().getName()).normalize());
                 if (own && unit.getPackageName() != null) packages.add(unit.getPackageName().toString());
                 new com.sun.source.util.TreePathScanner<Void, Void>() {
                     void note() {
@@ -434,6 +464,16 @@ public final class Toolchain {
                         continue;
                     }
                     if (lib == null || lib.sources().isEmpty()) continue;
+                    // Security S11 (r6): a Java contract need not use a certified library (its body is JuLC's to compile),
+                    // but the closure rules hold on every path, as JSC0721 holds them for java: imports: no class in a
+                    // package of JOUST, JuLC, CCL or the JDK, and one source per class.
+                    var closure = lib.problems().stream().filter(x -> x.contains("in a package of JOUST, JuLC, cardano-client-lib or the JDK")
+                            || x.contains("is declared in more than one source")).toList();
+                    if (!closure.isEmpty()) {
+                        diagnostics.add(new Diagnostic(Severity.ERROR, "the Java library " + fqcn + ", which a Java contract uses, is refused: "
+                                + String.join("; ", closure), null, -1, "toolchain"));
+                        continue;
+                    }
                     wanted.add(fqcn);
                     javaUses.put("java:" + fqcn, new org.julclang.state.dsl.v2.JscV2.LibraryUse(org.julclang.state.dsl.v2.JscV2.LibraryUse.JAVA_SOURCE, "java:" + fqcn,
                             lib.sourceSha256()));
