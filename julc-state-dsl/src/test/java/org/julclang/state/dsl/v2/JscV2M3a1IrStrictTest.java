@@ -133,6 +133,119 @@ class JscV2M3a1IrStrictTest {
         assertTrue(e.getMessage().contains("but no owned action moves"), e.getMessage());
     }
 
+    /** A deep copy of parsed JSON (maps and lists), so a mutant can copy a part of the program. */
+    @SuppressWarnings("unchecked")
+    static Object copy(Object o) {
+        if (o instanceof Map<?, ?> m) {
+            var c = new LinkedHashMap<String, Object>();
+            for (var e : ((Map<String, Object>) m).entrySet()) c.put(e.getKey(), copy(e.getValue()));
+            return c;
+        }
+        if (o instanceof List<?> l) {
+            var c = new ArrayList<Object>();
+            for (Object v : l) c.add(copy(v));
+            return c;
+        }
+        return o;
+    }
+
+    /** A copy of a method's JSON with its locals renumbered (ids, references, checked inputs), to sit beside the original. */
+    @SuppressWarnings("unchecked")
+    static Object renumber(Object o, int by) {
+        if (o instanceof Map<?, ?> m) {
+            var c = new LinkedHashMap<String, Object>();
+            for (var e : ((Map<String, Object>) m).entrySet()) {
+                Object v = e.getValue();
+                if (e.getKey().equals("id") && v instanceof Number n) c.put("id", n.longValue() + by);
+                else if (e.getKey().equals("local") && "LocalRef".equals(m.get("node")) && v instanceof Number n) c.put("local", n.longValue() + by);
+                else if (e.getKey().equals("checked") && v instanceof List<?> l) c.put("checked", l.stream().map(x -> ((Number) x).longValue() + by).toList());
+                else c.put(e.getKey(), renumber(v, by));
+            }
+            return c;
+        }
+        if (o instanceof List<?> l) return new ArrayList<>(l.stream().map(v -> renumber(v, by)).toList());
+        return o;
+    }
+
+    /** Each {@code New Account} in raw IR gains an empty map for a field added after the others. */
+    @SuppressWarnings("unchecked")
+    static void growAccounts(Object o, Object mapType) {
+        if (o instanceof Map<?, ?> m) {
+            var mm = (Map<String, Object>) m;
+            if ("New".equals(mm.get("node")) && "Account".equals(mm.get("record"))) {
+                var values = new ArrayList<>((List<Object>) mm.get("values"));
+                values.add(new LinkedHashMap<String, Object>(Map.of("node", "BigEmpty", "type", mapType, "taint", 0, "at", mm.get("at"))));
+                mm.put("values", values);
+            }
+            for (Object v : new ArrayList<>(mm.values())) growAccounts(v, mapType);
+        } else if (o instanceof List<?> l) {
+            for (Object v : l) growAccounts(v, mapType);
+        }
+    }
+
+    /** Replaces each {@code balance} CtxRef in raw IR with the Int literal 1. */
+    @SuppressWarnings("unchecked")
+    static void balanceToOne(Object o) {
+        if (o instanceof Map<?, ?> m) {
+            var mm = (Map<String, Object>) m;
+            for (var e : mm.entrySet()) {
+                if (e.getValue() instanceof Map<?, ?> v && "CtxRef".equals(v.get("node")) && "balance".equals(v.get("name"))) {
+                    var lit = new LinkedHashMap<String, Object>();
+                    lit.put("node", "Lit");
+                    lit.put("value", "1");
+                    lit.put("type", "Int");
+                    lit.put("taint", 0);
+                    lit.put("at", v.get("at"));
+                    e.setValue(lit);
+                } else {
+                    balanceToOne(e.getValue());
+                }
+            }
+        } else if (o instanceof List<?> l) {
+            for (Object v : l) balanceToOne(v);
+        }
+    }
+
+    /**
+     * #101 round-r2 review C3, C4, C5: M3a2's owned-type forms (a second owned type with its own owned init and escape
+     * hatch, so JSC1208 and JSC1209 cannot mask the stage; a BigMap in an owned type), an escape hatch that never reads
+     * balance (JSC1216), and present nulls for the optional owned fields.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void reviewRound2_mutants_areRefused() throws Exception {
+        {   // M3a2's forms: refused while the readers' stage is 1 (complete programs, refused by the stage alone), read from M3a2
+            Mutant m3a2 = IrJson.OWNED_STAGE < 2 ? JscV2M3a1IrStrictTest::refused : (m, f) -> reads(m);
+            m3a2.apply(ir -> {
+                var records = (List<Object>) ir.get("records");
+                var second = (Map<String, Object>) copy(records.get(0));
+                second.put("name", "Account2");
+                records.add(second);
+                ir.put("owned", new ArrayList<>(List.of("Account", "Account2")));
+                var ms = (List<Object>) ir.get("methods");
+                for (String n : List.of("open", "close")) {
+                    var m = (Map<String, Object>) renumber(method(ir, n), 1000);
+                    m.put("name", n + "2");
+                    m.put("on", "Account2");
+                    ms.add(m);
+                }
+            }, "a second owned type (Account2) is not produced yet (M3a2; JSC1215)");
+            m3a2.apply(ir -> {
+                var account = (Map<String, Object>) ((List<Object>) ir.get("records")).get(0);
+                var fields = (List<Object>) account.get("fields");
+                var map = Map.of("bigmap", List.of("Key", "Int"));
+                fields.add(new LinkedHashMap<String, Object>(Map.of("name", "entries", "type", map)));
+                growAccounts(ir.get("methods"), map);
+            }, "a BigMap in the owned type Account is not produced yet (M3a2; JSC1215)");
+        }
+        // The only escape hatch pays 1, not balance: no object could ever be closed (JSC1216).
+        refused(ir -> balanceToOne(method(ir, "close").get("body")), "it is its type's escape hatch but never reads balance (JSC1216)");
+        // Present nulls: malformed, not absent.
+        for (String k : List.of("into", "arriving", "shared", "on", "reads")) {
+            refused(ir -> method(ir, "withdraw").put(k, null), "\"" + k + "\" is null: an absent field is not written");
+        }
+    }
+
     // ------------------------------------------------------------------ a minimal JSON writer (the parser's inverse)
 
     static String write(Object o) {
