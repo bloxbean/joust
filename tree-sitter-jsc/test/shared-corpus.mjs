@@ -1,6 +1,6 @@
 // ADR-0018 D13: the tree-sitter side of the shared parse corpus. The same files as
 // julc-state-dsl/src/test/java/org/julclang/state/dsl/JscCorpusTest.java, with the same expected verdicts:
-//   corpus/{v2,v1}/valid/*.jsc parse without an ERROR or MISSING node; corpus/{v2,v1}/invalid/*.jsc have one;
+//   corpus/v2/valid/*.jsc parse without an ERROR or MISSING node; corpus/v2/invalid/*.jsc have one;
 //   every other .jsc file of the repository parses (found, not listed; the Gradle template's @@package@@ replaced);
 //   docs/research/**/*.jsc have the verdict corpus/research-verdicts.txt states.
 // Run from tree-sitter-jsc/ after `tree-sitter generate` (npm test does both).
@@ -15,11 +15,9 @@ const ROOT = join(HERE, '..');
 const CORPUS = join(HERE, 'corpus');
 const SKIP = new Set(['build', 'node_modules', '.git', '.gradle', 'tree-sitter-jsc', 'dist', '.joust']);
 
-// The known differences (README.md): files where tree-sitter's verdict differs from the hand-written parser's on purpose.
-// A v1 file with a block comment: extras are global in tree-sitter, so v1 accepts `/* … */`; v1's lexer refuses it.
-const KNOWN = new Map([
-  ['docs/research/jsc-v1-gaps-2026-11-12/probes/26_block_comment.jsc', 'valid'],
-]);
+// The known differences (README.md) outside corpus/known: files where tree-sitter's verdict differs from the hand-written
+// parser's on purpose. None at present.
+const KNOWN = new Map();
 
 const jsc = (dir) => readdirSync(dir).filter((f) => f.endsWith('.jsc')).sort().map((f) => join(dir, f));
 
@@ -36,7 +34,7 @@ function walk(dir, out = []) {
 
 // The files to parse, each with its expected verdict ('valid' or 'invalid') and a name for messages.
 const cases = [];
-for (const version of ['v2', 'v1']) {
+for (const version of ['v2']) {
   for (const verdict of ['valid', 'invalid']) {
     for (const f of jsc(join(CORPUS, version, verdict))) cases.push({ file: f, name: `${version}/${verdict}/${f.split(sep).pop()}`, verdict });
   }
@@ -190,25 +188,13 @@ function shape(file) {
   const fieldOf = (n, f) => (n ? n.children.find((c) => c.field === f) : undefined);
   const fieldsOf = (n, f) => (n ? n.children.filter((c) => c.field === f) : []);
   const join = (xs) => xs.join(',');
-  const params = (n) => (n ? join([...kids(n, 'parameter'), ...kids(n, 'v1_parameter')].map((p) => text(fieldOf(p, 'name')))) : '');
-  const mods = (n) => [...kids(n, 'modifier'), ...kids(n, 'v1_modifier')].map((m) => text(m).replace(/\s+/g, ' ')).join(' ');
+  const params = (n) => (n ? join(kids(n, 'parameter').map((p) => text(fieldOf(p, 'name')))) : '');
+  const mods = (n) => kids(n, 'modifier').map((m) => text(m).replace(/\s+/g, ' ')).join(' ');
   const t = tree(file);
   const out = [];
   const lib = kids(t, 'library_declaration')[0];
   const pkg = fieldOf(t, 'name') ?? fieldOf(lib ?? kids(t, 'package_declaration')[0] ?? { children: [] }, 'name');
   out.push((lib ? 'library ' : 'package ') + text(pkg).replace(/\s+/g, ''));
-  const v1 = kids(t, 'v1_contract_declaration')[0];
-  if (v1) {
-    const opts = v1.children.filter((c) => c.kind === 'v1_option').map((o) => text(fieldOf(o, 'name')));
-    out.push(`contract ${text(fieldOf(v1, 'name'))}(${join(opts)})`);
-    out.push('state: ' + join(kids(v1, 'v1_state_declaration').map((s) => text(fieldOf(s, 'name')))));
-    out.push('methods: ' + v1.children.filter((c) => c.kind === 'v1_method_declaration' || c.kind === 'v1_view_declaration').map((m) => {
-      const kind = m.kind === 'v1_view_declaration' ? 'view' : text(m).trim().split(/\s|\(/)[0];
-      const md = mods(m);
-      return kind + (kind === 'init' ? '' : ' ' + text(fieldOf(m, 'name'))) + '(' + params(fieldOf(m, 'parameters')) + ')' + (md ? ' ' + md : '');
-    }).join('; '));
-    return out.join(' | ');
-  }
   const decls = (n, where) => {
     out.push(where + 'types: ' + join(kids(n, 'type_declaration').map((d) => `${text(fieldOf(d, 'name'))}(${join(kids(fieldOf(d, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name'))))})`)));
     out.push(where + 'enums: ' + join(kids(n, 'enum_declaration').map((d) => `${text(fieldOf(d, 'name'))}(${join(kids(d, 'variant_declaration').map((v) => text(fieldOf(v, 'name'))))})`)));

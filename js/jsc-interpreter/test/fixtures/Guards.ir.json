@@ -1,0 +1,179 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "4cc00ac70db671bc03bd6123d4c8c9fa2615fc5f62f9a2c92762b4e0492af4ae",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Guards",
+  "source": "Guards.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": { "name": "State", "fields": [{ "name": "owner", "type": "Key" }, { "name": "n", "type": "Int" }], "at": [6, 1] },
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [10, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [10, 32] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [10, 12]
+        },
+        "at": [9, 10]
+      },
+      "at": [9, 3]
+    },
+    {
+      "kind": "action",
+      "name": "set",
+      "params": [{ "id": 1, "name": "d", "type": "Int", "taint": 0, "at": [13, 14] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [14, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [14, 12]
+            },
+            {
+              "node": "Cond",
+              "cond": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [14, 27] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [14, 32] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [14, 27]
+              },
+              "then": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [14, 36] },
+              "otherwise": {
+                "node": "Arith",
+                "op": "/",
+                "left": { "node": "Lit", "value": "100", "type": "Int", "taint": 0, "at": [14, 40] },
+                "right": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [14, 46] },
+                "type": "Int",
+                "taint": 0,
+                "at": [14, 40]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [14, 27]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [14, 12]
+        },
+        "at": [13, 22]
+      },
+      "at": [13, 3]
+    },
+    {
+      "kind": "action",
+      "name": "check",
+      "params": [{ "id": 2, "name": "d", "type": "Int", "taint": 0, "at": [17, 16] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "||",
+              "left": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [18, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [18, 18] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [18, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": ">",
+                "left": {
+                  "node": "Arith",
+                  "op": "/",
+                  "left": { "node": "Lit", "value": "100", "type": "Int", "taint": 0, "at": [18, 23] },
+                  "right": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [18, 29] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [18, 23]
+                },
+                "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [18, 33] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [18, 23]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [18, 13]
+            },
+            "message": "d too large",
+            "at": [18, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [19, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [19, 12]
+            },
+            { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [19, 27] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [19, 12]
+        },
+        "at": [17, 24]
+      },
+      "at": [17, 3]
+    }
+  ],
+  "warnings": []
+}

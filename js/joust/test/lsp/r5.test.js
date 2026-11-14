@@ -74,7 +74,7 @@ test('C22: a missing dependency of a present engine is an engine fault; only the
   // Through a real worker: an engine fault (counted, quarantined), never a missing copy.
   const host = new EngineHost({ workerEntry: WORKER });
   try {
-    const r = await host.analyze('engine:broken', { file, id: 'broken' }, { file: 'S.jsc', source: 'jsc 2 WARN' });
+    const r = await host.analyze('engine:broken', { file, id: 'broken' }, { file: 'S.jsc', source: 'jsc 1 WARN' });
     assert.equal(r.missing, undefined, JSON.stringify(r));
     assert.equal(r.internal?.kind, 'crash');
     assert.equal(host.stats.failures, 1);

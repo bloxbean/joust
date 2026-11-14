@@ -63,7 +63,7 @@ test('diagnostics as you type: the first error with its code and link, then the 
   const lsp = await startLsp({ folders: [dir] });
   try {
     const uri = uriOf(join(dir, 'W.jsc'));
-    const src = (v) => `jsc 2\npackage t\ncontract W {\n  state { n: Int, owner: Key }\n  init() { return { n: 0, owner: caller } }\n`
+    const src = (v) => `jsc 1\npackage t\ncontract W {\n  state { n: Int, owner: Key }\n  init() { return { n: 0, owner: caller } }\n`
       + `  destroy a() only owner { pay(owner, n) }\n  action b() { return { ...state, n: ${v} } }\n  destroy c() only owner { pay(owner, n + 2) }\n}\n`;
     lsp.open(uri, src('missing'));
     const p1 = await lsp.diagnostics(uri, 1);
@@ -164,7 +164,7 @@ test('oversized, binary and deeply nested files: one diagnostic each, the server
     assert.equal(b.diagnostics[0].code, 'JSC-INTERNAL');
     assert.match(b.diagnostics[0].message, /larger than/);
     const bin = uriOf(join(dir, 'Bin.jsc'));
-    lsp.open(bin, 'jsc 2\npackage t\n\u0000\u0001\u0002ÿ�');
+    lsp.open(bin, 'jsc 1\npackage t\n\u0000\u0001\u0002ÿ�');
     const x = await lsp.diagnostics(bin, 1);
     assert.equal(x.diagnostics[0].code, 'JSC0148');
     const deep = uriOf(join(dir, 'Deep.jsc'));
@@ -178,20 +178,8 @@ test('oversized, binary and deeply nested files: one diagnostic each, the server
   }
 });
 
-const V1 = 'package t;\ncontract C {\n  state n: Int;\n  init() { n = 0; }\n}\n';
-
-test('a valid v1 file gets the build\'s deprecation warning and no error (ADR-0018 D16; review C10)', { skip }, async () => {
-  const dir = tmp();
-  const lsp = await startLsp({ folders: [dir] });
-  try {
-    const uri = uriOf(join(dir, 'Old.jsc'));
-    lsp.open(uri, V1);
-    const p = await lsp.diagnostics(uri, 1);
-    assert.deepEqual(p.diagnostics.map((d) => [d.code, d.severity]), [['JSC9006', 2]]);
-  } finally {
-    await lsp.stop();
-  }
-});
+// An accepted file with no declarations: a library that declares nothing (until r26 of ADR-0018, a v1 file).
+const EMPTY = 'jsc 1\nlibrary t\n';
 
 test('an accepted model with no declarations clears the outline (review C9)', { skip }, async () => {
   const dir = tmp();
@@ -201,8 +189,8 @@ test('an accepted model with no declarations clears the outline (review C9)', { 
     lsp.open(uri, COUNTER, 1);
     await lsp.diagnostics(uri, 1);
     assert.equal((await lsp.request('textDocument/documentSymbol', { textDocument: { uri } }))[0].name, 'Counter');
-    lsp.change(uri, 2, V1);
-    await lsp.diagnostics(uri, 2);
+    lsp.change(uri, 2, EMPTY);
+    assert.deepEqual((await lsp.diagnostics(uri, 2)).diagnostics, []);
     assert.deepEqual(await lsp.request('textDocument/documentSymbol', { textDocument: { uri } }), []);
     assert.deepEqual(await lsp.request('textDocument/foldingRange', { textDocument: { uri } }), []);
   } finally {

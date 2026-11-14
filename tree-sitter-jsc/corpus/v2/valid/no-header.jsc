@@ -1,0 +1,7 @@
+// No header: version 1 (ADR-0018 r26).
+package corpus
+
+contract NoHeader {
+  state { n: Int }
+  init() { return { n: 0 } }
+}

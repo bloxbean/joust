@@ -2,7 +2,7 @@
 Counter
 ================================================================================
 
-jsc 2
+jsc 1
 package app
 
 // A counter.
@@ -99,7 +99,7 @@ contract Counter(maxDatumBytes = 128) {
 Types, enums and fns
 ================================================================================
 
-jsc 2
+jsc 1
 package a.b
 import { length } from "std/bytes"
 type Share = { to: Key, bps: Int }
@@ -196,7 +196,7 @@ contract C(minAda = 2 ada) { state { n: Int } init() payable { return { n: 0 } }
 Batched modifiers (M1c): batched only, then only <field> after batched
 ================================================================================
 
-jsc 2
+jsc 1
 package app
 
 contract Pool {
@@ -269,7 +269,7 @@ contract Pool {
 Params, events, invariants, quorum and authorized (M2b)
 ================================================================================
 
-jsc 2
+jsc 1
 package t
 contract C {
   params { guardian: Credential, cap: Int }
@@ -414,7 +414,7 @@ contract C {
 A library
 ================================================================================
 
-jsc 2
+jsc 1
 library app.lib
 
 import { sha2_256 } from "std/crypto"
@@ -476,3 +476,36 @@ fn fee(amount: Int, bps: Int): Int = amount * bps / 10_000
         (identifier))
       (number
         (integer)))))
+
+================================================================================
+No header: version 1
+================================================================================
+
+package app
+
+contract C { state { n: Int } init() { return { n: 0 } } }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (package_declaration
+    (package_name
+      (identifier)))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (init_declaration
+        (parameters)
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (number
+                  (integer))))))))))

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/crowdfund in .jsc 2 (ADR-0018 M1c, J11): a crowdfunding campaign with its backers in an inline Map.

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/vault in .jsc 2 (ADR-0018 M1c, J11): a time-locked savings vault. Anyone deposits; only the owner

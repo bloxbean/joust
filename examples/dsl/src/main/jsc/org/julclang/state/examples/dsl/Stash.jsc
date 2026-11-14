@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M2c (review r3, C7): a writer that stores a Value made from its params (a Value and a Hash, set at deployment),

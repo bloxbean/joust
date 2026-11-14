@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/escrow in .jsc 2 (ADR-0018 M1c, J11): two-party escrow with an arbiter. The buyer funds it when deploying.

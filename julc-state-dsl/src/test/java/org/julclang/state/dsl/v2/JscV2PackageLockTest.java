@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2PackageLockTest {
 
     static final String FEES = """
-            jsc 2
+            jsc 1
             library acme.fees
 
             import { round } from "./util/round.jsc"
@@ -29,13 +29,13 @@ class JscV2PackageLockTest {
             fn fee(amount: Int, bps: Int): Int = round(amount * bps)
             """;
     static final String ROUND = """
-            jsc 2
+            jsc 1
             library acme.fees.util
 
             fn round(x: Int): Int = x / 10_000
             """;
     static final String SHOP = """
-            jsc 2
+            jsc 1
             package app
 
             import { fee } from "@acme/fees/fees.jsc"

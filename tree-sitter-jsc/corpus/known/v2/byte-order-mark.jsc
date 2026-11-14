@@ -1,9 +1,0 @@
-﻿jsc 2
-package known
-
-contract K {
-  state { n: Int }
-  init() {
-    return { n: 0 }
-  }
-}

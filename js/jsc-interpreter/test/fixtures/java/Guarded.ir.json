@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "5f7e5615883061a1b2a50491a448a6ee52892db5da172add3dca6c3a8c95c30f",
+  "sourceSha256": "db3fddf948c59c485a68eea1ebfdd2969c8f0946a16dc5f2d06aad7ecd11136f",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Guarded",
   "source": "Guarded.jsc",

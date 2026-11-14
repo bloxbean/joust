@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2DepthTest {
 
     static String contract(String members) {
-        return "jsc 2\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n" + members + "\n}\n";
+        return "jsc 1\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n" + members + "\n}\n";
     }
 
     static JscV2.Lowered lower(String src) {
@@ -107,7 +107,7 @@ class JscV2DepthTest {
         for (int k = 0; k < n; k++) s.append("match o { Some(v").append(k).append(") => v").append(k).append(" + ");
         s.append("0");
         s.append(", None => 0 }".repeat(n));
-        return "jsc 2\npackage t\n" + src + s + " } }\n}\n";
+        return "jsc 1\npackage t\n" + src + s + " } }\n}\n";
     }
 
     static String nestedIf(int n) {
@@ -122,12 +122,12 @@ class JscV2DepthTest {
         // A type that contains another, 100 deep: refused at the declaration (the walks over values follow the chain).
         var types = new StringBuilder();
         for (int k = 0; k < 100; k++) types.append("type T").append(k).append(" = { f: ").append(k == 99 ? "Int" : "T" + (k + 1)).append(" }\n");
-        var e = assertThrows(JscException.class, () -> JscV2.lower("jsc 2\npackage t\n" + types + "contract D {\n  state { n: Int }\n"
+        var e = assertThrows(JscException.class, () -> JscV2.lower("jsc 1\npackage t\n" + types + "contract D {\n  state { n: Int }\n"
                 + "  init() { return { n: 0 } }\n}\n", "D.jsc"));
         assertEquals("JSC0340", e.code, e.getMessage());
         var few = new StringBuilder();
         for (int k = 0; k < 20; k++) few.append("type T").append(k).append(" = { f: ").append(k == 19 ? "Int" : "T" + (k + 1)).append(" }\n");
-        lower("jsc 2\npackage t\n" + few + "contract D {\n  state { n: Int, t: T0 }\n  init(t: T0) { return { n: 0, t } }\n}\n");
+        lower("jsc 1\npackage t\n" + few + "contract D {\n  state { n: Int, t: T0 }\n  init(t: T0) { return { n: 0, t } }\n}\n");
     }
 
     @Test
@@ -217,7 +217,7 @@ class JscV2DepthTest {
         int n = 400;
         var fns = new StringBuilder();
         for (int k = 0; k < n; k++) fns.append("  fn f").append(k).append("(t: Int): Int = ").append(k == n - 1 ? "t + 1" : "f" + (k + 1) + "(t)").append("\n");
-        String src = "jsc 2\npackage t\ncontract D {\n  state { n: Int, last: Int }\n  init() { return { n: 0, last: 0 } }\n"
+        String src = "jsc 1\npackage t\ncontract D {\n  state { n: Int, last: Int }\n  init() { return { n: 0, last: 0 } }\n"
                 + "  action a() { return { ...state, last: f0(validFrom) } }\n" + fns + "}\n";
         lower(src);
         // A time value reaching a divisor at the end of the chain is refused there, naming every call on the way.

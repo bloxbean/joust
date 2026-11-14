@@ -1,21 +1,21 @@
 ---
 title: ".jsc reference"
-description: "The precise .jsc 2 language: lexical rules, grammar, types and encodings, names, operators, effects, the time rule, BigMaps, the ABI manifest and diagnostics."
+description: "The precise .jsc language: lexical rules, grammar, types and encodings, names, operators, effects, the time rule, BigMaps, the ABI manifest and diagnostics."
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-This page defines `.jsc` 2, as the front end in `julc-state-dsl` implements it
+This page defines `.jsc`, as the front end in `julc-state-dsl` implements it
 ([`v2/Lexer.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/Lexer.java),
 [`v2/Parser.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/Parser.java),
 [`v2/Checker.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/Checker.java),
 [`v2/JavaEmitter.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/JavaEmitter.java))
 and [ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md) states
 it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the functions, the
-[standard library](/languages/jsc-std/). A file without `jsc 2` is [.jsc v1](/languages/jsc-v1/).
+[standard library](/languages/jsc-std/).
 
 <Aside type="caution" title="A preview">
-`.jsc` 2 is a preview: the core language of milestone M1, M2a's values and native assets (`Value`, `Address`,
+`.jsc` is a preview: the core language of milestone M1, M2a's values and native assets (`Value`, `Address`,
 `Credential`, `funds`, `send`, `mint`, `burn`, `accept`), and M2b's params, invariants, events, `quorum` and
 `authorized`, M2c's composition (other contracts' instances and states, deposits made and received, send datums,
 stored values), and `.jsc` and Java libraries (M4, below). M3 (owned and keyed objects, purposes) still needs
@@ -26,7 +26,7 @@ stored values), and `.jsc` and Java libraries (M4, below). M3 (owned and keyed o
 
 | Element | Rule |
 |---|---|
-| Version line | The first word of the file, after whitespace and comments, is `jsc`, followed by `2` (`JSC0112`, `JSC0113`). A file whose first word is anything else is v1 |
+| Header | Optional: when the first word of the file, after whitespace and comments, is `jsc`, it is followed by `1`. A file without a header is version 1. Any other version is refused (`JSC0113`), `jsc 2` included: it was the header of the previews, and there is no alias |
 | Line ends | LF or CRLF only. A lone CR, NEL, U+2028, U+2029, VT and FF are refused (`JSC0147`): some editors break lines there and a `//` comment could hide the code after them |
 | Format characters | No Unicode format character (category Cf: the bidirectional controls, zero-width characters) anywhere in the file, comments and strings included (`JSC0145`); a leading byte-order mark is allowed |
 | Comments | `//` to the end of the line, and `/* … */` |
@@ -391,7 +391,7 @@ A file headed `library <package>` is a **`.jsc` library** (ADR-0018 D9): imports
 
 ```jsc
 // contracts/app/fees.jsc
-jsc 2
+jsc 1
 library app
 
 type Line = { to: Key, bps: Int }
@@ -403,7 +403,7 @@ fn rate(t: Tier): Int = match t { Basic => 100, Gold { since } => since >= 10 ? 
 
 ```jsc
 // contracts/app/Shop.jsc
-jsc 2
+jsc 1
 package app
 
 import { Line, Tier, fee, rate } from "./fees.jsc"
@@ -508,7 +508,7 @@ The details, and the catalogue, are in
 
 ## The ABI manifest
 
-For every `.jsc` 2 contract the lowering writes `<Contract>.abi.json` (format `"abi": 2`), which the project commits
+For every `.jsc` contract the lowering writes `<Contract>.abi.json` (format `"abi": 2`), which the project commits
 beside the `.jsc` file:
 
 | Key | Content |
@@ -572,11 +572,7 @@ against the sources by a test, is the
 | `JSC08xx` | maps |
 | `JSC09xx` | enums and `match` |
 | `JSC10xx` | lists, loops and lambdas |
-| `JSC11xx` | `joust migrate` refusals |
 | `JSC9xxx` | warnings |
-
-`JSC9006` is the warning every build of a v1 file prints: v1 is deprecated, and
-[`joust migrate`](/languages/jsc-migration/) translates the file.
 
 A diagnostic of javac or the JOUST processor on generated Java is reported at the `.jsc` line and column the source
 map gives, with the generated file and line as a note.
@@ -585,9 +581,8 @@ map gives, with the generated file and line as a note.
 
 | Entry point | Use |
 |---|---|
-| `org.julclang.state.dsl.JscMain <srcDir> <outDir> [--accept-abi]` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first), with each `.jsc` 2 file's source map; checks (or with `--accept-abi` writes) the ABI manifests. A file's `./x.jsc` imports resolve to other files of `srcDir`. Exits 1 on an error, 2 on bad usage. Gradle's `generateJsc` and `acceptJscAbi` run it |
+| `org.julclang.state.dsl.JscMain <srcDir> <outDir> [--accept-abi]` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first), with each `.jsc` file's source map; checks (or with `--accept-abi` writes) the ABI manifests. A file's `./x.jsc` imports resolve to other files of `srcDir`. Exits 1 on an error, 2 on bad usage. Gradle's `generateJsc` and `acceptJscAbi` run it |
 | `JscMain --check-abi <srcDir> <descriptionsDir>` | Checks every manifest against the processor's descriptions (`checkJscAbi`) |
-| `JscMain --migrate <srcDir> <outDir> [--in-place]` | Translates v1 files to `.jsc` 2 ([migration](/languages/jsc-migration/)) |
 | `JscMain.lowerWithWarnings(source, fileName)` | `Lowered(java, diagnostics, fileName, sourceMapJson, abiJson)` for one file, on its own (it imports no libraries and no contracts) |
 | `JscMain.lowerWithWarnings(source, fileName, id, modules)` | The same for the file `id` of a build whose other files `modules` (`JscModules.of(files)`) finds: its libraries (M4) and the contracts it imports (M2c, `import contract`) |
 | `Toolchain.build(files, options)` (`julc-state-toolchain`) | Lowers `.jsc` entries, then compiles everything as Gradle does; used by `joust build` |
@@ -597,6 +592,5 @@ map gives, with the generated file and line as a note.
 <CardGrid>
 <LinkCard title=".jsc guide" description="The language by example." href="/languages/jsc/" />
 <LinkCard title=".jsc standard library" description="The prelude and the std modules." href="/languages/jsc-std/" />
-<LinkCard title="Migrating from .jsc v1" description="joust migrate and what it changes." href="/languages/jsc-migration/" />
 <LinkCard title="Annotations" description="The annotations .jsc modifiers lower to." href="/reference/annotations/" />
 </CardGrid>

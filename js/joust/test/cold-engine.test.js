@@ -19,9 +19,9 @@ test('a cold engine builds 300 else-if branches and four chains of 100, as the J
   assert.ok(ENGINE_STACK_MB >= 8);
   const root = mkdtempSync(join(tmpdir(), 'joust-cold-'));
   mkdirSync(join(root, 'contracts', 'app'), { recursive: true });
-  writeFileSync(join(root, 'contracts', 'app', 'Wide.jsc'), `jsc 2\npackage app\ncontract Wide {\n  state { n: Int }\n`
+  writeFileSync(join(root, 'contracts', 'app', 'Wide.jsc'), `jsc 1\npackage app\ncontract Wide {\n  state { n: Int }\n`
     + `  init() { return { n: 0 } }\n${chain(300, 'a')}\n}\n`);
-  writeFileSync(join(root, 'contracts', 'app', 'Four.jsc'), `jsc 2\npackage app\ncontract Four {\n  state { n: Int }\n`
+  writeFileSync(join(root, 'contracts', 'app', 'Four.jsc'), `jsc 1\npackage app\ncontract Four {\n  state { n: Int }\n`
     + `  init() { return { n: 0 } }\n${[0, 1, 2, 3].map((i) => chain(100, 'a' + i)).join('\n')}\n}\n`);
   const error = console.error;
   console.error = () => {};

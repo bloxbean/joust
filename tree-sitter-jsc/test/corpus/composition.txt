@@ -2,7 +2,7 @@
 Contract imports, Instance<C>, qualified types, reads parameters and receives (M2c)
 ================================================================================
 
-jsc 2
+jsc 1
 package t
 import contract { Oracle } from "./Oracle.jsc"
 import { blake2b_224 } from "std/crypto"
@@ -117,7 +117,7 @@ contract C {
 Deposits, send datums and effects in match arms (M2c)
 ================================================================================
 
-jsc 2
+jsc 1
 package t
 contract C {
   state { owner: Key }

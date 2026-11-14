@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "87f5d4ac36f8624c385419bc2d913bdb665d9ab318fe3b13c30eef88122f68b8",
+  "sourceSha256": "bab78ddf807e57a1310b70c1f4351b985e1bd27b17389df6b96d27385ade027d",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Pot",
   "source": "Pot.jsc",

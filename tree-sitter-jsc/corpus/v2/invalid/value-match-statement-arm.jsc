@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 fn f(o: Option<Int>): Int = match o { Some(x) => require(x > 0, "positive"), None => 0 }

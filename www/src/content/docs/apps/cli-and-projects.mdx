@@ -73,11 +73,11 @@ joust build [--src <dir>] [--out <dir>] [--accept-abi]
 Compiles every `.java` and `.jsc` file under `contracts/` (or `--src`) into `build/joust/` (or `--out`), with the
 toolchain engine, in-process. The `.jsc` language is JOUST's contract language ([.jsc](/languages/jsc/)). Plain JuLC
 validators (`@WithdrawValidator`, `@SpendingValidator`, ...) in the same folder are compiled too, for use as
-governors. Diagnostics are printed as `<file>:<line>: error: <message>`, a `.jsc` 2 diagnostic with its column and
+governors. Diagnostics are printed as `<file>:<line>: error: <message>`, a `.jsc` diagnostic with its column and
 code (`app/Counter.jsc:20:13: error[JSC0502]: <message>`, as Gradle prints it); on an error the command exits with status 1 and writes
 no contract.
 
-Each `.jsc` 2 contract has an ABI manifest, `<Contract>.abi.json`, committed beside the `.jsc` file. The build fails
+Each `.jsc` contract has an ABI manifest, `<Contract>.abi.json`, committed beside the `.jsc` file. The build fails
 when it is missing (`JSC0003`) or differs from what the contract now compiles to (`JSC0002`); `--accept-abi` writes it
 instead, to review and commit ([the ABI manifest](/languages/jsc/#the-abi-manifest)). The Java each `.jsc` file lowered
 to is written to `build/joust/generated/`, with its source map, also when the build failed (not for a file whose
@@ -181,7 +181,7 @@ The development loop, on one port (default **5178**, or the config's `dev.port`)
 2. **Build and deploy**, then start a prepare service over the result.
 3. **Serve**: the page, the chain proxy, the build, the engine and the faucet (routes below).
 4. **Watch** `contracts/`: a saved `.java` or `.jsc` file rebuilds and redeploys (debounced; one run at a time, and a
-   save during a run queues one more). A failed build waits for the next save. A `.jsc` 2 file whose ABI manifest is
+   save during a run queues one more). A failed build waits for the next save. A `.jsc` file whose ABI manifest is
    missing or changed fails the build unless `joust dev` was started with `--accept-abi`; the server keeps serving
    the last good build meanwhile.
 

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 library org.julclang.state.examples.dsl
 
 import { blake2b_224 } from "std/crypto"

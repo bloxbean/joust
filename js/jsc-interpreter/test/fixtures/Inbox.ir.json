@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "fdb03f7bca01178ac0dac8bbfb92211d6b970ba40363d6ba66989571bc734880",
+  "sourceSha256": "3f37c8db88a3a451ccb185a2484eaeee3d47eecf56672abe091544b3ad35fc07",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Inbox",
   "source": "Inbox.jsc",

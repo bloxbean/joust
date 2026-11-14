@@ -38,7 +38,7 @@ test('C29: a loader missing under a path with a newline, quotes and spaces is a 
     return () => {};
   } });
   try {
-    const r = await host.analyze('engine:nl', { file, id: 'nl' }, { file: 'S.jsc', source: 'jsc 2 WARN' });
+    const r = await host.analyze('engine:nl', { file, id: 'nl' }, { file: 'S.jsc', source: 'jsc 1 WARN' });
     assert.deepEqual(r, { missing: true });
     assert.equal(host.stats.failures, 0);
     assert.equal(host.quarantine.size, 0);

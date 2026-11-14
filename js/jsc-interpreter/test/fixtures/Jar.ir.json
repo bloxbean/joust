@@ -1,0 +1,295 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "95f162e4193cb41e3c579342acb8f3e2b3bb03333da90842e68ce5c10fc32858",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Jar",
+  "source": "Jar.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "192" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "owner", "type": "Key" },
+      { "name": "goal", "type": "Int" },
+      { "name": "total", "type": "Int" },
+      { "name": "tips", "type": "Int" }
+    ],
+    "at": [5, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [{ "id": 1, "name": "goal", "type": "Int", "taint": 0, "at": [8, 8] }],
+      "mods": [{ "name": "payable" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [9, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [9, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [9, 13]
+            },
+            "message": "the goal must be positive",
+            "at": [9, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [10, 21] },
+            { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [10, 29] },
+            { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [10, 42] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [10, 58] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [10, 12]
+        },
+        "at": [8, 27]
+      },
+      "at": [8, 3]
+    },
+    {
+      "kind": "action",
+      "name": "tip",
+      "params": [],
+      "mods": [{ "name": "payable" }, { "name": "batched" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [14, 13] },
+              "right": { "node": "Lit", "value": "1000000", "type": "Int", "taint": 0, "at": [14, 25] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [14, 13]
+            },
+            "message": "tip at least 1 ADA",
+            "at": [14, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [15, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [15, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [15, 17] },
+              "record": "State",
+              "field": "goal",
+              "type": "Int",
+              "taint": 0,
+              "at": [15, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "total", "type": "Int", "taint": 0, "at": [15, 31] },
+              "right": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [15, 39] },
+              "type": "Int",
+              "taint": 0,
+              "at": [15, 31]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "tips", "type": "Int", "taint": 0, "at": [15, 55] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [15, 62] },
+              "type": "Int",
+              "taint": 0,
+              "at": [15, 55]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [15, 12]
+        },
+        "at": [13, 32]
+      },
+      "at": [13, 3]
+    },
+    {
+      "kind": "action",
+      "name": "withdraw",
+      "params": [{ "id": 2, "name": "amount", "type": "Int", "taint": 0, "at": [19, 19] }],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [20, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [20, 22] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [20, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": "<=",
+                "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [20, 27] },
+                "right": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [20, 37] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [20, 27]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [20, 13]
+            },
+            "message": "bad amount",
+            "at": [20, 5]
+          },
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Compare",
+                  "op": "<",
+                  "left": { "node": "StateField", "field": "total", "type": "Int", "taint": 0, "at": [21, 8] },
+                  "right": { "node": "StateField", "field": "goal", "type": "Int", "taint": 0, "at": [21, 16] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [21, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Require",
+                      "cond": {
+                        "node": "Compare",
+                        "op": "<=",
+                        "left": {
+                          "node": "Arith",
+                          "op": "*",
+                          "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [22, 15] },
+                          "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [22, 24] },
+                          "type": "Int",
+                          "taint": 0,
+                          "at": [22, 15]
+                        },
+                        "right": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [22, 29] },
+                        "type": "Bool",
+                        "taint": 0,
+                        "at": [22, 15]
+                      },
+                      "message": "before the goal, at most half",
+                      "at": [22, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [21, 21]
+                },
+                "at": [21, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": false,
+            "at": [21, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [24, 9] },
+            "amount": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [24, 16] },
+            "at": [24, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [25, 12] },
+        "at": [19, 43]
+      },
+      "at": [19, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [29, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [29, 16] },
+            "at": [29, 5]
+          }
+        ],
+        "result": null,
+        "at": [28, 30]
+      },
+      "at": [28, 3]
+    },
+    {
+      "kind": "view",
+      "name": "reached",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Compare",
+          "op": ">=",
+          "left": { "node": "StateField", "field": "total", "type": "Int", "taint": 0, "at": [32, 26] },
+          "right": { "node": "StateField", "field": "goal", "type": "Int", "taint": 0, "at": [32, 35] },
+          "type": "Bool",
+          "taint": 0,
+          "at": [32, 26]
+        },
+        "at": [32, 26]
+      },
+      "at": [32, 3]
+    }
+  ],
+  "warnings": []
+}

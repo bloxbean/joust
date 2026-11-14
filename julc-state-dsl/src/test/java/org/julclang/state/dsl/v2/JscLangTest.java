@@ -151,7 +151,7 @@ class JscLangTest {
     // ------------------------------------------------------------------ D5: the first error, or the warnings
 
     static final String WARNED = """
-            jsc 2
+            jsc 1
             package t
             contract W {
               state { n: Int, owner: Key }
@@ -186,7 +186,7 @@ class JscLangTest {
 
     @Test
     void aParseErrorKeepsTheDeclarationsBeforeItMarkedPartial() {
-        String src = "jsc 2\npackage t\ntype P = { a: Int }\ncontract C {\n  state { n: Int }\n  action go() {\n    let x = 1\n  }\n}\n";
+        String src = "jsc 1\npackage t\ntype P = { a: Int }\ncontract C {\n  state { n: Int }\n  action go() {\n    let x = 1\n  }\n}\n";
         var m = JscLang.analyze(src, "C.jsc");
         assertEquals("JSC0128", m.diagnostics().get(0).code());
         assertEquals(new JscLang.Range(6, 4, 6, 7), m.diagnostics().get(0).range());   // the 'let' token
@@ -204,19 +204,19 @@ class JscLangTest {
     @Test
     void positionsAreUtf16CodeUnitsWithNonBmpCharactersBeforeThemOnTheLine() {
         String line = "    require(true, \"\uD83D\uDE00\uD83D\uDE00\") /* \uD83D\uDCA9 */; const t = nope";
-        String src = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a() {\n" + line
+        String src = "jsc 1\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action a() {\n" + line
                 + "\n    return state\n  }\n}\n";
         var d = JscLang.analyze(src, "C.jsc").diagnostics().get(0);
         int col = line.indexOf("nope");   // UTF-16 index (Java strings are UTF-16)
         assertEquals(col + 1, d.col(), d.toString());
         assertEquals(new JscLang.Range(6, col, 6, col + 4), d.range());
         // A character rule underlines the character: a non-BMP character (a surrogate pair) is two code units.
-        String bad = "jsc 2\npackage t\ncontract C {\n  state { n\uD835\uDC00: Int }\n}\n";
+        String bad = "jsc 1\npackage t\ncontract C {\n  state { n\uD835\uDC00: Int }\n}\n";
         var e = JscLang.analyze(bad, "C.jsc").diagnostics().get(0);
         assertEquals("JSC0108", e.code());
         assertEquals(new JscLang.Range(3, 11, 3, 13), e.range());
         // A bidirectional control (JSC0145) in a comment: one code unit.
-        var f = JscLang.analyze("jsc 2\npackage t\n// x\u202Ey\ncontract C { state { n: Int } }\n", "C.jsc").diagnostics().get(0);
+        var f = JscLang.analyze("jsc 1\npackage t\n// x\u202Ey\ncontract C { state { n: Int } }\n", "C.jsc").diagnostics().get(0);
         assertEquals("JSC0145", f.code());
         assertEquals(new JscLang.Range(2, 4, 2, 5), f.range());
     }
@@ -258,20 +258,6 @@ class JscLangTest {
         // Review F2 on #83: the server's path (the front end alone, lower = false) gives the same model as the lowering
         // path, so every L1/L5 comparison below also holds for what the server publishes.
         assertEquals(a.model().json(), JscLang.analysis(src, file, id, modules, false).model().json(), file);
-        if (!JscV2.isV2(src)) {
-            // What the build does with it: the v1 front end (a deletion of 'jsc' makes a file v1).
-            try {
-                var r = org.julclang.state.dsl.JscMain.lowerWithWarnings(src, file);
-                assertTrue(a.model().accepted(), file);
-                assertEquals(r.diagnostics().stream().map(w -> String.valueOf(w.code()) + w.line() + ":" + w.col() + w.message()).toList(),
-                        a.model().diagnostics().stream().map(d -> String.valueOf(d.code()) + d.line() + ":" + d.col() + d.message()).toList(), file);
-            } catch (JscException e) {
-                var d = a.model().diagnostics().get(0);
-                assertEquals(String.valueOf(e.code) + e.line + ":" + e.col + e.getMessage(),
-                        String.valueOf(d.code()) + d.line() + ":" + d.col() + d.message(), file);
-            }
-            return;
-        }
         JscV2.Lowered strict;
         try {
             strict = modules == null ? JscV2.lower(src, file) : JscV2.lower(src, file, id, modules);
@@ -302,7 +288,6 @@ class JscLangTest {
         int n = 0;
         for (Path p : corpus()) {
             String src = Files.readString(p);
-            if (!JscV2.isV2(src)) continue;
             sameAsTheBuild(src, name(p));
             n++;
         }
@@ -333,7 +318,6 @@ class JscLangTest {
             String id = exampleId(p);
             if (id == null) continue;
             String src = Files.readString(p);
-            if (!JscV2.isV2(src)) continue;
             sameAsTheBuild(src, name(p), id, modules);
             var m = JscLang.analysis(src, name(p), id, modules, false).model();
             for (JscLang.Declaration d : m.declarations()) kinds.add(d.kind());
@@ -370,7 +354,6 @@ class JscLangTest {
         for (Path p : corpus()) {
             if (!p.toString().contains("examples/dsl") && !p.toString().contains("create-joust")) continue;
             String src = Files.readString(p);
-            if (!JscV2.isV2(src)) continue;
             List<Lexer.Tok> toks = Lexer.lex(src);
             var lineStarts = new ArrayList<Integer>();
             lineStarts.add(0);
@@ -390,7 +373,7 @@ class JscLangTest {
     @Test
     void nestingPastTheCapIsTheCatalogued() {
         String deep = "(".repeat(70) + "1" + ")".repeat(70);
-        String src = "jsc 2\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: " + deep + " } }\n}\n";
+        String src = "jsc 1\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: " + deep + " } }\n}\n";
         var d = JscLang.analyze(src, "D.jsc").diagnostics().get(0);
         assertEquals("JSC0149", d.code());
         sameAsTheBuild(src, "D.jsc");
@@ -398,25 +381,9 @@ class JscLangTest {
 
     @Test
     void aBadFileNameIsTheBuildsError() {
-        var d = JscLang.analyze("jsc 2\npackage t\ncontract C { state { n: Int } }\n", "my file.jsc").diagnostics().get(0);
+        var d = JscLang.analyze("jsc 1\npackage t\ncontract C { state { n: Int } }\n", "my file.jsc").diagnostics().get(0);
         assertEquals("JSC0001", d.code());
         assertEquals(new JscLang.Range(0, 0, 0, 1), d.range());
-    }
-
-    @Test
-    void aV1FileGetsTheBuildsDeprecationWarningAndNoSpans() {
-        // Valid v1 (review C10 on #83): accepted, with exactly the deprecation warning.
-        String v1 = "package t;\ncontract C {\n  state n: Int;\n  init() { n = 0; }\n}\n";
-        var m = JscLang.analyze(v1, "C.jsc");
-        assertEquals("jsc1", m.language());
-        assertTrue(m.accepted(), m.toString());
-        assertEquals(List.of("JSC9006"), m.diagnostics().stream().map(JscLang.Diagnostic::code).toList());
-        assertTrue(m.declarations().isEmpty());
-        // Malformed v1: the v1 front end's error, as the build reports it.
-        String bad = "package t;\ncontract C {\n  state { n: Int }\n  init() { n = 0; }\n}\n";
-        var e = JscLang.analyze(bad, "C.jsc");
-        assertFalse(e.accepted());
-        sameAsTheBuild(bad, "C.jsc");
     }
 
     // ------------------------------------------------------------------ D2a: the model's bounds
@@ -437,7 +404,7 @@ class JscLangTest {
     @Test
     void foldingRangesKeepTheClosingBraceAndFoldCommentsAndImports() {
         String src = """
-                jsc 2
+                jsc 1
                 package t
                 import { div } from "std/math"
                 import { mod } from "std/math"

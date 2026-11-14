@@ -242,7 +242,7 @@ class JscV2JavaLibraryTest {
     // ------------------------------------------------------------------ the front end
 
     static final String CONTRACT = """
-            jsc 2
+            jsc 1
             package app
             import { Entry, isAllowed, entry } from "java:%s"
             contract C {

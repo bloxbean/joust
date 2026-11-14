@@ -26,7 +26,7 @@ export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAb
   refused = new Set() }) {
   const errors = [];
   for (const g of generated) {
-    if (!g.abi) continue;   // .jsc v1: no manifest
+    if (!g.abi) continue;   // a library: no manifest
     const committed = join(resolve(root, srcDir), dirname(g.jscFile), g.javaFile.split('/').pop().replace(/\.java$/, '.abi.json'));
     const exists = existsSync(committed);
     const old = exists ? readFileSync(committed, 'utf8') : null;

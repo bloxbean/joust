@@ -24,7 +24,7 @@ const load = (dir) => new Promise((ok) => {
   createRequire(import.meta.url)(resolve(dir, 'joust-toolchain.js'));
 });
 
-const contract = (m) => `jsc 2\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n${m}\n}\n`;
+const contract = (m) => `jsc 1\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n${m}\n}\n`;
 const action = (v) => contract(`  action a(x: Int) { return { ...state, n: ${v} } }`);
 const rep = (s, n) => s.repeat(n);
 const blocks = (n) => contract(`  action a(x: Int) {\n    ${rep('if x > 0 { ', n)}require(x > 0, "p")${rep(' }', n)}\n    return state\n  }`);

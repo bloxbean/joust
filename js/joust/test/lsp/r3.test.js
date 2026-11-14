@@ -73,7 +73,7 @@ test('C12: a copy removed while its worker loads is "missing", not an engine fai
     return () => {};
   } });
   try {
-    const r = await host.analyze('engine:id-gone', engine, { file: 'S.jsc', source: 'jsc 2 WARN' });
+    const r = await host.analyze('engine:id-gone', engine, { file: 'S.jsc', source: 'jsc 1 WARN' });
     assert.deepEqual(r, { missing: true });
     assert.equal(host.stats.failures, 0);
     assert.equal(host.quarantine.size, 0);
@@ -90,7 +90,7 @@ test('C13, C20: a slow selection that resumes after a newer one never cancels it
   const lsp = await startLsp({ engineDir: STUB, folders: [ws], args: ['--project-engine'], hostOptions: { analysisMs: 5000 } });
   try {
     const uri = uriOf(join(ws, 'sub', 'contracts', 'C.jsc'));
-    lsp.open(uri, 'jsc 2 WARN', 1);
+    lsp.open(uri, 'jsc 1 WARN', 1);
     // Established, not assumed: A's worker exists and is still loading, so the selection waits for it.
     const loadingA = async () => (await lsp.stats()).slots.find((x) => x.alive && !x.booted && x.file.includes('engines'));
     let a;
@@ -122,14 +122,14 @@ test('C14: recovering a missing copy re-analyses the other open documents too', 
     hostOptions: { analysisMs: 5000, idleMs: 300 } });
   try {
     const ua = uriOf(join(wa, 'contracts', 'A.jsc'));
-    lsp.open(ua, 'jsc 2 WARN', 1);
+    lsp.open(ua, 'jsc 1 WARN', 1);
     await lsp.diagnostics(ua, 1);
     await sleep(1000);   // A's worker is reaped as idle
     rmSync(join(storage, 'engines'), { recursive: true, force: true });   // another window evicted A's copy
     const ub = uriOf(join(wb, 'contracts', 'B.jsc'));
-    lsp.open(ub, 'jsc 2 SLOW WARN', 1);
+    lsp.open(ub, 'jsc 1 SLOW WARN', 1);
     await sleep(400);   // B's slow analysis runs
-    lsp.change(ua, 2, 'jsc 2 WARN again');
+    lsp.change(ua, 2, 'jsc 1 WARN again');
     await lsp.diagnostics(ua, 2, 15000);
     const pb = await lsp.until(() => lsp.published.find((x) => x.uri === ub && x.diagnostics.some((d) => /stub warning/.test(d.message))),
       15000, 'B\'s diagnostics');
@@ -148,14 +148,14 @@ test('C15: three failures in one Gradle project leave its sibling project in the
   const lsp = await startLsp({ engineDir: STUB, folders: [ws], args: ['--project-engine'], hostOptions: { ...FAST, analysisMs: 300 } });
   try {
     const hang = uriOf(join(ws, 'a', 'src', 'main', 'jsc', 'H.jsc'));
-    lsp.open(hang, 'jsc 2 HANG 1', 1);
+    lsp.open(hang, 'jsc 1 HANG 1', 1);
     await lsp.diagnostics(hang, 1);
-    lsp.change(hang, 2, 'jsc 2 HANG 2');
+    lsp.change(hang, 2, 'jsc 1 HANG 2');
     await lsp.diagnostics(hang, 2, 20000);
-    lsp.change(hang, 3, 'jsc 2 HANG 3');
+    lsp.change(hang, 3, 'jsc 1 HANG 3');
     await lsp.until(() => lsp.statuses.find((x) => x.uri === hang && x.state === 'unavailable'), 20000, 'a unavailable');
     const ok = uriOf(join(ws, 'b', 'src', 'main', 'jsc', 'Ok.jsc'));
-    lsp.open(ok, 'jsc 2 WARN', 1);
+    lsp.open(ok, 'jsc 1 WARN', 1);
     const p = await lsp.diagnostics(ok, 1, 20000);
     assert.match(p.diagnostics[0].message, /stub warning/);
     assert.equal((await lsp.request('joust/status', { uri: ok })).state, 'ok');
@@ -170,7 +170,7 @@ test('S10: an engine file removed under a running server backs off, then says so
   const lsp = await startLsp({ engineDir, folders: [dir] });
   try {
     const uri = uriOf(join(dir, 'C.jsc'));
-    lsp.open(uri, 'jsc 2 WARN', 1);
+    lsp.open(uri, 'jsc 1 WARN', 1);
     await lsp.diagnostics(uri, 1);
     rmSync(engineDir, { recursive: true, force: true });
     const before = lsp.statuses.length;

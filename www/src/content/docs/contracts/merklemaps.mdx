@@ -129,7 +129,7 @@ public class Token {
 <TabItem label=".jsc">
 
 ```jsc title="Points.jsc"
-jsc 2
+jsc 1
 package org.example.points
 
 // Loyalty points in a BigMap<Key, Int> (a Merkle map: any number of holders, a 32-byte root on chain).
@@ -185,8 +185,7 @@ proofs, and attaches the map verifier. See [MerkleMap mirrors](/apps/map-mirrors
 </TabItem>
 </Tabs>
 
-`.jsc` 2 `BigMap` values are `Int` or `Bytes`. For other value shapes, write the contract in Java. In `.jsc` v1, the
-only map type is `Map<Key, Int>`, and it is a MerkleMap ([.jsc v1](/languages/jsc-v1/)).
+`.jsc` `BigMap` values are `Int` or `Bytes`. For other value shapes, write the contract in Java.
 
 ## How a call works
 

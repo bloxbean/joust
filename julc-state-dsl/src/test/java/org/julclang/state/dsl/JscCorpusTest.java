@@ -1,7 +1,6 @@
 package org.julclang.state.dsl;
 
 import org.julclang.state.dsl.v2.CorpusParse;
-import org.julclang.state.dsl.v2.JscV2;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -17,11 +16,11 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * ADR-0018 D13: the hand-written parsers and the tree-sitter grammar ({@code tree-sitter-jsc/}) agree on one shared
+ * ADR-0018 D13: the hand-written parser and the tree-sitter grammar ({@code tree-sitter-jsc/}) agree on one shared
  * corpus. Each side parses (lexer and parser only, not the checker) the same files and must reach the same verdict:
  * <ul>
- *   <li>{@code tree-sitter-jsc/corpus/{v2,v1}/valid/*.jsc} parse; {@code …/invalid/*.jsc} are refused;</li>
- *   <li>every other {@code .jsc} file of the repository parses (examples, templates, migrated files: found, not listed;
+ *   <li>{@code tree-sitter-jsc/corpus/v2/valid/*.jsc} parse; {@code …/invalid/*.jsc} are refused;</li>
+ *   <li>every other {@code .jsc} file of the repository parses (examples, templates: found, not listed;
  *       the Gradle template's {@code @@package@@} replaced by a package name);</li>
  *   <li>the research probes and ports under {@code docs/research} (some refused on purpose) have the verdict
  *       {@code tree-sitter-jsc/corpus/research-verdicts.txt} states.</li>
@@ -35,13 +34,9 @@ class JscCorpusTest {
     /** Directories never searched for repository .jsc files (build output, dependencies, the corpus itself). */
     static final Set<String> SKIP = Set.of("build", "node_modules", ".git", ".gradle", "tree-sitter-jsc", "dist", ".joust");
 
-    /**
-     * Lexer and parser only, dispatched as the build does: a file whose first word is {@code jsc} is {@code .jsc} 2 (with
-     * the type names of the libraries it imports from beside it, ADR-0018 M4).
-     */
+    /** Lexer and parser only (with the type names of the libraries it imports from beside it, ADR-0018 M4). */
     static void parse(String text, Path file) {
-        if (JscV2.isV2(text)) CorpusParse.parse(text, file);
-        else Parser.parse(text);
+        CorpusParse.parse(text, file);
     }
 
     /** null when the file parses, else the parser's error. */
@@ -64,11 +59,9 @@ class JscCorpusTest {
     @Test
     void corpus_validFilesParse_andInvalidOnesAreRefused() throws IOException {
         int valid = 0, invalid = 0;
-        for (String version : List.of("v2", "v1")) {
+        for (String version : List.of("v2")) {
             for (Path f : jsc(CORPUS.resolve(version).resolve("valid"))) {
                 assertNull(verdict(f), version + "/valid/" + f.getFileName());
-                // A valid file's version line is its directory's (an invalid one may lack it on purpose).
-                assertEquals(version.equals("v2"), JscV2.isV2(Files.readString(f)), f.toString());
                 valid++;
             }
             for (Path f : jsc(CORPUS.resolve(version).resolve("invalid"))) {
@@ -128,24 +121,13 @@ class JscCorpusTest {
     /** The declarations of a file, as tree-sitter-jsc/test/shared-corpus.mjs builds them from its tree. */
     static String shape(String text, Path file) {
         text = text.replace("@@package@@", "app");
-        if (JscV2.isV2(text)) return CorpusParse.shape(text, file);
-        Ast.Contract c = Parser.parse(text);
-        var out = new ArrayList<String>();
-        out.add("package " + c.pkg());
-        out.add("contract " + c.name() + "(" + String.join(",", c.options().keySet()) + ")");
-        out.add("state: " + String.join(",", c.fields().stream().map(Ast.Field::name).toList()));
-        out.add("methods: " + String.join("; ", c.methods().stream().map(m -> {
-            String mods = String.join(" ", m.modifiers().stream().map(x -> x.arg() == null ? x.name() : x.name() + " " + x.arg()).toList());
-            return m.kind().name().toLowerCase() + (m.kind() == Ast.Kind.INIT ? "" : " " + m.name()) + "("
-                    + String.join(",", m.params().stream().map(Ast.Param::name).toList()) + ")" + (mods.isEmpty() ? "" : " " + mods);
-        }).toList()));
-        return String.join(" | ", out);
+        return CorpusParse.shape(text, file);
     }
 
     /** Every file whose structure both sides compare: the valid corpus files and the repository's .jsc files. */
     static TreeMap<String, String> shapes() throws IOException {
         var out = new TreeMap<String, String>();
-        for (String version : List.of("v2", "v1")) {
+        for (String version : List.of("v2")) {
             for (Path f : jsc(CORPUS.resolve(version).resolve("valid"))) out.put(ROOT.relativize(f).toString(), shape(Files.readString(f), f));
         }
         for (Path f : repositoryFiles()) out.put(ROOT.relativize(f).toString(), shape(Files.readString(f), f));
@@ -179,7 +161,7 @@ class JscCorpusTest {
             assertNotEquals(kv[1], kv[2], kv[0] + ": a known difference states two verdicts");
             n++;
         }
-        assertTrue(n >= 9, "known differences: " + n);
+        assertTrue(n >= 8, "known differences: " + n);
         System.out.println("[corpus] " + n + " known differences have their stated Java verdicts");
     }
 

@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2CancelTest {
 
     static final String SPIN = """
-            jsc 2
+            jsc 1
             package t
             contract Spin {
               state { n: Int }

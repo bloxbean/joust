@@ -1,10 +1,8 @@
 /**
- * @file tree-sitter grammar for JOUST's contract language: `.jsc` 2 (ADR-0018) and `.jsc` v1 (ADR-0005).
+ * @file tree-sitter grammar for JOUST's contract language, `.jsc` (ADR-0018).
  *
- * It follows the hand-written parsers: julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/{Lexer,Parser}.java for
- * `.jsc` 2 (a file starting with `jsc 2`) and julc-state-dsl/src/main/java/org/julclang/state/dsl/{Lexer,Parser}.java
- * for v1 (a file starting with `package`). Both are checked against one shared corpus (corpus/, README.md); the known
- * differences are listed in README.md.
+ * It follows the hand-written parser: julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/{Lexer,Parser}.java. Both
+ * are checked against one shared corpus (corpus/, README.md); the known differences are listed in README.md.
  */
 
 /* eslint-disable arrow-parens */
@@ -62,19 +60,14 @@ module.exports = grammar({
     [$.block, $._value_block],
     [$.match_arm, $._value_arm],
     [$._arm_block, $._arm_value_block],
-    // `batched only` (intent only) against `batched` followed by `only <field>`, in v2 (M1c) and v1.
+    // `batched only` (intent only) against `batched` followed by `only <field>` (M1c).
     [$.modifier],
-    [$.v1_modifier],
   ],
 
   rules: {
-    source_file: $ => choice($._v2_file, $._v1_file),
-
-    // ================================================================== .jsc 2
-
-    _v2_file: $ => seq(
-      $.version,
-      repeat(';'),
+    source_file: $ => seq(
+      // The header is optional (ADR-0018 r26): a file with no header is version 1.
+      optional(seq($.version, repeat(';'))),
       choice(
         seq(
           $.package_declaration,
@@ -93,7 +86,7 @@ module.exports = grammar({
       ),
     ),
 
-    version: $ => seq('jsc', '2'),
+    version: $ => seq('jsc', '1'),
 
     package_declaration: $ => seq('package', field('name', $.package_name)),
 
@@ -487,143 +480,6 @@ module.exports = grammar({
 
     lambda_parameters: $ => seq('(', optional(sep1($.identifier, ',')), ')'),
 
-    // ================================================================== .jsc v1 (ADR-0005; frozen)
-
-    _v1_file: $ => seq(
-      'package', field('name', $.package_name), optional(';'),
-      $.v1_contract_declaration,
-    ),
-
-    v1_contract_declaration: $ => seq(
-      'contract', field('name', $.identifier),
-      optional(seq('(', sep1($.v1_option, ','), ')')),
-      '{', repeat($._v1_member), '}',
-    ),
-
-    v1_option: $ => seq(
-      field('name', alias(choice('minAda', 'maxDatumBytes', 'maxValidityMs'), $.identifier)), '=', field('value', $.integer),
-    ),
-
-    _v1_member: $ => choice($.v1_state_declaration, $.v1_method_declaration, $.v1_view_declaration),
-
-    v1_state_declaration: $ => seq('state', field('name', $.identifier), ':', field('type', $.v1_type), optional(';')),
-
-    v1_type: _ => choice('Int', 'Bool', 'Bytes', 'Key', seq('Map', '<', 'Key', ',', 'Int', '>')),
-
-    v1_method_declaration: $ => seq(
-      choice('init', seq(choice('action', 'destroy'), field('name', $.identifier))),
-      field('parameters', $.v1_parameters),
-      repeat($.v1_modifier),
-      field('body', $.v1_block),
-    ),
-
-    v1_view_declaration: $ => seq(
-      'view', field('name', $.identifier), field('parameters', $.v1_parameters), ':', field('type', $.v1_type),
-      '=', field('value', $._v1_expression), optional(';'),
-    ),
-
-    v1_parameters: $ => seq('(', optional(sep1($.v1_parameter, ',')), ')'),
-
-    v1_parameter: $ => seq(field('name', $.identifier), ':', field('type', $.v1_type)),
-
-    v1_modifier: $ => choice(
-      'payable',
-      'open',
-      'batched',
-      seq('batched', 'only'),
-      seq(choice('only', 'after', 'before'), field('field', $.identifier)),
-    ),
-
-    v1_block: $ => seq('{', repeat(seq($._v1_statement, optional(';'))), '}'),
-
-    _v1_statement: $ => choice(
-      $.v1_let,
-      $.v1_require,
-      $.v1_pay,
-      $.v1_if,
-      $.v1_delete,
-      $.v1_assignment,
-      $.v1_map_assignment,
-    ),
-
-    v1_let: $ => seq('let', field('name', $.identifier), '=', field('value', $._v1_expression)),
-
-    v1_require: $ => seq('require', field('condition', $._v1_expression), field('message', $.v1_string)),
-
-    v1_pay: $ => seq('pay', field('amount', $._v1_expression), 'to', field('to', $._v1_expression)),
-
-    v1_if: $ => seq(
-      'if', field('condition', $._v1_expression), field('consequence', $.v1_block),
-      optional(seq('else', field('alternative', choice($.v1_if, $.v1_block)))),
-    ),
-
-    v1_delete: $ => seq('delete', field('map', $.identifier), '[', field('key', $._v1_expression), ']'),
-
-    v1_assignment: $ => seq(
-      optional(seq('this', '.')), field('field', $.identifier),
-      field('operator', choice('=', '+=', '-=')), field('value', $._v1_expression),
-    ),
-
-    v1_map_assignment: $ => seq(
-      field('map', $.identifier), '[', field('key', $._v1_expression), ']',
-      field('operator', choice('=', '+=', '-=')), field('value', $._v1_expression),
-    ),
-
-    _v1_expression: $ => $._v1_or,
-
-    _v1_or: $ => choice(bin($, $.v1_or_expression), $._v1_and),
-
-    v1_or_expression: $ => binary(PREC.OR, $._v1_or, '||', $._v1_and),
-
-    _v1_and: $ => choice(bin($, $.v1_and_expression), $._v1_equality),
-
-    v1_and_expression: $ => binary(PREC.AND, $._v1_and, '&&', $._v1_equality),
-
-    // == and < do not chain in v1 either.
-    _v1_equality: $ => choice(bin($, $.v1_equality_expression), $._v1_comparison),
-
-    v1_equality_expression: $ => binary(PREC.EQ, $._v1_comparison, choice('==', '!='), $._v1_comparison),
-
-    _v1_comparison: $ => choice(bin($, $.v1_comparison_expression), $._v1_additive),
-
-    v1_comparison_expression: $ => binary(PREC.CMP, $._v1_additive, choice('<', '<=', '>', '>='), $._v1_additive),
-
-    _v1_additive: $ => choice(bin($, $.v1_additive_expression), $._v1_multiplicative),
-
-    v1_additive_expression: $ => binary(PREC.ADD, $._v1_additive, choice('+', '-'), $._v1_multiplicative),
-
-    _v1_multiplicative: $ => choice(bin($, $.v1_multiplicative_expression), $._v1_unary),
-
-    v1_multiplicative_expression: $ => binary(PREC.MUL, $._v1_multiplicative, choice('*', '/', '%'), $._v1_unary),
-
-    _v1_unary: $ => choice(alias($.v1_unary_expression, $.unary_expression), $._v1_primary),
-
-    v1_unary_expression: $ => prec(PREC.UNARY, seq(field('operator', choice('!', '-')), field('operand', $._v1_unary))),
-
-    _v1_primary: $ => choice(
-      alias($._v1_number, $.number),
-      $.bytes,
-      $.boolean,
-      $.v1_this,
-      $.v1_call,
-      $.v1_index,
-      $.identifier,
-      alias($.v1_parenthesized_expression, $.parenthesized_expression),
-    ),
-
-    v1_parenthesized_expression: $ => seq('(', $._v1_expression, ')'),
-
-    _v1_number: $ => seq(field('value', $.integer), optional(field('unit', 'ada'))),
-
-    v1_this: $ => seq('this', '.', field('field', $.identifier)),
-
-    v1_call: $ => prec(PREC.CALL, seq(
-      field('function', choice($.identifier, alias('after', $.identifier), alias('before', $.identifier))),
-      '(', optional(sep1($._v1_expression, ',')), ')',
-    )),
-
-    v1_index: $ => prec(PREC.POSTFIX, seq(field('map', $.identifier), '[', field('key', $._v1_expression), ']')),
-
     // ================================================================== tokens
 
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
@@ -636,9 +492,6 @@ module.exports = grammar({
     string_content: _ => token.immediate(prec(1, /[^"\\\x00-\x1f\x7f]+/)),
 
     escape_sequence: _ => token.immediate(/\\["\\n]/),
-
-    // v1: no escapes (v1 Lexer).
-    v1_string: _ => token(/"[^"\\\n]*"/),
 
     line_comment: _ => token(seq('//', /[^\n]*/)),
 

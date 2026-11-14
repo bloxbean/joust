@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 import contract { Pot } from "./Pot.jsc"

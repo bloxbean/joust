@@ -418,8 +418,8 @@ final class Checker {
                     JscV2.checkFileName(s.fileName());
                     f = Parser.parse(s.text(), types);
                     if (!f.library()) {
-                        throw new Pos(1, 1).error("JSC0708", s.fileName() + " is a contract, not a library: only a file that starts"
-                                + " 'jsc 2' then 'library <package>' can be imported (to read another contract's state or deposit"
+                        throw new Pos(1, 1).error("JSC0708", s.fileName() + " is a contract, not a library: only a file that declares"
+                                + " 'library <package>' can be imported (to read another contract's state or deposit"
                                 + " into it, write import contract { " + f.contract().name() + " } from \"…\"; M2c)");
                     }
                     cls = libraryClass(s.fileName(), f, new Pos(1, 1));
@@ -566,7 +566,7 @@ final class Checker {
             if (borrowed != null) {
                 throw im.pos().error("JSC0746", "the contract " + name + " uses the type " + borrowed + " of a library it imports in its state,"
                         + " its declared types, its events or its memos: importing such a contract is not supported yet, since this file"
-                        + " names another contract's types as " + name + ".T (ADR-0018 D9; the .jsc 2 integration of M2c with M4); declare"
+                        + " names another contract's types as " + name + ".T (ADR-0018 D9; the integration of M2c with M4); declare"
                         + " the type in " + src.fileName() + " itself, or use the library's type only in its methods' parameters and results");
             }
             contracts.put(name, foreign(op));

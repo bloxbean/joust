@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 contract C { state { n: Int, m: Int } init() { return { n: 0, m: 0 } } action a() { return { n: 1, ...state } } }

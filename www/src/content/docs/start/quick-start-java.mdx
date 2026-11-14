@@ -116,7 +116,7 @@ from the release after `0.1.0-pre1-rc7`. Until then, set the project up by hand,
 2. **Create the project.**
 
    ```sh
-   joust new my-counter              # Counter.java; -l jsc for a .jsc 2 contract (a language preview), -p org.example for your package
+   joust new my-counter              # Counter.java; -l jsc for a .jsc contract (a language preview), -p org.example for your package
    cd my-counter
    ```
 
@@ -158,7 +158,7 @@ The plugin does what the hand-written `build.gradle` below spells out:
 | `julc-state-processor`, `julc-annotation-processor`, `julc-state-api:<v>:onchain` | the annotation processor path |
 | `julc-state-testkit`, `junit-platform-launcher` | the tests |
 | UTF-8 and `-parameters`; native access and in-memory map mirrors for tests; native access for `run` | compile, test and run tasks |
-| `generateJsc`, when `src/main/jsc` exists: `.jsc` contracts lowered to Java before compiling; with it `acceptJscAbi` and `checkJscAbi` (the [ABI manifest](/languages/jsc-reference/#the-abi-manifest)), `migrateJsc` ([from v1](/languages/jsc-migration/)) and `remapJscDiagnostics` (javac's errors on the generated Java, at their `.jsc` positions) | the build |
+| `generateJsc`, when `src/main/jsc` exists: `.jsc` contracts lowered to Java before compiling; with it `acceptJscAbi`, `checkJscAbi` (the [ABI manifest](/languages/jsc-reference/#the-abi-manifest)) and `remapJscDiagnostics` (javac's errors on the generated Java, at their `.jsc` positions) | the build |
 
 Every version comes from the JOUST release the plugin belongs to, so the JuLC and cardano-client-lib versions always
 match. It needs a Java 25 toolchain (the default; a lower one is refused with a message).

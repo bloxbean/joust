@@ -48,8 +48,7 @@ public final class JscLang {
     public record Range(int line, int col, int endLine, int endCol) {}
 
     /**
-     * A diagnostic: {@code severity} {@code error} or {@code warning}; {@code code} the catalogue's stable code (null for a
-     * {@code .jsc} v1 error); {@code line} and {@code col} 1-based, as the build prints them; {@code internal} non-null
+     * A diagnostic: {@code severity} {@code error} or {@code warning}; {@code code} the catalogue's stable code; {@code line} and {@code col} 1-based, as the build prints them; {@code internal} non-null
      * ({@code model-too-large}) for the analysis's own failure, never a front-end diagnostic.
      */
     public record Diagnostic(String severity, String code, String message, int line, int col, Range range, String internal) {}
@@ -69,7 +68,7 @@ public final class JscLang {
     public record Folding(int startLine, int endLine, String kind) {}
 
     /**
-     * One file's document model. {@code language}: {@code jsc2} or {@code jsc1}. {@code accepted}: the front end accepted
+     * One file's document model. {@code language}: {@code jsc2} (the model's name for the language). {@code accepted}: the front end accepted
      * it (no error). {@code contract}: {@code pkg.Name} when known. {@code blocks}: every brace block's extent, the scopes
      * selection ranges grow through.
      */
@@ -224,7 +223,6 @@ public final class JscLang {
      */
     static Analysis analysis(String source, String fileName, String id, JscModules modules, boolean lower) {
         if (source == null) source = "";
-        if (!JscV2.isV2(source)) return analyseV1(source, fileName);
         var spans = new Spans();
         var diagnostics = new ArrayList<Diagnostic>();
         JscV2.Lowered lowered = null;
@@ -273,23 +271,6 @@ public final class JscLang {
         boolean accepted = diagnostics.stream().noneMatch(d -> d.severity().equals("error"));
         return new Analysis(new Model("jsc2", fileName, accepted, contract, List.copyOf(diagnostics), List.copyOf(fixed),
                 List.copyOf(blocks), folding(source, spans, fixed)), lowered);
-    }
-
-    /** A {@code .jsc} v1 file: what the build reports for it (its first error, or its warnings); no spans (ADR-0018 D16). */
-    private static Analysis analyseV1(String source, String fileName) {
-        var diagnostics = new ArrayList<Diagnostic>();
-        boolean accepted = true;
-        try {
-            var r = JscMain.lowerWithWarnings(source, fileName);
-            for (JscMain.Warning w : r.diagnostics()) diagnostics.add(diagnostic("warning", w.code(), w.message(), w.line(), w.col(), source, null));
-        } catch (JscException e) {
-            accepted = false;
-            diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, source, null));
-        } catch (RuntimeException | Error e) {
-            accepted = false;
-            diagnostics.add(diagnostic("error", "JSC0005", JscMain.internalError(e), 1, 1, source, null));
-        }
-        return new Analysis(new Model("jsc1", fileName, accepted, null, List.copyOf(diagnostics), List.of(), List.of(), List.of()), null);
     }
 
     /**

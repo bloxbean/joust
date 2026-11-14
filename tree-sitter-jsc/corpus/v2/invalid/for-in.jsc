@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 fn f(xs: List<Int>): Int { for (const x in xs) { } 0 }

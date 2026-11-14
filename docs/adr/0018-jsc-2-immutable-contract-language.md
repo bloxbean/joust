@@ -1,6 +1,9 @@
-# ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
+# ADR-0018: The `.jsc` language — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r22)
+**Status:** Proposed (r26)
+**Naming (r26):** the language is `.jsc`, and this is its first version: a file may start with the header `jsc 1`, and a
+file with no header is version 1 (D2). What the revisions before r26 call `.jsc` 2 is this language; `.jsc` v1 (ADR-0005)
+and its migration are removed (D16). Internal names keep the 2 (`JscV2…` classes, the `jsc-2-*` documents, IR format 2).
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -86,10 +89,13 @@ stays readable and is written to disk on both build paths (D12). Generated `@Onc
 generated helper are checked by `SubsetLint`'s rules too (F11 runs on `@StateContract` only today; the checker runs
 them on everything it emits).
 
-### D2. Versioned files: `jsc 2`
+### D2. Versioned files: `jsc 1`
 
-A `.jsc` 2 file starts with the line `jsc 2` (after comments). A file without it is `.jsc` v1 and is compiled by the
-v1 front end, unchanged, with a deprecation warning. Both CLIs offer `joust migrate` (D16).
+*(r26)* A file may start with the header `jsc 1` (after comments); a file with no header is version 1. Any other
+version is refused (JSC0113), and `jsc 2`, the header of the previews, has no alias: its message says to write
+`jsc 1` or drop the line. A later version of the language would take a new header and leave version 1 files as they
+are. *(Until r26: a `.jsc` 2 file started with `jsc 2`, a file without it was `.jsc` v1, compiled by the v1 front end
+with a deprecation warning, and both CLIs offered `joust migrate`, D16.)*
 
 ### D3. Immutable and expression-oriented
 
@@ -491,7 +497,7 @@ import { concat, slice, length } from "std/bytes"
 
 ### D9. Libraries and other contracts
 
-- **`.jsc` libraries:** a file starting `jsc 2` then `library <package>` holds `type`, `enum` and `fn` declarations.
+- **`.jsc` libraries:** a file declaring `library <package>` (after the optional header) holds `type`, `enum` and `fn` declarations.
   `import { fee, Line } from "./fees.jsc"` uses them. A library lowers to a Java `@OnchainLibrary` class, so **Java
   contracts can call `.jsc` libraries too**; the library rules apply (static calls through imported simple names,
   explicit imports for same-package types, literal-only static fields: CLAUDE.md), and `SubsetLint`'s rules run on it
@@ -1038,7 +1044,13 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   agree on each refusal's class (which rule refused), and an interpreter that cannot finish a call gives no answer, a
   failure of that leg, never a refusal: the chain accepts any call within its budget.
 
-### D16. Compatibility and migration
+### D16. Compatibility and migration (superseded by r26)
+
+*(r26)* At the maintainer's direction, v1's front end, the JSC9006 warning and `joust migrate` (`JscMain --migrate`,
+Gradle's `migrateJsc`, the engine's `joust.migrate`) are removed, with their codes (JSC1101 to JSC1110, JSC9006; not
+reused). examples/dsl's v1 contracts (Guards, Points, Jar) are ported to
+the language. A v1 file is now read as version 1 and refused at its first v1 construct. The recorded-deployments
+warning below stays. The rest of this section is the design as it was until r25.
 
 - v1 files keep compiling (D2) with a deprecation warning. The v1 front end is **frozen, not removed**: a deployed v1
   script must stay rebuildable.
@@ -1087,7 +1099,7 @@ an argument, whoever writes a depositing contract chooses it, so it is a checked
 ## 4. Example (illustrative)
 
 ```
-jsc 2
+jsc 1
 package app
 
 // A counter anyone can increment and only its owner can reset or close.
@@ -1120,7 +1132,7 @@ bounded by `maxDatumBytes` (about 50 pledgers at 2,048 bytes; a pledge costs at 
 missed); a crowdfund for many pledgers would keep pledges in a `BigMap`:
 
 ```
-jsc 2
+jsc 1
 package app
 
 type Share = { to: Key, bps: Int }
@@ -1645,3 +1657,10 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   keeps the build's Java libraries in an imported library's checks (C1) and names library types in memo decoders and
   datum encoders (S4); an imported contract's class is held in the Java import names (C2); §8's M2 and M4 rows record
   their exits, and the M5 row its gates.
+- **r26** (2026-11-14, the `.jsc` v1 removal, on `feat/jsc-v1-removal`; r23 to r25 are M3a1 to M3a3's and r27 is M3c's,
+  in other PRs): the language is `.jsc` (the title; the naming note under the status). D2: the header is `jsc 1` and
+  optional, `jsc 2` is refused with a pointer to it (JSC0113; JSC0112, a missing header, is retired), and every
+  `jsc 2` header in the repository is rewritten in place, so no script hash changes. D16 is superseded: `.jsc` v1
+  (ADR-0005, now superseded by this ADR), its JSC9006 warning and `joust migrate` are removed, with JSC1101 to JSC1110;
+  examples/dsl's Guards and Points take their committed migrations and Jar is ported by hand (new scripts, so
+  fixtures/m0's dsl group is recorded again). The IR keeps format 2.

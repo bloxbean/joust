@@ -1,7 +1,7 @@
 {
  "ir": 2,
  "language": "jsc 2",
- "sourceSha256": "24c5761821829eb58afec709c1d3ad0e6a449d3172be53ca3448fcdd7f599565",
+ "sourceSha256": "9db501fecc58d3b7d48972af9d2b6fdfd17b48984a2257560a58dcc2b9067aa5",
  "package": "org.julclang.state.examples.dsl",
  "contract": "Pledges",
  "source": "Pledges.jsc",

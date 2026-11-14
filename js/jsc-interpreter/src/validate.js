@@ -148,8 +148,12 @@ export function validate(p) {
   // imported fns' signatures are listed; their bodies are not here, and evaluating a call of one has no answer (§2.4).
   if (!Array.isArray(p.javaLibraries)) fail('program', 'javaLibraries is a list');
   const javaFns = new Map();
+  const javaClasses = new Set();
   for (const j of p.javaLibraries) {
     keys(j, ['class', 'sourceSha256', 'records', 'fns'], 'java library');
+    // #110 C17: a library is listed once (two entries of one class would let one's fns hide the other's).
+    if (javaClasses.has(j.class)) fail('java library', `java:${j.class} is listed twice`);
+    javaClasses.add(j.class);
     if (!/^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*$/.test(str(j.class, 'java library'))) fail('java library', `a bad class name ${j.class}`);
     if (typeof j.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(j.sourceSha256)) fail('java library', 'sourceSha256 must be 64 hex digits');
     for (const r of j.records) {
