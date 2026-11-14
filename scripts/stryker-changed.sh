@@ -3,6 +3,7 @@
 # changed since <base>. Prints a Markdown summary (scripts/stryker-summary.py) and fails when the score is below
 # <threshold> (default 0: report only). With no changed file, says so and succeeds.
 #   bash scripts/stryker-changed.sh <base-ref> [threshold]
+#   bash scripts/stryker-changed.sh --all [threshold]       every file (the baseline)
 # Needs js/mutation's packages (npm ci --ignore-scripts there) and, for the engine-backed cases, js/joust/engine.
 set -euo pipefail
 base="${1:-origin/main}"
@@ -11,7 +12,8 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 targets=$(node -e "import('./js/mutation/stryker.config.mjs').then(m => console.log(m.default.mutate.join('\n')))" )
 changed=()
-for f in $(git diff --name-only "$base...HEAD" -- js/joust/src); do
+if [[ "$base" == "--all" ]]; then files="$(sed 's#^#js/joust/#' <<<"$targets")"; else files="$(git diff --name-only "$base...HEAD" -- js/joust/src)"; fi
+for f in $files; do
   rel="${f#js/joust/}"
   if grep -qxF "$rel" <<<"$targets" && [[ -f "$f" ]]; then changed+=("$rel"); fi
 done

@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class MemoFuzzTest {
 
     static final FuzzData.Tally TALLY = new FuzzData.Tally("MemoFuzzTest");
-    static final String KNOWN_ISSUE = "the JVM's memo decoders throw IllegalArgumentException on data of another kind";
+    static final String KNOWN_ISSUE = "#96, the JVM's memo decoders throw IllegalArgumentException on data of another kind";
     static FourWay inbox;
     static Tx slipTx, keyedTx;
     static PlutusData slip;

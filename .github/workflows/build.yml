@@ -30,6 +30,11 @@ on:
     branches: [ main, 'release/**' ]
   pull_request:
   workflow_dispatch:
+    inputs:
+      mutation_all:
+        description: 'Mutation-test the whole security-relevant set (the baselines), not only what changed'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -528,9 +533,11 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
           BEFORE: ${{ github.event.before }}
+          ALL: ${{ inputs.mutation_all }}
         run: |
           set -euo pipefail
-          if [[ -n "$BASE_REF" ]]; then base="origin/$BASE_REF"
+          if [[ "$ALL" == "true" ]]; then echo "base=--all" >> "$GITHUB_OUTPUT"; echo "Mutation testing the whole set" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          elif [[ -n "$BASE_REF" ]]; then base="origin/$BASE_REF"
           elif [[ -n "$BEFORE" && "$BEFORE" != 0000000000000000000000000000000000000000 ]]; then base="$BEFORE"
           else base="HEAD~1"; fi
           echo "base=$base" >> "$GITHUB_OUTPUT"

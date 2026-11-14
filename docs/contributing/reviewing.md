@@ -82,9 +82,9 @@ A disagreement that is known and tracked passes only as a registered divergence,
 is counted by class in the target's summary, and the first input of each class is written to
 `build/fuzz/<Target>.known-*.txt`. It is never silent. Two divergences are registered, each with its issue:
 
-- `IrReaderFuzzTest`: the Java IR reader (used only by tests) accepts some exports the JavaScript reader refuses.
+- `IrReaderFuzzTest`: the Java IR reader (used only by tests) accepts some exports the JavaScript reader refuses (#97).
 - `MemoFuzzTest`: the JVM's generated memo decoders throw `IllegalArgumentException` on data of another kind, where the
-  chain refuses.
+  chain refuses (#96).
 
 ## 4. Mutation testing
 

@@ -40,7 +40,7 @@ class IrReaderFuzzTest {
 
     static final Path FIXTURES = Path.of("../js/jsc-interpreter/test/fixtures");
     /** The issue that tracks the Java reader's laxer checks (the registered divergence below). */
-    static final String KNOWN_ISSUE = "the Java IR reader is laxer than the JavaScript one";
+    static final String KNOWN_ISSUE = "#97, the Java IR reader is laxer than the JavaScript one";
     static final Path SERVER = Path.of("src/test/js/ir-read-server.mjs");
     static final Path INTERPRETER = Path.of("../js/jsc-interpreter/src/index.js");
     static final List<Object> SEEDS = new ArrayList<>();

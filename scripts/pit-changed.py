@@ -3,6 +3,7 @@
 (gradle/pitest.gradle) whose sources changed since <base>, each module's PIT run limited to them.
 
     python3 scripts/pit-changed.py <base-ref> [--threshold N] [--dry-run]
+    python3 scripts/pit-changed.py --all [--threshold N]      every module's whole set (the baseline)
 
 Prints the Gradle runs it makes, then the summary (scripts/pit-summary.py) of their reports to stdout. A class's source is
 its src/main/java file or its src/onchain/java variant (julc-state-api); a module's pitMutableCodePaths are searched too.
@@ -22,8 +23,10 @@ if '--threshold' in args:
     threshold = args[i + 1]
     del args[i:i + 2]
 base = args[0] if args else 'origin/main'
+everything = base == '--all'
 
-changed = subprocess.run(['git', 'diff', '--name-only', f'{base}...HEAD'], capture_output=True, text=True, check=True).stdout.split()
+changed = [] if everything else subprocess.run(['git', 'diff', '--name-only', f'{base}...HEAD'], capture_output=True, text=True,
+                                               check=True).stdout.split()
 classes = set()
 for f in changed:
     m = re.match(r'(.+?)/src/(?:main|onchain)/java/(.+)\.java$', f)
@@ -43,7 +46,10 @@ for build in sorted(subprocess.run(['git', 'ls-files', '*/build.gradle'], captur
     if p:
         paths |= {x.lstrip(':').replace(':', '/') for x in re.findall(r"project\('([^']+)'\)", p.group(1))}
     hit = sorted({c for (mod, c) in classes if mod in paths and any(fnmatch.fnmatchcase(c, pat) for pat in patterns)})
-    if hit:
+    if everything:
+        runs.append((':' + module.replace('/', ':'), None))
+        reports.append(os.path.join(module, 'build/reports/pitest/mutations.xml'))
+    elif hit:
         runs.append((':' + module.replace('/', ':'), hit))
         reports.append(os.path.join(module, 'build/reports/pitest/mutations.xml'))
 
@@ -52,7 +58,9 @@ if not runs:
     sys.exit(0)
 failed = False
 for task, hit in runs:
-    cmd = ['./gradlew', f'{task}:pitest', '-Ppit.targetClasses=' + ','.join(c + '*' for c in hit), '--stacktrace']   # nested classes too
+    cmd = ['./gradlew', f'{task}:pitest', '--stacktrace']
+    if hit is not None:
+        cmd.insert(2, '-Ppit.targetClasses=' + ','.join(c + '*' for c in hit))   # nested classes too
     print('$ ' + ' '.join(cmd), file=sys.stderr)
     if not dry and subprocess.run(cmd).returncode != 0:
         failed = True
