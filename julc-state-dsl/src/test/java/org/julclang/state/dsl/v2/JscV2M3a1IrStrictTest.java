@@ -135,6 +135,40 @@ class JscV2M3a1IrStrictTest {
         return o;
     }
 
+    /** A copy of a method's JSON with its locals renumbered (ids, references, checked inputs), to sit beside the original. */
+    @SuppressWarnings("unchecked")
+    static Object renumber(Object o, int by) {
+        if (o instanceof Map<?, ?> m) {
+            var c = new LinkedHashMap<String, Object>();
+            for (var e : ((Map<String, Object>) m).entrySet()) {
+                Object v = e.getValue();
+                if (e.getKey().equals("id") && v instanceof Number n) c.put("id", n.longValue() + by);
+                else if (e.getKey().equals("local") && "LocalRef".equals(m.get("node")) && v instanceof Number n) c.put("local", n.longValue() + by);
+                else if (e.getKey().equals("checked") && v instanceof List<?> l) c.put("checked", l.stream().map(x -> ((Number) x).longValue() + by).toList());
+                else c.put(e.getKey(), renumber(v, by));
+            }
+            return c;
+        }
+        if (o instanceof List<?> l) return new ArrayList<>(l.stream().map(v -> renumber(v, by)).toList());
+        return o;
+    }
+
+    /** Each {@code New Account} in raw IR gains an empty map for a field added after the others. */
+    @SuppressWarnings("unchecked")
+    static void growAccounts(Object o, Object mapType) {
+        if (o instanceof Map<?, ?> m) {
+            var mm = (Map<String, Object>) m;
+            if ("New".equals(mm.get("node")) && "Account".equals(mm.get("record"))) {
+                var values = new ArrayList<>((List<Object>) mm.get("values"));
+                values.add(new LinkedHashMap<String, Object>(Map.of("node", "BigEmpty", "type", mapType, "taint", 0, "at", mm.get("at"))));
+                mm.put("values", values);
+            }
+            for (Object v : new ArrayList<>(mm.values())) growAccounts(v, mapType);
+        } else if (o instanceof List<?> l) {
+            for (Object v : l) growAccounts(v, mapType);
+        }
+    }
+
     /** Replaces each {@code balance} CtxRef in raw IR with the Int literal 1. */
     @SuppressWarnings("unchecked")
     static void balanceToOne(Object o) {
@@ -166,8 +200,9 @@ class JscV2M3a1IrStrictTest {
     @Test
     @SuppressWarnings("unchecked")
     void reviewRound2_mutants_areRefused() throws Exception {
-        {   // M3a2's forms, refused while the readers' stage is 1
-            refused(ir -> {
+        {   // M3a2's forms: refused while the readers' stage is 1, read from M3a2 (stage 2)
+            Mutant m3a2 = IrJson.OWNED_STAGE < 2 ? JscV2M3a1IrStrictTest::refused : (m, f) -> reads(m);
+            m3a2.apply(ir -> {
                 var records = (List<Object>) ir.get("records");
                 var second = (Map<String, Object>) copy(records.get(0));
                 second.put("name", "Account2");
@@ -175,16 +210,18 @@ class JscV2M3a1IrStrictTest {
                 ir.put("owned", new ArrayList<>(List.of("Account", "Account2")));
                 var ms = (List<Object>) ir.get("methods");
                 for (String n : List.of("open", "close")) {
-                    var m = (Map<String, Object>) copy(method(ir, n));
+                    var m = (Map<String, Object>) renumber(method(ir, n), 1000);
                     m.put("name", n + "2");
                     m.put("on", "Account2");
                     ms.add(m);
                 }
             }, "a second owned type (Account2) is not produced yet (M3a2; JSC1215)");
-            refused(ir -> {
+            m3a2.apply(ir -> {
                 var account = (Map<String, Object>) ((List<Object>) ir.get("records")).get(0);
                 var fields = (List<Object>) account.get("fields");
-                fields.add(new LinkedHashMap<String, Object>(Map.of("name", "entries", "type", Map.of("bigmap", List.of("Key", "Int")))));
+                var map = Map.of("bigmap", List.of("Key", "Int"));
+                fields.add(new LinkedHashMap<String, Object>(Map.of("name", "entries", "type", map)));
+                growAccounts(ir.get("methods"), map);
             }, "a BigMap in the owned type Account is not produced yet (M3a2; JSC1215)");
         }
         // The only escape hatch pays 1, not balance: no object could ever be closed (JSC1216).
