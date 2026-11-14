@@ -9,7 +9,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Worker } from 'node:worker_threads';
 import { EngineHost } from '../../src/lsp/host.js';
 import { ENGINE, HAS_ENGINE } from './client.js';
 
@@ -48,22 +47,22 @@ out.rss.oneAnalysisWorker = mb();
 await host.info('b', { ...engine, id: 'measure-b' });
 await host.analyze('b', { ...engine, id: 'measure-b' }, { file: 'Ledger.jsc', source: ledger });
 out.rss.twoAnalysisWorkers = mb();
-// A build worker as M5b will start it (joust build's: 8 MB stack, D2a's 384 MB heap), three Ledger builds.
-const build = new Worker(new URL('../../src/toolchain-worker.js', import.meta.url), { resourceLimits: { stackSizeMb: 8, maxOldGenerationSizeMb: 384 } });
+// M5b's build worker, as the server starts it (EngineHost with joust build's 8 MB stack and D2a's 384 MB heap, the
+// worker's build operation): three Ledger builds.
+const buildHost = new EngineHost({ workerEntry: new URL('../../src/lsp/worker.js', import.meta.url), stackSizeMb: 8, maxOldGenerationSizeMb: 384,
+  analysisMs: 120000, maxWorkers: 1 });
 const builds = [];
 for (let k = 0; k < 3; k++) {
   const t = performance.now();
-  const r = await new Promise((resolve, reject) => {
-    build.once('message', resolve);
-    build.once('error', reject);
-    build.postMessage({ id: k, files: { 'org/julclang/state/examples/dsl/Ledger.jsc': ledger }, options: {}, dir: ENGINE });
-  });
-  if (r.error || !r.result?.ok) throw new Error(`build failed: ${r.error ?? JSON.stringify(r.result?.diagnostics)}`);
+  const r = await buildHost.request('build', { ...engine, id: 'measure-build' }, { op: 'build',
+    files: { 'org/julclang/state/examples/dsl/Ledger.jsc': ledger + ' '.repeat(k) }, options: {} }, { input: String(k), what: 'the build', timeoutMs: 120000 });
+  const result = r.model ? JSON.parse(r.model) : null;
+  if (!result?.ok) throw new Error(`build failed: ${r.internal?.message ?? JSON.stringify(result?.diagnostics)}`);
   builds.push(Math.round(performance.now() - t));
 }
 out.rss.twoAnalysisWorkersAndABuildWorker = mb();
 out.builds = builds;
-await build.terminate();
+buildHost.dispose();
 host.dispose();
 console.log(JSON.stringify(out, null, 2));
 

@@ -107,7 +107,9 @@ final class Parser {
      */
     static File parse(String src, Set<String> importedTypes, Spans spans) {
         boolean recover = spans != null && spans.recover;
-        var p = new Parser(Lexer.lex(src, spans == null ? null : spans.comments, recover ? spans.errors : null), spans);
+        // Recovering, the loader lexed the file once already (its imports came from those tokens).
+        List<Tok> lexed = recover && spans.lexed != null ? spans.lexed : Lexer.lex(src, spans == null ? null : spans.comments, recover ? spans.errors : null);
+        var p = new Parser(lexed, spans);
         p.typeNames.addAll(importedTypes);
         if (spans != null) spans.toks = p.toks;
         int lexical = recover ? spans.errors.size() : 0;
@@ -346,7 +348,11 @@ final class Parser {
      * main parse reports it), from tokens lexed with recovery.
      */
     static List<Import> importsRecovering(String src) {
-        var toks = Lexer.lex(src, null, new ArrayList<>());
+        return importsRecovering(Lexer.lex(src, null, new ArrayList<>()));
+    }
+
+    /** The same from tokens already lexed (recovering, the main file is lexed once). */
+    static List<Import> importsRecovering(List<Tok> toks) {
         var out = new ArrayList<Import>();
         int depth = 0;
         for (int k = 0; k < toks.size(); k++) {

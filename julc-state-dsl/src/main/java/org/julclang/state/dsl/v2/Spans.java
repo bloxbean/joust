@@ -54,6 +54,8 @@ final class Spans {
     final List<int[]> comments = new ArrayList<>();
     /** The tokens, once the lexer has read the whole file (null when it stopped at an error). */
     List<Tok> toks;
+    /** Recovering: the file's tokens, lexed once by the loader (with its errors and comments recorded here). */
+    List<Tok> lexed;
 
     private final ArrayDeque<Decl> open = new ArrayDeque<>();
     private Tok last;

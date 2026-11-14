@@ -126,7 +126,9 @@ public final class JscLang {
                 range(o, d.nameRange());
                 o.append(",\"range\":");
                 range(o, d.range());
-                o.append(",\"partial\":").append(d.partial()).append(",\"outline\":").append(d.outline());
+                // Model v2 (L10): a flag is written only when it holds (absent: false).
+                if (d.partial()) o.append(",\"partial\":true");
+                if (d.outline()) o.append(",\"outline\":true");
                 // M5b (model v2): what the checker knows of it.
                 JscLangIndex.Meta mt = index == null ? null : index.meta.get(d.id());
                 if (mt != null) {

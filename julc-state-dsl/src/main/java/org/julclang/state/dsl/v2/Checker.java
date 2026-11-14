@@ -371,12 +371,13 @@ final class Checker {
             var deps = new LinkedHashMap<String, Module>();
             var types = new HashSet<String>();
             List<Import> imports;
-            try {
+            if (facts != null && spans != null && spans.recover) {
+                // Recovering: the file is lexed once (errors and comments recorded), its imports read leniently from those
+                // tokens (a broken one is the main parse's error), and the parse reads the same tokens.
+                spans.lexed = Lexer.lex(source, spans.comments, spans.errors);
+                imports = Parser.importsRecovering(spans.lexed);
+            } else {
                 imports = Parser.imports(source);
-            } catch (JscException e) {
-                if (facts == null) throw e;
-                // A lexical or import error: the main parse below records it; the imports that do parse still load.
-                imports = Parser.importsRecovering(source);
             }
             for (Import im : imports) {
                 // A Java library's records (M4b): a capitalised imported name is read as a type, so a constructor of one

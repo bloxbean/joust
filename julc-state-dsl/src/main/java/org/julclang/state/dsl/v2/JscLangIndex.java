@@ -50,8 +50,8 @@ final class JscLangIndex {
     private final Facts facts;
     private final Ir.Program program;
 
-    /** Declarations by kind and name (and parent for fields and variants). */
-    private final Map<String, Spans.Decl> byKindName = new HashMap<>();
+    /** Declarations by kind, then by name (and by "parent.name" for fields and variants). */
+    private final Map<String, Map<String, Spans.Decl>> byKindName = new HashMap<>();
 
     JscLangIndex(Spans spans, Facts facts, Ir.Program program) {
         this.spans = spans;
@@ -59,8 +59,17 @@ final class JscLangIndex {
         this.program = program;
         for (Spans.Decl d : spans.decls) {
             if (d.name == null || d.endLine < 0) continue;
-            byKindName.putIfAbsent(d.kind + ":" + d.name, d);
-            if (d.parent != null && d.parent.name != null) byKindName.putIfAbsent(d.kind + ":" + d.parent.name + "." + d.name, d);
+            // Only what a reference can name is indexed (L10: a local is found by its anchor, never by name).
+            switch (d.kind) {
+                case "const", "param", "loopVar", "binding", "lambdaParam", "import" -> {
+                    continue;
+                }
+                default -> {
+                }
+            }
+            var m = byKindName.computeIfAbsent(d.kind, k -> new HashMap<>());
+            m.putIfAbsent(d.name, d);
+            if (d.parent != null && d.parent.name != null) m.putIfAbsent(d.parent.name + "." + d.name, d);
         }
     }
 
@@ -69,7 +78,8 @@ final class JscLangIndex {
     }
 
     private Spans.Decl decl(String kind, String name) {
-        return name == null ? null : byKindName.get(kind + ":" + name);
+        var m = byKindName.get(kind);
+        return name == null || m == null ? null : m.get(name);
     }
 
     /** A record's field (a {@code type}'s, the state's, the params', an event's or a variant's). */
@@ -118,7 +128,13 @@ final class JscLangIndex {
             Syntax.Expr se = e.getKey();
             Ir.Expr ir = e.getValue();
             int[] x = spans.exprs.get(se);
-            if (x != null && ir != null && ir.type() != null) {
+            // L10: a literal's type is its own, and a name's is its declaration's (hover reads it there): neither is
+            // exported, unless a name is a time value (D11), which the hover and the semantic tokens say.
+            // An operator's type follows from its operands (Int, Bool): not exported either unless it is a time value.
+            boolean trivial = se instanceof Syntax.IntLit || se instanceof Syntax.BoolLit || se instanceof Syntax.BytesLit
+                    || se instanceof Syntax.StrLit || (se instanceof Syntax.Name || se instanceof Syntax.Binary || se instanceof Syntax.Unary)
+                    && ir != null && ir.taint() == 0;
+            if (x != null && ir != null && ir.type() != null && !trivial) {
                 typed.add(new Typed(x[0] - 1, x[1] - 1, x[2] - 1, x[3] - 1, Ty.show(ir.type()), taint(ir)));
             }
             resolve(se, ir, localDecl);
@@ -292,29 +308,30 @@ final class JscLangIndex {
      * field's reference and the binding's own name, are flagged, so a rename keeps the other meaning.
      */
     private void flagShorthands() {
-        var at = new HashMap<String, List<Integer>>();
+        var at = new HashMap<Long, List<Integer>>();
         for (int k = 0; k < refs.size(); k++) {
             Ref r = refs.get(k);
             if (r.decl() < 0) continue;
-            at.computeIfAbsent(r.line() + ":" + r.col() + ":" + r.endCol(), x -> new ArrayList<>()).add(k);
+            at.computeIfAbsent(key(r.line(), r.col(), r.endCol()), x -> new ArrayList<>(2)).add(k);
         }
-        var names = new HashMap<String, Spans.Decl>();
+        var names = new HashMap<Long, Spans.Decl>();
         for (Spans.Decl d : spans.decls) {
-            if (d.name != null && d.nameSpan != null && d.kind.equals("binding")) {
-                names.put((d.nameSpan[0] - 1) + ":" + (d.nameSpan[1] - 1) + ":" + (d.nameSpan[2] - 1), d);
-            }
+            if (d.name != null && d.nameSpan != null && d.kind.equals("binding")) names.put(key(d.nameSpan[0] - 1, d.nameSpan[1] - 1, d.nameSpan[2] - 1), d);
         }
         for (var e : at.entrySet()) {
             List<Integer> ks = e.getValue();
-            boolean pair = ks.size() >= 2 || names.containsKey(e.getKey());
-            if (!pair) continue;
+            Spans.Decl b = names.get(e.getKey());
+            if (ks.size() < 2 && b == null) continue;
             for (int k : ks) {
                 Ref r = refs.get(k);
                 refs.set(k, new Ref(r.line(), r.col(), r.endLine(), r.endCol(), r.decl(), r.builtin(), r.flags() | 1));
             }
-            Spans.Decl b = names.get(e.getKey());
             if (b != null) shorthandBindings.add(b.id);
         }
+    }
+
+    private static long key(int line, int col, int endCol) {
+        return ((long) line << 40) | ((long) col << 20) | endCol;
     }
 
     /** Bindings whose name is also a field (a pattern's shorthand). */

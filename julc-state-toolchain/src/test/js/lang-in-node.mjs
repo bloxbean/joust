@@ -59,8 +59,11 @@ async function depthCase(dir, i) {
     const r = e.lang.analyze({ file: 'D.jsc', source: src });
     if (!r.ok) return `failed ${r.error}`;
     const m = JSON.parse(r.model);
-    const err = m.diagnostics.find((d) => d.severity === 'error');
-    return err ? err.code : 'ok';
+    // M5b: the recovering mode reports every error; the cap's is among them (the build's first).
+    const want = DEPTH[i][2];
+    const errors = m.diagnostics.filter((d) => d.severity === 'error');
+    if (!errors.length) return 'ok';
+    return want && errors.some((d) => d.code === want) ? want : errors[0].code;
   } catch (x) {
     return `threw ${x}`;
   }
@@ -85,7 +88,9 @@ if (!isMainThread) {
   const fail = (m) => { failures++; console.log('FAIL ' + m); };
   const engine = await load(dir);
   const info = JSON.parse(engine.lang.info({}).info);
-  if (info.protocol !== 1 || info.modelVersion !== 1) fail(`lang.info ${JSON.stringify(info)}`);
+  if (info.protocol !== 1 || info.modelVersion !== 2 || !['analyze', 'modules', 'std', 'lower'].every((f) => info.features.includes(f))) {
+    fail(`lang.info ${JSON.stringify(info)}`);
+  }
 
   // 1. Parity with the JVM.
   const parity = JSON.parse(readFileSync(parityFile, 'utf8'));
@@ -127,10 +132,14 @@ if (!isMainThread) {
       const r = engine.joust.build({ files, options: {} });
       const own = p.id ? p.id : `t/${p.file}`;
       const jsc = r.diagnostics.filter((d) => d.source === 'jsc' && d.code !== 'JSC0004' && (!p.id || d.file === own || d.file === undefined));
-      const fmt = (d) => `${d.severity.toLowerCase()} ${d.code} ${Number(d.line)}:${Number(d.col)} ${d.message}`;
+      // L1 (M5b, recovered): the build stops at its first error, the model holds it among every error (code, line,
+      // column); a file the build accepts gives the build's warnings exactly.
+      const fmt = (d) => `${d.severity.toLowerCase()} ${d.code} ${Number(d.line)}:${Number(d.col)}`;
       const want = jsc.map(fmt);
       const got = model.diagnostics.map(fmt);
-      if (JSON.stringify(want) !== JSON.stringify(got)) fail(`[L1] ${p.key}:\n  build ${JSON.stringify(want)}\n  model ${JSON.stringify(got)}`);
+      const errs = jsc.filter((d) => d.severity.toLowerCase() === 'error');
+      const ok = errs.length ? want.filter((x) => x.startsWith('error')).every((x) => got.includes(x)) : JSON.stringify(want) === JSON.stringify(got);
+      if (!ok) fail(`[L1] ${p.key}:\n  build ${JSON.stringify(want)}\n  model ${JSON.stringify(got)}`);
       n++;
     }
     console.log(`[lang wasm] L1: ${n} .jsc 2 files, the model's diagnostics are joust.build's front-end diagnostics`);
