@@ -234,6 +234,27 @@ public final class JscV2 {
         return Checker.check(source, fileName, id, modules, javaLibraries, spans);
     }
 
+    /**
+     * ADR-0021 D5 (M5b): the front end in the language core's recovering mode: the lexer, the parser and the checker each
+     * record their errors (into {@code spans.errors} and {@code facts.errors}) and continue; the checked program of what
+     * could be checked, or null. {@code modules} null: the file on its own. Never on a build path: {@link #lower} and
+     * {@link #check} stop at the first error, and agree with this on it (L1, L5).
+     */
+    static Ir.Program checkRecovering(String source, String fileName, String id, JscModules modules, Spans spans, Facts facts) {
+        spans.recover = true;
+        try {
+            checkFileName(fileName);
+        } catch (JscException e) {
+            facts.errors.add(e);
+        }
+        return Checker.checkRecovering(source, fileName, id, modules, spans, facts);
+    }
+
+    /** The lowering of a program the recovering mode checked without an error (L5: the same as {@link #lower}). */
+    static Lowered lowerChecked(Ir.Program p, String source, String fileName) {
+        return lowered(p, source, fileName);
+    }
+
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */
     public static Interpreter interpreter(String source, String fileName, Interpreter.Hashes hashes) {
         return interpreter(source, fileName, null, JscModules.NONE, hashes);
