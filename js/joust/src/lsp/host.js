@@ -305,11 +305,25 @@ export class EngineHost {
    * `{ retryAt }` (in backoff) or `{ missing: true }` (the engine's file is gone).
    */
   analyze(key, engine, { file, source, scope = '', id, files }, token) {
+    // A project's files (the integration with ADR-0018 M2c and M4) are part of the input: quarantined with it.
+    // The module id travels as `module`: `id` is the call's own (EngineWorker.call), which would replace it.
+    const msg = files ? { op: 'analyze', file, source, module: id, files } : { op: 'analyze', file, source };
+    const input = files ? JSON.stringify([source, id, Object.entries(files).sort()]) : source;
+    return this.request(key, engine, msg, { scope, input, what: 'analysis' }, token);
+  }
+
+  /**
+   * M5b: any engine operation of the worker (`msg.op`: analyze, std, lower, build), under the same watchdog, limits,
+   * quarantine (by the SHA-256 of `input` and the operation) and backoff as an analysis; answers as {@link analyze}.
+   */
+  request(key, engine, msg, { scope = '', input = '', what = 'analysis', timeoutMs } = {}, token) {
     const s = this.slot(key, engine);
     const h = this.healthOf(key, scope);
+    const qkey = sha256(input) + '|' + engine.id + (msg.op === 'analyze' ? '' : `|${msg.op}`);
+    const cap = timeoutMs ?? this.opts.analysisMs;
     const run = async () => {
       if (h.unavailable) return { unavailable: true };
-      const q = this.quarantine.get(sha256(source) + '|' + engine.id);
+      const q = this.quarantine.get(qkey);
       if (q) return { internal: q, quarantined: true };
       if (h.backoffUntil > this.now()) return { retryAt: h.backoffUntil };
       if (token?.isCancellationRequested) return { cancelled: true };
@@ -327,9 +341,9 @@ export class EngineHost {
           this.stopWorker(s);
           return { missing: true };
         }
-        if (!ready.ready) return this.failed(h, s, source, { kind: 'crash', message: `the engine did not load: ${ready.error}` }, true);
+        if (!ready.ready) return this.failed(h, s, qkey, { kind: 'crash', message: `the engine did not load: ${ready.error}` }, true);
         this.stats.calls++;
-        const r = await w.call(files ? { op: 'analyze', file, source, id, files } : { op: 'analyze', file, source }, this.opts.analysisMs, token);
+        const r = await w.call(msg, cap, token);
         if (r.failure === 'stopped') return this.displaced();
         if (r.failure === 'cancelled') {
           this.stats.cancelled++;
@@ -338,13 +352,13 @@ export class EngineHost {
         }
         if (r.failure) {
           if (r.failure === 'time') this.stats.terminated++;
-          const message = r.failure === 'time' ? `analysis stopped: time limit (${this.opts.analysisMs} ms)`
-            : r.failure === 'memory' ? `analysis stopped: memory limit (${this.opts.maxOldGenerationSizeMb} MB)`
-              : `analysis stopped: the engine failed (${r.message ?? r.failure})`;
-          return this.failed(h, s, source, { kind: r.failure, message }, true);
+          const message = r.failure === 'time' ? `${what} stopped: time limit (${cap} ms)`
+            : r.failure === 'memory' ? `${what} stopped: memory limit (${this.opts.maxOldGenerationSizeMb} MB)`
+              : `${what} stopped: the engine failed (${r.message ?? r.failure})`;
+          return this.failed(h, s, qkey, { kind: r.failure, message }, true);
         }
-        if (r.failed) return this.failed(h, s, source, { kind: 'failed', message: `analysis stopped: internal error (${r.failed})` }, false);
-        if (r.tooLarge) return this.failed(h, s, source, { kind: 'too-large', message: 'analysis stopped: the document model is too large' }, false);
+        if (r.failed) return this.failed(h, s, qkey, { kind: 'failed', message: `${what} stopped: internal error (${r.failed})` }, false);
+        if (r.tooLarge) return this.failed(h, s, qkey, { kind: 'too-large', message: msg.op === 'analyze' ? 'analysis stopped: the document model is too large' : `${what} stopped: the result is too large` }, false);
         h.backoffMs = 0;
         return { model: r.model };
       } finally {
@@ -363,9 +377,9 @@ export class EngineHost {
     return { cancelled: true, displaced: true };
   }
 
-  failed(h, s, source, failure, workerFailure) {
+  failed(h, s, qkey, failure, workerFailure) {
     this.stats.failures++;
-    this.quarantine.set(sha256(source) + '|' + s.engine.id, failure);
+    this.quarantine.set(qkey, failure);
     h.backoffMs = h.backoffMs ? Math.min(h.backoffMs * 2, this.opts.backoffMaxMs) : this.opts.backoffMs;
     h.backoffUntil = this.now() + h.backoffMs;
     if (workerFailure) {

@@ -454,7 +454,7 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
       // file's imports resolve to.
       const jsc = await reader.resolveIn(folder, 'src/main/jsc', { base: project.rel });
       return advisory(`Gradle project${v ? ` (plugin ${v})` : ''}: the bundled compiler, advisory`,
-        { ...at, gradlePlugin: v, ...(jsc.error ? {} : { contracts: jsc.path }) });
+        { ...at, gradlePlugin: v, ...(jsc.error ? {} : { contracts: jsc.path, contractsRel: jsc.segments }) });
     }
     if (workspaceFileDir && !inside(folder, workspaceFileDir) && !allowedRoots.some((r) => inside(folder, r))) {
       return advisory('this folder lies outside the .code-workspace file\'s directory: its compiler is not loaded', at);
@@ -490,7 +490,9 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
     engine.version = info.joust ?? pkg.version;
     const inContracts = !contracts.error && inside(realFile, contracts.path);
     return {
-      key, engine, source: 'project', folder, root, ...(contracts.error ? {} : { contracts: contracts.path }),
+      key, engine, source: 'project', folder, root,
+      // M5b: where the build reads its sources (the contracts directory, real path, inside the folder), for builds on save.
+      contracts: contracts.error ? null : contracts.path, contractsRel: contracts.error ? null : contracts.segments,
       mode: inContracts ? 'project-matched' : 'advisory',
       reason: inContracts ? 'the project\'s own compiler' : 'the file is not in the project\'s contracts directory',
     };

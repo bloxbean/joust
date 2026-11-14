@@ -37,7 +37,7 @@ contract Shop {
 
   action buy(f: reads params.feed, amount: Int) payable {
     require(received == amount + fee(amount, params.bps), "pay the price and the fee")
-    require(f.open, "the feed is closed")
+    require(f.live, "the feed is closed")
     emit(Sold { amount })
     return { ...state, sold: sold + 1 }
   }
@@ -54,14 +54,14 @@ const FEED = `jsc 2
 package app
 
 contract Feed {
-  state { owner: Key, open: Bool }
+  state { owner: Key, live: Bool }
 
   init() {
-    return { owner: caller, open: true }
+    return { owner: caller, live: true }
   }
 
   action toggle() only owner {
-    return { ...state, open: !open }
+    return { ...state, live: !live }
   }
 }
 `;
@@ -98,8 +98,10 @@ test('a project file is analysed with the files its imports reach: .jsc librarie
     // A missing import is the build's error, at the import.
     lsp.change(shop, 2, SHOP.replace('"./Feed.jsc"', '"./Gone.jsc"'));
     const p3 = await lsp.diagnostics(shop, 2, 60_000);
-    assert.equal(p3.diagnostics[0].code, 'JSC0742', JSON.stringify(p3.diagnostics));
-    assert.match(p3.diagnostics[0].message, /no contract \.\/Gone\.jsc beside app\/Shop\.jsc under the sources/);
+    // M5b: recovering, each import's own error (the library's JSC0708 from the edit above stays too).
+    const gone = p3.diagnostics.find((d) => d.code === 'JSC0742');
+    assert.ok(gone, JSON.stringify(p3.diagnostics));
+    assert.match(gone.message, /no contract \.\/Gone\.jsc beside app\/Shop\.jsc under the sources/);
   } finally {
     await lsp.stop();
   }

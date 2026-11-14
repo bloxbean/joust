@@ -1,6 +1,10 @@
-// The document model (ADR-0021 D2; julc-state-dsl JscLang, modelVersion 1) turned into LSP answers. Every answer here is
-// a lookup in the model: no engine call.
-export const MODEL_VERSION = 1;
+// The document model (ADR-0021 D2; julc-state-dsl JscLang, modelVersion 2 since M5b) turned into LSP answers. Every
+// answer here is a lookup in the model: no engine call. A project engine from M5a gives version 1 models, which carry no
+// references, types or scopes: the M5b features then answer nothing for its files (features.js normalise).
+import { importEdit, normalise } from './features.js';
+
+export const MODEL_VERSION = 2;
+export const MODEL_VERSIONS = [1, 2];
 
 /** D7: a fixed https base, never configurable by a workspace. The catalogue's rows (docs/reference/jsc-2-diagnostics.md). */
 export const CATALOGUE = 'https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-diagnostics.md';
@@ -12,8 +16,8 @@ const range = (r) => ({ start: { line: r[0], character: r[1] }, end: { line: r[2
 /** Parses and checks a model's JSON; throws on a model of another version. */
 export function parseModel(json) {
   const m = JSON.parse(json);
-  if (m.modelVersion !== MODEL_VERSION) throw new Error(`document model version ${m.modelVersion}, expected ${MODEL_VERSION}`);
-  return m;
+  if (!MODEL_VERSIONS.includes(m.modelVersion)) throw new Error(`document model version ${m.modelVersion}, expected one of ${MODEL_VERSIONS.join(', ')}`);
+  return normalise(m);
 }
 
 /** The LSP diagnostics of a model, labelled with `source` (D3a: the compiler and the mode). */
@@ -128,8 +132,9 @@ export function selectionRanges(model, positions, lastLine, lastChar) {
 }
 
 /**
- * The machine-applicable fixes M5a offers (D7), each one token replaced: JSC0128 (`let`/`var` -> `const`) and JSC0133
- * (`===`/`!==` -> `==`/`!=`). `{ title, edits }` for a diagnostic of the model, or null.
+ * The machine-applicable fixes (D7): JSC0128 (`let`/`var` -> `const`) and JSC0133 (`===`/`!==` -> `==`/`!=`), each one
+ * token replaced (M5a), and JSC0704 (add the missing std import; M5b): the import goes into the module's existing
+ * `import { … }` or onto a new line after the imports. `{ title, edits }` for a diagnostic of the model, or null.
  */
 export function fixFor(text, diagnostic, lineText) {
   const [l, c, el, ec] = diagnostic.range;
@@ -141,6 +146,14 @@ export function fixFor(text, diagnostic, lineText) {
   }
   if (diagnostic.code === 'JSC0133' && (token === '===' || token === '!==')) {
     return { title: `Write '${token.slice(0, 2)}' for '${token}' (.jsc equality is by value)`, edits: [{ range: at, newText: token.slice(0, 2) }] };
+  }
+  if (diagnostic.code === 'JSC0704') {
+    // The message names the row and its module: "<fn> is in std/<m>: import { <fn> } from \"std/<m>\"".
+    const m = /^([A-Za-z_][A-Za-z0-9_]*) is in (std\/[a-z0-9_]+): import/.exec(diagnostic.message ?? '');
+    if (!m || token !== m[1]) return null;
+    const e = importEdit(text, m[1], m[2]);
+    if (!e) return null;
+    return { title: `Import '${m[1]}' from "${m[2]}"`, edits: [e] };
   }
   return null;
 }
