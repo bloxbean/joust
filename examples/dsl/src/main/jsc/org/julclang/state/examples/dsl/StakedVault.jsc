@@ -1,0 +1,46 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { isRegistration, delegatesOnlyTo, isDRepLifecycle } from "std/certs"
+
+// examples/staking's StakedVault in .jsc 2 (ADR-0018 M3c, J11; ADR-0010): a council-governed vault whose funds are
+// staked. Its state sits at the base address staked to its own script (stakeSelf), so the funds earn rewards. The council
+// (a quorum fixed at deploy) delegates only to the pool in the params, withdraws the rewards only to the payee, and votes
+// as a script DRep; a guardrail refuses treasury withdrawals over a cap.
+contract StakedVault(stakeSelf) {
+  params { council: List<Key>, quorum: Int, pool: Bytes, payee: Key, cap: Int }
+  state { deposits: Int }
+
+  init() payable {
+    return { deposits: received }
+  }
+
+  action deposit() payable {
+    require(received > 0, "deposit some ADA")
+    return { deposits: deposits + received }
+  }
+
+  destroy close() quorum params.council params.quorum {
+    pay(params.payee, balance)
+  }
+
+  // Rewards go only to the payee.
+  withdraw collect(amount: Int) quorum params.council params.quorum {
+    if amount > 0 {
+      send(wallet(params.payee), Value.lovelace(amount))
+    }
+  }
+
+  // Registration, and delegation of stake only (no vote delegation) to the pool in the params; nothing else.
+  certify certificate(cert: TxCert) quorum params.council params.quorum =
+    isRegistration(cert) || delegatesOnlyTo(cert, params.pool) || isDRepLifecycle(cert)
+
+  // The council votes as the script DRep: a quorum signing is the decision.
+  vote vote(voter: Voter, action: GovernanceActionId, choice: Vote) quorum params.council params.quorum = true
+
+  // Guardrail: no treasury withdrawal above the cap in total.
+  propose proposal(p: ProposalProcedure) = match p.governanceAction {
+    TreasuryWithdrawals { withdrawals } => withdrawals.values.sum() <= params.cap,
+    _ => true
+  }
+}

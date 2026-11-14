@@ -346,7 +346,7 @@ final class Parser {
 
     /** The method modifiers (D4, D10); none is a field or binding name (M1c review F4). */
     static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched", "receives",
-            "admits", "retire");
+            "admits", "retire", "migrates");
 
     /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
     private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
@@ -582,6 +582,12 @@ final class Parser {
                 do {
                     Pos op = peek().pos();
                     String on = ident("a contract option");
+                    if (on.equals("stakeSelf") && !at("=")) {
+                        // M3c (ADR-0010 D2): a flag, @StateContract(stakeSelf = true): the state sits at the base address
+                        // staked to the contract's own script.
+                        options.add(new Option(on, BigInteger.ONE, op, true));
+                        continue;
+                    }
                     expect("=");
                     Tok v = next();
                     if (v.kind() != K.INT) throw v.pos().error("JSC0120", "expected an integer");
@@ -692,6 +698,25 @@ final class Parser {
                 }
                 invariants.add(new InvariantDecl(n, body, t.pos(), on));
                 closeDecl();
+            } else if (t.is("init") && peek(1).is("migrate") && peek(2).is("from")) {
+                // M3c (ADR-0011 D4): init migrate from params.f(old: C.State, …) { … }, @Migrate(from = "params.f"): the
+                // adoption of an instance of the previous version, whose policy the params field f pins.
+                openDecl("migrate");
+                named(t);
+                next();
+                next();
+                next();
+                Pos fp = peek().pos();
+                if (!at("params") || !peek(1).is(".")) {
+                    throw fp.error("JSC1335", "init migrate names the previous version's policy by a params field: init migrate from params.previous(old: V1.State)");
+                }
+                next();
+                next();
+                String from = ident("the params field after 'init migrate from params.'");
+                var ps = params();
+                var mods = mods();
+                methods.add(new Method(Kind.MIGRATE, "migrate", ps, mods, block(), null, t.pos(), null, from, fp));
+                closeDecl();
             } else if (t.is("init")) {
                 openDecl("init");
                 named(t);
@@ -699,6 +724,27 @@ final class Parser {
                 var ps = params();
                 var mods = mods();
                 methods.add(new Method(Kind.INIT, "init", ps, mods, block(), null, t.pos()));
+                closeDecl();
+            } else if ((t.is("withdraw") || t.is("certify") || t.is("vote") || t.is("propose")) && peek(1).kind() == K.IDENT && peek(2).is("(")) {
+                // M3c (ADR-0010 D1): a script purpose's handler. withdraw m(amount: Int, …) { send(…) } lowers to @Withdraw and
+                // returns its sends; certify, vote and propose are predicates (= expr, or a block with a result). Contextual:
+                // only at a member's start, so actions keep these names (action withdraw(…)).
+                openDecl(t.text());
+                next();
+                Tok nt = peek();
+                String n = ident("a handler name");
+                named(nt);
+                var ps = params();
+                var mods = mods();
+                Kind kind = t.is("withdraw") ? Kind.WITHDRAW : t.is("certify") ? Kind.CERTIFY : t.is("vote") ? Kind.VOTE : Kind.PROPOSE;
+                Block body;
+                if (kind != Kind.WITHDRAW && eat("=")) {
+                    Expr e = expr();
+                    body = new Block(List.of(), e, e.pos());
+                } else {
+                    body = block();
+                }
+                methods.add(new Method(kind, n, ps, mods, body, null, t.pos()));
                 closeDecl();
             } else if (t.is("action") || t.is("destroy")) {
                 openDecl(t.text());
@@ -741,7 +787,8 @@ final class Parser {
             } else if (t.is("let") || t.is("const") || t.is("var")) {
                 throw t.pos().error("JSC0124", "a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10)");
             } else {
-                throw t.pos().error("JSC0125", "expected state, params, event, invariant, init, action, destroy, view, owned, fn, type or enum but found " + t);
+                throw t.pos().error("JSC0125", "expected state, params, event, invariant, init, action, destroy, view, owned, withdraw, certify,"
+                        + " vote, propose, fn, type or enum but found " + t);
             }
             endMember(member);
             semis();
@@ -813,6 +860,13 @@ final class Parser {
                 TypeRef memo = null;
                 if (peek().kind() == K.IDENT && !MODIFIERS.contains(peek().text()) && Character.isUpperCase(peek().text().charAt(0))) memo = type();
                 mods.add(new Mod("receives", null, t.pos(), memo));
+            } else if (t.is("migrates")) {
+                // M3c (ADR-0011 D4): migrates to f, on an instance destroy: @MigrateTo("f"), the successor's policy in the state
+                // field f (a params field would make the two versions' hashes circular; the checker refuses it).
+                next();
+                if (!at("to")) throw peek().pos().error("JSC1330", "a migrating destroy names its successor's field: migrates to successor");
+                next();
+                mods.add(new Mod("migrates", fieldRef("the state field after 'migrates to' (a Bytes field holding the successor's policy)"), t.pos()));
             } else if (t.is("admits")) {
                 // M3a (ADR-0012 D3): admits T, an instance action through which objects of the owned type T arrive.
                 next();

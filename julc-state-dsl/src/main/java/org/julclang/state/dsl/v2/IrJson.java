@@ -152,6 +152,11 @@ final class IrJson {
             if (m.on() != null) m2.put("on", m.on());
             if (m.owned() != null && m.owned().shared() != null) m2.put("shared", w.decl(m.owned().shared()));
             if (m.owned() != null && m.owned().into() != null) m2.put("into", w.decl(m.owned().into()));
+            // M3c (additive): init migrate's params field and the adopted state's local, declared before the parameters.
+            if (m.migration() != null) {
+                m2.put("from", m.migration().from());
+                m2.put("old", w.decl(m.migration().old()));
+            }
             m2.put("params", w.decls(m.params()));
             if (m.owned() != null && m.owned().arriving() != null) m2.put("arriving", w.decl(m.owned().arriving()));
             m2.put("mods", mods);
@@ -220,6 +225,9 @@ final class IrJson {
             case Ty.Ledger l -> l.name();
             case Ty.Instance i -> obj("instance", i.contract());
             case Ty.DepositT d -> obj("deposit", d.memo() == null ? null : type(d.memo()));
+            // M3c (additive): the purposes' ledger types by name, a LedgerMap by its key and value types.
+            case Ty.Gov g -> g.name();
+            case Ty.LedgerMapT m -> obj("ledgerMap", List.of(type(m.key()), type(m.val())));
         };
     }
 
@@ -258,8 +266,16 @@ final class IrJson {
             return obj("name", r.name(), "fields", fs, "at", at(r.pos()));
         }
 
+        /** M3c: a block's JSON form only to scan it for node kinds (its locals need not be declared through this writer). */
+        boolean scanning;
+
+        Map<String, Object> blockForScan(Ir.Block b) {
+            scanning = true;
+            return block(b);
+        }
+
         Map<String, Object> decl(Ir.Local l) {
-            if (!declared.add(l.seq)) throw new IllegalStateException("the local id " + l.seq + " is declared twice");
+            if (!declared.add(l.seq) && !scanning) throw new IllegalStateException("the local id " + l.seq + " is declared twice");
             byId.put(l.seq, l);
             var m = obj("id", (long) l.seq, "name", l.name, "type", type(l.type), "taint", (long) l.taint, "at", at(l.pos));
             if (l.fieldTaints != null) {
@@ -277,7 +293,7 @@ final class IrJson {
         }
 
         int ref(Ir.Local l) {
-            if (byId.get(l.seq) != l) throw new IllegalStateException("a reference to the undeclared local " + l);
+            if (byId.get(l.seq) != l && !scanning) throw new IllegalStateException("a reference to the undeclared local " + l);
             return l.seq;
         }
 
@@ -803,10 +819,16 @@ final class IrJson {
             for (Object o : l(r.get("methods"))) {
                 var x = m(o);
                 known(x, Set.of("kind", "name", "params", "mods", "checked", "usesCtx", "pays", "result", "body", "at", "reads", "on", "shared",
-                        "into", "arriving"), "a method");
+                        "into", "arriving", "from", "old"), "a method");
                 // M3a: the locals an owned method binds before its parameters, then the arriving object after the first.
                 Ir.Local shared = x.get("shared") == null ? null : decl(x.get("shared"));
                 Ir.Local into = x.get("into") == null ? null : decl(x.get("into"));
+                // M3c: init migrate's adopted state (checked with the program: purposesChecked).
+                if (x.containsKey("from") != x.containsKey("old") || x.containsKey("from") && !(x.get("from") instanceof String)) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": an init migrate names its params field (from) and its adopted"
+                            + " state (old), both or neither");
+                }
+                Ir.Migration migration = x.containsKey("old") ? new Ir.Migration(s(x.get("from")), decl(x.get("old"))) : null;
                 var params = decls(x.get("params"));
                 Ir.Local arriving = x.get("arriving") == null ? null : decl(x.get("arriving"));
                 var reads = new ArrayList<Ir.Read>();
@@ -830,7 +852,7 @@ final class IrJson {
                         case "quorum" -> Set.of("name", "keys", "threshold");
                         case "receives" -> Set.of("name", "type");
                         case "payable", "open", "retire" -> Set.of("name");
-                        default -> Set.of("name", "field");
+                        default -> Set.of("name", "field");   // M3c: migrates names its field too
                     };
                     known(md, allowed, "a modifier");
                     boolean quorum = name.equals("quorum");
@@ -861,8 +883,18 @@ final class IrJson {
                     case "ownedInit" -> Ir.Kind.OWNED_INIT;
                     case "ownedAction" -> Ir.Kind.OWNED_ACTION;
                     case "ownedDestroy" -> Ir.Kind.OWNED_DESTROY;
+                    // M3c (ADR-0010 D1, ADR-0011 D4)
+                    case "withdraw" -> Ir.Kind.WITHDRAW;
+                    case "certify" -> Ir.Kind.CERTIFY;
+                    case "vote" -> Ir.Kind.VOTE;
+                    case "propose" -> Ir.Kind.PROPOSE;
+                    case "migrate" -> Ir.Kind.MIGRATE;
                     default -> throw new IllegalArgumentException("method " + x.get("name") + ": unknown kind " + x.get("kind"));
                 };
+                if ((kind == Ir.Kind.MIGRATE) != (migration != null)) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": " + (migration != null ? "only an init migrate adopts a state (from, old)"
+                            : "an init migrate names from and old"));
+                }
                 // M3a: an owned method names an owned type (and only one does); its modifiers read that type's fields.
                 String on = x.get("on") == null ? null : s(x.get("on"));
                 if (kind.owned() != (on != null) || on != null && !owned.contains(on)) {
@@ -885,7 +917,9 @@ final class IrJson {
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
                 // #80 review C4, S7: a pay only in the method's statement blocks, never under an expression (JSC0413).
                 // #98 review F1: an init and a view move nothing (JSC0404): their whole body is pure.
-                noPayInExpressions(x.get("body"), kind == Ir.Kind.INIT || kind == Ir.Kind.VIEW, "method " + x.get("name"));
+                // M3c: a certify, vote or propose handler and an init migrate move nothing either (JSC1319, JSC1338).
+                noPayInExpressions(x.get("body"), kind == Ir.Kind.INIT || kind == Ir.Kind.VIEW || kind == Ir.Kind.MIGRATE || kind == Ir.Kind.CERTIFY
+                        || kind == Ir.Kind.VOTE || kind == Ir.Kind.PROPOSE, "method " + x.get("name"));
                 Ir.Block body = block(x.get("body"));
                 // #80 review S3: pays is recomputed from the body (a Pay statement in it, at any depth of if, for and match),
                 // and a method that moves value says who may call it ('only f', 'open', or M2b's quorum or authorized), as
@@ -900,8 +934,9 @@ final class IrJson {
                     throw new IllegalArgumentException("method " + x.get("name") + ": it pays, sends, mints, burns or deposits, so it says who may call it"
                             + " ('only f', 'open', quorum or authorized)");
                 }
-                // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409).
-                if (kind.ends() && !moves) {
+                // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409). M3c: but a migrating destroy
+                // moves everything into its successor, and nothing else (JSC1332, checked with the program).
+                if (kind.ends() && !moves && mods.stream().noneMatch(md -> md.name().equals("migrates"))) {
                     throw new IllegalArgumentException("method " + x.get("name") + ": a destroy pays out what the instance holds: it has no pay, send,"
                             + " mint, burn or deposit");
                 }
@@ -926,7 +961,7 @@ final class IrJson {
                 Ir.Owned ow = on != null || admitted != null ? new Ir.Owned(on, shared, into, arriving) : null;
                 methods.add(new Ir.Method(kind, s(x.get("name")), params, mods, checked,
                         (Boolean) x.get("usesCtx"), pays, body,
-                        x.get("result") == null ? null : type(x.get("result")), pos(x.get("at")), List.copyOf(reads), ow));
+                        x.get("result") == null ? null : type(x.get("result")), pos(x.get("at")), List.copyOf(reads), ow, migration));
             }
             // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy
             // without shared, before or after, so no object is trapped behind its instance or a deadline.
@@ -970,9 +1005,162 @@ final class IrJson {
                     invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at")), on));
                 }
             }
+            purposesChecked(r, options, records, enums, state, params0, methods, fns, owned, contracts, timeFields);
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
                     Set.copyOf(timeFields), recursive, warnings, params0, invariants, contracts, false, List.copyOf(libraries), List.copyOf(java),
                     List.copyOf(owned), keyedChecked(r, keyed, records, options, methods, owned, timeFields));
+        }
+
+        /**
+         * M3c (ADR-0010 D1, D2; ADR-0011 D4; K2, K39, K48): a program with script purposes or migration is read only in the
+         * checker's shapes, as the JavaScript reader reads it ({@code js/jsc-interpreter/test/mutants/purpose-*.json}, shared by
+         * both readers' tests). The option stakeSelf is the flag 1, once, and needs a withdraw and a certify handler
+         * (JSC1302). A purposes' ledger type or a LedgerMap is no field of the state, the params, a record, an enum variant or
+         * an imported contract's type, no parameter of any method but a handler's purpose data (a withdrawal's arguments
+         * included), and no view's result (JSC1321). Each handler, at most one per purpose (JSC1316), in a contract with
+         * params (JSC1317): its parameters in the processor's shape (JSC1314), a withdraw handler's result none and the
+         * others' a Bool (JSC1340, JSC1341); no input state read (StateRef, StateField: JSC1318); a withdraw handler's only
+         * effect a Send (JSC1319; the others' bodies are pure, read above); certify, vote and propose without the
+         * transaction (usesCtx false, JSC1315); modifiers only quorum or authorized over params.*, at least one but for
+         * propose, which takes none (JSC1312, JSC1313); a withdraw handler's checked locals among its arguments, the others'
+         * none. An init migrate, at most one (JSC1337): no modifiers (JSC1339), its from a Hash or Bytes params field
+         * (JSC1335), its old an imported contract's state without BigMaps (JSC1336, JSC1334), its result the state. A
+         * migrating destroy: no effects (JSC1332), an audience (only, quorum or authorized: JSC1333), its field no time field.
+         * Neither side in a contract with owned types, BigMap state or native assets (JSC1334): so an arriving object is
+         * always this contract's own output.
+         */
+        static void purposesChecked(Map<String, Object> r, List<Ir.ContractOption> options, Map<String, Ir.RecordType> records,
+                                    Map<String, Ir.EnumType> enums, Ir.RecordType state, Ir.RecordType params, List<Ir.Method> methods,
+                                    List<Ir.Fn> fns, List<String> owned, Map<String, Ir.Foreign> contracts, Set<String> timeFields) {
+            boolean stakeSelf = false;
+            for (Ir.ContractOption o : options) {
+                if (!o.name().equals("stakeSelf")) continue;
+                if (stakeSelf || !o.value().equals(BigInteger.ONE)) throw new IllegalArgumentException("the option stakeSelf is the flag 1, once (JSC1301)");
+                stakeSelf = true;
+            }
+            var stored = new ArrayList<Ir.RecordType>(records.values());
+            stored.add(state);
+            if (params != null) stored.add(params);
+            for (Ir.EnumType e : enums.values()) stored.addAll(e.variants().values());
+            for (Ir.Foreign f : contracts.values()) {
+                stored.add(f.state());
+                stored.addAll(f.records().values());
+                for (Ir.EnumType e : f.enums().values()) stored.addAll(e.variants().values());
+            }
+            for (Ir.RecordType rt : stored) {
+                for (var e : rt.fields().entrySet()) {
+                    if (Gov.holds(e.getValue())) {
+                        throw new IllegalArgumentException(rt.name() + "." + e.getKey() + ": a ledger type of the script purposes is no field (JSC1321)");
+                    }
+                }
+            }
+            var kinds = new java.util.EnumMap<Ir.Kind, Ir.Method>(Ir.Kind.class);
+            boolean migrates = false;
+            for (Ir.Method m : methods) {
+                String where = "method " + m.name() + ": ";
+                Ir.Kind k = m.kind();
+                List<Ir.Local> stored2 = k.purpose() ? (k == Ir.Kind.WITHDRAW && !m.params().isEmpty() ? m.params().subList(1, m.params().size()) : List.of())
+                        : m.params();
+                for (Ir.Local l : stored2) {
+                    if (Gov.holds(l.type)) throw new IllegalArgumentException(where + "the parameter " + l.name + " is a ledger type of the purposes,"
+                            + " which no redeemer carries (JSC1321)");
+                }
+                if (k == Ir.Kind.VIEW && Gov.holds(m.resultType())) throw new IllegalArgumentException(where + "a view's result is no ledger type (JSC1321)");
+                if (k.purpose() || k == Ir.Kind.MIGRATE) {
+                    if (kinds.put(k, m) != null) {
+                        throw new IllegalArgumentException(where + "at most one " + kindName(k) + (k == Ir.Kind.MIGRATE ? " (JSC1337)" : " handler (JSC1316)"));
+                    }
+                }
+                if (k.purpose()) {
+                    if (params == null) throw new IllegalArgumentException(where + "a handler is governed by the params, which the contract lacks (JSC1317)");
+                    List<Ty> shape = switch (k) {
+                        case CERTIFY -> List.of(Gov.TX_CERT);
+                        case VOTE -> List.of(Gov.VOTER, Gov.GOV_ACTION_ID, Gov.VOTE);
+                        case PROPOSE -> List.of(Gov.PROPOSAL);
+                        default -> null;
+                    };
+                    var types = m.params().stream().map(l -> l.type).toList();
+                    if (shape != null ? !types.equals(shape) : types.isEmpty() || !types.get(0).equals(Ty.INT)) {
+                        throw new IllegalArgumentException(where + "a " + kindName(k) + " handler's parameters are not the processor's shape (JSC1314)");
+                    }
+                    if (k == Ir.Kind.WITHDRAW ? m.resultType() != null : !Ty.BOOL.equals(m.resultType())) {
+                        throw new IllegalArgumentException(where + "a " + kindName(k) + " handler " + (k == Ir.Kind.WITHDRAW ? "has no result (JSC1340)"
+                                : "is a Bool (JSC1341)"));
+                    }
+                    if (k != Ir.Kind.WITHDRAW && m.usesCtx()) throw new IllegalArgumentException(where + "a " + kindName(k) + " handler takes no transaction (JSC1315)");
+                    if (k != Ir.Kind.WITHDRAW ? !m.checked().isEmpty() : m.checked().contains(m.params().get(0))) {
+                        throw new IllegalArgumentException(where + "a handler checks only a withdrawal's arguments");
+                    }
+                    if (hasNodeIn(m.body(), Set.of("StateRef", "StateField"))) {
+                        throw new IllegalArgumentException(where + "a handler reads no instance state (JSC1318)");
+                    }
+                    if (k == Ir.Kind.WITHDRAW && effectsOtherThan(m.body(), "Send")) {
+                        throw new IllegalArgumentException(where + "a withdraw handler's only effect is send (JSC1319)");
+                    }
+                    if (k == Ir.Kind.PROPOSE && !m.mods().isEmpty()) {
+                        throw new IllegalArgumentException(where + "a propose handler takes no modifiers (JSC1313)");
+                    }
+                    boolean audience = false;
+                    for (Ir.Mod md : m.mods()) {
+                        if (!md.name().equals("quorum") && !md.name().equals("authorized")) {
+                            throw new IllegalArgumentException(where + "a handler takes only quorum or authorized, not " + md.name() + " (JSC1313)");
+                        }
+                        for (String ref : md.field().split(" ")) {
+                            if (!ref.startsWith("params.")) throw new IllegalArgumentException(where + "a handler's audience names params fields (JSC1312)");
+                        }
+                        audience = true;
+                    }
+                    if (k != Ir.Kind.PROPOSE && !audience) throw new IllegalArgumentException(where + "a " + kindName(k) + " handler needs quorum or authorized (JSC1312)");
+                }
+                if (k == Ir.Kind.MIGRATE) {
+                    if (!m.mods().isEmpty()) throw new IllegalArgumentException(where + "an init migrate takes no modifiers (JSC1339)");
+                    Ty from = params == null ? null : params.fields().get(m.migration().from());
+                    if (from == null || !(from.equals(Ty.HASH) || from.equals(Ty.BYTES))) {
+                        throw new IllegalArgumentException(where + "init migrate's from names a Hash or Bytes params field (JSC1335)");
+                    }
+                    Ty old = m.migration().old().type;
+                    Ir.Foreign of = null;
+                    for (Ir.Foreign f : contracts.values()) if (old.equals(new Ty.Rec(f.state().name()))) of = f;
+                    if (of == null) throw new IllegalArgumentException(where + "init migrate adopts an imported contract's state (JSC1336)");
+                    if (of.bigMaps()) throw new IllegalArgumentException(where + "the previous version keeps BigMap state (JSC1334)");
+                    if (!Ty.STATE.equals(m.resultType())) throw new IllegalArgumentException(where + "init migrate's result is the state");
+                    if (!m.params().containsAll(m.checked())) throw new IllegalArgumentException(where + "init migrate checks its arguments");
+                }
+                String to = m.migratesTo();
+                if (to != null) {
+                    migrates = true;
+                    if (timeFields.contains(to)) throw new IllegalArgumentException(where + "migrates to " + to + ": a time field (JSC1330)");
+                    if (effectsOtherThan(m.body(), null)) throw new IllegalArgumentException(where + "a migrating destroy has no effects (JSC1332)");
+                    if (m.mods().stream().noneMatch(md -> md.name().equals("only") || md.name().equals("quorum") || md.name().equals("authorized"))) {
+                        throw new IllegalArgumentException(where + "a migrating destroy names its audience (JSC1333)");
+                    }
+                }
+            }
+            if (stakeSelf && !(kinds.containsKey(Ir.Kind.WITHDRAW) && kinds.containsKey(Ir.Kind.CERTIFY))) {
+                throw new IllegalArgumentException("stakeSelf needs a withdraw and a certify handler (JSC1302)");
+            }
+            if (migrates || kinds.containsKey(Ir.Kind.MIGRATE)) {
+                boolean assets = false;
+                for (Ir.Method m : methods) {
+                    if (m.kind().purpose()) continue;
+                    if (hasNodeIn(m.body(), Set.of("Send", "Mint", "Accept", "Deposit", "FundsRef")) || m.receives() != null) assets = true;
+                }
+                if (!owned.isEmpty() || state.fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT) || assets) {
+                    throw new IllegalArgumentException("migration with owned types, BigMap state or native assets (JSC1334)");
+                }
+            }
+        }
+
+        /** Whether a checked block holds a statement or node of one of {@code names}, at any depth (walked through its JSON form). */
+        static boolean hasNodeIn(Ir.Block b, Set<String> names) {
+            return hasNode(new Writer().blockForScan(b), names);
+        }
+
+        /** Whether a block holds an effect statement other than {@code allowed} (null: any effect at all). */
+        static boolean effectsOtherThan(Ir.Block b, String allowed) {
+            var others = new HashSet<>(EFFECTS);
+            if (allowed != null) others.remove(allowed);
+            return hasNodeIn(b, others);
         }
 
         /**
@@ -1121,6 +1309,14 @@ final class IrJson {
                         if (kind != Ir.Kind.ACTION) throw new IllegalArgumentException(where + "only an action admits objects, not a " + kind.name().toLowerCase());
                         if (f == null) throw new IllegalArgumentException(where + "admits names an owned type");
                     }
+                    case "migrates" -> {
+                        // M3c (ADR-0011 D4, JSC1330, JSC1331): an instance destroy, naming a Bytes or Hash state field.
+                        if (kind != Ir.Kind.DESTROY) throw new IllegalArgumentException(where + "only an instance destroy migrates, not a " + kind.name().toLowerCase());
+                        Ty t = f == null ? null : state.fields().get(f);
+                        if (t == null || !(t.equals(Ty.BYTES) || t.equals(Ty.HASH))) {
+                            throw new IllegalArgumentException(where + "migrates to names a Bytes or Hash state field, not " + f);
+                        }
+                    }
                     default -> {   // batched
                         if (f != null && !f.equals("only")) throw new IllegalArgumentException(where + "batched is plain or batched only, not " + f);
                         if (kind != Ir.Kind.ACTION) throw new IllegalArgumentException(where + "only an action can be batched, not a " + kind.name().toLowerCase());
@@ -1221,7 +1417,7 @@ final class IrJson {
         }
 
         static final Set<String> MODIFIERS = Set.of("payable", "open", "only", "after", "before", "batched", "quorum", "authorized", "receives",
-                "admits", "retire");
+                "admits", "retire", "migrates");
 
         /**
          * #101 review F2: the parts of M3a the checker produces so far (1: M3a1's owned objects of one type with shared reads;
@@ -1277,6 +1473,9 @@ final class IrJson {
                     case "Value" -> Ty.VALUE;
                     case "Address" -> Ty.ADDRESS;
                     case "Credential" -> Ty.CREDENTIAL;
+                    // M3c: the purposes' ledger types (Data, a PlutusData field's, too: it is carried, never read).
+                    case "TxCert", "Voter", "Vote", "GovernanceActionId", "ProposalProcedure", "GovernanceAction", "Delegatee", "DRep",
+                         "ProtocolVersion", "Rational", "Constitution", "Data" -> new Ty.Gov(p);
                     default -> throw new IllegalArgumentException("unknown type " + p);
                 };
             }
@@ -1292,6 +1491,7 @@ final class IrJson {
                 case "bigmap" -> new Ty.BigMapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
                 case "instance" -> new Ty.Instance(s(e.getValue()));
                 case "deposit" -> new Ty.DepositT(e.getValue() == null ? null : type(e.getValue()));
+                case "ledgerMap" -> new Ty.LedgerMapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
                 default -> throw new IllegalArgumentException("unknown type " + e.getKey());
             };
         }

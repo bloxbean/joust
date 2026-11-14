@@ -269,6 +269,12 @@ tasks.register('migrateJsc', JavaExec) {
     args '--migrate', jscSrc.path, layout.buildDirectory.dir('jsc-migrated').get().asFile.path
 }
 
+// ADR-0018 M3c (ADR-0010 §6): JuLC's pinned CIP-57 revision has no vocabulary for the VOTE/PROPOSE purposes, which the
+// staking port (StakedVault.jsc) handles, so this project compiles without a blueprint, as examples/staking does. Only the
+// aggregate META-INF/plutus/plutus.json is not written: every validator's own script (<Name>Validator.plutus.json), which
+// the runtime and the tests read, is unchanged.
+tasks.named('compileJava') { options.compilerArgs += ['-Ajulc.blueprint=false'] }
+
 // ADR-0018 D12: javac's diagnostics on the generated Java, reported again at their .jsc positions (as the plugin does).
 def javacLog = layout.buildDirectory.file('jsc/javac.log').get().asFile
 def remapJsc = tasks.register('remapJscDiagnostics', JavaExec) {

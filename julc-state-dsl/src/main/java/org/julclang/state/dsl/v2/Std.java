@@ -161,6 +161,23 @@ final class Std {
                 "AddressAdapter.paymentScript", List.of(), Policy.DIRECT, "any address; the script it is paid to, or None for a key's", false,
                 API + "AddressAdapter.paymentScript(" + ADDR + "):java.util.Optional<byte[]>"));
 
+        // ---- std/certs (M3c, ADR-0010 r2): the API's exact certificate checks for certify handlers, one body on the JVM and
+        //      on-chain (Certs). Each tests one constructor exactly: a StakeVote delegation is no stake-only delegation.
+        String CERT = "org.julclang.ledger.TxCert";
+        add(new Binding("std/certs", "isRegistration", List.of(Gov.TX_CERT), Ty.BOOL, API + "Certs", "Certs.isRegistration", List.of(),
+                Policy.DIRECT, "any certificate; true for RegStaking (with or without a deposit), else false", true,
+                API + "Certs.isRegistration(" + CERT + "):boolean"));
+        add(new Binding("std/certs", "delegatesOnlyTo", List.of(Gov.TX_CERT, Ty.BYTES), Ty.BOOL, API + "Certs", "Certs.delegatesOnlyTo", List.of(),
+                Policy.DIRECT, "any certificate and pool; true for DelegStaking or RegDeleg whose delegatee is exactly Stake of that pool"
+                + " (a StakeVote delegation is false), else false", true, API + "Certs.delegatesOnlyTo(" + CERT + ",byte[]):boolean"));
+        add(new Binding("std/certs", "delegatesVoteTo", List.of(Gov.TX_CERT, Gov.DREP), Ty.BOOL, API + "Certs", "Certs.delegatesVoteTo", List.of(),
+                Policy.DIRECT, "any certificate and DRep; true for DelegStaking or RegDeleg whose delegatee is exactly Vote of that DRep"
+                + " (a StakeVote delegation is false), else false", true,
+                API + "Certs.delegatesVoteTo(" + CERT + ",org.julclang.ledger.DRep):boolean"));
+        add(new Binding("std/certs", "isDRepLifecycle", List.of(Gov.TX_CERT), Ty.BOOL, API + "Certs", "Certs.isDRepLifecycle", List.of(),
+                Policy.DIRECT, "any certificate; true for RegDRep or UpdateDRep, else false", true,
+                API + "Certs.isDRepLifecycle(" + CERT + "):boolean"));
+
         // ---- std/time (D11): sources of time values with a documented bias, never exemptions. after and before are in
         //      the prelude and may also be imported from here.
         add(new Binding("std/time", "elapsedSince", List.of(Ty.INT), Ty.INT, null, null, List.of(), Policy.GENERATED,

@@ -51,7 +51,18 @@ final class Abi {
             // M2c: an instance of another contract (a params field), the API's ForeignInstance.
             case Ty.Instance i -> "ForeignInstance";
             case Ty.DepositT d -> throw new IllegalStateException("a deposit is never encoded by this contract");
+            // M3c: the purposes' ledger types come from the script context and are in no redeemer or datum (JSC1321).
+            case Ty.Gov g -> throw new IllegalStateException("a ledger type of the script purposes is never encoded by this contract");
+            case Ty.LedgerMapT m -> throw new IllegalStateException("a LedgerMap is never encoded by this contract");
         };
+    }
+
+    /**
+     * M3c: whether a method's parameters are a redeemer's fields: every method's but a view's and a certify, vote or
+     * propose handler's (their parameters are the purpose's data, from the script context; their redeemers carry nothing).
+     */
+    static boolean encodesParams(Ir.Method m) {
+        return m.kind() != Ir.Kind.VIEW && m.kind() != Ir.Kind.CERTIFY && m.kind() != Ir.Kind.VOTE && m.kind() != Ir.Kind.PROPOSE;
     }
 
     /** A value as data: policy → token name → quantity (ADR-0007; the redeemer's {@code assetsIn}). */
@@ -72,7 +83,7 @@ final class Abi {
         var all = new ArrayList<Ty>(p.state().fields().values());
         p.records().values().forEach(r -> all.addAll(r.fields().values()));
         p.enums().values().forEach(e -> e.variants().values().forEach(v -> all.addAll(v.fields().values())));
-        for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) all.add(l.type);
+        for (Ir.Method m : p.methods()) if (encodesParams(m)) for (Ir.Local l : m.params()) all.add(l.type);
         if (p.params() != null) all.addAll(p.params().fields().values());
         return all.stream().anyMatch(Abi::ledger);
     }
@@ -176,6 +187,42 @@ final class Abi {
             // An intent's datum, and the tag of its refund output, beside the state's (their schemas are in "types").
             w.append("  \"intent\": { \"datum\": \"Intent\", \"refund\": \"IntentRefund\" },\n");
         }
+        // M3c (ADR-0011 D4): init migrate adopts an instance of the previous version, Adopt(seed, args…, [ctx]), last in the
+        // processor's Lifecycle. The previous state is read from the seed, not carried in the redeemer.
+        Ir.Method adopt = p.migrate();
+        if (adopt != null) {
+            var fs = new ArrayList<String>();
+            fs.add(field("seed", "TxOutRef", "TxOutRef", ind));
+            for (Ir.Local l : adopt.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
+            if (adopt.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            ctx |= adopt.usesCtx();
+            mint.add("      " + ctor("Adopt", mint.size(), fs, "        "));
+            w.append("  \"migrate\": { \"from\": ").append(str(adopt.migration().from())).append(", \"previous\": ")
+                    .append(str(Ty.show(adopt.migration().old().type))).append(" },\n");
+        }
+        // M3c (ADR-0011 D4): each destroy that migrates, and the state field naming its successor's policy.
+        var migrating = new ArrayList<String>();
+        for (Ir.Method m : p.methods()) if (m.migratesTo() != null) migrating.add(str(m.name()) + ": " + str(m.migratesTo()));
+        if (!migrating.isEmpty()) w.append("  \"migratesTo\": { ").append(String.join(", ", migrating)).append(" },\n");
+        // M3c (ADR-0010 D2): the state's address is staked to the own script.
+        if (p.stakeSelf()) w.append("  \"stakeSelf\": true,\n");
+        // M3c (ADR-0010 D1): the script purposes' handlers, in source order; a withdraw handler's redeemer is
+        // Rewards(marker = 74, amount, args…, [ctx]), the others' carry nothing.
+        var purposes = new ArrayList<String>();
+        for (Ir.Method m : p.methods()) {
+            if (!m.kind().purpose()) continue;
+            String kind = m.kind().name().toLowerCase();
+            String entry = "    { \"purpose\": " + str(kind) + ", \"name\": " + str(m.name());
+            if (m.kind() == Ir.Kind.WITHDRAW) {
+                var fs = new ArrayList<String>(List.of(field("marker", "Int", "int", ind), field("amount", "Int", "int", ind)));
+                for (Ir.Local l : m.params().subList(1, m.params().size())) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
+                if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+                ctx |= m.usesCtx();
+                entry += ", \"marker\": 74, \"redeemer\": " + ctor("Rewards", 0, fs, "      ");
+            }
+            purposes.add(entry + " }");
+        }
+        if (!purposes.isEmpty()) w.append("  \"purposes\": [\n").append(String.join(",\n", purposes)).append("\n  ],\n");
         // M3a (ADR-0003 D2, ADR-0012 D1): an object's datum, Holding(instance, value), one constructor per owned type when
         // there are several (Holding_T, their tags in declaration order).
         // M3b (ADR-0016 D2): a keyed type's objects are a list's nodes: its head, its live nodes and its retired nodes,
@@ -310,7 +357,7 @@ final class Abi {
         var work = new java.util.ArrayDeque<Ty>();
         work.addAll(p.state().fields().values());
         if (p.params() != null) work.addAll(p.params().fields().values());   // M2b: the params are encoded too
-        for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) work.add(l.type);
+        for (Ir.Method m : p.methods()) if (encodesParams(m)) for (Ir.Local l : m.params()) work.add(l.type);
         while (!work.isEmpty()) {
             Ty t = work.removeFirst();
             switch (t) {
@@ -325,6 +372,8 @@ final class Abi {
                 case Ty.DepositT d -> {
                     if (d.memo() != null) work.addFirst(d.memo());
                 }
+                case Ty.Gov g -> { }
+                case Ty.LedgerMapT m -> { }
                 case Ty.Rec r -> {
                     if (!seen.add(r.name())) continue;
                     if (p.libraryOf(r.name()) != null || p.javaRecord(r.name()) != null) out.add(r.name());
@@ -422,6 +471,14 @@ final class Abi {
             tag += 3;
         }
         return out;
+    }
+
+    /**
+     * M3c (ADR-0011 D4): the mint redeemer's constructor of init migrate's Adopt, last in the processor's Lifecycle: after
+     * CreateInstance, BurnInstance, the owned inits, Remove_T, ByAction and CreateIntent.
+     */
+    static int adoptIndex(Ir.Program p) {
+        return 2 + ownedInits(p).size() + removable(p).size() + (Effects.mints(p) ? 1 : 0) + (intentOrder(p).isEmpty() ? 0 : 1);
     }
 
     /** M3a: the owned inits in source order; the k-th is the mint redeemer's constructor 2 + k (after BurnInstance). */

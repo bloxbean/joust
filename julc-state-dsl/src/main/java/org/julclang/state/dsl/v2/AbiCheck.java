@@ -80,6 +80,61 @@ public final class AbiCheck {
                 if (!same(st.get("remove"), remove)) problems.add("keyed type " + t + ": Remove_" + t + " is mint " + st.get("remove") + " here, " + remove + " described");
             }
         }
+        // M3c (ADR-0010 D2): the state's address staked to the own script, as x-joust.stakeSelf says.
+        boolean statedStake = Boolean.TRUE.equals(abi.get("stakeSelf")), describedStake = xj != null && Boolean.TRUE.equals(xj.get("stakeSelf"));
+        if (statedStake != describedStake) problems.add("stakeSelf is " + statedStake + " here, " + describedStake + " described");
+        // M3c (ADR-0010 D1): the purposes' handlers in order (purpose and name), and the withdraw handler's Rewards redeemer
+        // field by field, as x-joust.purposes describes them.
+        List<?> statedPurposes = abi.get("purposes") instanceof List<?> sp ? sp : List.of();
+        List<?> describedPurposes = xj != null && xj.get("purposes") instanceof List<?> dp ? dp : List.of();
+        if (statedPurposes.size() != describedPurposes.size()) {
+            problems.add("purposes: " + statedPurposes.size() + " stated, " + describedPurposes.size() + " described");
+        } else {
+            for (int i = 0; i < statedPurposes.size(); i++) {
+                var st = (Map<String, Object>) statedPurposes.get(i);
+                var d = (Map<String, Object>) describedPurposes.get(i);
+                if (!same(st.get("purpose"), d.get("purpose")) || !same(st.get("name"), d.get("name"))) {
+                    problems.add("purpose " + i + " is " + st.get("purpose") + " " + st.get("name") + " here, " + d.get("purpose") + " " + d.get("name")
+                            + " described");
+                    continue;
+                }
+                var dr = d.get("redeemer") instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.<String, Object>of();
+                if ("withdraw".equals(st.get("purpose"))) {
+                    if (!same(st.get("marker"), dr.get("marker"))) problems.add("the withdraw marker is " + st.get("marker") + " here, " + dr.get("marker") + " described");
+                    var describedCtor = new java.util.LinkedHashMap<String, Object>();
+                    describedCtor.put("title", dr.get("constructor"));
+                    describedCtor.put("index", dr.get("index"));
+                    describedCtor.put("fields", dr.get("fields"));
+                    c.alternatives("the withdraw redeemer", List.of(st.get("redeemer")), List.of(describedCtor));
+                } else if (st.containsKey("redeemer")) {
+                    problems.add("the " + st.get("purpose") + " handler's redeemer carries nothing, but the manifest states one");
+                }
+            }
+        }
+        // M3c (ADR-0011 D4): each migrating destroy's successor field, as its action's policies.migrateTo; init migrate's params
+        // field, as its creation's read (Adopt itself is in the mint redeemer, compared below).
+        var statedTo = abi.get("migratesTo") instanceof Map<?, ?> mt ? (Map<String, Object>) mt : Map.<String, Object>of();
+        var describedTo = new java.util.LinkedHashMap<String, Object>();
+        if (xj != null && xj.get("actions") instanceof List<?> as) {
+            for (Object a : as) {
+                var am = (Map<String, Object>) a;
+                if (am.get("policies") instanceof Map<?, ?> pm && pm.get("migrateTo") != null) describedTo.put((String) am.get("name"), pm.get("migrateTo"));
+            }
+        }
+        if (!same(new java.util.TreeMap<>(statedTo).toString(), new java.util.TreeMap<>(describedTo).toString())) {
+            problems.add("migrating destroys: " + statedTo + " here, " + describedTo + " described");
+        }
+        Object statedFrom = abi.get("migrate") instanceof Map<?, ?> mg ? mg.get("from") : null;
+        Object describedFrom = null;
+        if (xj != null && xj.get("creations") instanceof List<?> cs) {
+            for (Object o : cs) {
+                var cm = (Map<String, Object>) o;
+                if (!"migrate".equals(cm.get("kind"))) continue;
+                describedFrom = cm.get("recipe") instanceof Map<?, ?> rm && rm.get("reads") instanceof List<?> rd && !rd.isEmpty()
+                        && rd.get(0) instanceof Map<?, ?> r0 ? r0.get("params") : "?";
+            }
+        }
+        if (!same(statedFrom, describedFrom)) problems.add("init migrate's from is params." + statedFrom + " here, params." + describedFrom + " described");
         var redeemers = (Map<String, Object>) abi.get("redeemers");
         c.constructors("the spend redeemer", (List<Object>) redeemers.get("spend"), validator + "Calls");
         c.constructors("the mint redeemer", (List<Object>) redeemers.get("mint"), validator + "Lifecycle");

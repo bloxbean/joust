@@ -48,6 +48,23 @@ final class Ir {
             return name == null ? null : keyed.get(name);
         }
 
+        /** M3c (ADR-0010 D2): whether the state sits at the base address staked to the own script (the option stakeSelf). */
+        boolean stakeSelf() {
+            for (ContractOption o : options) if (o.name().equals("stakeSelf")) return true;
+            return false;
+        }
+
+        /** M3c: the contract's handler of a script purpose ({@code Kind.WITHDRAW} …), or null. */
+        Method handler(Kind kind) {
+            for (Method m : methods) if (m.kind() == kind) return m;
+            return null;
+        }
+
+        /** M3c (ADR-0011 D4): the contract's init migrate, or null. */
+        Method migrate() {
+            return handler(Kind.MIGRATE);
+        }
+
         /** M3b: whether the contract has keyed types (its datum then has the keyed variants, ADR-0016 D2). */
         boolean anyKeyed() {
             return !keyed.isEmpty();
@@ -284,13 +301,27 @@ final class Ir {
     /** A located warning (D12), with its stable code. */
     record Warning(int line, int col, String code, String message) {}
 
-    /** M3a (ADR-0003, ADR-0012): the owned kinds, on an owned type ({@link Method#on}). */
+    /**
+     * M3a (ADR-0003, ADR-0012): the owned kinds, on an owned type ({@link Method#on}). M3c (ADR-0010, ADR-0011 D4): the
+     * script purposes' handlers ({@code WITHDRAW}, {@code CERTIFY}, {@code VOTE}, {@code PROPOSE}) and the adoption of a
+     * previous version's instance ({@code MIGRATE}, a creation).
+     */
     enum Kind {
-        INIT, ACTION, DESTROY, VIEW, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY;
+        INIT, ACTION, DESTROY, VIEW, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY, WITHDRAW, CERTIFY, VOTE, PROPOSE, MIGRATE;
 
-        /** An init or an owned init: a creation, with no input. */
+        /** An init, an owned init or (M3c) an init migrate: a creation, with no input. */
         boolean creates() {
-            return this == INIT || this == OWNED_INIT;
+            return this == INIT || this == OWNED_INIT || this == MIGRATE;
+        }
+
+        /** M3c: a script purpose's handler: no input, no state; governed by the params (ADR-0010 D1). */
+        boolean purpose() {
+            return this == WITHDRAW || this == CERTIFY || this == VOTE || this == PROPOSE;
+        }
+
+        /** M3c: a creation of the instance (an init or an init migrate), whose output is checked against the params' quorums. */
+        boolean createsInstance() {
+            return this == INIT || this == MIGRATE;
         }
 
         /** An action or an owned action: it continues its input. */
@@ -328,15 +359,33 @@ final class Ir {
     record Read(Local local, String field) {}
 
     /**
+     * M3c (ADR-0011 D4): an {@code init migrate from params.from(old: C.State, …)}: the params field pinning the previous
+     * version's policy, and the local holding the adopted instance's state as its input holds it (not a redeemer field: the
+     * validator reads it from the spent instance, a checked input, class {@code input:<old>}).
+     */
+    record Migration(String from, Local old) {}
+
+    /**
      * A contract method. {@code checked} are the parameters holding keys, checked before the body runs (D5, J15);
      * {@code pays} says whether a {@code pay} is reachable (the action then returns its payouts too); {@code usesCtx}
      * whether the method takes the transaction.
      */
     record Method(Kind kind, String name, List<Local> params, List<Mod> mods, List<Local> checked, boolean usesCtx,
-                  boolean pays, Block body, Ty resultType, Pos pos, List<Read> reads, Owned owned) {
+                  boolean pays, Block body, Ty resultType, Pos pos, List<Read> reads, Owned owned, Migration migration) {
+        Method(Kind kind, String name, List<Local> params, List<Mod> mods, List<Local> checked, boolean usesCtx, boolean pays,
+               Block body, Ty resultType, Pos pos, List<Read> reads, Owned owned) {
+            this(kind, name, params, mods, checked, usesCtx, pays, body, resultType, pos, reads, owned, null);
+        }
+
         Method(Kind kind, String name, List<Local> params, List<Mod> mods, List<Local> checked, boolean usesCtx, boolean pays,
                Block body, Ty resultType, Pos pos, List<Read> reads) {
             this(kind, name, params, mods, checked, usesCtx, pays, body, resultType, pos, reads, null);
+        }
+
+        /** M3c: the state field a {@code destroy … migrates to f} names (the successor's policy), or null. */
+        String migratesTo() {
+            for (Mod m : mods) if (m.name().equals("migrates")) return m.field();
+            return null;
         }
 
         Method(Kind kind, String name, List<Local> params, List<Mod> mods, List<Local> checked, boolean usesCtx, boolean pays,

@@ -47,6 +47,21 @@ sealed interface Ty {
      */
     record Ledger(String name) implements Ty {}
 
+    /**
+     * M3c (ADR-0010, ADR-0018 D5): a ledger type of the script purposes, read from the script context: the sealed types
+     * {@code TxCert}, {@code Voter}, {@code Vote}, {@code GovernanceAction}, {@code Delegatee}, {@code DRep} (matched), the
+     * records {@code GovernanceActionId}, {@code ProposalProcedure}, {@code ProtocolVersion}, {@code Rational},
+     * {@code Constitution} (read by projection), and {@code Data}, a field typed {@code PlutusData} (inaccessible). Never
+     * constructed, compared, stored or passed in a redeemer ({@link Gov}).
+     */
+    record Gov(String name) implements Ty {}
+
+    /**
+     * M3c (ADR-0018 D5): a read-only map from ledger data ({@code JulcMap<K, V>}), its entries in the ledger's order:
+     * {@code TreasuryWithdrawals}' and {@code UpdateCommittee}'s {@code LedgerMap<Credential, Int>}. Never stored.
+     */
+    record LedgerMapT(Ty key, Ty val) implements Ty {}
+
     record ListT(Ty elem) implements Ty {}
 
     record OptT(Ty elem) implements Ty {}
@@ -75,6 +90,8 @@ sealed interface Ty {
             case Ledger l -> l.name();
             case Instance i -> "Instance<" + i.contract() + ">";
             case DepositT d -> d.memo() == null ? "Deposit" : "Deposit<" + show(d.memo()) + ">";
+            case Gov g -> g.name();
+            case LedgerMapT m -> "LedgerMap<" + show(m.key()) + ", " + show(m.val()) + ">";
         };
     }
 
@@ -107,6 +124,9 @@ sealed interface Ty {
             case Ledger l -> l.name();
             case Instance i -> "Instance_" + i.contract();
             case DepositT d -> d.memo() == null ? "Deposit" : "Deposit_" + mangle(d.memo());
+            // M3c: a ledger type's name has no '_' and is reserved (no declared type takes it), so its fragment is its name.
+            case Gov g -> g.name();
+            case LedgerMapT m -> "LedgerMap_" + mangle(m.key()) + "_" + mangle(m.val());
         };
     }
 
@@ -137,6 +157,8 @@ sealed interface Ty {
             case Ledger l -> false;
             case Instance i -> false;
             case DepositT d -> false;
+            case Gov g -> false;
+            case LedgerMapT m -> false;
             case ListT l -> hasBigMap(l.elem(), components, seen);
             case OptT o -> hasBigMap(o.elem(), components, seen);
             case MapT m -> hasBigMap(m.val(), components, seen);
@@ -164,6 +186,10 @@ sealed interface Ty {
             // M2c: an instance is the deployer's (params); a deposit's memo is checked where the action starts (#memo:).
             case Instance i -> false;
             case DepositT d -> false;
+            // M3c: the purposes' ledger types come from the script context (the ledger's data); they never cross from a
+            // caller (no redeemer, state or params field holds one, JSC1321).
+            case Gov g -> false;
+            case LedgerMapT m -> false;
             case ListT l -> needsCheck(l.elem(), components, seen);
             case OptT o -> needsCheck(o.elem(), components, seen);
             case Rec r -> seen.add(r.name()) && components.apply(r.name()).stream().anyMatch(f -> needsCheck(f, components, seen));

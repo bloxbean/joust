@@ -64,7 +64,12 @@ final class Checker {
             "Integer", "Long", "Byte", "Math", "System", "Record", "Override",
             // .jsc 2 type names and helper-name fragments: a declared type of the same name would share a helper (C6)
             "Int", "Bool", "Bytes", "Key", "List", "Option", "Opt", "Map", "BigMap", "Value", "Address", "Credential",
-            "Hash", "Some", "None", "Pair", "Tuple2", "Enum");
+            "Hash", "Some", "None", "Pair", "Tuple2", "Enum",
+            // M3c: the annotations the script purposes and migration lower to, the API helper and the ledger types they read
+            // (each imported by the generated Java: a declared type of the name would shadow it), the withdraw redeemer
+            "Withdraw", "Certify", "Votes", "Propose", "Migrate", "MigrateTo", "Certs", "Rewards", "TxCert", "Voter", "Vote",
+            "GovernanceActionId", "ProposalProcedure", "GovernanceAction", "Delegatee", "DRep", "ProtocolVersion", "Rational",
+            "Constitution", "LedgerMap", "Data");
 
     /**
      * A stopgap until bloxbean/joust#64 renames them: names the generated client binds where a method's parameters are in scope ({@code .run((s, ctx) -> { var r = …
@@ -106,6 +111,11 @@ final class Checker {
             // var r = …) in the generated client (ClientGenerator), and a move's names (ContractReader: into, destination).
             case OWNED_INIT -> Set.of("sh", "seed", "inst", "result");
             case OWNED_ACTION, OWNED_DESTROY -> Set.of("o", "sh", "r", "into", "destination", "destination_state");
+            // M3c: a withdraw handler's client (ClientGenerator: handle, amount, sends) and the adoption's (prior, priorState,
+            // result, seed); certify, vote and propose have no client method.
+            case WITHDRAW -> Set.of("handle", "amount", "sends");
+            case CERTIFY, VOTE, PROPOSE -> Set.of();
+            case MIGRATE -> Set.of("prior", "priorState", "result", "seed");
         };
     }
 
@@ -993,10 +1003,16 @@ final class Checker {
                         + lookups.get(m.name()) + " (" + m.name() + "(objectId)); rename it");
             }
         }
+        // M3c (ADR-0010 D1): a withdraw handler's redeemer is the record Rewards.
+        if (c.methods().stream().anyMatch(m -> m.kind() == Kind.WITHDRAW)) generated.add("Rewards");
+        boolean adopts = c.methods().stream().anyMatch(m -> m.kind() == Kind.MIGRATE);
         for (Syntax.Method m : c.methods()) {
-            if (m.kind() != Kind.INIT) checkUserName(m.name(), m.pos(), "method");
+            if (adopts && m.kind() != Kind.MIGRATE && m.name().equals("migrate")) {
+                throw m.pos().error("JSC1337", "migrate is the Java name of this contract's init migrate (@Migrate migrate(…)); rename this method");
+            }
+            if (m.kind() != Kind.INIT && m.kind() != Kind.MIGRATE) checkUserName(m.name(), m.pos(), "method");
             String variant = Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1);
-            if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && !generated.add(variant)) {
+            if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && m.kind() != Kind.MIGRATE && !generated.add(variant)) {
                 boolean declared = records.containsKey(variant) || enums.containsKey(variant) || variantEnum.containsKey(variant);
                 throw m.pos().error("JSC0203", "the method name " + m.name() + " would clash with the generated name " + variant
                         + (declared ? " (a declared type or variant): a method's redeemer is a Java class named after it, beside the"
@@ -1291,6 +1307,23 @@ final class Checker {
     /** M2c: whether the type being resolved may be {@code Instance<C>} (a params field's own type). */
     private boolean instanceOk;
 
+    /**
+     * M3c: whether the type being resolved may be (or hold) a purposes' ledger type or a {@code LedgerMap}: a handler's
+     * parameter, a fn's parameter or result, a const's annotation; never a field, a redeemer or a stored value (JSC1321).
+     */
+    private boolean ledgerOk;
+
+    /** M3c: a written type where the purposes' ledger types may appear (a handler's, a fn's or a const's). */
+    Ty resolveLedger(TypeRef t) {
+        boolean outer = ledgerOk;
+        ledgerOk = true;
+        try {
+            return resolve(t);
+        } finally {
+            ledgerOk = outer;
+        }
+    }
+
     private Ty resolveIn(TypeRef t, boolean stateField, boolean inst) {
         int n = t.args().size();
         Ty ty = switch (t.name()) {
@@ -1337,6 +1370,19 @@ final class Checker {
             }
             case "Address" -> n == 0 ? Ty.ADDRESS : null;
             case "Credential" -> n == 0 ? Ty.CREDENTIAL : null;
+            case "LedgerMap" -> {
+                // M3c (D5): a read-only map from ledger data; written only where a ledger value may be (a fn's, a const's).
+                if (n != 2) throw t.pos().error("JSC1321", "a LedgerMap has a key and a value type: LedgerMap<Credential, Int>");
+                ledgerOnly(t);
+                yield new Ty.LedgerMapT(resolve(t.args().get(0)), resolve(t.args().get(1)));
+            }
+            case "TxCert", "Voter", "Vote", "GovernanceActionId", "ProposalProcedure", "GovernanceAction", "Delegatee", "DRep",
+                 "ProtocolVersion", "Rational", "Constitution" -> {
+                // M3c (ADR-0010, D5): the script purposes' ledger types, from the script context.
+                if (n != 0) yield null;
+                ledgerOnly(t);
+                yield new Ty.Gov(t.name());
+            }
             default -> {
                 if (Ty.foreign(t.name())) {
                     // M2c: an imported contract's type, C.State or C.T.
@@ -1364,11 +1410,20 @@ final class Checker {
             throw t.pos().error("JSC0911", t.name() + " is a variant of " + variantEnum.get(t.name()) + ", not a type: write " + variantEnum.get(t.name()));
         }
         if (ty == null || (n > 0 && !(ty instanceof Ty.ListT || ty instanceof Ty.OptT || ty instanceof Ty.MapT || ty instanceof Ty.BigMapT
-                || ty instanceof Ty.Instance))) {
+                || ty instanceof Ty.Instance || ty instanceof Ty.LedgerMapT))) {
             throw t.pos().error("JSC0307", "unknown type '" + t.name() + "' (Int, Bool, Bytes, Key, Hash, Value, Address, Credential, List<T>,"
                     + " Option<T>, Map<K, V>, BigMap<K, V>, or a declared type or enum)");
         }
         return measured(ty, t.pos());
+    }
+
+    /** M3c (D5): a purposes' ledger type is read from the script context, never stored or passed by a caller (JSC1321). */
+    private void ledgerOnly(TypeRef t) {
+        if (!ledgerOk) {
+            throw t.pos().error("JSC1321", t.name() + " is a ledger type of the script purposes: it comes from the script context, so it is a"
+                    + " handler's parameter, a fn's parameter or result, or a const's type, never a field of the state, the params, a record,"
+                    + " an event or an object, nor a method's parameter (a redeemer field) or a view's result (ADR-0018 D5, M3c)");
+        }
     }
 
     /**
@@ -1457,6 +1512,11 @@ final class Checker {
             case Ty.DepositT d -> {
                 if (d.memo() != null) named(d.memo(), out);
             }
+            case Ty.Gov g -> { }
+            case Ty.LedgerMapT m -> {
+                named(m.key(), out);
+                named(m.val(), out);
+            }
         }
     }
 
@@ -1516,6 +1576,9 @@ final class Checker {
             case Ty.Ledger l -> l.equals(Ty.ADDRESS) ? 4 : 2;
             case Ty.Instance i -> 1;
             case Ty.DepositT d -> 1 + (d.memo() == null ? 0 : structuralDepth(d.memo(), named));
+            // M3c: the deepest ledger type of the purposes (a proposal's treasury withdrawals: a map of credentials) is shallow.
+            case Ty.Gov g -> 8;
+            case Ty.LedgerMapT m -> 1 + Math.max(structuralDepth(m.key(), named), structuralDepth(m.val(), named));
         };
     }
 
@@ -1691,13 +1754,22 @@ final class Checker {
                         }
                         options.add(new Ir.ContractOption(o.name(), o.value()));
                     }
-                    default -> throw o.pos().error("JSC0403", "unknown contract option '" + o.name() + "' (minAda, maxDatumBytes, maxValidityMs, assetSlots)");
+                    // M3c (ADR-0010 D2): stakeSelf, a flag: the state's address is staked to the contract's own script.
+                    case "stakeSelf" -> {
+                        if (!o.flag()) throw o.pos().error("JSC1301", "stakeSelf is a flag: contract Name(stakeSelf), without a value");
+                        if (options.stream().anyMatch(x -> x.name().equals("stakeSelf"))) throw o.pos().error("JSC1301", "stakeSelf is written twice");
+                        options.add(new Ir.ContractOption(o.name(), BigInteger.ONE));
+                    }
+                    default -> throw o.pos().error("JSC0403", "unknown contract option '" + o.name() + "' (minAda, maxDatumBytes, maxValidityMs, assetSlots,"
+                            + " stakeSelf)");
                 }
             }
             // M2: a contract is asset-aware when a method uses funds, send, mint, burn or accept (D10); the processor refuses
             // batched actions in one (ADR-0007 r2), so the checker does, at the batched modifier.
             // M2c: deposits and receives make a contract asset-aware too (D10; ADR-0011 D3).
-            assetAware = c.methods().stream().anyMatch(m -> usesFunds(m.body()) || effectsIn(m.body()).contains("deposit") || receives(m));
+            // M3c: a withdraw handler's sends are the reward account's lovelace (no Funds, as the processor reads it).
+            assetAware = c.methods().stream().anyMatch(m -> !m.kind().purpose() && (usesFunds(m.body()) || effectsIn(m.body()).contains("deposit")
+                    || receives(m)));
             ownedFields(c);
             for (Syntax.Method m : c.methods()) methods.add(method(m));
         }
@@ -1721,6 +1793,7 @@ final class Checker {
         var invariants = new ArrayList<Ir.Invariant>();
         for (Syntax.InvariantDecl inv : c.invariants()) invariants.add(invariant(inv, c));
         ownedRules(c, methods);
+        purposeRules(c, methods);
         var recs = recordsOf(main);
         for (TypeDecl t : c.owned()) recs.put(t.name(), new Ir.RecordType(t.name(), records.get(t.name()), t.pos()));
         return new Ir.Program(file.pkg(), fileName, c.name(), options, recs, enumsIrOf(main),
@@ -2161,6 +2234,11 @@ final class Checker {
         }
         for (Ir.Method m : methods) {
             if (Abi.batched(m)) throw m.pos().error("JSC1244", "keyed types cannot be combined with batched actions yet (ADR-0016 D1)");
+            // M3c: as the processor (ContractReader.keyedRules): no withdraw handler beside keyed types.
+            if (m.kind() == Ir.Kind.WITHDRAW) {
+                throw m.pos().error("JSC1244", "keyed types cannot be combined with a withdraw handler yet (native assets and @Withdraw: a"
+                        + " follow-up of ADR-0016, D1, M4)");
+            }
         }
         for (String o : ownedTypes) {
             if (records.get(o).values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
@@ -2228,12 +2306,21 @@ final class Checker {
             case OWNED_INIT -> Ir.Kind.OWNED_INIT;
             case OWNED_ACTION -> Ir.Kind.OWNED_ACTION;
             case OWNED_DESTROY -> Ir.Kind.OWNED_DESTROY;
+            case WITHDRAW -> Ir.Kind.WITHDRAW;
+            case CERTIFY -> Ir.Kind.CERTIFY;
+            case VOTE -> Ir.Kind.VOTE;
+            case PROPOSE -> Ir.Kind.PROPOSE;
+            case MIGRATE -> Ir.Kind.MIGRATE;
         };
     }
 
     private boolean usesCtx(Syntax.Method m) {
         if (m.kind() == Kind.DESTROY || m.kind() == Kind.OWNED_DESTROY) return true;
         if (m.kind() == Kind.VIEW) return false;
+        // M3c (ADR-0010 D1): certify, vote and propose take (Params, the purpose's data) only: no transaction. A withdraw
+        // handler takes Ctx when it reads the caller or the window (the processor's @Withdraw(…, Ctx)); so does init migrate.
+        if (m.kind() == Kind.CERTIFY || m.kind() == Kind.VOTE || m.kind() == Kind.PROPOSE) return false;
+        if (m.kind() == Kind.WITHDRAW || m.kind() == Kind.MIGRATE) return mentionsCtx(m.body());
         // M3a: a method that reads the instance by reference (shared) or moves (into) takes Ctx, as the Java examples'
         // owned methods do (examples/bank, guild, market: their redeemers carry it), so their ports keep those redeemers.
         for (Param p : m.params()) if (p.role() != null) return true;
@@ -2283,6 +2370,9 @@ final class Checker {
         // M2c: a receiving action takes Funds (it sees the deposits in funds.deposits; ADR-0011 D3).
         boolean funds = usesFunds(m.body()) || receives(m);
         boolean payable = m.mods().stream().anyMatch(x -> x.name().equals("payable"));
+        // M3c (ADR-0010 D1, ADR-0011 D4): a handler's and an adoption's own shapes come before the generic rules.
+        if (ik.purpose() || ik == Ir.Kind.MIGRATE) purposeShape(m, ik, fx);
+        boolean migrates = m.mods().stream().anyMatch(x -> x.name().equals("migrates"));
         if (moves && (ik.creates() || m.kind() == Kind.VIEW)) {
             throw firstEffect(m.body(), Set.of("pay", "send", "mint", "deposit")).error("JSC0404", (ik == Ir.Kind.INIT ? "an init"
                     : ik == Ir.Kind.OWNED_INIT ? "an owned init" : "a view") + " cannot pay, send, mint, burn or deposit (ADR-0018 D4, ADR-0007 D1,"
@@ -2313,8 +2403,8 @@ final class Checker {
             throw m.pos().error("JSC0423", m.name() + " is payable and uses funds, send, mint or burn, so it can take native assets: state"
                     + " exactly which with accept(…), or accept(Value.none()) for none (ADR-0007 r2, ADR-0018 D4)");
         }
-        // An init's body may accept (M3a), and nothing else of D4's effects (JSC0404 above).
-        boolean effects = ik.continues() || ik.ends() || ik.creates() && fx.contains("accept");
+        // An init's body may accept (M3a), and nothing else of D4's effects (JSC0404 above). M3c: a withdraw handler sends.
+        boolean effects = ik.continues() || ik.ends() || ik.creates() && fx.contains("accept") || ik == Ir.Kind.WITHDRAW;
         var sc = new Sc(ik, m.name(), hasState, ctx, effects, false, 0, null);
         var mods = new ArrayList<Ir.Mod>();
         boolean audience = false;
@@ -2455,6 +2545,27 @@ final class Checker {
                                 + " (owned " + m.on() + " keyed by field { … })" : ""));
                     }
                 }
+                case "migrates" -> {
+                    // M3c (ADR-0011 D4): @MigrateTo("f"): the instance ends by moving into an instance of the policy in f.
+                    if (m.kind() != Kind.DESTROY) {
+                        throw mod.pos().error("JSC1330", "migrates to goes on an instance destroy: it ends the instance by moving it, value and"
+                                + " state, into an instance of its successor (ADR-0011 D4)");
+                    }
+                    if (mod.arg().startsWith("params.")) {
+                        throw mod.pos().error("JSC1331", "migrates to names a state field, not " + mod.arg() + ": the successor's params pin this"
+                                + " version's policy, so pinning the successor in this version's params would make each script's hash depend on"
+                                + " the other's (ADR-0011 D4); keep the successor's policy in a state field its admin sets (setSuccessor)");
+                    }
+                    Ty st = inFields().get(mod.arg());
+                    if (st == null || !(st.equals(Ty.BYTES) || st.equals(Ty.HASH))) {
+                        throw mod.pos().error("JSC1330", "migrates to " + mod.arg() + ": " + (st == null ? "no state field " + mod.arg()
+                                : mod.arg() + " is " + Ty.show(st)) + "; the successor's policy is a Bytes or Hash state field (ADR-0011 D4)");
+                    }
+                    if (isTimeField(mod.arg())) {
+                        throw mod.pos().error("JSC1330", "migrates to " + mod.arg() + ": " + mod.arg() + " holds a time value, so where the funds go"
+                                + " would depend on a validity window (ADR-0018 D11)");
+                    }
+                }
                 default -> throw mod.pos().error("JSC0407", "unknown modifier " + mod.name());
             }
             mods.add(new Ir.Mod(mod.name(), mod.arg()));
@@ -2467,7 +2578,18 @@ final class Checker {
             throw m.pos().error("JSC0408", m.name() + " can pay out, send, mint, burn or deposit, so it must say who may call it: add 'only"
                     + " <field>' or 'open' (ADR-0018 D4)");
         }
-        if (ik.ends() && !moves) {
+        if (migrates) {
+            // M3c (ADR-0011 D4, K49): the successor adopts exactly the instance's lovelace, so the old side moves everything.
+            if (!fx.isEmpty()) {
+                throw firstEffect(m.body(), fx).error("JSC1332", "a migrating destroy moves the instance's whole value into its successor, which"
+                        + " adopts exactly its lovelace (ADR-0011 D4): it pays, sends, mints, deposits and emits nothing");
+            }
+            if (modNames.stream().noneMatch(Set.of("only", "quorum", "authorized")::contains)) {
+                throw m.pos().error("JSC1333", m.name() + " migrates the instance: say who may, with only, quorum or authorized ('open' would"
+                        + " let anyone move every instance into the successor whenever it is named)");
+            }
+        }
+        if (ik.ends() && !moves && !migrates) {
             throw m.pos().error("JSC0409", (ik == Ir.Kind.DESTROY ? "a destroy ends the instance" : "an owned destroy ends its object")
                     + ", so it must pay out what it holds: pay(…), send(…), mint(…), burn(…) or deposit(…) at least once (ADR-0018 D4)");
         }
@@ -2485,7 +2607,18 @@ final class Checker {
         Ir.Local shared = null, into = null, arriving = null;
         String admits = null;
         for (Mod mod : m.mods()) if (mod.name().equals("admits")) admits = mod.arg();
-        for (int pi = 0; pi < m.params().size(); pi++) {
+        // M3c: a handler's parameters are the purpose's data (and a withdrawal's arguments); an adoption's first is the
+        // previous version's state.
+        Ir.Local old = null;
+        int firstParam = 0;
+        if (ik.purpose()) {
+            purposeParams(m, ik, sc, params, checked);
+            firstParam = m.params().size();
+        } else if (ik == Ir.Kind.MIGRATE) {
+            old = migrateOld(m, sc);
+            firstParam = 1;
+        }
+        for (int pi = firstParam; pi < m.params().size(); pi++) {
             Param p = m.params().get(pi);
             if (p.role() != null) {
                 // M3a (ADR-0003 D1, ADR-0012 D3): name: shared, the instance's state by reference; name: into, a move's
@@ -2602,9 +2735,24 @@ final class Checker {
         Ir.Expr result = null;
         Ty resultType;
         switch (m.kind()) {
-            case INIT, ACTION, OWNED_INIT, OWNED_ACTION -> {
+            case WITHDRAW -> {
+                if (b.result() != null) {
+                    throw b.result().pos().error("JSC1340", "a withdraw handler's result is its sends: send(to, Value.lovelace(n)), totalling the"
+                            + " amount (ADR-0010 D1); it has no value");
+                }
+                resultType = null;
+            }
+            case CERTIFY, VOTE, PROPOSE -> {
                 if (b.result() == null) {
-                    throw b.pos().error("JSC0410", m.kind() == Kind.INIT ? "an init returns the first state: return { … }"
+                    throw b.pos().error("JSC1341", handlerWord(ik) + " decides: it evaluates to a Bool (= expr, or a block ending in one)");
+                }
+                result = expr(b.result(), sc, Ty.BOOL);
+                expectType(Ty.BOOL, result, b.result().pos());
+                resultType = Ty.BOOL;
+            }
+            case INIT, ACTION, OWNED_INIT, OWNED_ACTION, MIGRATE -> {
+                if (b.result() == null) {
+                    throw b.pos().error("JSC0410", m.kind() == Kind.INIT || m.kind() == Kind.MIGRATE ? "an init returns the first state: return { … }"
                             : m.kind() == Kind.OWNED_INIT ? "an owned init returns the new object: return { … }"
                             : m.kind() == Kind.OWNED_ACTION ? "an owned action evaluates to the object's next value: return { ...state, … }"
                             : "an action evaluates to the next state: return { ...state, … }");
@@ -2625,7 +2773,7 @@ final class Checker {
                             : "an owned destroy ends its object: it has no next value");
                 }
                 resultType = null;
-                if (!mentions(b, "balance")) {
+                if (!mentions(b, "balance") && !migrates) {
                     // #101 review S3: an owned destroy that is an escape hatch (no shared, before or after) and never reads
                     // balance could never pay out what its object holds, so every object would be locked: an error.
                     boolean hatch = m.kind() == Kind.OWNED_DESTROY && m.params().stream().noneMatch(p -> p.role() != null)
@@ -2649,8 +2797,256 @@ final class Checker {
         }
         unusedConsts(sc);
         Ir.Owned owned = m.owned() || admits != null ? new Ir.Owned(m.on(), shared, into, arriving) : null;
+        Ir.Migration migration = old == null ? null : new Ir.Migration(m.from(), old);
         return new Ir.Method(ik, m.name(), params, mods, checked, ctx, pays, new Ir.Block(stmts, result, b.pos()),
-                resultType, m.pos(), List.copyOf(reads), owned);
+                resultType, m.pos(), List.copyOf(reads), owned, migration);
+    }
+
+    // ------------------------------------------------------------------ M3c: script purposes and migration
+
+    /** M3c: how a handler kind is named in messages. */
+    static String handlerWord(Ir.Kind k) {
+        return switch (k) {
+            case WITHDRAW -> "a withdraw handler";
+            case CERTIFY -> "a certify handler";
+            case VOTE -> "a vote handler";
+            case PROPOSE -> "a propose handler";
+            case MIGRATE -> "init migrate";
+            default -> "a method";
+        };
+    }
+
+    /** M3c: the generated names a withdraw handler's arguments may not take (the Rewards redeemer's, the client's). */
+    static final Set<String> WITHDRAW_NAMES = Set.of("marker", "amount", "handle", "sends", "cosigners", "runtime", "callerAccount");
+
+    /**
+     * M3c (ADR-0010 D1, r2; ADR-0011 D4): a handler's and an adoption's shape, before the generic rules. A handler is
+     * governed by the params (no instance is spent): it needs the contract's params, names them in its audience (quorum or
+     * authorized over params.*, required but for propose, a guardrail whose audience the validator would not check), and
+     * has only the effects of its kind (a withdraw handler sends; the others decide). An adoption has no modifiers and no
+     * effects: the new instance takes exactly the previous one's lovelace (the processor's adoptMethod), and the previous
+     * version's destroy says who may migrate.
+     */
+    private void purposeShape(Syntax.Method m, Ir.Kind ik, Set<String> fx) {
+        String what = handlerWord(ik);
+        if (ik == Ir.Kind.MIGRATE) {
+            if (!fx.isEmpty()) {
+                throw firstEffect(m.body(), fx).error("JSC1338", "init migrate adopts the previous instance's value exactly (ADR-0011 D4): it pays,"
+                        + " sends, mints, accepts, deposits and emits nothing");
+            }
+            for (Mod mod : m.mods()) {
+                throw mod.pos().error("JSC1339", "init migrate takes no modifiers: the new instance holds exactly the previous one's lovelace, so"
+                        + " it is not payable, and the previous version's migrating destroy says who may migrate (ADR-0011 D4)");
+            }
+            return;
+        }
+        if (paramsFields == null) {
+            throw m.pos().error("JSC1317", what + " is governed by the params, since no instance is spent for a script purpose (ADR-0010 D1):"
+                    + " declare params { … } and name them in its quorum or authorized");
+        }
+        for (String k : fx) {
+            if (ik == Ir.Kind.WITHDRAW && k.equals("send")) continue;
+            throw firstEffect(m.body(), Set.of(k)).error("JSC1319", ik == Ir.Kind.WITHDRAW
+                    ? "a withdraw handler's only effect is send(…): its sends allocate the rewards withdrawn, exactly (ADR-0010 D1, I37)"
+                    : what + " decides, by its Bool: it has no effects (ADR-0010 D1)");
+        }
+        boolean audience = false;
+        for (Mod mod : m.mods()) {
+            if (!mod.name().equals("quorum") && !mod.name().equals("authorized") || ik == Ir.Kind.PROPOSE) {
+                throw mod.pos().error("JSC1313", ik == Ir.Kind.PROPOSE
+                        ? "a propose handler is a guardrail: the ledger runs it for a proposal and its validator checks no audience, so it takes"
+                        + " no modifiers (ADR-0010 D1); drop '" + mod.name() + "'"
+                        : what + " takes only quorum or authorized over params.* (ADR-0010 D1), not '" + mod.name() + "'");
+            }
+            for (String ref : mod.name().equals("quorum") ? mod.arg().split(" ") : new String[]{mod.arg()}) {
+                if (!ref.startsWith("params.")) {
+                    throw mod.pos().error("JSC1312", what + "'s audience names params fields ('" + mod.name() + " " + mod.arg() + "'): no instance is"
+                            + " spent for a script purpose, so there is no state to read it from (ADR-0010 D1)");
+                }
+            }
+            audience = true;
+        }
+        if (ik != Ir.Kind.PROPOSE && !audience) {
+            throw m.pos().error("JSC1312", what + " needs quorum or authorized over params.*: an open handler would let anyone "
+                    + (ik == Ir.Kind.WITHDRAW ? "withdraw the rewards" : ik == Ir.Kind.CERTIFY ? "register or redelegate the credential"
+                    : "cast the script's votes") + " (ADR-0010 r2)");
+        }
+    }
+
+    /**
+     * M3c (ADR-0010 D1): a handler's parameters, in the processor's shapes. certify (cert: TxCert), vote (voter: Voter,
+     * action: GovernanceActionId, vote: Vote), propose (p: ProposalProcedure): the purpose's data, from the script context.
+     * withdraw (amount: Int, args…): the amount withdrawn, then arguments, which are the Rewards redeemer's fields after the
+     * marker and the amount, checked inputs like any redeemer's (D5).
+     */
+    private void purposeParams(Syntax.Method m, Ir.Kind ik, Sc sc, List<Ir.Local> params, List<Ir.Local> checked) {
+        String what = handlerWord(ik);
+        List<Ty> shape = switch (ik) {
+            case CERTIFY -> List.of(Gov.TX_CERT);
+            case VOTE -> List.of(Gov.VOTER, Gov.GOV_ACTION_ID, Gov.VOTE);
+            case PROPOSE -> List.of(Gov.PROPOSAL);
+            default -> null;
+        };
+        String sig = switch (ik) {
+            case WITHDRAW -> "withdraw " + m.name() + "(amount: Int, …args)";
+            case CERTIFY -> "certify " + m.name() + "(cert: TxCert)";
+            case VOTE -> "vote " + m.name() + "(voter: Voter, action: GovernanceActionId, vote: Vote)";
+            default -> "propose " + m.name() + "(p: ProposalProcedure)";
+        };
+        if (shape != null ? m.params().size() != shape.size() : m.params().isEmpty()) {
+            throw m.pos().error("JSC1314", what + " takes " + sig + " (the processor's shape, ADR-0010 D1)");
+        }
+        for (int i = 0; i < m.params().size(); i++) {
+            Param p = m.params().get(i);
+            if (p.role() != null || p.reads() != null) {
+                throw p.pos().error("JSC1314", what + " reads no instance and no other contract: no input is spent for a script purpose (ADR-0010 D1)");
+            }
+            // The purpose's data is a ledger type; a withdrawal's arguments are a redeemer's fields, so never one (JSC1321).
+            Ty t = shape != null ? resolveLedger(p.type()) : resolve(p.type());
+            if (shape != null && !t.equals(shape.get(i))) {
+                throw p.type().pos().error("JSC1314", what + " takes " + sig + ": its parameter " + (i + 1) + " is a " + Ty.show(shape.get(i))
+                        + ", not " + Ty.show(t));
+            }
+            if (ik == Ir.Kind.WITHDRAW && i == 0 && !t.equals(Ty.INT)) {
+                throw p.type().pos().error("JSC1314", what + " takes " + sig + ": its first parameter is the amount withdrawn, an Int");
+            }
+            if (ik == Ir.Kind.WITHDRAW && i > 0) {
+                if (WITHDRAW_NAMES.contains(p.name())) {
+                    throw p.pos().error("JSC0216", "'" + p.name() + "' is a name the generated redeemer (Rewards(marker, amount, …)) or client uses;"
+                            + " rename the parameter");
+                }
+                if (holdsOwned(t, new HashSet<>())) throw p.type().pos().error("JSC1207", "a method parameter cannot be (or hold) an owned type");
+                noValue(t, p.type().pos(), "a method parameter");
+                noForeign(t, p.type().pos(), "a method parameter");
+                if (holdsValue(t)) throw p.type().pos().error("JSC0341", "a method parameter cannot hold a Value (" + Ty.show(t) + ")");
+            }
+            Ir.Local l = sc.declare(p.name(), t, 0, p.pos(), false, null);
+            params.add(l);
+            if (ik == Ir.Kind.WITHDRAW && i > 0 && Ty.needsCheck(t, this::components)) checked.add(l);
+        }
+    }
+
+    /**
+     * M3c (ADR-0011 D4): init migrate's first parameter, the previous version's state ({@code old: C.State}, C an imported
+     * contract), as the adopted instance's input holds it; a checked input (D5: its keys, hashes, maps), read like a read
+     * state, its fields time values where C sets them from its window (D11). The params field {@code from} pins C's policy.
+     */
+    private Ir.Local migrateOld(Syntax.Method m, Sc sc) {
+        Ty from = paramsFields == null ? null : paramsFields.get(m.from());
+        if (from == null || !(from.equals(Ty.HASH) || from.equals(Ty.BYTES))) {
+            throw m.fromPos().error("JSC1335", "init migrate from params." + m.from() + ": " + (paramsFields == null ? "the contract declares no params"
+                    : from == null ? "the params have no field " + m.from() : "params." + m.from() + " is " + Ty.show(from))
+                    + "; the previous version's policy is a Hash (or Bytes) params field: params { previous: Hash }");
+        }
+        Param p = m.params().isEmpty() ? null : m.params().get(0);
+        String hint = "init migrate's first parameter is the previous version's state: init migrate from params." + m.from()
+                + "(old: V1.State), with import contract { V1 } from \"./V1.jsc\" (ADR-0011 D4)";
+        if (p == null || p.role() != null || p.reads() != null || !Ty.foreign(p.type().name()) || !p.type().args().isEmpty()) {
+            throw (p == null ? m.pos() : p.pos()).error("JSC1336", hint);
+        }
+        Ty t = resolve(p.type());
+        String c = p.type().name().substring(0, p.type().name().indexOf('.'));
+        Ir.Foreign f = contracts.get(c);
+        if (!t.equals(new Ty.Rec(f.state().name()))) throw p.type().pos().error("JSC1336", hint + "; " + p.type().name() + " is not " + c + "'s state");
+        if (f.bigMaps()) {
+            throw p.type().pos().error("JSC1334", "the previous version " + c + " keeps BigMap state, whose maps cannot move into a new instance (their"
+                    + " claims are owned by the spent input, ADR-0011 r2)");
+        }
+        var fts = new LinkedHashMap<String, Integer>();
+        for (String fld : f.state().fields().keySet()) fts.put(fld, f.timeFields().contains(fld) ? TIME : 0);
+        int whole = f.timeFields().isEmpty() ? 0 : TIME;
+        return initLocal(p, sc, t, whole, fts);
+    }
+
+    /**
+     * M3c (ADR-0010 D1, D2; ADR-0011 D4): the contract's purposes and migration. At most one handler per purpose; stakeSelf
+     * needs a withdraw and a certify handler, or the rewards and the credential of its funds are unreachable (I38); at most
+     * one init migrate; and no migration (either side) with owned or keyed objects, BigMap state or native assets, which
+     * cannot move into the successor (ADR-0011 r2, A45). That exclusion also keeps M3a3's premise: an arriving object is
+     * always this contract's own output, never another policy's.
+     */
+    private void purposeRules(Contract c, List<Ir.Method> methods) {
+        var seen = new HashMap<Ir.Kind, Syntax.Method>();
+        for (Syntax.Method m : c.methods()) {
+            Ir.Kind k = kind(m.kind());
+            if (!k.purpose() && k != Ir.Kind.MIGRATE) continue;
+            Syntax.Method other = seen.putIfAbsent(k, m);
+            if (other != null) {
+                throw m.pos().error(k == Ir.Kind.MIGRATE ? "JSC1337" : "JSC1316", (k == Ir.Kind.MIGRATE ? "a contract adopts from one previous version:"
+                        + " at most one init migrate" : "at most one " + m.kind().name().toLowerCase() + " handler per contract (ADR-0010 D1): "
+                        + other.name() + " is one") + " (line " + other.pos().line() + ")");
+            }
+        }
+        boolean stakeSelf = c.options().stream().anyMatch(o -> o.name().equals("stakeSelf"));
+        if (stakeSelf && !(seen.containsKey(Ir.Kind.WITHDRAW) && seen.containsKey(Ir.Kind.CERTIFY))) {
+            Pos at = c.options().stream().filter(o -> o.name().equals("stakeSelf")).findFirst().get().pos();
+            throw at.error("JSC1302", "stakeSelf stakes the funds to the contract's own script, so it needs a withdraw handler (its rewards) and a"
+                    + " certify handler (its registration and delegation); without them they are unreachable (ADR-0010 D2, I38)");
+        }
+        boolean bigState = stateFields.values().stream().anyMatch(t -> t instanceof Ty.BigMapT);
+        for (Syntax.Method m : c.methods()) {
+            boolean adopts = m.kind() == Kind.MIGRATE;
+            Syntax.Mod to = m.mods().stream().filter(x -> x.name().equals("migrates")).findFirst().orElse(null);
+            if (!adopts && to == null) continue;
+            String why = !ownedTypes.isEmpty() ? "owned objects (" + String.join(", ", ownedTypes) + "), which would stay under the old policy"
+                    + " while the instance they belong to moves; and an object arriving from another policy would be no output of this contract"
+                    : bigState ? "BigMap state, whose maps cannot move (their claims are owned by the spent input)"
+                    : assetAware ? "native assets (this contract uses funds, send, mint, accept, deposit or receives), which the migration does not"
+                    + " move: the successor adopts exactly the instance's lovelace" : null;
+            if (why != null) {
+                throw (adopts ? m.pos() : to.pos()).error("JSC1334", (adopts ? "init migrate" : "migrates to") + " is not supported in a contract with "
+                        + why + " (ADR-0011 r2)");
+            }
+        }
+        // A43: the successor named by migrates to can be changed by whoever may write its field until the migration.
+        var successors = new LinkedHashSet<String>();
+        for (Ir.Method m : methods) if (m.migratesTo() != null) successors.add(m.migratesTo());
+        for (Ir.Method m : methods) {
+            if (m.kind() != Ir.Kind.ACTION || successors.isEmpty() || !(m.body().result() instanceof Ir.Expr r)) continue;
+            for (String f : successors) {
+                if (writesField(r, f) && !locksField(m.body(), f)) {
+                    warn(m.pos(), "JSC9014", m.name() + " sets " + f + ", the successor a migration moves the instance into: whoever may call it"
+                            + " can change the successor until the migration, after users relied on it (ADR-0011 D4); to fix it once, require"
+                            + " it unset: require(" + f + " == #, \"the successor is set once\")");
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether an action's next state may give field {@code f} another value than the input's: any result but the state itself
+     * or a spread of it that leaves {@code f} out or writes it back unchanged (conservative).
+     */
+    /** Whether a body requires the field {@code f} unset (empty) before anything else may set it: {@code require(f == #, …)}. */
+    private static boolean locksField(Ir.Block b, String f) {
+        for (Ir.Stmt st : b.stmts()) if (st instanceof Ir.Require r && requiresEmpty(r.cond(), f)) return true;
+        return false;
+    }
+
+    private static boolean requiresEmpty(Ir.Expr c, String f) {
+        if (c instanceof Ir.Logic l && l.op().equals("&&")) return requiresEmpty(l.left(), f) || requiresEmpty(l.right(), f);
+        if (!(c instanceof Ir.Equals e) || e.negate()) return false;
+        return isField(e.left(), f) && isEmptyBytes(e.right()) || isField(e.right(), f) && isEmptyBytes(e.left());
+    }
+
+    private static boolean isField(Ir.Expr e, String f) {
+        return e instanceof Ir.StateField sf && sf.field().equals(f) || e instanceof Ir.GetField g && g.target() instanceof Ir.StateRef
+                && g.field().equals(f);
+    }
+
+    private static boolean isEmptyBytes(Ir.Expr e) {
+        return e instanceof Ir.Lit l && l.value() instanceof byte[] b && b.length == 0;
+    }
+
+    private boolean writesField(Ir.Expr result, String f) {
+        if (result instanceof Ir.StateRef) return false;
+        if (result instanceof Ir.New n && n.record().equals("State")) {
+            // New's values are in field order: f's is the input's own field read back ({ ...state } without f), or a write.
+            Ir.Expr v = n.values().get(List.copyOf(stateFields.keySet()).indexOf(f));
+            return !(v instanceof Ir.StateField sf && sf.field().equals(f)
+                    || v instanceof Ir.GetField g && g.target() instanceof Ir.StateRef && g.field().equals(f));
+        }
+        return true;
     }
 
     /**
@@ -2877,9 +3273,9 @@ final class Checker {
         var params = new ArrayList<Ir.Local>();
         for (int i = 0; i < f.params().size(); i++) {
             Param p = f.params().get(i);
-            params.add(sc.declare(p.name(), resolve(p.type()), taints[i], p.pos(), false, null));
+            params.add(sc.declare(p.name(), resolveLedger(p.type()), taints[i], p.pos(), false, null));
         }
-        Ty ret = resolve(f.ret());
+        Ty ret = resolveLedger(f.ret());
         var stmts = stmts(f.body().stmts(), sc);
         if (f.body().result() == null) throw f.body().pos().error("JSC0312", "a fn ends in its value");
         Ir.Expr r = expr(f.body().result(), sc, ret);
@@ -2934,7 +3330,7 @@ final class Checker {
                 case Const c -> {
                     // A const may be typed State (the next state, built in steps); elsewhere State is not written.
                     boolean st = c.type() != null && c.type().name().equals("State") && c.type().args().isEmpty() && sc.kind != null;
-                    Ty want = c.type() == null ? null : st ? Ty.STATE : resolve(c.type());
+                    Ty want = c.type() == null ? null : st ? Ty.STATE : resolveLedger(c.type());
                     Ir.Expr v = expr(c.value(), sc, want);
                     if (want != null) expectType(want, v, c.value().pos());
                     Ty t = want != null ? want : v.type();
@@ -3104,6 +3500,10 @@ final class Checker {
      */
     private Ir.Expr encodable(Expr e, Sc sc, String what) {
         Ir.Expr v = expr(e, sc, null);
+        if (Gov.holds(v.type())) {
+            throw e.pos().error("JSC1321", Ty.show(v.type()) + " cannot be " + what + ": a ledger type of the script purposes is read from the"
+                    + " script context, never encoded into an output (ADR-0018 D5, M3c)");
+        }
         if (holdsForeign(v.type()) || v.type() instanceof Ty.BigMapT || v.type().equals(Ty.STATE) && stateFields.values().stream()
                 .anyMatch(t -> t instanceof Ty.BigMapT) || holdsOwned(v.type(), new HashSet<>()) && Ty.hasBigMap(v.type(), this::components)) {
             throw e.pos().error("JSC0452", Ty.show(v.type()) + " cannot be " + what + ": it is encoded as data, and only this contract's own"
@@ -3283,6 +3683,13 @@ final class Checker {
         };
     }
 
+    /** M3c: whether {@code n} is a constructor of a purposes' ledger type ({@code RegStaking}, {@code VoteYes}, …). */
+    private boolean govCtor(String n) {
+        if (variantEnum.containsKey(n)) return false;
+        for (var cs : Gov.SUMS.values()) for (Gov.Ctor c : cs) if (c.name().equals(n)) return true;
+        return false;
+    }
+
     private Ir.Expr name(Name n, Sc sc, Ty expected) {
         Ir.Local v = sc.lookup(n.name());
         if (v != null) {
@@ -3303,6 +3710,22 @@ final class Checker {
                 throw n.pos().error("JSC0912", n.name() + " has fields: write " + n.name() + " { " + String.join(", ", enums.get(e).get(n.name()).keySet()) + " }");
             }
             return new Ir.Variant(e, n.name(), List.of(), new Ty.EnumT(e), 0, n.pos());
+        }
+        // M3c (ADR-0010 D1): a script purpose's handler spends no instance, so it sees no state (K39).
+        if (sc.kind != null && sc.kind.purpose() && (n.name().equals("state") || stateFields.containsKey(n.name()))) {
+            throw n.pos().error("JSC1318", handlerWord(sc.kind) + " sees no instance: no input is spent for a script purpose, so '" + n.name()
+                    + "' is not available; it reads the params (params.f) and its parameters (ADR-0010 D1)");
+        }
+        if (sc.kind != null && (sc.kind == Ir.Kind.WITHDRAW || sc.kind == Ir.Kind.MIGRATE) && (n.name().equals("received") || n.name().equals("balance"))) {
+            throw n.pos().error(sc.kind == Ir.Kind.WITHDRAW ? "JSC1315" : "JSC1338", sc.kind == Ir.Kind.WITHDRAW
+                    ? "a withdraw handler's transaction has no input of the contract: received is 0 and balance the amount, so read the amount"
+                    + " parameter (ADR-0010 r2)"
+                    : "init migrate adopts exactly the previous instance's lovelace: nothing is received, and its balance is the old instance's"
+                    + " (ADR-0011 D4)");
+        }
+        if (Gov.NAMES.contains(n.name()) || n.name().equals("LedgerMap") || govCtor(n.name())) {
+            throw n.pos().error("JSC1325", n.name() + " is a ledger type of the script purposes (or one of its constructors): its values come from"
+                    + " the script context and are not built in .jsc; match them, or read their fields (ADR-0018 D5, M3c)");
         }
         switch (n.name()) {
             case "state" -> {
@@ -3383,6 +3806,10 @@ final class Checker {
     }
 
     private static void needCtx(Name n, Sc sc) {
+        if (!sc.hasCtx && sc.kind != null && sc.kind.purpose()) {
+            throw n.pos().error("JSC1315", n.name() + " is not available in " + handlerWord(sc.kind) + ": it takes the params and the purpose's"
+                    + " data only (ADR-0010 D1)");
+        }
         if (!sc.hasCtx) {
             throw n.pos().error("JSC0415", n.name() + " is part of the transaction: it is not available in a view or fn (pass it as an argument)");
         }
@@ -3403,6 +3830,30 @@ final class Checker {
             } + ")");
         }
         if (target instanceof Ir.Range) throw f.target().pos().error("JSC1009", RANGE_ONLY);
+        // M3c (D5): a ledger record's fields by projection; a sealed ledger type is matched; a PlutusData field is inaccessible.
+        if (target.type() instanceof Ty.Gov g) {
+            if (Gov.isSum(g)) {
+                throw f.pos().error("JSC1323", g.name() + " is a sealed ledger type: read its fields with match (" + g.name() + "'s cases: "
+                        + String.join(", ", Gov.ctorNames(g.name())) + ")");
+            }
+            Gov.Ctor r = Gov.RECORDS.get(g.name());
+            Gov.Field fd = r == null ? null : r.field(f.name());
+            if (fd == null) {
+                throw f.pos().error("JSC0320", g.name() + " has no field " + f.name() + (r == null ? "" : " (" + String.join(", ", r.types().keySet()) + ")"));
+            }
+            opaqueField(fd, g.name(), f.pos());
+            return new Ir.GetField(target, g.name(), f.name(), fd.type(), target.taint(), f.pos());
+        }
+        if (target.type() instanceof Ty.LedgerMapT lm) {
+            return switch (f.name()) {
+                case "size" -> new Ir.MapOp("size", target, List.of(), Ty.INT, 0, f.pos());
+                case "isEmpty" -> new Ir.MapOp("isEmpty", target, List.of(), Ty.BOOL, 0, f.pos());
+                case "keys" -> new Ir.MapOp("keys", target, List.of(), new Ty.ListT(lm.key()), target.taint(), f.pos());
+                case "values" -> new Ir.MapOp("values", target, List.of(), new Ty.ListT(lm.val()), target.taint(), f.pos());
+                default -> throw f.pos().error("JSC1324", "LedgerMap has no property '" + f.name() + "' (size, isEmpty, keys, values; get, has, any,"
+                        + " all, fold)");
+            };
+        }
         if (target.type() instanceof Ty.DepositT d) {
             // M2c (ADR-0011 D3): a deposit's value, and its memo when the action reads one (receives T).
             if (f.name().equals("value")) return new Ir.DepositField(target, "value", Ty.VALUE, 0, f.pos());
@@ -3614,9 +4065,9 @@ final class Checker {
      */
     private Ty signatureType(Syntax.Fn f, TypeRef t) {
         Module m = owner.getOrDefault(f.name(), main);
-        if (m == current) return resolve(t);
+        if (m == current) return resolveLedger(t);
         Ty[] out = new Ty[1];
-        inModule(m, () -> out[0] = resolve(t));
+        inModule(m, () -> out[0] = resolveLedger(t));
         return out[0];
     }
 
@@ -3761,6 +4212,10 @@ final class Checker {
             throw m.pos().error("JSC0342", l.name() + " has no methods: " + (l.equals(Ty.ADDRESS) ? "read a.payment" : "match it: KeyCred { key } or ScriptCred { hash }"));
         }
         if (target.type() instanceof Ty.MapT mt) return mapMethod(m, target, mt, sc, expected);
+        if (target.type() instanceof Ty.LedgerMapT lm) return ledgerMapMethod(m, target, lm, sc, expected);
+        if (target.type() instanceof Ty.Gov g) {
+            throw m.pos().error("JSC1323", g.name() + " has no methods: " + (Gov.isSum(g) ? "match it" : "read its fields"));
+        }
         if (target.type() instanceof Ty.BigMapT bt) return bigMethod(m, target, bt, sc);
         if (!(target.type() instanceof Ty.ListT lt)) {
             throw m.pos().error("JSC0327", "." + m.method() + "(…) needs a List or a Map; " + Ty.show(target.type()) + " has no methods");
@@ -4166,6 +4621,10 @@ final class Checker {
 
     /** M2c: an instance and a deposit are not comparable (D6): an instance is the deployer's, a deposit a registry claim. */
     private static void notComparable(Ty t, Pos p) {
+        if (Gov.holds(t)) {
+            throw p.error("JSC1322", Ty.show(t) + " is not comparable: a ledger type of the script purposes is matched (its constructors) or read"
+                    + " by its fields, which are (ADR-0018 D5, M3c)");
+        }
         if (holdsInstanceOrDeposit(t)) {
             throw p.error("JSC0446", Ty.show(t) + " is not comparable: an Instance<C> is used whole (a deposit's target, reads), and a deposit is"
                     + " compared by its value and memo (d.value, d.memo) (ADR-0018 D6, M2c)");
@@ -4469,6 +4928,72 @@ final class Checker {
         }
     }
 
+    /** M3c (D5): a field typed PlutusData in the ledger (ParameterChange.parameters) is never read (K40). */
+    private static void opaqueField(Gov.Field fd, String owner, Pos p) {
+        if (fd.opaque()) {
+            throw p.error("JSC1320", owner + "." + fd.name() + " is PlutusData in the ledger, which .jsc does not read: a guardrail that inspects"
+                    + " proposed parameter changes stays in Java until a typed protocol-parameter view exists (ADR-0018 D5)");
+        }
+    }
+
+    /**
+     * M3c (D5): a LedgerMap is read-only, its entries in the ledger's order: get (the first entry with the key, by
+     * structural equality), has, any, all, fold. No set or delete: it is never stored.
+     */
+    private Ir.Expr ledgerMapMethod(MethodCall m, Ir.Expr target, Ty.LedgerMapT lm, Sc sc, Ty expected) {
+        List<Expr> args = m.args();
+        int t = target.taint();
+        switch (m.method()) {
+            case "get", "has" -> {
+                if (args.size() != 1) throw m.pos().error("JSC0818", m.method() + " takes one key: m." + m.method() + "(k)");
+                Ir.Expr k = expr(args.get(0), sc, lm.key());
+                expectType(lm.key(), k, args.get(0).pos());
+                if (((k.taint() | t) & TIME) != 0) throw m.pos().error("JSC0513", "a time value cannot decide here: " + m.method() + " compares it (ADR-0018 D11)");
+                notComparable(lm.key(), m.pos());
+                return m.method().equals("get") ? new Ir.MapOp("get", target, List.of(k), option(lm.val(), m.pos(), "m.get"), t, m.pos())
+                        : new Ir.MapOp("has", target, List.of(k), Ty.BOOL, 0, m.pos());
+            }
+            case "any", "all" -> {
+                if (args.size() != 1 || !(args.get(0) instanceof Lambda l) || l.params().size() != 2) {
+                    throw m.pos().error("JSC0822", m.method() + " on a LedgerMap takes a two-parameter lambda: m." + m.method() + "((k, v) => …)");
+                }
+                Sc inner = sc.child(false, true);
+                Ir.Local k = inner.declare(l.params().get(0), lm.key(), t, l.pos(), false, null);
+                Ir.Local v = inner.declare(l.params().get(1), lm.val(), t, l.pos(), false, null);
+                Ir.Block body = lambdaBody(l, inner, Ty.BOOL);
+                expectType(Ty.BOOL, body.result(), body.result().pos());
+                if ((body.result().taint() & TIME) != 0) throw l.pos().error("JSC0514", "a time value cannot decide " + m.method() + "'s predicate (ADR-0018 D11)");
+                return new Ir.MapHof(m.method(), target, k, v, body, Ty.BOOL, 0, m.pos());
+            }
+            case "fold" -> {
+                if (args.size() != 2 || !(args.get(1) instanceof Lambda l) || l.params().size() != 3) {
+                    throw m.pos().error("JSC0823", "fold on a LedgerMap takes an initial value and a three-parameter lambda: m.fold(0, (acc, k, v) => acc + v)");
+                }
+                Ir.Expr start = expr(args.get(0), sc, expected);
+                Ty acc = expected != null && Ty.assignable(expected, start.type()) ? expected : start.type();
+                noBigMap(acc, args.get(0).pos(), "a fold accumulator");
+                int accTaint = start.taint() | t;
+                Ir.Local a, k, v;
+                Ir.Block body;
+                while (true) {
+                    Sc inner = sc.child(false, true);
+                    a = inner.declare(l.params().get(0), acc, accTaint, l.pos(), false, null);
+                    k = inner.declare(l.params().get(1), lm.key(), t, l.pos(), false, null);
+                    v = inner.declare(l.params().get(2), lm.val(), t, l.pos(), false, null);
+                    body = lambdaBody(l, inner, acc);
+                    int out = body.result().taint();
+                    if ((out | accTaint) == accTaint) break;
+                    accTaint |= out;
+                }
+                expectType(acc, body.result(), body.result().pos());
+                return new Ir.MapFold(target, start, a, k, v, body, acc, accTaint, m.pos());
+            }
+            case "set", "delete" -> throw m.pos().error("JSC1324", "a LedgerMap is read-only: it is ledger data, never stored, so it has no "
+                    + m.method() + " (ADR-0018 D5)");
+            default -> throw m.pos().error("JSC1324", "LedgerMap has no method '" + m.method() + "' (get, has, any, all, fold)");
+        }
+    }
+
     private Ir.Expr bigMethod(MethodCall m, Ir.Expr target, Ty.BigMapT bt, Sc sc) {
         List<Expr> args = m.args();
         switch (m.method()) {
@@ -4542,7 +5067,9 @@ final class Checker {
         if (t instanceof Ty.EnumT e) return List.copyOf(enums.get(e.name()).keySet());
         if (t instanceof Ty.OptT) return List.of("Some", "None");
         if (t.equals(Ty.CREDENTIAL)) return List.of("KeyCred", "ScriptCred");
-        throw p.error("JSC0916", "match needs an enum, an Option or a Credential, not " + Ty.show(t));
+        // M3c (D5): a sealed ledger type's constructors, in the ledger's tag order.
+        if (Gov.isSum(t)) return Gov.ctorNames(((Ty.Gov) t).name());
+        throw p.error("JSC0916", "match needs an enum, an Option, a Credential or a sealed ledger type, not " + Ty.show(t));
     }
 
     /** The fields a constructor binds: a variant's, or Some's one value. */
@@ -4557,6 +5084,7 @@ final class Checker {
             f.put(ctor.equals("KeyCred") ? "key" : "hash", ctor.equals("KeyCred") ? Ty.KEY : Ty.HASH);
             return f;
         }
+        if (t instanceof Ty.Gov g) return Gov.ctor(g.name(), ctor).types();
         return enums.get(((Ty.EnumT) t).name()).get(ctor);
     }
 
@@ -4598,6 +5126,7 @@ final class Checker {
                 if (t instanceof Ty.OptT && b.field() != null) throw b.pos().error("JSC0922", "an Option's value is bound as Some(x)");
                 Ty ft = fields.get(f);
                 if (ft == null) throw b.pos().error("JSC0320", p.ctor() + " has no field " + f);
+                if (t instanceof Ty.Gov g) opaqueField(Gov.ctor(g.name(), p.ctor()).field(f), p.ctor(), b.pos());
                 if (fs.contains(f)) throw b.pos().error("JSC0923", f + " is bound twice");
                 fs.add(f);
                 types.add(ft);

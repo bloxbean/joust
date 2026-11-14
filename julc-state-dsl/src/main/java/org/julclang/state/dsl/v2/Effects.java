@@ -50,7 +50,9 @@ final class Effects {
 
     /** Whether the method is lowered with {@code Funds} (D4). Views never are. */
     static boolean takesFunds(Ir.Method m) {
-        if (m.kind() == Ir.Kind.VIEW) return false;
+        // M3c: a script purpose's handler spends nothing of the contract (a withdraw handler's sends are lovelace from the
+        // reward account), and an adoption is in no asset-aware contract (JSC1334).
+        if (m.kind() == Ir.Kind.VIEW || m.kind().purpose() || m.kind() == Ir.Kind.MIGRATE) return false;
         var u = usage(m);
         // M2c: a receiving action takes Funds (its deposits are funds.deposits; ADR-0011 D3), a depositing one does not.
         return u.funds || u.kinds.contains("send") || u.kinds.contains("mint") || u.kinds.contains("accept") || m.receives() != null;
@@ -99,7 +101,8 @@ final class Effects {
             case INIT -> kinds(m).contains("accept") ? "Created" : null;
             case OWNED_INIT -> kinds(m).contains("accept") ? m.on() + "Created" : null;
             case DESTROY, OWNED_DESTROY -> exchanges(m) ? "Exchanged" : settled(p) ? "Settled" : null;
-            case VIEW -> null;
+            // M3c: a handler returns its sends or its Bool; an adoption its first state.
+            case VIEW, WITHDRAW, CERTIFY, VOTE, PROPOSE, MIGRATE -> null;
         };
     }
 
@@ -153,7 +156,8 @@ final class Effects {
     static boolean takesParams(Ir.Program p, Ir.Method m) {
         if (p.params() == null) return false;
         // M2c: a method that reads another contract takes the params (its reads name a params field, ADR-0011 D2).
-        return m.kind() == Ir.Kind.INIT || usage(m).params || !m.reads().isEmpty();
+        // M3c (ADR-0010 D1, ADR-0011 D4): a handler and an adoption always take them first (the processor's shapes).
+        return m.kind() == Ir.Kind.INIT || m.kind().purpose() || m.kind() == Ir.Kind.MIGRATE || usage(m).params || !m.reads().isEmpty();
     }
 
     /** Whether the method's result carries events (M2b): its redeemer then carries them last (ADR-0009 D5). */

@@ -1560,6 +1560,9 @@ public final class Interpreter {
             case Ty.Ledger l -> a.equals(b);
             case Ty.Instance i -> throw new IllegalStateException("an instance is not comparable");
             case Ty.DepositT d -> throw new IllegalStateException("a deposit is not comparable");
+            // M3c (D5): a purposes' ledger type is matched or read by its fields, never compared (JSC1322).
+            case Ty.Gov g -> throw new IllegalStateException("a ledger type of the script purposes is not comparable");
+            case Ty.LedgerMapT m -> throw new IllegalStateException("a LedgerMap is not comparable");
         };
     }
 
@@ -1615,6 +1618,9 @@ public final class Interpreter {
             };
             case Ty.Instance i -> true;
             case Ty.DepositT d -> true;
+            // M3c: from the script context, never a checked input (no redeemer, state or params field holds one, JSC1321).
+            case Ty.Gov g -> true;
+            case Ty.LedgerMapT m -> true;
         };
     }
 

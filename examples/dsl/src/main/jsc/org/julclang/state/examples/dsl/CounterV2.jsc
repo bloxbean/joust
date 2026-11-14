@@ -1,0 +1,31 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import contract { CounterV1 } from "./CounterV1.jsc"
+
+// examples/upgrade's CounterV2 in .jsc 2 (ADR-0018 M3c, J11; ADR-0011 D4): adds a step size; adopts v1 instances, keeping
+// their admin, count and funds. The params pin the previous version's policy.
+contract CounterV2 {
+  params { previous: Hash }
+  state { admin: Key, count: Int, step: Int }
+
+  init() {
+    return { admin: caller, count: 0, step: 1 }
+  }
+
+  init migrate from params.previous(old: CounterV1.State) {
+    return { admin: old.admin, count: old.count, step: 1 }
+  }
+
+  action increment() {
+    return { ...state, count: count + step }
+  }
+
+  action setStep(newStep: Int) only admin {
+    return { ...state, step: newStep }
+  }
+
+  destroy close() only admin {
+    pay(admin, balance)
+  }
+}

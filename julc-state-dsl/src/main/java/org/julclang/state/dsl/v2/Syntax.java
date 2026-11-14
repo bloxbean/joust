@@ -71,7 +71,12 @@ final class Syntax {
     /** A written type: {@code Int}, {@code List<Key>}, {@code Share}. */
     record TypeRef(String name, List<TypeRef> args, Pos pos) {}
 
-    record Option(String name, BigInteger value, Pos pos) {}
+    /** A contract or keyed option; M3c: {@code stakeSelf}, a flag, has the value 1 and {@code flag} true. */
+    record Option(String name, BigInteger value, Pos pos, boolean flag) {
+        Option(String name, BigInteger value, Pos pos) {
+            this(name, value, pos, false);
+        }
+    }
 
     /**
      * A contract. M2b: {@code params} (the deploy-time parameters' fields, null when none: ADR-0009 D1), {@code events}
@@ -99,8 +104,18 @@ final class Syntax {
         }
     }
 
-    /** M3a (ADR-0003, ADR-0012): {@code owned init T.m}, {@code owned action T.m}, {@code owned destroy T.m}. */
-    enum Kind { INIT, ACTION, DESTROY, VIEW, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY }
+    /**
+     * M3a (ADR-0003, ADR-0012): {@code owned init T.m}, {@code owned action T.m}, {@code owned destroy T.m}. M3c (ADR-0010,
+     * ADR-0011 D4): the script purposes' handlers {@code withdraw m}, {@code certify m}, {@code vote m}, {@code propose m},
+     * and {@code init migrate from params.f}, the adoption of an instance of the previous version.
+     */
+    enum Kind { INIT, ACTION, DESTROY, VIEW, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY, WITHDRAW, CERTIFY, VOTE, PROPOSE, MIGRATE;
+
+        /** M3c: a script purpose's handler (ADR-0010 D1): no instance, governed by the params. */
+        boolean purpose() {
+            return this == WITHDRAW || this == CERTIFY || this == VOTE || this == PROPOSE;
+        }
+    }
 
     /**
      * A parameter; {@code reads} (M2c): {@code name: reads params.f}, the params field it reads (its type is then null).
@@ -124,10 +139,18 @@ final class Syntax {
         }
     }
 
-    /** A method; {@code on} (M3a): an owned method's type, {@code T} of {@code owned action T.m}, else null. */
-    record Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos, String on) {
+    /**
+     * A method; {@code on} (M3a): an owned method's type, {@code T} of {@code owned action T.m}, else null. {@code from}
+     * (M3c): an {@code init migrate from params.f}'s params field {@code f}, and where it is written; else null.
+     */
+    record Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos, String on,
+                  String from, Pos fromPos) {
+        Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos, String on) {
+            this(kind, name, params, mods, body, viewType, pos, on, null, null);
+        }
+
         Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos) {
-            this(kind, name, params, mods, body, viewType, pos, null);
+            this(kind, name, params, mods, body, viewType, pos, null, null, null);
         }
 
         boolean owned() {
