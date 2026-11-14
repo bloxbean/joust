@@ -47,24 +47,40 @@ class JscLangHashTest {
         return ((Number) o).intValue();
     }
 
-    /** The rename of declaration {@code id} to {@code to}, as the server plans it (features.js renamePlan). */
+    /**
+     * The rename of declaration {@code id} to {@code to}, as the server plans it (features.js renamePlan and occurrences):
+     * the declaration and every reference; a shorthand keeps its other meaning (`{ field: value }`: a field renamed is
+     * `to: from`, a value `from: to`), and one whose two meanings are both the declaration is one edit (C5 on #99).
+     */
     @SuppressWarnings("unchecked")
     static List<Edit> rename(Map<String, Object> model, int id, String from, String to) {
-        var edits = new ArrayList<Edit>();
+        var byRange = new java.util.LinkedHashMap<String, Edit>();
+        var count = new java.util.HashMap<String, Integer>();
+        String kind = null;
+        for (Object o : list(model.get("declarations"))) {
+            var d = (Map<String, Object>) o;
+            if (num(d.get("id")) == id) kind = (String) d.get("kind");
+        }
+        boolean fieldish = "field".equals(kind) || "stateField".equals(kind);
         for (Object o : list(model.get("declarations"))) {
             var d = (Map<String, Object>) o;
             if (num(d.get("id")) != id) continue;
             var r = list(d.get("nameRange"));
-            String text = Boolean.TRUE.equals(d.get("shorthand")) ? from + ": " + to : to;
-            edits.add(new Edit(num(r.get(0)), num(r.get(1)), num(r.get(3)), text));
+            String key = r.get(0) + ":" + r.get(1) + ":" + r.get(3);
+            String text = Boolean.TRUE.equals(d.get("shorthand")) ? (fieldish ? to + ": " + from : from + ": " + to) : to;
+            byRange.put(key, new Edit(num(r.get(0)), num(r.get(1)), num(r.get(3)), text));
+            count.merge(key, 1, Integer::sum);
         }
         for (Object o : list(model.get("references"))) {
             var r = list(o);
             if (num(r.get(4)) != id) continue;
             boolean shorthand = (num(r.get(5)) & 1) == 1;
-            edits.add(new Edit(num(r.get(0)), num(r.get(1)), num(r.get(3)), shorthand ? from + ": " + to : to));
+            String key = r.get(0) + ":" + r.get(1) + ":" + r.get(3);
+            count.merge(key, 1, Integer::sum);
+            String text = count.get(key) > 1 ? to : shorthand ? (fieldish ? to + ": " + from : from + ": " + to) : to;
+            byRange.put(key, new Edit(num(r.get(0)), num(r.get(1)), num(r.get(3)), text));
         }
-        return edits;
+        return new ArrayList<>(byRange.values());
     }
 
     static String hash(String file, String text) throws Exception {
@@ -106,6 +122,47 @@ class JscLangHashTest {
         checked += 2;
         System.out.println("[hash] L12: " + checked + " hash-preserving edits keep the script hash");
         assertTrue(checked >= 20, checked + " edits");
+    }
+
+    /** features.js RENAMABLE. */
+    static final List<String> RENAMABLE = List.of("param", "const", "loopVar", "binding", "lambdaParam", "fn", "type", "enum", "variant", "field",
+            "stateField", "action", "destroy", "view", "event");
+
+    /**
+     * F8, C3 on #99: a rename of every renamable kind keeps the script hash (L12), and changes the ABI manifest exactly
+     * when the model marks the declaration {@code abi} (the rename warns exactly then: D7).
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void everyRenamableKindKeepsTheHashAndChangesTheManifestExactlyWhenAbi() throws Exception {
+        var kinds = new java.util.TreeMap<String, Integer>();
+        var abiKinds = new java.util.TreeSet<String>();
+        for (String name : List.of("Counter2.jsc", "Escrow.jsc", "Crowdfund.jsc", "Pledges.jsc", "Treasury.jsc", "Council.jsc", "Tipper.jsc",
+                "Inbox.jsc")) {
+            String src = Files.readString(JscV2HashStabilityTest.DSL.resolve(name));
+            var base = JscV2HashStabilityTest.build(name, src);
+            var model = (Map<String, Object>) AbiCheck.Json.parse(JscLang.analyzeJson(src, name));
+            var per = new java.util.HashMap<String, Integer>();
+            for (Object o : list(model.get("declarations"))) {
+                var d = (Map<String, Object>) o;
+                String kind = (String) d.get("kind");
+                if (!RENAMABLE.contains(kind) || per.getOrDefault(kind, 0) >= 2 || d.get("name") == null) continue;
+                String from = (String) d.get("name");
+                String renamed = apply(src, rename(model, num(d.get("id")), from, from + "Z"));
+                var after = JscLang.analyze(renamed, name);
+                if (!after.accepted()) continue;   // e.g. a name another file of the build imports: the server refuses (F2)
+                var built = JscV2HashStabilityTest.build(name, renamed);
+                assertEquals(base.hash(), built.hash(), name + ": renaming " + kind + " " + from + " moved the script hash");
+                boolean abi = Boolean.TRUE.equals(d.get("abi"));
+                boolean changed = !java.util.Objects.equals(base.abi(), built.abi());
+                assertEquals(abi, changed, name + ": renaming " + kind + " " + from + (changed ? " changed" : " kept") + " the manifest, abi " + abi);
+                if (abi) abiKinds.add(kind);
+                per.merge(kind, 1, Integer::sum);
+                kinds.merge(kind, 1, Integer::sum);
+            }
+        }
+        System.out.println("[hash] F8: renames by kind " + kinds + "; the manifest changes for " + abiKinds);
+        for (String k : RENAMABLE) assertTrue(kinds.containsKey(k), "no " + k + " renamed: " + kinds);
     }
 
     @Test

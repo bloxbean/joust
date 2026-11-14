@@ -385,10 +385,14 @@ class JscLangRecoveryTest {
         var byName = new HashMap<String, JscLang.Declaration>();
         for (JscLang.Declaration d : m.declarations()) byName.putIfAbsent(d.kind() + " " + d.name(), d);
         assertTrue(ix.meta.get(byName.get("stateField owner").id()).abi);
-        // Line reaches a redeemer (add's parameter): its fields are in the manifest; Paid (an event) is not.
+        // Line's fields are in the manifest; so are the event Paid and its fields (C3, F8 on #99: the manifest's coverage);
+        // a const and a view are not.
         assertTrue(ix.meta.get(byName.get("field qty").id()).abi);
         var amount = m.declarations().stream().filter(d -> d.name().equals("amount")).findFirst().orElseThrow();
-        assertFalse(ix.meta.containsKey(amount.id()) && ix.meta.get(amount.id()).abi, amount.toString());
+        assertTrue(ix.meta.containsKey(amount.id()) && ix.meta.get(amount.id()).abi, amount.toString());
+        assertTrue(ix.meta.get(byName.get("event Paid").id()).abi);
+        assertFalse(ix.meta.containsKey(byName.get("const sum").id()) && ix.meta.get(byName.get("const sum").id()).abi);
+        assertFalse(ix.meta.containsKey(byName.get("view current").id()) && ix.meta.get(byName.get("view current").id()).abi);
         assertEquals("Int", ix.meta.get(byName.get("const sum").id()).type);
         assertNotNull(ix.meta.get(byName.get("const sum").id()).scope);
         assertEquals("state,tx,params,", ix.meta.get(byName.get("action add").id()).context);

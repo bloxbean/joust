@@ -400,38 +400,22 @@ final class JscLangIndex {
     }
 
     /**
-     * What the ABI manifest records (D7: a rename of it warns): the state fields, the actions' and destroys' names and
-     * parameters, and the records, enums, variants and fields reachable from the state or from a redeemer.
+     * What the ABI manifest records (D7: a rename of it warns), with Abi.of's coverage (C3, F8 on #99): the state fields,
+     * the params block's fields, the actions' and destroys' names, the parameters of init, the actions and the destroys,
+     * the events (and their fields), and every record, enum, variant and field the contract declares (the manifest's
+     * "types" holds them all, reachable or not). A library has no manifest of its own: an importer's records its types
+     * (F2 refuses such a rename while a file imports it).
      */
     private void abi() {
-        var reach = new LinkedHashMap<String, Boolean>();
-        var queue = new ArrayList<Ty>();
-        if (program.state() != null) queue.addAll(program.state().fields().values());
-        for (Ir.Method m : program.methods()) {
-            if (m.kind() == Ir.Kind.VIEW) continue;
-            for (Ir.Local l : m.params()) queue.add(l.type);
-        }
-        while (!queue.isEmpty()) {
-            Ty t = queue.remove(queue.size() - 1);
-            for (String n : namedIn(t)) {
-                if (reach.putIfAbsent(n, true) != null) continue;
-                Ir.RecordType r = program.record(n);
-                if (r != null) queue.addAll(r.fields().values());
-                Ir.EnumType e = program.enumType(n);
-                if (e != null) for (Ir.RecordType v : e.variants().values()) {
-                    reach.putIfAbsent(v.name(), true);
-                    queue.addAll(v.fields().values());
-                }
-            }
-        }
+        if (program.library()) return;   // a library: no manifest of its own
         for (Spans.Decl d : spans.decls) {
             if (d.name == null || d.endLine < 0) continue;
-            String parent = d.parent == null ? null : d.parent.name;
+            String pk = d.parent == null ? null : d.parent.kind;
             boolean abi = switch (d.kind) {
-                case "stateField", "action", "destroy" -> true;
-                case "param" -> d.parent != null && (d.parent.kind.equals("action") || d.parent.kind.equals("destroy") || d.parent.kind.equals("init"));
-                case "type", "enum", "variant" -> reach.containsKey(d.name);
-                case "field" -> parent != null && reach.containsKey(parent);
+                case "stateField", "action", "destroy", "event", "type", "enum", "variant" -> true;
+                case "param" -> pk != null && (pk.equals("action") || pk.equals("destroy") || pk.equals("init"));
+                case "field" -> pk != null && (pk.equals("type") || pk.equals("variant") || pk.equals("params") || pk.equals("event")
+                        || pk.equals("state"));
                 default -> false;
             };
             if (abi) meta(d).abi = true;

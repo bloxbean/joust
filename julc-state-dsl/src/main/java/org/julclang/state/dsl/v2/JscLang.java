@@ -41,6 +41,8 @@ public final class JscLang {
 
     /** D2a: a model's bounds. Over either, the analysis reports one diagnostic instead of the model. */
     public static final int MAX_ENTRIES = 200_000;
+    /** The errors a model reports at most (S2 on #99; javac's -Xmaxerrs is 100): the build's first among them (L1). */
+    public static final int MAX_ERRORS = 100;
 
     public static final int MAX_JSON_CHARS = 16 * 1024 * 1024;
 
@@ -316,6 +318,7 @@ public final class JscLang {
         }
         errors.addAll(spans.errors);
         errors.addAll(facts.errors);
+        var where = new Where(source, spans);
         var seen = new HashSet<String>();
         // A file-level completeness rule (the contract needs an init, its state a field, …), reported at the contract's
         // head, cannot be judged when the parser dropped a member: the build stopped at that member's error first (L1),
@@ -323,22 +326,28 @@ public final class JscLang {
         int[] head = null;
         for (Spans.Decl d : spans.decls) if (d.kind.equals("contract")) head = new int[]{d.startLine, d.startCol};
         var fromChecker = new HashSet<JscException>(facts.errors);
+        // S2 on #99: MAX_ERRORS at most, in the order found (the build's first is the first found, L1); the rest are counted.
+        int more = 0;
         for (JscException e : errors) {
             if (Facts.isPoisoned(e) || !seen.add(e.code + ":" + e.line + ":" + e.col)) continue;
             if (spans.incomplete && head != null && fromChecker.contains(e) && e.line == head[0] && e.col == head[1]) continue;
-            diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, source, spans));
+            if (diagnostics.size() >= MAX_ERRORS) {
+                more++;
+                continue;
+            }
+            diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, where));
         }
         boolean clean = diagnostics.isEmpty();
         if (program != null) {
             contract = program.pkg() + "." + program.name();
-            for (Ir.Warning w : program.warnings()) diagnostics.add(diagnostic("warning", w.code(), w.message(), w.line(), w.col(), source, spans));
+            for (Ir.Warning w : program.warnings()) diagnostics.add(diagnostic("warning", w.code(), w.message(), w.line(), w.col(), where));
             if (lower && clean) {
                 try {
                     lowered = JscV2.lowerChecked(program, source, fileName);
                 } catch (JscException e) {
-                    diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, source, spans));
+                    diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, where));
                 } catch (RuntimeException | Error e) {
-                    diagnostics.add(diagnostic("error", "JSC0005", JscMain.internalError(e), 1, 1, source, spans));
+                    diagnostics.add(diagnostic("error", "JSC0005", JscMain.internalError(e), 1, 1, where));
                 }
             }
         }
@@ -352,6 +361,7 @@ public final class JscLang {
         }
         var advisory = new ArrayList<String>();
         if (!facts.unresolvedImports.isEmpty()) advisory.add("imports");
+        if (more > 0) advisory.add("more-errors");   // S2 on #99: past MAX_ERRORS (the server says so)
         var decls = new ArrayList<Declaration>();
         for (Spans.Decl d : spans.decls) {
             if (d.name == null || d.endLine < 0) continue;
@@ -399,24 +409,70 @@ public final class JscLang {
     }
 
     /**
+     * The file's line starts and its tokens, indexed once per analysis (S2 on #99): each diagnostic finds its line and
+     * its token by binary search, so a file with many errors costs O(n log n), not O(n²).
+     */
+    static final class Where {
+        final String source;
+        final List<Lexer.Tok> toks;
+        private int[] lineStarts;
+
+        Where(String source, Spans spans) {
+            this.source = source;
+            this.toks = spans == null ? null : spans.toks;
+        }
+
+        /** The text of 1-based line {@code l}, without its line end, or null past the end. */
+        String lineText(int l) {
+            if (lineStarts == null) {
+                int n = 1;
+                for (int i = 0; i < source.length(); i++) if (source.charAt(i) == '\n') n++;
+                lineStarts = new int[n];
+                for (int i = 0, k = 1; i < source.length(); i++) if (source.charAt(i) == '\n') lineStarts[k++] = i + 1;
+            }
+            if (l < 1 || l > lineStarts.length) return null;
+            int from = lineStarts[l - 1];
+            int to = l < lineStarts.length ? lineStarts[l] - 1 : source.length();
+            String s = source.substring(from, to);
+            return s.endsWith("\r") ? s.substring(0, s.length() - 1) : s;
+        }
+
+        /** The token that starts at {@code l:c} (not EOF), or null. */
+        Lexer.Tok tokenAt(int l, int c) {
+            if (toks == null) return null;
+            int lo = 0, hi = toks.size() - 1;
+            while (lo <= hi) {
+                int mid = (lo + hi) >>> 1;
+                Lexer.Tok t = toks.get(mid);
+                int cmp = t.line() != l ? Integer.compare(t.line(), l) : Integer.compare(t.col(), c);
+                if (cmp == 0) return t.kind() == Lexer.K.EOF ? null : t;
+                if (cmp < 0) lo = mid + 1;
+                else hi = mid - 1;
+            }
+            return null;
+        }
+    }
+
+    private static Diagnostic diagnostic(String severity, String code, String message, int line, int col, String source, Spans spans) {
+        return diagnostic(severity, code, message, line, col, new Where(source, spans));
+    }
+
+    /**
      * A diagnostic at the build's position, with a range: the token that starts there, or one character for the
      * character rules and wherever no token starts. A position before the file (the toolchain's line -1, F10) is 1:1.
      */
-    private static Diagnostic diagnostic(String severity, String code, String message, int line, int col, String source, Spans spans) {
+    private static Diagnostic diagnostic(String severity, String code, String message, int line, int col, Where w) {
         int l = Math.max(line, 1), c = Math.max(col, 1);
         if (line < 1) c = 1;
-        String text = lineText(source, l);
+        String text = w.lineText(l);
         int start = c - 1;
         int end = start;
         boolean found = false;
-        if (spans != null && spans.toks != null && (code == null || !ONE_CHARACTER.contains(code))) {
-            for (Lexer.Tok t : spans.toks) {
-                if (t.line() == l && t.col() == c && t.kind() != Lexer.K.EOF) {
-                    end = t.end() - 1;
-                    found = true;
-                    break;
-                }
-                if (t.line() > l) break;
+        if (code == null || !ONE_CHARACTER.contains(code)) {
+            Lexer.Tok t = w.tokenAt(l, c);
+            if (t != null) {
+                end = t.end() - 1;
+                found = true;
             }
         }
         if (!found && text != null && start < text.length()) {
@@ -424,19 +480,6 @@ public final class JscLang {
                     && Character.isLowSurrogate(text.charAt(start + 1)) ? 2 : 1);
         }
         return new Diagnostic(severity, code, message, line, col, new Range(l - 1, start, l - 1, end), null);
-    }
-
-    /** The text of 1-based line {@code l}, without its line end, or null past the end. */
-    private static String lineText(String source, int l) {
-        int from = 0;
-        for (int k = 1; k < l; k++) {
-            int nl = source.indexOf('\n', from);
-            if (nl < 0) return null;
-            from = nl + 1;
-        }
-        int nl = source.indexOf('\n', from);
-        String s = nl < 0 ? source.substring(from) : source.substring(from, nl);
-        return s.endsWith("\r") ? s.substring(0, s.length() - 1) : s;
     }
 
     /**

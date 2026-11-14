@@ -95,8 +95,8 @@ final class Lexer {
             // could hide the code after them: they are refused.
             if (c == '\r' && (i + 1 >= src.length() || src.charAt(i + 1) != '\n') || c == '\u0085' || c == '\u2028' || c == '\u2029'
                     || c == '\u000B' || c == '\u000C') {
-                if (record(errors, offsets, i, new JscException(line, col, "JSC0147", String.format("U+%04X breaks a line for some readers but not for .jsc:"
-                        + " end lines with LF (or CRLF), so that a comment cannot hide the code after it", (int) c)))) {
+                if (record(errors, offsets, i, line, col, "JSC0147", "U+%04X breaks a line for some readers but not for .jsc:"
+                        + " end lines with LF (or CRLF), so that a comment cannot hide the code after it", c)) {
                     col++;
                     continue;
                 }
@@ -107,9 +107,9 @@ final class Lexer {
             // LF and the CR of a CRLF. A terminal or a viewer may act on one (U+001C..U+001E, ESC) and show text that
             // differs from what compiles.
             if (Character.getType(c) == Character.CONTROL && c != '\t' && c != '\r') {
-                if (record(errors, offsets, i, new JscException(line, col, "JSC0148", String.format("control character U+%04X: .jsc files hold no control"
+                if (record(errors, offsets, i, line, col, "JSC0148", "control character U+%04X: .jsc files hold no control"
                         + " characters but TAB and line ends (LF or CRLF), even in comments and strings, so that the text reads as"
-                        + " it compiles", (int) c)))) {
+                        + " it compiles", c)) {
                     col++;
                     continue;
                 }
@@ -118,9 +118,9 @@ final class Lexer {
                         + " it compiles", (int) c));
             }
             if (Character.getType(c) == Character.FORMAT && !(i == 0 && c == '\uFEFF')) {
-                if (record(errors, offsets, i, new JscException(line, col, "JSC0145", String.format("invisible format character U+%04X: .jsc files may not hold"
+                if (record(errors, offsets, i, line, col, "JSC0145", "invisible format character U+%04X: .jsc files may not hold"
                         + " bidirectional controls or other format characters, even in comments and strings, so that the text"
-                        + " reads as it compiles", (int) c)))) {
+                        + " reads as it compiles", c)) {
                     col++;
                     continue;
                 }
@@ -136,11 +136,21 @@ final class Lexer {
         return lex(src, null);
     }
 
-    /** Records {@code e} when recovering (and the offset of the character it is about); false when not recovering. */
-    private static boolean record(List<JscException> errors, java.util.Set<Integer> offsets, int offset, JscException e) {
+    /**
+     * The lexer's errors a recovering lex records at most (S2 on #99): past it a refused character is still skipped, but
+     * no message is built. The model reports {@link JscLang#MAX_ERRORS} at most.
+     */
+    static final int MAX_RECORDED = 1000;
+
+    /**
+     * Records the error {@code e} makes when recovering (and the offset of the character it is about), up to
+     * {@link #MAX_RECORDED}; false when not recovering.
+     */
+    private static boolean record(List<JscException> errors, java.util.Set<Integer> offsets, int offset, int line, int col, String code,
+                                  String format, char c) {
         if (errors == null) return false;
         if (offsets != null) offsets.add(offset);
-        errors.add(e);
+        if (errors.size() < MAX_RECORDED) errors.add(new JscException(line, col, code, String.format(format, (int) c)));
         return true;
     }
 
@@ -165,7 +175,7 @@ final class Lexer {
         var seen = errors == null ? null : new java.util.HashSet<String>();
         java.util.function.Consumer<JscException> fail = e -> {
             if (errors == null) throw e;
-            if (seen.add(e.line + ":" + e.col)) errors.add(e);
+            if (errors.size() < MAX_RECORDED && seen.add(e.line + ":" + e.col)) errors.add(e);
         };
         var out = new ArrayList<Tok>();
         int i = 0, line = 1, col = 1;
