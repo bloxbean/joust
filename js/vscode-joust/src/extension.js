@@ -88,6 +88,8 @@ function makeClient() {
       storageDir: context.globalStorageUri.fsPath,
       workspaceFile: workspaceFilePath(),
       allowedRoots: allowedRoots(),
+      // Q7: builds on save can only be turned off by a setting (they never run in Restricted Mode or advisory mode).
+      buildOnSave: vscode.workspace.getConfiguration('joust').get('buildOnSave') !== false,
     },
     synchronize: { fileEvents: watchers },
     // D10: no markdown is ever trusted.
