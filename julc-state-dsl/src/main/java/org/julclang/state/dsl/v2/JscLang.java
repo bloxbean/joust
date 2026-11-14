@@ -25,7 +25,7 @@ public final class JscLang {
     private JscLang() {}
 
     /** The document model's version: a change to its shape or meaning is a new version (the server checks it). */
-    public static final int MODEL_VERSION = 1;
+    public static final int MODEL_VERSION = 2;
 
     /**
      * The {@code lang} protocol the engine speaks (ADR-0021 D3: an engine is eligible as a project's compiler only at a
@@ -74,10 +74,17 @@ public final class JscLang {
      * selection ranges grow through.
      */
     public record Model(String language, String file, boolean accepted, String contract, List<Diagnostic> diagnostics,
-                        List<Declaration> declarations, List<Range> blocks, List<Folding> folding) {
+                        List<Declaration> declarations, List<Range> blocks, List<Folding> folding, JscLangIndex index,
+                        List<String> advisory) {
+
+        Model(String language, String file, boolean accepted, String contract, List<Diagnostic> diagnostics,
+              List<Declaration> declarations, List<Range> blocks, List<Folding> folding) {
+            this(language, file, accepted, contract, diagnostics, declarations, blocks, folding, null, List.of());
+        }
 
         int entries() {
-            return diagnostics.size() + declarations.size() + blocks.size() + folding.size();
+            return diagnostics.size() + declarations.size() + blocks.size() + folding.size()
+                    + (index == null ? 0 : index.refs.size() + index.exprs.size() + index.types.size());
         }
 
         /** The model's JSON, with a fixed key order: the bytes the JVM and the Web Image must agree on (D12). */
@@ -119,7 +126,30 @@ public final class JscLang {
                 range(o, d.nameRange());
                 o.append(",\"range\":");
                 range(o, d.range());
-                o.append(",\"partial\":").append(d.partial()).append(",\"outline\":").append(d.outline()).append('}');
+                o.append(",\"partial\":").append(d.partial()).append(",\"outline\":").append(d.outline());
+                // M5b (model v2): what the checker knows of it.
+                JscLangIndex.Meta mt = index == null ? null : index.meta.get(d.id());
+                if (mt != null) {
+                    if (mt.type != null) {
+                        o.append(",\"type\":");
+                        str(o, mt.type);
+                    }
+                    if (mt.detail != null) {
+                        o.append(",\"detail\":");
+                        str(o, mt.detail);
+                    }
+                    if (mt.abi) o.append(",\"abi\":true");
+                    if (mt.scope != null) {
+                        o.append(",\"scope\":[").append(mt.scope[0]).append(',').append(mt.scope[1]).append(',').append(mt.scope[2]).append(',')
+                                .append(mt.scope[3]).append(']');
+                    }
+                    if (mt.context != null) {
+                        o.append(",\"context\":");
+                        str(o, mt.context);
+                    }
+                }
+                if (index != null && index.shorthandBindings.contains(d.id())) o.append(",\"shorthand\":true");
+                o.append('}');
             }
             o.append("],\"blocks\":[");
             for (int k = 0; k < blocks.size(); k++) {
@@ -134,7 +164,49 @@ public final class JscLang {
                 str(o, f.kind());
                 o.append(']');
             }
-            return o.append("]}").toString();
+            o.append(']');
+            if (index != null) {
+                o.append(",\"references\":[");
+                int k = 0;
+                for (JscLangIndex.Ref r : index.refs) {
+                    if (r.decl() < 0) continue;
+                    if (k++ > 0) o.append(',');
+                    o.append('[').append(r.line()).append(',').append(r.col()).append(',').append(r.endLine()).append(',').append(r.endCol())
+                            .append(',').append(r.decl()).append(',').append(r.flags()).append(']');
+                }
+                o.append("],\"builtins\":[");
+                k = 0;
+                for (JscLangIndex.Ref r : index.refs) {
+                    if (r.decl() >= 0) continue;
+                    if (k++ > 0) o.append(',');
+                    o.append('[').append(r.line()).append(',').append(r.col()).append(',').append(r.endLine()).append(',').append(r.endCol())
+                            .append(',');
+                    str(o, r.builtin());
+                    o.append(']');
+                }
+                o.append("],\"types\":[");
+                for (int t = 0; t < index.types.size(); t++) {
+                    if (t > 0) o.append(',');
+                    str(o, index.types.get(t));
+                }
+                o.append("],\"exprs\":[");
+                for (int t = 0; t < index.exprs.size(); t++) {
+                    JscLangIndex.Expr x = index.exprs.get(t);
+                    if (t > 0) o.append(',');
+                    o.append('[').append(x.line()).append(',').append(x.col()).append(',').append(x.endLine()).append(',').append(x.endCol())
+                            .append(',').append(x.type()).append(',').append(x.taint()).append(']');
+                }
+                o.append(']');
+            }
+            if (advisory != null && !advisory.isEmpty()) {
+                o.append(",\"advisory\":[");
+                for (int t = 0; t < advisory.size(); t++) {
+                    if (t > 0) o.append(',');
+                    str(o, advisory.get(t));
+                }
+                o.append(']');
+            }
+            return o.append('}').toString();
         }
     }
 
@@ -145,7 +217,7 @@ public final class JscLang {
             "params", "event", "invariant");
 
     /** Diagnostics on one character (D7: the lexer's character rules underline the offending character). */
-    private static final Set<String> ONE_CHARACTER = Set.of("JSC0104", "JSC0106", "JSC0107", "JSC0108", "JSC0145", "JSC0146",
+    private static final Set<String> ONE_CHARACTER = Set.of("JSC0001", "JSC0104", "JSC0106", "JSC0107", "JSC0108", "JSC0145", "JSC0146",
             "JSC0147", "JSC0148");
 
     /** The model's JSON, or, over D2a's bounds, a model holding one diagnostic that says so. */
@@ -180,7 +252,7 @@ public final class JscLang {
         var d = new Diagnostic("error", null, "analysis stopped: this file's document model is larger than the language server"
                 + " handles (" + m.entries() + " entries; at most " + maxEntries + " entries and " + maxChars + " characters)", 1, 1,
                 new Range(0, 0, 0, 0), "model-too-large");
-        return new Model(m.language(), m.file(), m.accepted(), m.contract(), List.of(d), List.of(), List.of(), List.of());
+        return new Model(m.language(), m.file(), m.accepted(), m.contract(), List.of(d), List.of(), List.of(), List.of(), null, List.of());
     }
 
     /** The document model of {@code source}, named {@code fileName} (a bare file name, as the build passes it). */
@@ -226,30 +298,51 @@ public final class JscLang {
         if (source == null) source = "";
         if (!JscV2.isV2(source)) return analyseV1(source, fileName);
         var spans = new Spans();
+        var facts = new Facts();
         var diagnostics = new ArrayList<Diagnostic>();
         JscV2.Lowered lowered = null;
         String contract = null;
+        Ir.Program program = null;
+        // ADR-0021 D5 (M5b): the recovering front end. Every error the lexer, the parser and the checker find, each at the
+        // position the build reports it, the build's first among them (L1); the warnings of what checked.
+        var errors = new ArrayList<JscException>();
         try {
-            List<Ir.Warning> warnings;
-            if (lower) {
-                lowered = modules == null ? JscV2.lower(source, fileName, spans)
-                        : JscV2.lower(source, fileName, id, modules, JavaLibraries.NONE, spans);
-                String path = lowered.javaPath();
-                contract = path.substring(0, path.length() - ".java".length()).replace('/', '.');
-                warnings = lowered.diagnostics().stream().map(w -> new Ir.Warning(w.line(), w.col(), w.code(), w.message())).toList();
-            } else {
-                Ir.Program p = modules == null ? JscV2.check(source, fileName, spans)
-                        : JscV2.check(source, fileName, id, modules, JavaLibraries.NONE, spans);
-                contract = p.pkg() + "." + p.name();
-                warnings = p.warnings();
-            }
-            for (Ir.Warning w : warnings) diagnostics.add(diagnostic("warning", w.code(), w.message(), w.line(), w.col(), source, spans));
-        } catch (JscException e) {
-            diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, source, spans));
+            program = JscV2.checkRecovering(source, fileName, id, modules, spans, facts);
         } catch (RuntimeException | Error e) {
             // As the toolchain reports it (Toolchain.build): a coded internal error at 1:1, never a crash (ADR-0018 J18).
             diagnostics.add(diagnostic("error", "JSC0005", JscMain.internalError(e), 1, 1, source, spans));
         }
+        errors.addAll(spans.errors);
+        errors.addAll(facts.errors);
+        var seen = new HashSet<String>();
+        for (JscException e : errors) {
+            if (Facts.isPoisoned(e) || !seen.add(e.code + ":" + e.line + ":" + e.col)) continue;
+            diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, source, spans));
+        }
+        boolean clean = diagnostics.isEmpty();
+        if (program != null) {
+            contract = program.pkg() + "." + program.name();
+            for (Ir.Warning w : program.warnings()) diagnostics.add(diagnostic("warning", w.code(), w.message(), w.line(), w.col(), source, spans));
+            if (lower && clean) {
+                try {
+                    lowered = JscV2.lowerChecked(program, source, fileName);
+                } catch (JscException e) {
+                    diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, source, spans));
+                } catch (RuntimeException | Error e) {
+                    diagnostics.add(diagnostic("error", "JSC0005", JscMain.internalError(e), 1, 1, source, spans));
+                }
+            }
+        }
+        diagnostics.sort((x, y) -> x.line() != y.line() ? Integer.compare(x.line(), y.line()) : Integer.compare(x.col(), y.col()));
+        JscLangIndex index;
+        try {
+            index = new JscLangIndex(spans, facts, program).build();
+        } catch (RuntimeException e) {
+            // The index is the editor's; a failure in it never costs the diagnostics.
+            index = new JscLangIndex(spans, null, null);
+        }
+        var advisory = new ArrayList<String>();
+        if (!facts.unresolvedImports.isEmpty()) advisory.add("imports");
         var decls = new ArrayList<Declaration>();
         for (Spans.Decl d : spans.decls) {
             if (d.name == null || d.endLine < 0) continue;
@@ -271,8 +364,12 @@ public final class JscLang {
         var blocks = new ArrayList<Range>();
         for (int[] b : spans.blocks) blocks.add(new Range(b[0] - 1, b[1] - 1, b[2] - 1, b[3] - 1));
         boolean accepted = diagnostics.stream().noneMatch(d -> d.severity().equals("error"));
+        for (Spans.Decl d : spans.decls) {
+            int[] sc = spans.scopes.get(d);
+            if (sc != null) index.meta(d).scope = new int[]{sc[0] - 1, sc[1] - 1, sc[2] - 1, sc[3] - 1};
+        }
         return new Analysis(new Model("jsc2", fileName, accepted, contract, List.copyOf(diagnostics), List.copyOf(fixed),
-                List.copyOf(blocks), folding(source, spans, fixed)), lowered);
+                List.copyOf(blocks), folding(source, spans, fixed), index, List.copyOf(advisory)), lowered);
     }
 
     /** A {@code .jsc} v1 file: what the build reports for it (its first error, or its warnings); no spans (ADR-0018 D16). */
