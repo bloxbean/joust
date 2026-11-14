@@ -22,9 +22,9 @@ import static org.junit.jupiter.api.Assertions.*;
  * A change to generated code (as #85's output verifier) that moves a script fails here until the recordings that use it
  * are made again (EngineFixturesTest replays only what is recorded, so it cannot tell).
  * <p>
- * And the ADR-0015 M0 oracle ({@code fixtures/m0}, review r2, F8): each group's deployed contracts ({@code NNNN-deploy_<Name>})
- * that take no parameters have this head's script hash in the group's recorded transactions (as their policy and script
- * address). A contract that takes parameters has no hash before they are applied, so it is not checked here: its
+ * And the ADR-0015 M0 oracle ({@code fixtures/m0}, review r2, F8; r3, C8): every recorded deployment
+ * ({@code NNNN-deploy_<Name>}) of a contract that takes no parameters mints its instance token under this head's script
+ * hash (each deployment's own transaction, decoded). A contract that takes parameters has no hash before they are applied, so it is not checked here: its
  * {@code fixtures/m3} contract file is (above), and its m0 group is recorded again with it (CLAUDE.md).
  */
 class EngineFixtureScriptsTest {
@@ -69,7 +69,7 @@ class EngineFixtureScriptsTest {
     static final Path M0 = Path.of("../fixtures/m0");
 
     @Test
-    void everyM0GroupHoldsItsUnparameterizedContractsScriptHashes() throws Exception {
+    void everyM0DeploymentOfAnUnparameterizedContractMintsUnderThisHeadsHash() throws Exception {
         assertTrue(Files.isDirectory(M0), "fixtures/m0 is missing");
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         List<String> stale = new ArrayList<>(), unchecked = new ArrayList<>();
@@ -79,29 +79,71 @@ class EngineFixtureScriptsTest {
             groups = s.filter(p -> Files.isDirectory(p) && !p.getFileName().toString().equals("blobs")).sorted().toList();
         }
         for (Path g : groups) {
-            var txs = new StringBuilder();
-            var deployed = new java.util.TreeSet<String>();
-            try (Stream<Path> fs = Files.list(g)) {
-                for (Path f : fs.filter(p -> p.toString().endsWith(".json")).sorted().toList()) {
-                    txs.append(JSON.readTree(f.toFile()).get("unsignedTx").asText());
-                    String n = f.getFileName().toString();
-                    int at = n.indexOf("-deploy_");
-                    if (at > 0) deployed.add(n.substring(at + "-deploy_".length(), n.length() - ".json".length()));
-                }
-            }
-            for (String name : deployed) {
-                Toolchain.Contract c = contractNamed(g.getFileName().toString(), name);
+            for (var d : deployments(g)) {
+                Toolchain.Contract c = contractNamed(g.getFileName().toString(), d.name());
                 if (c == null || c.scriptHash().isEmpty()) {
-                    unchecked.add(g.getFileName() + "/" + name + (c == null ? " (not built)" : " (parameterized)"));
+                    unchecked.add(g.getFileName() + "/" + d.file().getFileName() + (c == null ? " (not built)" : " (parameterized)"));
                     continue;
                 }
-                if (!txs.toString().contains(c.scriptHash())) stale.add(g.getFileName() + "/" + name + ": this head's hash " + c.scriptHash() + " is not recorded");
+                if (!d.mintPolicies().contains(c.scriptHash())) {
+                    stale.add(g.getFileName() + "/" + d.file().getFileName() + ": mints under " + d.mintPolicies() + ", not this head's " + c.scriptHash());
+                }
                 checked++;
             }
         }
-        System.out.println("[fixtures m0] " + checked + " deployed contracts have this head's script hash; not checked here: " + unchecked);
+        System.out.println("[fixtures m0] " + checked + " deployments mint under this head's script hash; not checked here: " + unchecked);
         assertEquals(List.of(), stale, "record these fixtures/m0 groups again (clear each first; -PjoustFixtures on DevKit)");
-        assertTrue(checked >= 20, "expected most of the oracle's contracts to be checked, checked " + checked);
+        assertTrue(checked >= 20, "expected most of the oracle's deployments to be checked, checked " + checked);
+    }
+
+    /**
+     * Review r3, C8: the guard decides per deployment, not per group. A copy of the wallet group (two deployments of Counter)
+     * whose first deployment mints under another policy is reported, though the second still holds this head's hash.
+     */
+    @Test
+    void aGroupWithOneStaleDeploymentIsReported(@org.junit.jupiter.api.io.TempDir Path tmp) throws Exception {
+        org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
+        Path wallet = M0.resolve("wallet");
+        Toolchain.Contract counter = contractNamed("wallet", "Counter");
+        assertNotNull(counter);
+        Path copy = tmp.resolve("wallet");
+        Files.createDirectories(copy);
+        List<Path> deploys = new ArrayList<>();
+        try (Stream<Path> s = Files.list(wallet)) {
+            for (Path f : s.filter(p -> p.toString().endsWith(".json")).sorted().toList()) {
+                Files.copy(f, copy.resolve(f.getFileName()));
+                if (f.getFileName().toString().contains("-deploy_Counter")) deploys.add(copy.resolve(f.getFileName()));
+            }
+        }
+        assertTrue(deploys.size() >= 2, "the wallet group deploys Counter twice: " + deploys);
+        String other = "ab".repeat(28);
+        Files.writeString(deploys.get(0), Files.readString(deploys.get(0)).replace(counter.scriptHash(), other));
+        var found = deployments(copy);
+        var byFile = new java.util.LinkedHashMap<String, Boolean>();
+        for (var d : found) if (d.name().equals("Counter")) byFile.put(d.file().getFileName().toString(), d.mintPolicies().contains(counter.scriptHash()));
+        assertEquals(false, byFile.get(deploys.get(0).getFileName().toString()), "the stale deployment is reported");
+        assertTrue(byFile.entrySet().stream().filter(e -> !e.getKey().equals(deploys.get(0).getFileName().toString())).allMatch(java.util.Map.Entry::getValue),
+                "the current ones are not: " + byFile);
+    }
+
+    /** A recorded deployment ({@code NNNN-deploy_<Name>}): the policies its transaction mints under. */
+    record Deployment(Path file, String name, java.util.Set<String> mintPolicies) {}
+
+    static List<Deployment> deployments(Path group) throws Exception {
+        var out = new ArrayList<Deployment>();
+        try (Stream<Path> fs = Files.list(group)) {
+            for (Path f : fs.filter(p -> p.toString().endsWith(".json")).sorted().toList()) {
+                String n = f.getFileName().toString();
+                int at = n.indexOf("-deploy_");
+                if (at < 0) continue;
+                var tx = com.bloxbean.cardano.client.transaction.spec.Transaction.deserialize(
+                        java.util.HexFormat.of().parseHex(JSON.readTree(f.toFile()).get("unsignedTx").asText()));
+                var policies = new java.util.TreeSet<String>();
+                if (tx.getBody().getMint() != null) tx.getBody().getMint().forEach(m -> policies.add(m.getPolicyId()));
+                out.add(new Deployment(f, n.substring(at + "-deploy_".length(), n.length() - ".json".length()), policies));
+            }
+        }
+        return out;
     }
 
     /** A contract by simple name: the group's example first, else the example whose sources declare it. */
