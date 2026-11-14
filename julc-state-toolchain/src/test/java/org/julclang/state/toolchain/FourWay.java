@@ -106,6 +106,8 @@ final class FourWay {
     /** Every call {@link #check} made, with the outcome the four legs agreed on, for the JavaScript leg. */
     final List<JsLeg.Call> jsCalls = new ArrayList<>();
     int calls, refusals, validatorRuns, rounds, batchRuns, mutantsRejected, attacksRejected, modifierRefusals;
+    /** M3c: refusals of a migration's half (migrate:to, migrate:from) and of its adopted state (input:old). */
+    int migrateRefusals;
     StateHarness.Verdict lastVerdict;
 
     /** The {@code .jsc} libraries' classes the program imports (ADR-0018 D9, M4): their records and variants are theirs. */
@@ -1106,6 +1108,17 @@ final class FourWay {
 
     /** An interpreter's outcome (either interpreter's: {@link JsLeg}) encoded as the runtime encodes a transition's result. */
     String encode(String method, Interpreter.Outcome o) {
+        // M3c (ADR-0010 D1): a withdraw handler's result is its sends; certify's, vote's and propose's their Bool.
+        switch (interp.kind(method)) {
+            case "withdraw" -> {
+                return "ok:" + PurposeLegs.sendsHex(sends(o.sends()));
+            }
+            case "certify", "vote", "propose" -> {
+                return "ok:" + o.value();
+            }
+            default -> {
+            }
+        }
         if (assets && !kindOf(method).equals("view")) {
             return "ok:" + step(kindOf(method).equals("destroy") ? null : java(o.value()), payouts(o.payouts()), sends(o.sends()),
                     value(o.mint()), value(o.accepted()), events ? events(o) : null, deposits(o.deposits()));
@@ -1135,6 +1148,8 @@ final class FourWay {
         if (takesParams(method)) call.add(java(params));
         // M2c: the read states directly after the params (ADR-0011 D2), as the transaction's reference inputs give them.
         for (String f : interp.reads(method)) call.add(java(t.reads().get(f)));
+        // M3c (ADR-0011 D4): an init migrate's adopted state, after the params, as the spent instance holds it.
+        if (interp.adoptsFrom(method) != null) call.add(java(t.prior().state()));
         for (int i = 0; i < args.size(); i++) {
             call.add(java(args.get(i)));
             // M3a3: an admits action's arriving object, after its first argument (the object's id).
@@ -1277,6 +1292,12 @@ final class FourWay {
                 var fs = new ArrayList<org.julclang.core.PlutusData>();
                 // As an attacker may write them (raw, not re-encoded canonically): a read state's map in its own order.
                 for (String f : interp.reads(method)) fs.add(raw(t.reads().get(f)));
+                fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
+                in = new org.julclang.core.PlutusData.ConstrData(0, fs);
+            }
+            // M3c (ADR-0011 D4): an init migrate's adopted state is its creation's read: after the params, before the arguments.
+            if (interp.adoptsFrom(method) != null) {
+                var fs = new ArrayList<org.julclang.core.PlutusData>(List.of(raw(t.prior().state())));
                 fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
                 in = new org.julclang.core.PlutusData.ConstrData(0, fs);
             }
@@ -1431,13 +1452,17 @@ final class FourWay {
             lastVerdict = v;
             return v.accepted();
         }
-        Object redeemer = construct(variant, redeemerArgs);
-        // The arguments as an attacker may send them (raw, not re-encoded canonically): the redeemer's fields replaced.
-        var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
-        var fields = new ArrayList<>(encoded.fields());
-        int offset = kind.equals("init") ? 1 : 0;
-        for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
-        redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
+        // M3c: an init migrate's redeemer is Adopt, built with its transaction below.
+        Object redeemer = null;
+        if (!kind.equals("migrate")) {
+            redeemer = construct(variant, redeemerArgs);
+            // The arguments as an attacker may send them (raw, not re-encoded canonically): the redeemer's fields replaced.
+            var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
+            var fields = new ArrayList<>(encoded.fields());
+            int offset = kind.equals("init") ? 1 : 0;
+            for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
+            redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
+        }
         Ctx c = interp.usesTx(method) ? ctx(t) : null;
         var ms = new MerkleSupport(store);
         StateHarness.Verdict v;
@@ -1485,11 +1510,30 @@ final class FourWay {
                 var live = harness.live(before, t.balance().subtract(BigInteger.valueOf(harness.minAda())));
                 var tx = withReads(method, harness.destroy(live, redeemer, construct("BurnInstance", List.of()),
                         ok ? paysJ : Payouts.of(signer, live.lovelace()), signer, c), t);
+                // M3c (ADR-0011 D4): a migrating destroy's transaction mints its successor's instance and pays it the value.
+                if (interp.migratesTo(method) != null && successor != null) tx = successor.apply(tx, live);
                 if (hasMaps()) {
                     if (ok) run(ms, method, before, args, t);
                     tx = harness.withClaims(tx, ms.prepare(harness.policy(), (Class) stateClass, before, null, StateHarness.LIVE_REF).claims());
                 }
                 v = evaluate(method, t, signer, tx);
+            }
+            case "migrate" -> {
+                // M3c (ADR-0011 D4): the whole migration as this contract's mint sees it: the previous instance spent and
+                // burned, this instance minted with Adopt(seed = the spent instance, args…, [ctx]).
+                Object first = ok ? nextJ : candidate == null ? null : java(candidate);
+                if (first == null || adoption == null) return null;
+                var whole = adoption.apply(first);
+                var mine = whole.copy();
+                mine.spendRedeemers.clear();
+                var fs = new ArrayList<Object>(List.of(StateHarness.LIVE_REF));
+                for (Object a : args) fs.add(java(a));
+                if (c != null) fs.add(c);
+                var adopt = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(construct("Adopt", fs));
+                var rf = new ArrayList<>(adopt.fields());
+                for (int i = 0; i < args.size(); i++) rf.set(1 + i, raw(args.get(i)));
+                mine.mintRedeemer = new org.julclang.core.PlutusData.ConstrData(adopt.constructorTag(), rf);
+                v = evaluate(method, t, signer, mine);
             }
             default -> {
                 return null;
@@ -1499,6 +1543,18 @@ final class FourWay {
         lastVerdict = v;
         return v.accepted();
     }
+
+    /**
+     * M3c (ADR-0011 D4): for this contract's migrating destroy, what its transaction adds beside the destroy: the successor's
+     * instance minted and its output holding the value (set by the test, with the successor's harness; null: none).
+     */
+    java.util.function.BiFunction<org.julclang.state.testkit.TxModel, StateHarness.Live<Object>, org.julclang.state.testkit.TxModel> successor;
+
+    /**
+     * M3c: for this contract's init migrate, the whole migration transaction from the adopted first state (the previous
+     * version's destroy, built with its harness, and this instance's output and mint); null: none.
+     */
+    java.util.function.Function<Object, org.julclang.state.testkit.TxModel> adoption;
 
     // ------------------------------------------------------------------ asset-aware contracts (M2)
 
@@ -2466,7 +2522,7 @@ final class FourWay {
         return stateClass.getDeclaredConstructor(types).newInstance(vals);
     }
 
-    private Object construct(String variant, List<Object> values) throws Exception {
+    Object construct(String variant, List<Object> values) throws Exception {
         return construct(variant, values, "Validator$");
     }
 

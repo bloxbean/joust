@@ -572,6 +572,22 @@ public final class Interpreter {
         return method(method).reads().stream().map(Ir.Read::field).toList();
     }
 
+    /** M3c (ADR-0011 D4): an init migrate's params field pinning the previous version, or null for any other method. */
+    public String adoptsFrom(String method) {
+        Ir.Migration m = method(method).migration();
+        return m == null ? null : m.from();
+    }
+
+    /** M3c: the state field naming a migrating destroy's successor, or null. */
+    public String migratesTo(String method) {
+        return method(method).migratesTo();
+    }
+
+    /** M3c (ADR-0010 D2): whether the contract's state is staked to its own script. */
+    public boolean stakeSelf() {
+        return p.stakeSelf();
+    }
+
     /** M2c: whether a method receives deposits ({@code receives}), and whether it reads their memos ({@code receives T}). */
     public boolean receives(String method) {
         return method(method).receives() != null;

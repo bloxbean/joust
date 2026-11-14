@@ -1,0 +1,33 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import contract { TallyV1 } from "./TallyV1.jsc"
+import { length } from "std/bytes"
+
+// ADR-0018 M3c's coverage contract for migration (ADR-0011 D4), version 2: it adopts TallyV1 instances with an argument
+// and the transaction (its admin adopts, before a deadline in the params), and is checked as a creation is: its params
+// quorum at adoption, its invariant on the adopted state.
+contract TallyV2(maxDatumBytes = 512) {
+  params { previous: Hash, council: List<Key>, needed: Int, until: Int }
+  state { admin: Key, voters: List<Key>, count: Int, bonus: Int }
+
+  init() {
+    return { admin: caller, voters: [], count: 0, bonus: 0 }
+  }
+
+  init migrate from params.previous(old: TallyV1.State, bonus: Int) {
+    require(caller == old.admin, "the admin adopts")
+    require(before(params.until), "too late to adopt")
+    return { admin: old.admin, voters: old.voters, count: old.tags.size + length(old.note ?? #), bonus }
+  }
+
+  action count() only admin {
+    return { ...state, count: count + 1 }
+  }
+
+  destroy close() quorum params.council params.needed {
+    pay(admin, balance)
+  }
+
+  invariant sane = count >= 0 && bonus >= 0 && bonus <= 100
+}

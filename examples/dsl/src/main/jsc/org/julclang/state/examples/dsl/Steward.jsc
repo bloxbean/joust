@@ -1,0 +1,77 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { delegatesOnlyTo } from "std/certs"
+
+// ADR-0018 M3c's coverage contract for the script purposes (ADR-0010), beside the staking port. Its handlers are governed
+// by a credential in the params (authorized: a key, or a script's approval naming this purpose), and by a quorum:
+//   - a withdrawal with arguments that reads the transaction (a deadline, so its redeemer carries a Ctx);
+//   - a certify handler that allows every certificate it sees: the built-in filter, not the handler, refuses
+//     unregistration, pool and committee certificates;
+//   - a vote handler that depends on the action and the vote, by a quorum;
+//   - a guardrail over every governance action, reading the ledger types' fields and LedgerMaps.
+contract Steward {
+  params { gov: Credential, council: List<Key>, quorum: Int, pool: Bytes, payee: Key, deadline: Int, banned: Bytes }
+  state { owner: Key }
+
+  init() {
+    return { owner: caller }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+
+  // The rewards, less a tip to the params' payee, to a key the governor names in the call, before the deadline.
+  withdraw take(amount: Int, to: Key, tip: Int) authorized params.gov {
+    require(before(params.deadline), "too late to withdraw")
+    require(tip >= 0 && tip <= amount, "the tip is within the amount")
+    if amount - tip > 0 {
+      send(wallet(to), Value.lovelace(amount - tip))
+    }
+    if tip > 0 {
+      send(wallet(params.payee), Value.lovelace(tip))
+    }
+  }
+
+  certify anything(cert: TxCert) authorized params.gov = match cert {
+    RegStaking { deposit } => (deposit ?? 0) >= 0,
+    UnRegStaking => true,
+    DelegStaking { delegatee } => delegateeOk(delegatee, params.pool) || delegatesOnlyTo(cert, params.pool),
+    RegDeleg { delegatee, deposit } => delegateeOk(delegatee, params.pool) && deposit >= 0,
+    RegDRep { deposit } => deposit > 0,
+    UpdateDRep => true,
+    UnRegDRep => true,
+    PoolRegister => true,
+    PoolRetire => true,
+    AuthHotCommittee => true,
+    ResignColdCommittee => true
+  }
+
+  // No vote on the banned transaction's actions; any vote on an action at index 0; otherwise only abstain.
+  vote judge(voter: Voter, action: GovernanceActionId, choice: Vote) quorum params.council params.quorum {
+    const indexZero = action.govActionIx == 0
+    action.txId != params.banned && (indexZero || match choice { Abstain => true, _ => false })
+  }
+
+  propose rail(p: ProposalProcedure) = p.deposit > 0 && match p.governanceAction {
+    ParameterChange { id, constitutionScript } => constitutionScript != None && match id { None => true, _ => false },
+    HardForkInitiation { protocolVersion } => protocolVersion.major <= 11 && protocolVersion.minor >= 0,
+    TreasuryWithdrawals { withdrawals } => total(withdrawals) <= 1000 ada && withdrawals.all((c, v) => v > 0)
+      && !withdrawals.has(keyCred(params.payee)) && withdrawals.size <= 3 && !withdrawals.isEmpty,
+    NoConfidence => false,
+    UpdateCommittee { removedMembers, addedMembers, newQuorum } => removedMembers.length <= 1 && addedMembers.keys.length <= 2
+      && addedMembers.any((c, e) => e > 100) == false && newQuorum.denominator > 0
+      && newQuorum.numerator * 3 >= newQuorum.denominator * 2,
+    NewConstitution { constitution } => constitution.script != None,
+    InfoAction => (p.returnAddress == keyCred(params.payee)) == false
+  }
+
+  fn total(m: LedgerMap<Credential, Int>): Int = m.fold(0, (acc, c, v) => acc + v)
+
+  fn delegateeOk(d: Delegatee, pool: Bytes): Bool = match d {
+    Stake { poolId } => poolId == pool,
+    Vote { dRep } => match dRep { AlwaysAbstain => true, _ => false },
+    StakeVote => false
+  }
+}
