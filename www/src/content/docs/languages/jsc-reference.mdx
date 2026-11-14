@@ -53,14 +53,16 @@ option    = ( "minAda" | "maxDatumBytes" | "maxValidityMs" ) "=" Int [ "ada" ]
 member    = "state" "{" { field [","] } "}"          (exactly once)
           | "params" "{" { field [","] } "}"          (at most once)
           | "event" Name [ "{" { field [","] } "}" ]
-          | "invariant" Ident ( "=" expr | block )
+          | "invariant" [ Name "." ] Ident ( "=" expr | block )                    (T.name: M3a3)
           | "init" params [ "payable" ] block
           | ( "action" | "destroy" ) Ident params { modifier } block
           | "view" Ident params ":" typeRef ( "=" expr | block )
+          | "owned" Name "{" { field [","] } "}"                                    (M3a)
+          | "owned" ( "init" | "action" | "destroy" ) Name "." Ident params { modifier } block
           | fn | type | enum
-params    = "(" [ param { "," param } ] ")";   param = Ident ":" ( typeRef | "reads" "params" "." Ident )
+params    = "(" [ param { "," param } ] ")";   param = Ident ":" ( typeRef | "reads" "params" "." Ident | "shared" | "into" )
 modifier  = "payable" | "open" | "batched" [ "only" ] | ( "only" | "after" | "before" ) Ident
-          | "quorum" fieldRef fieldRef | "authorized" fieldRef | "receives" [ typeRef ]
+          | "quorum" fieldRef fieldRef | "authorized" fieldRef | "receives" [ typeRef ] | "admits" Name   (admits: M3a3)
 fieldRef  = Ident | "params" "." Ident
 block     = "{" { stmt } [ [ "return" ] expr ] "}"
 stmt      = "const" Ident [ ":" typeRef ] "=" expr
@@ -155,6 +157,10 @@ hash, and every `Address` the ledger's encoding with a well-formed payment crede
 | `params { … }` | `@Params public record Config(...)` | once (`JSC0431`), at least one field (`JSC0432`); read as `params.f` in methods, views and invariants, never in a `fn` (`JSC0433`) |
 | `event Name { … }` | a variant of `public sealed interface Event` | the contract's events; emitted with `emit(Name { … })` |
 | `invariant name = expr` | `@Invariant public static boolean name(State s__[, Config params__])` | a `Bool` over the state and the params, like a view's body, without `require` (`JSC0441`); not with `BigMap` state (`JSC0435`) or `batched` actions (`JSC0436`) |
+| `owned T { … }` | `@Owned public record T(...)` | M3a (ADR-0003): an owned object's record; each object is its own UTxO. Its fields follow the state's rules (no built-in name, `JSC0208`; a `BigMap` at the top, M3a2). It needs an owned init (`JSC1208`) and an escape hatch, an owned destroy without `shared` (`JSC1209`); a contract with owned types destroys no instance (`JSC1210`) and keeps no `BigMap` state (`JSC1211`); an owned type is no field or parameter of another value (`JSC1207`) |
+| `owned init T.m(params) [payable] { … }` | `@OwnedInit public static T m([@Shared State s, ]params[, Ctx ctx])` | returns the new object; only `payable` (`JSC0405`); cannot pay, send, mint or deposit (`JSC0404`) |
+| `owned action T.m(params) mods { … }` | `@OwnedAction public static T m(T s__[, @Shared State s], params[, Ctx ctx])`, or `TOutcome` when it has effects | its input is the object: bare names and `state` read it, and so do `only`, `after`, `before`, `quorum`; returns the next object |
+| `owned destroy T.m(params) mods { … }` | `@OwnedDestroy public static JulcList<Payout> m(T s__, …, Ctx ctx)` (or `Settled`) | pays out what the object holds (`JSC0409`) |
 | `import contract { C } from "./C.jsc"` | `import <C's package>.C;` | M2c (ADR-0018 D9): another `.jsc` contract of the build, checked on its own; its state is `C.State` and its instances `Instance<C>`. One name, the file's contract (`JSC0740`, `JSC0742`); no cycle (`JSC0743`); not twice, nor its name for another declaration (`JSC0744`); `java:` contracts not yet (`JSC0741`) |
 
 Method names are unique, and a `fn` may not share one (`JSC0202`); nor may an invariant (`JSC0224`). A method gets
@@ -168,6 +174,32 @@ then a reserved type name, as `Event` is in a contract with events (`JSC0225`). 
 (`JSC0437`). M2c: the init checks them as a checked input (`#params:`: every `Key` and `Hash` 28 bytes, maps canonical,
 addresses the ledger's, every `Value` of lovelace's or 28-byte policies), so no instance is made under params whose
 values a reader would refuse.
+
+**Owned objects** (ADR-0003, M3a). An owned method names its type, `owned action Account.deposit()`. A parameter
+`bank: shared` is the instance's state, read through a reference input (never spent, so owners do not queue behind each
+other), and comes first (`JSC1205`, `JSC1206`); read its fields as `bank.paused`. In an owned action or destroy,
+`received` is what the call pays into the object and `balance` what the object holds. A method with a `shared` parameter
+takes `Ctx`, as the Java examples' owned methods do. An owned action or destroy without an audience warns (`JSC9010`:
+anyone could call it on anyone's object); say `open` when that is meant. Several owned types, `BigMap`s in owned types,
+moves between instances (`into`, `admits`) and invariants by type come in M3a2 and M3a3 (`JSC1215` until then).
+
+```text
+contract Bank(maxDatumBytes = 160) {
+  state { admin: Key, paused: Bool, withdrawLimit: Int }
+  owned Account { owner: Key, saved: Int }
+  init(withdrawLimit: Int) { return { admin: caller, paused: false, withdrawLimit } }
+  owned init Account.open(bank: shared) payable {
+    require(!bank.paused, "the bank is paused")
+    return { owner: caller, saved: received }
+  }
+  owned action Account.withdraw(bank: shared, amount: Int) only owner {
+    require(amount > 0 && amount <= bank.withdrawLimit && amount <= saved, "not that much")
+    pay(owner, amount)
+    return { ...state, saved: saved - amount }
+  }
+  owned destroy Account.close() only owner { pay(owner, balance) }
+}
+```
 
 **Invariants** (ADR-0009 D4) are checked by the validator on every state it accepts as an output (a creation and every
 action; a destroy has none), and by the runtime before it submits. A state that breaks one can only be destroyed.

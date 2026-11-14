@@ -105,6 +105,7 @@ these values:
 | `approvers` (M2b) | `List<Hash>` | the scripts that approve this call: each has a zero withdrawal in the transaction whose approval names this contract, instance and action (ADR-0009 D3; a native script, which has no redeemer, approves through its withdrawal alone), and is neither this contract's script nor a JOUST verifier (read only by `authorized`, §2.6; none when a vector does not say) |
 | `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns, accepts or receives: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token), `policy` (a `Hash`: the contract's policy), `self` (`Bytes`: the instance's token name) and (M2c) `deposits`: for a receiving action, the deposits claimed on its continuing output in the registry's order, each a value and, for `receives T`, a memo (a value of `T`); empty otherwise |
 | `reads` (M2c) | | for a method with `reads` parameters: the state of each instance a params field names, by that field, as the transaction's reference inputs hold it (ADR-0011 D2) |
+| `shared` (M3a) | | for an owned method with a `shared` parameter: the instance's state, as the transaction's reference input holds it (§2.8) |
 
 **The params** (M2b, ADR-0009 D1). A contract that declares `params { … }` is called as deployed with them: a `Config`
 record, fixed for every call of the deployment (the script is applied to them), read as `params.f`. A call of a method
@@ -309,6 +310,36 @@ and the transition program compute the transition without these checks, which ar
 before it submits): on such a call both interpreters refuse, the validator refuses, and the JVM and transition legs
 agree with the interpreters' transition. An invariant is evaluated like a view's body: the state, the params and its
 own consts; no transaction, no effects.
+
+### 2.8 Owned objects (M3a)
+
+An *owned object* (ADR-0003) is a value of an `owned T { … }` record held in its own UTxO under an instance. Its value is
+a record (§1), compared and encoded as one. Owned methods name their type: `owned init T.m`, `owned action T.m`,
+`owned destroy T.m`. A call of one is evaluated as in §2, with these differences:
+
+| Kind | Input σ | Outcome |
+|---|---|---|
+| `owned init T.m` | none | the new object (a `T`) |
+| `owned action T.m` | the object, a `T` | the next object and the effects |
+| `owned destroy T.m` | the object, a `T` | the effects |
+
+- **The input.** In an owned action or destroy, `state` is the object, and a bare field name reads the object's field;
+  the modifiers `only f`, `after f`, `before f`, `quorum k t` and `authorized c` read the object's fields (or `params.f`).
+  τ.`received` is what the call pays into the object, and τ.`balance` the lovelace the object holds: for an action
+  without its deposit, for a destroy everything (as an instance's, §2).
+- **The instance's state** reaches an owned method only through a parameter `s: shared`, bound to τ.`shared`: the
+  instance's state as the transaction's reference input holds it (ADR-0003 D1), never spent, so an owned call does not
+  contend with others. A call of a method with a `shared` parameter needs τ.`shared`; without it it is the caller's error,
+  not a refusal. It is not a checked input: it is this contract's own instance datum, which its validator accepted.
+- **Output checks** (§2.7): for an owned init's and an owned action's object, each quorum that the owned type's methods
+  name (over the object's fields) is well formed. An owned destroy makes no output check.
+- **Kinds.** A method of type `T` called on an object of another type is the caller's error, not a refusal: the
+  validator refuses it (ADR-0003 I21, ADR-0012 I42) and the attack suite covers it.
+- **Transaction-level rules** (§2): a shared read of another instance than the object's, an object spent with an
+  instance's redeemer or an instance with an object's, and a creation without its seed are the validator's to refuse.
+
+M3a1 builds one owned type per contract, without BigMaps; M3a2 and M3a3 add several types, BigMaps in owned records,
+moves between instances and invariants by type (refused until then, JSC1215).
 
 ## 3. Expressions
 
