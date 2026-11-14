@@ -187,10 +187,20 @@ public final class StateHarness<S> {
     }
 
     public Verdict evaluateCertify(TxModel tx, org.julclang.ledger.TxCert cert) {
+        return evaluateContext("CERTIFY", certifyContext(tx, cert));
+    }
+
+    /** The CERTIFY purpose's script context for {@code cert} in the transaction (ADR-0018 M3c: to tamper with as data). */
+    public PlutusData certifyContext(TxModel tx, org.julclang.ledger.TxCert cert) {
         var b = ScriptContextTestBuilder.certifying(BigInteger.ZERO, cert).redeemer(PlutusData.integer(0));
         b.certificate(cert);
+        return fill(b, tx).buildPlutusData();
+    }
+
+    /** Evaluates the contract's script on a script context given as data (ADR-0018 M3c: a context no ledger type can build). */
+    public Verdict evaluateContext(String label, PlutusData ctx) {
         var results = new LinkedHashMap<String, EvalResult>();
-        results.put("CERTIFY", ValidatorTest.evaluate(program, fill(b, tx).buildPlutusData()));
+        results.put(label, ValidatorTest.evaluate(program, ctx));
         return new Verdict(results);
     }
 
