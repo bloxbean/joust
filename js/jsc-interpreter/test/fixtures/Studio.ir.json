@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "dafa7e95e4995c53c249c5b2752512433757c4f967e5d6a19c2e749ebc787d7e",
+  "sourceSha256": "f36b5c45bd179a29735c32399711d3235051e7704a0cae38a2d7a309a5d57297",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Studio",
   "source": "Studio.jsc",

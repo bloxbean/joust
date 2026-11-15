@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "7174d9ec6a970f95bfb8c73b441958ea3a61d3b47aa22251b5f808393490b793",
+  "sourceSha256": "0038c5b1660eb2aba8e266162d1596764b2ad55e0d7fdaf3fae10265042d7c1f",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Vouch",
   "source": "Vouch.jsc",

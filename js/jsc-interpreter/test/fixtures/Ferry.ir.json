@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "fc78bbde98361a86bdb12660bd89fd3b310d487216d9e0c59bdd507f3f26d998",
+  "sourceSha256": "e71cf1ba3dee2b8a239cf60e581ac5901ebf7dc5fd1e08664116902fee3eb73c",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Ferry",
   "source": "Ferry.jsc",

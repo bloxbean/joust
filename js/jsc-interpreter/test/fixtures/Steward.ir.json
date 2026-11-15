@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "c0b830d37f06b5b8b6197187d34c315c92abf8f318e26e1ab7f90e0476ebccac",
+  "sourceSha256": "17bffb01e249bc2bf80f11674bcd2adede79138578fc96952f2a7806eda624ba",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Steward",
   "source": "Steward.jsc",

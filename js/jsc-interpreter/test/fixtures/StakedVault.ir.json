@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "b877f8df0592a50bba0ba441e3e27c69110b8101f5c8e160859b08422a4e805d",
+  "sourceSha256": "31f8323e1bcc4252b7f2773c9c4b56ecd5741e3b402032a09272b0e9c40e7813",
   "package": "org.julclang.state.examples.dsl",
   "contract": "StakedVault",
   "source": "StakedVault.jsc",

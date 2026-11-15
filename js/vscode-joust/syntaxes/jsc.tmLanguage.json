@@ -71,7 +71,7 @@
           }
         },
         {
-          "match": "\\b(from)\\b",
+          "match": "\\b(from|to)\\b",
           "name": "keyword.control.from.jsc"
         }
       ]

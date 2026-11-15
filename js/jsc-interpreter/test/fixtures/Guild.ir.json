@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "635c22d814d57be301d059d5d210bbfc8bea16d2a82176b27f17ad82cdcaca88",
+  "sourceSha256": "1932c912ac4592b395a161aa2366de66b13dea76ecd89abecc9b2b06535abd60",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Guild",
   "source": "Guild.jsc",

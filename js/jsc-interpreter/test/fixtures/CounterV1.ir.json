@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "a13c8aae2c8f15ffcb98cffdf02ae734c7b99d52614c3dd05269fd8479827fb7",
+  "sourceSha256": "7fe123756b79c4762a2fd6203be0fbbd1029fde7b3f50fffdcd8a3346d47d2f5",
   "package": "org.julclang.state.examples.dsl",
   "contract": "CounterV1",
   "source": "CounterV1.jsc",

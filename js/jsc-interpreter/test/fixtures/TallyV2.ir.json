@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "f78a207ef66b5f37f5b2d2491d8ffdc5af9743b6ce8b7aea69fa7f299bb49022",
+  "sourceSha256": "5b0250c526debfa87c817dfe1039c7a9ba29b99fe8a157d11f42ec29bd413a90",
   "package": "org.julclang.state.examples.dsl",
   "contract": "TallyV2",
   "source": "TallyV2.jsc",
