@@ -71,6 +71,10 @@ class JscV2M3bGateTest {
         SIZES.put("Keys", new int[]{0, size(keys, "Keys")});
     }
 
+    /** Registry's size as recorded under J11's exception (r27): over 14 KB, as the Java example is (14,711 B). */
+    static final int REGISTRY_RECORDED = 14_789;
+    static final int SLACK = 100;
+
     @Test
     void size_within15PercentOfJava_andUnderTheRuntimesLimit() {
         int[] s = SIZES.get("Registry");
@@ -80,6 +84,10 @@ class JscV2M3bGateTest {
         System.out.printf("[M3b size] Keys (coverage) %,7d%n", SIZES.get("Keys")[1]);
         assertTrue(ratio <= BOUND, "Registry: " + s[1] + " B is more than 15% above Java's " + s[0] + " B");
         assertTrue(s[1] <= RUNTIME_LIMIT, "Registry: over the runtime's reference-script limit");
+        // M3 final pass MD3 (§8's J11 rule, #104 F1): a port over 14 KB under the exception pins its recorded size with 100 B of
+        // slack, capped by the runtime's limit, as Locker, Safes and Market do: any growth has to be justified again.
+        assertTrue(s[1] <= Math.min(REGISTRY_RECORDED + SLACK, RUNTIME_LIMIT),
+                "Registry: " + s[1] + " B, more than " + SLACK + " B over its recorded " + REGISTRY_RECORDED + " B (J11's exception)");
         assertTrue(SIZES.get("Keys")[1] <= RUNTIME_LIMIT, "Keys: over the runtime's reference-script limit");
     }
 
