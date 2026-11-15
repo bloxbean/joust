@@ -2299,132 +2299,138 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (token?.isCancellationRequested) return { error: 'cancelled' };
     const flight = { stale: false };
     inFlight.set(seq, { uris: new Set(snap.versions.keys()), disk: snap.disk, cts: token?.cts, flight });
-    let r;
+    // M1 on #121 (final pass): the snapshot stays registered for invalidation through the post-processing (the ABI
+    // reads) and the publication, where builtDisk takes it over; an input that changes in between ends the results.
     try {
-      r = await buildHost.request(`build:${engine.id}`, engine,
+      const r = await buildHost.request(`build:${engine.id}`, engine,
         { op: 'build', files: snap.files, options: {}, packages: snap.packages, javaLibraries: snap.javaLibraries },
         { scope: sel.root ?? sel.folder ?? '', input: snap.digest, what: 'the build', timeoutMs: BUILD_MS }, token);
+      // Tests only: a pause after the engine answered, before the post-processing reads.
+      if (Number.isInteger(hostOptions.postBuildDelayMs) && r.model) {
+        log('build: post-processing pause (test)');
+        await new Promise((res) => setTimeout(res, hostOptions.postBuildDelayMs));
+      }
+      // C7 on #99: every buffer the snapshot read is still the same lifetime at the same version. C9 (r2): and no file it
+      // read from disk is now open with other text (a buffer opened during the build).
+      const openOnDisk = async () => {
+        for (const d of documents.all()) {
+          if (snap.versions.has(d.uri)) continue;
+          const p = localFileOf(d.uri);
+          const r = p && ((await real(p)) ?? p);
+          if (r && snap.disk.has(r) && snap.disk.get(r) !== hash(d.getText())) return true;
+        }
+        return false;
+      };
+      const stale = async () => flight.stale || selector.generation !== gen
+        || [...snap.versions].some(([u, v]) => documents.get(u)?.version !== v || state.get(u) !== snap.states.get(u))
+        || await openOnDisk();
+      if (!r.model) return { error: r.internal?.message ?? (r.cancelled ? 'cancelled' : r.unavailable ? 'builds are unavailable' : 'the build did not run') };
+      if (await stale()) return { error: 'the sources changed while it built: not shown' };
+      const result = JSON.parse(r.model);
+      const label = `joust build (${sel.source} ${engine.version}, in memory)`;
+      const byUri = new Map();
+      const add = (u, d) => {
+        if (!u) return;
+        if (!byUri.has(u)) byUri.set(u, []);
+        byUri.get(u).push(d);
+      };
+      let errors = 0;
+      for (const d of result.diagnostics ?? []) {
+        const line = Math.max(0, Number(d.line ?? 1) - 1);
+        const col = Math.max(0, Number(d.col ?? 1) - 1);
+        const target = uriOfBuilt(snap.dir, d.file, uri);
+        // The front end's own diagnostics are the analysis's already, where that document's analysis shows the same code on
+        // the same line (C6 on #99: a front-end error the analysis does not show, a library the analysis did not read say,
+        // is the build's explanation, and is shown).
+        const frontEnd = d.source === 'jsc' || (d.code && /^JSC0[1-9]/.test(d.code) && d.source !== 'julc' && d.source !== 'javac');
+        if (frontEnd && (state.get(target)?.lastDiagnostics ?? []).some((x) => x.code === d.code && x.range?.start?.line === line)) continue;
+        if (d.severity === 'error') errors++;
+        add(target ?? uri, { range: { start: { line, character: col }, end: { line, character: col + 1 } },
+          severity: d.severity === 'error' ? 1 : d.severity === 'warning' ? 2 : 3, ...(d.code ? { code: d.code } : {}), source: label,
+          message: `${d.message}${d.source ? ` (${d.source})` : ''}` });
+      }
+      // The ABI comparison with the committed <Contract>.abi.json beside each .jsc file (JSC0002, JSC0003); never accepted here.
+      for (const g of result.generated ?? []) {
+        if (!g.abi || !snap.dir) continue;
+        const name = g.javaFile.split('/').pop().replace(/\.java$/, '');
+        const jscDir = g.jscFile.includes('/') ? g.jscFile.slice(0, g.jscFile.lastIndexOf('/') + 1) : '';
+        const committed = await reader.read(sel.folder, `${sel.contractsRel.join('/')}/${jscDir}${name}.abi.json`, { cap: 4 * 1024 * 1024 });
+        const old = committed.error ? null : committed.bytes.toString('utf8');
+        if (old === g.abi) continue;
+        errors++;
+        add(uriOfBuilt(snap.dir, g.jscFile, uri), { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 1,
+          code: old === null ? 'JSC0003' : 'JSC0002', source: label,
+          message: old === null ? `no ABI manifest ${name}.abi.json: the encoding of the datum and redeemers must be committed; create it with Accept ABI… (joust build --accept-abi), review it and commit it`
+            : `the ABI manifest differs from the committed ${name}.abi.json: a datum or redeemer encoding changed, which strands deployed instances; if it is intended, run Accept ABI… and commit the new manifest` });
+      }
+      // ADR-0021 r10 (M5e, E1, E2): J12, decided as joust build decides it (libraries.js lockDecision), never accepted
+      // here. Each error at the import that brought the library in (every file that used it), else where it was asked.
+      if (snap.lock !== undefined && result.ok === true) {
+        const d = lockDecision({ used: librariesUsed(result.generated ?? [], result.libraries ?? []), lock: snap.lock });
+        const at = (code, message, u, line = 0) => {
+          errors++;
+          add(u, { range: { start: { line, character: 0 }, end: { line, character: 0 } }, severity: 1, code, source: label, message });
+        };
+        const strip = (line) => line.replace(/^error\[JSC\d+\]: /, '');
+        if (d.lockError) at(d.lockError.code, strip(d.lockError.line), uri);
+        for (const e of d.errors) {
+          let placed = false;
+          for (const g of result.generated ?? []) {
+            if (!(g.libraries ?? []).some((l) => l.name.replace(/^pkg:/, '') === e.name)) continue;
+            const u = uriOfBuilt(snap.dir, g.jscFile, uri);
+            const text = snap.files[g.jscFile] ?? '';
+            const spec = `"${e.name}"`;
+            const line = Math.max(0, text.split('\n').findIndex((l) => /^\s*import\b/.test(l) && l.includes(spec)));
+            at(e.code, strip(e.line), u, line);
+            placed = true;
+          }
+          if (!placed) at(e.code, strip(e.line), uri);
+        }
+      }
+      for (const c of result.contracts ?? []) {
+        if (c.scriptSizeBytes > SCRIPT_WARN_BYTES) {
+          const g = (result.generated ?? []).find((x) => x.javaFile === `${c.packageName.replaceAll('.', '/')}/${c.name}.java`);
+          add(g ? uriOfBuilt(snap.dir, g.jscFile, uri) : uri, { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 2,
+            source: label, message: `${c.name}'s script is ${c.scriptSizeBytes} bytes: a transaction holds at most 16 KB, scripts included (deploy it as a reference script)` });
+        }
+      }
+      // A failed build always says why (C6): with no error of its own to show, it says so where it was asked.
+      if (result.ok !== true && errors === 0) {
+        errors++;
+        const first = (result.diagnostics ?? []).find((d) => d.severity === 'error');
+        add(uri, { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 1, source: label,
+          message: `the build failed${first ? `: ${first.file ? `${first.file}:${first.line ?? 1}: ` : ''}${first.message}` : ' without a diagnostic'}` });
+      }
+      if (await stale()) return { error: 'the sources changed while it built: not shown' };
+      // Published for every open document the snapshot read (or the build named), each with the version it read.
+      const targets = new Set([...snap.versions.keys(), ...byUri.keys()]);
+      for (const u of targets) {
+        const st = state.get(u);
+        const doc = documents.get(u);
+        if (!st || !doc) continue;
+        // C9 (r2): a document gets the build's results only for the buffer the snapshot read (its lifetime and version), or,
+        // read from disk, while its buffer still holds exactly that text; never the recipient's own version instead.
+        let version = snap.versions.get(u);
+        if (version === undefined) {
+          const p = localFileOf(u);
+          const r = p && ((await real(p)) ?? p);
+          if (!r || !snap.disk.has(r) || snap.disk.get(r) !== hash(doc.getText())) continue;
+          version = doc.version;
+        } else if (snap.states.get(u) !== st) continue;
+        st.build = { seq, gen, version, diagnostics: byUri.get(u) ?? [] };
+        builtDisk.set(seq, snap.disk);
+        builtFrom.set(u, seq);
+        if (st.lastPublished === st.build.version) {
+          connection.sendDiagnostics({ uri: u, version: st.lastPublished, diagnostics: [...(st.lastDiagnostics ?? []), ...st.build.diagnostics].slice(0, MAX_PUBLISHED + 1) });
+        }
+      }
+      // Only the snapshots still shown are kept.
+      const shown = new Set([...state.values()].map((st) => st.build?.seq).filter((x) => x !== undefined));
+      for (const k of builtDisk.keys()) if (!shown.has(k)) builtDisk.delete(k);
+      return { ok: result.ok === true && errors === 0, errors, contracts: (result.contracts ?? []).length };
     } finally {
       inFlight.delete(seq);
     }
-    // C7 on #99: every buffer the snapshot read is still the same lifetime at the same version. C9 (r2): and no file it
-    // read from disk is now open with other text (a buffer opened during the build).
-    const openOnDisk = async () => {
-      for (const d of documents.all()) {
-        if (snap.versions.has(d.uri)) continue;
-        const p = localFileOf(d.uri);
-        const r = p && ((await real(p)) ?? p);
-        if (r && snap.disk.has(r) && snap.disk.get(r) !== hash(d.getText())) return true;
-      }
-      return false;
-    };
-    const stale = async () => flight.stale || selector.generation !== gen
-      || [...snap.versions].some(([u, v]) => documents.get(u)?.version !== v || state.get(u) !== snap.states.get(u))
-      || await openOnDisk();
-    if (!r.model) return { error: r.internal?.message ?? (r.cancelled ? 'cancelled' : r.unavailable ? 'builds are unavailable' : 'the build did not run') };
-    if (await stale()) return { error: 'the sources changed while it built: not shown' };
-    const result = JSON.parse(r.model);
-    const label = `joust build (${sel.source} ${engine.version}, in memory)`;
-    const byUri = new Map();
-    const add = (u, d) => {
-      if (!u) return;
-      if (!byUri.has(u)) byUri.set(u, []);
-      byUri.get(u).push(d);
-    };
-    let errors = 0;
-    for (const d of result.diagnostics ?? []) {
-      const line = Math.max(0, Number(d.line ?? 1) - 1);
-      const col = Math.max(0, Number(d.col ?? 1) - 1);
-      const target = uriOfBuilt(snap.dir, d.file, uri);
-      // The front end's own diagnostics are the analysis's already, where that document's analysis shows the same code on
-      // the same line (C6 on #99: a front-end error the analysis does not show, a library the analysis did not read say,
-      // is the build's explanation, and is shown).
-      const frontEnd = d.source === 'jsc' || (d.code && /^JSC0[1-9]/.test(d.code) && d.source !== 'julc' && d.source !== 'javac');
-      if (frontEnd && (state.get(target)?.lastDiagnostics ?? []).some((x) => x.code === d.code && x.range?.start?.line === line)) continue;
-      if (d.severity === 'error') errors++;
-      add(target ?? uri, { range: { start: { line, character: col }, end: { line, character: col + 1 } },
-        severity: d.severity === 'error' ? 1 : d.severity === 'warning' ? 2 : 3, ...(d.code ? { code: d.code } : {}), source: label,
-        message: `${d.message}${d.source ? ` (${d.source})` : ''}` });
-    }
-    // The ABI comparison with the committed <Contract>.abi.json beside each .jsc file (JSC0002, JSC0003); never accepted here.
-    for (const g of result.generated ?? []) {
-      if (!g.abi || !snap.dir) continue;
-      const name = g.javaFile.split('/').pop().replace(/\.java$/, '');
-      const jscDir = g.jscFile.includes('/') ? g.jscFile.slice(0, g.jscFile.lastIndexOf('/') + 1) : '';
-      const committed = await reader.read(sel.folder, `${sel.contractsRel.join('/')}/${jscDir}${name}.abi.json`, { cap: 4 * 1024 * 1024 });
-      const old = committed.error ? null : committed.bytes.toString('utf8');
-      if (old === g.abi) continue;
-      errors++;
-      add(uriOfBuilt(snap.dir, g.jscFile, uri), { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 1,
-        code: old === null ? 'JSC0003' : 'JSC0002', source: label,
-        message: old === null ? `no ABI manifest ${name}.abi.json: the encoding of the datum and redeemers must be committed; create it with Accept ABI… (joust build --accept-abi), review it and commit it`
-          : `the ABI manifest differs from the committed ${name}.abi.json: a datum or redeemer encoding changed, which strands deployed instances; if it is intended, run Accept ABI… and commit the new manifest` });
-    }
-    // ADR-0021 r10 (M5e, E1, E2): J12, decided as joust build decides it (libraries.js lockDecision), never accepted
-    // here. Each error at the import that brought the library in (every file that used it), else where it was asked.
-    if (snap.lock !== undefined && result.ok === true) {
-      const d = lockDecision({ used: librariesUsed(result.generated ?? [], result.libraries ?? []), lock: snap.lock });
-      const at = (code, message, u, line = 0) => {
-        errors++;
-        add(u, { range: { start: { line, character: 0 }, end: { line, character: 0 } }, severity: 1, code, source: label, message });
-      };
-      const strip = (line) => line.replace(/^error\[JSC\d+\]: /, '');
-      if (d.lockError) at(d.lockError.code, strip(d.lockError.line), uri);
-      for (const e of d.errors) {
-        let placed = false;
-        for (const g of result.generated ?? []) {
-          if (!(g.libraries ?? []).some((l) => l.name.replace(/^pkg:/, '') === e.name)) continue;
-          const u = uriOfBuilt(snap.dir, g.jscFile, uri);
-          const text = snap.files[g.jscFile] ?? '';
-          const spec = `"${e.name}"`;
-          const line = Math.max(0, text.split('\n').findIndex((l) => /^\s*import\b/.test(l) && l.includes(spec)));
-          at(e.code, strip(e.line), u, line);
-          placed = true;
-        }
-        if (!placed) at(e.code, strip(e.line), uri);
-      }
-    }
-    for (const c of result.contracts ?? []) {
-      if (c.scriptSizeBytes > SCRIPT_WARN_BYTES) {
-        const g = (result.generated ?? []).find((x) => x.javaFile === `${c.packageName.replaceAll('.', '/')}/${c.name}.java`);
-        add(g ? uriOfBuilt(snap.dir, g.jscFile, uri) : uri, { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 2,
-          source: label, message: `${c.name}'s script is ${c.scriptSizeBytes} bytes: a transaction holds at most 16 KB, scripts included (deploy it as a reference script)` });
-      }
-    }
-    // A failed build always says why (C6): with no error of its own to show, it says so where it was asked.
-    if (result.ok !== true && errors === 0) {
-      errors++;
-      const first = (result.diagnostics ?? []).find((d) => d.severity === 'error');
-      add(uri, { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 1, source: label,
-        message: `the build failed${first ? `: ${first.file ? `${first.file}:${first.line ?? 1}: ` : ''}${first.message}` : ' without a diagnostic'}` });
-    }
-    if (await stale()) return { error: 'the sources changed while it built: not shown' };
-    // Published for every open document the snapshot read (or the build named), each with the version it read.
-    const targets = new Set([...snap.versions.keys(), ...byUri.keys()]);
-    for (const u of targets) {
-      const st = state.get(u);
-      const doc = documents.get(u);
-      if (!st || !doc) continue;
-      // C9 (r2): a document gets the build's results only for the buffer the snapshot read (its lifetime and version), or,
-      // read from disk, while its buffer still holds exactly that text; never the recipient's own version instead.
-      let version = snap.versions.get(u);
-      if (version === undefined) {
-        const p = localFileOf(u);
-        const r = p && ((await real(p)) ?? p);
-        if (!r || !snap.disk.has(r) || snap.disk.get(r) !== hash(doc.getText())) continue;
-        version = doc.version;
-      } else if (snap.states.get(u) !== st) continue;
-      st.build = { seq, gen, version, diagnostics: byUri.get(u) ?? [] };
-      builtDisk.set(seq, snap.disk);
-      builtFrom.set(u, seq);
-      if (st.lastPublished === st.build.version) {
-        connection.sendDiagnostics({ uri: u, version: st.lastPublished, diagnostics: [...(st.lastDiagnostics ?? []), ...st.build.diagnostics].slice(0, MAX_PUBLISHED + 1) });
-      }
-    }
-    // Only the snapshots still shown are kept.
-    const shown = new Set([...state.values()].map((st) => st.build?.seq).filter((x) => x !== undefined));
-    for (const k of builtDisk.keys()) if (!shown.has(k)) builtDisk.delete(k);
-    return { ok: result.ok === true && errors === 0, errors, contracts: (result.contracts ?? []).length };
   }
 
   // D4, D10, Q7: on save, in trusted project-matched npm projects only (a user setting can turn it off).

@@ -318,3 +318,38 @@ test('#121 F5: a java: library (an npm package\'s joust-lib/*.java): the editor\
     await lsp.stop();
   }
 });
+
+test('#121 M1 (final pass): a lock changed after the engine answers, before the post-processing ends, ends the build (both ways)', { skip, timeout: 300_000 }, async () => {
+  const root = project();
+  const lockFile = join(root, 'joust.lock');
+  await build({ root, acceptAbi: true, acceptLock: true, log: quiet });
+  const good = readFileSync(lockFile, 'utf8');
+  const lsp = await startLsp({ folders: [root], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true },
+    hostOptions: { postBuildDelayMs: 2500 } });
+  try {
+    const uri = uriOf(join(root, 'contracts', 'app', 'Shop.jsc'));
+    lsp.open(uri, SHOP);
+    await lsp.until(() => lsp.statuses.find((s) => s.uri === uri && s.mode === 'project-matched'), 60000, 'project-matched');
+    await lsp.diagnostics(uri, 1, 60000);
+    for (const [what, before, after] of [['valid, then broken', good, '{broken'], ['broken, then valid', '{broken', good]]) {
+      writeFileSync(lockFile, before);
+      lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(lockFile), type: 2 }] });
+      const pauses = lsp.logs.filter((l) => /post-processing pause/.test(l)).length;
+      const pending = lsp.request('joust/checkBuild', { uri });
+      // In the window: the engine has answered, the ABI reads have not run.
+      // (Log messages wake no waiter: polled.)
+      for (let t = Date.now(); lsp.logs.filter((l) => /post-processing pause/.test(l)).length <= pauses; ) {
+        assert.ok(Date.now() - t < 120000, 'the post-processing pause');
+        await new Promise((res) => setTimeout(res, 20));
+      }
+      writeFileSync(lockFile, after);
+      lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(lockFile), type: 2 }] });
+      const r = await pending;
+      assert.match(r.error ?? '', /changed while it built/, `${what}: ${JSON.stringify(r)}`);
+    }
+    // The next build reads the lock as it is now (valid): clean.
+    assert.equal((await lsp.request('joust/checkBuild', { uri })).errors, 0);
+  } finally {
+    await lsp.stop();
+  }
+});
