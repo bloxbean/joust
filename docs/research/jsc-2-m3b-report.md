@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M3b: report (ADR-0018 §8, r27)
 
-Date 2026-11-14. Branch `feat/jsc-2-m3b`, stacked on M3a3 (`feat/jsc-2-m3a3`, #107), M3a2 (#104) and M3a1 (#101), which
+Date 2026-11-14 (round r2: 2026-11-15). Branch `feat/jsc-2-m3b`, stacked on M3a3 (`feat/jsc-2-m3a3`, #107), M3a2 (#104) and M3a1 (#101), which
 hold the `.jsc` 2 integration (#98). JuLC `v0.1.0-pre21-rc1`, cardano-client-lib `0.8.0-pre7`, JDK 25, Node 22, macOS
 arm64, Yaci DevKit. Every number below was measured at this branch's head, by the test named with it.
 
@@ -86,28 +86,41 @@ The port's withdraw is cheaper because it checks no `Ctx` (it takes none).
 ## Five-way agreement, mutation rejection, attacks (J3, J15)
 
 `JscV2M3bFourWayTest`: every call on the JavaScript interpreter, the Java interpreter, the generated Java on the JVM, the
-transition program and the validator, each refusal asserted by its class.
+transition program and the validator, each refusal asserted by its class. Since round r2 (#112 C2, C3) a keyed refusal's
+transaction proposes what the call would make without the rule (its next object, events and payouts; `FourWay.unguarded`),
+so the validator's refusal is the rule's and not a malformed transaction's, and where the validator tells a refusal apart
+it is compared with the interpreters' class (`FourWay.keyedParity`, the "validator refusals compared" column).
 
-| Contract | Calls | Refused | Validator runs | Keyed refusals | Modifier refusals | Invariant refusals | Mutants rejected | Attacks rejected | What they cover |
-|---|---|---|---|---|---|---|---|---|---|
-| Registry (port) | 60 | 37 | 60 | 16 | 9 | 4 | 118 | 181 | inserts after a head, a live node and a retired node; a signed key (EVE casting ANN's ballot: `keyed:signed`; ANN co-signing: accepted); uniqueness (a live, a retired and the anchor's next key: `keyed:order`); an anchor of another instance and of the other type (`keyed:anchor`); the cooldown at ±1 ms, the window W and W + 1, an upper bound at 2^32 − 1 and 2^32; key lengths 0, 64, 65 (`keyed:length`); the unsigned order (`7f`/`80`, `ab`/`ab00`); quorum shapes and the tier invariant at an insert; a guardian's recovery and the new owner's withdrawal (K32); a removal with a wrong or cooling predecessor; retires with and without funds (K31); every vector also on examples/registry (one stated difference: a 27-byte guardian, the port's checked input) |
-| Keys (coverage) | 25 | 12 | 25 | 6 | 4 | 1 | 64 | 134 | a plain owned type beside keyed ones (`Holding_Badge`); a key at index 1 with C = 0 (an anchor just relinked is no obstacle, the window still is); the same key in another instance's list; an action authorized by the object's credential, a key's and a script's (`Approvals` naming the node's token); a removal after a live predecessor; a signed key in a `Bytes` field (27 and 65 bytes refused); a 60,500 ms cooldown at its edge; an invariant of a keyed type; events from a keyed action; maxDatumBytes 2048 |
-| **Total** | **85** | 49 | 85 | 22 | 13 | 5 | **182** | **315** | |
+| Contract | Calls | Refused | Validator runs | Keyed refusals | Modifier refusals | Invariant refusals | Validator refusals compared | Mutants rejected | Attacks rejected | What they cover |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Registry (port) | 67 | 43 | 67 | 20 | 9 | 4 | 30 | 118 | 181 | inserts after a head, a live node and a retired node; a signed key (EVE casting ANN's ballot: `keyed:signed`; ANN co-signing: accepted); uniqueness (a live, a retired and the anchor's next key: `keyed:order`); an anchor of another instance and of the other type (`keyed:anchor`); a removal's predecessor of another instance and the other type's head, each pointing at the removed key (`keyed:anchor`, round r2, design F5); a `require` beside a cooling anchor (the validator's `require:`, round r2, C3); the cooldown at ±1 ms, the window W and W + 1, an upper bound at 2^32 − 1 and 2^32; key lengths 0, 64, 65 (`keyed:length`); the unsigned order (`7f`/`80`, `ab`/`ab00`); quorum shapes and the tier invariant at an insert; a guardian's recovery and the new owner's withdrawal (K32); a removal with a wrong or cooling predecessor; retires with and without funds (K31); every vector also on examples/registry (one stated difference: a 27-byte guardian, the port's checked input) |
+| Keys (coverage) | 25 | 12 | 25 | 6 | 4 | 1 | 6 | 64 | 134 | a plain owned type beside keyed ones (`Holding_Badge`); a key at index 1 with C = 0 (an anchor just relinked is no obstacle, the window still is); the same key in another instance's list; an action authorized by the object's credential, a key's and a script's (`Approvals` naming the node's token); a removal after a live predecessor; a signed key in a `Bytes` field (27 and 65 bytes refused); a 60,500 ms cooldown at its edge; an invariant of a keyed type; events from a keyed action; maxDatumBytes 2048 |
+| **Total** | **92** | 55 | 92 | 26 | 13 | 5 | 36 | **182** | **315** | |
 
 **Each defence fails a test without it.** Removing any one of the seven list rules from either interpreter (the anchor,
 the predecessor, the window, the cooldown, the length, the signer, the place) makes `JscV2M3bFourWayTest` fail: 14 of 14
-(the Java removals as "validator vs interpreter", the JavaScript ones as "the JavaScript interpreter disagrees").
+(the Java removals as "validator vs interpreter", the JavaScript ones as "the JavaScript interpreter disagrees"; rerun
+after round r2's reordering, 14 of 14 again). The validator's own defences are tested the same way since round r2 (C2):
+`JscV2M3bGuardMutationTest` builds Registry without one `require` (`choose 0 to 9`, the stake bound, the tier bound) and
+shows the validator then accepts the refused call (cast(10), a withdrawal over the stake, change(10)): 3 of 3.
 `keyed:fixed` cannot be reached from a checked program (JSC1248): a hand-made IR that changes a ballot's key
 (`keyed-key-changed.json`) loads in both readers and both interpreters refuse its call with `keyed:fixed`, while the
 transition computes it (`JscV2M3bIrStrictTest`, `keyed-strict.test.js`); the validator refuses the transaction (the
-five-way's key mutants). Each reader rule has its mutant (29), refused by both readers with a shared fragment, and each
+five-way's key mutants). Each reader rule has its mutant (32; round r2 adds a Key or Hash key under 28 bytes, an
+empty and a null `reads` on a retire, C5 and security S1), refused by both readers with a shared fragment, and each
 checker rule its refusal at its position.
 
-**Raw cases** (`JscV2M3bAttackTest`, 3 tests): the size rule counts the envelope at an insert (a claim with a 47-byte
+**Raw cases** (`JscV2M3bAttackTest`, 5 tests): the size rule counts the envelope at an insert (a claim with a 47-byte
 name and 6 guardians refused, its envelope 385 B, its actual datum fitting; 46 bytes accepted) and at a keyed action (a
 seat's note of 1,837 bytes accepted, 1,838 refused at maxDatumBytes 2048); token kinds never cross arms (a keyed node
 with a plain owned arm and with the instance's, a plain object with a keyed arm, a keyed token on a plain datum: 4
-crossings refused).
+crossings refused); round r2 adds the client's names across owned types (Name beside a keyed Name's NameExists refused
+by JSC1249, Named built, C1) and the parity check's proof (C3): for cast(10) after a cooling head, `keyed:cooldown`
+(round r1's class) fails `keyedParity` and `require:` passes; for cast(3) after it, the reverse.
+
+**Descriptors** (`JscV2M3bAbiDescriptorTest`, round r2, C4): AbiCheck compares the whole `x-joust.keyed` entry (the
+lookup, the head, node and retired schemas, the Link and Remove_T redeemers with their purposes and indices); 13
+descriptor mutants, each refused.
 
 ## The security review's items
 
@@ -129,7 +142,7 @@ test that covers it.
 | A47 mutants per transaction shape | 182 (table above): next and linkedAt of the new or continuing node, its instance, a retired node's key, the anchor's relink (next, linkedAt, a lovelace skimmed), the minted quantity, the anchor the mint redeemer names, a removal keeping its token |
 | A48 byte-identical earlier contracts | see "Builds" |
 | A49 size and budget at saturation | `JscV2M3bGateTest` (saturated at a 64-byte key after a 64-byte next, the datum at its envelope); the 16-keyed-type limit and the 2,048-byte cap at the checker (JSC1244) |
-| K1 five-way agreement | `JscV2M3bFourWayTest` (85 calls) |
+| K1 five-way agreement | `JscV2M3bFourWayTest` (92 calls) |
 | K2 IR | `JscV2M3bIrStrictTest`, `keyed-strict.test.js` (29 shared mutants: options, entries, the hatch, audiences, moves, assets, batched, maxDatumBytes, a time key, `retire` elsewhere) |
 | K3 ABI tags and positions | `checkJscAbi` (Registry, Keys: a plain type before keyed ones, a key at index 1, two initializers); `encoding_equalsTheJavaExample`; checker JSC1249 (a method `entryExists`, `nameKeys`, `link`, `insert_claim`, `remove_Name`, a handle member) |
 | K5 bytes and integers | five-way `7f`/`80`, `ab`/`ab00`; copied `KeyedVectorsPortTest` (the order and keyIds against the runtime and on chain) |
@@ -157,7 +170,25 @@ test that covers it.
 
 ## Builds and DevKit
 
-The branch merges `origin/feat/jsc-2-m3a3` at `66586603` (#101, #104 and #107 round r1); the numbers below are at the
+**Round r2** (#112's review at `4c694d0c`). The branch merges `origin/feat/jsc-2-m3a3` at `ee8650f1`,
+`origin/feat/jsc-v1-removal` at `baa2d6a3` (#111: the header is `jsc 1`; this branch's `.jsc` files are rewritten to it)
+and `origin/feat/jsc-2-m3a2` at `636e2472` (with #101 at `04b5e5e4`; already contained). `fixtures/m0/dsl` is recorded
+again on DevKit (Points' and Jar's scripts under this head's lowering). At the round's head:
+
+- `./gradlew clean build -PnoDevnet --continue --no-watch-fs`: **BUILD SUCCESSFUL**, 1,099 JVM tests, 0 failures (2
+  skipped; fewer than round r1's 1,136 as #111 removes v1's). julc-state-dsl 195, julc-state-toolchain 231, examples/dsl
+  193, examples/registry 58. The sizes and budgets below are unchanged (Registry 14,789 B, Keys 13,655 B).
+- **Wasm** (GraalVM 25.3.4.1): toolchainWasmTest 157 outputs the same as the JVM's (Registry's and Keys' among them), 129
+  language-server models byte-identical (49 in their project), 21 depth cases; the engines copied into `js/joust/engine`
+  and `js/joust-runtime/engine`.
+- **npm**: `js/jsc-interpreter` 62/62 (32 shared keyed reader mutants); `tree-sitter-jsc` 21/21 corpus parses, the shared
+  corpus agreeing with the hand-written parsers; `js/vscode-joust` 14/14; `js/state-client` 48/48; `js/joust` 151/158 with
+  its language-server tests, 0 failures (7 skipped: 6 need DevKit, 1 is Linux-only); `js/joust-runtime` 18/37, 0 failures
+  (19 skipped, DevKit not reachable).
+- **DevKit**: not rerun for round r2. The round changes the checker, the interpreters, the readers, AbiCheck and tests,
+  not a generated script; the dsl fixtures above were recorded on DevKit in this round.
+
+**Round r1**: The branch merges `origin/feat/jsc-2-m3a3` at `66586603` (#101, #104 and #107 round r1); the numbers below are at the
 merged head unless stated.
 
 - `./gradlew clean build -PnoDevnet --continue --no-watch-fs`: **BUILD SUCCESSFUL**, 1,136 JVM tests, 0 failures (2
