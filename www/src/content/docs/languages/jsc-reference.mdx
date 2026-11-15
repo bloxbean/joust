@@ -39,8 +39,8 @@ migration.
 ## Grammar at a glance
 
 ```text
-file      = "jsc" "2" "package" seg { "." seg } { import | type | enum | fn } contract { import | type | enum | fn }
-library   = "jsc" "2" "library" seg { "." seg } { import | type | enum | fn }
+file      = [ "jsc" "1" ] "package" seg { "." seg } { import | type | enum | fn } contract { import | type | enum | fn }
+library   = [ "jsc" "1" ] "library" seg { "." seg } { import | type | enum | fn }     ("jsc 2" is reserved and refused)
 import    = "import" "{" Ident { "," Ident } "}" "from" String     (String: "std/…", a relative "./x.jsc", or "java:<class>")
           | "import" "contract" "{" Name "}" "from" String          (M2c: another contract, "./Name.jsc"; not in a library)
 type      = "type" Name "=" "{" { field [","] } "}"
@@ -49,7 +49,8 @@ field     = Ident ":" typeRef
 typeRef   = Ident [ "." Name ] [ "<" typeRef { "," typeRef } ">" ]      (Oracle.State, Instance<Oracle>)
 fn        = "fn" Ident params ":" typeRef ( "=" expr | block )
 contract  = "contract" Name [ "(" option { "," option } ")" ] "{" { member } "}"
-option    = ( "minAda" | "maxDatumBytes" | "maxValidityMs" ) "=" Int [ "ada" ]
+option    = ( "minAda" | "maxDatumBytes" | "maxValidityMs" | "assetSlots" ) "=" Int [ "ada" ]
+          | "stakeSelf"                                                             (M3c: a flag, no value)
 member    = "state" "{" { field [","] } "}"          (exactly once)
           | "params" "{" { field [","] } "}"          (at most once)
           | "event" Name [ "{" { field [","] } "}" ]
@@ -58,11 +59,18 @@ member    = "state" "{" { field [","] } "}"          (exactly once)
           | ( "action" | "destroy" ) Ident params { modifier } block
           | "view" Ident params ":" typeRef ( "=" expr | block )
           | "owned" Name "{" { field [","] } "}"                                    (M3a)
+          | "owned" Name "keyed" "by" Ident [ "(" keyOpt { "," keyOpt } ")" ] "{" { field [","] } "}"   (M3b)
           | "owned" ( "init" | "action" | "destroy" ) Name "." Ident params { modifier } block
+          | "withdraw" Ident params { modifier } block                              (M3c: the handlers)
+          | ( "certify" | "vote" ) Ident params { modifier } ( "=" expr | block )
+          | "propose" Ident params ( "=" expr | block )
+          | "init" "migrate" "from" "params" "." Ident params block                  (M3c: the adoption)
           | fn | type | enum
+keyOpt    = "signed" | ( "maxKeyBytes" | "linkCooldownMs" | "linkWindowMs" ) "=" Int
 params    = "(" [ param { "," param } ] ")";   param = Ident ":" ( typeRef | "reads" "params" "." Ident | "shared" | "into" )
 modifier  = "payable" | "open" | "batched" [ "only" ] | ( "only" | "after" | "before" ) Ident
           | "quorum" fieldRef fieldRef | "authorized" fieldRef | "receives" [ typeRef ] | "admits" Name   (admits: M3a3)
+          | "retire" | "migrates" "to" Ident                                          (retire: M3b; migrates to: M3c)
 fieldRef  = Ident | "params" "." Ident
 block     = "{" { stmt } [ [ "return" ] expr ] "}"
 stmt      = "const" Ident [ ":" typeRef ] "=" expr
@@ -158,7 +166,7 @@ hash, and every `Address` the ledger's encoding with a well-formed payment crede
 | `params { … }` | `@Params public record Config(...)` | once (`JSC0431`), at least one field (`JSC0432`); read as `params.f` in methods, views and invariants, never in a `fn` (`JSC0433`) |
 | `event Name { … }` | a variant of `public sealed interface Event` | the contract's events; emitted with `emit(Name { … })` |
 | `invariant name = expr` | `@Invariant public static boolean name(State s__[, Config params__])` | a `Bool` over the state and the params, like a view's body, without `require` (`JSC0441`); not with `BigMap` state (`JSC0435`) or `batched` actions (`JSC0436`) |
-| `owned T { … }` | `@Owned public record T(...)` | M3a (ADR-0003): an owned object's record; each object is its own UTxO. Its fields follow the state's rules (no built-in name, `JSC0208`; a `BigMap` at the top, M3a2). It needs an owned init (`JSC1208`) and an escape hatch, an owned destroy without `shared` (`JSC1209`); a contract with owned types destroys no instance (`JSC1210`) and keeps no `BigMap` state (`JSC1211`); an owned type is no field or parameter of another value (`JSC1207`) |
+| `owned T { … }` | `@Owned public record T(...)` | M3a (ADR-0003): an owned object's record; each object is its own UTxO. Its fields follow the state's rules (no built-in name, `JSC0208`; a `BigMap` at the top, M3a2). It needs an owned init (`JSC1208`) and an escape hatch, an owned destroy without `shared`, `before` or `after` (`JSC1209`; warned, `JSC9016`, when every hatch needs the deployment's parties: `authorized params.f` or a quorum over params); a contract with owned types destroys no instance (`JSC1210`) and keeps no `BigMap` state (`JSC1211`); an owned type is no field or parameter of another value (`JSC1207`) |
 | `owned init T.m(params) [payable] { … }` | `@OwnedInit public static T m([@Shared State s, ]params[, Ctx ctx])` | returns the new object; only `payable` (`JSC0405`); cannot pay, send, mint or deposit (`JSC0404`) |
 | `owned action T.m(params) mods { … }` | `@OwnedAction public static T m(T s__[, @Shared State s], params[, Ctx ctx])`, or `TOutcome` when it has effects | its input is the object: bare names and `state` read it, and so do `only`, `after`, `before`, `quorum`; returns the next object |
 | `owned destroy T.m(params) mods { … }` | `@OwnedDestroy public static JulcList<Payout> m(T s__, …, Ctx ctx)` (or `Settled`) | pays out what the object holds (`JSC0409`) |
@@ -313,16 +321,17 @@ action; a destroy has none), and by the runtime before it submits. A state that 
 
 | Modifier | Annotation | Allowed on | Field type |
 |---|---|---|---|
-| `payable` | `@Payable` | `init`, `action`, an owned init, an owned action, an owned destroy (M3a2) | |
-| `only f` | `@SignedBy("f")` | `action`, `destroy` | `Key` (`JSC0311`) |
-| `after f` | `@ValidAfter("f")` | `action`, `destroy` | `Int` |
-| `before f` | `@ValidBefore("f")` | `action`, `destroy` | `Int` |
-| `open` | none | `action`, `destroy` | |
+| `payable` | `@Payable` | `init`, `action`, an owned init, an owned action, an owned destroy (M3a2); not a keyed retiring exit (`JSC1245`), a handler (`JSC1313`) or an init migrate (`JSC1339`) | |
+| `only f` | `@SignedBy("f")` | `action`, `destroy`, an owned action or destroy (M3a: `f` is the object's field), a keyed action and its retiring exit (M3b, its signer); not a handler (`JSC1313`) | `Key` (`JSC0311`) |
+| `after f` | `@ValidAfter("f")` | `action`, `destroy`, an owned action or destroy (an owned destroy with it is no escape hatch, `JSC1209`); not a retiring exit (`JSC1245`) or a handler (`JSC1313`) | `Int` |
+| `before f` | `@ValidBefore("f")` | as `after f` | `Int` |
+| `open` | none | `action`, `destroy`, an owned action or destroy; not a keyed action (`JSC1246`) or a handler (`JSC1313`) | |
 | `batched` | `@Batched` | `action` (`JSC0418`) | |
 | `batched only` | `@Batched(only = true)`: intent-only, no direct call | `action` | |
-| `quorum k t` | `@Quorum(keys = "k", threshold = "t")` | `action`, `destroy` | `List<Key>` and `Int`, both state fields or both `params.f` (`JSC0439`) |
-| `authorized c` | `@AuthorizedBy("c")` | `action`, `destroy` | `Credential`, a state field or `params.f` |
+| `quorum k t` | `@Quorum(keys = "k", threshold = "t")` | `action`, `destroy`, an owned action or destroy (the object's fields or `params.f`), a keyed action; a withdraw, certify or vote handler over `params.*` only (`JSC1312`, `JSC1313`); not a retiring exit (`JSC1245`), a propose handler (`JSC1313`) or a batched action (`JSC0417`) | `List<Key>` and `Int`, both state fields or both `params.f` (`JSC0439`) |
+| `authorized c` | `@AuthorizedBy("c")` | as `quorum k t` | `Credential`, a state field (an owned method: the object's) or `params.f` |
 | `receives`, `receives T` | `@Receives`, and the method takes `Funds` | `action` (`JSC0447`), not `batched` | `T`: the type of the deposits' memos, each a checked input |
+| `admits T` | `@Admits("T")` | an instance `action`, not `batched` (`JSC1212`), whose first parameter is the arriving object's id (`Bytes`) and whose optional second is the object as it arrives (`T`; not for a type that keeps a `BigMap`, `JSC1212`); `T` an owned type with a move (`into`, `JSC1214`), never a keyed type (`JSC1247`) | |
 | `retire` | `@OwnedDestroy(retire = true)` | an owned destroy of a keyed type (`JSC1245`) | |
 | `migrates to f` | `@MigrateTo("f")` | an instance `destroy` (`JSC1330`) | `Bytes` or `Hash`, a state field, not a time value (`JSC1330`, `JSC1331`) |
 

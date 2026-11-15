@@ -145,8 +145,9 @@ the program read back to the same Java and the same ABI manifest, and checks tha
                       "records": [Record + { "owner", "import", "javaName", "verified" }…],
                       "fns": [{ "name", "params": [Type…], "result": Type }…] }],
   "fns": [{ "name", "params": [Local…], "result": Type, "body": Block, "at" }],
-  "methods": [{ "kind": "init|action|destroy|view|ownedInit|ownedAction|ownedDestroy", "name", "on"?, "shared"?, "into"?,
-                "params": [Local…], "arriving"?, "mods": [{ "name", "field"? }], "checked": [localId…], "usesCtx", "pays",
+  "methods": [{ "kind": "init|action|destroy|view|ownedInit|ownedAction|ownedDestroy|withdraw|certify|vote|propose|migrate",
+                "name", "on"?, "shared"?, "into"?, "from"?, "old"?, "params": [Local…], "arriving"?,
+                "mods": [{ "name", "field"? }], "checked": [localId…], "usesCtx", "pays",
                 "result": Type|null, "body": Block, "at", "reads"? }],
   "invariants": [{ "name", "on"?, "body": Block, "at" }],
   "warnings": [{ "line", "col", "code", "message" }]
@@ -234,6 +235,11 @@ ADR-0018 D2, r26), and the tag stays as long as the format does.
   without an audience, or naming a time field or a field that is no `Bytes` or `Hash`; and either side in a contract
   with owned types, BigMap state or native assets (`js/jsc-interpreter/test/mutants/purpose-*.json`, shared by both
   readers' tests, each with the checker's code in the fragment both messages share).
+- **M3 final pass** (r29; the combinations, semantics §2.12). Both readers also refuse what the checker refuses for the
+  parts together: an instance destroy (JSC1210) or BigMap state (JSC1211) beside owned or keyed types; a withdraw handler
+  beside keyed types (JSC1244) or beside BigMap state (JSC1305); and, beside an owned type that keeps a `BigMap`, a move,
+  an `admits` action, a batched action, `receives`, `reads`, a certify, vote or propose handler, or an invariant by type
+  (JSC1217; `purpose-mapobj-*.json`, `purpose-*-instance-destroy.json`, `purpose-*-bigmap-state.json`).
 - **Vectors (M3c):** a vote's call takes two arguments, the voter and its votes `[[actionId, vote]…]`. A migrating
   destroy's transaction carries `"successor"` (hex: the policy whose instance it mints); an init migrate's carries
   `"prior"`: `{ "policy": hex, "state": v }` (the spent instance's policy and state).
