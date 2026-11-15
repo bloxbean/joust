@@ -1276,12 +1276,13 @@ Written before the code (D8's design, made exact). One fixed style, no options; 
 **Style.** The formatter changes only the whitespace between tokens and comments; it never adds, removes, splits or
 reorders a token or a comment, and never changes a line break inside a statement (`.jsc` reads newlines as layout, but
 a leading `-` is a known trap: ADR-0018's JSC0129 note), so a line's tokens stay on that line. Indentation is two
-spaces per open bracket (`{`, `(`, `[`) at the start of the line, a line that starts with a closing bracket one level
-less, and one more level for a continuation line (one that starts with, or follows a line that ends in, a binary
-operator, `.`, `?`, `:` or `=>`). Between two tokens on a line: none after `(`, `[` and `.` and before `)`, `]`, `,`,
-`;` and `.`; one after `,`; one inside a brace pair on one line (`{ a: 1 }`, `{}` stays); elsewhere one space where the
-source had any, none where it had none. A comment keeps its text; a trailing comment has one space before it; a block
-comment's later lines are kept as written. At most one blank line in a row, none at the start of the file or after
+spaces a level: a line is one level deeper than the line that opened the innermost bracket (`{`, `(`, `[`) still open,
+however many brackets that line opened (`fold(s, (a, b) => ({` indents its body once); a line that starts with a closing
+bracket goes back to its opener's line; a continuation line (one that starts with, or follows a line that ends in, a
+binary operator, `.`, `?`, `:`, `=>` or `=`, or starts with `else`) is one level deeper. Visual alignment is not kept. Between two tokens on a line: none after `(`, `[` and `.` and before `)`, `]`, `,`,
+`;` and `.`; one after `,`; one inside a brace pair on one line (`{ a: 1 }`; an empty pair is `{}`); elsewhere one space where the
+source had any, none where it had none. A comment keeps its text; a trailing line comment has one space before it, a block comment the spacing the
+source gave it; a block comment's later lines are kept as written. At most one blank line in a row, none at the start of the file or after
 `{`; no trailing whitespace; LF line ends; one newline at the end; a byte order mark stays.
 
 **Invariants** (tested over the corpus and generated layouts, §15's vectors):
@@ -1291,13 +1292,14 @@ comment's later lines are kept as written. At most one blank line in a row, none
 | F1 | **L12.** Formatting never changes the checked program except for positions: the IR export (positions removed), the ABI manifest, the description and the script hash are the same before and after; the generated Java differs only in its position comments | `JscFormatTest` (IR, manifest, Java) and the toolchain's hash test over every corpus file and generated layout |
 | F2 | **Idempotent:** `fmt(fmt(x)) == fmt(x)`, byte for byte | the same tests, every input |
 | F3 | **Comments:** every comment survives, with its text, in the same order, attached to the same token (the token it follows, or the one it precedes at the start of a line) | the same tests: the comment and token sequences, compared |
-| F4 | **Refusal:** a file the lexer or the parser refuses is not formatted: `lang.format` answers the first error and no text, the server no edit, `joust fmt` an error and leaves the file as it was; never a partial rewrite. The formatter also checks its own output (the same tokens and comments, re-lexed) and refuses rather than return text that differs in anything but whitespace | `JscFormatTest`: every single-token deletion of the corpus is refused or formatted with the same tokens; the self-check |
+| F4 | **Refusal:** a file the lexer or the parser refuses is not formatted (the file is parsed alone, as the checker does when it cannot read its libraries: the names it imports may start constructors, and, when that parse fails in a file with imports, every capitalised name may, for an imported enum's variants; the first parse's error is the one answered): `lang.format` answers the first error and no text, the server no edit, `joust fmt` an error and leaves the file as it was; never a partial rewrite. The formatter also checks its own output (the same tokens and comments, re-lexed) and refuses rather than return text that differs in anything but whitespace | `JscFormatTest`: every single-token deletion of the corpus is refused or formatted with the same tokens; the self-check |
 | F5 | **Engines:** the Java (JVM) and the JS/Wasm engines give the same bytes for every input | `lang-in-node`'s parity file carries the formatted text of every corpus file |
 | F6 | **Latency (L7):** formatting the 1,889-line file takes at most the 60 ms of L10's analysis bound (p95, the server's worker, warm), and a `textDocument/formatting` answer is one edit of the whole document | `measure-l10` |
 
 **Attack and edge vectors** (each in the tests): comments everywhere (before and after every token kind, inside
 brackets, at the end of the file, a block comment across lines, comments that look like code); nesting at M1e's depth
-cap (64 levels: 128 spaces of indentation, never deeper than the parser admits); non-BMP text (surrogate pairs in
+cap (the deepest file the parser admits is formatted, its brackets on one line and one to a line; one level more is
+refused with JSC0149); non-BMP text (surrogate pairs in
 strings and comments; columns count UTF-16 units as the lexer does); CRLF files (formatted to LF; a lone CR is
 refused by the lexer, F4); the longest lines (no wrapping: a line's length changes only by its whitespace); the
 headerless `jsc 1` form and the explicit header; a byte order mark; tabs (indentation replaced, a tab inside a string or
