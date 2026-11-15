@@ -542,6 +542,62 @@ public final class JscMain {
         return 1;
     }
 
+    /**
+     * {@code --fmt [--check] <file or dir>...} (ADR-0021 r9 §15): formats each {@code .jsc} file in place (a directory:
+     * every {@code .jsc} file under it), writing only a file whose text changes; with {@code --check}, writes nothing and
+     * lists the files that would change. A file that does not lex or parse is reported at its first error and left as it
+     * was (F4). 0 when every file is formatted (or, with --check, already is), 1 otherwise, 2 on a usage error.
+     */
+    static int fmt(List<String> args) throws IOException {
+        boolean check = args.contains("--check");
+        var paths = args.stream().filter(a -> !a.equals("--check")).toList();
+        if (paths.isEmpty() || paths.stream().anyMatch(a -> a.startsWith("--"))) {
+            System.err.println("usage: JscMain --fmt [--check] <file or dir>...");
+            return 2;
+        }
+        var files = new ArrayList<Path>();
+        for (String a : paths) {
+            Path p = Path.of(a);
+            if (Files.isDirectory(p)) {
+                try (Stream<Path> s = Files.walk(p)) {
+                    s.filter(f -> f.toString().endsWith(".jsc") && Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)).sorted().forEach(files::add);
+                }
+            } else if (Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                files.add(p);
+            } else {
+                System.err.println("jsc --fmt: " + p + ": not a regular file or a directory");
+                return 2;
+            }
+        }
+        int failed = 0, changed = 0;
+        for (Path f : files) {
+            String text = Files.readString(f);
+            var r = org.julclang.state.dsl.v2.JscFormat.format(text);
+            if (!r.ok()) {
+                System.err.println(f + ":" + r.line() + ":" + r.col() + ": error[" + r.code() + "] " + r.error() + " (not formatted)");
+                failed++;
+                continue;
+            }
+            if (r.text().equals(text)) continue;
+            changed++;
+            if (check) {
+                System.out.println(f + ": not formatted");
+                continue;
+            }
+            // Written whole or not at all: a temporary file beside it, then moved over it.
+            Path tmp = Files.createTempFile(f.toAbsolutePath().getParent(), "." + f.getFileName(), ".fmt");
+            try {
+                Files.writeString(tmp, r.text());
+                Files.move(tmp, f, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
+            System.out.println(f + ": formatted");
+        }
+        System.out.println("jsc --fmt: " + files.size() + " file(s), " + changed + (check ? " not formatted" : " formatted") + ", " + failed + " refused");
+        return failed > 0 || check && changed > 0 ? 1 : 0;
+    }
+
     public static void main(String[] args) throws IOException {
         int code = run(args);
         if (code != 0) System.exit(code);
@@ -570,6 +626,8 @@ public final class JscMain {
      * whatever the stack size (M1 hardening: the depth test no longer depends on how much stack a nested input uses).
      */
     public static int run(String[] args, FrontEnd frontEnd) throws IOException {
+        // ADR-0021 r9 §15 (M5d): JscMain --fmt [--check] <file or dir>...: the formatter, before any other mode.
+        if (args.length >= 1 && args[0].equals("--fmt")) return fmt(java.util.Arrays.asList(args).subList(1, args.length));
         // ADR-0018 D9 (M4b): --java-libraries <dir>, the on-chain sources of the Java libraries java: imports may name (a
         // library jar's META-INF/plutus-sources, extracted), anywhere after the mode; certified once, when needed.
         var rest = new ArrayList<String>();
