@@ -829,6 +829,11 @@ final class IrJson {
                 var params = decls(x.get("params"));
                 Ir.Local arriving = x.containsKey("arriving") ? decl(x.get("arriving")) : null;
                 var reads = new ArrayList<Ir.Read>();
+                // #112 review C5: reads is written only when a method reads another contract, so a present empty list is
+                // malformed too, as the JavaScript reader reads it.
+                if (x.get("reads") instanceof List<?> rl && rl.isEmpty()) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": \"reads\" is empty: an absent field is not written");
+                }
                 if (x.get("reads") != null) {
                     for (Object ro : l(x.get("reads"))) {
                         known(m(ro), Set.of("local", "field"), "a read");
@@ -1067,6 +1072,9 @@ final class IrJson {
                     throw new IllegalArgumentException("keyed type " + t + ": its key " + k.key() + " is not a Bytes, Key or Hash field");
                 }
                 if (k.maxKeyBytes() < 1 || k.maxKeyBytes() > 64) throw new IllegalArgumentException("keyed type " + t + ": maxKeyBytes is 1 to 64");
+                if ((kt.equals(Ty.KEY) || kt.equals(Ty.HASH)) && k.maxKeyBytes() < 28) {
+                    throw new IllegalArgumentException("keyed type " + t + ": a Key or Hash key is 28 bytes: maxKeyBytes at least 28");
+                }
                 if (k.signed() && (k.maxKeyBytes() < 28 || kt.equals(Ty.HASH))) {
                     throw new IllegalArgumentException("keyed type " + t + ": a signed key is a 28-byte key hash (maxKeyBytes at least 28, no Hash)");
                 }

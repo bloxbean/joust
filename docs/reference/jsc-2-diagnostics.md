@@ -508,7 +508,7 @@ method's object as an instance method reads the state.
 | JSC1248 | error | the key … of a keyed … is fixed for its life (ADR-0016 I50): return { ...state, … } without …, or with …: …; to change a key, retire or remove the object and insert another | Checker (M3b) |
 | JSC1249 | error | the method name … would be the redeemer …, a name the validator generates for keyed types … / the method / view … has the name of a member the generated client has for the keyed type … / the method … has the name of a member of the generated …Object handle … / '…' is a field name of the keyed type …'s generated redeemers … / the keyed types … and … both give the generated client's constant … | Checker (M3b) |
 | JSC1250 | error | a retired … may need … datum bytes, over maxDatumBytes = …: raise maxDatumBytes or lower maxKeyBytes (ADR-0016 D2) | Checker (M3b) |
-| JSC1251 | error | the key … of … is set from a time value somewhere: a key decides the list's order and whether an insert succeeds … (ADR-0018 D11) | Checker (M3b) |
+| JSC1251 | error | the key … of … is set from a time value somewhere: a key decides the list's order and whether an insert succeeds … (ADR-0018 D11). If a fn or another expression the checker follows as a whole builds the object, build it as a record literal ({ …, …, t: … }) so its fields are followed one by one | Checker (M3b) |
 
 M3b also reads earlier rules at keyed positions: a keyed type's escape hatch is its retiring exit (JSC1245 in place of
 JSC1209), an initializer takes only `payable` (JSC0405, as every owned init), and the instance is never destroyed

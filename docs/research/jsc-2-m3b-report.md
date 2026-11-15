@@ -121,11 +121,11 @@ test that covers it.
 | A28 the fixed key | checker JSC1248 (every result shape: a spread, a full literal, a const, a conditional, an `if`, a `match`); validator: the five-way's key mutants and copied `keyedActionsKeepTheList` (the key, next, linkedAt, instance changed); the interpreters' `keyed:fixed` on a hand-made IR |
 | A29 token-kind arms | copied `aHeadTakesOnlyLink`, `aRetiredNodeTakesNoActions`, `aStateRedeemerOnANodeAndAKeyedOneOnTheInstance`, `linkUnderOtherMintRedeemers`, `linkOnOtherKinds`; `tokenKinds_neverCrossArms` (plain 0x4F against keyed 0x4B, both ways, in Keys) |
 | A30 remove and retire | five-way removals (wrong and cooling predecessors, `keyed:anchor`, `keyed:cooldown`) and retires (with and without funds); copied `aRetiredNodeIsNeverRemoved`, `burning`, `theRelink`, `theRoles`, `theValueRule`, `topUpsAndZeroBalances`, `mintingOrBurningTheNodesUnit`; `retire` lowers to `@OwnedDestroy(retire = true)` (`aKeyedType_lowersToTheProcessorsKeyedType`) |
-| A31 cooldown and window as preconditions | five-way at the edges (linkedAt + C − 1 and + C; W and W + 1; an upper bound of 2^32 − 1 and 2^32) with the same class on every leg; DevKit `KeyedCooldownDevnetPortTest` (Registry's 60 s exactly at the boundary; Keys' 60.5 s rounded up to 61 slots; C = 0 not waiting) |
+| A31 cooldown and window as preconditions | five-way at the edges (linkedAt + C − 1 and + C; W and W + 1; an upper bound of 2^32 − 1 and 2^32) both interpreters reporting `keyed:<rule>`, the JVM and the transition program agreeing on the transition, the validator refusing where it checks the list (`FourWay.keyedParity`); DevKit `KeyedCooldownDevnetPortTest` (Registry's 60 s exactly at the boundary; Keys' 60.5 s rounded up to 61 slots; C = 0 not waiting) |
 | A32 keyed audience and quorum over object fields | five-way: recover by a guardian's quorum over the entry's fields, a stranger refused; the guardians' shape at an insert (`invariant:quorum guardians needed`: unsorted, a threshold over the count); Keys' `authorized` over the object's credential; checker JSC1246 (`open` is no audience) |
 | A33 keyed calls in one transaction | copied `twoStructuralOperations`, `anAnchorSpentWithAnOwnedAction`; DevKit `ContestedGapDevnetPortTest`, `ConcurrencyDevnetPortTest` |
 | A34 the datum within maxDatumBytes with placeholders | `theSizeRule_countsTheEnvelope_atAnInsert`, `…_atAKeyedAction`; copied `aNodeAtTheSizeLimitThenTheLongestKeyNearTheEndOfTime`, `aRemoveWhereNextIsLongerThanTheKey`; checker JSC1250 |
-| A46 refusal-class parity | the five-way asserts each keyed refusal's class on every leg (`keyed:anchor`, `keyed:window`, `keyed:cooldown`, `keyed:length`, `keyed:signed`, `keyed:order`); the JavaScript leg compares classes |
+| A46 refusal-class parity | both interpreters report each keyed refusal's class (`keyed:anchor`, `keyed:window`, `keyed:cooldown`, `keyed:length`, `keyed:signed`, `keyed:order`; the JavaScript leg compares classes); the JVM method and the transition program agree on the transition; the validator's refusal is compared where it tells it (`FourWay.keyedParity`: the failing purpose, a require's message or a checked input's key traced, round r2, #112 C3) |
 | A47 mutants per transaction shape | 182 (table above): next and linkedAt of the new or continuing node, its instance, a retired node's key, the anchor's relink (next, linkedAt, a lovelace skimmed), the minted quantity, the anchor the mint redeemer names, a removal keeping its token |
 | A48 byte-identical earlier contracts | see "Builds" |
 | A49 size and budget at saturation | `JscV2M3bGateTest` (saturated at a 64-byte key after a 64-byte next, the datum at its envelope); the 16-keyed-type limit and the 2,048-byte cap at the checker (JSC1244) |
@@ -184,8 +184,10 @@ merged head unless stated.
 
 ## Not in M3b
 
-Keyed types with native assets, `BigMap`s, batched actions or migration (the processor's limits, JSC1244); moves of
-keyed objects (JSC1247); a time-derived key (JSC1251). Purposes, staking and migration are M3c's.
+Keyed types with native assets, `BigMap`s or batched actions (the processor's limits, JSC1244); moves of keyed objects
+(JSC1247); a time-derived key (JSC1251). Migration and withdraw or purpose handlers beside keyed types are refused by the
+processor (as migrating or asset-aware); `.jsc` has neither until M3c, which extends JSC1244 and both readers' keyed rules
+to them (#112 design F4). Purposes, staking and migration are M3c's.
 
 ## Decisions for the maintainers
 

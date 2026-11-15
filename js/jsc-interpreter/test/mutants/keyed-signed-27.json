@@ -91,7 +91,7 @@
   {
    "type": "Ballot",
    "key": "voter",
-   "maxKeyBytes": 27,
+   "maxKeyBytes": 28,
    "signed": true,
    "linkCooldownMs": 60000,
    "linkWindowMs": 120000
@@ -99,8 +99,8 @@
   {
    "type": "Entry",
    "key": "name",
-   "maxKeyBytes": 64,
-   "signed": false,
+   "maxKeyBytes": 27,
+   "signed": true,
    "linkCooldownMs": 60000,
    "linkWindowMs": 120000
   }

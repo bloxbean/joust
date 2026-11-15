@@ -539,6 +539,8 @@ export function validate(p) {
       decl(m.arriving, where, scope);
       if (JSON.stringify(m.arriving.type) !== JSON.stringify({ record: admits.field })) fail(where, `the arriving object is a ${admits.field}`);
     }
+    // #112 review C5: reads is written only when a method reads another contract: a present empty list is malformed.
+    if (Array.isArray(m.reads) && m.reads.length === 0) fail(where, '"reads" is empty: an absent field is not written');
     // M2c: each read: a local of the instance's state type, named by a params field Instance<C>.
     for (const r of m.reads ?? []) {
       keys(r, ['local', 'field'], where);
@@ -669,6 +671,7 @@ function keyedRules(p, owned, fail, keys) {
     const kt = p.records.find((r) => r.name === t).fields.find((f) => f.name === k.key)?.type;
     if (!['Bytes', 'Key', 'Hash'].includes(kt)) fail('keyed', `keyed type ${t}: its key ${k.key} is not a Bytes, Key or Hash field`);
     if (k.maxKeyBytes < 1 || k.maxKeyBytes > 64) fail('keyed', `keyed type ${t}: maxKeyBytes is 1 to 64`);
+    if ((kt === 'Key' || kt === 'Hash') && k.maxKeyBytes < 28) fail('keyed', `keyed type ${t}: a Key or Hash key is 28 bytes: maxKeyBytes at least 28`);
     if (k.signed && (k.maxKeyBytes < 28 || kt === 'Hash')) fail('keyed', `keyed type ${t}: a signed key is a 28-byte key hash (maxKeyBytes at least 28, no Hash)`);
     if (k.linkCooldownMs !== 0 && (k.linkCooldownMs < 60000 || k.linkCooldownMs > 3600000)) fail('keyed', `keyed type ${t}: linkCooldownMs is 0 or 60000 to 3600000`);
     if (k.linkWindowMs < 20000 || BigInt(k.linkWindowMs) > windowCap) fail('keyed', `keyed type ${t}: linkWindowMs is 20000 to min(900000, maxValidityMs)`);
