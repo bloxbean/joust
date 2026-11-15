@@ -242,7 +242,7 @@ class JscV2M3cAttackTest {
         var in = tx.inputs.get(0);
         var o = in.resolved();
         tx.inputs.set(0, new TxInInfo(in.outRef(), new TxOut(o.address(), o.value(), new OutputDatum.OutputDatumInline(oldDatum), o.referenceScript())));
-        var adopted = new TallyV2.State(ADMIN, honestOld.voters(), BigInteger.valueOf(3), BigInteger.valueOf(5));
+        var adopted = new TallyV2.State(ADMIN, honestOld.voters(), BigInteger.valueOf(3), BigInteger.valueOf(5), honestOld.live());
         tx.outputs.add(new TxOut(h2.stateAddress(), Value.lovelace(live.lovelace()).merge(token(h2.policy(), successorId(), 1)),
                 new OutputDatum.OutputDatumInline(StateHarness.data(adopted)), Optional.empty()));
         tx.mint = tx.mint.merge(token(h2.policy(), successorId(), 1));
@@ -270,7 +270,8 @@ class JscV2M3cAttackTest {
         var cfg = new TallyV2.Config(h1.policy(), keys(A, B), BigInteger.TWO, StateHarness.T0.add(BigInteger.valueOf(600_000)));
         var h2 = (StateHarness<Object>) (StateHarness<?>) StateHarness.of(TallyV2Client.SPEC, cfg);
         JulcMap<byte[], BigInteger> tags = JulcMap.<byte[], BigInteger>empty().insert(new byte[]{'b'}, BigInteger.valueOf(4)).insert(new byte[]{'a'}, BigInteger.valueOf(3));
-        var old = new TallyV1.State(ADMIN, h2.policy(), keys(A, B, C), BigInteger.TWO, tags, Optional.of(new byte[]{'b'}));
+        var old = new TallyV1.State(ADMIN, h2.policy(), keys(A, B, C), BigInteger.TWO, tags, Optional.of(new byte[]{'b'}), true,
+                new TallyV1.Weighted(BigInteger.valueOf(3)));
         PlutusData honest = StateHarness.data(old);
         accepted(h2.evaluate(tallyAdoption(h1, h2, old, honest)), "the honest adoption");
         var bad = new LinkedHashMap<String, PlutusData>();
@@ -289,14 +290,27 @@ class JscV2M3cAttackTest {
         bad.put("a voter that is an integer", field(honest, 2, d -> new PlutusData.ListData(List.of(PlutusData.integer(1), PlutusData.bytes(B), PlutusData.bytes(C)))));
         bad.put("an admin of 29 bytes", field(honest, 0, d -> PlutusData.bytes(new byte[29])));
         bad.put("an admin that is an integer", field(honest, 0, d -> PlutusData.integer(1)));
+        // Review F3: a Bool the adoption reads and stores (live, field 6) of tag 2: refused (JuLC's Bool decoding).
+        bad.put("live a Bool of tag 2", field(honest, 6, d -> new PlutusData.ConstrData(2, List.of())));
         // the state's shape: a field short, a field more, another constructor.
         var fs = ((PlutusData.ConstrData) honest).fields();
-        bad.put("a field short", new PlutusData.ConstrData(0, fs.subList(0, 5)));
+        bad.put("a field short", new PlutusData.ConstrData(0, fs.subList(0, 7)));
         var more = new ArrayList<>(fs);
         more.add(PlutusData.integer(0));
         bad.put("a field more", new PlutusData.ConstrData(0, more));
         bad.put("constructor 1", new PlutusData.ConstrData(1, fs));
         for (var e : bad.entrySet()) refused(h2.evaluate(tallyAdoption(h1, h2, old, e.getValue())), "TallyV2 adopts an old state with " + e.getKey());
+        // Stated (review F3, semantics §4): the sum types' other malformations are taken as the previous version wrote them,
+        // as a read state's are. The previous version is a .jsc contract (init migrate imports one), whose validator checks
+        // every output datum against its typed state, so an instance holding its token never has one of these. The outcomes,
+        // as measured: a Bool with a field (stored as written), an enum of tag 2, Weighted without its field and Plain with
+        // one (never read) are accepted.
+        var stated = new LinkedHashMap<String, PlutusData>();
+        stated.put("live a Bool with a field", field(honest, 6, d -> new PlutusData.ConstrData(1, List.of(PlutusData.integer(0)))));
+        stated.put("mode an enum of tag 2", field(honest, 7, d -> new PlutusData.ConstrData(2, List.of())));
+        stated.put("mode Weighted without its field", field(honest, 7, d -> new PlutusData.ConstrData(1, List.of())));
+        stated.put("mode Plain with a field", field(honest, 7, d -> new PlutusData.ConstrData(0, List.of(PlutusData.integer(1)))));
+        for (var e : stated.entrySet()) accepted(h2.evaluate(tallyAdoption(h1, h2, old, e.getValue())), "stated: " + e.getKey());
         // Stated (D5): the check is the checked-input rule (key and hash lengths, map order and keys), as for a read state;
         // a value's kind is its writer's type, so an Int that is bytes in a field the adoption never reads (a tag's value)
         // is not looked at: read, it would fail. No build of TallyV1 can write one (its outputs are its typed states).

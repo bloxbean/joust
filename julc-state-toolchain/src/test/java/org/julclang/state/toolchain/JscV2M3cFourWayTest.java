@@ -583,15 +583,18 @@ class JscV2M3cFourWayTest {
         ok(v1.check("init", null, List.of(voters, n(2)), create, ADMIN));
         v1.invariantRefused("invariant:quorum voters needed", "init", null, List.of(voters, n(4)), create, ADMIN);
         v1.invariantRefused("invariant:quorum voters needed", "init", null, List.of(keys(B, A, C), n(2)), create, ADMIN);
-        Rec fresh = rec("State", Bytes.of(ADMIN), none, voters, n(2), tags(), Opt.NONE);
+        Rec fresh = rec("State", Bytes.of(ADMIN), none, voters, n(2), tags(), Opt.NONE, true, rec("Plain"));
         ok(v1.check("tag", fresh, List.of(text("a"), n(3)), null, ADMIN));
         v1.modifierRefused("tag", fresh, List.of(text("a"), n(3)), null, EVE);
         v1.mutants("tag", fresh, List.of(text("a"), n(3)), null, ADMIN);
+        // Review F3: a Bool and an enum in the migrating state (weigh sets both).
+        ok(v1.check("weigh", fresh, List.of(n(3)), null, ADMIN));
+        v1.modifierRefused("weigh", fresh, List.of(n(3)), null, EVE);
         // A43: the successor is set once (the lock the contract states; JSC9014 is silent for it): a second set is refused.
         ok(v1.check("setSuccessor", fresh, List.of(Bytes.of(p2)), null, ADMIN));
-        Rec named = rec("State", Bytes.of(ADMIN), Bytes.of(p2), voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b")));
+        Rec named = rec("State", Bytes.of(ADMIN), Bytes.of(p2), voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b")), true, rec("Weighted", n(3)));
         assertEquals("refused", v1.check("setSuccessor", named, List.of(Bytes.of(fill(0x5E))), null, ADMIN));
-        assertEquals("require:20:5:the successor is set once", v1.lastRefusal);
+        assertEquals("require:27:5:the successor is set once", v1.lastRefusal);
         v1.mutants("setSuccessor", fresh, List.of(Bytes.of(p2)), null, ADMIN);
 
         // ---- the old half: moved by a quorum of its voters into the successor its field names
@@ -599,13 +602,13 @@ class JscV2M3cFourWayTest {
         BigInteger lovelace = BigInteger.valueOf(v1.harness.minAda()).add(funds);
         Tx mv = at(A, 0, lovelace.longValue()).withSuccessor(Bytes.of(p2));
         // count = the tags' size + the note's length: 2 + 1.
-        Rec adopted = rec("State", Bytes.of(ADMIN), voters, n(3), n(5));
+        Rec adopted = rec("State", Bytes.of(ADMIN), voters, n(3), n(5), true);
         v1.successor = successor(p2, v2.harness.stateAddress(), v2.java(adopted), 0);
         ok(v1.as(List.of(A, B), null).check("move", named, List.of(), mv, A));
         v1.as(List.of(A), null).modifierRefused("move", named, List.of(), mv, A);
         v1.as(List.of(A, EVE), null).modifierRefused("move", named, List.of(), mv, A);
         migrateRefused(v1.as(List.of(A, B), null), "migrate:to", "move",
-                rec("State", Bytes.of(ADMIN), none, voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b"))), List.of(), mv, A);
+                rec("State", Bytes.of(ADMIN), none, voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b")), true, rec("Weighted", n(3))), List.of(), mv, A);
         v1.successor = successor(fill(0x5F), v2.harness.stateAddress(), v2.java(adopted), 0);
         migrateRefused(v1.as(List.of(A, B), null), "migrate:to", "move", named, List.of(), mv.withSuccessor(Bytes.of(fill(0x5F))), A);
         v1.successor = successor(p2, v2.harness.stateAddress(), v2.java(adopted), -1);
@@ -616,7 +619,7 @@ class JscV2M3cFourWayTest {
         // ---- the new half: adopted with an argument, by the old state's admin, before the params' deadline
         ok(v2.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN));
         Object oldJ = v1.java(named);
-        Interpreter.PriorV prior = new Interpreter.PriorV(Bytes.of(p1), as("TallyV1.State", named));
+        Interpreter.PriorV prior = new Interpreter.PriorV(Bytes.of(p1), asTallyV1(named));
         Tx adopt = new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW)).withPrior(prior);
         v2.adoption = adoption(v1, "move", oldJ, funds, v2, 0, A, B);
         assertEquals(ok(v2.check("migrate", null, List.of(n(5)), adopt, ADMIN)), "ok:" + v2.encoded(v2.java(adopted), null, null));
@@ -632,39 +635,39 @@ class JscV2M3cFourWayTest {
         // A42: an instance of another policy than params.previous.
         var honest = adoption(v1, "move", oldJ, funds, v2, 0, A, B);
         v2.adoption = first -> elsewhere(honest.apply(first), p1, fill(0x5D), v1.harness.instanceId());
-        migrateRefused(v2, "migrate:from", "migrate", null, List.of(n(5)), adopt.withPrior(new Interpreter.PriorV(Bytes.of(fill(0x5D)), as("TallyV1.State", named))), ADMIN);
+        migrateRefused(v2, "migrate:from", "migrate", null, List.of(n(5)), adopt.withPrior(new Interpreter.PriorV(Bytes.of(fill(0x5D)), asTallyV1(named))), ADMIN);
         // A44, K48: the old state is a checked input, of every kind it holds: a voter of 27 bytes, an admin of 27 bytes (no
         // v1 build stores either; the new side checks).
         var hostile = new LinkedHashMap<String, Rec[]>();
         hostile.put("a 27-byte voter", new Rec[] {
-                rec("State", Bytes.of(ADMIN), Bytes.of(p2), keys(new byte[27], B, C), n(2), tags("a", "3", "b", "4"), Opt.some(text("b"))),
-                rec("State", Bytes.of(ADMIN), keys(new byte[27], B, C), n(3), n(5))});
+                rec("State", Bytes.of(ADMIN), Bytes.of(p2), keys(new byte[27], B, C), n(2), tags("a", "3", "b", "4"), Opt.some(text("b")), true, rec("Weighted", n(3))),
+                rec("State", Bytes.of(ADMIN), keys(new byte[27], B, C), n(3), n(5), true)});
         hostile.put("a 27-byte admin", new Rec[] {
-                rec("State", Bytes.of(new byte[27]), Bytes.of(p2), voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b"))),
-                rec("State", Bytes.of(new byte[27]), voters, n(3), n(5))});
+                rec("State", Bytes.of(new byte[27]), Bytes.of(p2), voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b")), true, rec("Weighted", n(3))),
+                rec("State", Bytes.of(new byte[27]), voters, n(3), n(5), true)});
         for (var e : hostile.entrySet()) {
             Rec old = e.getValue()[0];
             v2.adoption = adoption(v1, "move", v1.java(old), funds, v2, 0, A, B);
-            Tx t = new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW)).withPrior(new Interpreter.PriorV(Bytes.of(p1), as("TallyV1.State", old)));
+            Tx t = new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW)).withPrior(new Interpreter.PriorV(Bytes.of(p1), asTallyV1(old)));
             migrateRefused(v2, "input:old", "migrate", null, List.of(n(5)), t, ADMIN, e.getValue()[1]);
         }
         // A map out of canonical order or with a key twice: the interpreters refuse it (input:old); the validator's check is
         // the generated SortedMaps key walk an argument's map has (mapKeys__Bytes), and the harness cannot carry the datum
         // (it writes canonical CBOR, which sorts the keys and keeps one of each: as JscV2M2cHostileInputTest states).
         for (MapV m : List.of(tags("b", "4", "a", "3"), tags("a", "3", "a", "4"))) {
-            Rec old = rec("State", Bytes.of(ADMIN), Bytes.of(p2), voters, n(2), m, Opt.some(text("b")));
+            Rec old = rec("State", Bytes.of(ADMIN), Bytes.of(p2), voters, n(2), m, Opt.some(text("b")), true, rec("Weighted", n(3)));
             Tx t = FourWay.interpreterTx(new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW))
-                    .withPrior(new Interpreter.PriorV(Bytes.of(p1), as("TallyV1.State", old))), ADMIN);
+                    .withPrior(new Interpreter.PriorV(Bytes.of(p1), asTallyV1(old))), ADMIN);
             var e = assertThrows(Interpreter.Refused.class, () -> v2.interp.call("migrate", null, List.of(n(5)), t));
             assertEquals("input:old", e.refusal(), m.toString());
             v2.jsCalls.add(JsLeg.call("migrate", null, List.of(n(5)), t, v2.params, "refused", null, e, "TallyV2.migrate " + m));
         }
         // Review S1: TallyV2's ordinary init seeded by the TallyV1 instance skips the adoption's requires (the admin, the
         // deadline) and the adopted state: refused on every leg (migrate:from), even past the deadline.
-        Rec bareOld = rec("State", Bytes.of(ADMIN), Bytes.of(p2), voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b")));
+        Rec bareOld = rec("State", Bytes.of(ADMIN), Bytes.of(p2), voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b")), true, rec("Weighted", n(3)));
         v2.adoption = adoption(v1, "move", v1.java(bareOld), BigInteger.ZERO, v2, v2.harness.minAda() - v1.harness.minAda(), A, B, EVE);
         migrateRefused(v2, "migrate:from", "init", null, List.of(), new Tx(Bytes.of(EVE), BigInteger.ZERO, BigInteger.ZERO, DEADLINE, DEADLINE.add(WINDOW))
-                .withPrior(new Interpreter.PriorV(Bytes.of(p1), as("TallyV1.State", bareOld))), EVE, rec("State", Bytes.of(EVE), List.of(), n(0), n(0)));
+                .withPrior(new Interpreter.PriorV(Bytes.of(p1), asTallyV1(bareOld))), EVE, rec("State", Bytes.of(EVE), List.of(), n(0), n(0), true));
         // K49: exactly the old input's lovelace.
         v2.adoption = adoption(v1, "move", oldJ, funds, v2, 1, A, B);
         v2.transactionLevel("migrate", null, List.of(n(5)), adopt, ADMIN);
@@ -686,6 +689,14 @@ class JscV2M3cFourWayTest {
         JsLeg.check(bad);
         report(v1, null);
         report(v2, null);
+    }
+
+    /** A TallyV1 state as TallyV2 names it: TallyV1.State, its enum's variant TallyV1.Plain or TallyV1.Weighted (field 7). */
+    static Rec asTallyV1(Rec r) {
+        var fs = new ArrayList<Object>(r.fields());
+        Rec mode = (Rec) fs.get(7);
+        fs.set(7, new Rec("TallyV1." + mode.type(), mode.fields()));
+        return new Rec("TallyV1.State", fs);
     }
 
     /** A state of another contract, as an importer names it (C.State). */

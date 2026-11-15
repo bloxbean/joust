@@ -9,16 +9,17 @@ import { length } from "std/bytes"
 // quorum at adoption, its invariant on the adopted state.
 contract TallyV2(maxDatumBytes = 512) {
   params { previous: Hash, council: List<Key>, needed: Int, until: Int }
-  state { admin: Key, voters: List<Key>, count: Int, bonus: Int }
+  state { admin: Key, voters: List<Key>, count: Int, bonus: Int, live: Bool }
 
   init() {
-    return { admin: caller, voters: [], count: 0, bonus: 0 }
+    return { admin: caller, voters: [], count: 0, bonus: 0, live: true }
   }
 
   init migrate from params.previous(old: TallyV1.State, bonus: Int) {
     require(caller == old.admin, "the admin adopts")
     require(before(params.until), "too late to adopt")
-    return { admin: old.admin, voters: old.voters, count: old.tags.size + length(old.note ?? #), bonus }
+    // Review F3: a Bool stored as it is (the old state's enum, mode, is not read: its tag is checked with the state's).
+    return { admin: old.admin, voters: old.voters, count: old.tags.size + length(old.note ?? #), bonus, live: old.live }
   }
 
   action count() only admin {

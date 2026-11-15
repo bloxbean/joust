@@ -2,13 +2,20 @@ jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M3c's coverage contract for migration (ADR-0011 D4), version 1, beside the upgrade port: a state whose checked
-// input reaches every kind (keys, a list of keys, a map, an option); the successor is set once (the lock the security
-// review asked about, A43: setSuccessor requires it unset); the migrating destroy is by a quorum of the voters.
+// input reaches every kind (keys, a list of keys, a map, an option, a Bool, an enum: review F3); the successor is set
+// once (the lock the security review asked about, A43: setSuccessor requires it unset); the migrating destroy is by a
+// quorum of the voters.
+enum Mode { Plain, Weighted { factor: Int } }
+
 contract TallyV1(maxDatumBytes = 512) {
-  state { admin: Key, successor: Bytes, voters: List<Key>, needed: Int, tags: Map<Bytes, Int>, note: Option<Bytes> }
+  state { admin: Key, successor: Bytes, voters: List<Key>, needed: Int, tags: Map<Bytes, Int>, note: Option<Bytes>, live: Bool, mode: Mode }
 
   init(voters: List<Key>, needed: Int) payable {
-    return { admin: caller, successor: #, voters, needed, tags: Map.empty(), note: None }
+    return { admin: caller, successor: #, voters, needed, tags: Map.empty(), note: None, live: true, mode: Plain }
+  }
+
+  action weigh(factor: Int) only admin {
+    return { ...state, live: false, mode: Weighted { factor } }
   }
 
   action tag(name: Bytes, n: Int) only admin {

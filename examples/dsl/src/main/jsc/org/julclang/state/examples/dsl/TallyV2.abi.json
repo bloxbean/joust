@@ -6,7 +6,8 @@
       { "name": "admin", "type": "Key", "data": "bytes28" },
       { "name": "voters", "type": "List<Key>", "data": "list<bytes28>" },
       { "name": "count", "type": "Int", "data": "int" },
-      { "name": "bonus", "type": "Int", "data": "int" }
+      { "name": "bonus", "type": "Int", "data": "int" },
+      { "name": "live", "type": "Bool", "data": "bool" }
     ] },
   "params": { "name": "Config", "constr": 0, "fields": [
       { "name": "previous", "type": "Hash", "data": "bytes28" },
