@@ -99,7 +99,9 @@ class UpgradeTest {
         JulcList<Payout> none = JulcList.empty();
         var tx = v1.destroy(live, new CounterV1Validator.Upgrade(c1), new CounterV1Validator.BurnInstance(), none, ADMIN, c1);
         Ctx c2 = v2.ctx(EVE, BigInteger.ZERO, BigInteger.ZERO);
-        var made = CounterV2.open(cfg, c2);   // a state EVE makes up: EVE the admin, the count reset
+        // A state EVE makes up (EVE the admin, the count reset), as v2's own creation writes it (open's state; built here,
+        // not called, since the .jsc port's creation is named init: examples/dsl runs this test against it).
+        var made = new CounterV2.State(EVE, BigInteger.ZERO, BigInteger.ONE);
         var token = Value.singleton(new org.julclang.ledger.PolicyId(v2.policy()), new org.julclang.ledger.TokenName(successorId()), BigInteger.ONE);
         tx.outputs.add(new TxOut(v2.stateAddress(), Value.lovelace(BigInteger.valueOf(CounterV2Client.SPEC.minAda())).merge(token),
                 new OutputDatum.OutputDatumInline(StateHarness.data(made)), Optional.empty()));
