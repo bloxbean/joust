@@ -262,3 +262,59 @@ test('#121 C3: a missing lock that becomes unreadable while its build runs ends 
     await lsp.stop();
   }
 });
+
+test('#121 F5: a java: library (an npm package\'s joust-lib/*.java): the editor\'s J12 decision is joust build\'s, at the java: import', { skip, timeout: 600_000 }, async () => {
+  const REPO = join(new URL('../../../..', import.meta.url).pathname);
+  const ALLOW = readFileSync(join(REPO, 'examples/compliance/src/main/java/com/example/compliance/AllowList.java'), 'utf8');
+  const GUARDED = readFileSync(join(REPO, 'examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Guarded.jsc'), 'utf8').replace('package org.julclang.state.examples.dsl', 'package app');
+  const root = project();
+  rmSync(join(root, 'contracts', 'app', 'Shop.jsc'));
+  rmSync(join(root, 'node_modules', '@acme'), { recursive: true, force: true });
+  const lib = join(root, 'node_modules', '@example', 'compliance', 'joust-lib', 'com', 'example', 'compliance');
+  mkdirSync(lib, { recursive: true });
+  writeFileSync(join(root, 'node_modules', '@example', 'compliance', 'package.json'), JSON.stringify({ name: '@example/compliance', version: '1.0.0' }));
+  writeFileSync(join(lib, 'AllowList.java'), ALLOW);
+  const file = join(root, 'contracts', 'app', 'Guarded.jsc');
+  writeFileSync(file, GUARDED);
+  const lockFile = join(root, 'joust.lock');
+  await build({ root, acceptAbi: true, log: quiet });
+  await build({ root, acceptLock: true, log: quiet });
+  const good = readFileSync(lockFile, 'utf8');
+  const name = 'java:com.example.compliance.AllowList';
+  const sha = JSON.parse(good).libraries[name];
+  assert.match(sha ?? '', /^[0-9a-f]{64}$/, good);
+  const importLine = GUARDED.split('\n').findIndex((l) => l.startsWith('import') && l.includes(`"${name}"`));
+  const lsp = await startLsp({ folders: [root], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: {} });
+  try {
+    const uri = uriOf(file);
+    lsp.open(uri, GUARDED);
+    await lsp.until(() => lsp.statuses.find((s) => s.uri === uri && s.mode === 'project-matched'), 120000, 'project-matched');
+    let version = 1;
+    const editorOf = async () => {
+      lsp.change(uri, ++version, GUARDED + ' '.repeat(version));
+      await lsp.diagnostics(uri, version, 120000);
+      const r = await lsp.request('joust/checkBuild', { uri });
+      assert.ok(!r.error, JSON.stringify(r));
+      const p = [...lsp.published].reverse().find((x) => x.uri === uri && x.version === version);
+      return (p?.diagnostics ?? []).filter((d) => d.code === 'JSC0731' || d.code === 'JSC0732');
+    };
+    for (const [what, arrange, codes] of [
+      ['not pinned', () => rmSync(lockFile, { force: true }), ['JSC0731']],
+      ['pinned with its hash', () => writeFileSync(lockFile, good), []],
+      ['pinned with another hash', () => writeFileSync(lockFile, good.replace(sha, 'cd'.repeat(32))), ['JSC0732']],
+    ]) {
+      arrange();
+      const c = await cli(root);
+      const e = await editorOf();
+      assert.deepEqual(c.codes, codes, `${what}: joust build ${JSON.stringify(c.lines)}`);
+      assert.deepEqual(e.map((d) => d.code), c.codes, what);
+      assert.deepEqual(e.map((d) => d.message), c.lines, `${what}: the same name, hashes and words`);
+      for (const d of e) {
+        assert.equal(d.range.start.line, importLine, `${what}: at the java: import`);
+        assert.ok(d.message.includes(name), d.message);
+      }
+    }
+  } finally {
+    await lsp.stop();
+  }
+});
