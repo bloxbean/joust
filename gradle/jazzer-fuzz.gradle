@@ -68,12 +68,12 @@ if (!rootProject.hasProperty('noFuzz')) {
 }
 
 // Targets by kind (reviewing.md §3, SECURITY.md):
-//   fuzzTargets            fuzzed by fuzzShort everywhere (CI included) and by the nightly campaign;
+//   fuzzTargets            fuzzed by fuzzShort everywhere (CI included) and by the long campaigns (build.yml's fuzz-long);
 //   fuzzOnChainDecoders    decoders of data an attacker writes on chain (values, addresses, memos): a finding can be a
 //                          vulnerability, so public CI only replays them (`test`); fuzzShort fuzzes them locally only, and
 //                          -Pfuzz.public (CI) leaves them out (JuLC ADR-063 D13);
 //   fuzzLongOnly           too slow for a short run to be more than replay (the five-way target): `test` replays its
-//                          seeds, the nightly campaign and `fuzz` fuzz it, fuzzShort does not.
+//                          seeds, the long campaigns (fuzz-long) and `fuzz` fuzz it, fuzzShort does not.
 def fuzzPublic = providers.gradleProperty('fuzz.public').isPresent()
 def previousFuzzTask = null
 def registerFuzzTarget = { String target, boolean inShort ->

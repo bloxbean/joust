@@ -27,7 +27,7 @@ The decoders of data an attacker writes on chain (`ValueAdapterFuzzTest`, `Addre
 uploads their failure records, because a finding there can be a vulnerability and this repository's logs and artifacts
 are public (as JuLC's ADR-063 D13 decides for its own decoders). If one of them fails for you, report it here before you
 commit its input or open an issue. The other fuzz targets (the five-way differential, the IR readers, NODE_OPTIONS) are
-fuzzed in public CI and nightly, and their findings are published like any test failure.
+fuzzed in public CI and in the long campaigns (build.yml's fuzz-long), and their findings are published like any test failure.
 `docs/contributing/reviewing.md` §3 has the details.
 
 ## Scope

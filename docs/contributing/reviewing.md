@@ -34,17 +34,22 @@ bash scripts/setup-js.sh ../review-<n>     # the JS packages' dependencies and l
 - It reads the run's record from GitHub's API. The repository and the head repository must both be `bloxbean/joust`
   (pinned in the script, not taken from your `origin`, which may be a fork). The workflow must be
   `.github/workflows/build.yml`, the event `pull_request` or `push`, the head the commit you named, and the `engines`
-  job a success. This holds for a run you name with `--run` too.
-- It prints every job's conclusion, and stops when the `build`, `mutation` or a `stryker` job has failed or not finished
-  (`--allow-incomplete` to accept a partial run).
+  job a success. It takes the newest run that passes these checks, skipping (and naming) newer runs that do not, such
+  as a fork's run of the same commit. A run you name with `--run` must pass them.
 - It refuses a run of a fork's head unless you pass `--allow-fork`.
-- It downloads the artifacts into `build/ci/<sha>/` of the worktree. It checks the engines against `engines.sha256`,
-  that the digests list exactly the engine files, and that `engines.head` names the commit. It checks the `.vsix`
-  against its digest, and `verification`, `mutation` and each `stryker-<set>` against their `SHA256SUMS`.
+- It prints every job's conclusion. The run must have finished, and each job whose results it hands out (`build`,
+  `cli`, `vscode`, `mutation` and the three `stryker` sets) must be present and have succeeded; otherwise it stops.
+  With `--allow-incomplete` it goes on, and fetches only the artifacts of the jobs that succeeded: a `.vsix` only when
+  the `vscode` job, which tests it, passed.
+- It downloads the artifacts into `build/ci/<sha>/` of the worktree; a download that fails stops it. Each artifact
+  must match its manifest exactly: the manifest (`engines.sha256`, `vscode-joust.vsix.sha256` or `SHA256SUMS`) lists
+  every file the artifact holds, once, by a relative path inside it, and nothing else, and every digest matches. The
+  engines must be exactly the two engines' six files, and `engines.head` must name the commit.
 - It installs the engines atomically into `js/joust/engine` and `js/joust-runtime/engine`. It stages and checks them,
   then moves them in. On any failure it removes those directories, so they never hold another head's engines or a
   half-installed copy.
-- It prints text from the artifacts with control characters removed.
+- It prints text from the artifacts as UTF-8 with control characters removed: C0, DEL, C1 (which a terminal may read
+  as CSI) and bidirectional overrides.
 
 **What this proves, and what it does not.** The digests prove that the files are the ones that run's workflow uploaded.
 The API record proves that the run is this repository's `build.yml` for that commit. The digests travel inside the
@@ -55,9 +60,20 @@ trustworthy than engines you build from the reviewed source yourself. Use them t
 repository. Build them yourself whenever the run's code is in question, and always for a fork: `--allow-fork` only makes
 that choice explicit.
 
-**For maintainers:** turn on the repository setting that requires actions to be pinned to a full-length commit SHA
-(`sha_pinning_required`; Settings → Actions → General). Every workflow here pins its actions already, and the setting
-keeps it so.
+**For maintainers:**
+
+- **After this pull request (#95) merges, purge main's Gradle cache entries once**, for example
+  `gh cache list --repo bloxbean/joust --ref refs/heads/main --key gradle- --limit 1000` and
+  `gh cache delete <key> --repo bloxbean/joust` for each one (or `gh cache delete --all`). setup-gradle shares its
+  extracted entries (dependencies, transforms, instrumented jars, wrapper zips) across jobs by their contents' names,
+  whatever `gradle-home-cache-strict-match` says, and entries the devnet job wrote before its cache became read-only
+  are still restored by `build` and `cli` (security review r2, S9). After the purge, the jobs that save on main
+  (build, cli, mutation, fuzz-long) run only this repository's code and locked dependencies.
+- `build.yml` pins every action by its commit SHA. The release and snapshot workflows (`release.yml`,
+  `bloxbean-snapshot.yml`, `bloxbean-snapshot-cleanup.yml`, `publish-central.yml`, `tag-release.yml`) do not yet, and
+  they hold the repository's secrets. Pin them first (#116), and only then turn on the setting that requires pinned
+  actions (`sha_pinning_required`; Settings → Actions → General): before that, it would stop them from starting.
+- Gradle dependency verification (`verification-metadata.xml`) is not set up yet (#116).
 
 CI builds the pull request's head commit, not its merge with the base, so the artifacts belong to the commit you have
 checked out. With the engines in place and `setup-js.sh` run, the engine-backed npm suites run locally without building
@@ -70,7 +86,7 @@ anything (§2 lists them), as do `toolchainWasmTest`'s Node scripts and the VS C
 | `engines` | `joust/engine/` and `joust-runtime/engine/` (the toolchain and runtime engines), `engines.sha256`, `engines.head` |
 | `vscode-joust-vsix` | `vscode-joust.vsix` and its digest |
 | `verification` | `build/verification/`: `summary.md` (the job summary), `five-way.txt` (every four-way and five-way count line the tests printed), `fuzz.txt` (each fuzz target's tally, and libFuzzer's final `DONE` line for the public targets), `tests.txt` (tests, failures and skips per module and npm package). Also the JUnit XML of every JVM test and of the build job's npm suites, every fuzz target's summary, and the failure records and `crash-*` inputs of the **public** targets only (§3). `SHA256SUMS` over all of it |
-| `npm-test-results-engines` | the JUnit XML of the engines job's npm suites |
+| `npm-test-results-engines` | `build/npm-test-results/`: the JUnit XML of the engines job's npm suites (js/joust, js/joust-runtime, the language server, create-joust), none of whose cases may skip, `SHA256SUMS` |
 | `mutation` | `build/mutation/pit.md` (PIT's scores, floors and surviving mutants), PIT's HTML and XML reports, `SHA256SUMS` |
 | `stryker-<set>` | for each set (`joust`, `joust-heap`, `state-client`): `build/mutation/stryker-<set>.md` (scores, floors and surviving mutants), Stryker's HTML and JSON reports, `SHA256SUMS` |
 
@@ -82,6 +98,8 @@ The npm suites CI runs:
   - js/joust's `abi`, `cold-engine`, `libraries`, `migrate`, `offline-ledger`, `sources`, `worker-limits` and `lsp/*`;
   - js/joust-runtime's `compat`, `exnref`, `keyed-window`, `messages` and `mirror`;
   - create-joust built with the engine;
+
+  none of these may skip a case: a skip there is an engine-backed security case that did not run, so the job fails;
 - vscode job: the packaged extension in VS Code.
 
 **Not run in CI:**
@@ -117,15 +135,18 @@ The modes:
   Add `--info` to see libFuzzer's lines.
 - **CI** (`build.yml`) runs `fuzzShort -Pfuzz.public`: the public targets for 30 s each. The on-chain decoders are
   only replayed.
-- **Nightly** (`.github/workflows/fuzz-nightly.yml`, also `workflow_dispatch`): the five-way target for 60 minutes, the
-  IR readers for 20 and NODE_OPTIONS for 10. Each continues from the corpus the last night left (`actions/cache` of
-  `.cifuzz-corpus/`), and a failure uploads its input and record.
+- **Long campaigns** (`build.yml`'s `fuzz-long` job), started by hand on any branch:
+  `gh workflow run build.yml --repo bloxbean/joust --ref <branch> -f fuzz_minutes=60`. The five-way target runs for
+  `fuzz_minutes`, the IR readers for 20 and NODE_OPTIONS for 10, and nothing else in the workflow runs. Each continues
+  from the corpus the branch's last campaign left (`actions/cache` of `.cifuzz-corpus/`), and a failure uploads its
+  input and record. It is a `workflow_dispatch` input rather than a schedule because GitHub runs scheduled workflows
+  only from the default branch, where the integration branches' code is not yet.
 
 **Disclosure.** The decoders of data an attacker writes on chain (values, addresses, memos) are fuzzed locally only, as
 JuLC's D13 decides, because a finding there can be a vulnerability and this repository's logs and artifacts are public.
 Public CI only replays their committed inputs (already public), and never uploads their failure records. Report a
 finding of one privately, as `SECURITY.md` says, before you commit its input. The public targets' findings are published
-by CI and the nightly run like any test failure.
+by CI and the long campaigns like any test failure.
 
 A finding fails the input:
 
@@ -144,8 +165,11 @@ counted by class in the target's summary, and the first input of each class is w
 - `IrReaderFuzzTest` (#97): the Java IR reader, which only the tests use, lacks some of the JavaScript validator's
   semantic checks. The rules (`KNOWN_97`) are exactly #97's classes: arity, a missing field, a name declared twice, a
   type check, a name that resolves to nothing, a method's checked inputs or transaction use, a declaration's shape, a
-  number out of range. Any other disagreement fails. A TypeError or RangeError while the JavaScript reader validates is
-  a crash, never a refusal.
+  number out of range. They match the check the JavaScript reader reports (its kind and its own words, never the
+  location, which holds IR-supplied text). A schema error other than a missing field, such as an unknown field, is
+  never registered, and an enumerated value only for #97's attributes at the node kinds that have them. Any other
+  disagreement fails, and `aReaderThatRefusesAFormatField_fails` shows a reader that refuses a format field failing.
+  A TypeError or RangeError while the JavaScript reader validates is a crash, never a refusal.
 - `MemoFuzzTest` and `AddressAdapterFuzzTest` (#96): an `IllegalArgumentException` thrown by `Builtins.un*Data` itself
   (top frame, message `unXData: expected …`) for data of another kind, where the chain refuses. Any other exception
   fails.
@@ -158,7 +182,9 @@ counted by class in the target's summary, and the first input of each class is w
 - reads of another contract's state;
 - `quorum` and `authorized`;
 - `batched`;
-- M3's owned and keyed objects, `Compose`, and transactions with several UTxOs.
+- M3's owned and keyed objects, `Compose`, and transactions with several UTxOs;
+- assets the instance already holds: every call's `held` is empty, so a burn never succeeds, held foreign tokens are
+  never sent or kept, and the exact-value rule never sees an input holding tokens (design review r2, F17).
 
 Validity windows wider than `maxValidityMs` are not generated either: that check is the validator's alone.
 
@@ -170,8 +196,9 @@ Validity windows wider than `maxValidityMs` are not generated either: that check
 4. a `JscGenTest` quota;
 5. a tally key in `FiveWayFuzzTest`'s summary.
 
-A milestone that adds language features exits only when they are in `JscGen` with quotas, and a nightly five-way run
-has passed with them.
+A milestone that adds language features exits only when they are in `JscGen` with quotas, and a long five-way run
+(at least 60 minutes, `fuzz_minutes=60` above) has passed with them on the milestone's head; its run is linked in the
+milestone's pull request.
 
 ## 4. Mutation testing
 
