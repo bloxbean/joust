@@ -133,7 +133,8 @@ function show(v) {
 export function validate(p) {
   // A refusal carries its parts as well as its text (review r2, security S13 and Codex C4): irWhere and irWhat (the
   // location and the check's own words, so a reader of the error never parses the message back), irCheck (which check:
-  // 'schema' for the export's shape, keys() below; 'enum' for a node attribute outside its set; 'check' otherwise) and,
+  // 'schema' for the export's shape, keys() below; 'enum' for a node attribute outside its set; 'arity', 'type' and
+  // 'field' for the checks whose words embed IR-supplied names (review r4, security S13); 'check' otherwise) and,
   // for an enumerated attribute, irNode (the node or statement kind).
   const fail = (where, what, check = 'check', node = undefined) => {
     const e = new Error(`invalid IR (${show(where)}): ${show(what)}`);
@@ -422,7 +423,7 @@ export function validate(p) {
       for (const f of a.fields) {
         const c = a.ctors[0];
         const known = c === 'Some' ? f === 'value' : key(c) in CRED_FIELDS ? f === CRED_FIELDS[key(c)] : (shapes.get(c) ?? []).some((x) => x.name === f);
-        if (!known) fail(where, `${show(c)} has no field ${show(f)}`);
+        if (!known) fail(where, `${show(c)} has no field ${show(f)}`, 'field');
       }
       const inner = new Set(scope);
       a.binds.forEach((l) => decl(l, where, inner));
@@ -452,7 +453,7 @@ export function validate(p) {
   };
   /** A condition or a boolean operand is of type Bool (review S3 on #76): the interpreter never tests truthiness. */
   const bool = (e, where, what) => {
-    if (e.type !== 'Bool') fail(where, `${show(what)} is of type ${JSON.stringify(e.type)}, not Bool`);
+    if (e.type !== 'Bool') fail(where, `${show(what)} is of type ${JSON.stringify(e.type)}, not Bool`, 'type');
   };
   /** A node's own fields; bindings it introduces (a loop variable, lambda parameters) are in scope in its blocks only. */
   const fields = (o, spec, where, scope) => {
@@ -481,7 +482,7 @@ export function validate(p) {
   };
   const fnArity = new Map(allFns.map((f) => [f.name, Array.isArray(f.params) ? f.params.length : -1]));
   const arity = (where, what, got, want) => {
-    if (got !== want) fail(where, `${show(what)} takes ${show(want)} argument(s), not ${show(got)}`);
+    if (got !== want) fail(where, `${show(what)} takes ${show(want)} argument(s), not ${show(got)}`, 'arity');
   };
   function expr(e, scope) {
     const spec = e && NODES[key(e.node)];
@@ -521,8 +522,8 @@ export function validate(p) {
     if (e.node === 'MapOp' || e.node === 'BigOp') arity(where, `${show(e.node)}.${show(e.op)}`, e.args.length, MAP_ARITY[key(e.op)]);
     if (e.node === 'New') arity(where, `the record ${show(e.record)}`, e.values.length, shapes.get(e.record).length);
     if (e.node === 'Variant') arity(where, `the variant ${show(e.variant)}`, e.values.length, shapes.get(e.variant).length);
-    if (e.node === 'GetField' && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${show(e.record)} has no field ${show(e.field)}`);
-    if (e.node === 'StateField' && !shapes.get('State').some((f) => f.name === e.field)) fail(where, `the state has no field ${show(e.field)}`);
+    if (e.node === 'GetField' && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${show(e.record)} has no field ${show(e.field)}`, 'field');
+    if (e.node === 'StateField' && !shapes.get('State').some((f) => f.name === e.field)) fail(where, `the state has no field ${show(e.field)}`, 'field');
     if (e.node === 'ParamsRef' && !(p.params?.fields ?? []).some((f) => f.name === e.field)) fail(where, `the params have no field ${show(e.field)}`);
   }
   function stmt(s, scope) {
@@ -658,8 +659,8 @@ function modifiers(m, where, fail, keys, state, modField, type) {
     } else if (w === 'only' || w === 'after' || w === 'before') {
       const want = w === 'only' ? 'Key' : 'Int';
       if (typeof field !== 'string') fail(where, `${show(w)} names a state field, not ${JSON.stringify(field)}`);
-      if (!state.has(field)) fail(where, `${show(w)} ${show(field)}: the state has no field ${show(field)}`);
-      if (state.get(field) !== want) fail(where, `${show(w)} ${show(field)}: ${show(field)} is of type ${JSON.stringify(state.get(field))}, not ${show(want)}`);
+      if (!state.has(field)) fail(where, `${show(w)} ${show(field)}: the state has no field ${show(field)}`, 'field');
+      if (state.get(field) !== want) fail(where, `${show(w)} ${show(field)}: ${show(field)} is of type ${JSON.stringify(state.get(field))}, not ${show(want)}`, 'type');
     } else if (w === 'quorum') {
       // M2b (ADR-0009 D2, JSC0439): keys a List<Key> and the threshold an Int, both state fields or both params fields.
       if (typeof mod.keys !== 'string' || typeof mod.threshold !== 'string') fail(where, 'a quorum names its keys and threshold');

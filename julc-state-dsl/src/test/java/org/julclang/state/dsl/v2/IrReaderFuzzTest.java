@@ -312,11 +312,15 @@ class IrReaderFuzzTest {
      * ({@link #ENUMS_97}).
      */
     static final List<String[]> KNOWN_97 = List.of(
-            new String[]{"arity", "check", ".*takes \\d+ argument\\(s\\), not \\d+"},
+            // The checks whose words embed IR-supplied names have codes of their own (review r4, security S13): their rules match
+            // the code, so no crafted name in another check's words can be registered under them.
+            new String[]{"arity", "arity", ".* takes \\d+ argument\\(s\\), not \\d+"},
             new String[]{"a missing field", "schema", "missing field \".*\""},
             new String[]{"a name declared twice", "check", "(two methods of that name|a name taken by another method, fn or invariant|two declarations named .*|a bad or repeated name|two fns named .*)"},
-            new String[]{"a type check", "check", "(a bad (big)?map type|.* is of type .*, not .*|a literal of type .*|an emitted value is an Event|not a string)"},
-            new String[]{"a name that resolves to nothing", "check", "(no (fn|record|enum|variant|imported contract) .*|.* has no field .*|the (state|params) (has|have) no field .*|a reference to the local \\d+ \\(.*\\) outside its scope|reads params\\..*, which is not an Instance<C>)"},
+            new String[]{"a type check", "check", "(a bad (big)?map type|a literal of type .*|an emitted value is an Event|not a string)"},
+            new String[]{"a name that resolves to nothing", "check", "(no (fn|record|enum|variant|imported contract) .*|the params (has|have) no field .*|a reference to the local \\d+ \\(.*\\) outside its scope|reads params\\..*, which is not an Instance<C>)"},
+            new String[]{"a type check", "type", ".* is of type .*, not .*"},
+            new String[]{"a name that resolves to nothing", "field", ".* has no field .*"},
             new String[]{"a method's checked inputs or transaction use", "check", "(checked is \\[.*\\], but .*|usesCtx is (true|false), but .*)"},
             new String[]{"a declaration's shape", "check", "(the (state|params) record .* named .*|its state is named .*|a (type|variant) not qualified by .*|a bad enum name .*|a bad name.*|binds and fields differ in length|only a single-constructor arm binds)"},
             new String[]{"a number out of the format's range", "check", "(not a non-negative integer|not a decimal integer: .*)"});
@@ -496,6 +500,23 @@ class IrReaderFuzzTest {
         assertEquals("fail: the readers disagree", verdict("ok", enumElsewhere));
         String enumHof = enumElsewhere.replace("\"irNode\":\"Lit\"", "\"irNode\":\"Hof\"");
         assertEquals("known: a name that resolves to nothing", verdict("ok", enumHof));
+    }
+
+    /**
+     * The S13 residue (review r4): the rules for checks whose words embed IR-supplied names (arity, a type, a field) match
+     * those checks' own codes, so their phrases inside another check's words are not registered, however the names look.
+     */
+    @org.junit.jupiter.api.Test
+    void rulesForNamedChecksMatchTheirOwnCodes() {
+        java.util.function.BiFunction<String, String, String> rule = (check, what) -> known97(Map.of("irCheck", check, "irWhat", what));
+        assertEquals("arity", rule.apply("arity", "the record Pt takes 2 argument(s), not 3"));
+        assertEquals("a type check", rule.apply("type", "a condition is of type \"Int\", not Bool"));
+        assertEquals("a name that resolves to nothing", rule.apply("field", "State has no field \u0011\u0011"));
+        // The same phrases in a check of another kind: a crafted name carrying a rule's text into a new check.
+        assertNull(rule.apply("check", "the record Pt takes 2 argument(s), not 3"));
+        assertNull(rule.apply("check", "an unregistered check: g(h) is of type A, not B"));
+        assertNull(rule.apply("check", "something new where evil has no field x"));
+        assertNull(rule.apply("schema", "Pt has no field z"));
     }
 
     @FuzzTest(maxDuration = "30s")
