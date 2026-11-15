@@ -1450,13 +1450,24 @@ decisions (D11); M5e builds what they publish from.
   both and the docs, and drives Neovim headless (`nvim-check.lua`) and `hx --grammar build` plus `hx --health jsc`.
   CI runs it in the engines job on Neovim v0.12.6 and Helix 25.07.1, downloaded and checked by SHA-256, with
   `JOUST_REQUIRE_EDITORS=1` so a missing editor fails. Locally the editor tests skip without `NVIM_BIN`/`HX_BIN`.
+  CI's first runs on the real editors found three issues:
+  - Neovim sets up filetype detection after the init file runs, so the harness opens files on `VimEnter`, as a
+    user's config does.
+  - The root check's refusal is a WARN: an ERROR raised inside the FileType autocommand ends `:edit`.
+  - `hx --grammar build` needs `~/.config/helix/runtime/grammars` to exist, so the docs create it.
+
+  Since then, CI shows Neovim receiving JSC0217 through the module with tree-sitter highlighting active, and
+  `hx --health jsc` listing the server, the parser and the highlight queries.
 - **Release.** `.github/workflows/editor-assets.yml` runs on `workflow_dispatch` only. It is not wired into
   `release.yml`'s tag run: the coordinator asked for a step that stays inert until a maintainer runs it, and that is the
   later decision this section names. `.github/scripts/editor-assets.mjs` builds the assets. PR CI runs it in the vscode
   job on an `npm pack` of the commit's `@julclang/joust`, attaching nothing. `js/vscode-joust/test/release.test.mjs`
   lints the workflow. `docs/release-ops.md` gives the maintainer's steps. The `.vsix` is not byte-reproducible (zip
   times): its provenance is the attestation and the engine digests the record carries.
-- **Docs.** The site's `languages/editors` page and `editors/README.md`. The site builds (66 pages, links checked).
+- **Docs.** The site's `languages/editors` page, `joust fmt` in the CLI reference, and `editors/README.md`. The site
+  builds (66 pages, links checked).
+- **After #120's round r2** (merged at `2391e292`): the editor's formatting is unchanged by M5e. The C6 fixture's JSC0731
+  is the lock gate's (E1).
 
 **Not in M5e:** publishing to the Marketplace, Open VSX, npm (`tree-sitter-jsc`) or crates.io; other editors' plugins
 (Emacs, Zed, Sublime): the generic LSP instructions cover them. Wiring the attachment into `release.yml`'s tag run is a
