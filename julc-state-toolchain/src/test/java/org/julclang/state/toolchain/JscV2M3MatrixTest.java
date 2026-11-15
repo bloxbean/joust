@@ -455,6 +455,15 @@ class JscV2M3MatrixTest {
     }
 
     @Test
+    void aPurposeAnnotationName_buildsInAContractWithoutPurposes() {
+        // Design MD7: Withdraw (the annotation a withdraw handler lowers to) is reserved only where a handler or a migration is.
+        String src = "jsc 1\npackage t\nenum Op { Pay, Withdraw, Rewards }\ncontract R {\n  state { last: Op }\n  init() { return { last: Pay } }\n"
+                + "  action take() { return { last: Withdraw } }\n}\n";
+        var r = Toolchain.build(Map.of("t/R.jsc", src), Map.of());
+        assertTrue(r.ok(), r.diagnostics().toString());
+    }
+
+    @Test
     void aScriptOverTheRuntimesLimit_isWarnedAtBuildTime() throws Exception {
         // MixFull (security MS3): Mix with a vote handler too, over the runtime's 15,000-byte limit.
         String full = SOURCES.get("Mix").replace("contract Mix(", "contract MixFull(").replace("\n  invariant Hero.heroLevel",

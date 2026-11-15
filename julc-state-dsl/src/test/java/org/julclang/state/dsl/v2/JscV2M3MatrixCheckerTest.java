@@ -172,4 +172,60 @@ class JscV2M3MatrixCheckerTest {
         System.out.println("[M3 matrix] " + (refused + accepted) + " cells: " + refused + " refused with their codes, " + accepted + " accepted");
         assertEquals(List.of(), out, out.size() + " cells differ from the matrix");
     }
+    /** Design MD5: a plain type's escape hatch that only the deployment's parties can use is warned (JSC9016). */
+    @Test
+    void aPlainHatchOnlyTheDeploymentsPartiesCanUse_isWarned() {
+        String box = """
+                jsc 1
+                package t
+                contract H {
+                  params { gov: Credential, council: List<Key>, quorum: Int }
+                  state { admin: Key }
+                  owned Box { owner: Key }
+                  init() { return { admin: caller } }
+                  owned init Box.make() { return { owner: caller } }
+                  %HATCH
+                }
+                """;
+        java.util.function.Function<String, List<String>> warned = hatch -> {
+            String src = box.replace("%HATCH", hatch);
+            return JscV2.lower(src, "H.jsc", "H.jsc", JscModules.of(Map.of("H.jsc", src))).diagnostics().stream()
+                    .filter(d -> d.code().equals("JSC9016")).map(d -> d.code() + "@" + d.line()).toList();
+        };
+        assertEquals(List.of("JSC9016@9"), warned.apply("owned destroy Box.close() only owner authorized params.gov { pay(owner, balance) }"));
+        assertEquals(List.of("JSC9016@9"), warned.apply("owned destroy Box.close() quorum params.council params.quorum { pay(owner, balance) }"));
+        // The owner's own hatch beside it, or a hatch over the object's own fields: silent.
+        assertEquals(List.of(), warned.apply("owned destroy Box.close() only owner authorized params.gov { pay(owner, balance) }\n"
+                + "  owned destroy Box.quit() only owner { pay(owner, balance) }"));
+        assertEquals(List.of(), warned.apply("owned destroy Box.close() only owner { pay(owner, balance) }"));
+    }
+    /**
+     * Design MD7, Codex M2: one policy for M3's reserved names. The annotations a part lowers to (and its generated records)
+     * are reserved where the contract has that part (M3a's owned annotations, M3b's keyed names, M3c's purposes'
+     * annotations and Rewards); the language's own type names (the ledger types, LedgerMap) and API classes (Certs) in
+     * every contract, as Int is; a declared variant may reuse a ledger constructor's spelling.
+     */
+    @Test
+    void theReservedNames_followOnePolicy() {
+        String plain = "jsc 1\npackage t\nenum Op { Pay, Withdraw }\ncontract R {\n  state { last: Op }\n  init() { return { last: Pay } }\n"
+                + "  action take() { return { last: Withdraw } }\n%M}\n";
+        java.util.function.Function<String, String> code = src -> {
+            try {
+                JscV2.lower(src, "R.jsc", "R.jsc", JscModules.of(Map.of("R.jsc", src)));
+                return "ok";
+            } catch (JscException e) {
+                return e.code + "@" + e.line + ":" + e.col;
+            }
+        };
+        assertEquals("ok", code.apply(plain.replace("%M", "")));
+        String withdraw = "  params { council: List<Key>, quorum: Int }\n  withdraw collect(amount: Int) quorum params.council params.quorum { }\n";
+        assertEquals("JSC0211@3:16", code.apply(plain.replace("%M", withdraw)));
+        String vote = "  params { council: List<Key>, quorum: Int }\n"
+                + "  vote choose(voter: Voter, action: GovernanceActionId, choice: Vote) quorum params.council params.quorum = true\n";
+        assertEquals("JSC0211@3:16", code.apply(plain.replace("%M", vote)), "Withdraw beside a vote handler (the annotation is imported)");
+        assertEquals("JSC0211@3:1", code.apply(plain.replace("%M", "").replace("enum Op { Pay, Withdraw }", "type Vote = { n: Int }\nenum Op { Pay, Withdraw }")));
+        String decision = "jsc 1\npackage t\nenum Decision { VoteYes, VoteNo, Abstain }\ncontract D {\n"
+                + "  state { last: Decision }\n  init() { return { last: VoteYes } }\n" + vote + "}\n";
+        assertEquals("ok", code.apply(decision));
+    }
 }

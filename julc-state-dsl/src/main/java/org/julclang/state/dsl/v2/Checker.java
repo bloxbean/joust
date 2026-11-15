@@ -65,11 +65,19 @@ final class Checker {
             // .jsc 2 type names and helper-name fragments: a declared type of the same name would share a helper (C6)
             "Int", "Bool", "Bytes", "Key", "List", "Option", "Opt", "Map", "BigMap", "Value", "Address", "Credential",
             "Hash", "Some", "None", "Pair", "Tuple2", "Enum",
-            // M3c: the annotations the script purposes and migration lower to, the API helper and the ledger types they read
-            // (each imported by the generated Java: a declared type of the name would shadow it), the withdraw redeemer
-            "Withdraw", "Certify", "Votes", "Propose", "Migrate", "MigrateTo", "Certs", "Rewards", "TxCert", "Voter", "Vote",
-            "GovernanceActionId", "ProposalProcedure", "GovernanceAction", "Delegatee", "DRep", "ProtocolVersion", "Rational",
-            "Constitution", "LedgerMap", "Data");
+            // M3c: the language's own type names for the purposes' ledger data (resolved as built-in types, as Int is, so a
+            // declared type of the name could never be written) and the API class std/certs lowers to; the annotations and the
+            // withdraw redeemer are PURPOSE_NAMES (M3 final pass, design MD7)
+            "Certs", "TxCert", "Voter", "Vote", "GovernanceActionId", "ProposalProcedure", "GovernanceAction", "Delegatee", "DRep",
+            "ProtocolVersion", "Rational", "Constitution", "LedgerMap", "Data");
+
+    /**
+     * M3c: the annotations the script purposes and migration lower to and the withdraw handler's redeemer record. Only a
+     * contract with a handler or a migration imports or generates them, so only there would a type of the name shadow one:
+     * reserved there (JSC0211), as M3a's owned annotations are in a contract with owned types (M3 final pass, design MD7).
+     * A Java library's class or record of the name is refused in every build (JSC0709).
+     */
+    static final Set<String> PURPOSE_NAMES = Set.of("Withdraw", "Certify", "Votes", "Propose", "Migrate", "MigrateTo", "Rewards");
 
     /**
      * A stopgap until bloxbean/joust#64 renames them: names the generated client binds where a method's parameters are in scope ({@code .run((s, ctx) -> { var r = …
@@ -289,7 +297,7 @@ final class Checker {
         // code uses (BigInteger, Optional, State, an annotation…) nor a type this build declares, other than a top-level
         // Java record naming itself.
         boolean itself = fqcn.equals(javaRecBinary.get(simple));
-        if (RESERVED.contains(simple) || PROCESSOR_TYPES.contains(simple)
+        if (RESERVED.contains(simple) || PURPOSE_NAMES.contains(simple) || PROCESSOR_TYPES.contains(simple)
                 || !itself && (records.containsKey(simple) || enums.containsKey(simple) || variantEnum.containsKey(simple) || fns.containsKey(simple))) {
             throw at.error("JSC0709", what + " is imported as " + simple + ", a name the generated code uses or this build declares; rename one");
         }
@@ -397,7 +405,7 @@ final class Checker {
     static String libraryClass(String fileName, File file, Pos at) {
         String base = fileName.endsWith(".jsc") ? fileName.substring(0, fileName.length() - 4) : fileName;
         String cls = base.isEmpty() ? base : Character.toUpperCase(base.charAt(0)) + base.substring(1);
-        if (!cls.matches("[A-Z][A-Za-z0-9]*") || RESERVED.contains(cls) || PROCESSOR_TYPES.contains(cls)) {
+        if (!cls.matches("[A-Z][A-Za-z0-9]*") || RESERVED.contains(cls) || PURPOSE_NAMES.contains(cls) || PROCESSOR_TYPES.contains(cls)) {
             throw at.error("JSC0705", "a library's file name is its Java class (fees.jsc is the class Fees of its package): '" + fileName
                     + "' gives '" + cls + "', which is not a class name the generated code can use; name the file with letters and"
                     + " digits only (fees.jsc, FeeMath.jsc)");
@@ -1145,7 +1153,8 @@ final class Checker {
         String cls = lib.simpleName();
         if (records.containsKey(cls) || enums.containsKey(cls) || variantEnum.containsKey(cls) || fns.containsKey(cls) || cls.equals(main.cls)
                 || libraries.stream().anyMatch(l -> l.cls.equals(cls)) || (file.contract() != null && file.contract().name().equals(cls))
-                || javaUsed.values().stream().anyMatch(j -> j.simpleName().equals(cls)) || RESERVED.contains(cls) || PROCESSOR_TYPES.contains(cls)) {
+                || javaUsed.values().stream().anyMatch(j -> j.simpleName().equals(cls)) || RESERVED.contains(cls) || PURPOSE_NAMES.contains(cls)
+                || PROCESSOR_TYPES.contains(cls)) {
             throw at.error("JSC0709", "the Java library " + fqcn + " is the class " + cls + ", the name of a declaration, library or contract of this"
                     + " build (or of the generated code); rename one");
         }
@@ -1160,7 +1169,7 @@ final class Checker {
             // build, registered once, by its binary name; only a different record of the same name is a clash.
             if (r.binaryName().equals(javaRecBinary.get(n))) continue;
             if (records.containsKey(n) || enums.containsKey(n) || variantEnum.containsKey(n) || fns.containsKey(n) || javaRecLib.containsKey(n)
-                    || RESERVED.contains(n) || PROCESSOR_TYPES.contains(n) || n.equals(cls) || n.contains("_")) {
+                    || RESERVED.contains(n) || PURPOSE_NAMES.contains(n) || PROCESSOR_TYPES.contains(n) || n.equals(cls) || n.contains("_")) {
                 throw at.error("JSC0709", "the record " + r.binaryName() + " of java:" + fqcn + " is named " + n + ", the name of a declaration of this"
                         + " build (or of the generated code); rename one");
             }
@@ -1228,6 +1237,11 @@ final class Checker {
 
     /** M2b: {@code Config} names the params record and {@code Event} the events' type, when the contract has them. */
     private static void generatedTypeName(String n, Pos p, Contract c) {
+        if (PURPOSE_NAMES.contains(n) && c.methods().stream().anyMatch(m -> m.kind().purpose() || m.kind() == Kind.MIGRATE
+                || m.mods().stream().anyMatch(md -> md.name().equals("migrates")))) {
+            throw p.error("JSC0211", "'" + n + "' is reserved in a contract with script purposes or migration (the annotation they lower to,"
+                    + " or the withdraw handler's redeemer) and cannot be a type name");
+        }
         if (!c.owned().isEmpty() && OWNED_ANNOTATIONS.contains(n)) {
             throw p.error("JSC0211", "'" + n + "' is reserved in a contract with owned types (the annotation owned objects lower to) and"
                     + " cannot be a type name");
@@ -1937,6 +1951,18 @@ final class Checker {
                 throw t.pos().error("JSC1209", "objects of the owned type " + o + " need an escape hatch: an owned destroy on " + o + " without a"
                         + " shared parameter, before or after, so an owner can always close their object whatever the instance's state and the"
                         + " time (ADR-0003 r2, ADR-0012 D1)");
+            }
+            // M3 final pass (design MD5): a keyed type's hatch needs nobody else (JSC1245); a plain type's needs no instance and no
+            // deadline (JSC1209), and may still name who closes it. When every hatch of the type needs the deployment's parties
+            // (authorized params.f, or a quorum over params), they can trap every object, as a deadline could: warned.
+            var hatches = methods.stream().filter(m -> m.kind() == Ir.Kind.OWNED_DESTROY && o.equals(m.on()) && m.owned().shared() == null
+                    && m.mods().stream().noneMatch(md -> md.name().equals("before") || md.name().equals("after"))).toList();
+            if (hatches.stream().allMatch(m -> m.mods().stream().anyMatch(md -> (md.name().equals("authorized") || md.name().equals("quorum"))
+                    && md.field() != null && md.field().startsWith("params.")))) {
+                Ir.Method h = hatches.getFirst();
+                warn(h.pos(), "JSC9016", "every escape hatch of " + o + " (" + h.name() + ") needs the deployment's parties (authorized or quorum"
+                        + " over params): they can keep every object closed, as a deadline could (#101 S3); give the owner a hatch of their"
+                        + " own (owned destroy " + o + ".m() only owner { … }), or accept that the deployment's parties hold the objects");
             }
         }
         for (Syntax.Method m : c.methods()) {
