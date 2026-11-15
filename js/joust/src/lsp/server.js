@@ -1333,6 +1333,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const text = doc.getText();
     if (text.length > MAX_FILE_CHARS) return null;
     const sel = s.selection ?? await selectionFor(uri);
+    // S7 on #121 (final pass): what rename never edits, formatting does not either (a package's library: its joust.lock
+    // pin is the SHA-256 of those sources; a .jsc outside the project's contracts directory).
+    if (await readOnlyReason(uri, sel)) return null;
     if (!Array.isArray(sel.engine?.features) || !sel.engine.features.includes('format')) {
       if (!formatNoted.has(sel.engine?.id)) {
         formatNoted.add(sel.engine?.id);
@@ -1375,7 +1378,14 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       const before = await normal(text);
       const after = before === null ? null : await normal(f.text);
       if (before === null || after !== before) {
-        log(`formatting ${fileNameOf(uri)}: refused the ${sel.source} compiler's answer: the bundled compiler does not read it as the same program`);
+        const why = before === null ? `the bundled compiler cannot format ${fileNameOf(uri)} to check it` : 'the bundled compiler does not read it as the same program';
+        log(`formatting ${fileNameOf(uri)}: refused the ${sel.source} compiler's answer: ${why}`);
+        // MF5 on #121 (final pass, #120 F11): said once per document, not only in the log.
+        if (!s.formatRefusalShown) {
+          s.formatRefusalShown = true;
+          connection.sendNotification('window/showMessage', { type: 2,
+            message: `JOUST: not formatted: the ${sel.source} compiler's formatting of ${fileNameOf(uri)} was refused (${why}).` });
+        }
         return null;
       }
       const again = documents.get(uri);

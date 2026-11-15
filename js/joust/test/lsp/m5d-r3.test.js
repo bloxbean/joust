@@ -53,6 +53,38 @@ test('S4, C6: a project compiler\'s meaning-changing whitespace edits are refuse
       assert.equal(await ask(text), null, `${name}: the meaning-changing edit is refused`);
     }
     assert.ok(lsp.logs.some((l) => /refused the project compiler's answer/.test(l)), lsp.logs.join('\n'));
+    // MF5 (final pass): the user is told, once for the document.
+    const shown = lsp.statuses.filter((x) => /JOUST: not formatted: the project compiler's formatting of C\.jsc was refused/.test(x.shown ?? ''));
+    assert.equal(shown.length, 1, JSON.stringify(lsp.statuses.filter((x) => x.shown)));
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('S7 (final pass): an npm package\'s library is never formatted, as rename never edits it', { skip, timeout: 120_000 }, async () => {
+  const dir = tmp();
+  const lib = join(dir, 'node_modules', 'good', 'joust-lib');
+  mkdirSync(lib, { recursive: true });
+  writeFileSync(join(dir, 'node_modules', 'good', 'package.json'), JSON.stringify({ name: 'good', version: '1.0.0' }));
+  const messy = 'jsc 1\nlibrary good\n\nfn g(x: Int): Int =   x\n';
+  writeFileSync(join(lib, 'g.jsc'), messy);
+  writeFileSync(join(dir, 'Own.jsc'), messy.replace('library good', 'library own'));
+  const lsp = await startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: false } });
+  try {
+    const fmt = (uri) => lsp.request('textDocument/formatting', { textDocument: { uri }, options: { tabSize: 2, insertSpaces: true } });
+    const pkg = uriOf(join(lib, 'g.jsc'));
+    lsp.open(pkg, messy);
+    await lsp.until(() => lsp.statuses.find((x) => x.uri === pkg && x.modelVersion >= 1), 60000, 'the model');
+    assert.equal(await fmt(pkg), null, 'a package library: no edit');
+    const range = await lsp.request('textDocument/rangeFormatting', { textDocument: { uri: pkg },
+      range: { start: { line: 0, character: 0 }, end: { line: 4, character: 0 } }, options: { tabSize: 2, insertSpaces: true } });
+    assert.equal(range, null);
+    // The project's own file is formatted.
+    const own = uriOf(join(dir, 'Own.jsc'));
+    lsp.open(own, messy.replace('library good', 'library own'));
+    await lsp.until(() => lsp.statuses.find((x) => x.uri === own && x.modelVersion >= 1), 60000, 'the model');
+    const e = await fmt(own);
+    assert.ok(Array.isArray(e) && e.length === 1, JSON.stringify(e));
   } finally {
     await lsp.stop();
   }

@@ -67,3 +67,25 @@ test('S5: --accept-abi refuses a manifest that is a link, and writes nothing thr
   assert.equal(readFileSync(victim, 'utf8'), 'keep');
   assert.ok(refused.has('app/Shop.java'));
 });
+
+test('#121 M2 (final pass): an accepted lock and manifest keep their mode exactly under a restrictive umask', () => {
+  const was = process.umask(0o077);
+  try {
+    const root = tmp('joust-accept-');
+    const lock = join(root, 'joust.lock');
+    writeFileSync(lock, '{ "lock": 1, "libraries": {} }\n');
+    chmodSync(lock, 0o664);
+    assert.deepEqual(lockGate({ generated: [], libraries: FEES, root, acceptLock: true, log: quiet }), []);
+    assert.equal(statSync(lock).mode & 0o777, 0o664);
+    mkdirSync(join(root, 'contracts', 'app'), { recursive: true });
+    const manifest = join(root, 'contracts', 'app', 'Shop.abi.json');
+    writeFileSync(manifest, '{"abi":0}\n');
+    chmodSync(manifest, 0o664);
+    const g = { jscFile: 'app/Shop.jsc', javaFile: 'app/Shop.java', abi: '{"abi":1}\n' };
+    assert.deepEqual(abiGate({ generated: [g], srcDir: 'contracts', root, acceptAbi: true, log: quiet, refused: new Set() }), []);
+    assert.equal(readFileSync(manifest, 'utf8'), '{"abi":1}\n');
+    assert.equal(statSync(manifest).mode & 0o777, 0o664);
+  } finally {
+    process.umask(was);
+  }
+});
