@@ -26,7 +26,9 @@ Install the JOUST extension (`vscode-joust`). It bundles the server and its comp
 
 Rename goes through **JOUST: Rename Symbol**. **JOUST: Show generated Java** opens the lowered class, and **Accept ABI…**
 reviews a changed ABI manifest before accepting it. Format Document, and format on save if you turn it on, use the same
-formatter as `joust fmt`.
+formatter as `joust fmt`. The formatting style belongs to the compiler's version (version 1 today). When the extension
+analyses with its bundled compiler (advisory), it formats with that one too, so a project pinned to another JOUST version
+may format differently in CI.
 
 <Aside type="note" title="Publishing">
 Maintainers attach the extension's `.vsix` to each GitHub release, with its SHA-256 and a provenance attestation.
