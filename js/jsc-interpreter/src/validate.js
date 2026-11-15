@@ -264,11 +264,21 @@ export function validate(p) {
     at(r.at, where);
   };
   for (const r of allRecords) record(r, 'record');
+  // A declaration read before its own checks run is an object first (CI's short fuzz at 2278fa53: a null variant, and
+  // before it a null state, were TypeErrors).
+  const objects = (xs, where, what) => {
+    if (!Array.isArray(xs)) fail(where, `${what} is not a list`);
+    for (const x of xs) if (!x || typeof x !== 'object' || Array.isArray(x)) fail(where, `${what}: an entry is not an object`, 'schema');
+  };
+  const object = (x, where, what) => {
+    if (!x || typeof x !== 'object' || Array.isArray(x)) fail(where, `${what} is not an object`, 'schema');
+  };
   const enums = new Map();
   for (const e of allEnums) {
     keys(e, ['name', 'variants', 'at'], 'enum');
     at(e.at, 'enum');   // its position too (IrReaderFuzzTest)
     if (!Array.isArray(e.variants)) fail('enum', 'variants is not a list');
+    objects(e.variants, 'enum', 'variants');
     if (enums.has(e.name) || shapes.has(e.name)) fail('enum', `two declarations named ${show(e.name)}`);
     enums.set(e.name, e.variants.map((v) => v.name));
     for (const v of e.variants) record(v, `variant of ${show(e.name)}`);
@@ -282,6 +292,9 @@ export function validate(p) {
       keys(c, ['name', 'package', 'state', 'records', 'enums', 'timeFields', 'receives', 'bigMaps'], where);
       if (!IDENT.test(str(c.name, where)) || contracts.has(c.name)) fail(where, 'a bad or repeated name');
       str(c.package, where);
+      object(c.state, where, 'state');
+      objects(c.records, where, 'records');
+      objects(c.enums, where, 'enums');
       const q = (n) => typeof n === 'string' && n.startsWith(`${show(c.name)}.`) && QUALIFIED.test(n);
       if (c.state.name !== `${show(c.name)}.State`) fail(where, `its state is named ${show(c.name)}.State`);
       record(c.state, where, true);
@@ -291,6 +304,7 @@ export function validate(p) {
       }
       for (const e of c.enums) {
         keys(e, ['name', 'variants', 'at'], where);
+        objects(e.variants, where, 'variants');
         if (!q(e.name) || enums.has(e.name) || shapes.has(e.name)) fail(where, `a bad enum name ${show(e.name)}`);
         enums.set(e.name, e.variants.map((v) => v.name));
         for (const v of e.variants) {
