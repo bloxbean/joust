@@ -42,12 +42,32 @@ public final class JscFormat {
     private static final Set<String> NO_SPACE_BEFORE = Set.of(")", "]", ",", ";", ".");
     private static final Set<String> NO_SPACE_AFTER = Set.of("(", "[", ".", "...");
 
+    /**
+     * The style's version (#120 F4): what the formatter changes is fixed per version. Version 1 sets indentation, line
+     * starts, blank lines, the spaces after `,` and inside braces, and the spaces next to `.`, brackets, `,` and `;`;
+     * other spacing within a line is kept as written. A later version that normalises more is a style change, said in the
+     * release notes, and `--check` at another version may then disagree.
+     */
+    public static final int STYLE = 1;
+
+    /** The file on its own: only the names it imports from {@code java:} libraries are types (#120 C3: no guessing). */
     public static Result format(String source) {
+        return format(source, null, null);
+    }
+
+    /**
+     * F4 (#120 C3): {@code source} formatted as the module {@code id} of {@code modules} (null: the file alone). It is
+     * parsed with the type names its imports bring, read as the build reads them; when an import cannot be read (the file
+     * alone, or a module that does not load), with only those it names from {@code java:} libraries. A file that then
+     * does not parse is refused: never formatted by guessing which names are types.
+     */
+    public static Result format(String source, String id, JscModules modules) {
         if (source == null) source = "";
         String bom = source.startsWith("﻿") ? "﻿" : "";
         // F4: the file must lex and parse.
         try {
-            parses(source);
+            Set<String> types = Checker.importedTypes(source, id, modules);
+            Parser.parse(source, types == null ? Set.of() : types);
         } catch (JscException e) {
             return new Result(null, e.getMessage(), e.line, e.col, e.code, List.of());
         } catch (RuntimeException | StackOverflowError e) {
@@ -78,56 +98,6 @@ public final class JscFormat {
         return new Result(out, null, 0, 0, null, edits(body, items, rendered, after, bom.length()));
     }
 
-    /**
-     * F4's parse, of the file alone. Which names start a constructor ({@code Gold { since: n }}) depends on the types the
-     * file's imports bring, and the formatter reads no other file: it parses with the names the file imports, as the
-     * checker does when it analyses a file alone, and, if that fails and the file imports a module, once more with every
-     * capitalised name as a type (an imported enum's variants). The first error is the one reported.
-     */
-    private static void parses(String source) {
-        Set<String> imported = importedNames(source, false);
-        try {
-            Parser.parse(source, imported);
-        } catch (JscException e) {
-            Set<String> all = importedNames(source, true);
-            if (all.equals(imported)) throw e;
-            try {
-                Parser.parse(source, all);
-            } catch (JscException again) {
-                throw e;
-            }
-        }
-    }
-
-    /**
-     * The capitalised names inside `import { … }` (and `import contract { … }`), read from the tokens; with
-     * {@code everyType}, and when the file imports anything, every capitalised identifier of the file too.
-     */
-    private static Set<String> importedNames(String src, boolean everyType) {
-        var out = new java.util.HashSet<String>();
-        List<Lexer.Tok> toks;
-        try {
-            toks = Lexer.lex(src);
-        } catch (JscException e) {
-            return out;   // the parse reports it
-        }
-        boolean imports = false;
-        for (int i = 0; i < toks.size(); i++) {
-            if (!toks.get(i).is("import")) continue;
-            int j = i + 1;
-            if (j < toks.size() && toks.get(j).is("contract")) j++;
-            if (j >= toks.size() || !toks.get(j).is("{")) continue;
-            imports = true;
-            for (j++; j < toks.size() && !toks.get(j).is("}"); j++) if (capitalised(toks.get(j))) out.add(toks.get(j).text());
-        }
-        if (everyType && imports) for (Lexer.Tok t : toks) if (capitalised(t)) out.add(t.text());
-        return out;
-    }
-
-    private static boolean capitalised(Lexer.Tok t) {
-        return t.kind() == Lexer.K.IDENT && !t.text().isEmpty() && Character.isUpperCase(t.text().charAt(0));
-    }
-
     /** The tokens (but EOF) and comments of {@code src}, in source order, by offsets. */
     private static List<Item> items(String src) {
         int[] lineStarts = lineStarts(src);
@@ -143,9 +113,17 @@ public final class JscFormat {
         for (int[] c : comments) {
             int s = offset(lineStarts, c[0], c[1]);
             int e = offset(lineStarts, c[2], c[3]);
-            // A comment keeps its text; only its line ends become LF and a line comment loses trailing whitespace.
-            String text = src.substring(s, e).replace("\r\n", "\n");
-            if (text.startsWith("//")) text = text.stripTrailing();
+            String text = src.substring(s, e);
+            if (text.startsWith("//")) {
+                // #120 C4: a line comment's trailing whitespace, and the CR of its CRLF, belong to the gap after it, so the
+                // line end is replaced whole (an edit never ends between CR and LF, which no LSP position names).
+                String kept = text.stripTrailing();
+                e = s + kept.length();
+                text = kept;
+            } else {
+                // A block comment keeps its text; only its line ends become LF.
+                text = text.replace("\r\n", "\n");
+            }
             out.add(new Item(s, e, c[0], c[2], true, text.startsWith("//"), text));
         }
         out.sort((a, b) -> Integer.compare(a.start, b.start));

@@ -771,11 +771,19 @@ public final class JscLang {
      * {@code joust fmt}, {@code jsc --fmt} and the server's {@code textDocument/formatting}.
      */
     public static String formatJson(String source) {
+        return formatJson(source, null, null);
+    }
+
+    /**
+     * #120 C3: {@code source} as the module {@code id} of the project's {@code files} (as {@link #lowerJson} takes them), so
+     * its imports bring the types the build's parser reads; null files: the file alone.
+     */
+    public static String formatJson(String source, String id, java.util.Map<String, String> files) {
         var o = new StringBuilder();
         try {
-            JscFormat.Result r = JscFormat.format(source);
+            JscFormat.Result r = JscFormat.format(source, id, modulesOf(files));
             if (r.ok()) {
-                o.append("{\"ok\":true,\"text\":");
+                o.append("{\"ok\":true,\"style\":").append(JscFormat.STYLE).append(",\"text\":");
                 str(o, r.text());
                 // The edits from the source, by UTF-16 offsets: [start, end, text] (range formatting applies those in its range).
                 o.append(",\"edits\":[");
