@@ -30,8 +30,8 @@ source = { path = "/absolute/path/to/tree-sitter-jsc-<version>" }
 ```
 
 ```sh
+mkdir -p ~/.config/helix/runtime/grammars ~/.config/helix/runtime/queries
 hx --grammar build
-mkdir -p ~/.config/helix/runtime/queries
 cp -R helix/queries/jsc ~/.config/helix/runtime/queries/
 hx --health jsc
 ```

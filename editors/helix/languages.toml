@@ -4,7 +4,8 @@
 #     "$(npm prefix -g)/bin/joust-lsp"), by absolute path. Never a bare name (looked up on PATH), never a project's
 #     node_modules/.bin, never npx: a repository you open must not choose the program that runs.
 #   - the grammar: the extracted tree-sitter-jsc-<version> package from a JOUST release (its EDITORS.md); then run
-#     `hx --grammar build`, copy its helix/queries/jsc into ~/.config/helix/runtime/queries/, and check `hx --health jsc`.
+#     `mkdir -p ~/.config/helix/runtime/grammars` and `hx --grammar build`, copy its helix/queries/jsc into
+#     ~/.config/helix/runtime/queries/, and check `hx --health jsc`.
 # Helix also reads a project's .helix/languages.toml, which can redefine any server's command: open untrusted
 # repositories with that in mind (the docs' editors page).
 

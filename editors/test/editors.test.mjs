@@ -216,15 +216,16 @@ test('E5: hx --health jsc reports the shipped server and the grammar\'s highligh
   if (!pkg) return;
   const home = tmp('joust-hx-');
   const config = join(home, 'config', 'helix');
-  const runtime = join(home, 'runtime');
-  mkdirSync(config, { recursive: true });
+  // The user's runtime directory, as the docs set it up: hx --grammar build writes runtime/grammars/jsc.so there.
+  const runtime = join(config, 'runtime');
+  mkdirSync(join(runtime, 'grammars'), { recursive: true });
   mkdirSync(join(runtime, 'queries'), { recursive: true });
   // The shipped file with its two placeholders replaced, as the docs say; only this grammar is built here.
   const shipped = readFileSync(join(EDITORS, 'helix', 'languages.toml'), 'utf8')
     .replace('/ABSOLUTE/PATH/TO/joust-lsp', LSP).replace('/ABSOLUTE/PATH/TO/tree-sitter-jsc', pkg);
   writeFileSync(join(config, 'languages.toml'), `use-grammars = { only = ["jsc"] }\n${shipped}`);
   cpSync(join(pkg, 'helix', 'queries', 'jsc'), join(runtime, 'queries', 'jsc'), { recursive: true });
-  const env = { ...process.env, XDG_CONFIG_HOME: join(home, 'config'), HELIX_RUNTIME: runtime, HOME: home };
+  const env = { ...process.env, XDG_CONFIG_HOME: join(home, 'config'), HOME: home };
   const b = spawnSync(HX, ['--grammar', 'build'], { env, encoding: 'utf8', timeout: 300_000 });
   assert.equal(b.status, 0, `hx --grammar build: ${b.stderr}${b.stdout}`);
   const h = spawnSync(HX, ['--health', 'jsc'], { env, encoding: 'utf8', timeout: 60_000 });

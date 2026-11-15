@@ -19,6 +19,8 @@ local function clients()
   return out
 end
 
+-- After startup: Neovim sets up filetype detection once the init file has run, as for any user's config.
+local function run()
 local ok, err = pcall(function()
   if case == 'diagnostics' then
     local started = joust.setup({ path = env('JOUST_LSP') })
@@ -52,3 +54,5 @@ local ok, err = pcall(function()
   end
 end)
 if not ok then finish({ error = tostring(err) }) end
+end
+vim.api.nvim_create_autocmd('VimEnter', { once = true, callback = function() vim.schedule(run) end })
