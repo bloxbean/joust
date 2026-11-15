@@ -18,7 +18,8 @@ Files are named by their repository path (--prefix is prepended to the report's 
   - --expect <file> (a changed-files run): that file must be measured;
   - a file with fewer than half the mutants its baseline counted fails ("lost most of its mutants").
 --kills lists, without failing, every mutant the baseline run detected that the reports no longer detect, matched by
-file, mutator, original code and replacement (not by line; review r2, F15). --write-baseline records each file's score,
+file, mutator, original code and replacement (not by line; review r2, F15), the files in scope that are no longer
+measured included (review r3, Codex C13). --write-baseline records each file's score,
 mutant count and --scope (its set) under "stryker"; --write-kills records the detected mutants' signatures."""
 import json
 import os
@@ -152,12 +153,17 @@ if kills_path and os.path.exists(kills_path):
     with open(kills_path) as f:
         base_kills = json.load(f).get('stryker', {})
     lost = []
-    for name in sorted(rows):
+    # The files measured, and the baselined files in scope that are not (their detections all count as lost; review r3,
+    # Codex C13): every file of a --whole set, and every --expect file.
+    in_scope = {n for n, b in baseline.items() if b.get('scope') in wholes} | set(expects)
+    for name in sorted(set(rows) | in_scope):
+        absent = not measured(name)
         for sig, n in sorted(base_kills.get(name, {}).items()):
             gone = n - detected_sigs[name][sig]
             if gone > 0:
                 mutator, text, repl = sig.split('|', 2)
-                lost.append(f"- `{name}` {mutator}: `{text[:80]}` → `{repl[:80]}`" + (f" (×{gone})" if gone > 1 else ''))
+                lost.append(f"- `{name}` {mutator}: `{text[:80]}` → `{repl[:80]}`" + (f" (×{gone})" if gone > 1 else '')
+                            + (" (file no longer measured)" if absent else ''))
     print(f"\n<details><summary>{len(lost)} detections lost against the baseline run ({kills_path})</summary>\n")
     print('\n'.join(lost) if lost else 'None: every mutant the baseline run detected in these files is still detected.')
     print("\n</details>")

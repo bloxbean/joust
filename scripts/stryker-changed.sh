@@ -29,7 +29,16 @@ if [[ "$base" == "--all" ]]; then changed=""; gone=""; else
 fi
 status=0
 ran=0
-for set in ${JOUST_STRYKER_SETS:-joust joust-heap state-client}; do
+SETS="joust joust-heap state-client"
+# Every set the baseline records must still be one of the sets here (review r3, Codex C12): a set dropped from this list
+# would take its files out of every run and out of the gate.
+for s in $(python3 -I -c 'import json,sys; print("\n".join(sorted({v.get("scope", "") for v in json.load(open(sys.argv[1])).get("stryker", {}).values()})))' "$BASELINE"); do
+  if ! grep -qw -- "$s" <<<"$SETS"; then
+    echo "**The baseline records files for the Stryker set $s, which this script no longer has**: restore it, or remove its entries from $BASELINE, visibly"
+    status=1
+  fi
+done
+for set in ${JOUST_STRYKER_SETS:-$SETS}; do
   case $set in
     joust) config=js/mutation/stryker.config.mjs; dir=js/joust ;;
     joust-heap) config=js/mutation/stryker.heap.config.mjs; dir=js/joust ;;
@@ -51,6 +60,13 @@ for set in ${JOUST_STRYKER_SETS:-joust joust-heap state-client}; do
   while read -r f; do
     if [[ -n "$f" ]] && grep -qxF -- "$f" <<<"$baselined"; then whole=1; why="the whole set ($f, baselined, was deleted or renamed)"; fi
   done <<<"$gone"
+  # A set whose configuration mutates nothing while the baseline still records files for it fails, under --all too
+  # (review r3, Codex C12: `const all = []` would otherwise end the run with "nothing changed").
+  if [[ -z "$targets" && -n "$baselined" ]]; then
+    echo "**$set: its configuration ($config) mutates no file, but the baseline records $(tr '\n' ' ' <<<"$baselined")**: restore its targets, or remove its entries from $BASELINE, visibly"
+    status=1
+    continue
+  fi
   files=()
   gates=()
   if [[ $whole -eq 1 ]]; then
@@ -86,5 +102,5 @@ for set in ${JOUST_STRYKER_SETS:-joust joust-heap state-client}; do
   git ls-files -s -- "$dir" | awk '$1 == "100755" {print $4}' | while read -r x; do chmod +x "$x"; done
   python3 "$root/scripts/stryker-summary.py" "$report" --prefix "$dir/" --baseline "$BASELINE" --floor "$floor" --kills "$KILLS" "${gates[@]}" || status=1
 done
-[[ $ran -eq 0 ]] && echo "No security-relevant JavaScript, nor its tests or mutation configuration, changed since $base: no Stryker run."
+[[ $ran -eq 0 && $status -eq 0 ]] && echo "No security-relevant JavaScript, nor its tests or mutation configuration, changed since $base: no Stryker run."
 exit $status

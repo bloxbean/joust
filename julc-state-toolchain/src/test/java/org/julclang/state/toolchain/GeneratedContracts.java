@@ -61,11 +61,21 @@ final class GeneratedContracts {
         }
     };
 
+    /** The programs found over a reference script's size, each counted once (review r3, design F20: the 2% ceiling). */
+    static final java.util.Map<String, OverScriptLimit> OVER = new java.util.HashMap<>();
+
     static synchronized Built built(JscGen.Plan p) throws Exception {
         String key = String.join("\n", p.files().values()) + p.params();
+        if (OVER.containsKey(key)) throw OVER.get(key);
         Built b = CACHE.get(key);
         if (b == null) {
-            b = build(p);
+            try {
+                b = build(p);
+            } catch (OverScriptLimit e) {
+                OVER.put(key, e);
+                FiveWayFuzzTest.TALLY.count(FiveWayFuzzTest.OVER_SCRIPT_LIMIT);
+                throw e;
+            }
             CACHE.put(key, b);
             FiveWayFuzzTest.TALLY.count("programs built");
             FiveWayFuzzTest.TALLY.count("build ms", b.millis());

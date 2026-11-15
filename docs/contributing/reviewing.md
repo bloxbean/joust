@@ -62,13 +62,23 @@ that choice explicit.
 
 **For maintainers:**
 
-- **After this pull request (#95) merges, purge main's Gradle cache entries once**, for example
-  `gh cache list --repo bloxbean/joust --ref refs/heads/main --key gradle- --limit 1000` and
-  `gh cache delete <key> --repo bloxbean/joust` for each one (or `gh cache delete --all`). setup-gradle shares its
-  extracted entries (dependencies, transforms, instrumented jars, wrapper zips) across jobs by their contents' names,
-  whatever `gradle-home-cache-strict-match` says, and entries the devnet job wrote before its cache became read-only
-  are still restored by `build` and `cli` (security review r2, S9). After the purge, the jobs that save on main
-  (build, cli, mutation, fuzz-long) run only this repository's code and locked dependencies.
+- **Purge main's Gradle cache entries once, after this change reaches `main`, and only once that merge's push run has
+  finished** (security review r2 and r3, S9). setup-gradle shares its extracted entries (dependencies, transforms,
+  instrumented jars, wrapper zips) across jobs by their contents' names, whatever `gradle-home-cache-strict-match`
+  says, and entries the devnet job wrote with lifecycle scripts on are still restored by `build` and `cli`.
+  - The timing matters. #95 merges into `feat/jsc-2-int2`, not `main`. Until the change reaches `main` (int2's merge
+    into `main`), `main`'s own `build.yml` still has the unhardened devnet job, which writes those entries again on
+    every push to `main`. Pull-request runs on int2-based branches restore `main`'s entries too, since int2 saves none.
+    A purge while the merge's push run is in flight is also undone: that run restores the old entries and saves new
+    ones that contain them.
+  - The purge: `gh cache list --repo bloxbean/joust --ref refs/heads/main --key gradle- --limit 1000`, then
+    `gh cache delete <key> --repo bloxbean/joust` for each one (or `gh cache delete --all`). Optionally, re-run that
+    push run afterwards, so that `main`'s entries are rebuilt clean.
+  - After the purge, the jobs that save on `main` (build, cli, mutation, fuzz-long) run only this repository's code and
+    locked dependencies.
+  - **Alternative, to purge sooner:** land only the devnet hardening on `main` first, in its own small pull request
+    (the devnet job's SHA-pinned actions, `--ignore-scripts` on its npm installs, and `cache-read-only: true`). Once
+    its push run has finished, purge.
 - `build.yml` pins every action by its commit SHA. The release and snapshot workflows (`release.yml`,
   `bloxbean-snapshot.yml`, `bloxbean-snapshot-cleanup.yml`, `publish-central.yml`, `tag-release.yml`) do not yet, and
   they hold the repository's secrets. Pin them first (#116), and only then turn on the setting that requires pinned
@@ -188,7 +198,9 @@ counted by class in the target's summary, and the first input of each class is w
 
 Validity windows wider than `maxValidityMs` are not generated either: that check is the validator's alone. A generated program whose
 script is over what a reference script may be (16 KB transactions, ADR-0009 r2) is built both ways and its scripts
-compared (I1), then counted and skipped, since the runtime refuses to deploy it and no on-chain leg can run it.
+compared (I1), then counted and skipped, since the runtime refuses to deploy it and no on-chain leg can run it. A run
+fails when such programs pass 2% of those built (once there are 100); running the interpreter and JVM legs on them is
+#123.
 
 **Extending the generator** (the contract for M3 and later). A feature is in `JscGen` when it has all of these:
 
@@ -236,15 +248,21 @@ points; a unit without an entry must reach 40% (PIT) or 10% (Stryker). It also r
 - A whole-set run must measure every unit the baseline records for that module or set (each entry names it), and a
   changed run every unit it selected. A unit that is not measured fails ("baselined but not measured"), so renaming a
   class or dropping a target cannot take it out of the gate unseen. A nested PIT class that disappears is only noted,
-  since a refactoring may remove it.
+  since a refactoring may remove it, but its family (the top-level class with its nested classes) must keep at least
+  half its baselined mutants (design review r3, F19).
+- A module the baseline records that no longer has its PIT configuration (`ext.pitTargets`), a Stryker set whose
+  configuration mutates no file, and a set the script no longer has all fail, in every mode, `--all` included
+  (Codex C12). Removing one on purpose means removing its entries from the baseline, visibly.
 - Every report must be readable and hold a mutant, even beside populated ones. A unit with no valid mutant is
   "no measurements", never 100%.
-- A unit with fewer than half the mutants its baseline counted fails ("lost most of its mutants"), so filtering its
-  mutants out (Ignored, NON_VIABLE) cannot remove it either.
+- A unit (a Stryker file, a PIT class family) with fewer than half the mutants its baseline counted fails ("lost most
+  of its mutants"), so filtering its mutants out (Ignored, NON_VIABLE) cannot remove it either.
 
 A change that means to lower a baseline, or to remove a unit, updates the file, visibly. The summaries also list every
 mutant the baseline run killed that is no longer killed. They match by unit, method or original code, mutator and
 replacement, not by line, against `gradle/mutation-kills.json`, so a reviewer sees each lost kill even within the slack.
+Units in scope that are no longer measured are listed with all their kills (Codex C13). `scripts/test/` holds the
+gates' own tests, which the build job runs.
 `-Ppit.targetClasses=a.B` and `JOUST_MUTATE=src/build.js` narrow a local run.
 
 The baselines come from CI's `mutation_all` run [43629689255](https://github.com/bloxbean/joust/actions/runs/43629689255)

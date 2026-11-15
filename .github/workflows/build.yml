@@ -116,7 +116,7 @@ jobs:
           # zips…) are shared across jobs whatever this says: they are keyed by their contents' names only (review r2,
           # security S9). Pull requests save nothing; main's jobs that save (build, cli, mutation, fuzz-long) run only this
           # repository's code and locked dependencies once main's entries written before this change are purged
-          # (reviewing.md §1, a maintainer step after merge).
+          # (reviewing.md §1: a maintainer step, after this change reaches main and that merge's push run has finished).
           gradle-home-cache-strict-match: true
 
       - name: Set up Node.js
@@ -183,6 +183,11 @@ jobs:
         run: |
           bash .github/scripts/homebrew-formula-test.sh
           bash .github/scripts/release-flags-test.sh
+
+      # The mutation gates' own tests (scripts/test: review r3, design F19, Codex C12 and C13): the summaries and selectors
+      # on synthetic reports, baselines and repositories.
+      - name: Test the mutation gates
+        run: python3 -m unittest discover -s scripts/test -p '*_test.py' -v
 
       # The wrapper every `joust new` project gets is this repository's (the CLI copies it; the e2e test checks it).
       - name: Validate the Gradle wrapper
@@ -457,7 +462,7 @@ jobs:
           # zips…) are shared across jobs whatever this says: they are keyed by their contents' names only (review r2,
           # security S9). Pull requests save nothing; main's jobs that save (build, cli, mutation, fuzz-long) run only this
           # repository's code and locked dependencies once main's entries written before this change are purged
-          # (reviewing.md §1, a maintainer step after merge).
+          # (reviewing.md §1: a maintainer step, after this change reaches main and that merge's push run has finished).
           gradle-home-cache-strict-match: true
 
       - name: Set up Node.js
@@ -577,7 +582,7 @@ jobs:
           # zips…) are shared across jobs whatever this says: they are keyed by their contents' names only (review r2,
           # security S9). Pull requests save nothing; main's jobs that save (build, cli, mutation, fuzz-long) run only this
           # repository's code and locked dependencies once main's entries written before this change are purged
-          # (reviewing.md §1, a maintainer step after merge).
+          # (reviewing.md §1: a maintainer step, after this change reaches main and that merge's push run has finished).
           gradle-home-cache-strict-match: true
 
       - name: The base to compare with

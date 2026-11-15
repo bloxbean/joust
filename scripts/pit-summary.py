@@ -16,10 +16,14 @@ Codex C9):
     ("baselined but not measured"). A nested class that no longer appears is reported, not failed: refactoring may
     remove it;
   - --expect <class> (a changed-classes run): that class, or a class nested in it, must be measured;
-  - a class with fewer than half the mutants its baseline counted fails ("lost most of its mutants"), so that no
-    filtering or exclusion can quietly take a unit out of the gate.
+  - a class family (a top-level class with its nested classes) in scope must keep at least half the mutants its
+    baseline counted ("lost most of its mutants"), so that neither filtering nor moving nested classes out of a target
+    can quietly take mutants out of the gate (review r3, design F19). In scope: the families of every --whole module,
+    of every --expect class, and of every class measured.
 --kills lists, without failing, every mutant the baseline run killed that the reports no longer kill, matched by class,
 method, mutator and description (not by line), so a reviewer sees kills lost even within the slack (review r2, F15).
+The baselined classes in scope that are no longer measured are listed too, with all their kills (review r3, Codex
+C13).
 --write-baseline records each class's score, mutant count and module under "pit"; --write-kills records the killed
 mutants' signatures."""
 import json
@@ -113,6 +117,20 @@ for cls in expects:
     if not any(measured(c) for c in per if c == cls or c.startswith(cls + '$')):
         errors.append(f"`{cls}` was selected but not measured")
 
+# The classes and families in scope: every --whole module's baselined classes, every --expect class's family, and every
+# class measured. A family is a top-level class with its nested classes (Outer, Outer$Inner, Outer$1...).
+family = lambda c: c.split('$', 1)[0]
+in_scope = {c for c, b in baseline.items() if b.get('module') in wholes}
+in_scope |= {c for c in baseline if any(family(c) == family(x) for x in expects)}
+in_scope |= {c for c in baseline if family(c) in {family(m) for m in per}}
+if gate:
+    for fam in sorted({family(c) for c in in_scope}):
+        base_total = sum(b.get('mutants', 0) for c, b in baseline.items() if family(c) == fam)
+        now = sum(t for c, (_, t) in per.items() if family(c) == fam)
+        if base_total and now < base_total / 2:
+            errors.append(f"the class family `{fam}` lost most of its mutants ({now} of {base_total} baselined): "
+                          f"restore its targets, or update the baseline, visibly")
+
 for e in errors:
     print(f"**Error:** {e}")
 killed = sum(k for k, _ in per.values())
@@ -137,9 +155,6 @@ for cls in sorted(per):
     if gate and score < need:
         below.append(f"`{cls}` {score:.0f}% < {need:.0f}%")
         mark = ' **below**'
-    if gate and base and '$' not in cls and t < base.get('mutants', 0) / 2:
-        below.append(f"`{cls}` lost most of its mutants ({t} of {base['mutants']}): update the baseline, visibly")
-        mark += ' **lost mutants**'
     print(f"| `{cls}` | {k} | {t} | {score:.0f}% | {need:.0f}%{mark} |")
 if survivors:
     print(f"\n<details><summary>{len(survivors)} surviving or uncovered mutants</summary>\n")
@@ -151,12 +166,14 @@ if kills_path and os.path.exists(kills_path):
     with open(kills_path) as f:
         base_kills = json.load(f).get('pit', {})
     lost = []
-    for cls in sorted(per):
+    for cls in sorted(set(per) | in_scope):
+        absent = cls not in per
         for sig, n in sorted(base_kills.get(cls, {}).items()):
             gone = n - killed_sigs[cls][sig]
             if gone > 0:
                 method, mutator, desc = sig.split('|', 2)
-                lost.append(f"- `{cls.rsplit('.', 1)[-1]}` `{method}` {mutator}: {desc}" + (f" (×{gone})" if gone > 1 else ''))
+                lost.append(f"- `{cls.rsplit('.', 1)[-1]}` `{method}` {mutator}: {desc}" + (f" (×{gone})" if gone > 1 else '')
+                            + (" (class no longer measured)" if absent else ''))
     print(f"\n<details><summary>{len(lost)} kills lost against the baseline run ({kills_path})</summary>\n")
     print('\n'.join(lost) if lost else 'None: every mutant the baseline run killed in these classes is still killed.')
     print("\n</details>")

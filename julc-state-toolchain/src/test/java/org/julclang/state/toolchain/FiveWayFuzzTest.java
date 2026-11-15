@@ -47,6 +47,13 @@ class FiveWayFuzzTest {
     @AfterAll
     static void report() {
         TALLY.write();
+        long built = TALLY.counts.getOrDefault("programs built", 0L);
+        long over = TALLY.counts.getOrDefault(OVER_SCRIPT_LIMIT, 0L);
+        // A bound on what the over-limit skip can remove (review r3, design F20): past 2% of the programs built (once there
+        // are 100 to judge by) the generator is making contracts too large to deploy, and the run fails rather than test
+        // a shrinking share. The long campaigns saw 1 in about 2,000.
+        assertFalse(built >= 100 && over * 50 > built, over + " of " + built + " generated programs are over a reference script's"
+                + " size (more than 2%): the generator's programs have grown past what can be deployed");
     }
 
     /** A call's transaction: an init creates the instance (nothing held yet); other calls find 100 ADA held. */
@@ -85,7 +92,7 @@ class FiveWayFuzzTest {
         } catch (GeneratedContracts.OverScriptLimit e) {
             // Built both ways with the same script (I1), then refused by the runtime as too large to deploy: no on-chain
             // leg can run it, so it is counted and skipped (reviewing.md §3).
-            TALLY.count(OVER_SCRIPT_LIMIT);
+            // (GeneratedContracts counts each such program once.)
             return;
         }
         FourWay f = built.legs();

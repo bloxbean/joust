@@ -44,7 +44,8 @@ BASELINE = 'gradle/mutation-baseline.json'
 KILLS = 'gradle/mutation-kills.json'
 SHARED = {'gradle/pitest.gradle', 'scripts/pit-changed.py', 'scripts/pit-summary.py', BASELINE}
 with open(BASELINE) as f:
-    BASELINED = set(json.load(f).get('pit', {}))
+    BASELINE_PIT = json.load(f).get('pit', {})
+BASELINED = set(BASELINE_PIT)
 
 # Each change as git reports it, renames detected: the new path of every change, and the old path of a deletion or a
 # rename (the side the gate would otherwise never see).
@@ -73,12 +74,14 @@ classes = {c for f in changed if os.path.exists(f) and (c := java_class(f))}
 gone_baselined = {c for f in gone if (c := java_class(f)) and any(b == c[1] or b.startswith(c[1] + '$') for b in BASELINED)}
 
 runs, reports, gates = [], [], []
+configured = set()
 for build in sorted(subprocess.run(['git', 'ls-files', '*/build.gradle'], capture_output=True, text=True, check=True).stdout.split()):
     text = open(build).read()
     t = re.search(r'ext\.pitTargets\s*=\s*\[(.*?)\]', text, re.S)
     if not t:
         continue
     module = os.path.dirname(build)
+    configured.add(os.path.basename(module))
     patterns = re.findall(r"'([^']+)'", t.group(1))
     paths = {module}
     p = re.search(r'ext\.pitMutableCodePaths\s*=\s*\[(.*?)\]', text, re.S)
@@ -107,6 +110,16 @@ for build in sorted(subprocess.run(['git', 'ls-files', '*/build.gradle'], captur
         continue
     reports.append(os.path.join(module, 'build/reports/pitest/mutations.xml'))
 
+# Every module the baseline records must still have its mutation configuration (review r3, Codex C12): removing a
+# module's ext.pitTargets (or its whole PIT block) would otherwise take its classes out of every run, and out of the
+# gate, with nothing left to say so. An intended removal deletes the module's entries from the baseline, visibly.
+orphaned = sorted({b.get('module') for b in BASELINE_PIT.values() if b.get('module')} - configured)
+if orphaned:
+    for mod in orphaned:
+        classes_of = sorted(c for c, b in BASELINE_PIT.items() if b.get('module') == mod)
+        print(f"**Error:** the module `{mod}` has baselined classes ({', '.join(f'`{c}`' for c in classes_of)}) but no mutation "
+              f"configuration (ext.pitTargets in {mod}/build.gradle): restore it, or remove its entries from {BASELINE}, visibly")
+    sys.exit(1)
 if not runs:
     print(f"No security-relevant Java, nor its tests or mutation configuration, changed since {base}: no mutation run.")
     sys.exit(0)
