@@ -827,6 +827,12 @@ class JscV2M3cFourWayTest {
         twice.mint = twice.mint.merge(token(v2.harness.policy(), successorId(), 1));
         twice.outputs.add(twice.outputs.get(twice.stateOutput));
         muts.put("one v1 into two v2 instances", twice);
+        // Review C4: the prior at a key address, still holding the previous version's token (only the address rule refuses it).
+        var keyPrior = mine.copy();
+        var pin = keyPrior.inputs.get(0);
+        keyPrior.inputs.set(0, new org.julclang.ledger.TxInInfo(pin.outRef(), new TxOut(StateHarness.pkhAddress(EVE), pin.resolved().value(),
+                pin.resolved().datum(), pin.resolved().referenceScript())));
+        muts.put("the prior at a key address, holding the previous token", keyPrior);
         var noPrior = mine.copy();
         noPrior.inputs.remove(0);
         muts.put("the seed not spent (a reference, or another input)", noPrior);
