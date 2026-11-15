@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "968b5e8958257d10fc3f4ab435167e98c0ef2c6ff8ce35c84600fb6ffcc95259",
+  "sourceSha256": "02014dfb49b3b49cf12cc1f75e4499b795c1178760ae766b70fcd84415151172",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Locker",
   "source": "Locker.jsc",

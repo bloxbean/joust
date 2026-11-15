@@ -1149,3 +1149,10 @@ test('a java: fn listed twice is refused, whichever copy is malformed', () => {
     assert.throws(() => load(JSON.stringify(p)), /listed twice|a bad type/);
   }
 });
+
+// #110 C17: a java: library listed twice is refused, in both readers (JscV2IrTest.aJavaLibraryListedTwice_isRefused).
+test('a java: library listed twice is refused', () => {
+  const p = JSON.parse(readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8'));
+  p.javaLibraries.push(structuredClone(p.javaLibraries[0]));
+  assert.throws(() => load(JSON.stringify(p)), /listed twice/);
+});

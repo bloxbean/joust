@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M3a2 coverage: what the locker ports leave out. Two owned types under one instance (the sealed Holding_T

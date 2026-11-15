@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 fn f(a: Option<Bool>, b: Bool): Bool = a ?? b && b

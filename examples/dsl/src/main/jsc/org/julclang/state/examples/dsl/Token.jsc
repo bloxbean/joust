@@ -1,7 +1,7 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
-// examples/token in .jsc 2 (ADR-0018 M1c, J11): an account-model fungible token, balances in a BigMap (a Merkle map,
+// examples/token in .jsc (ADR-0018 M1c, J11): an account-model fungible token, balances in a BigMap (a Merkle map,
 // ADR-0002/0014), so any number of holders fit in a datum of about 100 bytes; each call proves only the balances it
 // reads and writes.
 contract Token(maxDatumBytes = 160) {

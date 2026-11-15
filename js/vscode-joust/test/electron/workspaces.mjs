@@ -39,7 +39,7 @@ export function hostileWorkspace(base, engineDir) {
     scripts: { postinstall: `node -e "require('fs').writeFileSync('${sentinel}','npm')"` } }));
   writeFileSync(join(folder, 'joust.config.json'), JSON.stringify({ contracts: 'contracts', networks: { devkit: { chain: 'http://203.0.113.1/' } } }));
   copyFileSync(join(repo, 'js', 'create-joust', 'variants', 'jsc', 'contracts', 'app', 'Counter.jsc'), join(folder, 'contracts', 'app', 'Counter.jsc'));
-  writeFileSync(join(folder, 'contracts', 'app', 'Fixes.jsc'), `jsc 2
+  writeFileSync(join(folder, 'contracts', 'app', 'Fixes.jsc'), `jsc 1
 package app
 
 contract Fixes {

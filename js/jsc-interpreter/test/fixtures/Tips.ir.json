@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "71732a22a527b2f45b8c3202e8c23f1f2bd6750c4f70df7621b57e13d646024b",
+  "sourceSha256": "a86596354e1473c64d2088745b6444fbcb3d22f63269cbe7bd25f3f966692abb",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Tips",
   "source": "Tips.jsc",

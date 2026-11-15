@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 contract C { state { n: Int } async a() { } init() { return { n: 0 } } }

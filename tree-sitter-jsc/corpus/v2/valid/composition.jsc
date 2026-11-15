@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package app
 
 import contract { Oracle } from "./Oracle.jsc"

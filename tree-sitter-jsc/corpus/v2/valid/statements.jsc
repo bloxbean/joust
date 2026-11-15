@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 enum Phase { Open, Closed { day: Int, by: Key } }

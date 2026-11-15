@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M3a3 coverage (#107 reviews C2, round r2 F1, F5, C4): each half of a move reads the other half's input,

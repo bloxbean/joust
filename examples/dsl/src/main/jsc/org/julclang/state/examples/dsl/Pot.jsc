@@ -1,7 +1,7 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
-// examples/fees' Pot in .jsc 2 (ADR-0018 M2c, J11; ADR-0011 D3): a fee pot. Other contracts deposit into it in the same
+// examples/fees' Pot in .jsc (ADR-0018 M2c, J11; ADR-0011 D3): a fee pot. Other contracts deposit into it in the same
 // transaction, and collect takes their deposits in: its validator adds exactly the claimed deposits to its value, and the
 // method credits them.
 contract Pot {

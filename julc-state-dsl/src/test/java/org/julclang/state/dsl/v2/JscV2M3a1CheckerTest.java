@@ -17,7 +17,7 @@ class JscV2M3a1CheckerTest {
     /** A bank-like contract with members (methods and declarations) appended; its members start at line 6. */
     static String bank(String members) {
         return """
-                jsc 2
+                jsc 1
                 package t
                 contract Bank {
                   state { admin: Key, paused: Bool, limit: Int }
@@ -78,7 +78,7 @@ class JscV2M3a1CheckerTest {
         badSource(bank(BASICS + "  owned action withdraw@@() only owner { return state }"), "JSC1201", "names its type and itself");
         badSource(bank(BASICS + "  owned @@function Account.x() { return state }"), "JSC1201", "after 'owned' comes an owned type");
         badSource(bank(BASICS + "  @@owned action Wallet.x() only owner { return state }"), "JSC1203", "Wallet is not an owned type");
-        badSource("jsc 2\npackage t\ncontract C {\n  state { a: Int }\n  owned @@Hero {}\n  init() { return { a: 0 } }\n}\n", "JSC1202",
+        badSource("jsc 1\npackage t\ncontract C {\n  state { a: Int }\n  owned @@Hero {}\n  init() { return { a: 0 } }\n}\n", "JSC1202",
                 "needs at least one field");
         bad("  @@action account() only admin { return state }", "JSC1204", "lookup of the owned type Account");
     }
@@ -87,7 +87,7 @@ class JscV2M3a1CheckerTest {
     void theContractsRules_atTheirPositions() {
         // An owned init and an escape hatch per type; no instance destroy; no instance BigMap.
         badSource("""
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { a: Key }
@@ -97,7 +97,7 @@ class JscV2M3a1CheckerTest {
                 }
                 """, "JSC1208", "needs an owned init");
         badSource("""
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { a: Key }
@@ -109,7 +109,7 @@ class JscV2M3a1CheckerTest {
                 """, "JSC1209", "need an escape hatch");
         bad("  @@destroy end() only admin { pay(admin, balance) }", "JSC1210", "cannot destroy its instance");
         badSource("""
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { a: Key, m: @@BigMap<Key, Int> }
@@ -176,7 +176,7 @@ class JscV2M3a1CheckerTest {
     void securityReview_atTheChecker() {
         // A10: the state and the object both have an owner; in an owned method, owner (and only owner) is the object's.
         String both = """
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { owner: Key, n: Int }
@@ -194,7 +194,7 @@ class JscV2M3a1CheckerTest {
         // A11: the same field name timed in the object and not in the state: the state's is compared freely through
         // a shared read, the object's never decides.
         String timed = """
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { a: Key, until: Int }
@@ -209,7 +209,7 @@ class JscV2M3a1CheckerTest {
         badSourceIn(timed, "C.jsc", "JSC0502", "a time value cannot decide here");
         // A11: a timed object field is never a quorum's count.
         badSourceIn("""
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { a: Key }
@@ -259,7 +259,7 @@ class JscV2M3a1CheckerTest {
                   @@owned destroy Account.close() only owner { pay(owner, 1) }
                 """), "JSC1216", "never reads balance");
         badSource("""
-                jsc 2
+                jsc 1
                 package t
                 contract Bank {
                   state { admin: Key, paused: Bool, limit: Int }
@@ -270,7 +270,7 @@ class JscV2M3a1CheckerTest {
                 }
                 """, "JSC1209", "need an escape hatch");
         // F10: the annotation names are reserved only in a contract with owned types.
-        lower("jsc 2\npackage t\ncontract C {\n  state { a: Int }\n  type Shared = { b: Int }\n  init() { return { a: 0 } }\n}\n");
+        lower("jsc 1\npackage t\ncontract C {\n  state { a: Int }\n  type Shared = { b: Int }\n  init() { return { a: 0 } }\n}\n");
         bad("  @@type Shared = { b: Int }", "JSC0211", "reserved in a contract with owned types");
     }
 
@@ -290,7 +290,7 @@ class JscV2M3a1CheckerTest {
     void time_atTheNewPositions() {
         // An object's field set from the window is a time field of its type ("Account.until"): it then never decides.
         String src = """
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { a: Key }
@@ -305,7 +305,7 @@ class JscV2M3a1CheckerTest {
         assertEquals("JSC0502", e.code, e.getMessage());
         // The instance's time fields are time values through a shared read.
         String shared = """
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { a: Key, since: Int }
@@ -319,7 +319,7 @@ class JscV2M3a1CheckerTest {
         assertEquals("JSC0502", e2.code, e2.getMessage());
         // And a stored time compared with after/before is allowed (D11).
         lower("""
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { a: Key }
@@ -331,7 +331,7 @@ class JscV2M3a1CheckerTest {
                 }
                 """);
         var ir = lower("""
-                jsc 2
+                jsc 1
                 package t
                 contract C {
                   state { a: Key }

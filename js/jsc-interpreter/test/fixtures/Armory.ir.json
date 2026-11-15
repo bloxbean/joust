@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "8d48bb61d463edae5e06b5e7c0491e72b8888b55672a4eab9b52cb3256dce966",
+  "sourceSha256": "6ab6c6ac3336009911def8e82e2f3a8469690467fa67fafa329228767e0695d2",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Armory",
   "source": "Armory.jsc",

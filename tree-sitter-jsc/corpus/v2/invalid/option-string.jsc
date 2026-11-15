@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 contract C(maxDatumBytes = "big") { state { n: Int } init() { return { n: 0 } } }

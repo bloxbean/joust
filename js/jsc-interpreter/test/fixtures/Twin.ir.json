@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "8a3b35b17a413c7c4f621c0aeb7cbebecfa5937b5c97844339a62086ccb32a5f",
+  "sourceSha256": "990aaa36c5901331b3ea2816814906ac5b123f81222568177cae0eaf51fd79a0",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Twin",
   "source": "Twin.jsc",

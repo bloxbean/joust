@@ -1,11 +1,11 @@
 ---
 title: ".jsc standard library"
-description: "Every function a .jsc 2 contract can call: the prelude and the std modules, with each one's signature, domain, time rule and the Java it binds to."
+description: "Every function a .jsc contract can call: the prelude and the std modules, with each one's signature, domain, time rule and the Java it binds to."
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A `.jsc` 2 contract calls three kinds of functions: the **prelude** (always in scope), the **`std` modules** (imported
+A `.jsc` contract calls three kinds of functions: the **prelude** (always in scope), the **`std` modules** (imported
 by name), and its own `fn`s. List and map methods (`xs.fold`, `m.get`) are on the
 [language reference](/languages/jsc-reference/#lists-maps-and-options).
 
@@ -19,7 +19,7 @@ module to import it from); a name imported from the wrong module is `JSC0702`; a
 `JSC0703`.
 
 <Aside type="note" title="A preview">
-`.jsc` 2 is a preview ([ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)).
+`.jsc` is a preview ([ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)).
 `std/value` and `std/address` come with `Value` and `Address` in milestone M2; importing them now is `JSC0304`.
 </Aside>
 
@@ -153,7 +153,7 @@ structural equality of `==`.
 
 - `keccak_256`, ECDSA and Schnorr signatures, RIPEMD-160: the JVM's crypto provider lacks them, and a function is
   bound only when every runtime fails exactly where the ledger's builtin fails (ADR-0018 D8, F18).
-- `integerToByteString` and `writeBits`: their domains need checks `.jsc` 2 does not have yet.
+- `integerToByteString` and `writeBits`: their domains need checks `.jsc` does not have yet.
 - Functions over raw `PlutusData`, and JuLC's transaction libraries (`ContextsLib`, `OutputLib`): the processor owns
   the transaction checks.
 

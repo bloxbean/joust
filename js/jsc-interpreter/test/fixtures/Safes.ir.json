@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "653af1865b413bc9660e075db1467705924a61dcacfe0086a2c5879354239bff",
+  "sourceSha256": "36f8eba6968dff31f58165ff379bcae879600fdff37a2c39b78073f4a683f3ea",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Safes",
   "source": "Safes.jsc",

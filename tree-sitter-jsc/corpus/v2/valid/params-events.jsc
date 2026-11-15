@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package t
 contract C {
   params { guardian: Credential, cap: Int }
