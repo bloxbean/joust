@@ -1980,6 +1980,22 @@ final class Checker {
         var names = new LinkedHashSet<String>(List.of("Link"));
         var members = new HashMap<String, String>();
         var constants = new HashMap<String, String>();
+        // #112 review C1: the client's instance members are one namespace, in Java as in the JavaScript wrapper: every owned
+        // type's lookup (t) and every keyed type's tList, tExists and tKeys. Two types may not give one name (a keyed Name's
+        // nameExists and a NameExists' lookup), whichever is declared first.
+        var given = new LinkedHashMap<String, String>();
+        for (TypeDecl t : c.owned()) {
+            String lookup = Character.toLowerCase(t.name().charAt(0)) + t.name().substring(1);
+            var own = new ArrayList<String>(List.of(lookup));
+            if (keyedDecls.containsKey(t.name())) own.addAll(List.of(lookup + "List", lookup + "Exists", lookup + "Keys"));
+            for (String x : own) {
+                String other = given.putIfAbsent(x, t.name());
+                if (other != null) {
+                    throw t.pos().error("JSC1249", "the owned types " + other + " and " + t.name() + " both give the generated client a member "
+                            + x + " (an owned type's lookup, a keyed type's List, Exists and Keys); rename one (ADR-0016 D7)");
+                }
+            }
+        }
         for (String o : keyedDecls.keySet()) {
             names.addAll(List.of("Head_" + o, "Keyed_" + o, "Retired_" + o, "Remove_" + o));
             String lookup = Character.toLowerCase(o.charAt(0)) + o.substring(1);

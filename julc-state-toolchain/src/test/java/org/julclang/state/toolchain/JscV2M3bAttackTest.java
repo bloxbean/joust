@@ -163,4 +163,21 @@ class JscV2M3bAttackTest {
         System.out.println("[M3b kinds] 4 crossings refused (a keyed node with a plain or instance arm, a plain object with a keyed arm, a"
                 + " keyed token on a plain datum)");
     }
+
+    @Test
+    void theGeneratedClient_ofNeighbouringKeyedNames() throws Exception {
+        // #112 review C1: keyed Name and keyed NameExists would give the Java client two nameExists(byte[]); the checker
+        // refuses it at the .jsc position (JSC1249) before any Java is generated. Name beside Named compiles, client and all.
+        java.util.function.BiFunction<String, String, String> two = (a, b) -> "jsc 1\npackage org.example.names\ncontract N {\n  state { admin: Key }\n"
+                + "  init() { return { admin: caller } }\n"
+                + String.join("", List.of(a, b).stream().map(t -> "  owned " + t + " keyed by k { k: Bytes, owner: Key }\n  owned init " + t + ".make" + t
+                + "(k: Bytes) { return { k, owner: caller } }\n  owned destroy " + t + ".end" + t + "() only owner retire { pay(owner, balance) }\n").toList())
+                + "}\n";
+        var refused = Toolchain.build(Map.of("org/example/names/N.jsc", two.apply("Name", "NameExists")), Map.of());
+        assertFalse(refused.ok());
+        assertTrue(refused.diagnostics().toString().contains("JSC1249"), refused.diagnostics().toString());
+        var built = Toolchain.build(Map.of("org/example/names/N.jsc", two.apply("Name", "Named")), Map.of());
+        assertTrue(built.ok(), built.diagnostics().toString());
+        System.out.println("[M3b names] Name + NameExists refused (JSC1249); Name + Named built, client included");
+    }
 }

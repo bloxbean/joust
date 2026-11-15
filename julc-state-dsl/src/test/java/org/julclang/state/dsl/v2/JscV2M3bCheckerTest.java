@@ -254,6 +254,32 @@ class JscV2M3bCheckerTest {
         lower(src(RETIRE + "  owned destroy Name.retire() only owner retire { pay(owner, balance) }\n"));
     }
 
+    /** Two owned types, keyed or plain as written, each with an initializer and an exit. */
+    static String two(String first, String second) {
+        StringBuilder b = new StringBuilder("jsc 1\npackage t\ncontract N {\n  state { admin: Key }\n  init() { return { admin: caller } }\n");
+        for (String t : List.of(first, second)) {
+            boolean keyed = !t.startsWith("plain ");
+            String n = t.replace("plain ", "").replace("@@", "");
+            b.append("  owned ").append(t.replace("plain ", "")).append(keyed ? " keyed by k" : "").append(" { k: Bytes, owner: Key }\n");
+            b.append("  owned init ").append(n).append(".make").append(n).append("(k: Bytes) { return { k, owner: caller } }\n");
+            b.append("  owned destroy ").append(n).append(".end").append(n).append("() only owner").append(keyed ? " retire" : "")
+                    .append(" { pay(owner, balance) }\n");
+        }
+        return b.append("}\n").toString();
+    }
+
+    @Test
+    void theClientsMembers_areOneNamespace_acrossOwnedTypes() {
+        // #112 review C1: a keyed Name's nameExists is a NameExists' lookup, whichever comes first; a plain type's lookup
+        // meets a keyed type's accessors too. Each is refused at the type declared second.
+        bad(two("Name", "@@NameExists"), "JSC1249", "both give the generated client a member nameExists");
+        bad(two("NameExists", "@@Name"), "JSC1249", "both give the generated client a member nameExists");
+        bad(two("plain NameKeys", "@@Name"), "JSC1249", "member nameKeys");
+        bad(two("Name", "plain @@NameList"), "JSC1249", "member nameList");
+        lower(two("Name", "Named"));
+        lower(two("plain Name", "Names"));
+    }
+
     @Test
     void squatting_isTheProcessorsWarning() {
         // JSC9011 (K33): an initializer that neither signs the key nor takes it from the caller in every result.
