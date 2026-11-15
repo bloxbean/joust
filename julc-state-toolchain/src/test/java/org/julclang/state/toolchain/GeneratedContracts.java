@@ -41,6 +41,17 @@ final class GeneratedContracts {
         }
     }
 
+    /**
+     * A program built both ways with the same script (I1) whose script is over what a reference script may be: the
+     * runtime refuses to deploy it (ADR-0009 r2, StateContractHandle), so no on-chain leg can run it. The five-way target
+     * counts and skips it (the long campaign at 0c40f1c3 generated one of 15,664 bytes).
+     */
+    static final class OverScriptLimit extends Exception {
+        OverScriptLimit(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     record Built(JscGen.Plan plan, FourWay legs, long millis) {}
 
     private static final Map<String, Built> CACHE = new LinkedHashMap<>(KEPT, 0.75f, true) {
@@ -105,8 +116,16 @@ final class GeneratedContracts {
             throw new BuildFailure("the toolchain's script and Gradle's differ (I1)\n" + p.describe());
         }
         var loader = new URLClassLoader(new java.net.URL[]{out.toUri().toURL()}, GeneratedContracts.class.getClassLoader());
-        var legs = new FourWay(JscGen.PKG, loader, p.name(), p.source(), p.contractFile(), JscModules.of(p.files()), JavaLibraries.NONE,
-                contract.transitions(), p.params());
+        FourWay legs;
+        try {
+            legs = new FourWay(JscGen.PKG, loader, p.name(), p.source(), p.contractFile(), JscModules.of(p.files()), JavaLibraries.NONE,
+                    contract.transitions(), p.params());
+        } catch (org.julclang.state.runtime.JoustException e) {
+            if (e.getMessage() != null && e.getMessage().contains("a reference script must fit a 16 KB transaction")) {
+                throw new OverScriptLimit(e.getMessage(), e);
+            }
+            throw e;
+        }
         return new Built(p, legs, (System.nanoTime() - t0) / 1_000_000);
     }
 }

@@ -35,6 +35,8 @@ import static org.junit.jupiter.api.Assertions.*;
 class FiveWayFuzzTest {
 
     static final FuzzData.Tally TALLY = new FuzzData.Tally("FiveWayFuzzTest");
+    /** The tally key of a program the runtime refuses as too large to deploy (GeneratedContracts.OverScriptLimit). */
+    static final String OVER_SCRIPT_LIMIT = "programs over a reference script's size (built both ways, not deployable)";
     static final BigInteger BALANCE = BigInteger.valueOf(100_000_000);
 
     @BeforeAll
@@ -80,6 +82,11 @@ class FiveWayFuzzTest {
         } catch (GeneratedContracts.BuildFailure e) {
             var path = FuzzData.reproducer("FiveWayFuzzTest", e.getMessage());
             throw new AssertionError("a generated program does not build (" + path + "): " + e.getMessage().lines().findFirst().orElse(""), e);
+        } catch (GeneratedContracts.OverScriptLimit e) {
+            // Built both ways with the same script (I1), then refused by the runtime as too large to deploy: no on-chain
+            // leg can run it, so it is counted and skipped (reviewing.md §3).
+            TALLY.count(OVER_SCRIPT_LIMIT);
+            return;
         }
         FourWay f = built.legs();
         plan.features().forEach(x -> TALLY.count("feature " + x));

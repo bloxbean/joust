@@ -186,7 +186,9 @@ counted by class in the target's summary, and the first input of each class is w
 - assets the instance already holds: every call's `held` is empty, so a burn never succeeds, held foreign tokens are
   never sent or kept, and the exact-value rule never sees an input holding tokens (design review r2, F17).
 
-Validity windows wider than `maxValidityMs` are not generated either: that check is the validator's alone.
+Validity windows wider than `maxValidityMs` are not generated either: that check is the validator's alone. A generated program whose
+script is over what a reference script may be (16 KB transactions, ADR-0009 r2) is built both ways and its scripts
+compared (I1), then counted and skipped, since the runtime refuses to deploy it and no on-chain leg can run it.
 
 **Extending the generator** (the contract for M3 and later). A feature is in `JscGen` when it has all of these:
 

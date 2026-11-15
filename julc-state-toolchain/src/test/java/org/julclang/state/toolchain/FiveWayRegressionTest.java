@@ -51,6 +51,13 @@ class FiveWayRegressionTest {
     void savedCasesAgreeOnAllFiveLegs(Path plan) throws Exception {
         var p = PlanCodec.read(Files.readString(plan));
         assertEquals(PlanCodec.write(p), PlanCodec.write(PlanCodec.read(PlanCodec.write(p))), "the plan reads back as itself");
+        long over = FiveWayFuzzTest.TALLY.counts.getOrDefault(FiveWayFuzzTest.OVER_SCRIPT_LIMIT, 0L);
         FiveWayFuzzTest.run(p);
+        // over-script-limit-*.plan: a program the runtime must refuse as too large, which the target must count and skip
+        // (not pass by running nothing for another reason).
+        if (plan.getFileName().toString().startsWith("over-script-limit")) {
+            assertEquals(over + 1, (long) FiveWayFuzzTest.TALLY.counts.getOrDefault(FiveWayFuzzTest.OVER_SCRIPT_LIMIT, 0L),
+                    plan + " is no longer over the reference-script limit");
+        }
     }
 }
