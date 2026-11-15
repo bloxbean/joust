@@ -89,20 +89,79 @@ async function saveChangesNothing(doc) {
   }
 }
 
-async function noRenameOrFormatting() {
+async function allowList() {
   const caps = (await status()).capabilities;
   // M5b: completion is offered to the extension (its edits replace the word only; imports come by joust.addImport); rename
-  // only through JOUST: Rename Symbol, never textDocument/rename (D4a).
-  for (const k of ['renameProvider', 'documentFormattingProvider', 'documentRangeFormattingProvider', 'documentOnTypeFormattingProvider',
+  // only through JOUST: Rename Symbol, never textDocument/rename (D4a). M5d: document and range formatting, never on type.
+  for (const k of ['renameProvider', 'documentOnTypeFormattingProvider',
     'linkedEditingRangeProvider', 'inlayHintProvider', 'codeLensProvider']) assert.equal(caps[k], undefined, k);
+  assert.equal(caps.documentFormattingProvider, true);
+  assert.equal(caps.documentRangeFormattingProvider, true);
   assert.ok(caps.completionProvider && caps.hoverProvider && caps.definitionProvider && caps.semanticTokensProvider);
   assert.equal(caps.textDocumentSync.willSaveWaitUntil, undefined);
+}
+
+const FORMATTED = `jsc 1
+package app
+
+contract Tidy {
+  state { n: Int }
+
+  init() {
+    return { n: 0 }
+  }
+
+  action bump(by: Int) {
+    require(by > 0, "positive") // kept
+    return { ...state, n: n + by }
+  }
+}
+`;
+const MESSY = FORMATTED.replace('  state { n: Int }', '\tstate {   n: Int }').replace('    return { n: 0 }', '        return {n: 0}')
+  .replace('    require(by > 0, "positive") // kept', 'require( by > 0 , "positive")   // kept');
+
+/**
+ * M5d (ADR-0021 r9 §15): Format Document gives the formatted text; a file that does not parse is left as it was (F4);
+ * with `onSave` (a workspace's editor.formatOnSave), a save formats the file and changes nothing else.
+ */
+async function formatting({ onSave = false } = {}) {
+  fs.writeFileSync(path.join(WS, 'contracts', 'app', 'Tidy.jsc'), MESSY);
+  const doc = await open('contracts/app/Tidy.jsc');
+  await analysed(doc);
+  step('Format Document');
+  const edits = await within(vscode.commands.executeCommand('vscode.executeFormatDocumentProvider', doc.uri, { tabSize: 2, insertSpaces: true }), 'formatting');
+  // The server answers one edit of the whole document (F6; m5d.test.js); VS Code reduces it to minimal edits itself.
+  assert.ok(Array.isArray(edits) && edits.length > 0, JSON.stringify(edits));
+  const ed = new vscode.WorkspaceEdit();
+  ed.set(doc.uri, edits);
+  assert.ok(await vscode.workspace.applyEdit(ed));
+  assert.equal(doc.getText(), FORMATTED);
+  const none = await within(vscode.commands.executeCommand('vscode.executeFormatDocumentProvider', doc.uri, { tabSize: 2, insertSpaces: true }), 'formatting');
+  assert.ok(!none || none.length === 0, JSON.stringify(none));
+  // F4: an unclosed brace: no edit.
+  await replace(doc, 'return { n: 0 }', 'return { n: 0');
+  const broken = doc.getText();
+  const refused = await within(vscode.commands.executeCommand('vscode.executeFormatDocumentProvider', doc.uri, { tabSize: 2, insertSpaces: true }), 'formatting');
+  assert.ok(!refused || refused.length === 0, JSON.stringify(refused));
+  assert.equal(doc.getText(), broken);
+  await replace(doc, 'return { n: 0', 'return { n: 0 }');
+  if (onSave) {
+    // The workspace turned editor.formatOnSave on: the one save-time edit is the formatter's (D10), hash-preserving.
+    // (`{n: 0}`: the style keeps no space where the source had none, so `n:0` would stay `n:0`.)
+    await replace(doc, '    return { n: 0 }', '        return {n: 0}');
+    await within(vscode.window.showTextDocument(doc), 'showing the document');
+    step('save with formatOnSave');
+    await within(vscode.commands.executeCommand('workbench.action.files.save'), 'the save', 90000);
+    assert.equal(doc.isDirty, false, 'saved');
+    await waitFor(() => doc.getText() === FORMATTED, 'the save formatted the file');
+    assert.equal(fs.readFileSync(doc.fileName, 'utf8'), FORMATTED);
+  }
 }
 
 async function smoke() {
   const info = await serverInfo();
   assert.match(info.version, /\(bundled, advisory\)$/, info.version);
-  await noRenameOrFormatting();
+  await allowList();
   const doc = await open('contracts/app/Counter.jsc');
   await analysed(doc);
   // The seeded error.
@@ -154,6 +213,7 @@ async function smoke() {
   await waitFor(() => /by == 1/.test(fixes.getText()), 'the === fix applied');
   // No project CLI here: no build task.
   assert.deepEqual(await vscode.tasks.fetchTasks({ type: 'joust' }), []);
+  await formatting();
   await m5b(doc);
 }
 
@@ -240,7 +300,7 @@ async function hostileTrusted() {
   const info = await serverInfo();
   // L2: the project's own compiler, from its two engine files only.
   assert.match(info.version, /\(project, project-matched\)$/, info.version);
-  await noRenameOrFormatting();
+  await allowList();
   const doc = await open('contracts/app/Counter.jsc');
   const s = await analysed(doc);
   assert.equal(s.source, 'project');
@@ -257,6 +317,7 @@ async function hostileTrusted() {
   const fixes = await open('contracts/app/Fixes.jsc');
   await waitCode(fixes, 'JSC0128');
   await saveChangesNothing(fixes);
+  await formatting({ onSave: true });
   // The build task is the project's own CLI inside the folder, on this Node, by absolute path; never run here.
   const tasks = await vscode.tasks.fetchTasks({ type: 'joust' });
   assert.ok(tasks.length >= 1);
@@ -281,6 +342,7 @@ async function hostileRestricted() {
   const fixes = await open('contracts/app/Fixes.jsc');
   await waitCode(fixes, 'JSC0128');
   await saveChangesNothing(fixes);
+  await formatting({ onSave: true });
   // The Build command runs nothing here (it checks trust before it asks for any task). Fetching tasks is not done: in
   // Restricted Mode VS Code answers it with its trust dialog. The provider's own refusal is in client.test.mjs.
   assert.deepEqual(await within(vscode.commands.executeCommand('joust.build'), 'JOUST: Build'), { ran: false, reason: 'restricted' });
