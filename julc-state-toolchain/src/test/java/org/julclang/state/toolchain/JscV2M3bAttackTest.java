@@ -180,4 +180,27 @@ class JscV2M3bAttackTest {
         assertTrue(built.ok(), built.diagnostics().toString());
         System.out.println("[M3b names] Name + NameExists refused (JSC1249); Name + Named built, client included");
     }
+
+    @Test
+    void theValidatorsRefusal_tellsARequireFromACooldown() throws Exception {
+        // #112 review C3: cast(ANN, 10) after a cooling head fails both its require and the cooldown. The validator traces the
+        // require (its policy runs the initializer first): FourWay.keyedParity accepts the interpreters' require class and
+        // refuses round r1's keyed:cooldown, so the five-way would have caught r1's order.
+        var f = LEGS.get("Registry");
+        var t = JscV2M1aFourWayTest.at(ANN, 0, 0).withShared(rec("State", Bytes.of(ADMIN), true));
+        f.anchor = FourWay.Node.head("Ballot", f.harness.instanceId(), Bytes.of(new byte[0]), T0.subtract(BigInteger.valueOf(60_000)).add(BigInteger.ONE));
+        Rec candidate = rec("Ballot", Bytes.of(ANN), n(10));
+        var tx = f.keyedTx("cast", null, List.of(Bytes.of(ANN), n(10)), t, ANN, false, null, JulcList.empty(), null, candidate);
+        var v = f.harness.evaluate(tx);
+        assertFalse(v.accepted(), v.toString());
+        f.keyedParity("cast", "require:32:5:choose 0 to 9", v, "cast(10), cooling");
+        assertThrows(AssertionError.class, () -> f.keyedParity("cast", "keyed:cooldown", v, "cast(10), cooling"));
+        // A cooling anchor alone: the policy refuses with no require traced, so keyed:cooldown is the validator's too.
+        var o = f.interp.transition("cast", null, List.of(Bytes.of(ANN), n(3)), t);
+        var cool = f.harness.evaluate(f.keyedTx("cast", null, List.of(Bytes.of(ANN), n(3)), t, ANN, true, f.java(o.value()), JulcList.empty(), o, null));
+        assertFalse(cool.accepted(), cool.toString());
+        f.keyedParity("cast", "keyed:cooldown", cool, "cast(3), cooling");
+        assertThrows(AssertionError.class, () -> f.keyedParity("cast", "require:32:5:choose 0 to 9", cool, "cast(3), cooling"));
+        System.out.println("[M3b parity] a require beside a cooling anchor is the validator's require; a cooling anchor alone, its policy's refusal");
+    }
 }
