@@ -1397,6 +1397,35 @@ decisions (D11); M5e builds what they publish from.
   - the `.vsix`'s engine differing from the published tarball's (fails);
   - a run on a fork, or with a token for a registry present (nothing references one).
 
+**As built (M5e).**
+
+- **Lock gate.** `libraries.js` `lockDecision({ used, lock })` is J12's decision. `lockGate` (`joust build`) and the
+  server's `runBuild` both call it; the CLI keeps acceptance (`--accept-lock`). The server:
+  - reads `joust.lock` in `buildSnapshot` through the confined reader, capped at 1 MiB (`LOCK_CAP`);
+  - records it in the build's digest and its disk inputs (`null` when absent);
+  - places a library's error at its `import` line, and a lock that cannot be read at the saved file's start;
+  - ends a build's results when a watched `joust.lock` change arrives. The extension now watches `**/joust.lock`.
+
+  Gradle projects are not gated in the editor: their J12 is `JscMain --lock`. `m5e-lock.test.js` compares `joust
+  build` and the server vector by vector (codes, names, hashes and words). The m5b C6 fixture, an unpinned npm library,
+  now gets JSC0731 beside JSC0003.
+- **Package.** `tree-sitter-jsc/scripts/package.mjs` (`npm run package`) writes the archive with its own ustar writer.
+  It compiles each query with `tree-sitter query` over the valid corpus and the examples, Helix's translation included.
+  The translation (`HELIX`) maps nine nvim-treesitter names that Helix spells differently; the others are shared.
+  `test/package.test.mjs` is part of `npm test`, so CI's grammar step runs it.
+- **Configurations.** `editors/neovim/lua/joust.lua` (`vim.lsp.config`, a `root_dir` that refuses a server inside the
+  buffer's root or the working directory) and `editors/helix/languages.toml`. `editors/test/editors.test.mjs` lints
+  both and the docs, and drives Neovim headless (`nvim-check.lua`) and `hx --grammar build` plus `hx --health jsc`.
+  CI runs it in the engines job on Neovim v0.12.6 and Helix 25.07.1, downloaded and checked by SHA-256, with
+  `JOUST_REQUIRE_EDITORS=1` so a missing editor fails. Locally the editor tests skip without `NVIM_BIN`/`HX_BIN`.
+- **Release.** `.github/workflows/editor-assets.yml` runs on `workflow_dispatch` only. It is not wired into
+  `release.yml`'s tag run: the coordinator asked for a step that stays inert until a maintainer runs it, and that is the
+  later decision this section names. `.github/scripts/editor-assets.mjs` builds the assets. PR CI runs it in the vscode
+  job on an `npm pack` of the commit's `@julclang/joust`, attaching nothing. `js/vscode-joust/test/release.test.mjs`
+  lints the workflow. `docs/release-ops.md` gives the maintainer's steps. The `.vsix` is not byte-reproducible (zip
+  times): its provenance is the attestation and the engine digests the record carries.
+- **Docs.** The site's `languages/editors` page and `editors/README.md`. The site builds (66 pages, links checked).
+
 **Not in M5e:** publishing to the Marketplace, Open VSX, npm (`tree-sitter-jsc`) or crates.io; other editors' plugins
 (Emacs, Zed, Sublime): the generic LSP instructions cover them. Wiring the attachment into `release.yml`'s tag run is a
 later decision, like D11's automation.
