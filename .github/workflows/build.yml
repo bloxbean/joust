@@ -257,10 +257,11 @@ jobs:
       # ADR-0021 M5a, M5b: the language core in this commit's engine. JscLangTest writes the JVM's document models; the
       # engine's must be byte-identical, the build's errors must be among its diagnostics (L1, on the path the server
       # runs), and the nesting cap must hold on the main thread and the server's 4 MB worker, cold (M5a's exit).
-      # JscLangRecoveryTest is M5b's mutation corpus (L1 recovered, L13) and L5 (the build job runs it too).
+      # JscLangRecoveryTest is M5b's mutation corpus (L1 recovered, L13) and L5 (the build job runs it too). JscFormatTest
+      # writes the formatter's cases, which lang.format must answer byte for byte (ADR-0021 §15 F5).
       - name: Test the language core in the engine
         run: |
-          ./gradlew :julc-state-dsl:test --tests '*JscLangTest' --tests '*JscLangRecoveryTest' --stacktrace
+          ./gradlew :julc-state-dsl:test --tests '*JscLangTest' --tests '*JscLangRecoveryTest' --tests '*JscFormatTest' --stacktrace
           node --experimental-wasm-exnref julc-state-toolchain/src/test/js/lang-in-node.mjs julc-state-toolchain/build/wasm julc-state-dsl/build/lang-parity.json
 
       # ADR-0021 M5a: the language server's protocol, watchdog, confinement, input and edit tests on this commit's
