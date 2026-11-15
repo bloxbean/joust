@@ -871,7 +871,7 @@ it. The Web Image gains entries and reachability metadata for the model's record
 | M5b | Recovery (lexer, parser, checker) and the remaining spans and reference mapping; hover, definition and references within a file, semantic tokens, completion, rename within a file, quick fixes and **Remove invisible characters…**, generated-Java view, ABI diff and **Accept ABI…** (D7a, with ADR-0018's D12 acceptance change), build diagnostics on save (worker) | M5a exit (Q1(b): may run alongside ADR-0018 M2/M3, with L5's corpus test in their front-end PRs) | L1 (recovered), L5, L6, L12, L13 tested; the recovery mutation corpus and the save tests green; latency still within L10. *(r7, M5b)* How each is tested: §13 note 9 |
 | M5c | Across files: `.jsc` libraries, `import contract`, `java:` imports (read-only library documents), project-wide references and rename, library signature cache. *(r7)* The index (references, types, expressions) leaves the per-edit diagnostics path (built on the first navigation request of a version, or behind its own entry), or L10 is revisited in this ADR with measurements: L10's model-size guard is not raised to make room for cross-file data. *(r8)* Built in #115: the index left the per-edit path (§14 note 1); the java: libraries' signature cache is keyed by the engine and the SHA-256 of the sources read, in the server's private storage (outside every workspace folder, as the engine copies; not per workspace: a content key is safe to share) | M5b exit; ADR-0018 M4 exited; javac attribution cost in the engine measured | definition and references across a `.jsc` library and into a Java library in the language server's protocol tests (`m5c.test.js`, `m5c-r2.test.js`) and the extension's (`cross` electron scenario) *(r8, F5 on #115: not the template's)*; L6 and L12 across files; L10 with its CI guards |
 | M5d | Formatter: trivia-preserving lexing, `joust fmt`, `textDocument/formatting` | M5b exit (M1e's message scheme is in place since M5a) | L7 and L12 over the corpus and generated layouts |
-| M5e | Other editors: Neovim and Helix configurations (a user-installed `joust-lsp`), the tree-sitter grammar packaged with its queries, docs; the `.vsix` attached to a release for maintainers to publish (D11) | M5a exit (configurations), M5c exit (docs complete); the namespaces claimed and Q4 decided (D11) | the release checklist run by hand on each editor; the docs test refusing `npx joust` green |
+| M5e | Other editors: Neovim and Helix configurations (a user-installed `joust-lsp`), the tree-sitter grammar packaged with its queries, docs; the `.vsix` attached to a release for maintainers to publish (D11). *(r8, F13 on #115)* The `joust.lock` gate (ADR-0018 J12) on the on-save build, deferred from M5c (D4) | M5a exit (configurations), M5c exit (docs complete); the namespaces claimed and Q4 decided (D11) | the release checklist run by hand on each editor; the docs test refusing `npx joust` green; the on-save build reports J12's errors as `joust build` does |
 
 Recommendation: ADR-0018's recommendation gate (`.jsc` 2 recommended once M2 and M4 exit and the security review
 passes) does not depend on M5; the extension is labelled preview while `.jsc` 2 is.
@@ -1197,7 +1197,7 @@ What M5c's implementation chose (#115, on `feat/jsc-lsp-m5b` after #111).
    asks for that version's index on the same worker; navigation, completion, rename, semantic tokens and selection
    ranges wait (bounded) for it, so a request made right after an edit is answered from that edit's version (C4 on #99),
    and never from an older version's index (semantic tokens included: C5 on #115).
-   The engine keeps the last four analyses (F7 on #115: the importers a library's edit reschedules queue their
+   The engine keeps the last four analyses, keyed by their inputs' SHA-256 (F12 on #115: never by the texts) (F7: the importers a library's edit reschedules queue their
    diagnostics ahead of their indexes; one slot would make each index a second full analysis), each replaced by newer
    ones: no project state survives in the worker beyond them (D2a's r7a note: a project file's analysis still posts the
    files it read). L10 is measured on the diagnostics path (L10's row).
@@ -1214,16 +1214,21 @@ What M5c's implementation chose (#115, on `feat/jsc-lsp-m5b` after #111).
    rename (S4/C2 on #99, across files), as does any change of the open buffers while it is checked; a type or enum warns
    first (an importer's datum or redeemers can hold it: D7's ABI warning). A variant or field of a library type, and a
    contract's names (its types included: F1 on #115), stay renamable in their file only while no file imports it (F2 on
-   #99). *(F2 on #115)* A rename can start on an imported name in the importer (its import or a use): it is the rename
-   of its declaration, in the library (which must be open too); a declaration in an npm package's library, a `std`
-   row or a `java:` library is never renamed. *(C1 on #115)* Every importer the lexical scan finds counts before anything
+   #99). *(F2 on #115)* A rename can start on an imported name in the importer (its import or a use): `joust/prepareRename`
+   and `joust/rename` both name its declaration, in the library (which the rename opens if needed); a declaration in an
+   npm package's library, a `std` row or a `java:` library is never renamed. *(C10)* A package's library, or any file
+   outside the project's contracts, is never edited, whatever the rename starts from, and navigation opens a package's
+   library as a read-only `joust-lib:` document. *(C1 on #115)* Every importer the lexical scan finds counts before anything
    else: one with an error, or whose model shows no import of the name (a header error drops its imports), refuses the
-   rename. *(C2)* The scan is bound to the open documents' identities (URI, version and open lifetime). *(S1)* Navigation
+   rename (*C6:* a clean importer of other names of the library is not). *(C2)* The scan is bound to the open documents'
+   identities (URI, version and open lifetime). *(C7)* A cached importer analysis is dropped on any change of a project
+   file (a buffer, a watched file) and on reselection. *(S1)* Navigation
    and rename across files are bounded: a definition reads only the file the import names (C4: a project file, or an npm
    package's library through its module id, read-only); the importer scan debits a 16 M-character budget before each read
    and keeps only the importers' texts; at most 64 importers are analysed (closed ones' occurrences cached by the engine,
-   their text and the target's), at most 10,000 locations kept, ranges only, the request's cancellation checked between
-   files; past a bound the file's own references are answered. *(S2)* A buffer of a file not on disk is admitted only when
+   their text and the target's), at most 10,000 locations kept (*C12, S7:* counting the declaring file's own and each
+   cached entry, and the scan stops at the cap; a rename past it is refused), ranges only, the request's cancellation
+   checked between files; past a bound the file's own references are answered. *(S2)* A buffer of a file not on disk is admitted only when
    the reader reports it missing (never one reached through a link); each file is listed once. There are no top-level
    consts (the grammar's top level: import, type, enum, fn, contract). L12 across files: renaming a library's fn, type
    or enum in it and in an importer keeps the importer's script hash (`JscLangHashTest`).
@@ -1237,11 +1242,16 @@ What M5c's implementation chose (#115, on `feat/jsc-lsp-m5b` after #111).
    longer advisory for it (D3a). *(C3 on #115)* The library sources are live inputs: an open buffer of one is what is
    described (the extension sends `joust-lib/**/*.java` buffers and watches those files; the server never analyses
    them), the paths read are the importing file's deps (a change analyses it again) and a build's inputs (a change ends its
-   results). *(S5, F7)* The read of the packages' libraries is kept until one changes; the cache keeps 16 descriptions in
+   results). *(F10)* The extension sends those buffers by a notification (`joust/javaInput`), not as documents, so no JOUST
+   language feature applies to a Java file. *(C9)* A library source that appears or goes analyses every file with a `java:`
+   import again. *(S5, F7; C8, S6, F11)* The read of the packages' libraries is kept while every file it read keeps its size
+   and modification time (checked on use: `node_modules` changes often send no watcher event), and is dropped on a
+   reselection (a `package.json` change, Restart analysis); the cache keeps 16 descriptions in
    memory and its 32 most recent files on disk, and an entry is read only up to 4 MB. The digest of an entry detects
    corruption, not a writer of the server's private storage. A `joust.lock` mismatch is reported by `joust build`, not yet
-   in the editor (D4; M5e). *(F8)* A fn's and a record's places come from javac's tree, their columns in characters
-   (javac's LineMap expands tabs). A Gradle project's Java libraries come from its `joustLibrary` jars, which the server
+   in the editor (D4; M5e). *(F8, C11, C13)* A fn's and a record's places come from javac's tree (a method's name in its
+   header, before its body, whatever stands before its `(`; a record's name in its own declaration), their columns in
+   characters (javac's LineMap expands tabs), and the record's definition uses that place. A Gradle project's Java libraries come from its `joustLibrary` jars, which the server
    does not read: advisory there, as before. *Definition* of a name a `java:` import brings opens the library's source as
    a **read-only** document, `joust-lib:/<id>/<path>`: the server serves the text by an opaque id (`joust/libraryContent`,
    at most 20 kept), never by a path the URI names; a fn at its name, a record at its declaration.
