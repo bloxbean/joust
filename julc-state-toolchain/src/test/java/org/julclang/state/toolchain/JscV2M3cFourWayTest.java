@@ -500,6 +500,15 @@ class JscV2M3cFourWayTest {
         v2.adoption = adoption(v1, "upgrade", v1.java(hostile), funds, v2, 0, ADMIN);
         migrateRefused(v2, "input:old", "migrate", null, List.of(), adopt.withPrior(new Interpreter.PriorV(Bytes.of(p1), as("CounterV1.State", hostile))), ADMIN,
                 rec("State", Bytes.of(new byte[27]), n(41), n(1)));
+        // Review S1 (I41): v2's ordinary init seeded by the v1 instance (its token named as @MigrateTo expects) in place of the
+        // adoption: refused on every leg (migrate:from). The v1 instance holds only its deposit, so v2's init value fits
+        // and only the new rule refuses (JscV2M3cAttackTest shows the old side accepting the same transaction).
+        Rec bare = rec("State", Bytes.of(ADMIN), Bytes.of(p2), n(41));
+        v2.adoption = adoption(v1, "upgrade", v1.java(bare), BigInteger.ZERO, v2, v2.harness.minAda() - v1.harness.minAda(), ADMIN);
+        migrateRefused(v2, "migrate:from", "init", null, List.of(), at(ADMIN, 0, 0).withPrior(new Interpreter.PriorV(Bytes.of(p1), as("CounterV1.State", bare))),
+                ADMIN, rec("State", Bytes.of(ADMIN), n(0), n(1)));
+        // The same init seeded by an instance of another policy is an ordinary creation's seed: not this rule's.
+        ok(v2.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN));
         // K49: exactly the old input's lovelace: one more or one less is refused (transaction-level: the new side's value rule).
         v2.adoption = adoption(v1, "upgrade", oldJ, funds, v2, 1, ADMIN);
         v2.transactionLevel("migrate", null, List.of(), adopt, ADMIN);
@@ -645,6 +654,12 @@ class JscV2M3cFourWayTest {
             assertEquals("input:old", e.refusal(), m.toString());
             v2.jsCalls.add(JsLeg.call("migrate", null, List.of(n(5)), t, v2.params, "refused", null, e, "TallyV2.migrate " + m));
         }
+        // Review S1: TallyV2's ordinary init seeded by the TallyV1 instance skips the adoption's requires (the admin, the
+        // deadline) and the adopted state: refused on every leg (migrate:from), even past the deadline.
+        Rec bareOld = rec("State", Bytes.of(ADMIN), Bytes.of(p2), voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b")));
+        v2.adoption = adoption(v1, "move", v1.java(bareOld), BigInteger.ZERO, v2, v2.harness.minAda() - v1.harness.minAda(), A, B, EVE);
+        migrateRefused(v2, "migrate:from", "init", null, List.of(), new Tx(Bytes.of(EVE), BigInteger.ZERO, BigInteger.ZERO, DEADLINE, DEADLINE.add(WINDOW))
+                .withPrior(new Interpreter.PriorV(Bytes.of(p1), as("TallyV1.State", bareOld))), EVE, rec("State", Bytes.of(EVE), List.of(), n(0), n(0)));
         // K49: exactly the old input's lovelace.
         v2.adoption = adoption(v1, "move", oldJ, funds, v2, 1, A, B);
         v2.transactionLevel("migrate", null, List.of(n(5)), adopt, ADMIN);
@@ -684,7 +699,7 @@ class JscV2M3cFourWayTest {
         var o = in.resolved();
         Value v = Value.lovelace(o.value().lovelaceOf()).merge(token(to, id, 1));
         c.inputs.set(0, new org.julclang.ledger.TxInInfo(in.outRef(), new TxOut(script(to), v, o.datum(), o.referenceScript())));
-        c.mint = c.mint.merge(token(from, id, 1)).merge(token(to, id, -1));
+        c.mint = withoutZeros(c.mint.merge(token(from, id, 1)).merge(token(to, id, -1)));
         return c;
     }
 
@@ -696,7 +711,34 @@ class JscV2M3cFourWayTest {
     static void migrateRefused(FourWay f, String cls, String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate) throws Exception {
         assertEquals("refused", f.check(method, state, args, t, signer, candidate), f.name + "." + method);
         assertEquals(cls, f.lastRefusal, f.name + "." + method);
+        // Review C4: the validator's refusal is a script's (phase 2), not the ledger's: the transaction is well formed.
+        scriptRejects(f.lastVerdict, method.equals("migrate") || method.equals("init") ? "MINT" : "SPEND", f.name + "." + method + " (" + cls + ")");
         f.migrateRefusals++;
+    }
+
+    /**
+     * Review C4: a refusal by the script that holds the defence ({@code prefix}: "MINT", "SPEND"), in a transaction the
+     * ledger accepts (no zero mint entry, no other phase-1 problem), so removing that script's check makes the test fail.
+     */
+    static void scriptRejects(StateHarness.Verdict v, String prefix, String what) {
+        assertNotNull(v, what);
+        assertFalse(v.accepted(), what + ": accepted\n" + v);
+        assertFalse(v.results().containsKey("LEDGER"), what + ": refused by the ledger, not by a script\n" + v);
+        assertTrue(v.results().entrySet().stream().anyMatch(e -> e.getKey().startsWith(prefix) && !e.getValue().isSuccess()),
+                what + ": no " + prefix + " script refuses it\n" + v);
+    }
+
+    /** A value without zero quantities (Value.merge keeps a cancelled entry, which the ledger refuses: review C4). */
+    static Value withoutZeros(Value v) {
+        Value out = Value.zero();
+        for (PolicyId p : v.inner().keys()) {
+            var tokens = v.inner().get(p);
+            for (TokenName n : tokens.keys()) {
+                BigInteger q = tokens.get(n);
+                if (q.signum() != 0) out = out.merge(Value.singleton(p, n, q));
+            }
+        }
+        return out;
     }
 
     /** The old side's transaction one step away (each rejected by the old version's validator alone), and the attack suite. */
@@ -726,12 +768,12 @@ class JscV2M3cFourWayTest {
         otherName.mint = otherName.mint.merge(token(p2, fill(0x01), 1));
         muts.put("the successor's token not named for the spent input", otherName);
         var unburned = honest.copy();
-        unburned.mint = unburned.mint.merge(token(v1.harness.policy(), v1.harness.instanceId(), 1));
+        unburned.mint = withoutZeros(unburned.mint.merge(token(v1.harness.policy(), v1.harness.instanceId(), 1)));
         muts.put("the old token not burned", unburned);
         for (var e : muts.entrySet()) {
             var v = v1.harness.evaluate(e.getValue());
             v1.validatorRuns++;
-            assertFalse(v.accepted(), "the old side accepts the mutant \"" + e.getKey() + "\"\n" + v);
+            scriptRejects(v, "SPEND", "the old side, the mutant \"" + e.getKey() + "\"");
             v1.mutantsRejected++;
         }
         v1.attacksRejected += Attacks.assertAllRejected(v1.harness, honest);
@@ -763,7 +805,7 @@ class JscV2M3cFourWayTest {
         assertTrue(v2.harness.evaluate(mine).accepted(), "the control\n" + v2.harness.evaluate(mine));
         var muts = new LinkedHashMap<String, TxModel>();
         var unburned = mine.copy();
-        unburned.mint = unburned.mint.merge(token(v1.harness.policy(), v1.harness.instanceId(), 1));
+        unburned.mint = withoutZeros(unburned.mint.merge(token(v1.harness.policy(), v1.harness.instanceId(), 1)));
         muts.put("the old instance not burned (it does not end)", unburned);
         var twice = mine.copy();
         twice.mint = twice.mint.merge(token(v2.harness.policy(), successorId(), 1));
@@ -779,7 +821,7 @@ class JscV2M3cFourWayTest {
         for (var e : muts.entrySet()) {
             var v = v2.harness.evaluate(e.getValue());
             v2.validatorRuns++;
-            assertFalse(v.accepted(), "the new side accepts the mutant \"" + e.getKey() + "\"\n" + v);
+            scriptRejects(v, "MINT", "the new side, the mutant \"" + e.getKey() + "\"");
             v2.mutantsRejected++;
         }
         // The attack suite on the whole migration (both halves' scripts run in one transaction): each attack is refused by the

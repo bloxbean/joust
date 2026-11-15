@@ -239,6 +239,12 @@ class Program {
       const named = this.#field(state, to.field);
       if (named.length === 0 || !bytesEqual(named, tx.successor)) throw new Refused(`the instance migrates only into the successor ${to.field} names`, 'migrate', 'to');
     }
+    // Review S1 (I41): an ordinary creation whose seed is an instance of the previous version (tx.prior, of the policy the
+    // init migrate's params field pins) would satisfy that version's migrating destroy without the adoption's rules.
+    const adoption = this.ir.methods.find((x) => x.kind === 'migrate');
+    if (m.kind === 'init' && adoption && tx && tx.prior && bytesEqual(tx.prior.policy, this.#paramsField(adoption.from))) {
+      throw new Refused('an ordinary creation consumes no instance of the previous version: only init migrate adopts one', 'migrate', 'from');
+    }
     if (m.kind === 'migrate') {
       if (!tx || !tx.prior) throw new Error(`${m.name} adopts an instance: its transaction needs it`);
       if (!bytesEqual(tx.prior.policy, this.#paramsField(m.from))) throw new Refused(`the adopted instance is not of the policy params.${m.from} pins`, 'migrate', 'from');

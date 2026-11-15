@@ -858,6 +858,13 @@ public final class Interpreter {
                 throw new Refused("the instance migrates only into the successor " + to + " names", "migrate", "to");
             }
         }
+        // Review S1 (I41): an ordinary creation whose seed is an instance of the previous version (τ.prior, of the policy the
+        // init migrate's params field pins) would satisfy that version's migrating destroy without the adoption's rules.
+        Ir.Method adoption = p.migrate();
+        if (m.kind() == Ir.Kind.INIT && adoption != null && tx != null && tx.prior() != null
+                && tx.prior().policy().equals(paramsField(adoption.migration().from()))) {
+            throw new Refused("an ordinary creation consumes no instance of the previous version: only init migrate adopts one", "migrate", "from");
+        }
         if (m.kind() == Ir.Kind.MIGRATE) {
             if (tx == null || tx.prior() == null) throw new IllegalArgumentException(m.name() + " adopts an instance: its transaction needs it (withPrior)");
             if (!tx.prior().policy().equals(paramsField(m.migration().from()))) {

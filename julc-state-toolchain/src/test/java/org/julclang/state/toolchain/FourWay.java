@@ -1472,6 +1472,22 @@ final class FourWay {
             case "init" -> {
                 Object first = ok ? nextJ : candidate == null ? null : java(candidate);
                 if (first == null) return null;
+                if (t != null && t.prior() != null && adoption != null) {
+                    // M3c review S1: an ordinary creation seeded by the previous version's instance (τ.prior): the whole
+                    // migration as this contract's mint sees it, under CreateInstance(seed = the spent instance, …).
+                    var whole = adoption.apply(first);
+                    var mine = whole.copy();
+                    mine.spendRedeemers.clear();
+                    var cr = (org.julclang.core.PlutusData.ConstrData) redeemer;
+                    var crf = new ArrayList<>(cr.fields());
+                    crf.set(0, StateHarness.data(StateHarness.LIVE_REF));
+                    mine.mintRedeemer = new org.julclang.core.PlutusData.ConstrData(cr.constructorTag(), crf);
+                    if (c != null) mine.range = StateHarness.window(c.validFrom(), c.validTo());
+                    v = evaluate(method, t, signer, mine);
+                    validatorRuns++;
+                    lastVerdict = v;
+                    return v.accepted();
+                }
                 var tx = withHeads(harness.create(redeemer, first, c));   // M3b: a keyed contract's heads
                 if (hasMaps()) {
                     var p = ms.prepareCreation(harness.policy(), (Class) stateClass, first, harness.seed());
