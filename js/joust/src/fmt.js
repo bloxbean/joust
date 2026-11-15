@@ -1,20 +1,30 @@
 // joust fmt [--check] [<file or dir>...] (ADR-0021 r9 §15): the .jsc formatter, through the toolchain engine's lang.format
-// (the language core's one entry, which jsc --fmt and the server's textDocument/formatting call too). A file that does not
-// lex or parse is reported at its first error and left as it was (F4); a file is written only when its text changes, all
-// at once (a temporary file beside it, renamed over it).
-import { lstatSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+// (the language core's one entry, which jsc --fmt and the server's textDocument/formatting call too). A file is read as
+// UTF-8 strictly (#120 F1) and formatted as a module of its project (C3: its imports read as the build reads them). It is
+// refused, and left as it was, when it does not lex or parse (F4), is not valid UTF-8, or is read-only (F2: never made
+// writable); a rewritten file keeps its mode, and is written whole (a temporary file beside it, renamed over it).
+// Exit codes (F5): 0 formatted (with --check: already was), 1 not formatted (--check), 2 a file refused, 3 usage.
+import { accessSync, chmodSync, constants, lstatSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { loadToolchain } from './toolchain.js';
+import { libraryPackages } from './libraries.js';
 
-/** The .jsc files under `paths` (directories walked, node_modules and links skipped), sorted; or `{ error }`. */
+export const FMT_OK = 0;
+export const FMT_NOT_FORMATTED = 1;
+export const FMT_REFUSED = 2;
+export const FMT_USAGE = 3;
+
+const strict = new TextDecoder('utf-8', { fatal: true });
+
+/** The .jsc files under `paths` (directories walked, node_modules and links skipped), sorted, each with its root; or `{ error }`. */
 export function jscFiles(paths) {
   const out = [];
-  const walk = (dir) => {
+  const walk = (dir, root) => {
     for (const e of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
       const p = join(dir, e.name);
-      if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')) walk(p);
-      else if (e.isFile() && e.name.endsWith('.jsc')) out.push(p);
+      if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')) walk(p, root);
+      else if (e.isFile() && e.name.endsWith('.jsc')) out.push({ file: p, root });
     }
   };
   for (const p of paths) {
@@ -24,34 +34,72 @@ export function jscFiles(paths) {
     } catch {
       return { error: `${p}: no such file or directory` };
     }
-    if (st.isDirectory()) walk(p);
-    else if (st.isFile()) out.push(p);
+    if (st.isDirectory()) walk(p, p);
+    else if (st.isFile()) out.push({ file: p, root: dirname(p) });
     else return { error: `${p}: not a regular file or a directory` };
   }
   return { files: out };
 }
 
+/** The .jsc modules under `root` by id (and the npm packages' libraries as pkg:<package>/<path>), for imports (C3). */
+function projectFiles(root, packagesRoot) {
+  const files = {};
+  const { files: found = [] } = jscFiles([root]);
+  for (const { file } of found) {
+    try {
+      files[relative(root, file).split(sep).join('/')] = strict.decode(readFileSync(file));
+    } catch {
+      // not a module the build could read either
+    }
+  }
+  if (packagesRoot) {
+    try {
+      for (const [k, v] of Object.entries(libraryPackages(packagesRoot).packages)) files[`pkg:${k}`] = v;
+    } catch {
+      // the build reports a broken package
+    }
+  }
+  return files;
+}
+
 /**
- * Formats `paths` (or, with `check`, lists the files that are not formatted and writes nothing). Returns the exit code:
- * 0 when every file is formatted (with check: already was), 1 when one is refused or (with check) not formatted, 2 when
- * a path is not a file or a directory or the engine cannot format.
+ * Formats `paths` (or, with `check`, lists the files that are not formatted and writes nothing). `contracts` and
+ * `root`: the project's contracts directory (a file under it is a module of it, its npm packages' libraries too) and
+ * root. Returns the exit code (above).
  */
-export async function fmt({ paths, check = false, engine, log = console.log, error = console.error } = {}) {
+export async function fmt({ paths, check = false, engine, root = null, contracts = null, log = console.log, error = console.error } = {}) {
   const found = jscFiles(paths);
   if (found.error) {
     error(`joust fmt: ${found.error}`);
-    return 2;
+    return FMT_USAGE;
   }
   const api = engine ?? await loadToolchain();
   if (typeof api?.lang?.format !== 'function') {
     error('joust fmt: this toolchain engine has no lang.format (it predates JOUST M5d)');
-    return 2;
+    return FMT_USAGE;
   }
+  const contractsReal = contracts ? (() => { try { return realpathSync(contracts); } catch { return null; } })() : null;
+  const projects = new Map();
+  const projectOf = (r) => {
+    if (!projects.has(r)) projects.set(r, projectFiles(r, r === contractsReal && root ? root : null));
+    return projects.get(r);
+  };
   let refused = 0;
   let changed = 0;
-  for (const f of found.files) {
-    const text = readFileSync(f, 'utf8');
-    const r = api.lang.format({ source: text });
+  for (const { file: f, root: given } of found.files) {
+    let text;
+    try {
+      text = strict.decode(readFileSync(f));
+    } catch {
+      error(`${f}: error: not valid UTF-8 (not formatted)`);
+      refused++;
+      continue;
+    }
+    // A file under the project's contracts directory is a module of it; any other, of the directory it was found in.
+    const real = realpathSync(f);
+    const base = contractsReal && (real === contractsReal || real.startsWith(contractsReal + sep)) ? contractsReal : realpathSync(given);
+    const id = relative(base, real).split(sep).join('/');
+    const r = api.lang.format({ source: text, id, files: projectOf(base) });
     const a = r?.ok ? JSON.parse(r.json) : null;
     if (!a) {
       error(`${f}: error: the formatter failed: ${r?.error ?? 'no result'} (not formatted)`);
@@ -64,14 +112,25 @@ export async function fmt({ paths, check = false, engine, log = console.log, err
       continue;
     }
     if (a.text === text) continue;
+    if (!check) {
+      try {
+        accessSync(f, constants.W_OK);
+      } catch {
+        error(`${f}: error: read-only (not formatted; it is never made writable)`);
+        refused++;
+        continue;
+      }
+    }
     changed++;
     if (check) {
       log(`${f}: not formatted`);
       continue;
     }
+    const mode = lstatSync(f).mode & 0o7777;
     const tmp = join(dirname(f), `.${basename(f)}.${randomBytes(6).toString('hex')}.fmt`);
     try {
-      writeFileSync(tmp, a.text, { flag: 'wx' });
+      writeFileSync(tmp, a.text, { flag: 'wx', mode: 0o600 });
+      chmodSync(tmp, mode);
       renameSync(tmp, f);
     } finally {
       rmSync(tmp, { force: true });
@@ -79,5 +138,24 @@ export async function fmt({ paths, check = false, engine, log = console.log, err
     log(`${f}: formatted`);
   }
   log(`joust fmt: ${found.files.length} file(s), ${changed} ${check ? 'not formatted' : 'formatted'}, ${refused} refused`);
-  return refused || (check && changed) ? 1 : 0;
+  return refused ? FMT_REFUSED : check && changed ? FMT_NOT_FORMATTED : FMT_OK;
+}
+
+/**
+ * #120 S3: the default target, the configured contracts directory, only when it is inside the project root (real
+ * paths): `{ path }` or `{ error }`.
+ */
+export function defaultTarget(root, contracts) {
+  const want = isAbsolute(contracts) ? contracts : resolve(root, contracts);
+  let real;
+  try {
+    real = realpathSync(want);
+  } catch {
+    return { error: `the contracts directory ${contracts} does not exist` };
+  }
+  const top = realpathSync(root);
+  if (real !== top && !real.startsWith(top + sep)) {
+    return { error: `joust.config.json's contracts (${contracts}) is outside the project (${top}): joust fmt formats only inside it; name the files to format them` };
+  }
+  return { path: want };
 }
