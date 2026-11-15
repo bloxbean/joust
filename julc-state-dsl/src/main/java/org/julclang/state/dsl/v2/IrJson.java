@@ -1199,7 +1199,10 @@ final class IrJson {
                     }
                 }
                 if (k == Ir.Kind.WITHDRAW && !owned.isEmpty()) {
-                    throw new IllegalArgumentException(where + "a withdraw handler is not supported beside owned types yet (JSC1305)");
+                    // M3 final pass MD6: beside keyed types the checker's code is JSC1244 (the processor's keyed rule).
+                    boolean keyed = r.get("keyed") instanceof List<?> kl && !kl.isEmpty();
+                    throw new IllegalArgumentException(where + "a withdraw handler is not supported beside " + (keyed ? "keyed types (JSC1244)"
+                            : "owned types yet (JSC1305)"));
                 }
                 if (k.purpose()) {
                     if (params == null) throw new IllegalArgumentException(where + "a handler is governed by the params, which the contract lacks (JSC1317)");

@@ -216,9 +216,10 @@ merged head unless stated.
 ## Not in M3b
 
 Keyed types with native assets, `BigMap`s or batched actions (the processor's limits, JSC1244); moves of keyed objects
-(JSC1247); a time-derived key (JSC1251). Migration and withdraw or purpose handlers beside keyed types are refused by the
-processor (as migrating or asset-aware); `.jsc` has neither until M3c, which extends JSC1244 and both readers' keyed rules
-to them (#112 design F4). Purposes, staking and migration are M3c's.
+(JSC1247); a time-derived key (JSC1251). Migration and withdraw handlers beside keyed types are refused by the processor
+(as migrating or asset-aware). In `.jsc` (M3c, corrected in the M3 final pass, MD6): a withdraw handler beside keyed types
+is JSC1244 in the checker and both readers; migration is JSC1334 (the owned-objects rule fires first); certify, vote and
+propose handlers are accepted (the Mixed coverage contract). Purposes, staking and migration are M3c's.
 
 ## Decisions for the maintainers
 

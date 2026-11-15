@@ -192,6 +192,10 @@
   "message": "(JSC1305)"
  },
  {
+  "file": "purpose-withdraw-keyed.json",
+  "message": "(JSC1244)"
+ },
+ {
   "file": "purpose-owned-instance-destroy.json",
   "message": "(JSC1210)"
  },

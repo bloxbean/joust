@@ -460,7 +460,8 @@ whose envelope does not fit, `JscV2M3bAttackTest`), the anchor's relink (its dat
 replaced, its lovelace not lowered), the token's name (`0x4B ‖ blake2b_224(instance ‖ typeId ‖ key)`), the mint, a
 retire's continuing output (Retired_T, the deposit plus a builder's top-up) and its payouts' total, and which UTxO
 τ.`anchor` is: the validator binds it to its token. The keyed limits are the checker's (JSC1240–JSC1251): no native
-assets, no batched actions, no BigMaps, no moves, at most 16 keyed types, maxDatumBytes at most 2048, a retiring exit
+assets, no batched actions, no BigMaps, no moves, no withdraw handler (JSC1244; a contract with one is asset-aware),
+no migration (JSC1334, the owned-objects rule), at most 16 keyed types, maxDatumBytes at most 2048, a retiring exit
 signed by its owner and needing nobody else, every keyed action with an audience, and a key that is never a time value
 (D11: a key decides the list's order and whether an insert succeeds, as a map key does).
 
@@ -504,8 +505,8 @@ address under the contract's own staking credential; it needs a withdraw and a c
 rewards and the registration would be unreachable (I38), and every state output keeps that stake part. A handler reads
 no `funds` (no input of the contract is spent: JSC1315), a withdraw handler's send is `Value.lovelace(n)` written as
 such (JSC1340: a native asset could never allocate a withdrawal, review S4), and neither `stakeSelf` nor a withdraw
-handler is accepted beside owned types yet (JSC1305: their objects' stake part and composed payouts are not covered,
-review F1, S3).
+handler is accepted beside plain owned types yet (JSC1305: their objects' stake part and composed payouts are not
+covered, review F1, S3); a withdraw handler beside keyed types is JSC1244 (the processor's keyed rule, §2.9).
 
 ### 2.11 Migration (M3c)
 
