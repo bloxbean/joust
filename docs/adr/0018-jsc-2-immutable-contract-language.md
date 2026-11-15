@@ -833,7 +833,10 @@ upgrade's CounterV1 and CounterV2). The handlers `withdraw m(amount: Int, args�
 handler words are words only where a member starts, so an action, a field or a local may still be called `withdraw`
 or `vote`. A handler sees no instance (JSC1318), reads its parameters and the params, and names its audience with
 `quorum` or `authorized` over `params.*` (JSC1312, JSC1313); propose takes none, since its validator checks none. A
-withdraw handler's only effect is `send`, its sends allocating the amount exactly (I37); the others decide by a Bool.
+withdraw handler's only effect is `send`, its sends allocating the amount exactly (I37); the others decide by a Bool. Neither `stakeSelf` nor a withdraw handler is accepted beside owned types yet (JSC1305, round r2): the first because
+no contract covers the objects' outputs under the stake part (A40, K47), the second, conservatively, because reward sends
+composed with objects' payouts are not covered either (K42); a withdraw handler beside keyed types is JSC1244's, as the
+processor's.
 The purposes' **ledger types** are JuLC's (D5; semantics §1.5): read by projection or an exhaustive `match`, never
 stored, passed by a caller, encoded or compared (JSC1320–JSC1325), with a read-only `LedgerMap` and `std/certs`.
 Migration is two halves of one transaction: `destroy m() <audience> migrates to f { }` (`@MigrateTo("f")`, `f` a
