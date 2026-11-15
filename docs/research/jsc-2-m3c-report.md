@@ -92,7 +92,12 @@ rule), which the example does not make.
 
 `JscV2M3cFourWayTest`: every call on the JavaScript interpreter, the Java interpreter, the generated Java on the JVM
 (and the Java example's, for the ports), the transition program (a withdraw handler without Ctx, the creations, the
-destroys) and the validator run for its purpose, each refusal asserted by its class.
+destroys) and the validator run for its purpose. What each leg is asked (review C6): the two reference interpreters
+give a refusal's class, and the test asserts it and that both give the same one; the JVM method and the transition
+program compute the transition alone (for a precondition's refusal, the body's result, which must equal the
+interpreter's transition; for a body's refusal, "refused"); the validator is asked accept or refuse, and since r2 (C4)
+a migration's refusal is asserted to be a script's (the MINT or SPEND that holds the defence), never the ledger's. The
+UPLC legs report no class (semantics §2.1), so the class is observed twice, not five times.
 
 | Contract | Calls | Refused | Validator runs | Purpose | Migration | Modifier | Invariant | Tx-level | Mutants | Attacks | What they cover |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -136,7 +141,7 @@ it.
 | A43 the successor pinned by a state field | five-way: a stranger's setSuccessor (`modifier:only admin`); the admin may change it in CounterV1 (examples/upgrade's rule, kept); TallyV1 locks it (`require:…the successor is set once`); checker JSC1331 (a params successor), JSC9014 (warned, and silent with the lock); `JscV2M3cAttackTest.aSuccessorThatIsTheOldPolicy_isNoMigration` |
 | A44 the old state as a checked input | five-way `input:old` (a 27-byte admin; a 27-byte voter); interpreters: a map out of order, a key twice; `JscV2M3cAttackTest.theAdoptedState_isCheckedAsData` (12 raw datums: an Option of tag 2, Some without its field, a map out of order, a key twice, a 65-byte key, a 27-byte voter, a voter that is an integer, a 29-byte admin, an admin that is an integer, a field short, a field more, constructor 1); stated: an unread field of the wrong kind is not looked at |
 | A45 migration excluded where unsound | checker JSC1334 (owned objects on the adopting side, native assets on the migrating side, a previous version with BigMap state); readers (mutants `purpose-migrate-big-maps`, `-migrate-with-send`, `-migrates-with-send`); an instance destroy beside owned objects is JSC1210 already |
-| A46 refusal-class parity | every M3c refusal asserted by class on all five legs (`purpose:*`, `migrate:*`, `input:old`, `modifier:*`, `invariant:*`); the JavaScript leg compares classes |
+| A46 refusal-class parity | the class of every M3c refusal (`purpose:*`, `migrate:*`, `input:old`, `modifier:*`, `invariant:*`) asserted on both reference interpreters, which must agree; the JVM and the transition program agree on the transition, and the validator on accept or refuse (a migration's refusal by the script that holds the defence, r2). The UPLC legs report no class: the A46 gate is interpreter parity plus outcome agreement, not five class observations (review C6) |
 | A47 mutants per transaction shape | the five-way's mutant counts (see the table) |
 | A48 byte-identical earlier contracts | `diff -r` of `generateJsc`'s output against the base (see Builds) |
 | A49 size and budget at saturation | `JscV2M3cGateTest` |

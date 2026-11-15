@@ -259,8 +259,17 @@ the params and (a withdraw handler) the transaction, and the params say who may:
 `authorized params.governor`. The purposes' data is the ledger's: `TxCert`, `Voter`, `Vote`, `GovernanceActionId`,
 `ProposalProcedure`, `GovernanceAction` and the types they hold, with JuLC's constructors and fields, read by a field
 or an exhaustive `match`; never stored, passed by a caller, encoded or compared (`JSC1320`–`JSC1325`). A
-`LedgerMap<Credential, Int>` (a treasury withdrawal's, a committee update's) is read-only: `size`, `keys`, `values`,
-`get`, `has`, `any`, `all`, `fold`. `std/certs` holds the exact certificate tests.
+`LedgerMap<Credential, Int>` (a treasury withdrawal's, a committee update's) is read-only: `size`, `isEmpty`, `keys`,
+`values`, `get`, `has`, `any`, `all`, `fold`. `std/certs` holds the exact certificate tests (`isRegistration`,
+`delegatesOnlyTo`, `isDRepLifecycle`); a vote delegation to a given DRep is a `match` over the delegatee. Two limits:
+`ParameterChange.parameters` is `PlutusData` in the ledger and is never read (`JSC1320`), so a constitution guardrail over
+proposed parameter changes stays in Java; and a handler reads no `funds` (`JSC1315`). A withdraw handler's sends are
+`Value.lovelace(n)` written as such (`JSC1340`), each positive. `stakeSelf` and a withdraw handler are not accepted
+beside owned types yet (`JSC1305`).
+
+A contract with a `vote` or `propose` handler compiles without a CIP-57 blueprint: JuLC's blueprint writer has no
+vocabulary for those purposes yet, so pass `-Ajulc.blueprint=false` to `compileJava`, as examples/dsl and examples/staking
+do (every validator's own `<Name>Validator.plutus.json` is still written).
 
 ```text
 contract StakedVault(stakeSelf) {
@@ -286,7 +295,11 @@ params field, `JSC1331`) burns its token and moves its whole value, and the new 
 `init migrate from params.previous(old: CounterV1.State) { … }` mints the new instance for it, from the old state. A
 migrating destroy has no effects (`JSC1332`) and an audience (`JSC1333`). An action that writes the successor field
 warns (`JSC9014`: it can redirect the migration after users relied on it) unless it requires the field unset,
-`require(successor == #, "the successor is set once")`, which fixes it once.
+`require(successor == #, "the successor is set once")`, which fixes it once; check then that the new successor is a
+28-byte policy (`require(length(next) == 28, …)`), since a set-once successor of another length could never migrate
+(review F8). The adopting version
+imports a previous version that declares a migrating destroy (`JSC1336`), and its ordinary `init` never consumes an
+instance of that version: only `init migrate` adopts one.
 
 **Invariants** (ADR-0009 D4) are checked by the validator on every state it accepts as an output (a creation and every
 action; a destroy has none), and by the runtime before it submits. A state that breaks one can only be destroyed.

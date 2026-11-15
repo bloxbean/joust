@@ -853,7 +853,12 @@ Decisions M3c asks the maintainers to confirm (r28):
   output, never another policy's, so it stays no checked input.
 - **The adopted state is checked as a read state is.** Keys, hashes, maps and addresses at the previous version's state;
   its nested tags as its writer wrote them, and a field's kind as its type (a field the adoption reads is decoded when
-  read; one it never reads is not looked at).
+  read; one it never reads is not looked at). The writer is a `.jsc` contract with a migrating destroy (JSC1336), whose
+  outputs are its typed states, so an instance holding its token holds a well-formed datum (review F3 measured the
+  malformed ones: semantics §4). A full decode of the adopted datum is the alternative, at the adoption's cost.
+- **Only the adoption consumes the previous version** (security S1, I41). A successor's ordinary creation seeded by the
+  old instance would carry the token the old side's `@MigrateTo` expects; the processor's `CreateInstance` now refuses a
+  seed at the previous policy's address or holding its token, so a migration always runs the adoption's rules.
 - **A purpose handler's arguments.** A certificate's handler runs after the processor's filter (a script credential's
   registration, delegation or DRep registration or update), which no handler can widen; a vote handler runs once per
   vote of its voter, the call being the conjunction; a propose handler takes no modifiers.
@@ -1856,4 +1861,14 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   the interpreters' purpose filters and migration halves as transaction preconditions) and the decisions it asks to
   confirm (a successor that can change until the migration, with a warning and its lock; no migration beside objects,
   BigMaps or assets, which keeps the arriving-object premise; the adopted state checked as a read state; the handlers'
-  arguments and order); §8 records M3c's gates (the staking and upgrade ports, within the bounds).
+  arguments and order); §8 records M3c's gates (the staking and upgrade ports, within the bounds). Round r2 (#113):
+  in a contract with `@Migrate` an ordinary creation never consumes the previous version's instance (security S1, I41:
+  the processor's `CreateInstance`, so examples/upgrade's CounterV2 changes hash and its fixtures are recorded again;
+  both interpreters refuse it as `migrate:from`); a withdrawal's sends are each positive (Codex C1); both IR readers
+  refuse equality on ledger values, a set on a LedgerMap and an opaque bind (C2); `funds` is no name in a handler or an
+  init migrate (C3); `stakeSelf` and a withdraw handler are refused beside owned types (JSC1305; design F1, security S3);
+  an init migrate imports a version with a migrating destroy (S2, F4); a withdraw send is `Value.lovelace(n)` (S4);
+  `std/certs` drops `delegatesVoteTo` (F5). **Compatibility (F9):** the names M3c reserves (the annotations `Withdraw`,
+  `Certify`, `Votes`, `Propose`, `Migrate`, `MigrateTo`, the class `Certs`, the record `Rewards`, the ledger types and their
+  constructors, `LedgerMap`) are reserved in every contract, as M2c's `Deposit` is, so that a name means one thing in
+  every file and in the generated Java beside the API's imports: an `enum Op { Pay, Withdraw }` now needs other names.
