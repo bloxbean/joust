@@ -117,9 +117,13 @@ class FiveWayFuzzTest {
                 if (out.startsWith("ok:") && !view && s.mutants()) {
                     // Every next state, payout and event one step away, and the attack suite (an unsigned caller among them):
                     // the validator must refuse each (review r1, design F1).
-                    // A method that reads no transaction and has no modifier checks no signature (anyone may call it), so its
+                    // A method checks a signature when it reads the transaction (its caller signs) or has a modifier that names
+                    // who signs (only, quorum, authorized). Otherwise anyone may call it (`open`, or no modifier), so its
                     // transaction is built unsigned and the signer attacks do not apply, as in the hand-written four-way tests.
-                    boolean signs = f.interp.usesTx(s.method()) || !f.interp.modifiers(s.method()).isEmpty();
+                    // (The long campaign at 9b8caf3f found the oracle counting `open` as a signing modifier:
+                    // FiveWayRegressions/open-action-unsigned.plan.)
+                    boolean signs = f.interp.usesTx(s.method()) || f.interp.modifiers(s.method()).stream()
+                            .anyMatch(m -> m.startsWith("only ") || m.startsWith("quorum") || m.startsWith("authorized"));
                     int mutantsBefore = f.mutantsRejected, attacksBefore = f.attacksRejected;
                     f.as(signs ? signers : null, null);
                     f.mutants(s.method(), state, s.args(), t, signs ? signer : null);

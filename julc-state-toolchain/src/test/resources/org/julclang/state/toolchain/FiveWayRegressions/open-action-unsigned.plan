@@ -1,0 +1,149 @@
+{
+  "generator": "JscGen r2",
+  "name": "C38b368f100",
+  "contractFile": "org/julclang/state/fuzz/C38b368f100.jsc",
+  "files": {
+    "org/julclang/state/fuzz/C38b368f100.jsc": "jsc 2\npackage org.julclang.state.fuzz\n\nimport { pow } from \"std/math\"\nimport { take } from \"std/bytes\"\n\ntype Pt = { x: Int, y: Int }\nenum Tier { Lo, Hi { k: Int } }\nfn g0(a: Int, c: Int): Int = 170_141_183_460_469_231_731_687_303_715_884_105_727\n\ncontract C38b368f100(maxDatumBytes = 2048) {\n  state { owner: Key, n: Int, m: Int, b: Bytes, f: Bool, xs: List<Int>, o: Option<Int>, t: Tier, p: Pt }\n  event Ev { v: Int }\n\n  init(a: Int, k: Bytes) {\n    const c0 = Pt { x: 0, y: a }.x\n    require((c0 != if true { a } else { a }) || !(true), \"m0\")\n    return { owner: caller, n: (7) % 1_000_003, m: (if true { (9_223_372_036_854_775_807 + a) } else { abs(-1_000_000) }) % 1_000_003, b: take(if (255 != c0) { #00ff } else { if true { k } else { # } }, 40), f: (3 == (9_223_372_036_854_775_807 + 1)), xs: ([(7 * 9_223_372_036_854_775_807)]).take(4).map(x0 => x0 % 1_000_003), o: if true { Some((1) % 1_000_003) } else { None }, t: Hi { k: (pow(max(7, c0), abs(9_223_372_036_854_775_807) % 9)) % 1_000_003 }, p: Pt { x: ([18_446_744_073_709_551_616].reverse().length) % 1_000_003, y: (10) % 1_000_003 } }\n  }\n\n  action a0(p0_0: Key, p0_1: Option<Int>) open {\n    pay(owner, 2_000_000 + abs(((m * m) % 1_000_000)) % 3_000_000)\n    return { ...state, m: (n) % 1_000_003 }\n  }\n\n  view w2(q: Int): Int = p.y\n\n}\n"
+  },
+  "params": null,
+  "features": ["M2b events", "time", "enum", "record"],
+  "kinds": {
+    "a0": "action",
+    "init": "init",
+    "w2": "view"
+  },
+  "steps": [{
+    "method": "init",
+    "state": null,
+    "args": [{
+      "int": "9223372036854775807"
+    }, {
+      "bytes": ""
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": ["0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"],
+    "mutants": true,
+    "candidate": {
+      "rec": "State",
+      "fields": [{
+        "bytes": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      }, {
+        "int": "830302"
+      }, {
+        "int": "-188201"
+      }, {
+        "bytes": "e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6"
+      }, {
+        "bool": true
+      }, {
+        "list": [{
+          "int": "722007"
+        }, {
+          "int": "-464417"
+        }, {
+          "int": "54852"
+        }, {
+          "int": "-670487"
+        }]
+      }, {
+        "some": {
+          "int": "-238875"
+        }
+      }, {
+        "rec": "Hi",
+        "fields": [{
+          "int": "137961"
+        }]
+      }, {
+        "rec": "Pt",
+        "fields": [{
+          "int": "-995905"
+        }, {
+          "int": "5"
+        }]
+      }]
+    }
+  }, {
+    "method": "a0",
+    "state": null,
+    "args": [{
+      "bytes": "c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8"
+    }, {
+      "none": true
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": false,
+    "candidate": null
+  }, {
+    "method": "a0",
+    "state": null,
+    "args": [{
+      "bytes": "48484848484848484848484848484848484848484848484848484848"
+    }, {
+      "some": {
+        "int": "-170141183460469231731687303715884105728"
+      }
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": ["0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"],
+    "mutants": true,
+    "candidate": null
+  }, {
+    "method": "a0",
+    "state": null,
+    "args": [{
+      "bytes": "6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f"
+    }, {
+      "none": true
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": false,
+    "candidate": null
+  }, {
+    "method": "a0",
+    "state": null,
+    "args": [{
+      "bytes": "11111111111111111111111111111111111111111111111111111111"
+    }, {
+      "none": true
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": true,
+    "candidate": null
+  }, {
+    "method": "w2",
+    "state": null,
+    "args": [{
+      "int": "433265"
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": ["0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"],
+    "mutants": true,
+    "candidate": null
+  }, {
+    "method": "a0",
+    "state": null,
+    "args": [{
+      "bytes": "bebebebebebebebebebebebebebebebebebebebebebebebebebebebe"
+    }, {
+      "some": {
+        "int": "45748"
+      }
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": false,
+    "candidate": null,
+    "window": ["1800000120000", "1800000120001"]
+  }]
+}

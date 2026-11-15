@@ -1035,12 +1035,21 @@ final class IrJson {
                 case "option" -> new Ty.OptT(type(e.getValue()));
                 case "record" -> new Ty.Rec(s(e.getValue()));
                 case "enum" -> new Ty.EnumT(s(e.getValue()));
-                case "map" -> new Ty.MapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
-                case "bigmap" -> new Ty.BigMapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
+                // A key type and a value type, exactly (the long campaign at 9b8caf3f: a third element was ignored here and
+                // refused by the JavaScript reader).
+                case "map" -> new Ty.MapT(type(pair(e.getValue()).get(0)), type(pair(e.getValue()).get(1)));
+                case "bigmap" -> new Ty.BigMapT(type(pair(e.getValue()).get(0)), type(pair(e.getValue()).get(1)));
                 case "instance" -> new Ty.Instance(s(e.getValue()));
                 case "deposit" -> new Ty.DepositT(e.getValue() == null ? null : type(e.getValue()));
                 default -> throw new IllegalArgumentException("unknown type " + e.getKey());
             };
+        }
+
+        /** A map type's [key, value]: a list of exactly two types. */
+        static List<Object> pair(Object o) {
+            List<Object> p = l(o);
+            if (p.size() != 2) throw new IllegalArgumentException("a map type is [key, value], not " + p.size() + " types");
+            return p;
         }
 
         Ir.Local decl(Object o) {
