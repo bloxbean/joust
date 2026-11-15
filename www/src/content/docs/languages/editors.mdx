@@ -32,8 +32,14 @@ may format differently in CI.
 
 <Aside type="note" title="Publishing">
 Maintainers attach the extension's `.vsix` to each GitHub release, with its SHA-256 and a provenance attestation.
-Marketplace and Open VSX listings follow once the publisher is decided. Until then, install the `.vsix` from the release:
-`code --install-extension vscode-joust.vsix`. Check it first with `gh attestation verify vscode-joust.vsix -R bloxbean/joust`.
+Marketplace and Open VSX listings follow once the publisher is decided. Until then, install the `.vsix` from the release
+(it is named `vscode-joust-<ext>.vsix`). Check it first, then install it:
+
+```sh
+gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust \
+  --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml --source-ref refs/heads/main
+code --install-extension vscode-joust-<ext>.vsix
+```
 </Aside>
 
 ## Other editors: a server you installed

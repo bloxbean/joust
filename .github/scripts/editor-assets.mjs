@@ -69,6 +69,8 @@ const record = {
   joust: version,
   assets: Object.fromEntries(assets.map((a) => [a, sha(join(out, a))])),
   engine: { sha256: engine, from: engineFrom },
+  // #121 S4: the tree-sitter archive's gzip bytes depend on Node's zlib.
+  node: process.version,
   publisher: JSON.parse(readFileSync(join(ext, 'package.json'), 'utf8')).publisher,
   note: 'Attached for maintainers to publish by hand after gh attestation verify (ADR-0021 D11); nothing here is published.',
 };

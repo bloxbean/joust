@@ -74,5 +74,38 @@ test('E7: write access only where it attaches, which checks out nothing and neve
   // The engine is the published package's, not the checkout's.
   assert.match(j.build, /npm pack "@julclang\/joust@\$VERSION"/);
   assert.match(j.build, /--engine-tarball/);
-  assert.match(j.build, /ref: v\$\{\{ inputs\.version \}\}/);
+});
+
+test('#121 S1: only from main, the tag itself (fully qualified, its commit, reachable from main), attached in the release environment', () => {
+  const j = jobs();
+  for (const name of ['build', 'attach']) assert.match(j[name], /^\s{4}if: github\.ref == 'refs\/heads\/main'$/m, `${name} runs only from main`);
+  assert.match(j.build, /ref: refs\/tags\/v\$\{\{ inputs\.version \}\}/);
+  assert.ok(!/ref: v\$\{\{/.test(body), 'never an unqualified ref');
+  assert.match(j.build, /fetch-depth: 0/);
+  assert.match(j.build, /head=\$\(git rev-parse HEAD\)/);
+  assert.match(j.build, /tag=\$\(git rev-parse "refs\/tags\/v\$\{VERSION\}\^\{commit\}"\)/);
+  assert.match(j.build, /\[\[ "\$head" == "\$tag" \]\] \|\| \{[^}]*exit 1; \}/);
+  assert.match(j.build, /git merge-base --is-ancestor "\$head" origin\/main \|\| \{[^}]*exit 1; \}/);
+  // The check runs right after the checkout, before anything is built.
+  assert.ok(j.build.indexOf('merge-base --is-ancestor') < j.build.indexOf('npm ci'));
+  assert.match(j.attach, /^\s{4}environment: release$/m);
+  // The docs give the verification that names this workflow and main.
+  const ops = readFileSync(`${REPO}docs/release-ops.md`, 'utf8');
+  assert.match(ops, /gh attestation verify vscode-joust-<ext>\.vsix -R bloxbean\/joust --signer-workflow bloxbean\/joust\/\.github\/workflows\/editor-assets\.yml\s*\\?\s*--source-ref refs\/heads\/main/);
+  assert.match(ops, /`release` environment/);
+});
+
+test('#121 F6, S4: attested before uploading; no install scripts; a pinned tree-sitter binary; the token only where gh runs; an exact Node', () => {
+  const j = jobs();
+  assert.ok(j.attach.indexOf('attest-build-provenance') < j.attach.indexOf('gh release upload'), 'attest, then upload');
+  assert.match(j.build, /\(cd tree-sitter-jsc && npm ci --ignore-scripts\)/);
+  assert.match(j.build, /\(cd js\/vscode-joust && npm ci --ignore-scripts\)/);
+  assert.ok(!/npm ci(?! --ignore-scripts)/.test(body), 'every npm ci without scripts');
+  assert.match(j.build, /TREE_SITTER_SHA256: [0-9a-f]{64}/);
+  assert.match(j.build, /sha256sum -c -/);
+  assert.match(j.build, /node-version: '\d+\.\d+\.\d+'/);
+  // GH_TOKEN only in the env of the steps that run gh, never a job's.
+  const jobEnvToken = /^ {4}env:\n(?: {6}.*\n)*? {6}GH_TOKEN/m;
+  assert.ok(!jobEnvToken.test(j.build) && !jobEnvToken.test(j.attach), 'no job-level GH_TOKEN');
+  for (const step of body.split(/\n {6}- /).filter((x) => /GH_TOKEN/.test(x))) assert.match(step, /\bgh (release|api)\b/, step.slice(0, 80));
 });

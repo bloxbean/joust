@@ -83,19 +83,36 @@ joust-<v>-SHA256SUMS.txt` and `gh attestation verify joust-<v>-<platform>.zip -R
 
 **The editor assets** (ADR-0021 D11, §16): the VS Code extension's `.vsix` and the tree-sitter package, attached to a
 release by `.github/workflows/editor-assets.yml`. **A maintainer runs it by hand** (Actions, then "Editor assets",
-then Run workflow, with the version), after the release's npm packages are out. Nothing else starts it.
+then Run workflow, from `main`, with the version), after the release's npm packages are out. Nothing else starts it, and
+both of its jobs refuse to run from any branch but `main`.
 
 What it does:
-1. It checks out the tag and fetches `@julclang/joust@<version>` with `npm pack`, so the `.vsix` gets the published
-   engine, compared byte for byte.
+1. It checks out `refs/tags/v<version>`, the tag itself, and checks that HEAD is the tag's commit and that `main`
+   reaches it. It fetches `@julclang/joust@<version>` with `npm pack`, so the `.vsix` gets the published engine,
+   compared byte for byte. Install scripts are off, and `tree-sitter` is the pinned release binary, checked by SHA-256.
 2. It builds `vscode-joust-<ext>.vsix`, `tree-sitter-jsc-<ts>.tar.gz`, `editor-assets-<version>.json` (the engine's
-   digests and where they came from) and `editor-assets-<version>-SHA256SUMS.txt`.
-3. It attaches them without ever replacing an asset, and attests the `.vsix` and the archive.
+   digests and where they came from, and the Node version that packed the archive) and
+   `editor-assets-<version>-SHA256SUMS.txt`.
+3. In the `release` environment, it attests the `.vsix` and the archive, then attaches every asset, never replacing
+   one.
 
 It publishes nothing: no Marketplace or Open VSX token exists in the repository or in CI.
 
+**Maintainer setup, once:** create the repository environment `release` (Settings, Environments) with required
+reviewers, the maintainers who may attach release assets, and deployments allowed from `main` only. The workflow names
+it but does not create it. Until it exists, GitHub creates it on the first run with no protection, so set it up first.
+
+**A failed attach:** the attestation comes first, so an uploaded asset is always attested. The `.vsix` is not
+byte-reproducible, though, so a re-run after a partial upload stops at "differs from this run's build". Delete the
+assets that run uploaded from the release, then run the workflow again.
+
 To publish the extension, once the publisher (Q4) and the Open VSX namespaces are settled:
-1. Download the `.vsix` from the release and verify it: `gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust`.
+1. Download the `.vsix` from the release and verify it:
+
+   ```sh
+   gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml \
+     --source-ref refs/heads/main
+   ```
 2. Publish it by hand: `vsce publish --packagePath vscode-joust-<ext>.vsix` and `ovsx publish vscode-joust-<ext>.vsix`,
    with tokens kept outside CI (D11's custody and incident rules).
 
