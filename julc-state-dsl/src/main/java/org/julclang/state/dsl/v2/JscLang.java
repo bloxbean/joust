@@ -269,7 +269,14 @@ public final class JscLang {
     private static String key(String source, String fileName, String id, java.util.Map<String, String> files) {
         var b = new StringBuilder().append(fileName).append('\0').append(id).append('\0').append(source.length()).append('\0');
         if (files != null) new java.util.TreeMap<>(files).forEach((k, v) -> b.append(k).append('\0').append(v.length()).append('\0').append(v).append('\0'));
-        return b.append(source).toString();
+        b.append(source);
+        // F12 on #115: the slots are keyed by the inputs' digest, never by the texts themselves.
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(
+                    b.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /**
@@ -285,7 +292,7 @@ public final class JscLang {
     public static String diagnosticsJson(String source, String fileName, String id, java.util.Map<String, String> files, String javaLibraries) {
         Analysis a = analysis(source, fileName, id, modulesOf(files), false, javaOf(javaLibraries));
         synchronized (JscLang.class) {
-            recent.put(key(source == null ? "" : source, fileName, id, files) + "\0" + (javaLibraries == null ? "" : javaLibraries), a.full());
+            recent.put(key(source == null ? "" : source, fileName, id, files) + "|" + digest(javaLibraries), a.full());
         }
         return bounded(a.diagnostics(), MAX_ENTRIES, MAX_JSON_CHARS);
     }
@@ -298,7 +305,7 @@ public final class JscLang {
     public static String indexJson(String source, String fileName, String id, java.util.Map<String, String> files, String javaLibraries) {
         java.util.function.Supplier<Model> full;
         synchronized (JscLang.class) {
-            full = recent.remove(key(source == null ? "" : source, fileName, id, files) + "\0" + (javaLibraries == null ? "" : javaLibraries));
+            full = recent.remove(key(source == null ? "" : source, fileName, id, files) + "|" + digest(javaLibraries));
         }
         if (full == null) full = analysis(source, fileName, id, modulesOf(files), false, javaOf(javaLibraries)).full();
         return bounded(full.get(), MAX_ENTRIES, MAX_JSON_CHARS);
@@ -308,6 +315,15 @@ public final class JscLang {
     public static String analyzeJson(String source, String fileName, String id, java.util.Map<String, String> files, String javaLibraries) {
         if (javaLibraries == null) return analyzeJson(source, fileName, id, files);
         return bounded(analysis(source, fileName, id, modulesOf(files), false, javaOf(javaLibraries)).model(), MAX_ENTRIES, MAX_JSON_CHARS);
+    }
+
+    private static String digest(String s) {
+        if (s == null) return "";
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static JavaLibraries javaOf(String json) {

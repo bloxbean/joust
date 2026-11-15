@@ -262,7 +262,9 @@ public final class JavaLibraryCertifier {
                 // ADR-0021 r8 (M5c): where javac places the method's name (the language server's go to definition).
                 String file = null;
                 int line = 0, col = 0;
-                int[] place = place(declared.get(m), name + "(");
+                // C11 on #115: the method's name in its header (between the tree's start and its body), whatever trivia
+                // stands before its '(' (never a later call).
+                int[] place = place(declared.get(m), "\\b" + java.util.regex.Pattern.quote(name) + "\\s*\\(");
                 if (place != null) {
                     file = pathOf(declared.get(m).getCompilationUnit());
                     line = place[0];
@@ -478,18 +480,27 @@ public final class JavaLibraryCertifier {
         }
 
         /**
-         * ADR-0021 r8 (M5c): the 1-based line and character column of {@code needle} (a name) from the start of the tree at
-         * {@code at}, or null. The column counts characters (#115 F8: LineMap's column expands tabs).
+         * ADR-0021 r8 (M5c): the 1-based line and character column of {@code pattern}'s match (its group 1 when it has one)
+         * in the header of the tree at {@code at}, or null. The column counts characters (#115 F8: LineMap's column
+         * expands tabs); the header is bounded by the body (C11: never a later call).
          */
-        int[] place(TreePath at, String needle) {
+        int[] place(TreePath at, String pattern) {
             if (at == null) return null;
             CompilationUnitTree cu = at.getCompilationUnit();
-            long start = trees.getSourcePositions().getStartPosition(cu, at.getLeaf());
+            var positions = trees.getSourcePositions();
+            long start = positions.getStartPosition(cu, at.getLeaf());
             if (start < 0) return null;
+            // A method's header ends where its body starts; a record's header is the first match in its own tree.
+            long end = -1;
+            if (at.getLeaf() instanceof MethodTree mt && mt.getBody() != null) end = positions.getStartPosition(cu, mt.getBody());
+            else if (at.getLeaf() instanceof ClassTree) end = positions.getEndPosition(cu, at.getLeaf());   // the first match is its own header
             try {
                 String text = cu.getSourceFile().getCharContent(true).toString();
-                int k = text.indexOf(needle, (int) start);
-                if (k < 0) return null;
+                int to = end > start ? (int) end : (int) Math.min(text.length(), start + 4096);
+                var m = java.util.regex.Pattern.compile(pattern).matcher(text);
+                m.region((int) start, Math.max((int) start, to));
+                if (!m.find()) return null;
+                int k = m.groupCount() >= 1 && m.group(1) != null ? m.start(1) : m.start();
                 int lineStart = text.lastIndexOf('\n', k - 1) + 1;
                 return new int[]{(int) cu.getLineMap().getLineNumber(k), k - lineStart + 1};
             } catch (java.io.IOException e) {
@@ -598,11 +609,12 @@ public final class JavaLibraryCertifier {
             String sourceName = e.getQualifiedName().toString().substring(top.getQualifiedName().length() - top.getSimpleName().length());
             // ADR-0021 r8 (F8 on #115): the record's name where javac's tree puts the declaration (never a match in a comment).
             TreePath at = trees.getPath(e);
-            int[] place = at == null ? null : place(at, "record " + e.getSimpleName());
+            // C11, F8 on #115: `record`, any whitespace, the name, within the record's header.
+            int[] place = at == null ? null : place(at, "\\brecord\\s+(" + java.util.regex.Pattern.quote(e.getSimpleName().toString()) + ")\\b");
             String file = place == null ? null : pathOf(at.getCompilationUnit());
             var r = new JavaLibraries.Rec(bin, e.getSimpleName().toString(), canonicalOwner, top.getQualifiedName().toString(), sourceName,
                     why == null ? List.copyOf(fieldNames) : List.of(), why == null ? List.copyOf(fieldTypes) : List.of(), why == null, why,
-                    file, place == null ? 0 : place[0], place == null ? 0 : place[1] + "record ".length());
+                    file, place == null ? 0 : place[0], place == null ? 0 : place[1]);
             records.put(bin, r);
             return r;
         }

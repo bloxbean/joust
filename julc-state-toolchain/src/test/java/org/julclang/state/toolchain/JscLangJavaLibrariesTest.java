@@ -41,6 +41,18 @@ class JscLangJavaLibrariesTest {
             String l = tabbed.get(f.file()).split("\n", -1)[f.line() - 1];
             assertEquals(f.name(), l.substring(f.col() - 1, f.col() - 1 + f.name().length()), f + " in a tab-indented file");
         }
+        // C11, C13 on #115: whitespace before '(' and in `record  Entry`, and a comment naming the record before it.
+        var spaced = new java.util.LinkedHashMap<String, String>();
+        sources.forEach((k, v) -> spaced.put(k, v.replace("isAllowed(", "isAllowed (").replaceAll("(?m)^(\\s*)(public )?record Entry", "$1// record Entry is documented here\n$1$2record  Entry")));
+        var slib = JavaLibraryCertifier.certify(spaced).values().iterator().next();
+        var sfn = slib.fns().stream().filter(f -> f.name().equals("isAllowed")).findFirst().orElseThrow();
+        String sline = spaced.get(sfn.file()).split("\n", -1)[sfn.line() - 1];
+        assertEquals("isAllowed", sline.substring(sfn.col() - 1, sfn.col() - 1 + "isAllowed".length()), sfn.toString());
+        assertTrue(sline.contains("static"), "the declaration, not a call: " + sline);
+        var srec = slib.records().stream().filter(r -> r.simpleName().equals("Entry")).findFirst().orElseThrow();
+        String rline = spaced.get(srec.file()).split("\n", -1)[srec.line() - 1];
+        assertFalse(rline.contains("//"), "not the comment: " + rline);
+        assertEquals("Entry", rline.substring(srec.col() - 1, srec.col() - 1 + "Entry".length()), srec.toString());
         String src = Files.readString(JscV2HashStabilityTest.DSL.resolve("Guarded.jsc"));
         String without = JscLang.diagnosticsJson(src, "Guarded.jsc", null, null);
         String with = JscLang.diagnosticsJson(src, "Guarded.jsc", null, null, json);
