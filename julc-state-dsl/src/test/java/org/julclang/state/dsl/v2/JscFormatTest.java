@@ -121,7 +121,7 @@ class JscFormatTest {
             // Generated layouts: the same tokens and line breaks, other spaces, indentation and blank lines: formatted
             // to the same text.
             for (int k = 0; k < 3; k++) {
-                String layout = relayout(src, rnd);
+                String layout = Layouts.relayout(src, rnd);
                 var lr = JscFormat.format(layout);
                 assertTrue(lr.ok(), file + ": a layout of a formatted file formats: " + lr.error());
                 assertEquals(f, lr.text(), file + ": a generated layout formats to the same text");
@@ -133,43 +133,6 @@ class JscFormatTest {
     }
 
     /** The same tokens and comments and line breaks; random indentation, spaces between items, and blank lines. */
-    static String relayout(String withBom, Random rnd) {
-        String bom = withBom.startsWith("\uFEFF") ? "\uFEFF" : "";
-        String src = withBom.substring(bom.length());
-        var cs = new ArrayList<int[]>();
-        List<Lexer.Tok> toks = Lexer.lex(src, cs);
-        int[] starts = new int[src.split("\n", -1).length + 1];
-        for (int i = 0, k = 1; i < src.length(); i++) if (src.charAt(i) == '\n') starts[k++] = i + 1;
-        var spans = new ArrayList<int[]>();   // [start, end] offsets of every item
-        for (Lexer.Tok t : toks) if (t.kind() != Lexer.K.EOF) spans.add(new int[]{starts[t.line() - 1] + t.col() - 1, starts[t.line() - 1] + t.end() - 1});
-        for (int[] c : cs) spans.add(new int[]{starts[c[0] - 1] + c[1] - 1, starts[c[2] - 1] + c[3] - 1});
-        spans.sort((a, b) -> Integer.compare(a[0], b[0]));
-        var o = new StringBuilder(bom);
-        int at = 0;
-        for (int[] sp : spans) {
-            String gap = src.substring(at, sp[0]);
-            o.append(rewhite(gap, rnd, at == 0 || o.length() == 0));
-            o.append(src, sp[0], sp[1]);
-            at = sp[1];
-        }
-        o.append(rewhite(src.substring(at), rnd, false));
-        return o.toString();
-    }
-
-    private static String rewhite(String gap, Random rnd, boolean first) {
-        int nl = (int) gap.chars().filter(c -> c == '\n').count();
-        if (nl == 0) {
-            // between two items on a line: keep "none" as none (it may matter to nothing, but a space where none was is a
-            // style change the formatter keeps), else 1 to 4 spaces or a tab
-            return gap.isEmpty() ? "" : rnd.nextBoolean() ? " ".repeat(1 + rnd.nextInt(4)) : "\t";
-        }
-        var b = new StringBuilder();
-        if (rnd.nextBoolean()) b.append("   ");
-        for (int i = 0; i < nl; i++) b.append(rnd.nextInt(4) == 0 ? "\r\n" : "\n");
-        if (nl > 1 && rnd.nextBoolean()) b.append("\n");
-        b.append(" ".repeat(rnd.nextInt(9)));
-        return b.toString();
-    }
 
     @Test
     void filesThatDoNotParseAreRefusedNeverRewritten() throws Exception {

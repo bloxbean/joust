@@ -1,5 +1,8 @@
 description = 'JOUST toolchain: compiles .java and .jsc contracts without Gradle or a JDK (validators, descriptions, TS clients); the core of the Wasm toolchain engine (ADR-0015 D2)'
 
+// ADR-0021 §15 (M5d): the formatter's layout generator (julc-state-dsl's, in the dsl package: it reads the lexer).
+sourceSets.test.java.srcDir rootProject.file('julc-state-dsl/src/testShared/java')
+
 dependencies {
     implementation project(':julc-state-processor')
     implementation project(':julc-state-dsl')

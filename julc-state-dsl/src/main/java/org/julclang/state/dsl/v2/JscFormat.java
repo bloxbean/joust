@@ -55,7 +55,7 @@ public final class JscFormat {
         }
         String rendered = render(body, items);
         String out = bom + rendered;
-        // F4: the output holds the same tokens and comments, in order (only whitespace changed).
+        // F4: the output holds the same tokens and comments, in order, with the same line breaks between them.
         try {
             if (!same(items, items(rendered), body, rendered)) {
                 return new Result(null, "the formatter's output differs from the source in more than whitespace (an internal error: please report it)",
@@ -159,6 +159,8 @@ public final class JscFormat {
         for (int i = 0; i < a.size(); i++) {
             Item x = a.get(i), y = b.get(i);
             if (x.comment != y.comment || !x.text.equals(y.text)) return false;
+            // A line break between two items stays one, and none is added (`.jsc` reads newlines as layout).
+            if (i > 0 && (x.line > a.get(i - 1).endLine) != (y.line > b.get(i - 1).endLine)) return false;
         }
         return true;
     }

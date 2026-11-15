@@ -1,5 +1,8 @@
 description = 'JOUST .jsc: a state-contract surface syntax that lowers to a Java @StateContract (ADR-0005)'
 
+// ADR-0021 §15 (M5d): the formatter's layout generator, shared with julc-state-toolchain's script-hash test.
+sourceSets.test.java.srcDir 'src/testShared/java'
+
 // -Pjoust.writeIrFixtures: rewrite the JavaScript interpreter's IR fixtures (js/jsc-interpreter/test/fixtures) from the
 // current lowering (JscV2IrTest); without it the test fails when they are stale.
 // -Djsc.writeStdDoc=true: JscV2StdDocTest rewrites the std library tables of www's jsc-std.mdx instead of checking them.
