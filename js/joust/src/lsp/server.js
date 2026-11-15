@@ -223,8 +223,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   /** Everything selected again: every open document re-analysed (C14), outstanding fixes invalid (C4). */
   function reselectAll(delay = 0) {
     // C8, F11, S6 on #115: a reselection (a package.json change, an npm install, Restart analysis) reads the packages'
-    // libraries again; C7: and every cached importer analysis goes.
+    // libraries again; C7: and every cached importer analysis goes; F7 on #120: and node_modules is walked again.
     libraryMemo.clear();
+    packageScans.clear();
     occurrenceCache.clear();
     selector.invalidate();
     fixes.clear();
@@ -622,31 +623,76 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   }
   const javaSignatures = new Map();   // engine id | sources' SHA-256 -> descriptions (JSON), LRU (S5 on #115)
   const libraryMemo = new Map();
+  // F7 on #120: the node_modules walk of libraryListing, per project root: { top, mtime, scopes: [[dir, mtime]], candidates }.
+  const packageScans = new Map();
+  const listingStats = { scans: 0, packageChecks: 0 };
   /**
    * C15 (#119): the packages' joust-lib/ files as buildLibraries lists them (the same confined walk, nothing read): a
    * file added or removed changes it.
    */
+  /**
+   * C15 (#119): the packages' library files (every joust-lib/ under node_modules), listed; F7 on #120: the walk over
+   * node_modules is kept per project while node_modules' and its scopes' directories are unchanged (their mtimes: a
+   * package added, removed or replaced changes them), so a use lists only the packages that ship a joust-lib/ (a file
+   * added to one is still seen). A joust-lib/ made by hand inside an installed package is seen after the next change of
+   * node_modules, or Restart analysis.
+   */
   async function libraryListing(sel) {
     if (!sel.root || !inside(sel.root, sel.folder)) return [];
     const rootRel = relative(sel.folder, sel.root).split(sep).join('/') || '.';
-    const out = [];
-    const dirs = async (rel) => {
-      const r = await reader.resolveIn(sel.folder, rel);
-      if (r.error) return [];
+    const mtime = async (p) => {
       try {
-        return (await fsp.readdir(r.path, { withFileTypes: true }))
-          .filter((e) => !e.name.startsWith('.') && (e.isDirectory() || (e.isSymbolicLink() && !e.name.startsWith('@')))).map((e) => e.name).sort();
+        return (await fsp.stat(p)).mtimeMs;
       } catch {
-        return [];
+        return -1;
       }
     };
-    for (const n of await dirs(`${rootRel}/node_modules`)) {
-      const names = n.startsWith('@') ? (await dirs(`${rootRel}/node_modules/${n}`)).map((m) => `${n}/${m}`) : [n];
-      for (const name of names) {
-        const listed = await reader.list(sel.folder, `${rootRel}/node_modules/${name}/joust-lib`, { max: MAX_BUILD_FILES, kind: 'gradle' });
-        if (!listed.error) for (const f of listed.files) out.push(`${name}/${f}`);
-        if (out.length > MAX_BUILD_FILES) return out;
+    const top = await reader.resolveIn(sel.folder, `${rootRel}/node_modules`);
+    if (top.error) return [];
+    let scan = packageScans.get(sel.root);
+    let same = scan && scan.top === top.path && scan.mtime === await mtime(top.path);
+    for (const [p, m] of same ? scan.scopes : []) {
+      if (await mtime(p) !== m) {
+        same = false;
+        break;
       }
+    }
+    if (!same) {
+      listingStats.scans++;
+      const dirs = async (rel) => {
+        const r = await reader.resolveIn(sel.folder, rel);
+        if (r.error) return { names: [], path: null };
+        try {
+          return { path: r.path, names: (await fsp.readdir(r.path, { withFileTypes: true }))
+            .filter((e) => !e.name.startsWith('.') && (e.isDirectory() || (e.isSymbolicLink() && !e.name.startsWith('@')))).map((e) => e.name).sort() };
+        } catch {
+          return { names: [], path: null };
+        }
+      };
+      const nmMtime = await mtime(top.path);
+      const scopes = [];
+      const candidates = [];
+      for (const n of (await dirs(`${rootRel}/node_modules`)).names) {
+        let names = [n];
+        if (n.startsWith('@')) {
+          const d = await dirs(`${rootRel}/node_modules/${n}`);
+          if (d.path) scopes.push([d.path, await mtime(d.path)]);
+          names = d.names.map((m) => `${n}/${m}`);
+        }
+        for (const name of names) {
+          listingStats.packageChecks++;
+          if (!(await reader.resolveIn(sel.folder, `${rootRel}/node_modules/${name}/joust-lib`)).error) candidates.push(name);
+        }
+      }
+      scan = { top: top.path, mtime: nmMtime, scopes, candidates };
+      packageScans.set(sel.root, scan);
+      while (packageScans.size > 8) packageScans.delete(packageScans.keys().next().value);
+    }
+    const out = [];
+    for (const name of scan.candidates) {
+      const listed = await reader.list(sel.folder, `${rootRel}/node_modules/${name}/joust-lib`, { max: MAX_BUILD_FILES, kind: 'gradle' });
+      if (!listed.error) for (const f of listed.files) out.push(`${name}/${f}`);
+      if (out.length > MAX_BUILD_FILES) return out;
     }
     return out;
   }
@@ -2410,7 +2456,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   if (flags.testHooks) {
     connection.onRequest('joust/test/stats', () => ({
-      ...host.stats, builds: { ...buildHost.stats }, reader: { ...reader.stats }, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
+      ...host.stats, builds: { ...buildHost.stats }, reader: { ...reader.stats }, listing: { ...listingStats }, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
     }));
   }
 

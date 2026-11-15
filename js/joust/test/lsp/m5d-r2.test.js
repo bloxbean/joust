@@ -4,13 +4,16 @@
 //   C4  a CRLF after a line comment: range formatting over the whole file is document formatting, and then has nothing to do;
 //   F3  an engine without the formatter is never asked, and Format Document does not back the analyses off;
 //   S1  an engine's formatting is applied only when it changes whitespace alone;
-//   F8  advisory-mode formatting is labelled.
+//   F8  advisory-mode formatting is labelled;
+//   F7  the library listing walks node_modules once, not on every analysis of a java: importer.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { HAS_ENGINE, STUB, startLsp, tmp, uriOf, VSCODE_CAPS } from './client.js';
+import { crossProject } from './m5c-fixtures.js';
 
 const skip = !HAS_ENGINE && 'needs the toolchain engine in js/joust/engine';
 const FORMAT_STUB = fileURLToPath(new URL('./fixtures/format-stub-engine/', import.meta.url));
@@ -145,6 +148,44 @@ test('S1: an engine\'s formatting is applied only when it changes whitespace alo
     }
     // F8: the bundled compiler, advisory here: labelled.
     assert.ok(lsp.logs.some((l) => /with the bundled compiler .*\(advisory\)/.test(l)), lsp.logs.join('\n'));
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('F7: a java: importer\'s analyses list only the packages that ship a joust-lib/, not all of node_modules', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  crossProject(dir);
+  const REPO = join(new URL('../../../..', import.meta.url).pathname);
+  const lib = join(dir, 'node_modules', '@example', 'compliance', 'joust-lib', 'com', 'example', 'compliance');
+  mkdirSync(lib, { recursive: true });
+  writeFileSync(join(dir, 'node_modules', '@example', 'compliance', 'package.json'), JSON.stringify({ name: '@example/compliance', version: '1.0.0' }));
+  writeFileSync(join(lib, 'AllowList.java'), readFileSync(join(REPO, 'examples/compliance/src/main/java/com/example/compliance/AllowList.java'), 'utf8'));
+  // A large node_modules: 2,000 packages and 20 scopes of 25, none with a joust-lib/.
+  for (let k = 0; k < 2000; k++) mkdirSync(join(dir, 'node_modules', `pkg-${k}`, 'lib'), { recursive: true });
+  for (let k = 0; k < 20; k++) for (let j = 0; j < 25; j++) mkdirSync(join(dir, 'node_modules', `@scope${k}`, `p${j}`), { recursive: true });
+  const guarded = readFileSync(join(REPO, 'examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Guarded.jsc'), 'utf8').replace('package org.julclang.state.examples.dsl', 'package app');
+  const file = join(dir, 'contracts', 'app', 'Guarded.jsc');
+  writeFileSync(file, guarded);
+  const lsp = await startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true } });
+  try {
+    const uri = uriOf(file);
+    lsp.open(uri, guarded);
+    await lsp.until(() => lsp.statuses.find((x) => x.uri === uri && x.modelVersion >= 1), 120000, 'the first model');
+    const first = (await lsp.stats()).listing;
+    assert.ok(first.packageChecks >= 2500, JSON.stringify(first));
+    for (let v = 2; v <= 6; v++) {
+      lsp.change(uri, v, guarded + ' '.repeat(v));
+      await lsp.until(() => lsp.statuses.find((x) => x.uri === uri && x.modelVersion >= v), 120000, `the model of v${v}`);
+    }
+    const after = (await lsp.stats()).listing;
+    assert.equal(after.scans, first.scans, `node_modules walked again: ${JSON.stringify([first, after])}`);
+    assert.equal(after.packageChecks, first.packageChecks);
+    // A package added: the walk runs again (and finds a new joust-lib/).
+    mkdirSync(join(dir, 'node_modules', 'pkg-new'), { recursive: true });
+    lsp.change(uri, 7, guarded);
+    await lsp.until(() => lsp.statuses.find((x) => x.uri === uri && x.modelVersion >= 7), 120000, 'the model of v7');
+    assert.ok((await lsp.stats()).listing.scans > after.scans);
   } finally {
     await lsp.stop();
   }
