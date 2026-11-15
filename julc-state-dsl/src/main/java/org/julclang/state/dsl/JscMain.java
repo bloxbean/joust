@@ -542,60 +542,120 @@ public final class JscMain {
         return 1;
     }
 
+    /** {@code --fmt}'s exit codes (#120 F5, §15): formatted (or, with --check, already); not formatted; refused; usage. */
+    static final int FMT_OK = 0, FMT_NOT_FORMATTED = 1, FMT_REFUSED = 2, FMT_USAGE = 3;
+
     /**
      * {@code --fmt [--check] <file or dir>...} (ADR-0021 r9 §15): formats each {@code .jsc} file in place (a directory:
-     * every {@code .jsc} file under it), writing only a file whose text changes; with {@code --check}, writes nothing and
-     * lists the files that would change. A file that does not lex or parse is reported at its first error and left as it
-     * was (F4). 0 when every file is formatted (or, with --check, already is), 1 otherwise, 2 on a usage error.
+     * every {@code .jsc} file under it, links not followed), writing only a file whose text changes; with {@code --check},
+     * writes nothing and lists the files that would change. A file is read as UTF-8, strictly (#120 F1), and formatted as
+     * a module of its directory argument's files (C3: its imports read as the build reads them; a file argument with its
+     * own directory's). A file is refused, and left as it was, when it does not lex or parse (F4), is not valid UTF-8,
+     * or is read-only (F2: it is never made writable); a rewritten file keeps its permissions. A linked directory
+     * argument is refused (S2). Exit 0: every file formatted (with --check: already was); 1 (--check): a file is not
+     * formatted; 2: a file was refused; 3: a usage error.
      */
     static int fmt(List<String> args) throws IOException {
         boolean check = args.contains("--check");
         var paths = args.stream().filter(a -> !a.equals("--check")).toList();
         if (paths.isEmpty() || paths.stream().anyMatch(a -> a.startsWith("--"))) {
-            System.err.println("usage: JscMain --fmt [--check] <file or dir>...");
-            return 2;
+            System.err.println("usage: JscMain --fmt [--check] <file or dir>...   (exit 0 formatted, 1 not formatted (--check), 2 refused, 3 usage)");
+            return FMT_USAGE;
         }
-        var files = new ArrayList<Path>();
+        // Each file with the root its module id is relative to (its directory argument, or its own directory).
+        var files = new ArrayList<Path[]>();
         for (String a : paths) {
             Path p = Path.of(a);
-            if (Files.isDirectory(p)) {
+            if (Files.isSymbolicLink(p)) {
+                System.err.println("jsc --fmt: " + p + ": a link (not followed): give the path it leads to");
+                return FMT_USAGE;
+            }
+            if (Files.isDirectory(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
                 try (Stream<Path> s = Files.walk(p)) {
-                    s.filter(f -> f.toString().endsWith(".jsc") && Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)).sorted().forEach(files::add);
+                    for (Path f : s.filter(f -> f.toString().endsWith(".jsc") && Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)).sorted().toList()) {
+                        files.add(new Path[]{f, p});
+                    }
                 }
             } else if (Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                files.add(p);
+                files.add(new Path[]{p, p.toAbsolutePath().getParent()});
             } else {
                 System.err.println("jsc --fmt: " + p + ": not a regular file or a directory");
-                return 2;
+                return FMT_USAGE;
             }
         }
-        int failed = 0, changed = 0;
-        for (Path f : files) {
-            String text = Files.readString(f);
-            var r = org.julclang.state.dsl.v2.JscFormat.format(text);
+        var projects = new java.util.HashMap<Path, java.util.Map<String, String>>();
+        int refused = 0, changed = 0;
+        for (Path[] fr : files) {
+            Path f = fr[0];
+            String text;
+            try {
+                text = strictUtf8(Files.readAllBytes(f));
+            } catch (java.nio.charset.CharacterCodingException e) {
+                System.err.println(f + ": error: not valid UTF-8 (not formatted)");
+                refused++;
+                continue;
+            }
+            java.util.Map<String, String> project = projects.computeIfAbsent(fr[1], JscMain::jscFilesUnder);
+            String id = fr[1].toAbsolutePath().normalize().relativize(f.toAbsolutePath().normalize()).toString().replace('\\', '/');
+            var r = org.julclang.state.dsl.v2.JscFormat.format(text, id, org.julclang.state.dsl.v2.JscModules.of(project));
             if (!r.ok()) {
                 System.err.println(f + ":" + r.line() + ":" + r.col() + ": error[" + r.code() + "] " + r.error() + " (not formatted)");
-                failed++;
+                refused++;
                 continue;
             }
             if (r.text().equals(text)) continue;
+            if (!check && !Files.isWritable(f)) {
+                System.err.println(f + ": error: read-only (not formatted; it is never made writable)");
+                refused++;
+                continue;
+            }
             changed++;
             if (check) {
                 System.out.println(f + ": not formatted");
                 continue;
             }
-            // Written whole or not at all: a temporary file beside it, then moved over it.
+            // Written whole or not at all: a temporary file beside it, with its permissions, then moved over it.
             Path tmp = Files.createTempFile(f.toAbsolutePath().getParent(), "." + f.getFileName(), ".fmt");
             try {
                 Files.writeString(tmp, r.text());
+                try {
+                    Files.setPosixFilePermissions(tmp, Files.getPosixFilePermissions(f));
+                } catch (UnsupportedOperationException e) {
+                    // not a POSIX file system: the platform's defaults
+                }
                 Files.move(tmp, f, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
             } finally {
                 Files.deleteIfExists(tmp);
             }
             System.out.println(f + ": formatted");
         }
-        System.out.println("jsc --fmt: " + files.size() + " file(s), " + changed + (check ? " not formatted" : " formatted") + ", " + failed + " refused");
-        return failed > 0 || check && changed > 0 ? 1 : 0;
+        System.out.println("jsc --fmt: " + files.size() + " file(s), " + changed + (check ? " not formatted" : " formatted") + ", " + refused + " refused");
+        return refused > 0 ? FMT_REFUSED : check && changed > 0 ? FMT_NOT_FORMATTED : FMT_OK;
+    }
+
+    /** The bytes as UTF-8, refusing malformed input (#120 F1: never a replacement character). */
+    static String strictUtf8(byte[] bytes) throws java.nio.charset.CharacterCodingException {
+        return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+    }
+
+    /** The .jsc files under {@code root} that read as UTF-8, by module id (links not followed), for imports (C3). */
+    static java.util.Map<String, String> jscFilesUnder(Path root) {
+        var out = new java.util.LinkedHashMap<String, String>();
+        try (Stream<Path> s = Files.walk(root)) {
+            for (Path f : s.filter(f -> f.toString().endsWith(".jsc") && Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)).sorted().toList()) {
+                try {
+                    out.put(root.relativize(f).toString().replace('\\', '/'), strictUtf8(Files.readAllBytes(f)));
+                } catch (java.nio.charset.CharacterCodingException e) {
+                    // not a module the build could read either
+                }
+            }
+        } catch (IOException e) {
+            // an unreadable directory: the files alone
+        }
+        return out;
     }
 
     public static void main(String[] args) throws IOException {
