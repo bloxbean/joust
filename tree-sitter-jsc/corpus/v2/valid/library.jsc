@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 library app.lib
 
 // A .jsc library (ADR-0018 D9, M4): imports, types, enums and fns; no contract.

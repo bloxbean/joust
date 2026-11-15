@@ -2,7 +2,7 @@
 Precedence: ?: below ?? below || below && below == below < below + below * below unary
 ================================================================================
 
-jsc 2
+jsc 1
 package p
 fn f(a: Int, o: Option<Int>, d: Bool): Int = d || a < 1 + 2 * -a == true && d ? (o ?? 0) : a % 2
 contract C { state { n: Int } init() { return { n: 0 } } }
@@ -82,7 +82,7 @@ contract C { state { n: Int } init() { return { n: 0 } } }
 Postfix: fields, methods, a same-line index and a list on the next line
 ================================================================================
 
-jsc 2
+jsc 1
 package p
 fn f(m: BigMap<Bytes, Int>, k: Bytes): List<Int> {
   const v = m.set(k, 1)[k]
@@ -156,7 +156,7 @@ contract C { state { n: Int } init() { return { n: 0 } } }
 Literals
 ================================================================================
 
-jsc 2
+jsc 1
 package p
 fn f(): Int {
   const b = #00ff
@@ -244,7 +244,7 @@ contract C { state { n: Int } init() { return { n: 0 } } }
 Lambdas and value blocks
 ================================================================================
 
-jsc 2
+jsc 1
 package p
 fn f(xs: List<Int>): Bool = xs.any(x => { const y = x * 2; y > 3 }) && xs.all(() => true)
 contract C { state { n: Int } init() { return { n: 0 } } }

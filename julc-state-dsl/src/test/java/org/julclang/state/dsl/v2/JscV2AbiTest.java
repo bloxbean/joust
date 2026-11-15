@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2AbiTest {
 
     static final String COUNTER = """
-            jsc 2
+            jsc 1
             package app
             contract Counter {
               state { count: Int, owner: Key }

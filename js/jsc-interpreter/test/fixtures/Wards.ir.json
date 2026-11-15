@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "1a1fa0d33a766fa077903b588f33fad1f1bc48fdd6a6fc7384f87de2eee5819a",
+  "sourceSha256": "fa021713cda33d82382f4c2c4953f95c378e9111b528c7e402df4a0b3823c118",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Wards",
   "source": "Wards.jsc",

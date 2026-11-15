@@ -51,10 +51,10 @@ test('C2: a slow analysis of a closed lifetime never publishes into the reopened
   const lsp = await startLsp({ engineDir: STUB, folders: [dir], hostOptions: { ...FAST, analysisMs: 5000 } });
   try {
     const uri = uriOf(join(dir, 'R.jsc'));
-    lsp.open(uri, 'jsc 2 SLOW WARN', 1);
+    lsp.open(uri, 'jsc 1 SLOW WARN', 1);
     await sleep(400);
     lsp.close(uri);
-    lsp.open(uri, 'jsc 2 CLEAN', 1);
+    lsp.open(uri, 'jsc 1 CLEAN', 1);
     await lsp.until(() => lsp.published.find((p) => p.uri === uri && p.version === 1 && p.diagnostics.length === 0), 10000, 'the new lifetime');
     await sleep(2000);
     assert.ok(!lsp.published.some((p) => p.uri === uri && p.diagnostics.some((d) => /stub warning/.test(d.message))),
@@ -71,7 +71,7 @@ test('C2, C4: a fix is refused when its document was reopened, or its selection 
       hostOptions: { ...FAST, analysisMs: 5000 } });
     try {
       const uri = uriOf(join(dir, 'F.jsc'));
-      lsp.open(uri, 'jsc 2 SLOWCHECK\n  let x = 1', 1);
+      lsp.open(uri, 'jsc 1 SLOWCHECK\n  let x = 1', 1);
       const p = await lsp.diagnostics(uri, 1);
       assert.equal(p.diagnostics[0].code, 'JSC0128');
       const [a] = await actions(lsp, uri, p.diagnostics);
@@ -97,7 +97,7 @@ test('C6: Restart analysis selects again and loads replaced engine bytes', async
   const lsp = await startLsp({ engineDir: STUB, folders: [ws], args: ['--project-engine'] });
   try {
     const uri = uriOf(join(ws, 'contracts', 'C.jsc'));
-    lsp.open(uri, 'jsc 2 WARN', 1);
+    lsp.open(uri, 'jsc 1 WARN', 1);
     await lsp.diagnostics(uri, 1);
     assert.equal((await lsp.request('joust/status', { uri })).compiler, 'test-stub-a');
     // Only the engine's bytes change; package.json does not.
@@ -116,7 +116,7 @@ test('C3: more compilers than worker slots: every analysis completes, with no fa
   const engines = ['x', 'y', 'z'].map((t) => ({ file: join(stubVariant(join(base, t), t), ENGINE_JS), id: `id-${t}` }));
   const host = new EngineHost({ workerEntry: WORKER, maxWorkers: 2, analysisMs: 10000 });
   try {
-    const rs = await Promise.all(engines.map((e) => host.analyze(`engine:${e.id}`, e, { file: 'S.jsc', source: 'jsc 2 SLOW WARN' })));
+    const rs = await Promise.all(engines.map((e) => host.analyze(`engine:${e.id}`, e, { file: 'S.jsc', source: 'jsc 1 SLOW WARN' })));
     for (const r of rs) assert.ok(r.model, JSON.stringify(r));
     assert.equal(host.stats.failures, 0);
   } finally {
@@ -133,7 +133,7 @@ test('C3, C16: Restart analysis while a worker is still loading gives exactly a 
   const host = new EngineHost({ workerEntry: WORKER, analysisMs: 10000 });
   try {
     const fresh = { file: join(dir, ENGINE_JS), id: 'id-slow' };
-    const p = host.analyze('engine:id-slow', fresh, { file: 'S.jsc', source: 'jsc 2 WARN' });
+    const p = host.analyze('engine:id-slow', fresh, { file: 'S.jsc', source: 'jsc 1 WARN' });
     const slot = () => host.slots.get('engine:id-slow');
     for (let k = 0; k < 100 && !slot()?.worker; k++) await sleep(10);
     assert.ok(slot()?.worker && !slot().worker.booted, 'the worker exists and is still loading');
@@ -152,14 +152,14 @@ test('S7: three failures in one project leave the other projects on the same com
   const lsp = await startLsp({ engineDir: STUB, folders: [a, b], hostOptions: { ...FAST, analysisMs: 300 } });
   try {
     const hang = uriOf(join(a, 'H.jsc'));
-    lsp.open(hang, 'jsc 2 HANG 1', 1);
+    lsp.open(hang, 'jsc 1 HANG 1', 1);
     await lsp.diagnostics(hang, 1);
-    lsp.change(hang, 2, 'jsc 2 HANG 2');
+    lsp.change(hang, 2, 'jsc 1 HANG 2');
     await lsp.diagnostics(hang, 2, 20000);
-    lsp.change(hang, 3, 'jsc 2 HANG 3');
+    lsp.change(hang, 3, 'jsc 1 HANG 3');
     await lsp.until(() => lsp.statuses.find((x) => x.uri === hang && x.state === 'unavailable'), 20000, 'A unavailable');
     const ok = uriOf(join(b, 'Ok.jsc'));
-    lsp.open(ok, 'jsc 2 WARN', 1);
+    lsp.open(ok, 'jsc 1 WARN', 1);
     const p = await lsp.diagnostics(ok, 1, 20000);
     assert.match(p.diagnostics[0].message, /stub warning/);
     assert.equal((await lsp.request('joust/status', { uri: ok })).state, 'ok');
@@ -174,10 +174,10 @@ test('S4: a workspace folder URI with a host is ignored, and the server starts',
   try {
     assert.match(lsp.init.serverInfo.version, /bundled, advisory/);
     const uri = uriOf(join(dir, 'Ok.jsc'));
-    lsp.open(uri, 'jsc 2 WARN', 1);
+    lsp.open(uri, 'jsc 1 WARN', 1);
     await lsp.diagnostics(uri, 1);
     const far = 'file://attacker.example/share/repo/X.jsc';
-    lsp.open(far, 'jsc 2 WARN', 1);
+    lsp.open(far, 'jsc 1 WARN', 1);
     await lsp.diagnostics(far, 1);
     assert.match((await lsp.request('joust/status', { uri: far })).reason, /not a file on disk/);
   } finally {
@@ -248,7 +248,7 @@ test('C7: the store bound holds with the real host\'s lifecycle (copies of stopp
       const sel = createSelector({ reader: createReader(), store, host, bundled, trusted: true, folders: [ws] });
       const s = await sel.select(join(ws, 'contracts', 'C.jsc'));
       assert.equal(s.source, 'project', s.reason);
-      const r = await host.analyze(s.key, s.engine, { file: 'C.jsc', source: 'jsc 2 WARN' });
+      const r = await host.analyze(s.key, s.engine, { file: 'C.jsc', source: 'jsc 1 WARN' });
       assert.ok(r.model, JSON.stringify(r));
     }
     const copies = readdirSync(join(storage, 'engines')).filter((n) => /^[0-9a-f]{64}$/.test(n));

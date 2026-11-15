@@ -97,7 +97,7 @@ export async function startLsp({ engineDir = ENGINE, storage = tmp('joust-lsp-st
   return lsp;
 }
 
-export const COUNTER = `jsc 2
+export const COUNTER = `jsc 1
 package app
 
 contract Counter(maxDatumBytes = 128) {

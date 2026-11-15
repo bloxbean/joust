@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2LibraryTest {
 
     static final String FEES = """
-            jsc 2
+            jsc 1
             library app
 
             import { blake2b_224 } from "std/crypto"
@@ -41,7 +41,7 @@ class JscV2LibraryTest {
             """;
 
     static String contract(String imports, String members) {
-        return "jsc 2\npackage app\n" + imports + "\ncontract Shop {\n  state { owner: Key, price: Int, tier: Tier }\n"
+        return "jsc 1\npackage app\n" + imports + "\ncontract Shop {\n  state { owner: Key, price: Int, tier: Tier }\n"
                 + "  init(price: Int) { return { owner: caller, price, tier: Basic } }\n" + members + "\n}\n";
     }
 
@@ -124,13 +124,13 @@ class JscV2LibraryTest {
         files = build("app/fees.jsc", FEES, "app/Shop.jsc", contract("import { Tier } from \"./fees.jsc\"", "  view x(l: Line): Int = 1"));
         e = refused(files, "app/Shop.jsc", "JSC0710");
         assertTrue(e.getMessage().contains("'Line' is declared in app/fees.jsc"), e.getMessage());
-        files = build("app/fees.jsc", FEES, "app/Shop.jsc", "jsc 2\npackage app\nimport { fee } from \"./fees.jsc\"\ncontract Shop {\n"
+        files = build("app/fees.jsc", FEES, "app/Shop.jsc", "jsc 1\npackage app\nimport { fee } from \"./fees.jsc\"\ncontract Shop {\n"
                 + "  state { n: Int }\n  init() { return { n: 0 } }\n  view v(): Bool = Basic == Basic\n}\n");
         e = refused(files, "app/Shop.jsc", "JSC0710");
         assertTrue(e.getMessage().contains("the variant Basic of Tier"), e.getMessage());
         // Values of a type that is not imported still flow: a library fn returns one, and its fields are read.
         files = build("app/fees.jsc", FEES + "fn mk(n: Int): Line = Line { to: asKey(#" + "00".repeat(28) + "), bps: n }\n",
-                "app/Shop.jsc", "jsc 2\npackage app\nimport { mk } from \"./fees.jsc\"\ncontract Shop {\n"
+                "app/Shop.jsc", "jsc 1\npackage app\nimport { mk } from \"./fees.jsc\"\ncontract Shop {\n"
                         + "  state { n: Int }\n  init() { return { n: mk(3).bps } }\n}\n");
         assertTrue(lower(files, "app/Shop.jsc").java().contains("Fees.mk("));
         // A binding may take the name of a library declaration the file does not import (it hides nothing in scope),
@@ -157,12 +157,12 @@ class JscV2LibraryTest {
         files = build("app/fees.jsc", FEES, "app/Shop.jsc", contract(IMPORT, "").replace("contract Shop {", "type Fees = { x: Int }\ncontract Shop {"));
         refused(files, "app/Shop.jsc", "JSC0709");
         // Two libraries that are one class (the same package and file name).
-        files = build("app/fees.jsc", FEES, "lib/fees.jsc", "jsc 2\nlibrary app\nfn two(): Int = 2\n", "app/Shop.jsc",
+        files = build("app/fees.jsc", FEES, "lib/fees.jsc", "jsc 1\nlibrary app\nfn two(): Int = 2\n", "app/Shop.jsc",
                 contract(IMPORT + "\nimport { two } from \"../lib/fees.jsc\"", ""));
         e = refused(files, "app/Shop.jsc", "JSC0709");
         assertTrue(e.getMessage().contains("both the library app.Fees"), e.getMessage());
         // A library's file name is its class: it must make one.
-        files = build("app/fee-math.jsc", "jsc 2\nlibrary app\nfn two(): Int = 2\n", "app/Shop.jsc",
+        files = build("app/fee-math.jsc", "jsc 1\nlibrary app\nfn two(): Int = 2\n", "app/Shop.jsc",
                 contract("import { two } from \"./fee-math.jsc\"", "").replace("tier: Tier", "n: Int").replace("tier: Basic", "n: two()"));
         e = refused(files, "app/Shop.jsc", "JSC0712");
         assertTrue(e.getMessage().contains("error[JSC0705]"), e.getMessage());
@@ -177,8 +177,8 @@ class JscV2LibraryTest {
      */
     @Test
     void aBinding_neverTakesALibrarysClassName() {
-        String lib = "jsc 2\nlibrary lib\nfn fee(): Int = 1\n";
-        String c = "jsc 2\npackage app\nimport { fee } from \"../lib/fees.jsc\"\ntype Item = { fee: Int }\n"
+        String lib = "jsc 1\nlibrary lib\nfn fee(): Int = 1\n";
+        String c = "jsc 1\npackage app\nimport { fee } from \"../lib/fees.jsc\"\ntype Item = { fee: Int }\n"
                 + "contract C {\n  state { n: Int }\n  init(%s) { return { n: fee() } }\n%s\n}\n";
         // Codex's case: an init parameter whose record has an accessor of the fn's name.
         var e = refused(build("lib/fees.jsc", lib, "app/C.jsc", String.format(c, "Fees: Item", "")), "app/C.jsc", "JSC0709");
@@ -192,12 +192,12 @@ class JscV2LibraryTest {
             refused(build("lib/fees.jsc", lib, "app/C.jsc", String.format(c, "", member)), "app/C.jsc", "JSC0709");
         }
         // In a library that imports another library, and in a library naming its own class.
-        String mid = "jsc 2\nlibrary lib\nimport { fee } from \"./fees.jsc\"\nfn twice(Fees: Int): Int = fee() + Fees\n";
-        String top = "jsc 2\npackage app\nimport { twice } from \"../lib/mid.jsc\"\ncontract C {\n  state { n: Int }\n"
+        String mid = "jsc 1\nlibrary lib\nimport { fee } from \"./fees.jsc\"\nfn twice(Fees: Int): Int = fee() + Fees\n";
+        String top = "jsc 1\npackage app\nimport { twice } from \"../lib/mid.jsc\"\ncontract C {\n  state { n: Int }\n"
                 + "  init() { return { n: twice(1) } }\n}\n";
         e = refused(build("lib/fees.jsc", lib, "lib/mid.jsc", mid, "app/C.jsc", top), "app/C.jsc", "JSC0712");
         assertTrue(e.getMessage().contains("error[JSC0709]"), e.getMessage());
-        String self = "jsc 2\nlibrary lib\nfn fee(Fees: Int): Int = Fees\n";
+        String self = "jsc 1\nlibrary lib\nfn fee(Fees: Int): Int = Fees\n";
         var own = assertThrows(JscException.class, () -> JscV2.lower(self, "fees.jsc", "lib/fees.jsc", JscModules.of(build("lib/fees.jsc", self))));
         assertEquals("JSC0709", own.code, own.getMessage());
         // Control: the same contract with a parameter of another name lowers, and calls the library.
@@ -212,14 +212,14 @@ class JscV2LibraryTest {
      */
     @Test
     void twoLibrariesOfOneClassName_areRefusedAtTheImport() {
-        String a = "jsc 2\nlibrary aa\nfn a(): Int = 1\n", b = "jsc 2\nlibrary bb\nfn b(): Int = 2\n";
-        String c = "jsc 2\npackage app\nimport { a } from \"../a/fees.jsc\"\nimport { b } from \"../b/fees.jsc\"\n"
+        String a = "jsc 1\nlibrary aa\nfn a(): Int = 1\n", b = "jsc 1\nlibrary bb\nfn b(): Int = 2\n";
+        String c = "jsc 1\npackage app\nimport { a } from \"../a/fees.jsc\"\nimport { b } from \"../b/fees.jsc\"\n"
                 + "contract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  view v(): Int = a() + b()\n}\n";
         var e = refused(build("a/fees.jsc", a, "b/fees.jsc", b, "app/C.jsc", c), "app/C.jsc", "JSC0709");
         assertTrue(e.getMessage().contains("both classes named Fees"), e.getMessage());
         // Through a library: the contract imports aa.Fees, and bb.Fees arrives with another library.
-        String via = "jsc 2\nlibrary cc\nimport { b } from \"../b/fees.jsc\"\nfn viaB(): Int = b()\n";
-        String c2 = "jsc 2\npackage app\nimport { a } from \"../a/fees.jsc\"\nimport { viaB } from \"../c/via.jsc\"\n"
+        String via = "jsc 1\nlibrary cc\nimport { b } from \"../b/fees.jsc\"\nfn viaB(): Int = b()\n";
+        String c2 = "jsc 1\npackage app\nimport { a } from \"../a/fees.jsc\"\nimport { viaB } from \"../c/via.jsc\"\n"
                 + "contract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  view v(): Int = a() + viaB()\n}\n";
         refused(build("a/fees.jsc", a, "b/fees.jsc", b, "c/via.jsc", via, "app/C.jsc", c2), "app/C.jsc", "JSC0709");
     }
@@ -237,9 +237,9 @@ class JscV2LibraryTest {
         files = build("lib/fees.jsc", FEES, "app/Shop.jsc", contract(IMPORT.replace("./fees.jsc", "../lib/fees.jsc"), ""));
         assertTrue(lower(files, "app/Shop.jsc").java().contains("import app.Fees;"));
         // A cycle.
-        files = build("app/a.jsc", "jsc 2\nlibrary app\nimport { b } from \"./b.jsc\"\nfn a(): Int = 1\n",
-                "app/b.jsc", "jsc 2\nlibrary app\nimport { a } from \"./a.jsc\"\nfn b(): Int = 2\n",
-                "app/Shop.jsc", "jsc 2\npackage app\nimport { a } from \"./a.jsc\"\ncontract Shop {\n  state { n: Int }\n  init() { return { n: a() } }\n}\n");
+        files = build("app/a.jsc", "jsc 1\nlibrary app\nimport { b } from \"./b.jsc\"\nfn a(): Int = 1\n",
+                "app/b.jsc", "jsc 1\nlibrary app\nimport { a } from \"./a.jsc\"\nfn b(): Int = 2\n",
+                "app/Shop.jsc", "jsc 1\npackage app\nimport { a } from \"./a.jsc\"\ncontract Shop {\n  state { n: Int }\n  init() { return { n: a() } }\n}\n");
         var e = refused(files, "app/Shop.jsc", "JSC0707");
         assertTrue(e.getMessage().contains("app/a.jsc -> app/b.jsc -> app/a.jsc"), e.getMessage());
         // A contract is not a library.
@@ -253,7 +253,7 @@ class JscV2LibraryTest {
         // A file lowered on its own imports no libraries.
         assertEquals("JSC0706", assertThrows(JscException.class, () -> JscV2.lower(contract(IMPORT, ""), "Shop.jsc")).code);
         // A library holds no contract.
-        var lib = assertThrows(JscException.class, () -> JscV2.lower("jsc 2\nlibrary app\ncontract X {\n state { n: Int }\n init() { return { n: 0 } }\n}\n", "x.jsc"));
+        var lib = assertThrows(JscException.class, () -> JscV2.lower("jsc 1\nlibrary app\ncontract X {\n state { n: Int }\n init() { return { n: 0 } }\n}\n", "x.jsc"));
         assertEquals("JSC0711", lib.code);
     }
 

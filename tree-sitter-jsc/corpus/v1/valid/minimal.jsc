@@ -1,5 +1,0 @@
-package p
-contract Minimal {
-    state n: Int
-    init() { }
-}

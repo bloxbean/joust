@@ -1,7 +1,7 @@
 {
   "name": "tree-sitter-jsc",
   "version": "0.1.0",
-  "description": "tree-sitter grammar for JOUST's contract language, .jsc 2 and .jsc v1 (ADR-0018 D13)",
+  "description": "tree-sitter grammar for JOUST's contract language, .jsc (ADR-0018 D13)",
   "private": true,
   "license": "MIT",
   "repository": {

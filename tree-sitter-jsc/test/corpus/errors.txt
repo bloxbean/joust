@@ -3,7 +3,7 @@ Mixing ?? with && needs parentheses
 :error
 ================================================================================
 
-jsc 2
+jsc 1
 package p
 fn f(a: Option<Bool>, b: Bool): Bool = a ?? b && b
 contract C { state { n: Int } init() { return { n: 0 } } }
@@ -17,7 +17,7 @@ Comparisons do not chain
 :error
 ================================================================================
 
-jsc 2
+jsc 1
 package p
 fn f(a: Int): Bool = 0 < a < 10
 contract C { state { n: Int } init() { return { n: 0 } } }
@@ -31,7 +31,7 @@ An arm block is not an object
 :error
 ================================================================================
 
-jsc 2
+jsc 1
 package p
 contract C { state { n: Int } init() { return { n: 0 } } action a(o: Option<Int>) { return match o { Some(v) => { ...state, n: v }, None => state } } }
 
@@ -44,7 +44,7 @@ A library holds no contract
 :error
 ================================================================================
 
-jsc 2
+jsc 1
 library p
 contract C { state { n: Int } init() { return { n: 0 } } }
 

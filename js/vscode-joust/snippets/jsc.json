@@ -1,7 +1,7 @@
 {
   "contract": {
     "prefix": "contract",
-    "description": "A .jsc 2 contract with its state and init",
+    "description": "A .jsc contract with its state and init",
     "body": [
       "contract ${1:Name} {",
       "  state { ${2:count}: ${3:Int}, owner: Key }",

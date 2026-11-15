@@ -38,14 +38,14 @@ function project({ contracts = {}, packages = {} }) {
   return dir;
 }
 
-const FEES = `jsc 2
+const FEES = `jsc 1
 library acme.fees
 
 // A .jsc library shipped by an npm package (joust-lib/fees.jsc).
 fn fee(amount: Int, bps: Int): Int = amount * bps / 10_000
 `;
 
-const SHOP = `jsc 2
+const SHOP = `jsc 1
 package app
 
 import { fee } from "@acme/fees/fees.jsc"
@@ -75,7 +75,7 @@ public class Limits {
 }
 `;
 
-const CAPPED = `jsc 2
+const CAPPED = `jsc 1
 package app
 
 import { cap } from "java:acme.allow.Limits"
@@ -150,7 +150,7 @@ import java.math.BigInteger;
 
 public record Bound(BigInteger limit, BigInteger value) {}
 `;
-const ROOM = `jsc 2
+const ROOM = `jsc 1
 package app
 
 import { room } from "java:acme.allow.Limits"

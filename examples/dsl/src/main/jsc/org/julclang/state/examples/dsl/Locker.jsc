@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/locker's Locker in .jsc 2 (ADR-0018 M3a, J11; ADR-0014): a token locker. One instance holds a native token

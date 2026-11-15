@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2M3a2CheckerTest {
 
     static final String HEAD = """
-            jsc 2
+            jsc 1
             package t
             contract C {
               state { host: Key, isOpen: Bool }

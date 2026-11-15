@@ -1,7 +1,7 @@
 {
   "name": "vscode-joust",
   "displayName": "JOUST .jsc",
-  "description": "JOUST's contract language, .jsc 2, in VS Code: diagnostics as you type from the build's own front end, the outline, folding, highlighting, and JOUST: Build with clickable build errors (ADR-0021). Language preview.",
+  "description": "JOUST's contract language, .jsc, in VS Code: diagnostics as you type from the build's own front end, the outline, folding, highlighting, and JOUST: Build with clickable build errors (ADR-0021). Language preview.",
   "version": "0.1.0",
   "private": true,
   "preview": true,

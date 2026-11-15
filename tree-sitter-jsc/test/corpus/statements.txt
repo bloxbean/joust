@@ -2,7 +2,7 @@
 Statements
 ================================================================================
 
-jsc 2
+jsc 1
 package p
 contract C {
   state { n: Int, xs: List<Int> }
@@ -120,7 +120,7 @@ contract C {
 Match: statement and value
 ================================================================================
 
-jsc 2
+jsc 1
 package p
 enum Phase { Open, Closed { day: Int, by: Key } }
 contract C {
@@ -247,7 +247,7 @@ contract C {
 Effects on native assets (M2a): send, mint, burn, accept, and effect arms
 ================================================================================
 
-jsc 2
+jsc 1
 package t
 contract C {
   state { n: Int }
