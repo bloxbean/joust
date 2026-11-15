@@ -112,6 +112,8 @@ final class Gov {
                 c("RegDRep", f("credential", CRED), f("deposit", INT)),
                 c("UpdateDRep", f("credential", CRED)),
                 c("UnRegDRep", f("credential", CRED), f("refund", INT)),
+                // poolVfr is the pool's 32-byte VRF key hash, held by JuLC as a PubKeyHash: typed Key here, as JuLC's record
+                // types it (review F7); the certificate filter keeps pool certificates from every handler.
                 c("PoolRegister", h("poolId", Ty.KEY), h("poolVfr", Ty.KEY)),
                 c("PoolRetire", h("pubKeyHash", Ty.KEY), f("epoch", INT)),
                 c("AuthHotCommittee", f("cold", CRED), f("hot", CRED)),

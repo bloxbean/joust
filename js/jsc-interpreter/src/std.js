@@ -165,14 +165,10 @@ export function applyStd(name, args, { same, elemType, tx }) {
     // std/certs (M3c, §2.10): each tests one constructor exactly; a StakeVote delegation is neither stake-only nor vote-only.
     case 'isRegistration': return a.ctor === 'RegStaking';
     case 'isDRepLifecycle': return a.ctor === 'RegDRep' || a.ctor === 'UpdateDRep';
-    case 'delegatesOnlyTo':
-    case 'delegatesVoteTo': {
+    case 'delegatesOnlyTo': {
       if (a.ctor !== 'DelegStaking' && a.ctor !== 'RegDeleg') return false;
       const d = a.fields[1];
-      if (name === 'delegatesOnlyTo') return d.ctor === 'Stake' && bytesEqual(d.fields[0], b);
-      const x = d.fields[0];
-      return d.ctor === 'Vote' && x.ctor === b.ctor
-        && (x.ctor !== 'DRepCredential' || (x.fields[0].script === b.fields[0].script && bytesEqual(x.fields[0].hash, b.fields[0].hash)));
+      return d.ctor === 'Stake' && bytesEqual(d.fields[0], b);
     }
     // std/time
     case 'elapsedSince': return tx.validFrom - a > 0n ? tx.validFrom - a : 0n;
@@ -194,5 +190,5 @@ export const ROWS = Object.freeze({
   'std/value': ['isEmpty', 'withoutLovelace', 'scale'],
   'std/address': ['paymentKey', 'paymentScript'],
   // M3c (ADR-0010 r2): the exact certificate checks of certify handlers.
-  'std/certs': ['isRegistration', 'delegatesOnlyTo', 'delegatesVoteTo', 'isDRepLifecycle'],
+  'std/certs': ['isRegistration', 'delegatesOnlyTo', 'isDRepLifecycle'],
 });

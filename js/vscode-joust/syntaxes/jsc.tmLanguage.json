@@ -302,7 +302,7 @@
           }
         },
         {
-          "match": "\\b(sha2_256|sha3_256|blake2b_256|blake2b_224|verifyEd25519|length|concat|slice|take|drop|byteAt|toInt|toHex|div|mod|pow|expMod|sign|andBytes|orBytes|xorBytes|complement|readBit|shift|rotate|countSetBits|findFirstSetBit|last|nth|indexOf|elapsedSince|elapsedSinceAtMost|windowStart|windowEnd|withoutLovelace|scale|paymentKey|paymentScript|isRegistration|delegatesOnlyTo|delegatesVoteTo|isDRepLifecycle)\\s*(?=\\()",
+          "match": "\\b(sha2_256|sha3_256|blake2b_256|blake2b_224|verifyEd25519|length|concat|slice|take|drop|byteAt|toInt|toHex|div|mod|pow|expMod|sign|andBytes|orBytes|xorBytes|complement|readBit|shift|rotate|countSetBits|findFirstSetBit|last|nth|indexOf|elapsedSince|elapsedSinceAtMost|windowStart|windowEnd|withoutLovelace|scale|paymentKey|paymentScript|isRegistration|delegatesOnlyTo|isDRepLifecycle)\\s*(?=\\()",
           "captures": {
             "1": {
               "name": "support.function.std.jsc"

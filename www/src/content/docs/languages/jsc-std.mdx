@@ -144,7 +144,6 @@ structural equality of `==`.
 |---|---|---|---|---|
 | `isRegistration` | `isRegistration(TxCert): Bool` | any certificate; true for RegStaking (with or without a deposit), else false | yes | `Certs.isRegistration` (direct) |
 | `delegatesOnlyTo` | `delegatesOnlyTo(TxCert, Bytes): Bool` | any certificate and pool; true for DelegStaking or RegDeleg whose delegatee is exactly Stake of that pool (a StakeVote delegation is false), else false | yes | `Certs.delegatesOnlyTo` (direct) |
-| `delegatesVoteTo` | `delegatesVoteTo(TxCert, DRep): Bool` | any certificate and DRep; true for DelegStaking or RegDeleg whose delegatee is exactly Vote of that DRep (a StakeVote delegation is false), else false | yes | `Certs.delegatesVoteTo` (direct) |
 | `isDRepLifecycle` | `isDRepLifecycle(TxCert): Bool` | any certificate; true for RegDRep or UpdateDRep, else false | yes | `Certs.isDRepLifecycle` (direct) |
 
 ### `std/time`

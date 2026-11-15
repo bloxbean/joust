@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "5b0250c526debfa87c817dfe1039c7a9ba29b99fe8a157d11f42ec29bd413a90",
+  "sourceSha256": "cbdf9c7b36ba776b603eeafe0f68f6ddc7f4746821ebc7ca0d68f87607edbb00",
   "package": "org.julclang.state.examples.dsl",
   "contract": "TallyV2",
   "source": "TallyV2.jsc",
@@ -14,7 +14,8 @@
       { "name": "admin", "type": "Key" },
       { "name": "voters", "type": { "list": "Key" } },
       { "name": "count", "type": "Int" },
-      { "name": "bonus", "type": "Int" }
+      { "name": "bonus", "type": "Int" },
+      { "name": "live", "type": "Bool" }
     ],
     "at": [10, 1]
   },
@@ -40,12 +41,23 @@
           { "name": "voters", "type": { "list": "Key" } },
           { "name": "needed", "type": "Int" },
           { "name": "tags", "type": { "map": ["Bytes", "Int"] } },
-          { "name": "note", "type": { "option": "Bytes" } }
+          { "name": "note", "type": { "option": "Bytes" } },
+          { "name": "live", "type": "Bool" },
+          { "name": "mode", "type": { "enum": "TallyV1.Mode" } }
         ],
-        "at": [7, 1]
+        "at": [10, 1]
       },
       "records": [],
-      "enums": [],
+      "enums": [
+        {
+          "name": "TallyV1.Mode",
+          "variants": [
+            { "name": "TallyV1.Plain", "fields": [], "at": [8, 13] },
+            { "name": "TallyV1.Weighted", "fields": [{ "name": "factor", "type": "Int" }], "at": [8, 20] }
+          ],
+          "at": [8, 1]
+        }
+      ],
       "timeFields": [],
       "receives": [],
       "bigMaps": false
@@ -75,7 +87,8 @@
             { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [15, 21] },
             { "node": "ListLit", "items": [], "rest": null, "type": { "list": "Key" }, "taint": 0, "at": [15, 37] },
             { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 48] },
-            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 58] }
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 58] },
+            { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [15, 67] }
           ],
           "type": { "record": "State" },
           "taint": 0,
@@ -95,7 +108,7 @@
         "type": { "record": "TallyV1.State" },
         "taint": 0,
         "at": [18, 37],
-        "fieldTaints": { "admin": 0, "needed": 0, "note": 0, "successor": 0, "tags": 0, "voters": 0 }
+        "fieldTaints": { "admin": 0, "live": 0, "mode": 0, "needed": 0, "note": 0, "successor": 0, "tags": 0, "voters": 0 }
       },
       "params": [{ "id": 2, "name": "bonus", "type": "Int", "taint": 0, "at": [18, 57] }],
       "mods": [],
@@ -148,21 +161,21 @@
           "values": [
             {
               "node": "GetField",
-              "target": { "node": "LocalRef", "local": 1, "type": { "record": "TallyV1.State" }, "taint": 0, "at": [21, 21] },
+              "target": { "node": "LocalRef", "local": 1, "type": { "record": "TallyV1.State" }, "taint": 0, "at": [22, 21] },
               "record": "TallyV1.State",
               "field": "admin",
               "type": "Key",
               "taint": 0,
-              "at": [21, 21]
+              "at": [22, 21]
             },
             {
               "node": "GetField",
-              "target": { "node": "LocalRef", "local": 1, "type": { "record": "TallyV1.State" }, "taint": 0, "at": [21, 40] },
+              "target": { "node": "LocalRef", "local": 1, "type": { "record": "TallyV1.State" }, "taint": 0, "at": [22, 40] },
               "record": "TallyV1.State",
               "field": "voters",
               "type": { "list": "Key" },
               "taint": 0,
-              "at": [21, 40]
+              "at": [22, 40]
             },
             {
               "node": "Arith",
@@ -172,17 +185,17 @@
                 "op": "size",
                 "map": {
                   "node": "GetField",
-                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "TallyV1.State" }, "taint": 0, "at": [21, 59] },
+                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "TallyV1.State" }, "taint": 0, "at": [22, 59] },
                   "record": "TallyV1.State",
                   "field": "tags",
                   "type": { "map": ["Bytes", "Int"] },
                   "taint": 0,
-                  "at": [21, 59]
+                  "at": [22, 59]
                 },
                 "args": [],
                 "type": "Int",
                 "taint": 0,
-                "at": [21, 59]
+                "at": [22, 59]
               },
               "right": {
                 "node": "CallStd",
@@ -198,33 +211,42 @@
                         "local": 1,
                         "type": { "record": "TallyV1.State" },
                         "taint": 0,
-                        "at": [21, 82]
+                        "at": [22, 82]
                       },
                       "record": "TallyV1.State",
                       "field": "note",
                       "type": { "option": "Bytes" },
                       "taint": 0,
-                      "at": [21, 82]
+                      "at": [22, 82]
                     },
-                    "default": { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [21, 94] },
+                    "default": { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [22, 94] },
                     "type": "Bytes",
                     "taint": 0,
-                    "at": [21, 82]
+                    "at": [22, 82]
                   }
                 ],
                 "type": "Int",
                 "taint": 0,
-                "at": [21, 75]
+                "at": [22, 75]
               },
               "type": "Int",
               "taint": 0,
-              "at": [21, 59]
+              "at": [22, 59]
             },
-            { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [21, 98] }
+            { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [22, 98] },
+            {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 1, "type": { "record": "TallyV1.State" }, "taint": 0, "at": [22, 111] },
+              "record": "TallyV1.State",
+              "field": "live",
+              "type": "Bool",
+              "taint": 0,
+              "at": [22, 111]
+            }
           ],
           "type": { "record": "State" },
           "taint": 0,
-          "at": [21, 12]
+          "at": [22, 12]
         },
         "at": [18, 69]
       },
@@ -247,48 +269,57 @@
           "values": [
             {
               "node": "GetField",
-              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [25, 17] },
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
               "record": "State",
               "field": "admin",
               "type": "Key",
               "taint": 0,
-              "at": [25, 12]
+              "at": [26, 12]
             },
             {
               "node": "GetField",
-              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [25, 17] },
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
               "record": "State",
               "field": "voters",
               "type": { "list": "Key" },
               "taint": 0,
-              "at": [25, 12]
+              "at": [26, 12]
             },
             {
               "node": "Arith",
               "op": "+",
-              "left": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [25, 31] },
-              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [25, 39] },
+              "left": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [26, 31] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [26, 39] },
               "type": "Int",
               "taint": 0,
-              "at": [25, 31]
+              "at": [26, 31]
             },
             {
               "node": "GetField",
-              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [25, 17] },
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
               "record": "State",
               "field": "bonus",
               "type": "Int",
               "taint": 0,
-              "at": [25, 12]
+              "at": [26, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
+              "record": "State",
+              "field": "live",
+              "type": "Bool",
+              "taint": 0,
+              "at": [26, 12]
             }
           ],
           "type": { "record": "State" },
           "taint": 0,
-          "at": [25, 12]
+          "at": [26, 12]
         },
-        "at": [24, 29]
+        "at": [25, 29]
       },
-      "at": [24, 3]
+      "at": [25, 3]
     },
     {
       "kind": "destroy",
@@ -303,15 +334,15 @@
         "stmts": [
           {
             "stmt": "Pay",
-            "to": { "node": "StateField", "field": "admin", "type": "Key", "taint": 0, "at": [29, 9] },
-            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [29, 16] },
-            "at": [29, 5]
+            "to": { "node": "StateField", "field": "admin", "type": "Key", "taint": 0, "at": [30, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [30, 16] },
+            "at": [30, 5]
           }
         ],
         "result": null,
-        "at": [28, 55]
+        "at": [29, 55]
       },
-      "at": [28, 3]
+      "at": [29, 3]
     }
   ],
   "invariants": [
@@ -328,41 +359,41 @@
             "left": {
               "node": "Compare",
               "op": ">=",
-              "left": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [32, 20] },
-              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [32, 29] },
+              "left": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [33, 20] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [33, 29] },
               "type": "Bool",
               "taint": 0,
-              "at": [32, 20]
+              "at": [33, 20]
             },
             "right": {
               "node": "Compare",
               "op": ">=",
-              "left": { "node": "StateField", "field": "bonus", "type": "Int", "taint": 0, "at": [32, 34] },
-              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [32, 43] },
+              "left": { "node": "StateField", "field": "bonus", "type": "Int", "taint": 0, "at": [33, 34] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [33, 43] },
               "type": "Bool",
               "taint": 0,
-              "at": [32, 34]
+              "at": [33, 34]
             },
             "type": "Bool",
             "taint": 0,
-            "at": [32, 20]
+            "at": [33, 20]
           },
           "right": {
             "node": "Compare",
             "op": "<=",
-            "left": { "node": "StateField", "field": "bonus", "type": "Int", "taint": 0, "at": [32, 48] },
-            "right": { "node": "Lit", "value": "100", "type": "Int", "taint": 0, "at": [32, 57] },
+            "left": { "node": "StateField", "field": "bonus", "type": "Int", "taint": 0, "at": [33, 48] },
+            "right": { "node": "Lit", "value": "100", "type": "Int", "taint": 0, "at": [33, 57] },
             "type": "Bool",
             "taint": 0,
-            "at": [32, 48]
+            "at": [33, 48]
           },
           "type": "Bool",
           "taint": 0,
-          "at": [32, 20]
+          "at": [33, 20]
         },
-        "at": [32, 20]
+        "at": [33, 20]
       },
-      "at": [32, 3]
+      "at": [33, 3]
     }
   ],
   "warnings": []

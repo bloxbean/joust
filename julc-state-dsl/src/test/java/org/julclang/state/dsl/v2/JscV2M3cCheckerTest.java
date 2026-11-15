@@ -94,6 +94,8 @@ class JscV2M3cCheckerTest {
         var fs = new LinkedHashMap<String, String>();
         fs.put("Old.jsc", OLD);
         fs.put("Big.jsc", BIG);
+        fs.put("Plain.jsc", "jsc 1\npackage t\ncontract Plain {\n  state { admin: Key, count: Int }\n  init() { return { admin: caller, count: 0 } }\n"
+                + "  destroy close() only admin { pay(admin, balance) }\n}\n");
         fs.put(name, source);
         return JscV2.lower(source, name, name, JscModules.of(fs));
     }
@@ -220,6 +222,11 @@ class JscV2M3cCheckerTest {
         cases.add(bad("JSC1319", "only effect is send", pur("  withdraw w(amount: Int) " + Q + " { @@pay(params.payee, amount) }\n")));
         cases.add(bad("JSC1319", "it has no effects", pur("  certify c(cert: TxCert) " + Q + " { @@send(wallet(params.payee), Value.lovelace(1))\n true }\n")));
         cases.add(bad("JSC1340", "its sends", pur("  withdraw w(amount: Int) " + Q + " { send(wallet(params.payee), Value.lovelace(amount))\n @@true }\n")));
+        // Review S4: a withdraw handler's send is Value.lovelace(n), as written (an asset, a sum, a const value refused).
+        cases.add(bad("JSC1340", "sends lovelace only", pur("  withdraw w(amount: Int, p: Hash) " + Q
+                + " { send(wallet(params.payee), @@Value.lovelace(amount) + Value.asset(p, #01, 1)) }\n")));
+        cases.add(bad("JSC1340", "sends lovelace only", pur("  withdraw w(amount: Int) " + Q
+                + " { const v = Value.lovelace(amount)\n send(wallet(params.payee), @@v) }\n")));
         // A withdraw handler is a block (its sends); the parser says so where the = is.
         cases.add(bad("JSC0109", "expected '{'", pur("  withdraw w(amount: Int) " + Q + " @@= true\n")));
         cases.add(bad("JSC1341", "evaluates to a Bool", pur("  certify c(cert: TxCert) " + Q + " @@{ const x = 1 }\n")));
@@ -280,10 +287,13 @@ class JscV2M3cCheckerTest {
         cases.add(bad("JSC1335", "params.until is Int", next("  init migrate from @@params.until(old: Old.State) { return { admin: old.admin, count: 0 } }\n")));
         cases.add(bad("JSC1335", "the contract declares no params", NEW.replace("  params { %P }\n", "").replace("%M",
                 "  init migrate from @@params.previous(old: Old.State) { return { admin: old.admin, count: 0 } }\n")));
+        // Review S2, F4: the previous version must declare a migrating destroy (Plain has an ordinary destroy only).
+        cases.add(bad("JSC1336", "Plain declares no migrating destroy", next("  init migrate from params.previous(old: @@Plain.State) { return { admin: old.admin, count: 0 } }\n")
+                .replace("import contract { Big }", "import contract { Plain } from \"./Plain.jsc\"\nimport contract { Big }")));
         cases.add(bad("JSC1336", "the previous version's state", next("  @@init migrate from params.previous() { return { admin: caller, count: 0 } }\n")));
         cases.add(bad("JSC1336", "the previous version's state", next("  init migrate from params.previous(@@n: Int) { return { admin: caller, count: n } }\n")));
-        // A second init migrate is a second method migrate (its Java name): JSC0204 says so first.
-        cases.add(bad("JSC0204", "the method migrate is declared twice", next(ADOPT + "  @@init migrate from params.previous(old: Old.State) { return { admin: old.admin, count: 1 } }\n")));
+        // Review F6: a second init migrate has its own message (it is also a second Java method migrate).
+        cases.add(bad("JSC1337", "at most one init migrate", next(ADOPT + "  @@init migrate from params.previous(old: Old.State) { return { admin: old.admin, count: 1 } }\n")));
         cases.add(bad("JSC1337", "rename this method", next(ADOPT + "  @@action migrate() only admin { return state }\n")));
         cases.add(bad("JSC1338", "pays,", next("  init migrate from params.previous(old: Old.State) { @@pay(old.admin, 1)\n return { admin: old.admin, count: 0 } }\n")));
         cases.add(bad("JSC1338", "funds is not available in init migrate",

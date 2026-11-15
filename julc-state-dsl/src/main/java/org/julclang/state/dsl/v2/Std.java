@@ -170,10 +170,8 @@ final class Std {
         add(new Binding("std/certs", "delegatesOnlyTo", List.of(Gov.TX_CERT, Ty.BYTES), Ty.BOOL, API + "Certs", "Certs.delegatesOnlyTo", List.of(),
                 Policy.DIRECT, "any certificate and pool; true for DelegStaking or RegDeleg whose delegatee is exactly Stake of that pool"
                 + " (a StakeVote delegation is false), else false", true, API + "Certs.delegatesOnlyTo(" + CERT + ",byte[]):boolean"));
-        add(new Binding("std/certs", "delegatesVoteTo", List.of(Gov.TX_CERT, Gov.DREP), Ty.BOOL, API + "Certs", "Certs.delegatesVoteTo", List.of(),
-                Policy.DIRECT, "any certificate and DRep; true for DelegStaking or RegDeleg whose delegatee is exactly Vote of that DRep"
-                + " (a StakeVote delegation is false), else false", true,
-                API + "Certs.delegatesVoteTo(" + CERT + ",org.julclang.ledger.DRep):boolean"));
+        // Review F5 (r2): no delegatesVoteTo: its DRep argument could be no params field nor a built value (D5), so a handler
+        // could only pass the certificate's own; a vote delegation is a match over the delegatee.
         add(new Binding("std/certs", "isDRepLifecycle", List.of(Gov.TX_CERT), Ty.BOOL, API + "Certs", "Certs.isDRepLifecycle", List.of(),
                 Policy.DIRECT, "any certificate; true for RegDRep or UpdateDRep, else false", true,
                 API + "Certs.isDRepLifecycle(" + CERT + "):boolean"));

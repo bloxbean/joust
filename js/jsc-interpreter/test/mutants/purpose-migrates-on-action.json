@@ -365,7 +365,7 @@
    "line": 18,
    "col": 3,
    "code": "JSC9014",
-   "message": "setSuccessor sets successor, the successor a migration moves the instance into: whoever may call it can change the successor until the migration, after users relied on it (ADR-0011 D4); to fix it once, require it unset: require(successor == #, \"the successor is set once\")"
+   "message": "setSuccessor sets successor, the successor a migration moves the instance into: whoever may call it can change the successor until the migration, after users relied on it (ADR-0011 D4); to fix it once, require it unset: require(successor == #, \"the successor is set once\"); and check the new successor is a 28-byte policy (require(length(next) == 28, …)), or a set-once successor of another length can never migrate"
   }
  ]
 }

@@ -1877,12 +1877,11 @@ public final class Interpreter {
                 String k = ((GovV) a.get(0)).ctor();
                 return k.equals("RegDRep") || k.equals("UpdateDRep");
             }
-            case "delegatesOnlyTo", "delegatesVoteTo" -> {
+            case "delegatesOnlyTo" -> {
                 GovV cert = (GovV) a.get(0);
                 if (!cert.ctor().equals("DelegStaking") && !cert.ctor().equals("RegDeleg")) return false;
                 GovV d = (GovV) cert.fields().get(1);
-                if (c.binding().name().equals("delegatesOnlyTo")) return d.ctor().equals("Stake") && d.fields().get(0).equals(a.get(1));
-                return d.ctor().equals("Vote") && sameDRep((GovV) d.fields().get(0), (GovV) a.get(1));
+                return d.ctor().equals("Stake") && d.fields().get(0).equals(a.get(1));
             }
             case "windowStart" -> {
                 return f.tx.validFrom();
@@ -2064,11 +2063,6 @@ public final class Interpreter {
             }
             default -> throw new IllegalStateException(c.op());
         };
-    }
-
-    /** M3c: two DReps alike: the same constructor, and for a credential's the same credential. */
-    private static boolean sameDRep(GovV x, GovV y) {
-        return x.ctor().equals(y.ctor()) && (!x.ctor().equals("DRepCredential") || x.fields().get(0).equals(y.fields().get(0)));
     }
 
     private Object field(Rec r, String name) {

@@ -97,7 +97,7 @@ const STD_ARITY = {
   byteAt: 2, toInt: 1, toHex: 1, div: 2, mod: 2, pow: 2, expMod: 3, sign: 1, andBytes: 3, orBytes: 3, xorBytes: 3, complement: 1,
   readBit: 2, shift: 2, rotate: 2, countSetBits: 1, findFirstSetBit: 1, last: 1, nth: 2, indexOf: 2, elapsedSince: 1,
   elapsedSinceAtMost: 1, windowStart: 0, windowEnd: 0, isEmpty: 1, withoutLovelace: 1, scale: 2, paymentKey: 1, paymentScript: 1,
-  isRegistration: 1, delegatesOnlyTo: 2, delegatesVoteTo: 2, isDRepLifecycle: 1,
+  isRegistration: 1, delegatesOnlyTo: 2, isDRepLifecycle: 1,
 };
 const LEDGER_ARITY = {
   none: 0, lovelace: 1, asset: 3, add: 2, sub: 2, lovelaceOf: 1, of: 3, covers: 2, keyCred: 1, scriptCred: 1, wallet: 1, walletStaked: 2,

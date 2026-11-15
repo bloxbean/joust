@@ -632,8 +632,13 @@ final class Checker {
                         + " the type in " + src.fileName() + " itself, or use the library's type only in its methods' parameters and results");
             }
             contracts.put(name, foreign(op));
+            // Review S2, F4: whether the imported contract declares a migrating destroy (an adoption needs one).
+            if (op.methods().stream().anyMatch(x -> x.migratesTo() != null)) migratingContracts.add(name);
         }
     }
+
+    /** The imported contracts that declare a migrating destroy ({@code destroy … migrates to f}). */
+    private final Set<String> migratingContracts = new HashSet<>();
 
     /**
      * The first record or enum an imported contract's state, declared types or memo types name that the contract does not
@@ -1017,6 +1022,11 @@ final class Checker {
                 throw m.pos().error("JSC0203", "the method name " + m.name() + " would clash with the generated name " + variant
                         + (declared ? " (a declared type or variant): a method's redeemer is a Java class named after it, beside the"
                         + " contract's types and variants" : "") + "; rename it");
+            }
+            // Review F6: a second init migrate is its own refusal (both are the Java method migrate), before JSC0204's.
+            if (m.kind() == Kind.MIGRATE && seen.contains("migrate")) {
+                Syntax.Method first = c.methods().stream().filter(x -> x.kind() == Kind.MIGRATE).findFirst().get();
+                throw m.pos().error("JSC1337", "a contract adopts from one previous version: at most one init migrate (line " + first.pos().line() + ")");
             }
             if (!seen.add(m.name())) throw m.pos().error("JSC0204", "the method " + m.name() + " is declared twice");
         }
@@ -2953,6 +2963,10 @@ final class Checker {
             throw p.type().pos().error("JSC1334", "the previous version " + c + " keeps BigMap state, whose maps cannot move into a new instance (their"
                     + " claims are owned by the spent input, ADR-0011 r2)");
         }
+        if (!migratingContracts.contains(c)) {
+            throw p.type().pos().error("JSC1336", c + " declares no migrating destroy (destroy … migrates to f): an adoption pairs only with the"
+                    + " previous version's consent (ADR-0011 D4, I41)");
+        }
         var fts = new LinkedHashMap<String, Integer>();
         for (String fld : f.state().fields().keySet()) fts.put(fld, f.timeFields().contains(fld) ? TIME : 0);
         int whole = f.timeFields().isEmpty() ? 0 : TIME;
@@ -3021,16 +3035,13 @@ final class Checker {
                 if (writesField(r, f) && !locksField(m.body(), f)) {
                     warn(m.pos(), "JSC9014", m.name() + " sets " + f + ", the successor a migration moves the instance into: whoever may call it"
                             + " can change the successor until the migration, after users relied on it (ADR-0011 D4); to fix it once, require"
-                            + " it unset: require(" + f + " == #, \"the successor is set once\")");
+                            + " it unset: require(" + f + " == #, \"the successor is set once\"); and check the new successor is a 28-byte"
+                            + " policy (require(length(next) == 28, …)), or a set-once successor of another length can never migrate");
                 }
             }
         }
     }
 
-    /**
-     * Whether an action's next state may give field {@code f} another value than the input's: any result but the state itself
-     * or a spread of it that leaves {@code f} out or writes it back unchanged (conservative).
-     */
     /** Whether a body requires the field {@code f} unset (empty) before anything else may set it: {@code require(f == #, …)}. */
     private static boolean locksField(Ir.Block b, String f) {
         for (Ir.Stmt st : b.stmts()) if (st instanceof Ir.Require r && requiresEmpty(r.cond(), f)) return true;
@@ -3052,6 +3063,10 @@ final class Checker {
         return e instanceof Ir.Lit l && l.value() instanceof byte[] b && b.length == 0;
     }
 
+    /**
+     * Whether an action's next state may give field {@code f} another value than the input's: any result but the state itself
+     * or a spread of it that leaves {@code f} out or writes it back unchanged (conservative).
+     */
     private boolean writesField(Ir.Expr result, String f) {
         if (result instanceof Ir.StateRef) return false;
         if (result instanceof Ir.New n && n.record().equals("State")) {
@@ -3397,6 +3412,11 @@ final class Checker {
                     if ((value.taint() & TIME) != 0) {
                         throw sd.value().pos().error("JSC0520", "a time value cannot be any part of a send's value: a send must hold a"
                                 + " non-negative value, so its sign would decide whether the call fails (ADR-0018 D11)");
+                    }
+                    // Review S4: a withdrawal allocates lovelace only, so a withdraw handler's send is Value.lovelace(n) as written.
+                    if (sc.kind == Ir.Kind.WITHDRAW && !(value instanceof Ir.LedgerOp lo && lo.op().equals("lovelace"))) {
+                        throw sd.value().pos().error("JSC1340", "a withdraw handler sends lovelace only: send(to, Value.lovelace(n)), as written;"
+                                + " a native asset can never allocate a withdrawal (ADR-0010 D1, I37)");
                     }
                     // M2c: send(to, value, datum): an inline datum, encoded by a generated encoder (D5, J17).
                     Ir.Expr datum = sd.datum() == null ? null : encodable(sd.datum(), sc, "a send's datum");
