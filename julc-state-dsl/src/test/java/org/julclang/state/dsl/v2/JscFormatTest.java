@@ -84,6 +84,50 @@ class JscFormatTest {
         return JscV2.lower(src, file).java().replaceAll("(?m)//.*\\.jsc:\\d+.*$", "").replaceAll("(?m)^\\s*$\\n", "");
     }
 
+    /**
+     * F5: build/lang-format-parity.json, [{key, source, format}], which the Wasm engine's lang.format must answer byte for
+     * byte (toolchainWasmTest, lang-in-node.mjs): every corpus file (refused ones too), a generated layout of each, and
+     * the edge vectors.
+     */
+    @Test
+    void theFormatParityFile() throws Exception {
+        var cases = new java.util.LinkedHashMap<String, String>();
+        var rnd = new Random(5);
+        for (Path p : corpus()) {
+            String src = Files.readString(p);
+            String key = p.normalize().toString().replace('\\', '/');
+            cases.put(key, src);
+            if (JscFormat.format(src).ok()) cases.put(key + "#layout", Layouts.relayout(src, rnd));   // (a layout needs a file that lexes)
+        }
+        String base = "jsc 1\npackage t\n\ncontract C {\n  state { n: Int }\n\n  init() {\n    return { n: 0 }\n  }\n}\n";
+        cases.put("vector:crlf-bom-tabs", "\uFEFF" + base.replace("\n", "\r\n").replace("  ", "\t"));
+        cases.put("vector:non-bmp", base.replace("return", "require(true, \"😀 𝐀\") // 😀\n    return"));
+        cases.put("vector:deep", base.replace("{ n: 0 }", "{ n: " + "(".repeat(40) + "1" + ")".repeat(40) + " }"));
+        cases.put("vector:long-line", base.replace("{ n: 0 }", "{ n: " + "1 + ".repeat(3000) + "1 }"));
+        cases.put("vector:lone-cr", "jsc 1\rpackage t\n");
+        cases.put("vector:empty", "");
+        cases.put("vector:comments-only", "// a\n/* b */\n");
+        var o = new StringBuilder("[");
+        int ok = 0;
+        for (var e : cases.entrySet()) {
+            if (o.length() > 1) o.append(",\n");
+            String json = JscLang.formatJson(e.getValue());
+            if (json.startsWith("{\"ok\":true")) ok++;
+            o.append("{\"key\":");
+            JscLang.str(o, e.getKey());
+            o.append(",\"source\":");
+            JscLang.str(o, e.getValue());
+            o.append(",\"format\":");
+            JscLang.str(o, json);
+            o.append('}');
+        }
+        o.append("]\n");
+        Files.createDirectories(Path.of("build"));
+        Files.writeString(Path.of("build/lang-format-parity.json"), o.toString());
+        System.out.printf("[fmt] parity file: %d cases, %d formatted%n", cases.size(), ok);
+        assertTrue(cases.size() > 150 && ok > 90, cases.size() + " cases, " + ok + " formatted");
+    }
+
     @Test
     void everyCorpusFileAndLayoutKeepsItsProgramAndComments() throws Exception {
         int formatted = 0, refused = 0, layouts = 0, lowered = 0;

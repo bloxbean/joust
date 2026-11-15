@@ -37,7 +37,7 @@ public final class JscLang {
      * {@code modules} (the integration with ADR-0018 M2c and M4): {@code lang.analyze} takes a project's files, which a
      * file's library and contract imports resolve to as in the build.
      */
-    public static final List<String> FEATURES = List.of("analyze", "modules", "std", "lower", "index", "javaLibraries");
+    public static final List<String> FEATURES = List.of("analyze", "modules", "std", "lower", "index", "javaLibraries", "format");
 
     /** D2a: a model's bounds. Over either, the analysis reports one diagnostic instead of the model. */
     public static final int MAX_ENTRIES = 200_000;
@@ -764,6 +764,33 @@ public final class JscLang {
      * its own, or as the module {@code id} of {@code files}), its path, and its source map's lines as {@code [jscLine,
      * javaLine]} (each {@code .jsc} line's first Java line); or {@code ok} false with the first error.
      */
+    /**
+     * ADR-0021 r9 §15 (M5d): the formatted text, {@code {"ok":true,"text":…}}, or, for a file that does not lex or parse
+     * (F4), {@code {"ok":false,"error":{"code","line","col","message"}}} and no text. One entry for every front end:
+     * {@code joust fmt}, {@code jsc --fmt} and the server's {@code textDocument/formatting}.
+     */
+    public static String formatJson(String source) {
+        var o = new StringBuilder();
+        try {
+            JscFormat.Result r = JscFormat.format(source);
+            if (r.ok()) {
+                o.append("{\"ok\":true,\"text\":");
+                str(o, r.text());
+                return o.append('}').toString();
+            }
+            o.append("{\"ok\":false,\"error\":{\"code\":");
+            str(o, r.code() == null ? "JSC0005" : r.code());
+            o.append(",\"line\":").append(Math.max(1, r.line())).append(",\"col\":").append(Math.max(1, r.col())).append(",\"message\":");
+            str(o, r.error());
+            return o.append("}}").toString();
+        } catch (RuntimeException | Error e) {
+            o.setLength(0);
+            o.append("{\"ok\":false,\"error\":{\"code\":\"JSC0005\",\"line\":1,\"col\":1,\"message\":");
+            str(o, JscMain.internalError(e));
+            return o.append("}}").toString();
+        }
+    }
+
     public static String lowerJson(String source, String fileName, String id, java.util.Map<String, String> files) {
         var o = new StringBuilder();
         try {

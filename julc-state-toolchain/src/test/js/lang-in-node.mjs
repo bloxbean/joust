@@ -88,7 +88,7 @@ if (!isMainThread) {
   const fail = (m) => { failures++; console.log('FAIL ' + m); };
   const engine = await load(dir);
   const info = JSON.parse(engine.lang.info({}).info);
-  if (info.protocol !== 1 || info.modelVersion !== 2 || !['analyze', 'modules', 'std', 'lower', 'index'].every((f) => info.features.includes(f))) {
+  if (info.protocol !== 1 || info.modelVersion !== 2 || !['analyze', 'modules', 'std', 'lower', 'index', 'format'].every((f) => info.features.includes(f))) {
     fail(`lang.info ${JSON.stringify(info)}`);
   }
 
@@ -126,6 +126,22 @@ if (!isMainThread) {
   }
   console.log(`[lang wasm] parity: ${parity.length} document models (${withProject} in their project), JVM and Wasm byte-identical;`
     + ' lang.index after the diagnostics model gives each again');
+
+  // ADR-0021 r9 §15 F5 (M5d): lang.format gives the JVM's answer, byte for byte (JscFormatTest writes the cases beside
+  // the parity file: every corpus file, a generated layout of each, and the edge vectors).
+  const formatFile = join(dirname(parityFile), 'lang-format-parity.json');
+  if (!existsSync(formatFile)) fail(`[format] ${formatFile} is missing (julc-state-dsl's JscFormatTest writes it)`);
+  else {
+    const cases = JSON.parse(readFileSync(formatFile, 'utf8'));
+    let formatted = 0;
+    for (const c of cases) {
+      const r = engine.lang.format({ source: c.source });
+      if (!r.ok) fail(`[format] ${c.key}: ${r.error}`);
+      else if (r.json !== c.format) fail(`[format] ${c.key}: the engine's answer differs from the JVM's`);
+      else if (JSON.parse(r.json).ok) formatted++;
+    }
+    console.log(`[lang wasm] format: ${cases.length} cases (${formatted} formatted, the rest refused), JVM and Wasm byte-identical`);
+  }
 
   // 2. L1: the model's front-end diagnostics are the build's.
   if (!noBuild) {

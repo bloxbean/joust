@@ -17,6 +17,8 @@ tasks.named('test') {
     inputs.dir(rootProject.file('js/create-joust/variants/jsc/contracts')).withPropertyName('jscTemplate').withPathSensitivity(PathSensitivity.RELATIVE)
     // JscLangTest writes build/lang-parity.json for the Wasm engine's parity test (julc-state-toolchain's toolchainWasmTest).
     outputs.file(layout.buildDirectory.file('lang-parity.json')).withPropertyName('langParity')
+    // JscFormatTest writes build/lang-format-parity.json for the engine's lang.format (ADR-0021 §15 F5).
+    outputs.file(layout.buildDirectory.file('lang-format-parity.json')).withPropertyName('langFormatParity')
     // JscV2IrTest compares the fixtures with the current exports, and Ed25519Test reads the libsodium vectors (review F9).
     inputs.dir(rootProject.file('js/jsc-interpreter/test/fixtures')).withPropertyName('jscInterpreterFixtures')
             .withPathSensitivity(PathSensitivity.RELATIVE)

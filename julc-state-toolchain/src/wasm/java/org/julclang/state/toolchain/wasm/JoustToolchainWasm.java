@@ -89,6 +89,9 @@ public final class JoustToolchainWasm {
 
     public record LowerRequest(String file, String source, String id, Map<String, String> files) {}
 
+    /** ADR-0021 r9 §15 (M5d): the text to format. */
+    public record FormatRequest(String source) {}
+
     /** The catalogue's or the lowering's JSON, or {@code ok} false and the failure (never a front-end diagnostic). */
     public record JsonResult(boolean ok, String json, String error) {}
 
@@ -114,6 +117,8 @@ public final class JoustToolchainWasm {
         api.add("lang.index", AnalyzeRequest.class, JoustToolchainWasm::index);
         // The java: libraries' descriptions (JavaLibrariesJson), which the server caches by the SHA-256 of the sources.
         api.add("lang.javaLibraries", JavaLibrariesRequest.class, JoustToolchainWasm::javaLibraries);
+        // M5d (ADR-0021 r9 §15): the formatter (JscLang.formatJson: the text, or the first error and no text).
+        api.add("lang.format", FormatRequest.class, JoustToolchainWasm::format);
         JsApi.install(api, new EngineInfo("joustToolchain", "joust-toolchain", VERSION, List.of("vm", "debug", "joust", "lang")));
     }
 
@@ -130,6 +135,14 @@ public final class JoustToolchainWasm {
             String file = request.file() == null ? "File.jsc" : request.file();
             return ServiceResult.ok(new JsonResult(true, org.julclang.state.dsl.v2.JscLang.lowerJson(request.source(), file, request.id(),
                     request.files()), null));
+        } catch (Throwable t) {
+            return ServiceResult.ok(new JsonResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
+        }
+    }
+
+    static ServiceResult<JsonResult> format(FormatRequest request) {
+        try {
+            return ServiceResult.ok(new JsonResult(true, org.julclang.state.dsl.v2.JscLang.formatJson(request.source()), null));
         } catch (Throwable t) {
             return ServiceResult.ok(new JsonResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
         }
