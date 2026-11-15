@@ -1,18 +1,38 @@
 # JOUST `.jsc` for VS Code
 
-JOUST's contract language, `.jsc`, in VS Code (ADR-0021, milestone M5a). Language preview, like `.jsc` itself.
+JOUST's contract language, `.jsc`, in VS Code (ADR-0021, milestones M5a–M5e). Language preview, like `.jsc` itself.
 
-- **Diagnostics as you type**, from the build's own front end: the first error, or, when the file checks, its warnings,
-  each with its stable code (`JSC0502`) linking its row in the
-  [diagnostics catalogue](https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-diagnostics.md). Recovery
-  (several errors at once) comes in M5b.
+- **Diagnostics as you type**, from the build's own front end. Every error in a file is reported at once, each with
+  its stable code (`JSC0502`) linking its row in the
+  [diagnostics catalogue](https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-diagnostics.md).
+- **Hover** (types, the standard library's documentation), **go to definition**, **find references** and **semantic
+  highlighting**, within a file and across files (below).
+- **Completion**: names in scope, fields, the standard library, and names from other files (choosing one adds its
+  import).
+- **Quick fixes**: `let`/`var` → `const`, `===` → `==`, and adding a missing standard-library import. They are offered
+  only when you ask (Ctrl+.), never on save.
+- **JOUST: Rename Symbol** (F2), across files (below).
+- **Formatting**: Format Document, Format Selection, and format on save if you turn it on, with the same formatter as
+  `joust fmt`. It changes whitespace only, never a token, a comment or the script hash. The style is the compiler's
+  version 1, which keeps spacing within a line as written. A file that does not parse is left as it was. With the
+  bundled compiler (advisory), it formats as that compiler does. A project's own compiler formats only when the bundled
+  compiler confirms the result is the same program; otherwise the file is left as it was, and you are told. An npm
+  package's library is never formatted.
+- **The build on save**, in a trusted project that uses its own compiler: an in-memory build, which writes nothing,
+  adds the processor's and JuLC's errors, the ABI comparison with each committed `<Contract>.abi.json`, and the
+  `joust.lock` check (JSC0731/JSC0732, as `joust build` reports them). **JOUST: Check build (in memory)** runs it on
+  request anywhere.
+- **JOUST: Show generated Java** and **Peek generated Java** open the Java a `.jsc` file lowers to, at the cursor's line.
+- **JOUST: Accept ABI…** shows the diff between the committed ABI manifest and the build's, then accepts that contract
+  (trusted workspaces).
+- **JOUST: Remove invisible characters…** removes bidirectional controls and other format characters the compiler
+  refuses, after you confirm.
 - **The outline, folding and selection ranges**: contract, state fields, init, actions, destroys, views, fns, types,
   enums and variants.
 - **Highlighting** (the TextMate grammar, which the docs site's Shiki also loads), a language configuration and snippets
   (`contract`, `action`, `match`, `fn`, `enum`).
 - **JOUST: Build** runs the project's own `joust build` (npm) or `./gradlew build` as a task; its errors land in the
   Problems panel through the `$joust` problem matcher.
-- Two quick fixes (`let`/`var` → `const`, `===` → `==`), offered only when you ask (Ctrl+.), never on save.
 
 ## Which compiler runs
 
@@ -42,9 +62,15 @@ trusted folders).
 
 | Command | |
 |---|---|
-| JOUST: Restart analysis | a new engine worker, after "JOUST analysis unavailable" |
-| JOUST: Restart server | a new language server |
+| JOUST: Rename Symbol | renames a name across the files that use it (F2 in `.jsc` files) |
+| JOUST: Show generated Java | opens the Java the current file lowers to, read-only, at the cursor's line |
+| JOUST: Peek generated Java | the same, in a peek view |
+| JOUST: Check build (in memory) | builds the project in memory, writing nothing, and shows the later stages' errors, the ABI comparison and the `joust.lock` check |
+| JOUST: Accept ABI… | shows the ABI manifest's diff, then accepts that contract through the project's CLI (trusted workspaces) |
+| JOUST: Remove invisible characters… | removes invisible and bidirectional control characters from the file, after you confirm |
 | JOUST: Build | the project's `joust build` or `./gradlew build`, as a task (trusted workspaces): the project at a workspace folder's root only; the npm CLI runs on VS Code's own Node (an absolute path), not the `node` on your PATH |
+| JOUST: Restart analysis | a new engine worker, after "JOUST analysis unavailable"; it also reads the packages' libraries again |
+| JOUST: Restart server | a new language server |
 | JOUST: Show compiler and mode | which compiler analyses the current file, and why |
 
 ## Across files
