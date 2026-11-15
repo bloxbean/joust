@@ -56,7 +56,9 @@ function M.check_path(path)
 end
 
 --- The first `node` on an absolute PATH entry (a relative or empty entry names a directory of the project), or nil.
+--- #121 F9: on Windows, none (PATH's form differs): give setup({ node = 'C:\\…\\node.exe' }) there.
 function M.find_node()
+  if vim.fn.has('win32') == 1 then return nil end
   for _, dir in ipairs(vim.split(vim.env.PATH or '', ':', { plain = true })) do
     if dir:sub(1, 1) == '/' then
       local p = dir:gsub('/$', '') .. '/node'
@@ -99,6 +101,9 @@ function M.setup(opts)
       local root = M.root(bufnr)
       -- #121 F1: the buffer's project as JOUST's markers find it (never .git alone, never the working directory).
       local project = real(vim.fs.root(bufnr, M.project_markers))
+      -- #121 F9: the home directory itself is never a project (a stray ~/package.json is not one).
+      local home = real(vim.env.HOME)
+      if project and home and project == home then project = nil end
       for _, p in ipairs({ server, node }) do
         if project and inside(p, project) then
           -- A warning, not an error: raised inside the FileType autocommand, an error would end the buffer's other handlers.

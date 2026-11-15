@@ -50,6 +50,8 @@ test('E4: the Neovim module names only the path it is given, with --stdio', () =
   assert.match(c, /for _, p in ipairs\(\{ server, node \}\) do\s*\n\s*if project and inside\(p, project\) then/);
   assert.ok(!/getcwd/.test(c), 'no working-directory rule');
   assert.match(c, /if dir:sub\(1, 1\) == '\/' then/, 'node only from absolute PATH entries');
+  assert.match(c, /if project and home and project == home then project = nil end/, '$HOME is never a project (#121 F9)');
+  assert.match(c, /if vim\.fn\.has\('win32'\) == 1 then return nil end/, 'Windows: node is given (#121 F9)');
 });
 
 test('E4: the Helix configuration names an absolute joust-lsp with --stdio only', () => {
@@ -242,6 +244,8 @@ test('#121 F1: a server installed under $HOME starts when Neovim runs in $HOME, 
     writeFileSync(join(proj, 'contracts', 'app', 'Counter.jsc'), COUNTER);
     mkdirSync(join(home, 'notes'));
     writeFileSync(join(home, 'notes', 'Counter.jsc'), COUNTER);
+    // #121 F9: a stray ~/package.json does not make $HOME a project (the loose file's nearest JOUST marker).
+    writeFileSync(join(home, 'package.json'), '{}');
     for (const file of [join(proj, 'contracts', 'app', 'Counter.jsc'), join(home, 'notes', 'Counter.jsc')]) {
       const out = nvim({ dir: home, file }, { JOUST_CASE: 'diagnostics', JOUST_LSP: server, HOME: home }, { cwd: home });
       assert.equal(out.started, true, file);

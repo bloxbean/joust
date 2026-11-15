@@ -109,3 +109,14 @@ test('#121 F6, S4: attested before uploading; no install scripts; a pinned tree-
   assert.ok(!jobEnvToken.test(j.build) && !jobEnvToken.test(j.attach), 'no job-level GH_TOKEN');
   for (const step of body.split(/\n {6}- /).filter((x) => /GH_TOKEN/.test(x))) assert.match(step, /\bgh (release|api)\b/, step.slice(0, 80));
 });
+
+test('#121 S6, F10: the header shows the full verification; the attach job checks the environment\'s reviewers before anything else', () => {
+  assert.match(wf, /#\s+gh attestation verify vscode-joust-<ext>\.vsix -R bloxbean\/joust \\\n#\s+--signer-workflow bloxbean\/joust\/\.github\/workflows\/editor-assets\.yml --source-ref refs\/heads\/main\n/);
+  assert.ok(!/gh attestation verify [^\n]*-R bloxbean\/joust`/.test(wf), 'no older, shorter command');
+  const j = jobs();
+  assert.match(j.attach, /actions: read/);
+  const check = j.attach.indexOf('environments/release');
+  assert.ok(check > 0, 'the environment is checked');
+  assert.match(j.attach, /select\(\.type == "required_reviewers"\)/);
+  assert.ok(check < j.attach.indexOf('attest-build-provenance') && check < j.attach.indexOf('gh release upload'), 'before attesting and uploading');
+});

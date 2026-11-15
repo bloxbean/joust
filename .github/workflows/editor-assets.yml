@@ -11,11 +11,14 @@
 # never replaced: one already on the release with the same bytes is accepted, one with other bytes fails the run.
 # #121 S1: it runs only from main (both jobs check github.ref), builds the tag itself (refs/tags/v<version>, checked to be
 # the tag's commit and reachable from main), and attaches only in the `release` environment, whose reviewers a
-# maintainer sets up (docs/release-ops.md). Verify an asset with
-#   gh attestation verify <asset> -R bloxbean/joust --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml \
-#     --source-ref refs/heads/main Nothing is published: no Marketplace or Open VSX token
-# exists here, and no step runs vsce publish or ovsx publish. A maintainer publishes from the attached .vsix by hand,
-# after `gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust` (D11), once the publisher (Q4) is decided.
+# maintainer sets up (docs/release-ops.md); #121 F10: the attach job checks, before anything is uploaded, that the
+# environment has required reviewers.
+#
+# Nothing is published: no Marketplace or Open VSX token exists here, and no step runs vsce publish or ovsx publish. A
+# maintainer publishes from the attached .vsix by hand (D11), once the publisher (Q4) is decided, after verifying it:
+#
+#   gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust \
+#     --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml --source-ref refs/heads/main
 name: Editor assets
 
 on:
@@ -134,9 +137,24 @@ jobs:
       contents: write
       id-token: write
       attestations: write
+      actions: read   # #121 F10: to read the environment's protection rules
     env:
       VERSION: ${{ inputs.version }}
     steps:
+      # #121 F10: GitHub creates a missing environment, unprotected, on first use; this run then needed no approval.
+      - name: Check that the release environment has required reviewers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          n=$(gh api "repos/${GH_REPO}/environments/release" --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if [[ "$n" -lt 1 ]]; then
+            echo "::error::the release environment has no required reviewers: set them up (docs/release-ops.md), then run again" >&2
+            exit 1
+          fi
+
       - name: Download the assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

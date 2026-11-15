@@ -69,12 +69,12 @@ The module checks the path, sets the `jsc` filetype and configures the server th
 - `npx`;
 - a project's `node_modules/.bin`;
 - a server, or `node`, inside the project of the buffer you open. The project is the one JOUST's markers find:
-  `joust.config.json`, `package.json` or `settings.gradle`. An install under your home directory (nvm, volta, asdf,
-  an npm prefix of `~/.npm-global`) is your own, wherever Neovim is started.
+  `joust.config.json`, `package.json` or `settings.gradle`, never your home directory itself. An install under your
+  home directory (nvm, volta, asdf, an npm prefix of `~/.npm-global`) is your own, wherever Neovim is started.
 
 The server runs on an absolute `node`. By default that is the first `node` on an absolute `PATH` entry; a relative entry
-such as `./node_modules/.bin` is never used, since it would let a project choose the interpreter. You can give one
-explicitly:
+such as `./node_modules/.bin` is never used, since it would let a project choose the interpreter. On Windows, give
+`node` explicitly; the module does not search `PATH` there. Elsewhere you can give it too:
 
 ```lua
 require('joust').setup({ path = '/absolute/path/to/joust-lsp', node = '/absolute/path/to/node' })

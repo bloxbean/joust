@@ -100,7 +100,9 @@ It publishes nothing: no Marketplace or Open VSX token exists in the repository 
 
 **Maintainer setup, once:** create the repository environment `release` (Settings, Environments) with required
 reviewers, the maintainers who may attach release assets, and deployments allowed from `main` only. The workflow names
-it but does not create it. Until it exists, GitHub creates it on the first run with no protection, so set it up first.
+it but does not create it. **Set it up before the first run:** GitHub creates a missing environment, unprotected, on
+first use. The attach job checks, before it attests or uploads anything, that `release` has required reviewers, and
+stops when it has none.
 
 **A failed attach:** the attestation comes first, so an uploaded asset is always attested. The `.vsix` is not
 byte-reproducible, though, so a re-run after a partial upload stops at "differs from this run's build". Delete the

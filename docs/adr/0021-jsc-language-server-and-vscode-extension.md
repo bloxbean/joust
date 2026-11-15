@@ -1,7 +1,8 @@
 # ADR-0021: A language server and VS Code extension for `.jsc`
 
-**Status:** Proposed (r10, with r7a and r7b); M5a–M5e built. Acceptance waits only on the idle three-run L10 measurement
-(L10, on an idle machine); Q4 is the maintainers' (D11) and does not hold acceptance. r5 was approved on #66 (design, security, Codex); r6 records the amendments
+**Status:** Proposed (r10, with r7a and r7b); M5a–M5e built: M5a in #83, M5b in #99, M5c in #115, M5d in #120, M5e in
+#121. *(r10, F8 on #121)* Acceptance waits on two conditions: ADR-0018's acceptance (this ADR builds on it; it is
+Proposed, r26), and the idle three-run L10 measurement. Q4 is the maintainers' (D11) and does not hold acceptance. r5 was approved on #66 (design, security, Codex); r6 records the amendments
 that M5a's implementation (#83) made, which its reviews asked for, and was approved with #83. r7a records the project
 reading that the `.jsc` 2 integration (#98) brought forward from M5c; r7 records M5b's amendments (§13, #99), approved
 with #99; r7b records the `.jsc` v1 removal (#111); r8 records M5c's (§14, #115), approved with #115; r9 records M5d's
@@ -18,8 +19,9 @@ Image, run in Node). ADR-0017 D4, D9 (the native `joust` defers project commands
 built (integrated in #76): a catalogued nesting limit (JSC0149, identical on the JVM and in Wasm) and on-chain messages
 that do not depend on layout, comments, the file name or any name (§3a). M1e was **one atomic gate** of M5a, and was
 met before M5a.
-**Implementation:** M5a in #83 (draft), on `feat/jsc-2-m1`; it merges only after #76 (ADR-0018 M1) and ADR-0018's
-acceptance (M5a's entry gate). §12 lists what the implementation chose. Every snippet here is illustrative.
+**Implementation:** *(r10, F8 on #121)* M5a in #83, M5b in #99, M5c in #115, M5d in #120 and M5e in #121, stacked on the
+`.jsc` integration (#98) after ADR-0018 M1 (#76). They reach `main` only after ADR-0018's acceptance (M5a's entry gate,
+still open). §12–§16 record what each milestone chose. Every snippet here is illustrative.
 **Risk:** medium. Nothing here changes a validator, a wire format or what the build accepts: the build stays the
 authority (D1). But the extension runs code inside the developer's editor on every repository they open, including
 hostile clones, so trust and the choice of which code runs are security decisions (D3b, D10). And editor operations
@@ -1614,6 +1616,10 @@ later decision, like D11's automation.
   L6 per file, L12 across files), `java:` libraries described once and cached by their sources' SHA-256, their imports no
   longer advisory in npm projects, and read-only `joust-lib:` documents; #114's fixes. The M5c row records how its r7
   commitment was met.
+- **r10, round r3** (2026-11-15; #121 round 2): accepting never writes through a link (S5, JscMain and joust build
+  alike); the Status and Implementation lines name the PRs and ADR-0018's acceptance as the second condition (F8); the
+  home directory is never a project, and Windows needs an explicit `node` (F9); the attach job checks the `release`
+  environment's reviewers (F10).
 - **r10, round r2** (2026-11-15; #121 round 1):
   - E3 records the lock by its logical path in three states, and states that an unsaved lock buffer is not an input
     (C1–C3, F7);
