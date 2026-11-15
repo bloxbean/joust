@@ -35,6 +35,9 @@ class JscGenTest {
                 if (st.args().stream().anyMatch(x -> x instanceof org.julclang.state.dsl.v2.Interpreter.MapV)) {
                     features.merge("call: a map argument", 1, Integer::sum);
                 }
+                if (st.args().stream().anyMatch(x -> x instanceof org.julclang.state.dsl.v2.Interpreter.MapV m && !canonical(m))) {
+                    features.merge("call: a non-canonical map argument", 1, Integer::sum);
+                }
             }
             try {
                 JscV2.lower(plan.source(), plan.name() + ".jsc", plan.contractFile(), JscModules.of(plan.files()));
@@ -48,9 +51,23 @@ class JscGenTest {
         // A quota per feature (review r1, design F2, F9): a grammar change that stops producing one fails here.
         for (String f : List.of("M4 library", "M2b params", "M2b invariant", "M2b events", "M2 values", "time", "enum", "record", "M1 map",
                 "M2 assets (mint, send, accept)", "call: a window of its own", "call: co-signers", "call: mutants and attacks",
-                "call: native assets offered", "call: a map argument")) {
+                "call: native assets offered", "call: a map argument", "call: a non-canonical map argument")) {
             assertTrue(features.getOrDefault(f, 0) > 10, f + ": " + features);
         }
+    }
+
+    /**
+     * Whether a map argument is in the canonical form the chain's CBOR has (review r2, design F17): keys strictly
+     * ascending, byte by byte unsigned, none repeated, none over 64 bytes. A raw argument that is not is the
+     * canonical-order case the five-way target must see the legs agree on.
+     */
+    static boolean canonical(org.julclang.state.dsl.v2.Interpreter.MapV m) {
+        for (int i = 0; i < m.keys().size(); i++) {
+            byte[] k = m.keys().get(i).bytes();
+            if (k.length > 64) return false;
+            if (i > 0 && java.util.Arrays.compareUnsigned(m.keys().get(i - 1).bytes(), k) >= 0) return false;
+        }
+        return true;
     }
 
     /**
