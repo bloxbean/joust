@@ -126,7 +126,7 @@ these values:
 | `validTo` | `Int` | its end |
 | `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, `quorum` and `authorized`, §2.6; the caller alone when a vector does not say) |
 | `approvers` (M2b) | `List<Hash>` | the scripts that approve this call: each has a zero withdrawal in the transaction whose approval names this contract, instance and action (ADR-0009 D3; a native script, which has no redeemer, approves through its withdrawal alone), and is neither this contract's script nor a JOUST verifier (read only by `authorized`, §2.6; none when a vector does not say) |
-| `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns, accepts or receives: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token), `policy` (a `Hash`: the contract's policy), `self` (`Bytes`: the instance's token name) and (M2c) `deposits`: for a receiving action, the deposits claimed on its continuing output in the registry's order, each a value and, for `receives T`, a memo (a value of `T`); empty otherwise |
+| `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns, accepts or receives: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token; in an owned method, the object's, §2.8), `policy` (a `Hash`: the contract's policy), `self` (`Bytes`: the instance's token name; in an owned method, the object's, §2.8) and (M2c) `deposits`: for a receiving action, the deposits claimed on its continuing output in the registry's order, each a value and, for `receives T`, a memo (a value of `T`); empty otherwise |
 | `reads` (M2c) | | for a method with `reads` parameters: the state of each instance a params field names, by that field, as the transaction's reference inputs hold it (ADR-0011 D2) |
 | `shared` (M3a) | | for an owned method with a `shared` parameter: the instance's state, as the transaction's reference input holds it (§2.8) |
 | `instance`, `anchor` (M3b) | | for a keyed insert or removal: the instance it acts under, and the node of its list it relinks, with its key, `next` and `linkedAt` (§2.9) |
@@ -355,6 +355,12 @@ a record (§1), compared and encoded as one. Owned methods name their type: `own
   the modifiers `only f`, `after f`, `before f`, `quorum k t` and `authorized c` read the object's fields (or `params.f`).
   τ.`received` is what the call pays into the object, and τ.`balance` the lovelace the object holds: for an action
   without its deposit, for a destroy everything (as an instance's, §2).
+- **`funds` in an owned method** (M3a2, #104 design review MD4): τ.`funds` describes the object, not the instance.
+  `funds.held` is what the object's UTxO holds besides lovelace and its own token (empty at an owned init, which has no
+  input); `funds.self` is the object's token name, its id (29 bytes, `0x4F…`); `funds.policy` is the contract's policy, the
+  instance's and its objects' one policy; `funds.received` is what the caller offers into the object; `funds.deposits`
+  is empty (an owned action receives none, below). So Safes' `empty` and Market's `buy` and `cancel`, which
+  `send(…, funds.held)` in owned destroys, send the object's assets. A contract with keyed types uses no native assets (JSC1244).
 - **The instance's state** reaches an owned method only through a parameter `s: shared`, bound to τ.`shared`: the
   instance's state as the transaction's reference input holds it (ADR-0003 D1), never spent, so an owned call does not
   contend with others. A call of a method with a `shared` parameter needs τ.`shared`; without it it is the caller's error,
@@ -549,6 +555,56 @@ keyed objects, `BigMap` state or native assets (JSC1334): they would stay behind
 always the contract's own output, never another policy's. **The successor can change** (review A43): whoever may write
 `f` can rename the successor until the migration; the checker warns (JSC9014) unless the writer requires it unset
 (`require(f == #, …)`), which fixes it once.
+
+### 2.12 Combinations of the parts (M3 final pass)
+
+Each M3 part is specified on its own in §2.8 to §2.11 and §5. This table is how they combine in one contract
+(design review MD2): each pair of parts is either refused, with its code (in bold), or accepted and run on all five legs
+by the contracts named, in their gates' five-way tests (the M3 ports' and the coverage contracts': `JscV2M3MatrixTest`,
+`JscV2M3cFourWayTest`; the M1 and M2 examples' in theirs). `JscV2M3MatrixCheckerTest` lowers every cell: 136 pairs, 49
+refused with these codes and 87 accepted. A refusal under the "not covered yet" rule (JSC1217, JSC1244, JSC1305,
+JSC1334) is lifted when a coverage contract runs the cell.
+
+| Part | In the contract |
+|---|---|
+| owned | a plain owned type, its owned init, an action and its escape hatch (§2.8) |
+| keyed | an `owned T keyed by f` type, with its insert, an action and its retiring exit (§2.9) |
+| BigMap state | a `BigMap` field of the instance's state (§1.2) |
+| BigMap in an object | an owned type with a `BigMap` field (§2.8) |
+| native assets | a method that uses `funds`, `send`, `mint`, `burn` or `accept` (§5) |
+| batched | a `batched` instance action (an intent, ADR-0004) |
+| moves | an owned action with an `into` parameter and the `admits` action for its type (§2.8) |
+| invariants by type | `invariant T.name = …` on an owned type (§2.8) |
+| deposits (receives) | an instance action that `receives` deposits (§5.8) |
+| reads | an instance action that reads another contract's state (`reads params.f`, §5.9) |
+| withdraw, certify, vote, propose | a handler of that purpose (§2.10) |
+| stakeSelf | the option, with the withdraw and certify handlers it needs (§2.10) |
+| migration (old side), (new side) | `destroy … migrates to f`; `init migrate from params.p(…)` (§2.11) |
+
+- **owned** × keyed: Keys, Mix, Mixed; × BigMap state: **JSC1211**; × BigMap in an object: Armory, Safes; × native assets: Desk, Market, Safes; × batched: OwnedIntents; × moves: Desk, Ferry, Guild, Market, Mix, Mixed, OwnedIntents; × invariants by type: Desk, Ferry, Guild, Keys, Mix, Mixed; × deposits (receives): Desk; × reads: Desk, Mixed; × withdraw: **JSC1305**; × certify: Mix, Mixed, OwnedIntents; × vote: Mixed, OwnedIntents; × propose: Mixed, OwnedIntents; × stakeSelf: **JSC1305**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **keyed** × BigMap state: **JSC1211**; × BigMap in an object: **JSC1244**; × native assets: **JSC1244**; × batched: **JSC1244**; × moves: Mix, Mixed; × invariants by type: Keys, Mix, Mixed, Registry; × deposits (receives): **JSC1244**; × reads: Mixed; × withdraw: **JSC1244**; × certify: Mix, Mixed; × vote: Mixed; × propose: Mixed; × stakeSelf: **JSC1244**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **BigMap state** × BigMap in an object: **JSC1211**; × native assets: Ledger, Locker, MapInbox, Token; × batched: **JSC0419**; × moves: **JSC1211**; × invariants by type: **JSC1211**; × deposits (receives): MapInbox; × reads: MapInbox; × withdraw: **JSC1305**; × certify: MapVotes; × vote: MapVotes; × propose: MapVotes; × stakeSelf: **JSC1305**; × migration (old side): **JSC1334**; × migration (new side): **JSC1334**.
+- **BigMap in an object** × native assets: Safes; × batched: **JSC1217**; × moves: **JSC1217**; × invariants by type: **JSC1217**; × deposits (receives): **JSC1217**; × reads: **JSC1217**; × withdraw: **JSC1305**; × certify: **JSC1217**; × vote: **JSC1217**; × propose: **JSC1217**; × stakeSelf: **JSC1217**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **native assets** × batched: **JSC0424**; × moves: Desk, Market; × invariants by type: Desk; × deposits (receives): Desk, Inbox, MapInbox, StakedDesk, Tips; × reads: Desk, MapInbox, StakedDesk, Tipper; × withdraw: StakedDesk; × certify: StakedDesk; × vote: StakedDesk; × propose: StakedDesk; × stakeSelf: StakedDesk; × migration (old side): **JSC1334**; × migration (new side): **JSC1334**.
+- **batched** × moves: OwnedIntents; × invariants by type: **JSC0436**; × deposits (receives): **JSC0424**; × reads: RelayV1, RelayV2; × withdraw: StakedQueue; × certify: OwnedIntents, StakedQueue; × vote: OwnedIntents, RelayV1; × propose: OwnedIntents, RelayV1; × stakeSelf: StakedQueue; × migration (old side): RelayV1, RelayV2; × migration (new side): RelayV2.
+- **moves** × invariants by type: Desk, Ferry, Guild, Mix, Mixed; × deposits (receives): Desk; × reads: Desk, Mixed; × withdraw: **JSC1305**; × certify: Mix, Mixed, OwnedIntents; × vote: Mixed, OwnedIntents; × propose: Mixed, OwnedIntents; × stakeSelf: **JSC1305**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **invariants by type** × deposits (receives): Desk; × reads: Desk, Mixed; × withdraw: **JSC1305**; × certify: Mix, Mixed; × vote: Mixed; × propose: Mixed; × stakeSelf: **JSC1305**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **deposits (receives)** × reads: Desk, MapInbox, StakedDesk; × withdraw: StakedDesk; × certify: StakedDesk; × vote: StakedDesk; × propose: StakedDesk; × stakeSelf: StakedDesk; × migration (old side): **JSC1334**; × migration (new side): **JSC1334**.
+- **reads** × withdraw: StakedDesk; × certify: Mixed, StakedDesk; × vote: Mixed, RelayV1, StakedDesk; × propose: Mixed, RelayV1, StakedDesk; × stakeSelf: StakedDesk; × migration (old side): RelayV1, RelayV2; × migration (new side): RelayV2.
+- **withdraw** × certify: StakedCounterV1, StakedCounterV2, StakedDesk, StakedQueue, StakedVault, Steward; × vote: StakedCounterV2, StakedDesk, StakedVault, Steward; × propose: StakedCounterV2, StakedDesk, StakedVault; × stakeSelf: StakedCounterV1, StakedCounterV2, StakedDesk, StakedQueue, StakedVault; × migration (old side): StakedCounterV1; × migration (new side): StakedCounterV2.
+- **certify** × vote: MapVotes, Mixed, OwnedIntents, StakedCounterV2, StakedDesk, StakedVault, Steward; × propose: MapVotes, Mixed, OwnedIntents, StakedCounterV2, StakedDesk, StakedVault; × stakeSelf: StakedCounterV1, StakedCounterV2, StakedDesk, StakedQueue, StakedVault; × migration (old side): StakedCounterV1; × migration (new side): StakedCounterV2.
+- **vote** × propose: MapVotes, Mixed, OwnedIntents, RelayV1, StakedCounterV2, StakedDesk, StakedVault; × stakeSelf: StakedCounterV2, StakedDesk, StakedVault; × migration (old side): RelayV1; × migration (new side): StakedCounterV2.
+- **propose** × stakeSelf: StakedCounterV2, StakedDesk, StakedVault; × migration (old side): RelayV1; × migration (new side): StakedCounterV2.
+- **stakeSelf** × migration (old side): StakedCounterV1; × migration (new side): StakedCounterV2.
+- **migration (old side)** × migration (new side): RelayV2.
+
+Notes. A cell is about two parts in one contract, not about one type having both: a keyed type never moves (JSC1247) and
+a type that keeps a `BigMap` is never admitted (JSC1212) nor has invariants (JSC1213), whatever else the contract holds.
+"invariants by type" beside batched is M2b's rule (JSC0436: any invariant). An accepted cell says that the two parts work
+together, not that every contract holding many of them fits a transaction: the toolchain and `checkJscAbi` warn when a
+script is over the runtime's 15,000-byte limit (JSC9015; MixFull, Mix with a vote handler too, is 15,138 B). The
+coverage contracts are split by that limit: RelayV2 with stakeSelf and its handlers as well was 16,947 B with its params
+applied, so StakedQueue runs batched × stakeSelf and StakedCounterV2 the handlers beside an adopting side.
 
 ## 3. Expressions
 
