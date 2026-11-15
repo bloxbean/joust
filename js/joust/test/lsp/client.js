@@ -37,7 +37,8 @@ export async function startLsp({ engineDir = ENGINE, storage = tmp('joust-lsp-st
   const notify = () => { for (const w of [...waiters]) w(); };
   conn.onNotification('textDocument/publishDiagnostics', (p) => { published.push(p); notify(); });
   conn.onNotification('joust/status', (p) => { statuses.push(p); notify(); });
-  conn.onNotification('window/logMessage', () => {});
+  const logs = [];
+  conn.onNotification('window/logMessage', (p) => { if (logs.length < 1000) logs.push(String(p?.message ?? '')); });
   conn.onNotification('window/showMessage', (p) => { statuses.push({ shown: p.message }); notify(); });
   const applied = [];
   conn.onRequest('workspace/applyEdit', (p) => { applied.push(p); return applyEdit ? applyEdit(p) : { applied: true }; });
@@ -64,7 +65,7 @@ export async function startLsp({ engineDir = ENGINE, storage = tmp('joust-lsp-st
     check();
   });
   const lsp = {
-    conn, child, init, published, statuses, applied, storage,
+    conn, child, init, published, statuses, applied, storage, logs,
     get stderr() { return stderr; },
     until,
     open(uri, text, version = 1) {

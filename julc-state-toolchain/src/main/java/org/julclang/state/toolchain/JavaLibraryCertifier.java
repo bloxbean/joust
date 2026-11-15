@@ -259,7 +259,27 @@ public final class JavaLibraryCertifier {
                         : map(m.getReturnType(), records, problems);
                 if (refusal == null && result.unmappable() != null) refusal = "its result is " + m.getReturnType() + ": " + result.unmappable();
                 if (refusal == null && !m.getTypeParameters().isEmpty()) refusal = "it is generic (no generic fns in .jsc)";
-                fns.add(new JavaLibraries.Fn(name, List.copyOf(pnames), List.copyOf(ptypes), result, refusal));
+                // ADR-0021 r8 (M5c): where javac places the method's name (the language server's go to definition).
+                String file = null;
+                int line = 0, col = 0;
+                TreePath at = declared.get(m);
+                if (at != null) {
+                    CompilationUnitTree cu = at.getCompilationUnit();
+                    long start = trees.getSourcePositions().getStartPosition(cu, at.getLeaf());
+                    try {
+                        String text = cu.getSourceFile().getCharContent(true).toString();
+                        int k = start < 0 ? -1 : text.indexOf(name + "(", (int) start);
+                        if (k < 0 && start >= 0) k = text.indexOf(name, (int) start);
+                        if (k >= 0) {
+                            file = pathOf(cu);
+                            line = (int) cu.getLineMap().getLineNumber(k);
+                            col = (int) cu.getLineMap().getColumnNumber(k);
+                        }
+                    } catch (java.io.IOException e) {
+                        // no place: still a description
+                    }
+                }
+                fns.add(new JavaLibraries.Fn(name, List.copyOf(pnames), List.copyOf(ptypes), result, refusal, file, line, col));
             }
             // Every body the public methods reach, transitively, stopping at the trusted base.
             var certified = new TreeSet<String>();

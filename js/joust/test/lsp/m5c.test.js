@@ -147,3 +147,61 @@ test('rename across files: a library fn and type, in the library and its importe
     await lsp.stop();
   }
 });
+
+const REPO = join(new URL('../../../..', import.meta.url).pathname);
+const GUARDED = (await import('node:fs')).readFileSync(join(REPO, 'examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Guarded.jsc'), 'utf8');
+const ALLOW = (await import('node:fs')).readFileSync(join(REPO, 'examples/compliance/src/main/java/com/example/compliance/AllowList.java'), 'utf8');
+
+test('java: libraries: described once (cached by their sources\' SHA-256), the import resolves, definition opens the library source read-only', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  crossProject(dir);
+  const lib = join(dir, 'node_modules', '@example', 'compliance', 'joust-lib', 'com', 'example', 'compliance');
+  mkdirSync(lib, { recursive: true });
+  writeFileSync(join(dir, 'node_modules', '@example', 'compliance', 'package.json'), JSON.stringify({ name: '@example/compliance', version: '1.0.0' }));
+  writeFileSync(join(lib, 'AllowList.java'), ALLOW);
+  const file = join(dir, 'contracts', 'app', 'Guarded.jsc');
+  const text = GUARDED.replace('package org.julclang.state.examples.dsl', 'package app');
+  writeFileSync(file, text);
+  const storage = tmp('joust-lsp-store-');
+  const lsp = await startLsp({ folders: [dir], storage, capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: {} });
+  try {
+    const uri = uriOf(file);
+    lsp.open(uri, text);
+    await modelOf(lsp, uri, 1);
+    const status = lsp.statuses.filter((x) => x.uri === uri && x.mode).at(-1);
+    assert.equal(status.mode, 'project-matched', JSON.stringify(status));
+    const d = (await lsp.diagnostics(uri, 1)).diagnostics;
+    assert.deepEqual(d.filter((x) => x.severity === 1), [], JSON.stringify(d));
+    // The cache: one file in the server's private storage, keyed by the engine and the sources' SHA-256.
+    const cached = readdirSync(join(storage, 'java-signatures'));
+    assert.equal(cached.length, 1, JSON.stringify(cached));
+    // The M5c row's entry gate: javac attribution's cost in the engine (the server logs it once per set of sources).
+    console.log(`[java] ${lsp.logs.map((l) => /described the project's Java libraries in \d+ ms/.exec(l)?.[0]).find(Boolean) ?? 'not logged'}`);
+    // Definition of isAllowed: the library's source, read-only, at the fn's name.
+    const def = await lsp.request('textDocument/definition', { textDocument: { uri }, position: at(text, 'isAllowed(list', 1) });
+    assert.match(def?.uri ?? '', /^joust-lib:\/[A-Za-z0-9_-]+\/com\/example\/compliance\/AllowList\.java$/, JSON.stringify(def));
+    const id = def.uri.split('/')[1];
+    const content = await lsp.request('joust/libraryContent', { id });
+    assert.equal(content.text, ALLOW);
+    const line = ALLOW.split('\n')[def.range.start.line];
+    assert.equal(line.slice(def.range.start.character, def.range.end.character), 'isAllowed', line);
+    // A record: Entry.
+    const rec = await lsp.request('textDocument/definition', { textDocument: { uri }, position: at(text, 'Entry, isAllowed', 1) });
+    assert.match(rec?.uri ?? '', /AllowList\.java$/, JSON.stringify(rec));
+    assert.equal((await lsp.request('joust/libraryContent', { id: 'nope' })).error.includes('gone'), true);
+  } finally {
+    await lsp.stop();
+  }
+  // A new server, the same storage: the descriptions come from the cache (no attribution logged).
+  const again = await startLsp({ folders: [dir], storage, capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: {} });
+  try {
+    const uri = uriOf(file);
+    again.open(uri, text);
+    await modelOf(again, uri, 1);
+    const d = (await again.diagnostics(uri, 1)).diagnostics;
+    assert.deepEqual(d.filter((x) => x.severity === 1), [], JSON.stringify(d));
+    assert.ok(!again.logs.some((l) => /described the project's Java libraries/.test(l)), 'from the cache');
+  } finally {
+    await again.stop();
+  }
+});

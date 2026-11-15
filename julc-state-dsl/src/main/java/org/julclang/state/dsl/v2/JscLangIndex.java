@@ -277,6 +277,8 @@ final class JscLangIndex {
                         else ref(c.pos().line(), c.pos().col(), end, imported(cf.fn()), IMPORTED);
                     }
                     case Ir.CallStd cs -> builtin(c.pos().line(), c.pos().col(), end, cs.binding().module() + "." + cs.binding().name());
+                    // A java: library's fn (M5c): through its import, which the server follows into the library's sources.
+                    case Ir.CallJava cj -> ref(c.pos().line(), c.pos().col(), end, imported(c.fn()), IMPORTED);
                     case Ir.SomeOf s -> builtin(c.pos().line(), c.pos().col(), end, "Some");
                     case Ir.TimePred t -> builtin(c.pos().line(), c.pos().col(), end, "prelude." + c.fn());
                     case Ir.Variant v -> ref(c.pos().line(), c.pos().col(), end, decl("variant", v.variant()), 0);

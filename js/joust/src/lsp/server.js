@@ -51,6 +51,8 @@ export const BUILD_IDLE_MS = 5 * 60 * 1000;
 export const MAX_BUILD_FILES = 500;
 /** S7 on #99: at most this many characters in a build snapshot (sources and libraries). */
 export const MAX_BUILD_CHARS = 16 * 1024 * 1024;
+/** M5c: the cap on describing a project's Java libraries (javac attribution in the engine). */
+export const JAVA_LIBRARIES_MS = 60000;
 /** D4: a script over this many bytes is reported on save (a transaction holds at most 16 KB, scripts included). */
 export const SCRIPT_WARN_BYTES = 14 * 1024;
 export const SERVER_NAME = 'joust-lsp';
@@ -180,6 +182,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   const reader = createReader();
   // uri -> the state of ONE open lifetime of the document (review C2 on #83): every asynchronous result checks that the
   // state it started with is still the current one, so a close and a reopen at the same version never mix lifetimes.
+  let signatureDir = null;   // M5c: the java: library signature cache (outside every workspace folder, as the engines)
   const state = new Map();   // uri -> { lastPublished, model, modelVersion, modelGen, outlineModel, timer, cts, selection }
   const fixes = new Map();   // opaque single-use fix id -> { uri, st, version, gen, engineId, code, range, issued }
   const imports = new Map(); // opaque single-use import id -> { uri, st, gen, name, module, issued }
@@ -241,6 +244,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     bundled.version = probe.info?.joust ?? probe.version ?? 'unknown';
     if (!probe.ready || !probe.info) log(`the bundled engine has no lang entries: ${probe.error ?? 'no lang.info'}`);
 
+    signatureDir = storage ? join(storage, 'java-signatures') : null;
     store = storage ? createStore(storage) : { put: async () => { throw new Error('no private storage outside the workspace'); } };
     selector = createSelector({
       reader, store,
@@ -342,8 +346,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    *     none). A package library's path follows no link either (libraries.js).
    *   - Bounds: MAX_PROJECT_FILES files, MAX_PROJECT_CHARS characters, MAX_FILE_CHARS each, open buffers included (#98
    *     C8). A bound reached makes the analysis advisory, with its reason (#98 F4).
-   *   - A java: import makes the analysis advisory (D3a): the build certifies the library's Java sources, which the
-   *     server does not read (M5c).
+   *   - A java: import (M5c, ADR-0021 r8): an npm project's packages' Java library sources are described once and cached
+   *     (javaLibrariesOf), and the analysis takes the descriptions; in a Gradle project (joustLibrary jars) it is advisory.
    * `{ id, files, deps, advisory }` (deps: the real paths read, for rescheduling importers), or null: the file is not in a
    * project's contracts directory (analysed on its own, as before).
    */
@@ -369,6 +373,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     let chars = text.length;
     let advisory = null;
     const todo = [id];
+    const javaImports = new Set();
     const npm = sel.kind !== 'gradle';
     const PACKAGE = /^(@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*\/[^\\]+\.jsc$/;
     const pkgOf = (spec) => (spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]);
@@ -415,7 +420,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         // #98 S7: as JscModules.join, a specifier with a backslash or '//' names no module: never joined into a path.
         if (spec.includes('\\') || spec.includes('//')) continue;
         if (spec.startsWith('java:')) {
-          advisory ??= `a java: import (${spec}): the build certifies the Java library's sources, which the language server does not read yet (M5c)`;
+          // M5c (ADR-0021 r8): an npm project's java: libraries are read from its packages (joust-lib/*.java) and
+          // described once (javaLibrariesOf); a Gradle project's come from its joustLibrary jars, which the server does
+          // not read: advisory there.
+          javaImports.add(spec.slice('java:'.length));
           continue;
         }
         let target;
@@ -490,8 +498,73 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         todo.push(target);
       }
     }
-    return { id, files, deps, advisory, resolved };
+    let javaLibraries = null;
+    let javaSources = null;
+    if (javaImports.size) {
+      const j = npm ? await javaLibrariesOf(sel) : { error: 'the Java libraries of a Gradle project come from its joustLibrary jars, which the language server does not read' };
+      if (j.error) advisory ??= `a java: import (${[...javaImports][0]}): ${j.error}`;
+      else {
+        javaLibraries = j.json;
+        javaSources = j.sources;
+      }
+    }
+    return { id, files, deps, advisory, resolved, javaLibraries, javaSources };
   }
+
+  /**
+   * M5c (ADR-0021 r8): the descriptions of an npm project's java: libraries (its packages' joust-lib/*.java, read as the
+   * build reads them, confined): javac's attribution and certification run on the engine once per set of sources, and
+   * the result is cached by the SHA-256 of the bytes read (in memory and in the server's private storage, outside every
+   * workspace folder), re-verified on use (the entry's own digest; the key is the sources' content). `{ json, sources,
+   * key }` or `{ error }`.
+   */
+  async function javaLibrariesOf(sel) {
+    const libs = await buildLibraries(sel, MAX_PROJECT_CHARS);
+    if (libs.error) return { error: libs.error };
+    const sources = libs.javaLibraries;
+    if (!Object.keys(sources).length) return { error: 'no package of the project ships Java library sources (joust-lib/*.java)' };
+    const key = createHash('sha256');
+    for (const [k, v] of Object.entries(sources).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) key.update(`${k.length}:${k}${v.length}:`).update(v);
+    const k = key.digest('hex');
+    const engineKey = sel.engine?.id ?? 'engine';
+    const memo = javaSignatures.get(`${engineKey}|${k}`);
+    if (memo) return { json: memo, sources, key: k };
+    const file = signatureDir ? join(signatureDir, `${engineKey}-${k}.json`) : null;
+    if (file) {
+      try {
+        const entry = JSON.parse(await fsp.readFile(file, 'utf8'));
+        if (entry && entry.key === k && typeof entry.json === 'string' && entry.sha256 === hash(entry.json)) {
+          javaSignatures.set(`${engineKey}|${k}`, entry.json);
+          return { json: entry.json, sources, key: k };
+        }
+      } catch {
+        // not cached yet, or unreadable: described again
+      }
+    }
+    const t = Date.now();
+    const r = await host.request(sel.key, sel.engine, { op: 'javaLibraries', sources }, { scope: scopeOf(sel), input: `java|${k}`,
+      what: 'the Java libraries\' description', timeoutMs: JAVA_LIBRARIES_MS });
+    if (!r.model) return { error: r.internal?.message ?? 'the engine could not describe them' };
+    let parsed;
+    try {
+      parsed = JSON.parse(r.model);
+    } catch {
+      return { error: 'the engine\'s description did not parse' };
+    }
+    if (parsed?.ok === false || typeof parsed?.json !== 'string') return { error: parsed?.error ?? 'this engine cannot describe Java libraries (an older JOUST)' };
+    javaSignatures.set(`${engineKey}|${k}`, parsed.json);
+    log(`described the project's Java libraries in ${Date.now() - t} ms (javac attribution in the engine)`);
+    if (file) {
+      try {
+        await fsp.mkdir(signatureDir, { recursive: true });
+        await fsp.writeFile(file, JSON.stringify({ key: k, json: parsed.json, sha256: hash(parsed.json) }));
+      } catch {
+        // the cache is an optimisation
+      }
+    }
+    return { json: parsed.json, sources, key: k };
+  }
+  const javaSignatures = new Map();   // engine id | sources' SHA-256 -> descriptions (JSON)
 
   /** Every open document whose last analysis read `realPath` (it imports it, directly or not): analysed again. */
   function rescheduleImporters(paths, delay = DEBOUNCE_MS * 2, except = null) {
@@ -547,7 +620,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     s.cts = cts;
     const file = fileNameOf(uri);
     // ADR-0021 r8 (M5c): the diagnostics model first (no index), then the index behind its own entry (requestIndex).
-    const inputs = { file, source: text, scope: scopeOf(sel), ...(project ? { moduleId: project.id, files: project.files } : {}) };
+    const inputs = { file, source: text, scope: scopeOf(sel), ...(project ? { moduleId: project.id, files: project.files } : {}),
+      ...(project?.javaLibraries ? { javaLibraries: project.javaLibraries } : {}) };
+    s.javaSources = project?.javaSources ?? null;
+    s.javaLibraries = project?.javaLibraries ?? null;
     const r = await host.analyze(sel.key, sel.engine, { ...inputs, index: false }, cts.token);
     if (s.cts === cts) s.cts = undefined;
     // D4a: a result is published only if nothing it read changed since: the open lifetime (C2), the buffer's version and
@@ -800,7 +876,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // the file alone and refuse it for its imports).
     const project = await projectOf(uri, source, sel, new Map(), overrides);
     const r = await host.analyze(sel.key, sel.engine, { file: fileNameOf(uri), source, scope: scopeOf(sel),
-      ...(project ? { moduleId: project.id, files: project.files } : {}) }, token);
+      ...(project ? { moduleId: project.id, files: project.files } : {}), ...(project?.javaLibraries ? { javaLibraries: project.javaLibraries } : {}) }, token);
     if (!r.model) return null;
     try {
       return parseModel(r.model);
@@ -944,6 +1020,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const f = await currentModel(p.textDocument.uri);
     if (!f) return null;
     const sym = symbolAt(f.model, p.position);
+    if (sym?.decl?.kind === 'import' && String(sym.decl.detail ?? '').startsWith('java:')) {
+      const j = javaTarget(f.s, sym.decl);
+      if (j) return j;
+    }
     if (sym?.decl?.kind === 'import') {
       const t = await importTarget(p.textDocument.uri, f.model, sym.decl, token);
       if (t) return { uri: t.uri, range: lspRangeOf(t.decl.nameRange) };
@@ -1499,6 +1579,57 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   }
 
   // ------------------------------------------------------------------ M5c: across files (ADR-0021 r8)
+
+  /**
+   * M5c (ADR-0021 r8): a name a java: import brings goes to its declaration in the library's on-chain sources, a
+   * read-only document (joust-lib:/<id>/<path>, served from memory by an opaque id: joust/libraryContent). A fn is
+   * placed where javac's attribution put its name; a record by its declaration in the library's file.
+   */
+  function javaTarget(s, imp) {
+    if (typeof s?.javaLibraries !== 'string' || !s.javaSources) return null;
+    let libs;
+    try {
+      libs = JSON.parse(s.javaLibraries).libraries ?? [];
+    } catch {
+      return null;
+    }
+    const fqcn = String(imp.detail).slice('java:'.length);
+    const lib = libs.find((l) => l.fqcn === fqcn);
+    if (!lib) return null;
+    let path = null;
+    let line = 0;
+    let col = 0;
+    const fn = (lib.fns ?? []).find((x) => x.name === imp.name);
+    if (fn && typeof fn.file === 'string' && fn.line > 0) {
+      path = fn.file;
+      line = fn.line - 1;
+      col = fn.col - 1;
+    } else {
+      const rec = (lib.records ?? []).find((r) => r.simpleName === imp.name);
+      const file = `${fqcn.replace(/\./g, '/')}.java`;
+      const text = s.javaSources[file];
+      if (rec && typeof text === 'string') {
+        const m = new RegExp(`\\brecord\\s+${imp.name}\\b`).exec(text);
+        if (m) {
+          path = file;
+          const before = text.slice(0, m.index + m[0].length - imp.name.length);
+          line = before.split('\n').length - 1;
+          col = before.length - before.lastIndexOf('\n') - 1;
+        }
+      }
+    }
+    const text = path && s.javaSources[path];
+    if (typeof text !== 'string') return null;
+    for (const [k, v] of [...libraryDocs.entries()].sort((a, b) => b[1].issued - a[1].issued).slice(19)) libraryDocs.delete(k);
+    const id = randomBytes(18).toString('base64url');
+    libraryDocs.set(id, { text, path, issued: Date.now() });
+    return { uri: `joust-lib:/${id}/${path}`, range: { start: { line, character: col }, end: { line, character: col + imp.name.length } } };
+  }
+  const libraryDocs = new Map();   // opaque id -> { text, path, issued }: the read-only java: library documents
+  connection.onRequest('joust/libraryContent', (p) => {
+    const d = p && typeof p.id === 'string' && libraryDocs.get(p.id);
+    return d ? { text: d.text, path: d.path } : { error: 'this library document is gone: go to its definition again' };
+  });
 
   const lspRangeOf = (r) => ({ start: { line: r[0], character: r[1] }, end: { line: r[2], character: r[3] } });
 

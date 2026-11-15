@@ -236,13 +236,18 @@ public final class JscV2 {
      * {@link #check} stop at the first error, and agree with this on it (L1, L5).
      */
     static Ir.Program checkRecovering(String source, String fileName, String id, JscModules modules, Spans spans, Facts facts) {
+        return checkRecovering(source, fileName, id, modules, spans, facts, JavaLibraries.NONE);
+    }
+
+    static Ir.Program checkRecovering(String source, String fileName, String id, JscModules modules, Spans spans, Facts facts,
+                                      JavaLibraries javaLibraries) {
         spans.recover = true;
         try {
             checkFileName(fileName);
         } catch (JscException e) {
             facts.errors.add(e);
         }
-        return Checker.checkRecovering(source, fileName, id, modules, spans, facts);
+        return Checker.checkRecovering(source, fileName, id, modules, spans, facts, javaLibraries);
     }
 
     /** The lowering of a program the recovering mode checked without an error (L5: the same as {@link #lower}). */

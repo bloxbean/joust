@@ -80,9 +80,16 @@ public interface JavaLibraries {
 
     /**
      * A public static method: its name, parameter names and types, result type. {@code refusal}: why it cannot be
-     * imported (an unmappable parameter or result, an overload), or null.
+     * imported (an unmappable parameter or result, an overload), or null. {@code file}, {@code line}, {@code col}: where
+     * javac's attribution places its name (1-based; ADR-0021 r8, the language server's read-only library documents), or
+     * null and 0 when unknown.
      */
-    record Fn(String name, List<String> paramNames, List<JType> params, JType result, String refusal) {}
+    record Fn(String name, List<String> paramNames, List<JType> params, JType result, String refusal, String file, int line, int col) {
+        /** Without its place (a description written by hand, a test's). */
+        public Fn(String name, List<String> paramNames, List<JType> params, JType result, String refusal) {
+            this(name, paramNames, params, result, refusal, null, 0, 0);
+        }
+    }
 
     /**
      * A record the library's signatures reach. {@code binaryName} ({@code com.acme.AllowList$Entry}) identifies it;

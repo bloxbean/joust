@@ -16,6 +16,7 @@
     { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$LangInfo", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
     { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$StdRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
     { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$LowerRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
-    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$JsonResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true }
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$JsonResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$JavaLibrariesRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true }
   ]
 }

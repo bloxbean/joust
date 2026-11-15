@@ -71,6 +71,8 @@ export async function runEngineWorker({ engineFile }) {
       // ADR-0021 r8 (M5c): `index: false` asks an engine with lang.info's "index" for the diagnostics model alone.
       const lazy = m.index === false && Array.isArray(info?.features) && info.features.includes('index');
       const req = modules ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source };
+      // M5c: the java: libraries' descriptions, to an engine that takes them.
+      if (typeof m.javaLibraries === 'string' && info?.features?.includes('javaLibraries')) req.javaLibraries = m.javaLibraries;
       const r = api.lang.analyze(lazy ? { ...req, index: false } : req);
       return r && r.ok ? { model: r.model } : { failed: String(r?.error ?? 'the engine returned no result') };
     },
@@ -78,6 +80,7 @@ export async function runEngineWorker({ engineFile }) {
     index: (m) => {
       const modules = m.files && Array.isArray(info?.features) && info.features.includes('modules');
       const req = modules ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source };
+      if (typeof m.javaLibraries === 'string' && info?.features?.includes('javaLibraries')) req.javaLibraries = m.javaLibraries;
       const r = typeof api.lang?.index === 'function' ? api.lang.index(req) : api.lang.analyze(req);
       return r && r.ok ? { model: r.model } : { failed: String(r?.error ?? 'the engine returned no result') };
     },
@@ -85,6 +88,12 @@ export async function runEngineWorker({ engineFile }) {
       if (typeof api.lang?.std !== 'function') return { model: null };
       const r = api.lang.std({});
       return r && r.ok ? { model: r.json } : { failed: String(r?.error ?? 'the engine returned no result') };
+    },
+    // M5c: the java: libraries' descriptions (javac attribution and certification), as JSON.
+    javaLibraries: (m) => {
+      if (typeof api.lang?.javaLibraries !== 'function') return { model: JSON.stringify({ ok: false, error: 'this engine cannot describe Java libraries' }) };
+      const r = api.lang.javaLibraries({ sources: m.sources ?? {} });
+      return { model: JSON.stringify({ ok: r?.ok === true, json: r?.json ?? null, error: r?.error ?? null }) };
     },
     lower: (m) => {
       if (typeof api.lang?.lower !== 'function') return { failed: 'this engine has no lang.lower' };

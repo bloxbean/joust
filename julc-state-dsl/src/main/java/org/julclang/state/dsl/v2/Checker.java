@@ -521,6 +521,12 @@ final class Checker {
      * ({@link Facts#suppressed}). Null when nothing could be checked. Never on a build path.
      */
     static Ir.Program checkRecovering(String source, String fileName, String id, JscModules modules, Spans spans, Facts facts) {
+        return checkRecovering(source, fileName, id, modules, spans, facts, JavaLibraries.NONE);
+    }
+
+    /** ADR-0021 r8 (M5c): with the {@code java:} libraries' descriptions (the language server's signature cache). */
+    static Ir.Program checkRecovering(String source, String fileName, String id, JscModules modules, Spans spans, Facts facts,
+                                      JavaLibraries javaLibraries) {
         var loader = new Loader(modules == null ? JscModules.NONE : modules);
         loader.facts = facts;
         loader.alone = modules == null;
@@ -539,7 +545,8 @@ final class Checker {
         facts.poisoned.addAll(spans.droppedNames);
         if (spans.namelessDropped) facts.incomplete = true;
         try {
-            return checkFile(main, loader.order, JavaLibraries.NONE, modules == null ? JscModules.NONE : modules, List.of(), facts);
+            return checkFile(main, loader.order, javaLibraries == null ? JavaLibraries.NONE : javaLibraries, modules == null ? JscModules.NONE : modules,
+                    List.of(), facts);
         } catch (JscException e) {
             if (!Facts.isPoisoned(e)) facts.errors.add(facts.errors.size() < 10 * JscLang.MAX_ERRORS ? Parser.hinted(e, main.file.leadingMinus(), main.file.members()) : e);   // N1: the first ones hinted
             return null;

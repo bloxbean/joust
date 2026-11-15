@@ -73,7 +73,10 @@ public final class JoustToolchainWasm {
      * {@code .jsc} files by id ({@code pkg:<package>/<path>} for a package's library), which its imports resolve to as in
      * the build. Without {@code files}: the file on its own.
      */
-    public record AnalyzeRequest(String file, String source, String id, Map<String, String> files, Boolean index) {}
+    public record AnalyzeRequest(String file, String source, String id, Map<String, String> files, Boolean index, String javaLibraries) {}
+
+    /** ADR-0021 r8 (M5c): {@code java:} library on-chain sources by path, to describe (javac attribution and certification). */
+    public record JavaLibrariesRequest(Map<String, String> sources) {}
 
     /**
      * The document model's JSON ({@link org.julclang.state.dsl.v2.JscLang}), or, when the analysis itself failed (never a
@@ -109,6 +112,8 @@ public final class JoustToolchainWasm {
         api.add("lang.lower", LowerRequest.class, JoustToolchainWasm::lower);
         // M5c (ADR-0021 r8): the full model with the index, from the last diagnostics-only analysis of the same inputs.
         api.add("lang.index", AnalyzeRequest.class, JoustToolchainWasm::index);
+        // The java: libraries' descriptions (JavaLibrariesJson), which the server caches by the SHA-256 of the sources.
+        api.add("lang.javaLibraries", JavaLibrariesRequest.class, JoustToolchainWasm::javaLibraries);
         JsApi.install(api, new EngineInfo("joustToolchain", "joust-toolchain", VERSION, List.of("vm", "debug", "joust", "lang")));
     }
 
@@ -143,12 +148,23 @@ public final class JoustToolchainWasm {
             String file = request.file() == null ? "File.jsc" : request.file();
             // ADR-0021 r8 (M5c): index false gives the diagnostics model alone (lang.info's "index"); lang.index the full one.
             String model = Boolean.FALSE.equals(request.index())
-                    ? org.julclang.state.dsl.v2.JscLang.diagnosticsJson(request.source(), file, request.id(), request.files())
-                    : request.files() == null ? org.julclang.state.dsl.v2.JscLang.analyzeJson(request.source(), file)
-                    : org.julclang.state.dsl.v2.JscLang.analyzeJson(request.source(), file, request.id(), request.files());
+                    ? org.julclang.state.dsl.v2.JscLang.diagnosticsJson(request.source(), file, request.id(), request.files(), request.javaLibraries())
+                    : request.files() == null && request.javaLibraries() == null ? org.julclang.state.dsl.v2.JscLang.analyzeJson(request.source(), file)
+                    : org.julclang.state.dsl.v2.JscLang.analyzeJson(request.source(), file, request.id(), request.files(), request.javaLibraries());
             return ServiceResult.ok(new AnalyzeResult(true, model, null));
         } catch (Throwable t) {
             return ServiceResult.ok(new AnalyzeResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
+        }
+    }
+
+    static ServiceResult<JsonResult> javaLibraries(JavaLibrariesRequest request) {
+        try {
+            var sources = request.sources() == null ? Map.<String, String>of() : request.sources();
+            var described = sources.isEmpty() ? Map.<String, org.julclang.state.dsl.v2.JavaLibraries.Library>of()
+                    : org.julclang.state.toolchain.JavaLibraryCertifier.certify(sources);
+            return ServiceResult.ok(new JsonResult(true, org.julclang.state.dsl.v2.JavaLibrariesJson.write(described), null));
+        } catch (Throwable t) {
+            return ServiceResult.ok(new JsonResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
         }
     }
 
@@ -156,7 +172,7 @@ public final class JoustToolchainWasm {
         try {
             String file = request.file() == null ? "File.jsc" : request.file();
             return ServiceResult.ok(new AnalyzeResult(true, org.julclang.state.dsl.v2.JscLang.indexJson(request.source(), file, request.id(),
-                    request.files()), null));
+                    request.files(), request.javaLibraries()), null));
         } catch (Throwable t) {
             return ServiceResult.ok(new AnalyzeResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
         }

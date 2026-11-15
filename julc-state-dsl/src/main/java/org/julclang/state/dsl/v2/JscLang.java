@@ -37,7 +37,7 @@ public final class JscLang {
      * {@code modules} (the integration with ADR-0018 M2c and M4): {@code lang.analyze} takes a project's files, which a
      * file's library and contract imports resolve to as in the build.
      */
-    public static final List<String> FEATURES = List.of("analyze", "modules", "std", "lower", "index");
+    public static final List<String> FEATURES = List.of("analyze", "modules", "std", "lower", "index", "javaLibraries");
 
     /** D2a: a model's bounds. Over either, the analysis reports one diagnostic instead of the model. */
     public static final int MAX_ENTRIES = 200_000;
@@ -270,9 +270,14 @@ public final class JscLang {
      * inputs, from this analysis when it was the last one.
      */
     public static String diagnosticsJson(String source, String fileName, String id, java.util.Map<String, String> files) {
-        Analysis a = analysis(source, fileName, id, modulesOf(files), false);
+        return diagnosticsJson(source, fileName, id, files, null);
+    }
+
+    /** {@code javaLibraries}: JavaLibrariesJson's descriptions of the {@code java:} libraries, or null (none: refused). */
+    public static String diagnosticsJson(String source, String fileName, String id, java.util.Map<String, String> files, String javaLibraries) {
+        Analysis a = analysis(source, fileName, id, modulesOf(files), false, javaOf(javaLibraries));
         synchronized (JscLang.class) {
-            lastKey = key(source == null ? "" : source, fileName, id, files);
+            lastKey = key(source == null ? "" : source, fileName, id, files) + "\0" + (javaLibraries == null ? "" : javaLibraries);
             lastFull = a.full();
         }
         return bounded(a.diagnostics(), MAX_ENTRIES, MAX_JSON_CHARS);
@@ -280,14 +285,29 @@ public final class JscLang {
 
     /** ADR-0021 r8 (M5c): the full model (with the index) of these inputs: the last analysis's when it had them. */
     public static String indexJson(String source, String fileName, String id, java.util.Map<String, String> files) {
+        return indexJson(source, fileName, id, files, null);
+    }
+
+    public static String indexJson(String source, String fileName, String id, java.util.Map<String, String> files, String javaLibraries) {
         java.util.function.Supplier<Model> full;
         synchronized (JscLang.class) {
-            full = lastKey != null && lastKey.equals(key(source == null ? "" : source, fileName, id, files)) ? lastFull : null;
+            full = lastKey != null && lastKey.equals(key(source == null ? "" : source, fileName, id, files) + "\0"
+                    + (javaLibraries == null ? "" : javaLibraries)) ? lastFull : null;
             lastKey = null;
             lastFull = null;
         }
-        if (full == null) full = analysis(source, fileName, id, modulesOf(files), false).full();
+        if (full == null) full = analysis(source, fileName, id, modulesOf(files), false, javaOf(javaLibraries)).full();
         return bounded(full.get(), MAX_ENTRIES, MAX_JSON_CHARS);
+    }
+
+    /** The full model with the {@code java:} libraries' descriptions (lang.analyze's default path). */
+    public static String analyzeJson(String source, String fileName, String id, java.util.Map<String, String> files, String javaLibraries) {
+        if (javaLibraries == null) return analyzeJson(source, fileName, id, files);
+        return bounded(analysis(source, fileName, id, modulesOf(files), false, javaOf(javaLibraries)).model(), MAX_ENTRIES, MAX_JSON_CHARS);
+    }
+
+    private static JavaLibraries javaOf(String json) {
+        return json == null ? JavaLibraries.NONE : JavaLibraries.of(JavaLibrariesJson.read(json));
     }
 
     static Model tooLarge(Model m, int maxEntries, int maxChars) {
@@ -350,6 +370,11 @@ public final class JscLang {
      * {@code lower(source, fileName, id, modules)}); null: the file on its own.
      */
     static Analysis analysis(String source, String fileName, String id, JscModules modules, boolean lower) {
+        return analysis(source, fileName, id, modules, lower, JavaLibraries.NONE);
+    }
+
+    /** With the {@code java:} libraries' descriptions (ADR-0021 r8, M5c: their imports then resolve as in the build). */
+    static Analysis analysis(String source, String fileName, String id, JscModules modules, boolean lower, JavaLibraries javaLibraries) {
         if (source == null) source = "";
         var spans = new Spans();
         var facts = new Facts();
@@ -361,7 +386,7 @@ public final class JscLang {
         // position the build reports it, the build's first among them (L1); the warnings of what checked.
         var errors = new ArrayList<JscException>();
         try {
-            program = JscV2.checkRecovering(source, fileName, id, modules, spans, facts);
+            program = JscV2.checkRecovering(source, fileName, id, modules, spans, facts, javaLibraries);
         } catch (RuntimeException | Error e) {
             // As the toolchain reports it (Toolchain.build): a coded internal error at 1:1, never a crash (ADR-0018 J18).
             diagnostics.add(diagnostic("error", "JSC0005", JscMain.internalError(e), 1, 1, source, spans));
