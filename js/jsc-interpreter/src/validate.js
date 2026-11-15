@@ -305,6 +305,8 @@ export function validate(p) {
       contracts.set(c.name, c);
     }
   }
+  // The state is an object before anything reads it (the long campaign at 40dd8337: a null state was a TypeError).
+  if (!p.state || typeof p.state !== 'object' || Array.isArray(p.state)) fail('state', 'not an object', 'schema');
   if (p.state.name !== 'State') fail('state', 'the state record is named State');
   record(p.state, 'state');
   if ('params' in p) {
