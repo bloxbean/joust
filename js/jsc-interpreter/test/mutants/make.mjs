@@ -316,4 +316,24 @@ purpose('withdraw-owned', 'Bank', (p) => {
   w.body = { stmts: [], result: null, at };
   p.methods.push(w);
 }, '(JSC1305)');
+// M3 final pass MS2: owned, keyed and moving programs with an instance destroy (JSC1210) or BigMap state (JSC1211).
+const endDestroy = (field) => ({ kind: 'destroy', name: 'endAll', params: [], mods: [{ name: 'only', field }], checked: [], usesCtx: true, pays: true,
+  result: null, body: { stmts: [{ stmt: 'Pay', to: { node: 'StateField', field, type: 'Key', taint: 0, at },
+    amount: { node: 'CtxRef', name: 'balance', type: 'Int', taint: 0, at }, at }], result: null, at }, at });
+const keyField = (p) => p.state.fields.find((f) => f.type === 'Key').name;
+const withBook = (p) => {
+  p.state.fields.push({ name: 'book', type: { bigmap: ['Key', 'Int'] } });
+  const add = (o) => {
+    if (Array.isArray(o)) { o.forEach(add); return; }
+    if (!o || typeof o !== 'object') return;
+    if (o.node === 'New' && o.record === 'State') o.values.push({ node: 'BigEmpty', type: { bigmap: ['Key', 'Int'] }, taint: 0, at });
+    Object.values(o).forEach(add);
+  };
+  add(p.methods);
+};
+purpose('owned-instance-destroy', 'Bank', (p) => { p.methods.push(endDestroy(keyField(p))); }, '(JSC1210)');
+purpose('keyed-instance-destroy', 'Keys', (p) => { p.methods.push(endDestroy(keyField(p))); }, '(JSC1210)');
+purpose('moves-instance-destroy', 'Guild', (p) => { p.methods.push(endDestroy(keyField(p))); }, '(JSC1210)');
+purpose('owned-bigmap-state', 'Bank', (p) => { withBook(p); }, '(JSC1211)');
+purpose('keyed-bigmap-state', 'Keys', (p) => { withBook(p); }, '(JSC1211)');
 writeFileSync(new URL('./purpose-mutants.json', import.meta.url), JSON.stringify(purposeMutants, null, 1) + '\n');

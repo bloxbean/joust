@@ -1014,6 +1014,14 @@ final class IrJson {
                     throw new IllegalArgumentException("method " + x.get("name") + ": it is its type's escape hatch but never reads balance (JSC1216)");
                 }
             }
+            // M3 final pass MS2: the checker's contract-level owned rules: no instance destroy beside objects (JSC1210: the
+            // objects that read it would be locked), no BigMap state beside them (JSC1211), keyed objects included.
+            if (!owned.isEmpty() && methods.stream().anyMatch(m -> m.kind() == Ir.Kind.DESTROY)) {
+                throw new IllegalArgumentException("a contract with owned objects destroys no instance (JSC1210)");
+            }
+            if (!owned.isEmpty() && state.fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                throw new IllegalArgumentException("a contract with owned objects keeps no BigMap state (JSC1211)");
+            }
             // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy
             // without shared, before or after, so no object is trapped behind its instance or a deadline.
             for (String o : owned) {

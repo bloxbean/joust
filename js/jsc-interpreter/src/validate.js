@@ -620,6 +620,12 @@ export function validate(p) {
       && (m.mods.some((x) => !NO_CTX.has(x.name)) || readsTx(m.body)));
     if (usesCtx !== m.usesCtx) fail(where, `usesCtx is ${m.usesCtx}, but the method ${usesCtx ? 'reads' : 'does not read'} the transaction`);
   }
+  // M3 final pass MS2: the checker's contract-level owned rules: no instance destroy beside objects (JSC1210), no BigMap
+  // state beside them (JSC1211), keyed objects included.
+  if (owned.length > 0 && p.methods.some((m) => m.kind === 'destroy')) fail('owned', 'a contract with owned objects destroys no instance (JSC1210)');
+  if (owned.length > 0 && p.state.fields.some((fd) => fd.type && typeof fd.type === 'object' && 'bigmap' in fd.type)) {
+    fail('owned', 'a contract with owned objects keeps no BigMap state (JSC1211)');
+  }
   // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy without
   // shared, before or after.
   for (const o of owned) {
