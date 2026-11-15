@@ -42,6 +42,8 @@ export const MAX_IMPORTS_PER_FILE = 128;
 export const DEBOUNCE_MS = 150;
 /** D7: Show generated Java runs the lowering on request only, with its own cap (§12 note 10's latency budget). */
 export const LOWER_MS = 10000;
+/** S1 on #120: what a formatter may replace: the whitespace the lexer skips (never a byte order mark or NBSP). */
+const WHITESPACE = /^[\t\n\v\f\r \u1680\u2000-\u200a\u202f\u205f\u3000]*$/;
 /** M5d: how long a formatting request may take in the engine (F6's bound is 60 ms warm; this is the watchdog's cap). */
 export const FORMAT_MS = 5000;
 /** D2a, D4: the build worker's limits (joust build's ENGINE_STACK_MB; the build heap of §1), its cap and idle stop. */
@@ -264,6 +266,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     bundled = { file: join(engineDir, ENGINE_JS), id: engineId(hash(jsBytes), hash(wasmBytes)), source: 'bundled' };
     const probe = await host.info(workerKey(bundled), bundled);
     bundled.version = probe.info?.joust ?? probe.version ?? 'unknown';
+    bundled.features = Array.isArray(probe.info?.features) ? [...probe.info.features] : [];
     if (!probe.ready || !probe.info) log(`the bundled engine has no lang entries: ${probe.error ?? 'no lang.info'}`);
 
     signatureDir = storage ? join(storage, 'java-signatures') : null;
@@ -1268,8 +1271,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   /**
    * The formatter's answer for the open document `uri` at the version it has now: `{ doc, version, f }` with the engine's
-   * `{ ok, text, edits }` (F4: `ok` false for a file that does not parse), or null (not open, too large, no engine with
-   * lang.format, cancelled, or a newer version arrived meanwhile: D4a's rule, nothing for a stale request).
+   * `{ ok, text, edits }`, checked (S1 on #120: only whitespace changes, and the edits give the text), or null: not
+   * open, too large, an engine without lang.info's "format" (F3 on #120: never asked, so never a failure that backs the
+   * analyses off), a file that does not parse (F4), cancelled, a newer version or another lifetime of the document
+   * (D4a; C1 on #120: a close and a reopen at the same version is another document).
    */
   async function formatted(uri, token) {
     const doc = documents.get(uri);
@@ -1279,17 +1284,58 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const text = doc.getText();
     if (text.length > MAX_FILE_CHARS) return null;
     const sel = s.selection ?? await selectionFor(uri);
-    const r = await host.request(sel.key, sel.engine, { op: 'format', source: text },
-      { scope: scopeOf(sel), input: text, what: 'the formatting', timeoutMs: FORMAT_MS }, token);
+    if (!Array.isArray(sel.engine?.features) || !sel.engine.features.includes('format')) {
+      if (!formatNoted.has(sel.engine?.id)) {
+        formatNoted.add(sel.engine?.id);
+        log(`formatting: the compiler ${sel.engine?.version ?? ''} (${sel.source}) predates the formatter (JOUST M5d): no formatting`);
+      }
+      return null;
+    }
+    // C3 on #120: as a module of its project, so its imports bring the types the build's parser reads.
+    const project = await projectOf(uri, text, sel);
+    if (state.get(uri) !== s || token?.isCancellationRequested) return null;
+    const r = await host.request(sel.key, sel.engine, { op: 'format', source: text, ...(project ? { moduleId: project.id, files: project.files } : {}) },
+      { scope: scopeOf(sel), input: project ? JSON.stringify([text, project.id, Object.entries(project.files).sort()]) : text, what: 'the formatting',
+        timeoutMs: FORMAT_MS }, token);
     const now = documents.get(uri);
-    if (!r.model || !now || now.version !== version || token?.isCancellationRequested) return null;
+    if (!r.model || !now || now.version !== version || state.get(uri) !== s || token?.isCancellationRequested) return null;
     let f;
     try {
       f = JSON.parse(r.model);
     } catch {
       return null;
     }
-    return f && f.ok === true && typeof f.text === 'string' ? { doc: now, version, f } : null;
+    if (!f || f.ok !== true || typeof f.text !== 'string' || !whitespaceOnly(text, f)) return null;
+    // F8 on #120: the style is the compiler's; in advisory mode that is the bundled one, which the project's may not share.
+    if (sel.mode !== 'project-matched' && !s.formatLabelled) {
+      s.formatLabelled = true;
+      log(`formatting ${fileNameOf(uri)} with the bundled compiler ${sel.engine?.version ?? ''} (advisory): the project's own may format it differently`);
+    }
+    return { doc: now, version, f };
+  }
+  const formatNoted = new Set();
+
+  /**
+   * S1 on #120: a formatter's answer is applied only when it changes nothing but whitespace: its edits are in order and
+   * inside the text, each replaces whitespace with spaces, tabs and line ends (or a block comment with the same comment,
+   * CRLF made LF), and together they give its text.
+   */
+  function whitespaceOnly(text, f) {
+    if (!Array.isArray(f.edits)) return false;
+    let at = 0;
+    let out = '';
+    for (const e of f.edits) {
+      if (!Array.isArray(e) || e.length !== 3) return false;
+      const [start, end, newText] = e;
+      if (!Number.isInteger(start) || !Number.isInteger(end) || typeof newText !== 'string' || start < at || end < start || end > text.length) return false;
+      const was = text.slice(start, end);
+      const space = WHITESPACE.test(was) && /^[ \t\n]*$/.test(newText);
+      const comment = was.startsWith('/*') && was.endsWith('*/') && was.replace(/\r\n/g, '\n') === newText;
+      if (!space && !comment) return false;
+      out += text.slice(at, start) + newText;
+      at = end;
+    }
+    return out + text.slice(at) === f.text;
   }
 
   // One edit of the whole document (F6), none when it is formatted already; a file that does not parse gets none (F4).
@@ -1302,20 +1348,31 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return [{ range: { start: { line: 0, character: 0 }, end: x.doc.positionAt(text.length) }, newText: x.f.text }];
   });
 
-  // The formatter's edits that end inside the range: the whitespace before each item in it (its line's indentation
-  // included) and the comments in it, never a line outside it.
+  /**
+   * C2 and F6 on #120: only the formatter's edits inside the range, and nothing outside it. An edit wholly inside is
+   * kept; the whitespace that ends at the range's first item and starts before the range (the line break and
+   * indentation above it) is cut at the range's start, and kept only when that part holds no line break: the first
+   * line's indentation is set, the lines and blank lines above are left as they are. Any other edit crossing a bound is
+   * left out.
+   */
   connection.onDocumentRangeFormatting(async (p, token) => {
     if (!edits) return null;
     const x = await formatted(p.textDocument.uri, token);
     if (!x) return null;
+    const text = x.doc.getText();
     const from = x.doc.offsetAt(p.range.start);
     const to = x.doc.offsetAt(p.range.end);
     const out = [];
-    for (const e of Array.isArray(x.f.edits) ? x.f.edits : []) {
-      const [start, end, newText] = e;
-      if (!Number.isInteger(start) || !Number.isInteger(end) || typeof newText !== 'string' || start > end) return null;
-      if (end < from || end > to) continue;
-      out.push({ range: { start: x.doc.positionAt(start), end: x.doc.positionAt(end) }, newText });
+    for (const [start, end, newText] of x.f.edits) {
+      if (from <= start && end <= to) {
+        out.push({ range: { start: x.doc.positionAt(start), end: x.doc.positionAt(end) }, newText });
+      } else if (start < from && from <= end && end <= to && !/[\r\n]/.test(text.slice(from, end)) && newText.includes('\n')) {
+        // The indentation of the range's first line: from the range's start (a line start) to its first item.
+        const indent = newText.slice(newText.lastIndexOf('\n') + 1);
+        const before = text.slice(0, from);
+        if (from !== 0 && !/\n$/.test(before)) continue;   // the range starts mid-line: its gap is outside
+        if (text.slice(from, end) !== indent) out.push({ range: { start: x.doc.positionAt(from), end: x.doc.positionAt(end) }, newText: indent });
+      }
     }
     return out;
   });
