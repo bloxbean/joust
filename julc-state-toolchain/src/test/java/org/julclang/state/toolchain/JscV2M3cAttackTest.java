@@ -37,6 +37,9 @@ import org.julclang.state.examples.dsl.GuardrailClient;
 import org.julclang.state.examples.dsl.StakedVault;
 import org.julclang.state.examples.dsl.StakedVaultClient;
 import org.julclang.state.examples.dsl.StakedVaultValidator;
+import org.julclang.state.examples.dsl.StakedCounterV1;
+import org.julclang.state.examples.dsl.StakedCounterV1Client;
+import org.julclang.state.examples.dsl.StakedCounterV1Validator;
 import org.julclang.state.examples.dsl.Steward;
 import org.julclang.state.examples.dsl.StewardClient;
 import org.julclang.state.examples.dsl.TallyV1;
@@ -391,6 +394,48 @@ class JscV2M3cAttackTest {
         two.mint = two.mint.merge(token(h1.policy(), id2, -1));
         scriptRejects(h1.evaluate(two), "SPEND", "two CounterV1 instances into one CounterV2 (F2)");
         System.out.println("[M3c attacks] F2: two old instances into one new refused by the old side (the second has no successor)");
+    }
+
+
+    // ------------------------------------------------------------------ M3 final pass MS1: a staked contract migrates
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aStakedContractMigrates_andItsMigrationIsChecked() {
+        var cfg = new StakedCounterV1.Config(keys(A, B, C), BigInteger.TWO, POOL, PAYEE);
+        var h1 = (StateHarness<Object>) (StateHarness<?>) StateHarness.of(StakedCounterV1Client.SPEC, cfg);
+        var h2 = (StateHarness<Object>) (StateHarness<?>) StateHarness.of(CounterV2Client.SPEC, new CounterV2.Config(h1.policy()));
+        assertTrue(h1.stateAddress().stakingCredential().isPresent(), "stakeSelf: the state is staked to its own script");
+        var adopted = new CounterV2.State(ADMIN, BigInteger.valueOf(41), BigInteger.ONE);
+        java.util.function.BiFunction<org.julclang.ledger.Address, Long, TxModel> migration = (to, delta) -> {
+            var s = new StakedCounterV1.State(ADMIN, h2.policy(), BigInteger.valueOf(41));
+            var live = h1.live(s, ADA.multiply(BigInteger.TEN));
+            Ctx c = h1.ctx(ADMIN, BigInteger.ZERO, live.lovelace());
+            JulcList<Payout> none = JulcList.empty();
+            var tx = h1.destroy(live, new StakedCounterV1Validator.Upgrade(c), new StakedCounterV1Validator.BurnInstance(), none, ADMIN, c);
+            tx.outputs.add(new TxOut(to, Value.lovelace(live.lovelace().add(BigInteger.valueOf(delta))).merge(token(h2.policy(), successorId(), 1)),
+                    new OutputDatum.OutputDatumInline(StateHarness.data(adopted)), Optional.empty()));
+            tx.mint = tx.mint.merge(token(h2.policy(), successorId(), 1));
+            tx.stateOutput = tx.outputs.size() - 1;
+            tx.token = successorId();
+            return tx;
+        };
+        var honest = migration.apply(h2.stateAddress(), 0L);
+        accepted(h1.evaluate(honest), "the staked old side (it refused every migration before the fix)");
+        var mine = honest.copy();
+        mine.spendRedeemers.clear();
+        mine.mintRedeemer = StateHarness.data(new CounterV2Validator.Adopt(StateHarness.LIVE_REF));
+        accepted(h2.evaluate(mine), "CounterV2 adopts the staked instance");
+        // The old side's I41 rules, each refused by its SPEND script.
+        scriptRejects(h1.evaluate(migration.apply(StateHarness.pkhAddress(EVE), 0L)), "SPEND", "the successor at a key address");
+        scriptRejects(h1.evaluate(migration.apply(h2.stateAddress(), -1L)), "SPEND", "one lovelace skimmed");
+        var noMint = migration.apply(h2.stateAddress(), 0L);
+        noMint.mint = JscV2M3cFourWayTest.withoutZeros(noMint.mint.merge(token(h2.policy(), successorId(), -1)));
+        scriptRejects(h1.evaluate(noMint), "SPEND", "the successor's output, but no mint");
+        var notBurned = migration.apply(h2.stateAddress(), 0L);
+        notBurned.mint = JscV2M3cFourWayTest.withoutZeros(notBurned.mint.merge(token(h1.policy(), h1.instanceId(), 1)));
+        scriptRejects(h1.evaluate(notBurned), "SPEND", "the old token not burned");
+        System.out.println("[M3c attacks] MS1: a staked contract (withdraw and certify handlers) migrates into CounterV2; four I41 mutants refused by its SPEND");
     }
 
     // ------------------------------------------------------------------ A43: the successor is no own policy

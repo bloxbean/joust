@@ -90,7 +90,7 @@ class JscV2M3cFourWayTest {
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         if (!LEGS.isEmpty()) return;
         Map<String, String> files = new LinkedHashMap<>();
-        for (String c : List.of("StakedVault", "CounterV1", "CounterV2", "Steward", "Guardrail", "TallyV1", "TallyV2")) {
+        for (String c : List.of("StakedVault", "CounterV1", "CounterV2", "Steward", "Guardrail", "TallyV1", "TallyV2", "StakedCounterV1")) {
             SOURCES.put(c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
             files.put("org/julclang/state/examples/dsl/" + c + ".jsc", SOURCES.get(c + ".jsc"));
         }
@@ -543,6 +543,46 @@ class JscV2M3cFourWayTest {
         report(v2, null);
     }
 
+
+    // ------------------------------------------------------------------ M3 final pass MS1: a staked contract that migrates
+
+    @Test
+    @Order(6)
+    void stakedMigration() throws Exception {
+        // StakedCounterV1 has stakeSelf, a withdraw and a certify handler, so it is asset-aware; its migrating destroy must
+        // still move the instance into its successor (I41), CounterV2 deployed with its policy as params.previous.
+        var v1 = legs("StakedCounterV1", rec("Config", keys(A, B, C), n(2), Bytes.of(POOL), Bytes.of(PAYEE)));
+        byte[] p1 = v1.harness.policy();
+        var v2 = legs("CounterV2", rec("Config", Bytes.of(p1)));
+        byte[] p2 = v2.harness.policy();
+        Bytes none = Bytes.of(new byte[0]);
+        ok(v1.check("init", null, List.of(), at(ADMIN, ada(10).longValue(), 0), ADMIN));
+        Rec fresh = rec("State", Bytes.of(ADMIN), none, n(0));
+        ok(v1.check("setSuccessor", fresh, List.of(Bytes.of(p2)), null, ADMIN));
+        v1.mutants("setSuccessor", fresh, List.of(Bytes.of(p2)), null, ADMIN);
+        BigInteger funds = ada(10);
+        BigInteger lovelace = BigInteger.valueOf(v1.harness.minAda()).add(funds);
+        Rec named = rec("State", Bytes.of(ADMIN), Bytes.of(p2), n(41));
+        Rec adopted = rec("State", Bytes.of(ADMIN), n(41), n(1));
+        Tx up = at(ADMIN, 0, lovelace.longValue()).withSuccessor(Bytes.of(p2));
+        // The regression: the honest migration is accepted on every leg (the validator refused it before the fix).
+        v1.successor = successor(p2, v2.harness.stateAddress(), v2.java(adopted), 0);
+        ok(v1.check("upgrade", named, List.of(), up, ADMIN));
+        v1.modifierRefused("upgrade", named, List.of(), at(EVE, 0, lovelace.longValue()).withSuccessor(Bytes.of(p2)), EVE);
+        migrateRefused(v1, "migrate:to", "upgrade", rec("State", Bytes.of(ADMIN), none, n(41)), List.of(), up, ADMIN);
+        v1.successor = successor(p2, v2.harness.stateAddress(), v2.java(adopted), -1);
+        v1.transactionLevel("upgrade", named, List.of(), up, ADMIN);
+        v1.successor = successor(p2, v2.harness.stateAddress(), v2.java(adopted), 0);
+        oldSideMutants(v1, named, lovelace, p2, v2.harness.stateAddress(), v2.java(adopted));
+        // The new half: CounterV2 adopts it.
+        v2.adoption = adoption(v1, "upgrade", v1.java(named), funds, v2, 0, ADMIN);
+        Tx adopt = new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW))
+                .withPrior(new Interpreter.PriorV(Bytes.of(p1), as("CounterV1.State", named)));
+        assertEquals(ok(v2.check("migrate", null, List.of(), adopt, ADMIN)), "ok:" + v2.encoded(v2.java(adopted), null, null));
+        JsLeg.check(v1);
+        JsLeg.check(v2);
+        report(v1, null);
+    }
 
     // ------------------------------------------------------------------ Tally (coverage): migration with every kind of input
 

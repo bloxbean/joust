@@ -1730,6 +1730,10 @@ final class FourWay {
         var h = held(kind, java(state), t);
         var tx = harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null : tr.next(), signer, c, null);
         tx = composed(method, tx, t, tr, h);
+        // M3 final pass MS1: an asset-aware contract's migrating destroy (one with a withdraw handler) mints its successor too.
+        if (kind.equals("destroy") && interp.migratesTo(method) != null && successor != null) {
+            tx = successor.apply(tx, harness.live(java(state), t.balance().subtract(BigInteger.valueOf(harness.minAda()))));
+        }
         // M3a2: an instance's BigMaps with native assets (examples/locker's Locker): the honest call's claims.
         return hasMaps() ? harness.withClaims(tx, mapClaims(method, stateClass, java(state), kind, t, StateHarness.LIVE_REF)) : tx;
     }

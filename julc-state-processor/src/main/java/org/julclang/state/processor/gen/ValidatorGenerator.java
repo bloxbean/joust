@@ -478,15 +478,7 @@ public final class ValidatorGenerator {
             case PAYOUTS -> {
                 w.line("JulcList<Payout> payouts = " + call + ";");
                 if (t.migrateTo() != null) {
-                    w.line("// I41: the instance migrates: its successor mints blake2b_256(own input) and holds the rest.");
-                    w.line("byte[] successor = " + field(t.migrateTo()) + ";");
-                    w.line("byte[] successorId = ValuesLib.uniqueTokenName(own.outRef());");
-                    w.line("boolean successorMinted = ValuesLib.assetOf(tx.mint(), successor, successorId).compareTo(BigInteger.ONE) == 0;");
-                    w.line("TxOut next = uniqueOutputWith(tx.outputs(), successor, successorId);");
-                    w.line("boolean successorAt = AddressLib.isScriptAddress(next.address())");
-                    w.line("        && ByteStringLib.equals(AddressLib.credentialHash(next.address()), successor);");
-                    w.line("boolean allocated = successorMinted && successorAt && ValuesLib.lovelaceOf(next.value())");
-                    w.line("        .compareTo(inLovelace.add(" + received("r", t) + ").subtract(Payouts.total(payouts))) >= 0;");
+                    migrationAllocated(t);
                 } else {
                     w.line("// The instance ends: everything it holds, deposit included, is allocated (I8).");
                     w.line("boolean allocated = Payouts.total(payouts).compareTo(inLovelace.add(" + received("r", t) + ")) == 0;");
@@ -1415,6 +1407,24 @@ public final class ValidatorGenerator {
     }
 
     /** SPEND for an asset-aware contract: A's checks with the full value equation, sends and user mints (I26–I31). */
+    /**
+     * I41: a migrating destroy's allocation: its successor (the policy in its state field) mints blake2b_256(own input),
+     * at that script, holding at least the instance's lovelace (less payouts, which a migrating destroy has none of). One
+     * body for the lovelace-only transition and the asset-aware one (ADR-0018 M3 final pass MS1: a contract with a withdraw
+     * handler is asset-aware, and its migrating destroy must migrate too); the burn and the payouts are checked beside it.
+     */
+    private void migrationAllocated(TransitionIR t) {
+        w.line("// I41: the instance migrates: its successor mints blake2b_256(own input) and holds the rest.");
+        w.line("byte[] successor = " + field(t.migrateTo()) + ";");
+        w.line("byte[] successorId = ValuesLib.uniqueTokenName(own.outRef());");
+        w.line("boolean successorMinted = ValuesLib.assetOf(tx.mint(), successor, successorId).compareTo(BigInteger.ONE) == 0;");
+        w.line("TxOut next = uniqueOutputWith(tx.outputs(), successor, successorId);");
+        w.line("boolean successorAt = AddressLib.isScriptAddress(next.address())");
+        w.line("        && ByteStringLib.equals(AddressLib.credentialHash(next.address()), successor);");
+        w.line("boolean allocated = successorMinted && successorAt && ValuesLib.lovelaceOf(next.value())");
+        w.line("        .compareTo(inLovelace.add(" + received("r", t) + ").subtract(Payouts.total(payouts))) >= 0;");
+    }
+
     private void transitionAssets(TransitionIR t) {
         String X = c.name();
         boolean owned = t.owned();
@@ -1479,6 +1489,20 @@ public final class ValidatorGenerator {
             case PAYOUTS -> {
                 w.line("JulcList<Payout> payouts = " + call + ";");
                 payouts = "payouts";
+                if (t.migrateTo() != null) {
+                    // MS1: the instance moves into its successor (I41), as in the lovelace-only transition: no settlement,
+                    // which would require the instance's value to be paid out. Migration holds no native assets (the
+                    // checker's JSC1334, ContractReader's @MigrateTo rule), so the lovelace is the whole value.
+                    migrationAllocated(t);
+                    w.line("boolean burned = ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.valueOf(-1)) == 0;");
+                    w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
+                    checks.add("allocated");
+                    checks.add("burned");
+                    checks.add("paid");
+                    w.line("return " + conj(checks, t.variant()) + ";");
+                    w.close("}").blank();
+                    return;
+                }
             }
             case RESULT, SETTLE -> {
                 w.line(t.resultType() + " result = " + call + ";");
