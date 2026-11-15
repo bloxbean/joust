@@ -1,15 +1,19 @@
 jsc 1
 package org.julclang.state.examples.dsl
 
+import contract { Oracle } from "./Oracle.jsc"
+
 // ADR-0018 M3 final pass (Codex M1, design MD2): a coverage contract for the M3 combination matrix. A keyed type declared
 // before a plain one (the plain holding's constructor tag shifted), invariants by type, a move of the plain type with its
-// admit, and the certify, vote and propose handlers beside both kinds of object (JscV2M3MatrixTest).
+// admit, a read of another contract (reads), and the certify, vote and propose handlers beside both kinds of object
+// (JscV2M3MatrixTest).
 contract Mixed(maxDatumBytes = 512) {
-  params { council: List<Key>, threshold: Int }
+  params { council: List<Key>, threshold: Int, feed: Instance<Oracle> }
   state { admin: Key, count: Int }
   owned Slot keyed by key { key: Key, count: Int }
   owned Badge { owner: Key, level: Int }
   init() { return { admin: caller, count: 0 } }
+  action quote(p: reads params.feed) open { return { ...state, count: p.price } }
   owned init Slot.claim() { return { key: caller, count: 0 } }
   owned action Slot.bump() only key { return { ...state, count: count + 1 } }
   owned destroy Slot.leave() only key retire { pay(key, balance) }

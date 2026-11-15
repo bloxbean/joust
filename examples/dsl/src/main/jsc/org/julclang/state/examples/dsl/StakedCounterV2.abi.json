@@ -21,7 +21,8 @@
           { "name": "amount", "type": "Int", "data": "int" }
       ] } },
     { "purpose": "certify", "name": "certificate" },
-    { "purpose": "vote", "name": "decide" }
+    { "purpose": "vote", "name": "decide" },
+    { "purpose": "propose", "name": "guard" }
   ],
   "redeemers": {
     "spend": [

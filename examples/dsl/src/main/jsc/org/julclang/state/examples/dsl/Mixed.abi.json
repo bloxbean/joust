@@ -8,7 +8,8 @@
     ] },
   "params": { "name": "Config", "constr": 0, "fields": [
       { "name": "council", "type": "List<Key>", "data": "list<bytes28>" },
-      { "name": "threshold", "type": "Int", "data": "int" }
+      { "name": "threshold", "type": "Int", "data": "int" },
+      { "name": "feed", "type": "Instance<Oracle>", "data": "ForeignInstance" }
     ] },
   "purposes": [
     { "purpose": "certify", "name": "register" },
@@ -41,27 +42,28 @@
   ],
   "keyed": [
     { "type": "Slot", "key": "key", "keyIndex": 0, "maxKeyBytes": 32, "signedKey": false, "linkCooldownMs": 60000, "linkWindowMs": 120000,
-      "typeId": "04536c6f74", "headTag": 0, "nodeTag": 1, "retiredTag": 2, "link": 5, "remove": null,
+      "typeId": "04536c6f74", "headTag": 0, "nodeTag": 1, "retiredTag": 2, "link": 6, "remove": null,
       "inserts": ["claim"], "actions": ["bump"], "removes": [], "retires": ["leave"] }
   ],
   "redeemers": {
     "spend": [
-      { "name": "Admit", "constr": 0, "fields": [
+      { "name": "Quote", "constr": 0, "fields": [] },
+      { "name": "Admit", "constr": 1, "fields": [
           { "name": "id", "type": "Bytes", "data": "bytes" },
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] },
-      { "name": "Bump", "constr": 1, "fields": [] },
-      { "name": "Go", "constr": 2, "fields": [
+      { "name": "Bump", "constr": 2, "fields": [] },
+      { "name": "Go", "constr": 3, "fields": [
           { "name": "into", "type": "Bytes", "data": "bytes" },
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] },
-      { "name": "Leave", "constr": 3, "fields": [
+      { "name": "Leave", "constr": 4, "fields": [
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] },
-      { "name": "Drop", "constr": 4, "fields": [
+      { "name": "Drop", "constr": 5, "fields": [
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] },
-      { "name": "Link", "constr": 5, "fields": [] }
+      { "name": "Link", "constr": 6, "fields": [] }
     ],
     "mint": [
       { "name": "CreateInstance", "constr": 0, "fields": [
@@ -96,6 +98,10 @@
         { "name": "balance", "type": "Int", "data": "int" },
         { "name": "validFrom", "type": "Int", "data": "int" },
         { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "ForeignInstance": { "kind": "api", "constructors": [{ "name": "ForeignInstance", "constr": 0, "fields": [
+        { "name": "policy", "type": "Bytes", "data": "bytes" },
+        { "name": "instance", "type": "Bytes", "data": "bytes" }
       ] }] },
     "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
         { "name": "txId", "type": "Bytes", "data": "bytes" },

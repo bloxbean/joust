@@ -628,6 +628,7 @@ class JscV2M3cFourWayTest {
         ok(p.as(List.of(A, B), List.of()).check("decide", List.of(voter("DRepVoter", self), List.of(pair(actionId(fill(0x61), 0), vote("VoteYes")))), null));
         p.as(List.of(A), List.of()).refused("modifier:quorum params.council params.quorum", "decide",
                 List.of(voter("DRepVoter", self), List.of(pair(actionId(fill(0x61), 0), vote("VoteNo")))), null);
+        ok(p.as(List.of(), List.of()).check("guard", List.of(proposal(n(1), keyCred(A), action("InfoAction"))), null));
         JsLeg.check(v1);
         JsLeg.check(v2);
         report(v2, p);

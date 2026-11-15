@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "826f3487b7d95a489f82aeb802e320d3913807970f85ba09dcef67bf7f51b2ad",
+  "sourceSha256": "7c7e58de8d2ab1bf5cb21c7d959f763639be5cab739a95b13386715b443c770e",
   "package": "org.julclang.state.examples.dsl",
   "contract": "StakedCounterV2",
   "source": "StakedCounterV2.jsc",
@@ -320,6 +320,22 @@
         "at": [38, 109]
       },
       "at": [38, 3]
+    },
+    {
+      "kind": "propose",
+      "name": "guard",
+      "params": [{ "id": 7, "name": "p", "type": "ProposalProcedure", "taint": 0, "at": [40, 17] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [40, 41] },
+        "at": [40, 41]
+      },
+      "at": [40, 3]
     }
   ],
   "warnings": []

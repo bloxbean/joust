@@ -1,0 +1,25 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+import contract { Oracle } from "./Oracle.jsc"
+
+// ADR-0018 M3 final pass (design MD2): a coverage contract for the combination matrix's M2 cells that no example
+// covered: BigMap state beside deposits (receives) and a read of another contract (reads). JscV2M3MatrixTest runs it on
+// all five legs.
+contract MapInbox(maxDatumBytes = 256) {
+  params { feed: Instance<Oracle> }
+  state { admin: Key, price: Int, book: BigMap<Key, Int> }
+
+  init() {
+    return { admin: caller, price: 0, book: BigMap.empty() }
+  }
+
+  action credit() receives Key {
+    require(!funds.deposits.isEmpty, "nothing deposited")
+    return { ...state, book: book.set(caller, book[caller] + funds.deposits.length) }
+  }
+
+  action quote(p: reads params.feed) open {
+    return { ...state, price: p.price }
+  }
+}
