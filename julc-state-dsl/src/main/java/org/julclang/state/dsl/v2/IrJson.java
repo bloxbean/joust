@@ -1113,8 +1113,8 @@ final class IrJson {
             if ("Equals".equals(node) && holdsGovJson(m.get("operand"))) {
                 throw new IllegalArgumentException(where + "a ledger value of the purposes is not comparable (JSC1322)");
             }
-            if ("ListArg".equals(node) && ("contains".equals(m.get("op")) || "indexOf".equals(m.get("op")))
-                    && m.get("list") instanceof Map<?, ?> lm && holdsGovJson(lm.get("type"))) {
+            // Review C7 (r3): membership is the Contains node, by its element type.
+            if ("Contains".equals(node) && holdsGovJson(m.get("elem"))) {
                 throw new IllegalArgumentException(where + "a ledger value of the purposes is not comparable (JSC1322)");
             }
             if ("CallStd".equals(node) && "indexOf".equals(m.get("name")) && m.get("args") instanceof List<?> as && !as.isEmpty()
@@ -1141,6 +1141,14 @@ final class IrJson {
             // Review C2: the ledger types' expression rules, over every method's and fn's body.
             for (Object mo : l(r.get("methods"))) ledgerExpressions(m(mo).get("body"), "method " + m(mo).get("name") + ": ");
             if (r.get("fns") instanceof List<?> fl) for (Object fo : fl) ledgerExpressions(m(fo).get("body"), "fn " + m(fo).get("name") + ": ");
+            // Review C8 (r3): and every imported .jsc library's fns, which the program's bodies call.
+            if (r.get("libraries") instanceof List<?> ll) {
+                for (Object lo : ll) {
+                    if (m(lo).get("fns") instanceof List<?> lf) {
+                        for (Object fo : lf) ledgerExpressions(m(fo).get("body"), "fn " + m(lo).get("library") + "." + m(fo).get("name") + ": ");
+                    }
+                }
+            }
             boolean stakeSelf = false;
             for (Ir.ContractOption o : options) {
                 if (!o.name().equals("stakeSelf")) continue;

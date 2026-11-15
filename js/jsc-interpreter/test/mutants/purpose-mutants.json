@@ -170,5 +170,25 @@
  {
   "file": "purpose-stakeself-owned.json",
   "message": "(JSC1305)"
+ },
+ {
+  "file": "purpose-ledger-contains.json",
+  "message": "(JSC1322)"
+ },
+ {
+  "file": "purpose-ledger-contains-nested.json",
+  "message": "(JSC1322)"
+ },
+ {
+  "file": "purpose-library-equality.json",
+  "message": "(JSC1322)"
+ },
+ {
+  "file": "purpose-library-map-set.json",
+  "message": "(JSC1324)"
+ },
+ {
+  "file": "purpose-withdraw-owned.json",
+  "message": "(JSC1305)"
  }
 ]

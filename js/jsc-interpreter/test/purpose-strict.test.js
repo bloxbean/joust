@@ -14,6 +14,8 @@ test('the reader refuses every purpose and migration mutant (shared with the Jav
   for (const { file, message } of list) {
     assert.throws(() => load(read(file)), (e) => e.message.includes(message), `${file}: refused, mentioning '${message}'`);
   }
+  // Review C8 (r3): the imported-library mutants' control (the library fn's result true) loads.
+  assert.doesNotThrow(() => load(read('purpose-library-control.json')), 'the library control');
   for (const f of ['StakedVault', 'CounterV1', 'CounterV2']) {
     assert.doesNotThrow(() => load(readFileSync(new URL(`./fixtures/${f}.ir.json`, import.meta.url), 'utf8')), f);
   }

@@ -257,4 +257,59 @@ purpose('propose-funds', 'StakedVault', (p, m) => { m('proposal').body.stmts.uns
 purpose('migrate-funds', 'CounterV2', (p, m) => { m('migrate').body.stmts.unshift(fundsLet(90305)); }, '(JSC1338)');
 // Review F1, S3 (r2): stakeSelf beside owned types (Bank's).
 purpose('stakeself-owned', 'Bank', (p) => { p.options.push({ name: 'stakeSelf', value: '1' }); }, '(JSC1305)');
+// Review C7 (r3): membership (the Contains node) over ledger values, direct and nested in an Option.
+purpose('ledger-contains', 'StakedVault', (p, m) => {
+  const cert = m('certificate').params[0];
+  const ref = { node: 'LocalRef', local: cert.id, type: 'TxCert', taint: 0, at };
+  m('certificate').body.result = { node: 'Contains', list: { node: 'ListLit', items: [ref], rest: null, type: { list: 'TxCert' }, taint: 0, at },
+    value: { ...ref }, elem: 'TxCert', type: 'Bool', taint: 0, at };
+}, '(JSC1322)');
+purpose('ledger-contains-nested', 'StakedVault', (p, m) => {
+  const cert = m('certificate').params[0];
+  const some = { node: 'SomeOf', value: { node: 'LocalRef', local: cert.id, type: 'TxCert', taint: 0, at }, type: { option: 'TxCert' }, taint: 0, at };
+  m('certificate').body.result = { node: 'Contains', list: { node: 'ListLit', items: [some], rest: null, type: { list: { option: 'TxCert' } }, taint: 0, at },
+    value: JSON.parse(JSON.stringify(some)), elem: { option: 'TxCert' }, type: 'Bool', taint: 0, at };
+}, '(JSC1322)');
+// Review C8 (r3): an imported library's fn, called by the certify handler: equality on a ledger value, a set on a LedgerMap.
+const withLibrary = (p, m, result, param) => {
+  p.libraries = [{ library: 't.Helpers', source: 'helpers.jsc', sourceSha256: '0'.repeat(64), records: [], enums: [],
+    fns: [{ name: 'helper', params: [param], result: 'Bool', body: { stmts: [], result, at }, at }] }];
+  const cert = m('certificate').params[0];
+  m('certificate').body.result = { node: 'CallFn', fn: 'helper', args: [{ node: 'LocalRef', local: cert.id, type: 'TxCert', taint: 0, at }],
+    type: 'Bool', taint: 0, at };
+};
+const certParam = { id: 90401, name: 'c', type: 'TxCert', taint: 0, at };
+const certRef = { node: 'LocalRef', local: 90401, type: 'TxCert', taint: 0, at };
+// The control: the same library and call with a result of true, which both readers load.
+{
+  const p = fixture('StakedVault');
+  const m = (name) => p.methods.find((x) => x.name === name);
+  withLibrary(p, m, lit(true, 'Bool'), certParam);
+  out('purpose-library-control', p);
+}
+purpose('library-equality', 'StakedVault', (p, m) => {
+  withLibrary(p, m, { node: 'Equals', negate: false, left: certRef, right: { ...certRef }, operand: 'TxCert', type: 'Bool', taint: 0, at }, certParam);
+}, '(JSC1322)');
+purpose('library-map-set', 'Guardrail', (p, m) => {
+  // Guardrail's rail, with its LedgerMap has moved into a library fn over the map, as a set then isEmpty.
+  const has = findNode(m('rail').body, (o) => o.node === 'MapOp' && o.op === 'has');
+  const mapType = has.map.type;
+  const param = { id: 90402, name: 'w', type: mapType, taint: 0, at };
+  const mref = { node: 'LocalRef', local: 90402, type: mapType, taint: 0, at };
+  const set = { node: 'MapOp', op: 'set', map: mref, args: [JSON.parse(JSON.stringify(has.args[0])), lit('1', 'Int')], type: mapType, taint: 0, at };
+  p.libraries = [{ library: 't.Helpers', source: 'helpers.jsc', sourceSha256: '0'.repeat(64), records: [], enums: [],
+    fns: [{ name: 'helper', params: [param], result: 'Bool', body: { stmts: [], result: { node: 'MapOp', op: 'isEmpty', map: set, args: [], type: 'Bool', taint: 0, at }, at }, at }] }];
+  const original = JSON.parse(JSON.stringify(has));
+  for (const k of Object.keys(has)) delete has[k];
+  Object.assign(has, { node: 'CallFn', fn: 'helper', args: [original.map], type: 'Bool', taint: 0, at });
+}, '(JSC1324)');
+// Review F13 (r3): a withdraw handler beside owned types (Bank's), JSC1305's withdraw branch.
+purpose('withdraw-owned', 'Bank', (p) => {
+  const sv = fixture('StakedVault');
+  const w = JSON.parse(JSON.stringify(sv.methods.find((x) => x.kind === 'withdraw')), (k, v) => (k === 'id' || k === 'local') && typeof v === 'number' ? v + 91000 : v);
+  // Bank has no params: an empty body and no audience, so the reader's generic checks pass and JSC1305 is the first refusal.
+  w.mods = [];
+  w.body = { stmts: [], result: null, at };
+  p.methods.push(w);
+}, '(JSC1305)');
 writeFileSync(new URL('./purpose-mutants.json', import.meta.url), JSON.stringify(purposeMutants, null, 1) + '\n');

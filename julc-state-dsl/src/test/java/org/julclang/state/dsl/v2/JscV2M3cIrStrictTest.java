@@ -40,5 +40,7 @@ class JscV2M3cIrStrictTest {
         for (String f : new String[]{"StakedVault", "CounterV1", "CounterV2"}) {
             IrJson.read(Files.readString(Path.of("../js/jsc-interpreter/test/fixtures/" + f + ".ir.json")));   // the unmutated programs
         }
+        // Review C8 (r3): the imported-library mutants' control (the library fn's result true) loads.
+        IrJson.read(Files.readString(MUTANTS.resolve("purpose-library-control.json")));
     }
 }

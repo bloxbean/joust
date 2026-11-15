@@ -772,9 +772,8 @@ function ledgerExpressions(json, where, fail) {
   if (!json || typeof json !== 'object') return;
   const n = json.node;
   if (n === 'Equals' && holdsLedger(json.operand)) fail(where, 'a ledger value of the purposes is not comparable (JSC1322)');
-  if (n === 'ListArg' && (json.op === 'contains' || json.op === 'indexOf') && json.list && holdsLedger(json.list.type)) {
-    fail(where, 'a ledger value of the purposes is not comparable (JSC1322)');
-  }
+  // Review C7 (r3): membership is the Contains node, by its element type.
+  if (n === 'Contains' && holdsLedger(json.elem)) fail(where, 'a ledger value of the purposes is not comparable (JSC1322)');
   if (n === 'CallStd' && json.name === 'indexOf' && Array.isArray(json.args) && json.args[0] && holdsLedger(json.args[0].type)) {
     fail(where, 'a ledger value of the purposes is not comparable (JSC1322)');
   }
@@ -791,6 +790,8 @@ function ledgerExpressions(json, where, fail) {
 function purposeRules(p, owned, fail, contracts) {
   for (const m of p.methods) ledgerExpressions(m.body, `method ${m.name}`, fail);
   for (const f of p.fns ?? []) ledgerExpressions(f.body, `fn ${f.name}`, fail);
+  // Review C8 (r3): and every imported .jsc library's fns, which the program's bodies call.
+  for (const l of p.libraries ?? []) for (const f of l.fns ?? []) ledgerExpressions(f.body, `fn ${l.library}.${f.name}`, fail);
   const stake = p.options.filter((o) => o.name === 'stakeSelf');
   if (stake.length > 1 || stake.some((o) => o.value !== '1')) fail('options', 'the option stakeSelf is the flag "1", once (JSC1301)');
   // Review F1, S3: not beside owned objects yet (their outputs' stake part is not covered).
