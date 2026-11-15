@@ -87,7 +87,7 @@ export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAb
   const target = bound ? resolveContract(generated, bound.contract) : null;
   if (target?.error) errors.push(`error[JSC0002]: --accept-abi=${bound.contract}@…: ${target.error}; nothing accepted`);
   for (const g of generated) {
-    if (!g.abi) continue;   // .jsc v1: no manifest
+    if (!g.abi) continue;   // a library: no manifest
     const committed = manifestPath(g, srcDir, root);
     const exists = existsSync(committed);
     const old = exists ? readFileSync(committed, 'utf8') : null;

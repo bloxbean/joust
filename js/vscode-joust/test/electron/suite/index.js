@@ -217,7 +217,7 @@ async function m5b(doc) {
   // joust.applyFix is not in the command palette (S17): only the manifest can say so; checked in client.test.mjs.
 }
 
-const FIXES = `jsc 2
+const FIXES = `jsc 1
 package app
 
 contract Fixes {

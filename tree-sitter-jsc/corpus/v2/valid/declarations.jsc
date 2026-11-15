@@ -1,4 +1,4 @@
-jsc 2;
+jsc 1;
 package org.example.jsc.corpus;
 
 import { blake2b_224, sha3_256 } from "std/crypto"

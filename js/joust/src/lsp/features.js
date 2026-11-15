@@ -889,30 +889,17 @@ export function renamePreserves(before, after, edits) {
 
 // ------------------------------------------------------------------ invisible characters
 
-const INVISIBLE = new Set(['JSC0145', 'JSC0148']);
 const FORMAT = /^\p{Cf}$/u;
 
 /**
- * The characters **Remove invisible characters…** would delete: every JSC0145 and JSC0148 of the text (D7). A .jsc 2
- * file's are found by the lexer's own rules over the text (S2 on #99: the model reports its first errors only):
- * JSC0145 a format character (Unicode Cf, of the Basic Multilingual Plane, as the lexer reads UTF-16 units; not a BOM at
- * the start), JSC0148 a control character other than TAB, LF, CR and the line breaks of JSC0147 (U+000B, U+000C,
- * U+0085). A v1 file's come from its model.
+ * The characters **Remove invisible characters…** would delete: every JSC0145 and JSC0148 of the text (D7), found by
+ * the lexer's own rules over the text (S2 on #99: the model reports its first errors only): JSC0145 a format character
+ * (Unicode Cf, of the Basic Multilingual Plane, as the lexer reads UTF-16 units; not a BOM at the start), JSC0148 a
+ * control character other than TAB, LF, CR and the line breaks of JSC0147 (U+000B, U+000C, U+0085). (`.jsc` v1, whose
+ * model listed them, is gone: ADR-0018 r26.)
  */
 export function invisibleOccurrences(model, text) {
   const out = [];
-  if (model.language !== 'jsc2') {
-    const lines = text.split('\n');
-    for (const d of model.diagnostics) {
-      if (!INVISIBLE.has(d.code)) continue;
-      const [l, c, , ec] = d.range;
-      const s = (lines[l] ?? '').slice(c, ec);
-      if (!s) continue;
-      const cp = s.codePointAt(0);
-      out.push({ range: d.range, code: d.code, char: `U+${cp.toString(16).toUpperCase().padStart(4, '0')}`, line: l + 1, col: c + 1 });
-    }
-    return out;
-  }
   let line = 0;
   let col = 0;
   for (let i = 0; i < text.length; i++) {

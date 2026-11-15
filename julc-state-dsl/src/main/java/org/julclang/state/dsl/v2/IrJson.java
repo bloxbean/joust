@@ -702,9 +702,12 @@ final class IrJson {
                         enums(x.get("enums")), fns(x.get("fns"))));
             }
             var java = new ArrayList<Ir.JavaLib>();
+            var javaClasses = new java.util.HashSet<String>();
             for (Object o : l(r.get("javaLibraries"))) {
                 var x = m(o);
                 known(x, Set.of("class", "sourceSha256", "records", "fns"), "a Java library");
+                // #110 C17: a library is listed once (two entries of one class would let one's fns hide the other's).
+                if (!javaClasses.add(String.valueOf(x.get("class")))) throw new IllegalArgumentException("java:" + x.get("class") + " is listed twice");
                 var recs = new LinkedHashMap<String, Ir.JavaRec>();
                 for (Object ro : l(x.get("records"))) {
                     var rm = m(ro);

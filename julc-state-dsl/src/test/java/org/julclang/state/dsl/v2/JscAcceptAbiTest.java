@@ -37,7 +37,7 @@ class JscAcceptAbiTest {
     }
 
     static String contract(String name, String fields) {
-        return "jsc 2\npackage app\ncontract " + name + " {\n  state { owner: Key" + fields + " }\n  init() { return { owner: caller"
+        return "jsc 1\npackage app\ncontract " + name + " {\n  state { owner: Key" + fields + " }\n  init() { return { owner: caller"
                 + fields.replace(": Int", ": 0") + " } }\n  destroy close() only owner { pay(owner, balance) }\n}\n";
     }
 

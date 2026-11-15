@@ -7,7 +7,7 @@ import {
   semanticTokens, TOKEN_MODIFIERS, TOKEN_TYPES,
 } from '../../src/lsp/features.js';
 
-// jsc 2
+// jsc 1
 // package t
 // contract C {
 //   state { goal: Int, owner: Key }
@@ -111,7 +111,7 @@ test('renamePreserves: every reference resolves to the same declaration at its s
 
 test('completion: scope, context-filtered built-ins, members after a dot, std imports with a command, modifiers, types', () => {
   const m = model();
-  const text = 'jsc 2\npackage t\ncontract C {\n  state { goal: Int, owner: Key }\n  action set(goal: Int) only owner { return { ...state, goal } }\n}\n';
+  const text = 'jsc 1\npackage t\ncontract C {\n  state { goal: Int, owner: Key }\n  action set(goal: Int) only owner { return { ...state, goal } }\n}\n';
   const std = {
     rows: [{ module: 'std/crypto', name: 'sha2_256', signature: 'sha2_256(b: Bytes): Bytes' }, { module: 'prelude', name: 'min', signature: 'min(a: Int, b: Int): Int' }],
     types: ['Int', 'Bool', 'Bytes', 'Key', 'List', 'Map', 'Option'],
@@ -135,12 +135,12 @@ test('completion: scope, context-filtered built-ins, members after a dot, std im
   m.declarations[4].context = { state: true, tx: true };
   assert.deepEqual(labels(completion(dotText, { line: 4, character: 50 }, m, std)), ['goal', 'owner']);
   // Inside an import's braces: the module's rows.
-  const imp = 'jsc 2\npackage t\nimport { s } from "std/crypto"\n';
+  const imp = 'jsc 1\npackage t\nimport { s } from "std/crypto"\n';
   assert.deepEqual(labels(completion(imp, { line: 2, character: 10 }, m, std)), ['sha2_256']);
   // After a method's parameters: the modifiers; in a type position: the types.
-  const hdr = 'jsc 2\npackage t\ncontract C {\n  action set(goal: Int) \n';
+  const hdr = 'jsc 1\npackage t\ncontract C {\n  action set(goal: Int) \n';
   assert.ok(labels(completion(hdr, { line: 3, character: 24 }, m, std)).includes('payable'));
-  const ty = 'jsc 2\npackage t\ncontract C {\n  action set(goal: \n';
+  const ty = 'jsc 1\npackage t\ncontract C {\n  action set(goal: \n';
   assert.ok(labels(completion(ty, { line: 3, character: 19 }, m, std)).includes('Key'));
   // A text edit replaces only the word being completed on the cursor's line.
   const typed = text.replace('{ ...state, goal }', 'go');
@@ -149,16 +149,16 @@ test('completion: scope, context-filtered built-ins, members after a dot, std im
 });
 
 test('importEdit: into the module\'s import, else a new line after the imports', () => {
-  const a = 'jsc 2\npackage t\nimport { sha2_256 } from "std/crypto"\ncontract C {}\n';
+  const a = 'jsc 1\npackage t\nimport { sha2_256 } from "std/crypto"\ncontract C {}\n';
   assert.deepEqual(importEdit(a, 'blake2b_256', 'std/crypto'), { range: { start: { line: 2, character: 17 }, end: { line: 2, character: 17 } }, newText: ', blake2b_256' });
   assert.equal(importEdit(a, 'sha2_256', 'std/crypto'), null);
   assert.deepEqual(importEdit(a, 'length', 'std/bytes').range.start, { line: 3, character: 0 });
-  const b = 'jsc 2\npackage t\ncontract C {}\n';
+  const b = 'jsc 1\npackage t\ncontract C {}\n';
   assert.deepEqual(importEdit(b, 'length', 'std/bytes'), { range: { start: { line: 2, character: 0 }, end: { line: 2, character: 0 } }, newText: 'import { length } from "std/bytes"\n' });
 });
 
 test('invisible characters: every JSC0145 and JSC0148 the model reports, with its code point', () => {
-  const text = 'jsc 2\nconst s = "a​b\u0007"\n';
+  const text = 'jsc 1\nconst s = "a​b\u0007"\n';
   const m = normalise({ declarations: [], diagnostics: [
     { severity: 'error', code: 'JSC0145', message: '', range: [1, 12, 1, 13] },
     { severity: 'error', code: 'JSC0148', message: '', range: [1, 14, 1, 15] },
@@ -180,7 +180,7 @@ test('S1 on #99: completion reads a bounded window in linear time: hostile lines
     'x'.repeat(1024 * 1024),
   ];
   for (const line of cases) {
-    const text = `jsc 2\npackage t\n${line}`;
+    const text = `jsc 1\npackage t\n${line}`;
     const t = performance.now();
     completion(text, { line: 2, character: line.length }, m, { rows: [{ module: 'std/crypto', name: 'sha2_256', signature: 's' }] });
     const ms = performance.now() - t;

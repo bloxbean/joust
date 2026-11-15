@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package lang.refs
 
 // ADR-0021 D12 (M5b): hand-written expectations for references, built-ins and types, written without the implementation.

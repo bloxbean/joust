@@ -13,7 +13,7 @@ const BIN = fileURLToPath(new URL('../bin/joust.js', import.meta.url));
 const HAS_ENGINE = existsSync(fileURLToPath(new URL('../engine/joust-toolchain.js.wasm', import.meta.url)));
 const skip = !HAS_ENGINE && 'needs the toolchain engine in js/joust/engine';
 
-const contract = (name, fields) => `jsc 2
+const contract = (name, fields) => `jsc 1
 package app
 
 contract ${name} {

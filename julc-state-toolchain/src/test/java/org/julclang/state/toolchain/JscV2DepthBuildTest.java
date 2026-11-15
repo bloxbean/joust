@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2DepthBuildTest {
 
     static String contract(String members) {
-        return "jsc 2\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n" + members + "\n}\n";
+        return "jsc 1\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n" + members + "\n}\n";
     }
 
     static String action(String value) {
@@ -94,7 +94,7 @@ class JscV2DepthBuildTest {
             t.append("type T").append(k).append(" = { f: ").append("List<".repeat(wrappers)).append(k == named - 1 ? "Key" : "T" + (k + 1))
                     .append(">".repeat(wrappers)).append(" }\n");
         }
-        return "jsc 2\npackage t\n" + t + "contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
+        return "jsc 1\npackage t\n" + t + "contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
                 + "  action a(v: T0) { require(v == v, \"same\")\n return state }\n}\n";
     }
 
@@ -118,7 +118,7 @@ class JscV2DepthBuildTest {
     static String types(int n) {
         var t = new StringBuilder();
         for (int k = 0; k < n; k++) t.append("type T").append(k).append(" = { f: ").append(k == n - 1 ? "Int" : "T" + (k + 1)).append(" }\n");
-        return "jsc 2\npackage t\n" + t + "contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n";
+        return "jsc 1\npackage t\n" + t + "contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n";
     }
 
     @Test

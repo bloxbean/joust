@@ -34,32 +34,6 @@ final class Lexer {
     private static final String[] PUNCT = {"===", "!==", "...", "=>", "??", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "++", "--",
             "{", "}", "(", ")", "[", "]", ",", ";", ":", ".", "?", "<", ">", "!", "+", "-", "*", "/", "%", "="};
 
-    /**
-     * The first word of a source, after whitespace and comments, or null: {@code jsc} marks a {@code .jsc} 2 file (D2).
-     * Only the head of the file is read, so a lexical error later in a {@code jsc 2} file is still reported by the
-     * {@code .jsc} 2 front end (F8).
-     */
-    static String firstWord(String src) {
-        int i = 0;
-        while (i < src.length()) {
-            char c = src.charAt(i);
-            if (Character.isWhitespace(c)) {
-                i++;
-            } else if (src.startsWith("//", i)) {
-                while (i < src.length() && src.charAt(i) != '\n') i++;
-            } else if (src.startsWith("/*", i)) {
-                int end = src.indexOf("*/", i + 2);
-                if (end < 0) return null;
-                i = end + 2;
-            } else {
-                int j = i;
-                while (j < src.length() && (Character.isLetterOrDigit(src.charAt(j)) || src.charAt(j) == '_')) j++;
-                return j == i ? null : src.substring(i, j);
-            }
-        }
-        return null;
-    }
-
     private static boolean identStart(char c) {
         return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '_';
     }

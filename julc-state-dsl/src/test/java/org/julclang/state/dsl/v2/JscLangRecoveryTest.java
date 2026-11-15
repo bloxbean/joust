@@ -129,6 +129,9 @@ class JscLangRecoveryTest {
             if (!d.severity().equals("error")) continue;
             if (strict != null && String.valueOf(strict.code).equals(String.valueOf(d.code())) && strict.line == d.line() && strict.col == d.col()) continue;
             Member in = memberAt(after, d.range().line(), d.range().col());
+            // An error at the mutated token itself is the mutation's, not a cascade (a '(' inserted before the header: with
+            // the header optional since ADR-0018 r26, such files are analysed, no longer skipped as another version).
+            if (d.range().line() == line && d.range().col() == col) continue;
             if (in == null) {
                 // Outside every member of the mutated file: where a member of the original was that the mutation removed
                 // (it crossed a declaration boundary: both count as mutated), or nowhere allowed.
@@ -191,7 +194,6 @@ class JscLangRecoveryTest {
         var failures = new ArrayList<String>();
         for (Path p : JscLangTest.corpus()) {
             String src = Files.readString(p);
-            if (!JscV2.isV2(src)) continue;
             String id = JscLangTest.exampleId(p);
             JscModules ms = id == null ? null : modules;
             String file = JscLangTest.name(p);
@@ -208,8 +210,6 @@ class JscLangRecoveryTest {
                     continue;
                 }
                 n++;
-                // A mutation that makes it a v1 file (a deletion of 'jsc') goes to the v1 front end: JscLangTest's.
-                if (!JscV2.isV2(mu.text())) continue;
                 JscException e = strictError(mu.text(), file, id, ms);
                 if (e != null) {
                     errorsSeen++;
@@ -240,7 +240,6 @@ class JscLangRecoveryTest {
         int n = 0;
         for (Path p : JscLangTest.corpus()) {
             String src = Files.readString(p);
-            if (!JscV2.isV2(src)) continue;
             String id = JscLangTest.exampleId(p);
             JscModules ms = id == null ? null : JscLangTest.EXAMPLES;
             String file = JscLangTest.name(p);
@@ -265,7 +264,7 @@ class JscLangRecoveryTest {
     /** L13's namespace fixture (D12): two fns f and g, then f renamed to g: the build's JSC0201 at the second, and nothing else. */
     @Test
     void theNamespaceFixtureKeepsTheBuildsDuplicateNameError() {
-        String src = "jsc 2\npackage t\nfn %s(a: Int): Int = a + 1\nfn g(b: Int): Int = b * 2\ncontract C {\n  state { n: Int }\n"
+        String src = "jsc 1\npackage t\nfn %s(a: Int): Int = a + 1\nfn g(b: Int): Int = b * 2\ncontract C {\n  state { n: Int }\n"
                 + "  init() { return { n: 0 } }\n  action go() { return { ...state, n: g(n) } }\n}\n";
         assertTrue(JscLang.analyze(src.formatted("f"), "C.jsc").accepted());
         String renamed = src.formatted("g");
@@ -280,7 +279,7 @@ class JscLangRecoveryTest {
 
     @Test
     void theLexerReportsEveryCharacterAtTheBuildsPosition() {
-        String src = "jsc 2\npackage t\n// a‮b\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
+        String src = "jsc 1\npackage t\n// a‮b\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
                 + "  action go() { require(true, \"x\u0007y​z\"); return { ...state, n: 1 } }\n}\n";
         var m = JscLang.analyze(src, "C.jsc");
         assertEquals(List.of("JSC0145@3:5", "JSC0148@7:33", "JSC0145@7:35"), m.diagnostics().stream().map(d -> d.code() + "@" + d.line() + ":" + d.col()).toList());
@@ -291,7 +290,7 @@ class JscLangRecoveryTest {
     @Test
     void theParserResumesAtTheNextMemberAndStatement() {
         String src = """
-                jsc 2
+                jsc 1
                 package t
                 type P = { a: Int, }
                 fn bad(: Int = 1
@@ -405,11 +404,11 @@ class JscLangRecoveryTest {
         String std = JscLang.stdJson();
         assertTrue(std.contains("\"name\":\"sha2_256\""), std);
         assertTrue(std.contains("\"module\":\"prelude\",\"name\":\"min\""), std);
-        String src = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action go(by: Int) {\n    return { ...state, n: n + by }\n  }\n}\n";
+        String src = "jsc 1\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action go(by: Int) {\n    return { ...state, n: n + by }\n  }\n}\n";
         String lowered = JscLang.lowerJson(src, "C.jsc", null, null);
         assertTrue(lowered.startsWith("{\"ok\":true,\"javaFile\":\"t/C.java\""), lowered);
         assertTrue(lowered.contains("[6,"), lowered);   // line 6 of the .jsc file (the action) maps to a Java line
-        assertTrue(JscLang.lowerJson("jsc 2\npackage t\ncontract C {", "C.jsc", null, null).startsWith("{\"ok\":false"));
+        assertTrue(JscLang.lowerJson("jsc 1\npackage t\ncontract C {", "C.jsc", null, null).startsWith("{\"ok\":false"));
         assertEquals(Map.of(), Map.of());
     }
 }

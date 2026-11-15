@@ -48,13 +48,9 @@ class JscTextMateTest {
         var known = new TreeSet<String>();
         var v2 = parserWords(Path.of("src/main/java/org/julclang/state/dsl/v2/Parser.java"));
         v2.removeAll(HABITS);
-        var v1 = parserWords(Path.of("src/main/java/org/julclang/state/dsl/Parser.java"));
-        var v1Keywords = Pattern.compile("KEYWORDS = Set\\.of\\(([^)]*)\\)").matcher(Files.readString(Path.of("src/main/java/org/julclang/state/dsl/Parser.java")));
-        assertTrue(v1Keywords.find());
-        for (String w : v1Keywords.group(1).replaceAll("[\"\\s]", "").split(",")) v1.add(w);
         var std = new TreeSet<String>();
         for (var b : JscV2.bindings()) std.add(b.name());
-        for (var set : java.util.List.of(v2, v1, Checker.BUILTINS, Checker.PRELUDE, std)) known.addAll(set);
+        for (var set : java.util.List.of(v2, Checker.BUILTINS, Checker.PRELUDE, std)) known.addAll(set);
         // Forward: every word the front ends know is in the grammar (type names are matched by their own rule).
         var missing = new TreeSet<String>(known);
         missing.removeAll(grammar);
@@ -64,10 +60,10 @@ class JscTextMateTest {
         var extra = new TreeSet<String>(grammar);
         extra.removeAll(known);
         extra.removeAll(Set.of("Int", "Bool", "Bytes", "Key", "Hash", "List", "Option", "Map", "BigMap", "Value", "Address", "None", "Credential", "Instance",
-                "has", "isEmpty"));   // has and isEmpty: v1's calls (Lowering.FUNCTIONS)
+                "true", "false"));   // the literals (Parser.primary's case labels)
         assertEquals(Set.of(), extra, "words the TextMate grammar names that no front end knows");
         System.out.println("[textmate] " + grammar.size() + " grammar words; " + std.size() + " std bindings, " + Checker.PRELUDE.size()
-                + " prelude names, " + Checker.BUILTINS.size() + " built-ins, " + (v2.size() + v1.size()) + " parser words covered");
+                + " prelude names, " + Checker.BUILTINS.size() + " built-ins, " + v2.size() + " parser words covered");
     }
 
     @Test

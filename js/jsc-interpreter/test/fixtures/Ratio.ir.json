@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "f06a7584e2818c0d9711d3065c6a07a1603d575b473ec41665e197080ab2a74b",
+  "sourceSha256": "6512ad6e563230def19b9160f3f673c73c010bfb99adc9e11945f49a75e47314",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Ratio",
   "source": "Ratio.jsc",

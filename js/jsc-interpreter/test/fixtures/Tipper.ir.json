@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "aa9e03e4a9159edcccfc386e91ac95418e0892954c3317d1fc7951cc6b44c70b",
+  "sourceSha256": "ed9be6de1fb428161a81e0b486481be8ed80057c552bb89c6a303abf0a88f309",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Tipper",
   "source": "Tipper.jsc",

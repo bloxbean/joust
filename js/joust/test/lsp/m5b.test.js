@@ -11,7 +11,7 @@ import { ENGINE, HAS_ENGINE, startLsp, tmp, uriOf, VSCODE_CAPS } from './client.
 
 const skip = !HAS_ENGINE && 'needs the toolchain engine in js/joust/engine';
 
-export const SHOP = `jsc 2
+export const SHOP = `jsc 1
 package app
 
 type Line = { qty: Int, price: Int }

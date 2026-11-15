@@ -21,7 +21,7 @@ const at = (text, needle, delta = 0) => {
 const modelOf = (lsp, uri, v) => lsp.until(() => lsp.statuses.find((s) => s.uri === uri && s.modelVersion >= v), 30000, `the model of v${v}`);
 const apply = (text, edits) => TextDocument.applyEdits(TextDocument.create('x', 'jsc', 1, text), edits);
 
-const COUNT = `jsc 2
+const COUNT = `jsc 1
 package app
 
 contract Count {
@@ -103,8 +103,8 @@ test('F2: a name another file imports is not renamed in one file; a local one is
   const dir = tmp();
   mkdirSync(join(dir, 'contracts', 'app'), { recursive: true });
   writeFileSync(join(dir, 'joust.config.json'), '{ "contracts": "contracts" }');
-  const LIB = 'jsc 2\nlibrary app\n\ntype Fee = { bps: Int }\n\nfn fee(amount: Int, f: Fee): Int = amount * f.bps / 10000\n';
-  const USER = `jsc 2
+  const LIB = 'jsc 1\nlibrary app\n\ntype Fee = { bps: Int }\n\nfn fee(amount: Int, f: Fee): Int = amount * f.bps / 10000\n';
+  const USER = `jsc 1
 package app
 
 import { fee, Fee } from "./fees.jsc"
@@ -231,7 +231,7 @@ test('S2: a hostile file\'s errors are capped, it analyses quickly, and a valid 
   const dir = tmp();
   const lsp = await vscode(dir);
   try {
-    const head = 'jsc 2\npackage app\n\ncontract C {\n  state { n: Int }\n\n  init() {\n    return { n: 0 }\n  }\n';
+    const head = 'jsc 1\npackage app\n\ncontract C {\n  state { n: Int }\n\n  init() {\n    return { n: 0 }\n  }\n';
     const shapes = {
       unknown: head + Array.from({ length: 400 }, (_, i) => `  action a${i}() {\n    require(nope > 0, "x")\n    return state\n  }\n`).join('') + '}\n',
       unclosed: head + Array.from({ length: 1500 }, (_, i) => `  action a${i}( {\n    return state\n  }\n`).join('') + '}\n',
@@ -268,7 +268,7 @@ test('S2: a hostile file\'s errors are capped, it analyses quickly, and a valid 
 
 // ------------------------------------------------------------------ builds on save (C6, C7, F7)
 
-const SHOP = `jsc 2
+const SHOP = `jsc 1
 package app
 
 import { fee } from "@acme/fees/fees.jsc"
@@ -303,7 +303,7 @@ function libraryProject(root) {
   const fees = join(root, 'node_modules', '@acme', 'fees');
   mkdirSync(join(fees, 'joust-lib'), { recursive: true });
   writeFileSync(join(fees, 'package.json'), JSON.stringify({ name: '@acme/fees', version: '1.0.0' }));
-  writeFileSync(join(fees, 'joust-lib', 'fees.jsc'), 'jsc 2\nlibrary acme.fees\n\nfn fee(amount: Int): Int = amount / 100\n');
+  writeFileSync(join(fees, 'joust-lib', 'fees.jsc'), 'jsc 1\nlibrary acme.fees\n\nfn fee(amount: Int): Int = amount / 100\n');
   writeFileSync(join(root, 'contracts', 'app', 'Shop.jsc'), SHOP);
   return join(root, 'contracts', 'app', 'Shop.jsc');
 }
@@ -326,7 +326,7 @@ test('C6: the build reads the npm packages\' libraries as joust build does, and 
     const p = await lsp.until(() => lsp.published.find((x) => x.uri === uri && x.diagnostics.some((y) => y.code === 'JSC0003')), 60000, 'JSC0003');
     assert.ok(p);
     // A package library that does not check: the build fails, and says so (never zero errors on a failure).
-    writeFileSync(join(dir, 'node_modules', '@acme', 'fees', 'joust-lib', 'fees.jsc'), 'jsc 2\nlibrary acme.fees\n\nfn fee(amount: Int): Int = amount / nope\n');
+    writeFileSync(join(dir, 'node_modules', '@acme', 'fees', 'joust-lib', 'fees.jsc'), 'jsc 1\nlibrary acme.fees\n\nfn fee(amount: Int): Int = amount / nope\n');
     const f = await lsp.request('joust/checkBuild', { uri });
     assert.equal(f.ok, false, JSON.stringify(f));
     assert.ok(f.errors >= 1, JSON.stringify(f));
@@ -422,7 +422,7 @@ test('C11: an open importer not on disk yet keeps a library\'s name from being r
   const dir = tmp();
   mkdirSync(join(dir, 'contracts', 'app'), { recursive: true });
   writeFileSync(join(dir, 'joust.config.json'), '{ "contracts": "contracts" }');
-  const LIB = 'jsc 2\nlibrary app\n\nfn fee(amount: Int): Int = amount / 100\n';
+  const LIB = 'jsc 1\nlibrary app\n\nfn fee(amount: Int): Int = amount / 100\n';
   writeFileSync(join(dir, 'contracts', 'app', 'fees.jsc'), LIB);
   const lsp = await vscode(dir);
   try {
@@ -431,7 +431,7 @@ test('C11: an open importer not on disk yet keeps a library\'s name from being r
     await modelOf(lsp, uri, 1);
     // User.jsc exists only as an open buffer.
     const user = uriOf(join(dir, 'contracts', 'app', 'User.jsc'));
-    lsp.open(user, 'jsc 2\npackage app\n\nimport { fee } from "./fees.jsc"\n\ncontract User {\n  state { n: Int }\n\n  init() {\n    return { n: fee(100) }\n  }\n}\n');
+    lsp.open(user, 'jsc 1\npackage app\n\nimport { fee } from "./fees.jsc"\n\ncontract User {\n  state { n: Int }\n\n  init() {\n    return { n: fee(100) }\n  }\n}\n');
     const r = await lsp.request('joust/rename', { uri, position: at(LIB, 'fee(amount'), newName: 'charge', confirm: true });
     assert.equal(r.applied, false, JSON.stringify(r));
     assert.match(r.error, /import this one \((contracts\/)?app\/User\.jsc\)/, r.error);
@@ -505,8 +505,8 @@ test('C13: the snapshot budget is debited while reading: a file past it is not r
   const dir = tmp();
   const uri = uriOf(libraryProject(dir));
   const lib = join(dir, 'node_modules', '@acme', 'fees', 'joust-lib');
-  writeFileSync(join(lib, 'a-pad.jsc'), `jsc 2\nlibrary acme.pad\n\n// ${'x'.repeat(5000)}\n`);
-  writeFileSync(join(lib, 'b-pad.jsc'), `jsc 2\nlibrary acme.pad2\n\n// ${'x'.repeat(5000)}\n`);
+  writeFileSync(join(lib, 'a-pad.jsc'), `jsc 1\nlibrary acme.pad\n\n// ${'x'.repeat(5000)}\n`);
+  writeFileSync(join(lib, 'b-pad.jsc'), `jsc 1\nlibrary acme.pad2\n\n// ${'x'.repeat(5000)}\n`);
   writeFileSync(join(lib, 'zz-too-large.jsc'), `// ${'x'.repeat(3 * 1024 * 1024)}\n`);
   const lsp = await startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: { buildChars: 8000 } });
   try {

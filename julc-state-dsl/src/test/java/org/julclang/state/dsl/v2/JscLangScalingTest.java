@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
  */
 class JscLangScalingTest {
 
-    private static final String HEAD = "jsc 2\npackage app\n\ncontract C {\n  state { n: Int }\n\n  init() {\n    return { n: 0 }\n  }\n";
+    private static final String HEAD = "jsc 1\npackage app\n\ncontract C {\n  state { n: Int }\n\n  init() {\n    return { n: 0 }\n  }\n";
 
     static String invisible(int n) {
         return HEAD + "  // " + "​".repeat(n) + "\n}\n";

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package corpus
 
 // '[' on the next line starts a new expression: here the fn's value, a list.

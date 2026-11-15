@@ -183,14 +183,6 @@ def copyPortTests = tasks.register('copyPortTests', Sync) {
 }
 sourceSets.test.java.srcDir(files(portTestsOut).builtBy(copyPortTests))
 
-// ADR-0018 D16: the v1 files translated to .jsc 2, into build/jsc-migrated (src/main/jsc is not changed).
-tasks.register('migrateJsc', JavaExec) {
-    description = 'Translates the .jsc v1 files of src/main/jsc to .jsc 2, into build/jsc-migrated'
-    classpath = configurations.jsc
-    mainClass = 'org.julclang.state.dsl.JscMain'
-    args '--migrate', jscSrc.path, layout.buildDirectory.dir('jsc-migrated').get().asFile.path
-}
-
 // ADR-0018 D12: javac's diagnostics on the generated Java, reported again at their .jsc positions (as the plugin does).
 def javacLog = layout.buildDirectory.file('jsc/javac.log').get().asFile
 def remapJsc = tasks.register('remapJscDiagnostics', JavaExec) {

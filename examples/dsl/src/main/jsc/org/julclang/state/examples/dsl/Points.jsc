@@ -1,43 +1,36 @@
+jsc 1
 package org.julclang.state.examples.dsl
 
 // Loyalty points in a Map<Key, Int> (a MerkleMap: any number of holders, a 32-byte root on chain).
 contract Points(maxDatumBytes = 160) {
-    state admin: Key
-    state supply: Int
-    state points: Map<Key, Int>
+  state { admin: Key, supply: Int, points: BigMap<Key, Int> }
 
-    init() {
-        admin = caller
-    }
+  init() {
+    return { admin: caller, supply: 0, points: BigMap.empty() }
+  }
 
-    action award(to: Key, n: Int) only admin {
-        require n > 0 "award a positive amount"
-        points[to] += n
-        supply += n
-    }
+  action award(to: Key, n: Int) only admin {
+    require(n > 0, "award a positive amount")
+    return { ...state, supply: supply + n, points: points.set(to, points[to] + n) }
+  }
 
-    // Spending everything removes the holder.
-    action spend(n: Int) {
-        let have = points[caller]
-        require n > 0 && have >= n "not enough points"
-        if have == n {
-            delete points[caller]
-        } else {
-            points[caller] -= n
-        }
-        supply -= n
-    }
+  // Spending everything removes the holder.
+  action spend(n: Int) {
+    const have = points[caller]
+    require(n > 0 && have >= n, "not enough points")
+    return { ...state, supply: supply - n, points: points.set(caller, have == n ? 0 : points[caller] - n) }
+  }
 
-    action give(to: Key, n: Int) {
-        require n > 0 && points[caller] >= n "not enough points"
-        points[caller] -= n
-        points[to] += n
-    }
+  action give(to: Key, n: Int) {
+    require(n > 0 && points[caller] >= n, "not enough points")
+    const points1 = points[caller] - n
+    return { ...state, points: points.set(caller, points1).set(to, (to == caller ? points1 : points[to]) + n) }
+  }
 
-    destroy close() only admin {
-        require supply == 0 && isEmpty(points) "points are still out"
-        pay balance to admin
-    }
+  destroy close() only admin {
+    require(supply == 0 && points.isEmpty, "points are still out")
+    pay(admin, balance)
+  }
 
-    view pointsOf(who: Key): Int = points[who]
+  view pointsOf(who: Key): Int = points[who]
 }

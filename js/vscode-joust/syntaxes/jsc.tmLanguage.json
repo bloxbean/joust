@@ -6,7 +6,7 @@
   "fileTypes": [
     "jsc"
   ],
-  "comment": "JOUST's contract language: .jsc 2 (ADR-0018) and .jsc v1 (ADR-0005). The tree-sitter grammar (tree-sitter-jsc/) is the structural one; this grammar colours tokens for Shiki and VS Code.",
+  "comment": "JOUST's contract language, .jsc (ADR-0018). The tree-sitter grammar (tree-sitter-jsc/) is the structural one; this grammar colours tokens for Shiki and VS Code.",
   "patterns": [
     {
       "include": "#comments"
@@ -205,15 +205,11 @@
         },
         {
           "name": "storage.type.jsc",
-          "match": "\\b(const|let)\\b"
+          "match": "\\b(const)\\b"
         },
         {
           "name": "keyword.other.effect.jsc",
-          "match": "\\b(require|pay|send|mint|burn|accept|emit|deposit|delete)\\b"
-        },
-        {
-          "name": "keyword.other.to.jsc",
-          "match": "\\b(to)\\b(?=\\s+[A-Za-z_])"
+          "match": "\\b(require|pay|send|mint|burn|accept|emit|deposit)\\b"
         },
         {
           "name": "storage.modifier.jsc",
@@ -226,10 +222,6 @@
         {
           "name": "constant.language.boolean.jsc",
           "match": "\\b(true|false)\\b"
-        },
-        {
-          "name": "variable.language.this.jsc",
-          "match": "\\b(this)\\b"
         },
         {
           "name": "constant.language.option.jsc",
@@ -252,7 +244,7 @@
           }
         },
         {
-          "match": "\\b(min|max|abs|utf8|asKey|asHash|range|after|before|has|isEmpty|keyCred|scriptCred|wallet|script)\\s*(?=\\()",
+          "match": "\\b(min|max|abs|utf8|asKey|asHash|range|after|before|isEmpty|keyCred|scriptCred|wallet|script)\\s*(?=\\()",
           "captures": {
             "1": {
               "name": "support.function.builtin.jsc"

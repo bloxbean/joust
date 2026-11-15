@@ -1,6 +1,6 @@
-# `.jsc` 2 semantics
+# `.jsc` semantics
 
-What a checked `.jsc` 2 program evaluates to (ADR-0018 D15), for the constructs of milestone M1 (M0, M1a, and M1c's
+What a checked `.jsc` program evaluates to (ADR-0018 D15), for the constructs of milestone M1 (M0, M1a, and M1c's
 modifiers and batched actions), of M2a (values, addresses, credentials, funds, and the effects on native assets), of M2b
 (params, invariants, events, quorum and authorized) and of M2c (composition: other contracts' instances, read states,
 deposits made and received, send datums, stored values). It is

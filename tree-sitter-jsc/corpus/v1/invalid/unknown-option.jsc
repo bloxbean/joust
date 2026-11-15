@@ -1,2 +1,0 @@
-package p
-contract C(maxSize = 3) { state n: Int init() { } }

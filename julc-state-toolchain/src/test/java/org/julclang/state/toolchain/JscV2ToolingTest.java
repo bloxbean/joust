@@ -79,7 +79,7 @@ class JscV2ToolingTest {
         // A hand-written class of the same name as the contract, listed first: javac reports the duplicate on the
         // generated unit, at its class declaration.
         files.put("app/Dup.java", "package app;\nclass Counter {}\n");
-        files.put("app/Counter.jsc", "jsc 2\npackage app\n\ncontract Counter {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n");
+        files.put("app/Counter.jsc", "jsc 1\npackage app\n\ncontract Counter {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n");
         var r = Toolchain.build(files, Map.of());
         assertFalse(r.ok());
         var d = r.diagnostics().stream().filter(x -> "javac".equals(x.source()) && x.message().contains("duplicate class")).findFirst()
@@ -89,7 +89,7 @@ class JscV2ToolingTest {
     }
 
     static Toolchain.Result jsc(String name, String body) {
-        return Toolchain.build(Map.of("probe/" + name + ".jsc", "jsc 2\npackage probe\n" + body + "\n"), Map.of());
+        return Toolchain.build(Map.of("probe/" + name + ".jsc", "jsc 1\npackage probe\n" + body + "\n"), Map.of());
     }
 
     static void builds(String name, String body) {
@@ -194,8 +194,8 @@ class JscV2ToolingTest {
     void javacErrors_inSameNamedFilesOfTwoPackages_landOnTheRightJscFile() {
         var files = new LinkedHashMap<String, String>();
         files.put("app/Dup.java", "package app;\nclass Foo {}\n");
-        files.put("app/Foo.jsc", "jsc 2\npackage app\n\ncontract Foo {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n");
-        files.put("other/Foo.jsc", "jsc 2\npackage other\n\ncontract Foo {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n");
+        files.put("app/Foo.jsc", "jsc 1\npackage app\n\ncontract Foo {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n");
+        files.put("other/Foo.jsc", "jsc 1\npackage other\n\ncontract Foo {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n");
         var r = Toolchain.build(files, Map.of());
         var d = r.diagnostics().stream().filter(x -> "javac".equals(x.source()) && x.message().contains("duplicate class")).findFirst()
                 .orElseThrow(() -> new AssertionError(r.diagnostics().toString()));

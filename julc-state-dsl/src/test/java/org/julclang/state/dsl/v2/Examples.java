@@ -60,11 +60,11 @@ public final class Examples {
             java.util.List.of(), java.util.List.of("com.acme.L", "com.acme.L$P"))));
 
     /**
-     * Whether a source is a {@code .jsc} 2 contract (not v1, not a library) that this module can lower: one with
+     * Whether a source is a contract (not a library) that this module can lower: one with
      * {@code java:} imports needs the certifier (julc-state-toolchain), whose tests cover it (M4b).
      */
     public static boolean isContract(String text) {
-        return JscV2.isV2(text) && !JscV2.isLibrary(text) && !importsJava(text);
+        return !JscV2.isLibrary(text) && !importsJava(text);
     }
 
     /** Whether a source imports a Java library ({@code java:}). */
