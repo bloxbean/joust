@@ -267,45 +267,119 @@ class JscV2M3a3FourWayTest {
         return rec("Pass", Bytes.of(ANN), n(level));
     }
 
-    /** The two halves' verdicts in the last validator run: the arriving object's spend and the destination's. */
+    /** The two halves' verdicts in the last validator run of an admits action: the arriving object's spend, the destination's. */
     static boolean[] halves(FourWay f) {
         var r = f.lastVerdict.results();
         return new boolean[]{r.get("SPEND 2@0b0b0b0b").isSuccess(), r.get("SPEND 1@7a7a7a7a").isSuccess()};
     }
 
+    /** The same for a move's run: the moving object's spend, the destination's (the partner instance, OTHER_REF). */
+    static boolean[] moveHalves(FourWay f) {
+        var r = f.lastVerdict.results();
+        var object = r.entrySet().stream().filter(e -> e.getKey().startsWith("SPEND") && !e.getKey().contains("@0c0c0c0c")).toList();
+        assertEquals(1, object.size(), "one object spend: " + r.keySet());
+        return new boolean[]{object.get(0).getValue().isSuccess(), r.get("SPEND 0@0c0c0c0c").isSuccess()};
+    }
+
+    static Rec ferry(long arrivals) {
+        return rec("State", Bytes.of(MASTER), n(3), n(arrivals));
+    }
+
     /**
-     * K22: the admission reads the arriving object as its input holds it, never the move's result. Ferry's moves change
-     * the very field board reads: a level-1 pass lifted to 3 is refused at a level-3 ferry (it arrives at level 1), and a
-     * level-3 pass lowered to 1 is boarded (it arrives at level 3), on all five legs. The halves' verdicts say which side
-     * refuses: the move's spend is accepted in both, the destination's refuses only the lifted pass. A validator that
-     * read the move's output instead would board the lifted pass and refuse the lowered one, failing both vectors.
+     * Each half of a move reads the other half's input, never its outcome, and the vectors are chosen so that input and
+     * outcome give different verdicts, checked on five legs with each half's verdict asserted:
+     * <ul>
+     *   <li>K22 (#107 C2, round r2 C4): the admission reads the arriving pass as its input holds it. A level-1 pass lifted
+     *   to 3 is refused at a level-3 ferry, and the refusal's transaction proposes the ferry's unguarded outcome (one more
+     *   arrival), so only the admission's level check refuses it. A level-3 pass lowered to 1 is boarded.</li>
+     *   <li>Design F1: the move reads the destination as its input holds it. lift into a ferry with 1 arrival is accepted
+     *   although the ferry leaves with 2 (full), and lower onto an empty ferry is refused although it leaves with 1. The
+     *   harness asserts that the legs' into and arriving are the states the validator spends.</li>
+     *   <li>Design F5: an invariant by type broken through a move (lift from 4 to 6) and through an owned init (issueAt 6).</li>
+     * </ul>
+     * An admission that read the move's output would board the lifted pass (and refuse the lowered one); a move that read
+     * the destination's output would refuse the lift into a ferry with 1 arrival and lower onto an empty one.
+     * {@link #ferry_withoutItsAdmissionCheck_failsTheVector} runs the K22 refusal against the validator without its level
+     * check.
      */
     @Test
     @Order(4)
     void ferry() throws Exception {
         var f = LEGS.get("Ferry");
-        Rec ferry = rec("State", Bytes.of(MASTER), n(3), n(0));
-        f.defaultShared = ferry;
+        Rec empty = ferry(0), one = ferry(1);
+        f.defaultShared = empty;
         ok(f.check("init", null, List.of(n(3)), at(MASTER, 0, 0), MASTER));
-        // Low in, high out: refused at the destination.
-        f.partner = new FourWay.Partner("lift", pass(1), List.of(), null, ferry);
-        assertEquals("refused", f.check("board", ferry, List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(1)), ANN));
+        ok(f.check("issue", null, List.of(), at(ANN, 0, 0).withShared(empty), ANN));
+        // K22, low in, high out: refused at the destination, whose unguarded outcome (one more arrival) is proposed.
+        f.partner = new FourWay.Partner("lift", pass(1), List.of(), null, one);
+        f.unguarded(ferry(2), List.of());
+        assertEquals("refused", f.check("board", one, List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(1)), ANN));
         assertTrue(f.lastRefusal.endsWith(":below the ferry's level"), f.lastRefusal);
         boolean[] lifted = halves(f);
         assertTrue(lifted[0] && !lifted[1], "the lift's spend accepted, the destination's refused: " + f.lastVerdict);
-        // High in, low out: boarded, and the move checked from its own side too.
-        f.partner = new FourWay.Partner("lower", pass(3), List.of(), null, ferry);
-        ok(f.check("board", ferry, List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(3)), ANN));
+        // K22, high in, low out: boarded.
+        f.partner = new FourWay.Partner("lower", pass(3), List.of(), null, one);
+        ok(f.check("board", one, List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(3)), ANN));
         boolean[] lowered = halves(f);
         assertTrue(lowered[0] && lowered[1], "both halves accepted: " + f.lastVerdict);
-        f.partner = new FourWay.Partner("board", ferry, List.of(), null, null);
-        ok(f.check("lower", pass(3), List.of(), at(ANN, 0, 0).withInto(ferry), ANN));
-        assertEquals("refused", f.check("lower", pass(2), List.of(), at(ANN, 0, 0).withInto(ferry), ANN));
-        f.partner = new FourWay.Partner("lower", pass(3), List.of(), null, ferry);
-        f.mutants("board", ferry, List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(3)), ANN);
+        // F1, from the move's side: lift into a ferry with 1 arrival (the input has room; the ferry leaves full).
+        f.partner = new FourWay.Partner("board", one, List.of(), null, null);
+        ok(f.check("lift", pass(3), List.of(), at(ANN, 0, 0).withInto(one), ANN));
+        boolean[] full = moveHalves(f);
+        assertTrue(full[0] && full[1], "both halves accepted: " + f.lastVerdict);
+        // A full ferry (2 arrivals): the lift is refused, its unguarded pass proposed.
+        f.partner = new FourWay.Partner("board", ferry(2), List.of(), null, null);
+        f.unguarded(pass(5), List.of());
+        assertEquals("refused", f.check("lift", pass(3), List.of(), at(ANN, 0, 0).withInto(ferry(2)), ANN));
+        assertTrue(f.lastRefusal.endsWith(":the ferry is full"), f.lastRefusal);
+        // F1: lower onto an empty ferry (the input has boarded no one; the ferry leaves with 1), its unguarded pass proposed.
+        f.partner = new FourWay.Partner("board", empty, List.of(), null, null);
+        f.unguarded(pass(1), List.of());
+        assertEquals("refused", f.check("lower", pass(3), List.of(), at(ANN, 0, 0).withInto(empty), ANN));
+        assertTrue(f.lastRefusal.endsWith(":the ferry has not sailed yet"), f.lastRefusal);
+        boolean[] notSailed = moveHalves(f);
+        assertTrue(!notSailed[0] && notSailed[1], "the move's spend refused, the destination's accepted: " + f.lastVerdict);
+        f.partner = new FourWay.Partner("board", one, List.of(), null, null);
+        ok(f.check("lower", pass(3), List.of(), at(ANN, 0, 0).withInto(one), ANN));
+        assertEquals("refused", f.check("lower", pass(2), List.of(), at(ANN, 0, 0).withInto(one), ANN));
+        // F5: the type's invariant (level <= 5) broken through a move and through an owned init.
+        f.invariantRefused("invariant:cap", "lift", pass(4), List.of(), at(ANN, 0, 0).withInto(one), ANN);
+        ok(f.check("issueAt", null, List.of(n(5)), at(ANN, 0, 0).withShared(empty), ANN));
+        f.invariantRefused("invariant:cap", "issueAt", null, List.of(n(6)), at(ANN, 0, 0).withShared(empty), ANN);
+        f.partner = new FourWay.Partner("lower", pass(3), List.of(), null, one);
+        f.mutants("board", one, List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(3)), ANN);
+        f.partner = new FourWay.Partner("board", one, List.of(), null, null);
+        f.mutants("lift", pass(3), List.of(), at(ANN, 0, 0).withInto(one), ANN);
         f.partner = null;
         ok(f.check("scrap", pass(3), List.of(), at(ANN, 0, f.harness.minAda()), ANN));
         JsLeg.check(f);
         report(f);
+    }
+
+    /**
+     * #107 round-r2 review C4: the K22 refusal fails without the admission's level check. The validator is rebuilt from
+     * Ferry's lowering with only that check removed and installed in a fresh leg (the other legs unchanged): the refused
+     * board, whose transaction proposes the unguarded outcome, is then accepted by the validator alone, so the vector
+     * reports "validator vs interpreter".
+     */
+    @Test
+    @Order(5)
+    void ferry_withoutItsAdmissionCheck_failsTheVector() throws Exception {
+        String source = Files.readString(DSL.resolve("Ferry.jsc"));
+        String java = org.julclang.state.dsl.v2.JscV2.lower(source, "Ferry.jsc").java();
+        String guard = java.lines().filter(l -> l.contains("below the ferry's level")).findFirst().orElseThrow();
+        assertTrue(guard.contains("Require.that("), guard);
+        String mutated = java.replace(guard + "\n", "");
+        var built = Toolchain.build(Map.of("org/julclang/state/examples/dsl/Ferry.java", mutated), Map.of());
+        assertTrue(built.ok(), built.diagnostics().toString());
+        var f = new FourWay("Ferry", source, LEGS.get("Ferry").transitions);
+        f.useScript(built.contracts().get(0).scriptCborHex());
+        f.defaultShared = ferry(0);
+        f.partner = new FourWay.Partner("lift", pass(1), List.of(), null, ferry(1));
+        f.unguarded(ferry(2), List.of());
+        var e = assertThrows(org.opentest4j.AssertionFailedError.class,
+                () -> f.check("board", ferry(1), List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(1)), ANN));
+        assertTrue(e.getMessage().contains("validator vs interpreter"), e.getMessage());
+        System.out.println("[M3a3 C4] the K22 refusal against the validator without its level check: " + f.lastVerdict);
     }
 }

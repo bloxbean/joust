@@ -54,6 +54,12 @@ class JscV2M3a2GateTest {
     static final byte[] ADMIN = StateHarness.fill(28, 0xAD), ANN = StateHarness.fill(28, 0xA1), BEN = StateHarness.fill(28, 0xB2);
     static final byte[] POLICY = StateHarness.fill(28, 0x5E), GOLD = "GOLD".getBytes();
     static final int RUNTIME_LIMIT = 15_000;
+    /**
+     * #104 review F1: J11's exception, as ADR-0018 §8 states it (a Java example over 14 KB: the port within +15% of it and
+     * at most the runtime's limit), pinned at each port's recorded size with a 100-byte slack, so growth is justified again.
+     */
+    static final Map<String, Integer> RECORDED = Map.of("Locker", 14_812, "Safes", 14_935);
+    static final int SLACK = 100;
     static final String JAVA = "org/julclang/state/examples/locker/", DSL = "org/julclang/state/examples/dsl/";
     static final Map<String, int[]> SIZES = new LinkedHashMap<>();
     static final List<String> ROWS = new ArrayList<>();
@@ -78,6 +84,12 @@ class JscV2M3a2GateTest {
                     s[0] < SIZE_LIMIT ? "below" : "over", s[1] < SIZE_LIMIT ? "below" : "over");
             assertTrue(ratio <= BOUND, c + ": " + s[1] + " B is more than 15% above Java's " + s[0] + " B");
             assertTrue(s[1] <= RUNTIME_LIMIT, c + ": " + s[1] + " B is over the runtime's reference-script limit");
+            if (s[0] >= SIZE_LIMIT) {
+                assertTrue(s[1] <= RECORDED.get(c) + SLACK, c + ": " + s[1] + " B, more than " + SLACK + " B over its recorded " + RECORDED.get(c)
+                        + " B (J11's exception, ADR-0018 §8): record the growth and its reason");
+            } else {
+                assertTrue(s[1] < SIZE_LIMIT, c + ": " + s[1] + " B is not below 14 KB, and its Java example is");
+            }
         });
     }
 

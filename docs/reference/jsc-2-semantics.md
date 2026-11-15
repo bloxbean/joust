@@ -368,6 +368,15 @@ a record (§1), compared and encoded as one. Owned methods name their type: `own
   the validator refuses it when either half refuses. No order between the halves is defined beyond that: a tool that
   runs both reports the first refusal it meets (the runtime's `Compose`, in the order calls were added). An object
   arrives only from an instance of the same policy, so its datum is this contract's own output and not a checked input.
+  **What an admission holds for** (#107 round-r2 review S3): the admits action's conditions hold for the object as it
+  arrives, its input, not for the object that lands: the move's half may change it (Ferry's `lower` of a level-3 pass
+  boards it although the ferry then holds a level-1 pass, whose admission requires level 3). Both halves are the
+  contract's own code, so this is not a bypass, but an author who wants "every object here satisfies P" checks P on the
+  move's side too (or with an invariant by type). **One move per destination per transaction** (ADR-0012 D3): the
+  destination has one redeemer, so one admits action, which names one object; a second object moving into the same
+  instance in that transaction is refused.
+- **Moves of objects that keep a `BigMap`** are refused (JSC1212 at the `into` parameter, #107 round-r2 review F6) until
+  a test runs one: such an object's map claims are keyed to its input while it continues under another instance.
 - **Invariants by type** (M3a3, ADR-0012 D1): `invariant T.name = …` reads an object of type `T` (its fields as bare
   names) and is checked on every continuing object of that type (an owned init's, an owned action's, a move's), never
   on another type's objects or on the state. A type that keeps a `BigMap` has none (JSC1213).

@@ -111,6 +111,16 @@ const KINDS = set('init', 'action', 'destroy', 'view', 'ownedInit', 'ownedAction
 // assets in owned methods, payable owned destroys; 3: moves and invariants by type), as the Java reader's OWNED_STAGE.
 const OWNED_STAGE = 3;
 
+/** Whether raw IR reads balance (a CtxRef of that name), at any depth (#101 review C4). */
+function readsBalance(json) {
+  if (Array.isArray(json)) return json.some(readsBalance);
+  if (json !== null && typeof json === 'object') {
+    if (json.node === 'CtxRef' && json.name === 'balance') return true;
+    return Object.values(json).some(readsBalance);
+  }
+  return false;
+}
+
 /** Whether raw IR holds a statement or expression node of one of the names, at any depth. */
 function hasNode(json, names) {
   if (Array.isArray(json)) return json.some((v) => hasNode(v, names));
@@ -460,7 +470,17 @@ export function validate(p) {
   if ('owned' in p) {
     if (!Array.isArray(p.owned) || p.owned.length === 0) fail('owned', 'a non-empty list, absent when there are none');
     for (const o of p.owned) if (!p.records.some((r) => r.name === o) || p.owned.indexOf(o) !== p.owned.lastIndexOf(o)) fail('owned', `${o} is not one record`);
+    // #101 review C3 (round r2): M3a2's owned-type forms (several owned types, a BigMap in an owned type) are staged.
+    if (OWNED_STAGE < 2 && p.owned.length > 1) fail('owned', `a second owned type (${p.owned[1]}) is not produced yet (M3a2; JSC1215)`);
+    for (const o of p.owned) {
+      const r = p.records.find((x) => x.name === o);
+      if (OWNED_STAGE < 2 && r.fields.some((f) => f.type !== null && typeof f.type === 'object' && 'bigmap' in f.type)) {
+        fail('owned', `a BigMap in the owned type ${o} is not produced yet (M3a2; JSC1215)`);
+      }
+    }
   }
+  const keepsBigMap = (t) => (p.records.find((r) => r.name === t)?.fields ?? [])
+    .some((f) => f.type !== null && typeof f.type === 'object' && 'bigmap' in f.type);
   const ownedKind = (k) => k === 'ownedInit' || k === 'ownedAction' || k === 'ownedDestroy';
   for (const m of p.methods) {
     const where = `method ${m.name}`;
@@ -468,6 +488,8 @@ export function validate(p) {
     // "arriving" only for owned methods, moves and admits actions.
     const extra = ['reads', 'on', 'shared', 'into', 'arriving'].filter((k) => k in m);
     keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...extra, 'usesCtx', 'pays', 'result', 'body', 'at'], where);
+    // #101 review C5 (round r2): a present null is a malformed field, not an absent one (as the Java reader reads them).
+    for (const k of extra) if (m[k] === null) fail(where, `"${k}" is null: an absent field is not written`);
     if (!Array.isArray(m.mods)) fail(where, 'mods is not a list');
     if (!KINDS.has(m.kind)) fail(where, `unknown kind ${m.kind}`);
     if (methodNames.has(m.name)) fail(where, 'two methods of that name');
@@ -488,6 +510,17 @@ export function validate(p) {
       fail(where, 'native assets in an owned method (accept, send, mint, burn, deposit, funds) are not produced yet (M3a2; JSC1215)');
     }
     if (OWNED_STAGE < 3 && ('into' in m || 'arriving' in m || admits)) fail(where, 'moves (into, admits) are not produced yet (M3a3; JSC1215)');
+    // #107 round-r2 review C5, F7: the shapes stage 3 admits, as the checker produces them (and as the Java reader).
+    if ('into' in m && 'on' in m && keepsBigMap(m.on)) fail(where, `${m.on} keeps a BigMap, so it cannot move yet (JSC1212)`);
+    if (admits) {
+      if (!Array.isArray(m.params) || m.params.length === 0 || m.params[0] === null || m.params[0].type !== 'Bytes') {
+        fail(where, 'an admits action\'s first parameter is the arriving object\'s id, a Bytes (JSC1212)');
+      }
+      if (m.mods.some((x) => x && x.name === 'batched')) fail(where, 'an admits action cannot be batched (JSC1212)');
+      if ('arriving' in m && keepsBigMap(admits.field)) {
+        fail(where, `the arriving ${admits.field} keeps a BigMap, so an admits action cannot take it as a parameter (JSC1212)`);
+      }
+    }
     const scope = new Set();
     if ('shared' in m) {
       decl(m.shared, where, scope);
@@ -556,6 +589,13 @@ export function validate(p) {
       fail('owned', `the owned type ${o} has no escape hatch: an owned destroy without shared, before or after (JSC1209)`);
     }
   }
+  // #101 review C4 (round r2): an escape hatch that never reads balance could never pay out what its object holds (JSC1216).
+  for (const m of p.methods) {
+    if (m.kind === 'ownedDestroy' && !('shared' in m) && !m.mods.some((x) => x && (x.name === 'before' || x.name === 'after'))
+      && !readsBalance(m.body)) {
+      fail(`method ${m.name}`, 'it is its type\'s escape hatch but never reads balance (JSC1216)');
+    }
+  }
   keyedRules(p, owned, fail, keys);
   for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${n}`);
   // M2b: invariants, each a Bool over the state and the params, with names of their own.
@@ -565,6 +605,8 @@ export function validate(p) {
       const where = `invariant ${inv.name}`;
       keys(inv, ['name', ...('on' in inv ? ['on'] : []), 'body', 'at'], where);
       if ('on' in inv && !owned.includes(inv.on)) fail(where, `${inv.on} is not an owned type`);
+      // #107 round-r2 review F7: an owned type that keeps a BigMap has no invariants (JSC1213).
+      if ('on' in inv && keepsBigMap(inv.on)) fail(where, `the owned type ${inv.on} keeps a BigMap, so it has no invariants (JSC1213)`);
       if ('on' in inv && OWNED_STAGE < 3) fail(where, 'an owned type\'s invariant is not produced yet (M3a3; JSC1215)');
       if (names.has(inv.name) || methodNames.has(inv.name) || fnNames.has(inv.name)) fail(where, 'a name taken by another method, fn or invariant');
       names.add(inv.name);

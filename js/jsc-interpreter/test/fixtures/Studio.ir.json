@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "dafa7e95e4995c53c249c5b2752512433757c4f967e5d6a19c2e749ebc787d7e",
+  "sourceSha256": "d49384d23a00624ff631c13b9623740f3f9360ec2a16a83dfec468cb67dc1fe9",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Studio",
   "source": "Studio.jsc",
@@ -474,6 +474,46 @@
       "at": [58, 3]
     },
     {
+      "kind": "ownedDestroy",
+      "name": "tip",
+      "on": "Seat",
+      "shared": {
+        "id": 8,
+        "name": "s",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [65, 26],
+        "fieldTaints": { "fee": 0, "host": 0, "isOpen": 0 }
+      },
+      "params": [],
+      "mods": [{ "name": "payable" }, { "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 8, "type": { "record": "State" }, "taint": 0, "at": [66, 9] },
+              "record": "State",
+              "field": "host",
+              "type": "Key",
+              "taint": 0,
+              "at": [66, 9]
+            },
+            "amount": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [66, 17] },
+            "at": [66, 5]
+          }
+        ],
+        "result": null,
+        "at": [65, 50]
+      },
+      "at": [65, 3]
+    },
+    {
       "kind": "view",
       "name": "isOpen",
       "params": [],
@@ -484,11 +524,18 @@
       "result": "Bool",
       "body": {
         "stmts": [],
-        "result": { "node": "StateField", "field": "isOpen", "type": "Bool", "taint": 0, "at": [62, 25] },
-        "at": [62, 25]
+        "result": { "node": "StateField", "field": "isOpen", "type": "Bool", "taint": 0, "at": [69, 25] },
+        "at": [69, 25]
       },
-      "at": [62, 3]
+      "at": [69, 3]
     }
   ],
-  "warnings": []
+  "warnings": [
+    {
+      "line": 65,
+      "col": 3,
+      "code": "JSC9001",
+      "message": "tip never reads balance; a destroy must pay out everything the object holds"
+    }
+  ]
 }
