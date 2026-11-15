@@ -2,6 +2,7 @@
 // the protocol thread, i.e. INCLUDING the model's export across the engine boundary):
 //   - analysis latency, median and p95 over 100 warm calls, for Ledger.jsc and the 509- and 1,889-line files made from it
 //     (L10: p95 at most 50 ms for the 1,889-line file);
+//   - formatting latency for the 1,889-line file, re-indented and as it is (ADR-0021 r9 §15 F6: p95 at most 60 ms);
 //   - the process's RSS with one analysis worker (L10: at most 600 MB), with two analysis workers, and with two analysis
 //     workers and a build worker after three Ledger builds (D4's largest configuration; L10: at most 1.2 GB).
 // Usage: node js/joust/test/lsp/measure-l10.mjs [--check]   (--check: fail past CI's looser bounds, 250 ms p95 (about 3x
@@ -68,6 +69,24 @@ for (const [name, src] of files) {
   out.latency.lower1889 = { median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2) };
   out.latency.ratio = +(out.latency['Ledger1889.jsc'].median / out.latency.lower1889.median).toFixed(3);
 }
+// ADR-0021 r9 §15 F6 (M5d): formatting the 1,889-line file in the same worker (warm), as the server asks for it: the file
+// with its indentation stripped (every line re-indented) and as it is (formatted: no change).
+{
+  const src = files[2][1];
+  const messy = src.replace(/^ +/gm, '');
+  for (const [key, text] of [['format1889', messy], ['format1889Formatted', src]]) {
+    const ts = [];
+    for (let k = 0; k < 110; k++) {
+      const t = performance.now();
+      const r = await host.request('a', engine, { op: 'format', source: text + ' '.repeat(k) }, { input: `${key}${k}`, what: 'the formatting', timeoutMs: 30000 });
+      const f = r.model ? JSON.parse(r.model) : null;
+      if (!f?.ok) throw new Error(`formatting failed: ${r.internal?.message ?? f?.error?.message}`);
+      if (k >= 10) ts.push(performance.now() - t);
+    }
+    out.latency[key] = { median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2) };
+  }
+  out.latency.formatRatio = +(out.latency.format1889.median / out.latency.lower1889.median).toFixed(3);
+}
 out.rss.oneAnalysisWorker = mb();
 await host.info('b', { ...engine, id: 'measure-b' });
 await host.analyze('b', { ...engine, id: 'measure-b' }, { file: 'Ledger.jsc', source: ledger });
@@ -96,6 +115,8 @@ const results = [
   // CI's runner measured 86.7 ms (run 43350031856); its bound is set about 3x above that, to catch regressions without
   // flaking on a noisy runner (#83 review F9). L10's strict bound (60 ms since r7, #99 F3) is for §1's reference machine.
   ['p95 (1,889 lines)', bound(out.latency['Ledger1889.jsc'].p95, 60, 250)],
+  // F6 (M5d): formatting the 1,889-line file, the same bounds as its analysis.
+  ['formatting p95 (1,889 lines)', bound(out.latency.format1889.p95, 60, 250)],
   ['RSS, one analysis worker (MB)', bound(out.rss.oneAnalysisWorker, 600, 900)],
   ['RSS, two analysis workers and a build worker (MB)', bound(out.rss.twoAnalysisWorkersAndABuildWorker, 1229, 1800)],
 ];
@@ -111,6 +132,10 @@ results.push(['model of 1,889 lines (characters)', check ? out.latency['Ledger18
 }
 results.push(['analysis / lowering, median (1,889 lines)', check ? out.latency.ratio <= 0.5 && { v: out.latency.ratio, strict: 0.5, withinStrict: true }
   : { v: out.latency.ratio, strict: 0.5, withinStrict: out.latency.ratio <= 0.5 }]);
+// F6 (M5d): a guard that does not depend on the runner: formatting the re-indented 1,889-line file takes at most half its
+// lowering (0.106 at M5d).
+results.push(['formatting / lowering, median (1,889 lines)', check ? out.latency.formatRatio <= 0.5 && { v: out.latency.formatRatio, strict: 0.5, withinStrict: true }
+  : { v: out.latency.formatRatio, strict: 0.5, withinStrict: out.latency.formatRatio <= 0.5 }]);
 let failed = 0;
 for (const [what, r] of results) {
   if (!r) {

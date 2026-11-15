@@ -1305,6 +1305,32 @@ refused by the lexer, F4); the longest lines (no wrapping: a line's length chang
 headerless `jsc 1` form and the explicit header; a byte order mark; tabs (indentation replaced, a tab inside a string or
 a comment kept); an empty file and a file of comments only.
 
+**As built (M5d).**
+
+- **Core:** `JscFormat` (julc-state-dsl) formats over the lexer's token and comment spans (`Lexer.lex(src, comments)`),
+  not over the `Syntax` tree, so F4 of §1 (the tree holds no trivia) needs no change to the parser. `JscLang.formatJson`
+  is the one entry: `{ok, text, edits}`, where the edits are the formatted text's changes item by item (the whitespace
+  between two items, or a comment's own line ends and trailing spaces) as UTF-16 offsets of the source; or
+  `{ok: false, error: {code, line, col, message}}`. The engine's `lang.format` wraps it, and `lang.info` lists `format`.
+- **Front ends:**
+  - `jsc --fmt [--check] <file or dir>...` (`JscMain`);
+  - `joust fmt [--check] [paths]` (`contracts/` by default; the engine's `lang.format`);
+  - the server's `textDocument/formatting` (one edit of the whole document, or none) and `rangeFormatting` (the edits
+    that end in the range).
+
+  Both are offered to the clients that get completion (D4a). The CLIs write a file only when its text changes, through a
+  temporary file renamed over it.
+- **Measured:**
+  - The tests format the corpus: 49 files, 147 generated layouts, and 61 refusals, all of them files marked invalid.
+  - The toolchain builds 34 contracts 204 times (formatted, from layouts, with formatted libraries), and every script hash,
+    size and ABI manifest stays the same.
+  - The engine's parity covers 166 cases, byte for byte.
+  - F6: formatting the 1,889-line file takes 12.8 ms p95 (re-indented) and 11.0 ms p95 (already formatted) in the
+    server's worker, warm. That is 0.106 of its lowering's median, and `measure-l10` guards it at 0.5.
+- **Fuzzing:** the generated layouts are the property test, seeded and run in every build. The #95 verification
+  infrastructure is not on this stack, so no separate fuzz target is added. One belongs there once it lands, with
+  `JscFormatTest`'s invariants as its oracle.
+
 ## Revision history
 
 - **r1** (2026-11-13): initial proposal, with the measurements of §1 (toolchain and front-end-only Web Images, JVM
@@ -1431,4 +1457,7 @@ a comment kept); an empty file and a file of comments only.
   commitment was met.
 - **r9** (2026-11-15; with the M5d implementation): §15 states the formatter before its code: the style, invariants
   F1–F6 (L12's hash and IR, idempotence, comments, refusal of files that do not parse, engine parity, latency) and the
-  attack and edge vectors; L7 points to it.
+  attack and edge vectors; L7 points to it. The as-built notes follow the code. The indentation rule (one level per line that opens brackets,
+  back to the opener's line at a closer) and F4's parse of a file alone (imported names, then every capitalised name
+  for an imported enum's variants) are stated as the implementation needed them. #119 (C14–C17, F14 on #115) is
+  folded in.
