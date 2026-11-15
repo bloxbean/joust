@@ -4,7 +4,8 @@
 that M5a's implementation (#83) made, which its reviews asked for, and was approved with #83. r7a records the project
 reading that the `.jsc` 2 integration (#98) brought forward from M5c; r7 records M5b's amendments (§13, #99), approved
 with #99; r7b records the `.jsc` v1 removal (#111); r8 records M5c's (§14, #115), approved with #115; r9 records M5d's
-formatter (§15), to be reviewed with its PR.
+formatter (§15), reviewed with #120; r10 states M5e (§16: other editors, the tree-sitter package, docs, the release
+attachment and the editor's `joust.lock` gate), to be reviewed with its PR.
 **Date:** 2026-11-13
 **Builds on:** ADR-0018 (`.jsc`, called `.jsc` 2 before its r26), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
 D3 (names), D9 (libraries and `java:` imports, built in M4), D12 (stable codes, source maps, generated Java, ABI
@@ -872,7 +873,7 @@ it. The Web Image gains entries and reachability metadata for the model's record
 | M5b | Recovery (lexer, parser, checker) and the remaining spans and reference mapping; hover, definition and references within a file, semantic tokens, completion, rename within a file, quick fixes and **Remove invisible characters…**, generated-Java view, ABI diff and **Accept ABI…** (D7a, with ADR-0018's D12 acceptance change), build diagnostics on save (worker) | M5a exit (Q1(b): may run alongside ADR-0018 M2/M3, with L5's corpus test in their front-end PRs) | L1 (recovered), L5, L6, L12, L13 tested; the recovery mutation corpus and the save tests green; latency still within L10. *(r7, M5b)* How each is tested: §13 note 9 |
 | M5c | Across files: `.jsc` libraries, `import contract`, `java:` imports (read-only library documents), project-wide references and rename, library signature cache. *(r7)* The index (references, types, expressions) leaves the per-edit diagnostics path (built on the first navigation request of a version, or behind its own entry), or L10 is revisited in this ADR with measurements: L10's model-size guard is not raised to make room for cross-file data. *(r8)* Built in #115: the index left the per-edit path (§14 note 1); the java: libraries' signature cache is keyed by the engine and the SHA-256 of the sources read, in the server's private storage (outside every workspace folder, as the engine copies; not per workspace: a content key is safe to share) | M5b exit; ADR-0018 M4 exited; javac attribution cost in the engine measured | definition and references across a `.jsc` library and into a Java library in the language server's protocol tests (`m5c.test.js`, `m5c-r2.test.js`) and the extension's (`cross` electron scenario) *(r8, F5 on #115: not the template's)*; L6 and L12 across files; L10 with its CI guards |
 | M5d | Formatter: trivia-preserving lexing, `joust fmt`, `textDocument/formatting`. *(r9)* Its invariants and vectors: §15 | M5b exit (M1e's message scheme is in place since M5a) | L7 and L12 over the corpus and generated layouts |
-| M5e | Other editors: Neovim and Helix configurations (a user-installed `joust-lsp`), the tree-sitter grammar packaged with its queries, docs; the `.vsix` attached to a release for maintainers to publish (D11). *(r8, F13 on #115)* The `joust.lock` gate (ADR-0018 J12) on the on-save build, deferred from M5c (D4) | M5a exit (configurations), M5c exit (docs complete); the namespaces claimed and Q4 decided (D11) | the release checklist run by hand on each editor; the docs test refusing `npx joust` green; the on-save build reports J12's errors as `joust build` does |
+| M5e | Other editors: Neovim and Helix configurations (a user-installed `joust-lsp`), the tree-sitter grammar packaged with its queries, docs; the `.vsix` attached to a release for maintainers to publish (D11). *(r8, F13 on #115)* The `joust.lock` gate (ADR-0018 J12) on the on-save build, deferred from M5c (D4). *(r10)* Its invariants and vectors: §16 | M5a exit (configurations), M5c exit (docs complete); the namespaces claimed and Q4 decided (D11) | the release checklist run by hand on each editor; the docs test refusing `npx joust` green; the on-save build reports J12's errors as `joust build` does |
 
 Recommendation: ADR-0018's recommendation gate (`.jsc` 2 recommended once M2 and M4 exit and the security review
 passes) does not depend on M5; the extension is labelled preview while `.jsc` 2 is.
@@ -1331,6 +1332,75 @@ a comment kept); an empty file and a file of comments only.
   infrastructure is not on this stack, so no separate fuzz target is added. One belongs there once it lands, with
   `JscFormatTest`'s invariants as its oracle.
 
+## 16. Other editors, the tree-sitter package, docs, the release attachment and the editor's lock gate (M5e, r10)
+
+Written before the code. M5e is ADR-0021's last row: nothing here adds a capability to the server (D10's allow-list is
+unchanged), and nothing is published. The Marketplace publisher, Open VSX namespaces and Q4 stay maintainer
+decisions (D11); M5e builds what they publish from.
+
+**Scope.**
+
+1. **The `joust.lock` gate in the editor** (ADR-0018 J12; D4 deferred it from M5c). The on-save build (trusted,
+   project-matched npm projects only, as today) also checks the libraries it used against the project's `joust.lock`
+   and reports J12's errors as diagnostics. It never writes or accepts the lock: acceptance stays `joust build
+   --accept-lock`, run by the user and reviewed in a commit.
+2. **Neovim and Helix configurations** (D3b, D9) under `editors/`: a Neovim Lua module for `vim.lsp.config` (0.11+)
+   and a Helix `languages.toml` fragment, both naming a **user-installed** `joust-lsp --stdio` by absolute path, with
+   the tree-sitter grammar and its queries for highlighting.
+3. **The tree-sitter package:** one archive with the grammar, the generated parser (ADR-0018 D13 r13 keeps it out of
+   the repository, so it goes into the archive), the queries, `tree-sitter.json` and the licence. It is laid out for
+   Neovim's and Helix's runtime directories too, and built reproducibly from the pinned `tree-sitter-cli`. Not
+   published to npm or crates.io (D9: a release decision).
+4. **Docs:** an editors page on the site (VS Code, Neovim, Helix, other LSP clients, the tree-sitter package), with
+   the warnings D3b requires.
+5. **The release attachment** (D11): the `.vsix` and the tree-sitter archive attached to an existing GitHub release with
+   their SHA-256 and build-provenance attestations, by a workflow a maintainer runs. Publishing from them stays by hand.
+
+**Invariants** (each with its test):
+
+| # | Invariant | Checked by |
+|---|---|---|
+| E1 | **The editor's lock gate agrees with `joust build`.** On the same inputs (the project's sources, its npm packages' libraries and the bytes of `joust.lock`), the on-save build reports J12 errors exactly when `joust build` refuses for J12, with the same codes (JSC0731 not pinned, JSC0732 changed or unreadable), library names and hashes. Both decide through one function, `lockDecision`, and a differential test runs `joust build` and the server on the same vectors and compares them. An unused pin is not an error in either | `lock` vectors: the server's diagnostics against `joust build`'s lines |
+| E2 | **The editor never writes or accepts the lock.** The on-save build gets no accept flag, the server writes no file (L3), and no command, code action or setting accepts a lock | the same tests: `joust.lock` bytes and mtime unchanged; the allow-list test |
+| E3 | **The lock is a snapshot input and is read confined.** `joust.lock` is read from the project root through D4b's reader (real path inside the folder, a regular file, capped at 1 MiB). It is part of the build's digest and of the files whose change ends a build's results (D4a). A lock the reader refuses (a link leaving the folder, a directory, a FIFO, over the cap) is JSC0732 "cannot be read". This is stricter than `joust build`, which follows a link: the editor fails closed | stale-result test (lock edited during a build); hostile lock vectors |
+| E4 | **Editor configurations run only the user-installed `joust-lsp`.** The shipped Neovim and Helix configurations name the server by an absolute path the user supplies. Neovim refuses a relative path, a bare name, or a path inside the buffer's root or any workspace folder, and Helix's file carries an absolute placeholder. None names `npx`, `node_modules/.bin`, a workspace path or `--project-engine` | `editors` lint test (configurations and docs); Neovim headless test: a planted `node_modules/.bin/joust-lsp` and a `.nvim.lua` never run (sentinel) |
+| E5 | **The configurations work.** Neovim (headless, `nvim --headless`) starts the server through the shipped module and receives `.jsc` diagnostics with JOUST's codes; `hx --health jsc` reports the shipped language server and the grammar's highlight queries | CI on pinned Neovim and Helix releases (downloaded by SHA-256); the same scripts locally |
+| E6 | **The tree-sitter package is complete, valid and reproducible.** The archive holds the generated parser and every query. Every query compiles against the grammar it ships with (`tree-sitter query` over the corpus, no error), and two builds from one commit are byte-identical (sorted entries, fixed times and owners) | `tree-sitter-jsc` package test |
+| E7 | **The release step only attaches.** The workflow runs only on `workflow_dispatch` for an existing release tag, never on a push, a tag or a pull request. It builds the `.vsix` with the engine from that release's published `@julclang/joust` tarball (digests compared and recorded, D11) and the tree-sitter archive, and uploads them with `SHA256SUMS` and provenance attestations. It **never replaces an asset**: an existing asset with the same bytes is accepted and one with other bytes fails. It references no Marketplace or Open VSX token and runs no `vsce publish` or `ovsx publish`; the publisher stays `joust-q4-undecided` until Q4 | workflow lint test (triggers, permissions, no publish commands or tokens, SHA-pinned actions); the asset script run in PR CI without uploading |
+| E8 | **The docs never recommend running workspace code.** No editor configuration on the site or in `editors/` uses `npx joust`. The project-local server (`./node_modules/.bin/joust-lsp`) and `--project-engine` appear only with D3b's warning | the docs test (D12, M5e exit) |
+
+**Attack and edge vectors** (each in the tests):
+
+- **Lock:**
+  - no lock with an external library (JSC0731);
+  - a pin with another hash (JSC0732);
+  - a lock that is not JSON, or not version 1 (JSC0732 "cannot be read");
+  - an unused pin (no error);
+  - no external library and no lock (no error);
+  - `joust.lock` edited on disk, or open in a buffer with other text, during a build (the result is dropped);
+  - a lock that is a symlink out of the folder, a directory, a FIFO, or 2 MiB (refused, fails closed);
+  - a library changed in `node_modules` after the lock was accepted (JSC0732);
+  - a Gradle project: J12 is the Gradle build's (`JscMain --lock`); the editor's npm gate does not apply, and says nothing.
+- **Configurations:**
+  - a workspace that plants `node_modules/.bin/joust-lsp`, `.nvim.lua` and `.exrc`, and a `package.json` whose
+    `bin` is `joust-lsp` (none runs);
+  - a relative or bare server path, or a path inside the workspace (refused with a message);
+  - a path with spaces;
+  - a server that is not installed (the editor says so; nothing else is tried);
+  - Helix's workspace `.helix/languages.toml` can redefine any server's command: an editor feature JOUST cannot
+    restrict, so the docs warn about it (as D10 does for VS Code's workspace settings).
+- **Package:** a query capture the grammar lacks (fails the package test); the generated parser older than
+  `grammar.js` (regenerated); an archive built twice (identical).
+- **Release:**
+  - dispatch for a tag with no release (fails before building);
+  - an asset already attached with other bytes (fails, nothing replaced);
+  - the `.vsix`'s engine differing from the published tarball's (fails);
+  - a run on a fork, or with a token for a registry present (nothing references one).
+
+**Not in M5e:** publishing to the Marketplace, Open VSX, npm (`tree-sitter-jsc`) or crates.io; other editors' plugins
+(Emacs, Zed, Sublime): the generic LSP instructions cover them. Wiring the attachment into `release.yml`'s tag run is a
+later decision, like D11's automation.
+
 ## Revision history
 
 - **r1** (2026-11-13): initial proposal, with the measurements of §1 (toolchain and front-end-only Web Images, JVM
@@ -1455,6 +1525,11 @@ a comment kept); an empty file and a file of comments only.
   L6 per file, L12 across files), `java:` libraries described once and cached by their sources' SHA-256, their imports no
   longer advisory in npm projects, and read-only `joust-lib:` documents; #114's fixes. The M5c row records how its r7
   commitment was met.
+- **r10** (2026-11-15; with the M5e implementation): §16 states M5e before its code: the scope (the editor's
+  `joust.lock` gate, Neovim and Helix configurations, the tree-sitter package, docs, the release attachment),
+  invariants E1–E8 (the lock gate agrees with `joust build` and never accepts; the lock is a confined snapshot input;
+  configurations run only a user-installed `joust-lsp`; they work headless; the package is valid and reproducible; the
+  release step only attaches, never publishes; the docs never recommend workspace code) and the vectors.
 - **r9** (2026-11-15; with the M5d implementation): §15 states the formatter before its code: the style, invariants
   F1–F6 (L12's hash and IR, idempotence, comments, refusal of files that do not parse, engine parity, latency) and the
   attack and edge vectors; L7 points to it. The as-built notes follow the code. The indentation rule (one level per line that opens brackets,
