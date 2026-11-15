@@ -1509,7 +1509,8 @@ final class FourWay {
                 paysJ = outcomePayouts(r) == null ? JulcList.empty() : outcomePayouts(r);
             }
         }
-        if (assets) return validatorAssets(method, state, args, t, signer, candidate, o);
+        // M3 final pass (MD2): an init migrate's transaction is the test's adoption on either path (its Adopt carries no Funds).
+        if (assets && !kind.equals("migrate")) return validatorAssets(method, state, args, t, signer, candidate, o);
         if (keyedType(method) != null) {
             var tx = keyedTx(method, state, args, t, signer, ok, ok ? nextJ : null, ok ? paysJ : JulcList.empty(), o, candidate);
             if (tx == null) return null;

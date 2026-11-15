@@ -87,13 +87,13 @@ class JscV2M3cGateTest {
         var javaUpgrade = Toolchain.build(Map.of(up + "CounterV1.java", read("../examples/upgrade/src/main/java/" + up + "CounterV1.java"),
                 up + "CounterV2.java", read("../examples/upgrade/src/main/java/" + up + "CounterV2.java")), Map.of());
         var ports = new LinkedHashMap<String, String>();
-        for (String c : List.of("StakedVault", "CounterV1", "CounterV2", "Steward", "Guardrail", "TallyV1", "TallyV2", "StakedCounterV1")) ports.put(DSL + c + ".jsc", jsc(c));
+        for (String c : List.of("StakedVault", "CounterV1", "CounterV2", "Steward", "Guardrail", "TallyV1", "TallyV2", "StakedCounterV1", "StakedCounterV2")) ports.put(DSL + c + ".jsc", jsc(c));
         var port = Toolchain.build(ports, Map.of());
         for (var r : List.of(javaStaking, javaUpgrade, port)) assertTrue(r.ok(), r.diagnostics().toString());
         SIZES.put("StakedVault", new int[]{size(javaStaking, "StakedVault"), size(port, "StakedVault")});
         SIZES.put("CounterV1", new int[]{size(javaUpgrade, "CounterV1"), size(port, "CounterV1")});
         SIZES.put("CounterV2", new int[]{size(javaUpgrade, "CounterV2"), size(port, "CounterV2")});
-        for (String c : List.of("Steward", "Guardrail", "TallyV1", "TallyV2", "StakedCounterV1")) SIZES.put(c, new int[]{0, size(port, c)});
+        for (String c : List.of("Steward", "Guardrail", "TallyV1", "TallyV2", "StakedCounterV1", "StakedCounterV2")) SIZES.put(c, new int[]{0, size(port, c)});
     }
 
     @Test

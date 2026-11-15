@@ -90,7 +90,7 @@ class JscV2M3cFourWayTest {
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         if (!LEGS.isEmpty()) return;
         Map<String, String> files = new LinkedHashMap<>();
-        for (String c : List.of("StakedVault", "CounterV1", "CounterV2", "Steward", "Guardrail", "TallyV1", "TallyV2", "StakedCounterV1")) {
+        for (String c : List.of("StakedVault", "CounterV1", "CounterV2", "Steward", "Guardrail", "TallyV1", "TallyV2", "StakedCounterV1", "StakedCounterV2")) {
             SOURCES.put(c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
             files.put("org/julclang/state/examples/dsl/" + c + ".jsc", SOURCES.get(c + ".jsc"));
         }
@@ -582,6 +582,55 @@ class JscV2M3cFourWayTest {
         JsLeg.check(v1);
         JsLeg.check(v2);
         report(v1, null);
+    }
+
+    @Test
+    @Order(7)
+    void stakedAdoption() throws Exception {
+        // Design MD2: the adopting side in a staked contract with handlers. StakedCounterV2 (stakeSelf, a withdraw and a vote
+        // handler, so asset-aware) adopts StakedCounterV1's instance at its own staked address; its handlers work beside it.
+        var v1 = legs("StakedCounterV1", rec("Config", keys(A, B, C), n(2), Bytes.of(POOL), Bytes.of(PAYEE)));
+        byte[] p1 = v1.harness.policy();
+        var v2 = legs("StakedCounterV2", rec("Config", Bytes.of(p1), keys(A, B, C), n(2), Bytes.of(PAYEE)));
+        byte[] p2 = v2.harness.policy();
+        assertTrue(v2.interp.stakeSelf() && v2.harness.stateAddress().stakingCredential().isPresent());
+        BigInteger funds = ada(10);
+        BigInteger lovelace = BigInteger.valueOf(v1.harness.minAda()).add(funds);
+        Rec named = rec("State", Bytes.of(ADMIN), Bytes.of(p2), n(41));
+        Rec adopted = rec("State", Bytes.of(ADMIN), n(41), n(1));
+        // The old half into the staked successor (MS1's branch, here with a stakeSelf successor address).
+        v1.successor = successor(p2, v2.harness.stateAddress(), v2.java(adopted), 0);
+        ok(v1.check("upgrade", named, List.of(), at(ADMIN, 0, lovelace.longValue()).withSuccessor(Bytes.of(p2)), ADMIN));
+        // The new half: the adoption on every leg, its value rule, and the migration one step away.
+        Object oldJ = v1.java(named);
+        v2.adoption = adoption(v1, "upgrade", oldJ, funds, v2, 0, ADMIN);
+        Tx adopt = new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW))
+                .withPrior(new Interpreter.PriorV(Bytes.of(p1), as("StakedCounterV1.State", named)));
+        // (An asset-aware contract's step is its state with the effects, so the adopted state is checked by the mutants below.)
+        ok(v2.check("migrate", null, List.of(), adopt, ADMIN));
+        var honestAdoption = adoption(v1, "upgrade", oldJ, funds, v2, 0, ADMIN);
+        v2.adoption = first -> elsewhere(honestAdoption.apply(first), p1, fill(0x5D), v1.harness.instanceId());
+        migrateRefused(v2, "migrate:from", "migrate", null, List.of(),
+                adopt.withPrior(new Interpreter.PriorV(Bytes.of(fill(0x5D)), as("StakedCounterV1.State", named))), ADMIN);
+        v2.adoption = adoption(v1, "upgrade", oldJ, funds, v2, 1, ADMIN);
+        v2.transactionLevel("migrate", null, List.of(), adopt, ADMIN);
+        v2.adoption = adoption(v1, "upgrade", oldJ, funds, v2, 0, ADMIN);
+        newSideMutants(v2, v1, oldJ, adopted, funds);
+        // The adopted instance's own methods and the handlers beside it.
+        ok(v2.check("increment", adopted, List.of(), null, ADMIN));
+        ok(v2.check("close", adopted, List.of(), at(ADMIN, 0, lovelace.longValue()), ADMIN));
+        v2.modifierRefused("close", adopted, List.of(), at(EVE, 0, lovelace.longValue()), EVE);
+        var p = new PurposeLegs(v2);
+        CredV self = scriptCred(p2);
+        ok(p.as(List.of(A, B), List.of()).check("collect", List.of(ada(5)), null));
+        p.as(List.of(A), List.of()).refused("modifier:quorum params.council params.quorum", "collect", List.of(ada(5)), null);
+        p.as(List.of(A, B), List.of()).withdrawMutants("collect", List.of(ada(5)), null);
+        ok(p.as(List.of(A, B), List.of()).check("decide", List.of(voter("DRepVoter", self), List.of(pair(actionId(fill(0x61), 0), vote("VoteYes")))), null));
+        p.as(List.of(A), List.of()).refused("modifier:quorum params.council params.quorum", "decide",
+                List.of(voter("DRepVoter", self), List.of(pair(actionId(fill(0x61), 0), vote("VoteNo")))), null);
+        JsLeg.check(v1);
+        JsLeg.check(v2);
+        report(v2, p);
     }
 
     // ------------------------------------------------------------------ Tally (coverage): migration with every kind of input
