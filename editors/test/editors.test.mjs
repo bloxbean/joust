@@ -14,7 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
 const EDITORS = join(REPO, 'editors');
@@ -39,22 +39,26 @@ test('E4: the Neovim module names only the path it is given, with --stdio', () =
   const lua = readFileSync(join(EDITORS, 'neovim', 'lua', 'joust.lua'), 'utf8');
   const c = code(lua);
   const cmds = [...c.matchAll(/cmd\s*=\s*\{([^}]*)\}/g)].map((m) => m[1].trim());
-  assert.deepEqual(cmds, ["server, '--stdio'"], 'one command: the checked path and --stdio');
+  assert.deepEqual(cmds, ["node, server, '--stdio'"], 'one command: the checked node and path, and --stdio (#121 S2)');
   for (const bad of ['--project-engine', 'exepath', 'node_modules/', "'npx'", '"npx"', 'jobstart', 'system(', 'io.popen', 'os.execute', 'dofile', 'loadfile', 'exrc']) {
     assert.ok(!c.includes(bad), `the module's code has no ${bad}`);
   }
   // The checks run on what setup is given, before anything is configured.
   assert.match(c, /local server, why = M\.check_path\(opts\.path or vim\.g\.joust_lsp_path\)\s*\n\s*if not server then/);
-  assert.match(c, /inside\(server, r\)/, 'a server inside the buffer\'s project is refused');
+  // #121 F1: the buffer's project by JOUST's markers; no working-directory rule.
+  assert.match(c, /vim\.fs\.root\(bufnr, M\.project_markers\)/);
+  assert.match(c, /for _, p in ipairs\(\{ server, node \}\) do\s*\n\s*if project and inside\(p, project\) then/);
+  assert.ok(!/getcwd/.test(c), 'no working-directory rule');
+  assert.match(c, /if dir:sub\(1, 1\) == '\/' then/, 'node only from absolute PATH entries');
 });
 
 test('E4: the Helix configuration names an absolute joust-lsp with --stdio only', () => {
   const toml = readFileSync(join(EDITORS, 'helix', 'languages.toml'), 'utf8');
   const lines = toml.split('\n').filter((l) => !/^\s*#/.test(l));
   const command = lines.map((l) => /^command\s*=\s*"([^"]*)"/.exec(l)?.[1]).filter(Boolean);
-  assert.deepEqual(command, ['/ABSOLUTE/PATH/TO/joust-lsp']);
-  assert.ok(command[0].startsWith('/') && command[0].endsWith('/joust-lsp'));
-  assert.deepEqual(lines.map((l) => /^args\s*=\s*(.*)$/.exec(l)?.[1]).filter(Boolean), ['["--stdio"]']);
+  // #121 S2: an absolute node runs the absolute joust-lsp.
+  assert.deepEqual(command, ['/ABSOLUTE/PATH/TO/node']);
+  assert.deepEqual(lines.map((l) => /^args\s*=\s*(.*)$/.exec(l)?.[1]).filter(Boolean), ['["/ABSOLUTE/PATH/TO/joust-lsp", "--stdio"]']);
   const body = lines.join('\n');
   for (const bad of ['npx', 'node_modules', '--project-engine', 'git =']) assert.ok(!body.includes(bad), bad);
   assert.match(body, /\[\[language\]\]\s*\nname = "jsc"/);
@@ -102,7 +106,8 @@ test('E8: the docs never show npx for an editor; the project-local server and --
   // The site's page shows both editors' configurations as shipped.
   const page = readFileSync(pages[0], 'utf8');
   assert.match(page, /require\('joust'\)\.setup\(\{ path = '\/absolute\/path\/to\/joust-lsp' \}\)/);
-  assert.match(page, /command = "\/ABSOLUTE\/PATH\/TO\/joust-lsp"/);
+  assert.match(page, /command = "\/ABSOLUTE\/PATH\/TO\/node"/);
+  assert.match(page, /args = \["\/ABSOLUTE\/PATH\/TO\/joust-lsp", "--stdio"\]/);
   // A test of the docs test: an npx line in a block is caught.
   assert.throws(() => { for (const b of blocks('```lua\ncmd = { "npx", "joust-lsp" }\n```\n')) assert.ok(!/\bnpx\b/.test(b.text)); });
 });
@@ -135,7 +140,8 @@ function workspace() {
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'evil', bin: { 'joust-lsp': 'evil.js' }, dependencies: { '@julclang/joust': '0.0.0' } }));
   const planted = `#!/bin/sh\necho ran "$0" >> "${sentinel}"\n`;
   mkdirSync(join(dir, 'node_modules', '.bin'), { recursive: true });
-  for (const p of [join(dir, 'node_modules', '.bin', 'joust-lsp'), join(dir, 'evil.js'), join(dir, 'tools', 'joust-lsp')]) {
+  for (const p of [join(dir, 'node_modules', '.bin', 'joust-lsp'), join(dir, 'node_modules', '.bin', 'node'), join(dir, 'evil.js'),
+    join(dir, 'tools', 'joust-lsp'), join(dir, 'tools', 'node')]) {
     mkdirSync(join(p, '..'), { recursive: true });
     writeFileSync(p, planted);
     chmodSync(p, 0o755);
@@ -145,11 +151,11 @@ function workspace() {
   return { dir, sentinel, file: join(dir, 'contracts', 'app', 'Counter.jsc') };
 }
 
-function nvim(ws, env) {
+function nvim(ws, env, { cwd = ws.dir } = {}) {
   const home = tmp('joust-nvim-home-');
   const result = join(home, 'result.json');
   const r = spawnSync(NVIM, ['--headless', '-i', 'NONE', '-u', join(EDITORS, 'test', 'nvim-check.lua')], {
-    cwd: ws.dir, encoding: 'utf8', timeout: 180_000,
+    cwd, encoding: 'utf8', timeout: 180_000,
     env: { ...process.env, XDG_CONFIG_HOME: join(home, 'config'), XDG_DATA_HOME: join(home, 'data'), XDG_STATE_HOME: join(home, 'state'),
       XDG_CACHE_HOME: join(home, 'cache'), JOUST_EDITORS: EDITORS, JOUST_RESULT: result, JOUST_FILE: ws.file, ...env },
   });
@@ -183,11 +189,15 @@ test('E5: Neovim starts the user-installed server through the module and gets .j
       assert.equal(cc.status, 0, cc.stderr);
       cpSync(join(pkg, 'neovim', 'queries'), join(site, 'queries'), { recursive: true });
     }
-    const out = nvim(ws, { JOUST_CASE: 'diagnostics', JOUST_LSP: LSP, ...(site ? { JOUST_SITE: site } : {}) });
+    // #121 S2: a relative PATH entry first (a common shell setup): the project's planted node must not run.
+    const out = nvim(ws, { JOUST_CASE: 'diagnostics', JOUST_LSP: LSP, PATH: `./node_modules/.bin:${process.env.PATH}`, ...(site ? { JOUST_SITE: site } : {}) });
     assert.equal(out.started, true);
     assert.equal(out.filetype, 'jsc');
     assert.equal(out.diagnostics, true, `JSC0217 from the server: ${JSON.stringify(out)}`);
-    assert.deepEqual(out.clients.map((c) => c.cmd), [[realpathSync(LSP), '--stdio']]);
+    assert.equal(out.clients.length, 1, JSON.stringify(out.clients));
+    const [node, server, stdio] = out.clients[0].cmd;
+    assert.ok(node.startsWith('/') && node.endsWith('/node') && !node.startsWith(ws.dir), node);
+    assert.deepEqual([server, stdio], [realpathSync(LSP), '--stdio']);
     if (pkg) assert.equal(out.treesitter, true, 'tree-sitter highlighting with the package');
     assert.ok(!existsSync(ws.sentinel), `workspace code ran: ${existsSync(ws.sentinel) && readFileSync(ws.sentinel, 'utf8')}`);
   });
@@ -204,7 +214,39 @@ test('E4: Neovim refuses a bare, relative, npx or node_modules/.bin path, and a 
     const inside = nvim(ws, { JOUST_CASE: 'inside', JOUST_LSP: join(ws.dir, 'tools', 'joust-lsp') });
     assert.equal(inside.started, true);
     assert.deepEqual(inside.clients, []);
+    // #121 S2: a node inside the project, on an absolute PATH entry: never started either.
+    const nodeInside = nvim(ws, { JOUST_CASE: 'inside', JOUST_LSP: LSP, PATH: `${join(ws.dir, 'tools')}:${process.env.PATH}` });
+    assert.equal(nodeInside.started, true);
+    assert.deepEqual(nodeInside.clients, []);
+    // ... nor one in the project's node_modules/.bin (refused by setup itself).
+    const binNode = nvim(ws, { JOUST_CASE: 'inside', JOUST_LSP: LSP, PATH: `${join(ws.dir, 'node_modules', '.bin')}:${process.env.PATH}` });
+    assert.equal(binNode.started, false);
+    assert.deepEqual(binNode.clients, []);
     assert.ok(!existsSync(ws.sentinel), `workspace code ran: ${existsSync(ws.sentinel) && readFileSync(ws.sentinel, 'utf8')}`);
+  });
+
+test('#121 F1: a server installed under $HOME starts when Neovim runs in $HOME, beside a dotfiles .git',
+  { skip: skipUnless(NVIM, 'nvim') || (!HAS_ENGINE && 'needs js/joust/engine'), timeout: 300_000 }, () => {
+    assert.ok(NVIM, 'JOUST_REQUIRE_EDITORS=1 but no nvim');
+    const home = tmp('joust-fake-home-');
+    mkdirSync(join(home, '.git'));
+    // A global install as nvm lays it out, under $HOME: a real file there (it runs this checkout's server).
+    const bin = join(home, '.nvm', 'versions', 'node', 'v22.0.0', 'lib', 'node_modules', '@julclang', 'joust', 'bin');
+    mkdirSync(bin, { recursive: true });
+    const server = join(bin, 'joust-lsp.js');
+    writeFileSync(server, `#!/usr/bin/env node\nawait import(${JSON.stringify(pathToFileURL(LSP).href)});\n`);
+    chmodSync(server, 0o755);
+    const proj = join(home, 'work', 'proj');
+    mkdirSync(join(proj, 'contracts', 'app'), { recursive: true });
+    writeFileSync(join(proj, 'joust.config.json'), '{ "contracts": "contracts" }');
+    writeFileSync(join(proj, 'contracts', 'app', 'Counter.jsc'), COUNTER);
+    mkdirSync(join(home, 'notes'));
+    writeFileSync(join(home, 'notes', 'Counter.jsc'), COUNTER);
+    for (const file of [join(proj, 'contracts', 'app', 'Counter.jsc'), join(home, 'notes', 'Counter.jsc')]) {
+      const out = nvim({ dir: home, file }, { JOUST_CASE: 'diagnostics', JOUST_LSP: server, HOME: home }, { cwd: home });
+      assert.equal(out.started, true, file);
+      assert.equal(out.diagnostics, true, `${file}: JSC0217 from the server under $HOME: ${JSON.stringify(out)}`);
+    }
   });
 
 // ------------------------------------------------------------------ E5: Helix
@@ -222,7 +264,7 @@ test('E5: hx --health jsc reports the shipped server and the grammar\'s highligh
   mkdirSync(join(runtime, 'queries'), { recursive: true });
   // The shipped file with its two placeholders replaced, as the docs say; only this grammar is built here.
   const shipped = readFileSync(join(EDITORS, 'helix', 'languages.toml'), 'utf8')
-    .replace('/ABSOLUTE/PATH/TO/joust-lsp', LSP).replace('/ABSOLUTE/PATH/TO/tree-sitter-jsc', pkg);
+    .replace('/ABSOLUTE/PATH/TO/node', process.execPath).replace('/ABSOLUTE/PATH/TO/joust-lsp', LSP).replace('/ABSOLUTE/PATH/TO/tree-sitter-jsc', pkg);
   writeFileSync(join(config, 'languages.toml'), `use-grammars = { only = ["jsc"] }\n${shipped}`);
   cpSync(join(pkg, 'helix', 'queries', 'jsc'), join(runtime, 'queries', 'jsc'), { recursive: true });
   const env = { ...process.env, XDG_CONFIG_HOME: join(home, 'config'), HOME: home };
@@ -232,7 +274,7 @@ test('E5: hx --health jsc reports the shipped server and the grammar\'s highligh
   // Without its colours (ANSI escapes).
   const text = `${h.stdout}${h.stderr}`.replace(/\u001b\[[0-9;]*m/g, '');
   assert.equal(h.status, 0, text);
-  assert.match(text, new RegExp(`✓ joust: ${LSP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), text);
+  assert.match(text, new RegExp(`✓ joust: ${process.execPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), text);
   assert.match(text, /Tree-sitter parser: ✓/, text);
   assert.match(text, /Highlight queries: ✓/, text);
 });

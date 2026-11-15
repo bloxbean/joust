@@ -62,19 +62,30 @@ The module checks the path, sets the `jsc` filetype and configures the server th
 - a bare name or a relative path;
 - `npx`;
 - a project's `node_modules/.bin`;
-- a server inside the project of the buffer you open, or inside the working directory.
+- a server, or `node`, inside the project of the buffer you open. The project is the one JOUST's markers find:
+  `joust.config.json`, `package.json` or `settings.gradle`. An install under your home directory (nvm, volta, asdf,
+  an npm prefix of `~/.npm-global`) is your own, wherever Neovim is started.
+
+The server runs on an absolute `node`. By default that is the first `node` on an absolute `PATH` entry; a relative entry
+such as `./node_modules/.bin` is never used, since it would let a project choose the interpreter. You can give one
+explicitly:
+
+```lua
+require('joust').setup({ path = '/absolute/path/to/joust-lsp', node = '/absolute/path/to/node' })
+```
 
 With the tree-sitter package installed (below), it also starts tree-sitter highlighting and folding for `.jsc` buffers.
 
 ### Helix
 
 Add JOUST's [`editors/helix/languages.toml`](https://github.com/bloxbean/joust/blob/main/editors/helix/languages.toml)
-to `~/.config/helix/languages.toml` and replace its two placeholders:
+to `~/.config/helix/languages.toml` and replace its placeholders. The command is `node` itself, by absolute path. Helix
+starts servers from the project, so a bare name could find a project's `node` through a relative `PATH` entry:
 
 ```toml
 [language-server.joust]
-command = "/ABSOLUTE/PATH/TO/joust-lsp"
-args = ["--stdio"]
+command = "/ABSOLUTE/PATH/TO/node"
+args = ["/ABSOLUTE/PATH/TO/joust-lsp", "--stdio"]
 
 [[language]]
 name = "jsc"
@@ -108,7 +119,7 @@ JOUST cannot restrict that. Before you open a repository you do not trust in Hel
 
 ### Any other LSP client
 
-Start `/absolute/path/to/joust-lsp --stdio` for files ending in `.jsc`. Use the project root, the directory holding
+Start `/absolute/path/to/node /absolute/path/to/joust-lsp --stdio` for files ending in `.jsc`. Use the project root, the directory holding
 `joust.config.json` or `package.json`, as its workspace folder.
 
 ### The project's own server and compiler

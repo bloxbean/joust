@@ -7,7 +7,7 @@ user guide.
 
 | Path | What |
 |---|---|
-| `neovim/lua/joust.lua` | Neovim 0.11+: `require('joust').setup({ path = '/absolute/path/to/joust-lsp' })`. It checks the path (absolute, executable, not `npx`, not a `node_modules/.bin`, not inside the buffer's project or the working directory), sets the `jsc` filetype, configures `vim.lsp.config('joust')`, and starts tree-sitter highlighting when the parser is installed |
+| `neovim/lua/joust.lua` | Neovim 0.11+: `require('joust').setup({ path = '/absolute/path/to/joust-lsp' })`. It checks the path (absolute, executable, not `npx`, not a `node_modules/.bin`, not inside the buffer's project by JOUST's markers), starts it on an absolute `node` (given, or the first on an absolute `PATH` entry), sets the `jsc` filetype, configures `vim.lsp.config('joust')`, and starts tree-sitter highlighting when the parser is installed |
 | `helix/languages.toml` | Helix: the server, the `jsc` language and the grammar, with two absolute placeholders to replace |
 | `test/editors.test.mjs` | The configurations' and docs' lint (always), Neovim headless and `hx --health jsc` (with the editors; CI runs them on pinned releases) |
 | `test/nvim-check.lua` | The Neovim harness `editors.test.mjs` runs (`nvim --headless -u`) |
