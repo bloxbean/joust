@@ -81,6 +81,26 @@ A failing `cli-consumer` leaves the GitHub release without CLI archives; re-runn
 failure was transient (a repository not yet serving the files). Users can check an archive with `shasum -a 256 -c
 joust-<v>-SHA256SUMS.txt` and `gh attestation verify joust-<v>-<platform>.zip -R bloxbean/joust`.
 
+**The editor assets** (ADR-0021 D11, §16): the VS Code extension's `.vsix` and the tree-sitter package, attached to a
+release by `.github/workflows/editor-assets.yml`. **A maintainer runs it by hand** (Actions, then "Editor assets",
+then Run workflow, with the version), after the release's npm packages are out. Nothing else starts it.
+
+What it does:
+1. It checks out the tag and fetches `@julclang/joust@<version>` with `npm pack`, so the `.vsix` gets the published
+   engine, compared byte for byte.
+2. It builds `vscode-joust-<ext>.vsix`, `tree-sitter-jsc-<ts>.tar.gz`, `editor-assets-<version>.json` (the engine's
+   digests and where they came from) and `editor-assets-<version>-SHA256SUMS.txt`.
+3. It attaches them without ever replacing an asset, and attests the `.vsix` and the archive.
+
+It publishes nothing: no Marketplace or Open VSX token exists in the repository or in CI.
+
+To publish the extension, once the publisher (Q4) and the Open VSX namespaces are settled:
+1. Download the `.vsix` from the release and verify it: `gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust`.
+2. Publish it by hand: `vsce publish --packagePath vscode-joust-<ext>.vsix` and `ovsx publish vscode-joust-<ext>.vsix`,
+   with tokens kept outside CI (D11's custody and incident rules).
+
+The tree-sitter package is not published to npm or crates.io.
+
 ## Release flags (`gradle.properties`)
 
 Each must be `true` or `false`; `release.yml` refuses a missing or misspelled flag before it builds anything.

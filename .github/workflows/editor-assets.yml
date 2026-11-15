@@ -1,0 +1,138 @@
+# ADR-0021 r10 §16 (M5e) E7, D11: attaches the editor assets to an existing JOUST release, when a maintainer runs it
+# (Actions -> "Editor assets" -> Run workflow, with the release's version). Nothing else starts it: no push, tag, pull
+# request or schedule, so adding this file changes no release.
+#
+#   vscode-joust-<ext>.vsix             the extension, its engine from the release's published @julclang/joust tarball
+#   tree-sitter-jsc-<ts>.tar.gz         the tree-sitter package
+#   editor-assets-<version>.json        the engine's digests and where they came from
+#   editor-assets-<version>-SHA256SUMS.txt
+#
+# Each is attached with a build-provenance attestation, and an asset is never replaced: one already on the release with
+# the same bytes is accepted, one with other bytes fails the run. Nothing is published: no Marketplace or Open VSX token
+# exists here, and no step runs vsce publish or ovsx publish. A maintainer publishes from the attached .vsix by hand,
+# after `gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust` (D11), once the publisher (Q4) is decided.
+name: Editor assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The JOUST release whose editor assets to attach (its tag v<version> and GitHub release must exist)'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: editor-assets-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  # Builds from the release's tag with a read-only token and no secrets; installs with --ignore-scripts except the
+  # pinned tree-sitter-cli (its install step fetches its binary, as build.yml's grammar job does).
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check the version and its release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::not a version: $VERSION" >&2; exit 1; }
+          gh release view "v$VERSION" --json tagName --jq .tagName
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: v${{ inputs.version }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      # The engine as npm serves it for this release (npm pack checks the registry's integrity), never this checkout's.
+      - name: Fetch the release's @julclang/joust
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/npm"
+          npm pack "@julclang/joust@$VERSION" --ignore-scripts --pack-destination "$RUNNER_TEMP/npm"
+          ls -l "$RUNNER_TEMP/npm"
+
+      - name: Install the build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd js/vscode-joust && npm ci --ignore-scripts)
+          (cd tree-sitter-jsc && npm ci)
+
+      - name: Build and check the assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/editor-assets.mjs --version "$VERSION" \
+            --engine-tarball "$RUNNER_TEMP/npm/julclang-joust-$VERSION.tgz" --out "$RUNNER_TEMP/editor-assets"
+          cat "$RUNNER_TEMP/editor-assets/editor-assets-$VERSION.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: editor-assets
+          path: ${{ runner.temp }}/editor-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # Attaches them (never replacing one) and attests their provenance. Runs no repository code (no checkout).
+  attach:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download the assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: editor-assets
+          path: dist
+
+      - name: Attach the assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          (cd dist && sha256sum -c "editor-assets-${VERSION}-SHA256SUMS.txt")
+          existing=$(gh release view "$tag" --json assets --jq '.assets[].name')
+          mkdir -p published
+          for f in $(cd dist && ls); do
+            if grep -qxF "$f" <<< "$existing"; then
+              gh release download "$tag" --pattern "$f" --dir published
+              if ! cmp -s "dist/$f" "published/$f"; then
+                echo "::error::$f on the release differs from this run's build. Assets are never replaced: delete it" \
+                  "from the release to attach this build's." >&2
+                exit 1
+              fi
+            else
+              gh release upload "$tag" "dist/$f"
+            fi
+          done
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.vsix
+            dist/*.tar.gz

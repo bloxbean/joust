@@ -435,6 +435,20 @@ jobs:
         working-directory: js/vscode-joust
         run: xvfb-run -a node test/electron/run.mjs --versions 1.109.0,stable
 
+      # ADR-0021 r10 §16 (M5e) E7: the release's asset build (editor-assets.yml) on this commit, nothing attached. The
+      # engine comes from an npm tarball of this commit's @julclang/joust, as the release takes it from the published one.
+      - name: Build the editor assets (dry run)
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd tree-sitter-jsc && npm ci)
+          v=$(node -p "require('./js/joust/package.json').version")
+          mkdir -p "$RUNNER_TEMP/npm"
+          npm pack ./js/joust --ignore-scripts --pack-destination "$RUNNER_TEMP/npm"
+          node .github/scripts/editor-assets.mjs --version "$v" --engine-tarball "$RUNNER_TEMP/npm/julclang-joust-$v.tgz" \
+            --out "$RUNNER_TEMP/editor-assets"
+          (cd "$RUNNER_TEMP/editor-assets" && sha256sum -c "editor-assets-$v-SHA256SUMS.txt") | tee -a "$GITHUB_STEP_SUMMARY"
+
   devnet:
     needs: plan
     runs-on: ubuntu-24.04
