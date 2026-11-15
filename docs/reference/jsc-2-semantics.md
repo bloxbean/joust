@@ -531,6 +531,14 @@ init, τ.`prior` (the spent instance: its policy and its state). After the modif
    ordinary creation in place of the adoption and every rule of the adoption would be skipped. The validator's
    `CreateInstance` refuses a seed at the previous policy's script address or holding a token of it.
 
+**Two premises** (review F12). (1) `params.p` is trusted as the deployed policy of the imported version `V`: the
+deployer applies it, and nothing on chain ties that hash to `V`'s source, so a successor deployed with another policy in
+`params.p` adopts that policy's instances (the deployment's choice, as every params value is). (2) Rule 3 protects a
+successor that declares `init migrate`: the old version's `migrates to f` accepts any instance of the policy in `f`
+whose token is named for the spent instance, so a successor *without* `init migrate`, if `f` names it, takes the
+instance through its ordinary creation. Who sets `f` is the old version's audience (A43): name only a successor that
+adopts (JSC9014 warns on every writer of `f` without the set-once lock).
+
 Then, for the init, its checked inputs: the params (`input:params`, as every creation's), **the old state**
 (`input:old`, §4: it arrives as data from another script, as a read state does), and its arguments; its result is
 checked as every creation's (§2.7: the invariants, the params' quorum shape). **Not evaluated by a call:** the old

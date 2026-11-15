@@ -512,15 +512,16 @@ class JscV2M3cFourWayTest {
         v2.adoption = adoption(v1, "upgrade", v1.java(bare), BigInteger.ZERO, v2, v2.harness.minAda() - v1.harness.minAda(), ADMIN);
         migrateRefused(v2, "migrate:from", "init", null, List.of(), at(ADMIN, 0, 0).withPrior(new Interpreter.PriorV(Bytes.of(p1), as("CounterV1.State", bare))),
                 ADMIN, rec("State", Bytes.of(ADMIN), n(0), n(1)));
-        // The same init seeded by an instance of another policy is an ordinary creation's seed: not this rule's.
+        // The control: the same init with no previous instance in its transaction (a wallet seed) is accepted.
         ok(v2.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN));
         // K49: exactly the old input's lovelace: one more or one less is refused (transaction-level: the new side's value rule).
         v2.adoption = adoption(v1, "upgrade", oldJ, funds, v2, 1, ADMIN);
         v2.transactionLevel("migrate", null, List.of(), adopt, ADMIN);
         v2.adoption = adoption(v1, "upgrade", oldJ, funds, v2, -1, ADMIN);
         v2.transactionLevel("migrate", null, List.of(), adopt, ADMIN);
-        // The migration transaction one step away, as the new side's mint sees it (A42: no burn, two v1 into one v2, …), and
-        // the attack suite on its new instance.
+        // The migration transaction one step away, as the new side's mint sees it (A42: the old instance not burned, one v1
+        // into two v2, the seed not spent, a wallet seed, the prior at a key address; two v1 into one v2 is
+        // JscV2M3cAttackTest's, refused by the old side), and the attack suite on its new instance.
         v2.adoption = adoption(v1, "upgrade", oldJ, funds, v2, 0, ADMIN);
         newSideMutants(v2, v1, oldJ, adopted2, funds);
         // The new version's own methods.
