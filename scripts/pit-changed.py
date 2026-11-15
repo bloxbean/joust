@@ -6,15 +6,21 @@
     build.gradle (ext.pitTargets, ext.pitTests), gradle/pitest.gradle, these scripts, the baseline file, or the module's
     tests (src/test: a test that stops asserting is the "test that cannot fail" this is for; review r1, design F6,
     security S6);
+  - the whole target set too when a source file of a baselined class was deleted or renamed (review r2, design F14):
+    its old path no longer matches anything, and the gate must see the class go;
   - else the target classes whose sources changed (src/main/java, or julc-state-api's src/onchain/java variants).
 
     python3 scripts/pit-changed.py <base-ref> [--floor N] [--dry-run]
     python3 scripts/pit-changed.py --all [--floor N]      every module's whole set (the baselines)
 
 Each class must score at least its baseline in gradle/mutation-baseline.json less 5 points (a class with no baseline: at
-least --floor, default 40). Prints the Gradle runs it makes, then the summary (scripts/pit-summary.py) of their reports.
-Exits 0 with a note when nothing relevant changed; 1 when a run fails, a report is missing, or a class is below its floor."""
+least --floor, default 40). A whole-set run must measure every class the baseline records for the module, and a
+changed-classes run each class it selected (scripts/pit-summary.py's --whole and --expect). Prints why each module runs,
+then the summary of their reports, with the kills lost against gradle/mutation-kills.json; Gradle's own output goes to
+stderr. Exits 0 with a note when nothing relevant changed; 1 when a run fails, a report is missing or empty, a selected
+or baselined class is not measured, or a class is below its floor."""
 import fnmatch
+import json
 import os
 import re
 import subprocess
@@ -35,17 +41,38 @@ if '--threshold' in args:   # the old name
 base = args[0] if args else 'origin/main'
 everything = base == '--all'
 BASELINE = 'gradle/mutation-baseline.json'
+KILLS = 'gradle/mutation-kills.json'
 SHARED = {'gradle/pitest.gradle', 'scripts/pit-changed.py', 'scripts/pit-summary.py', BASELINE}
+with open(BASELINE) as f:
+    BASELINED = set(json.load(f).get('pit', {}))
 
-changed = [] if everything else subprocess.run(['git', 'diff', '--name-only', f'{base}...HEAD'], capture_output=True, text=True,
-                                               check=True).stdout.split()
-classes = set()
-for f in changed:
+# Each change as git reports it, renames detected: the new path of every change, and the old path of a deletion or a
+# rename (the side the gate would otherwise never see).
+status = [] if everything else subprocess.run(['git', 'diff', '--name-status', '-M', f'{base}...HEAD'], capture_output=True,
+                                              text=True, check=True).stdout.splitlines()
+changed, gone = [], []
+for line in status:
+    parts = line.split('\t')
+    if parts[0].startswith('R') or parts[0].startswith('C'):
+        changed.append(parts[2])
+        if parts[0].startswith('R'):
+            gone.append(parts[1])
+    elif parts[0].startswith('D'):
+        changed.append(parts[1])
+        gone.append(parts[1])
+    else:
+        changed.append(parts[1])
+
+
+def java_class(f):
     m = re.match(r'(.+?)/src/(?:main|onchain)/java/(.+)\.java$', f)
-    if m and os.path.exists(f):
-        classes.add((m.group(1), m.group(2).replace('/', '.')))
+    return (m.group(1), m.group(2).replace('/', '.')) if m else None
 
-runs, reports = [], []
+
+classes = {c for f in changed if os.path.exists(f) and (c := java_class(f))}
+gone_baselined = {c for f in gone if (c := java_class(f)) and any(b == c[1] or b.startswith(c[1] + '$') for b in BASELINED)}
+
+runs, reports, gates = [], [], []
 for build in sorted(subprocess.run(['git', 'ls-files', '*/build.gradle'], capture_output=True, text=True, check=True).stdout.split()):
     text = open(build).read()
     t = re.search(r'ext\.pitTargets\s*=\s*\[(.*?)\]', text, re.S)
@@ -65,11 +92,17 @@ for build in sorted(subprocess.run(['git', 'ls-files', '*/build.gradle'], captur
             if f in SHARED or f == build or f.startswith(module + '/src/test/'):
                 why = f'the whole set ({f} changed: it decides whether the mutants die)'
                 break
+        for mod, c in sorted(gone_baselined):
+            if not why and mod in paths:
+                why = f'the whole set (the baselined {c} lost its source file: deleted or renamed)'
     hit = sorted({c for (mod, c) in classes if mod in paths and any(fnmatch.fnmatchcase(c, pat) for pat in patterns)})
     if why:
         runs.append((':' + module.replace('/', ':'), None, why))
+        gates += ['--whole', os.path.basename(module)]
     elif hit:
         runs.append((':' + module.replace('/', ':'), hit, 'the changed classes ' + ', '.join(hit)))
+        for c in hit:
+            gates += ['--expect', c]
     else:
         continue
     reports.append(os.path.join(module, 'build/reports/pitest/mutations.xml'))
@@ -82,12 +115,14 @@ for task, hit, why in runs:
     cmd = ['./gradlew', f'{task}:pitest', '--stacktrace']
     if hit is not None:
         cmd.insert(2, '-Ppit.targetClasses=' + ','.join(c + '*' for c in hit))   # nested classes too
-    print(f'{task}: {why}')
-    print('$ ' + ' '.join(cmd), file=sys.stderr)
-    if not dry and subprocess.run(cmd).returncode != 0:
+    print(f'{task}: {why}', flush=True)
+    print('$ ' + ' '.join(cmd), file=sys.stderr, flush=True)
+    # Gradle's output to stderr, so stdout (pit.md, the job summary) holds only this script's lines and the summary.
+    if not dry and subprocess.run(cmd, stdout=sys.stderr).returncode != 0:
         failed = True
 if dry:
     sys.exit(0)
-summary = [sys.executable, os.path.join(os.path.dirname(__file__), 'pit-summary.py'), *reports, '--baseline', BASELINE, '--floor', floor]
+summary = [sys.executable, os.path.join(os.path.dirname(__file__), 'pit-summary.py'), *reports, '--baseline', BASELINE, '--floor', floor,
+           '--kills', KILLS, *gates]
 rc = subprocess.run(summary).returncode
 sys.exit(1 if failed or rc else 0)

@@ -220,16 +220,30 @@ they cover, they kept CI's Stryker past its timeout, so only the `joust-heap` se
 Stryker runs in place: it mutates the working files and puts them back. Commit or stash your work first. The tests reach
 outside the package (the repository's `fixtures/`, `../joust-runtime`, the engines), which a sandbox copy would not have.
 
-In CI, the `mutation` job (PIT) and the `stryker` jobs (one per set, in parallel) run a set **whole** when the change touches what decides whether its mutants die: the
-module's or package's tests, `ext.pitTargets`/`ext.pitTests`, `gradle/pitest.gradle`, `js/mutation/**`, the scripts or
-the baseline file. Otherwise it runs only the changed classes and files (`scripts/pit-changed.py`,
-`scripts/stryker-changed.sh`). The Build workflow's manual run with `mutation_all` runs everything. It runs Stryker with
-that commit's engines, and first checks that js/joust's selected tests skip nothing.
+In CI, the `mutation` job (PIT) and the `stryker` jobs (one per set, in parallel) run a set **whole** when the change
+touches what decides whether its mutants die: the module's or package's tests, `ext.pitTargets`/`ext.pitTests`,
+`gradle/pitest.gradle`, `js/mutation/**`, the scripts or the baseline file. A set also runs whole when a source file
+of a baselined class or file was deleted or renamed. Otherwise only the changed classes and files run
+(`scripts/pit-changed.py`, `scripts/stryker-changed.sh`). The Build workflow's manual run with `mutation_all` runs
+everything. Stryker runs with that commit's engines, and first checks that js/joust's selected tests skip nothing.
 
 The gate is per unit. Every class and file must score at least its entry in `gradle/mutation-baseline.json` less 5
-points; a unit without an entry must reach 40% (PIT) or 10% (Stryker). A missing or unreadable report fails, and so do
-reports with no mutant in them ("no measurements", never 100%). A change that means to lower a baseline updates the file,
-visibly. `-Ppit.targetClasses=a.B` and `JOUST_MUTATE=src/build.js` narrow a local run.
+points; a unit without an entry must reach 40% (PIT) or 10% (Stryker). It also requires the units to be measured
+(design review r2, F14; Codex C9):
+
+- A whole-set run must measure every unit the baseline records for that module or set (each entry names it), and a
+  changed run every unit it selected. A unit that is not measured fails ("baselined but not measured"), so renaming a
+  class or dropping a target cannot take it out of the gate unseen. A nested PIT class that disappears is only noted,
+  since a refactoring may remove it.
+- Every report must be readable and hold a mutant, even beside populated ones. A unit with no valid mutant is
+  "no measurements", never 100%.
+- A unit with fewer than half the mutants its baseline counted fails ("lost most of its mutants"), so filtering its
+  mutants out (Ignored, NON_VIABLE) cannot remove it either.
+
+A change that means to lower a baseline, or to remove a unit, updates the file, visibly. The summaries also list every
+mutant the baseline run killed that is no longer killed. They match by unit, method or original code, mutator and
+replacement, not by line, against `gradle/mutation-kills.json`, so a reviewer sees each lost kill even within the slack.
+`-Ppit.targetClasses=a.B` and `JOUST_MUTATE=src/build.js` narrow a local run.
 
 The baselines come from CI's `mutation_all` run [43629689255](https://github.com/bloxbean/joust/actions/runs/43629689255)
 at 525ff225, with the engines (the file holds every class and file):
