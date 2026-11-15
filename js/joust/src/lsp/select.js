@@ -498,6 +498,8 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
       return advisory(`the project's compiler (${pkg.version}) predates the language server's protocol: the bundled compiler runs`, at);
     }
     engine.version = info.joust ?? pkg.version;
+    // F3 on #120: what the engine offers (lang.info's features), for requests only some engines answer (formatting).
+    engine.features = [...info.features];
     const inContracts = !contracts.error && inside(realFile, contracts.path);
     return {
       key, engine, source: 'project', folder, root, kind: 'npm',

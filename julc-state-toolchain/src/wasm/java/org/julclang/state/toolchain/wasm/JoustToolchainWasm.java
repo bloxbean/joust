@@ -89,8 +89,8 @@ public final class JoustToolchainWasm {
 
     public record LowerRequest(String file, String source, String id, Map<String, String> files) {}
 
-    /** ADR-0021 r9 §15 (M5d): the text to format. */
-    public record FormatRequest(String source) {}
+    /** ADR-0021 r9 §15 (M5d): the text to format; #120 C3: as the module {@code id} of the project's {@code files}. */
+    public record FormatRequest(String source, String id, Map<String, String> files) {}
 
     /** The catalogue's or the lowering's JSON, or {@code ok} false and the failure (never a front-end diagnostic). */
     public record JsonResult(boolean ok, String json, String error) {}
@@ -142,7 +142,7 @@ public final class JoustToolchainWasm {
 
     static ServiceResult<JsonResult> format(FormatRequest request) {
         try {
-            return ServiceResult.ok(new JsonResult(true, org.julclang.state.dsl.v2.JscLang.formatJson(request.source()), null));
+            return ServiceResult.ok(new JsonResult(true, org.julclang.state.dsl.v2.JscLang.formatJson(request.source(), request.id(), request.files()), null));
         } catch (Throwable t) {
             return ServiceResult.ok(new JsonResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
         }

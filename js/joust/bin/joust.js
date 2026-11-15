@@ -28,7 +28,7 @@ const handedOver = deferredTo === SELF;
 const COMMANDS = {
   build: 'build [--accept-abi[=<Contract>@<committed>..<new>]] [--accept-lock] [--traces]   compile contracts/ (.java, .jsc) into build/joust/',
   abi: 'abi diff <Contract> [--out <file>]   (<Contract>: package.Name, or a Name only one contract has) the committed ABI manifest and the one the build computes now, with their SHA-256',
-  fmt: 'fmt [--check] [<file or dir>...]   format the .jsc files (contracts/ by default) in place; --check lists those that are not',
+  fmt: 'fmt [--check] [<file or dir>...]   format the .jsc files (contracts/ by default) in place; --check lists those that are not (exit 0 formatted, 1 not formatted, 2 refused, 3 usage)',
   test: 'test [-- <node --test args>]   build, then run test/*.test.js offline (an in-memory ledger: @julclang/joust/test)',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
   dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
@@ -166,13 +166,23 @@ async function project() {
     }
     case 'fmt': {
       // ADR-0021 r9 §15: the engine's lang.format; a file that does not parse is reported and left as it was (F4).
-      const { fmt } = await import('../src/fmt.js');
+      // #120 F5: exit 0 formatted, 1 not formatted (--check), 2 refused, 3 usage. S3: the default target only inside the project.
+      const { fmt, defaultTarget, FMT_USAGE } = await import('../src/fmt.js');
       const paths = args.slice(1).filter((a) => a !== '--check');
       if (paths.some((a) => a.startsWith('-'))) {
         console.error(`usage: joust ${COMMANDS.fmt}`);
-        return 2;
+        return FMT_USAGE;
       }
-      return fmt({ paths: paths.length ? paths : [config.contracts], check: args.includes('--check') });
+      let targets = paths;
+      if (!targets.length) {
+        const t = defaultTarget(process.cwd(), config.contracts);
+        if (t.error) {
+          console.error(`joust fmt: ${t.error}`);
+          return FMT_USAGE;
+        }
+        targets = [t.path];
+      }
+      return fmt({ paths: targets, check: args.includes('--check'), root: process.cwd(), contracts: defaultTarget(process.cwd(), config.contracts).path ?? null });
     }
     case 'deploy': {
       const { deploy } = await import('../src/deploy.js');

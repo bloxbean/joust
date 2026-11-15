@@ -102,8 +102,9 @@ export async function runEngineWorker({ engineFile }) {
     },
     // M5d (ADR-0021 r9 §15): the formatter, {ok, text} or {ok: false, error}; an engine without "format" has none.
     format: (m) => {
-      if (typeof api.lang?.format !== 'function' || !info?.features?.includes('format')) return { failed: 'this engine has no lang.format' };
-      const r = api.lang.format({ source: m.source });
+      // F3 on #120: an engine without the formatter answers "unsupported", which is no failure (no backoff, no quarantine).
+      if (typeof api.lang?.format !== 'function' || !info?.features?.includes('format')) return { model: JSON.stringify({ ok: false, unsupported: true }) };
+      const r = api.lang.format(m.files ? { source: m.source, id: m.moduleId, files: m.files } : { source: m.source });
       return r && r.ok ? { model: r.json } : { failed: String(r?.error ?? 'the engine returned no result') };
     },
     build: (m) => {

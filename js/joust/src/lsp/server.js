@@ -45,6 +45,8 @@ export const DEBOUNCE_MS = 150;
 export const LOWER_MS = 10000;
 /** M5e (E3): at most this many bytes of joust.lock are read. */
 export const LOCK_CAP = 1024 * 1024;
+/** S1 on #120: what a formatter may replace: the whitespace the lexer skips (never a byte order mark or NBSP). */
+const WHITESPACE = /^[\t\n\v\f\r \u1680\u2000-\u200a\u202f\u205f\u3000]*$/;
 /** M5d: how long a formatting request may take in the engine (F6's bound is 60 ms warm; this is the watchdog's cap). */
 export const FORMAT_MS = 5000;
 /** D2a, D4: the build worker's limits (joust build's ENGINE_STACK_MB; the build heap of §1), its cap and idle stop. */
@@ -224,8 +226,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   /** Everything selected again: every open document re-analysed (C14), outstanding fixes invalid (C4). */
   function reselectAll(delay = 0) {
     // C8, F11, S6 on #115: a reselection (a package.json change, an npm install, Restart analysis) reads the packages'
-    // libraries again; C7: and every cached importer analysis goes.
+    // libraries again; C7: and every cached importer analysis goes; F7 on #120: and node_modules is walked again.
     libraryMemo.clear();
+    packageScans.clear();
     occurrenceCache.clear();
     selector.invalidate();
     fixes.clear();
@@ -267,6 +270,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     bundled = { file: join(engineDir, ENGINE_JS), id: engineId(hash(jsBytes), hash(wasmBytes)), source: 'bundled' };
     const probe = await host.info(workerKey(bundled), bundled);
     bundled.version = probe.info?.joust ?? probe.version ?? 'unknown';
+    bundled.features = Array.isArray(probe.info?.features) ? [...probe.info.features] : [];
     if (!probe.ready || !probe.info) log(`the bundled engine has no lang entries: ${probe.error ?? 'no lang.info'}`);
 
     signatureDir = storage ? join(storage, 'java-signatures') : null;
@@ -622,31 +626,76 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   }
   const javaSignatures = new Map();   // engine id | sources' SHA-256 -> descriptions (JSON), LRU (S5 on #115)
   const libraryMemo = new Map();
+  // F7 on #120: the node_modules walk of libraryListing, per project root: { top, mtime, scopes: [[dir, mtime]], candidates }.
+  const packageScans = new Map();
+  const listingStats = { scans: 0, packageChecks: 0 };
   /**
    * C15 (#119): the packages' joust-lib/ files as buildLibraries lists them (the same confined walk, nothing read): a
    * file added or removed changes it.
    */
+  /**
+   * C15 (#119): the packages' library files (every joust-lib/ under node_modules), listed; F7 on #120: the walk over
+   * node_modules is kept per project while node_modules' and its scopes' directories are unchanged (their mtimes: a
+   * package added, removed or replaced changes them), so a use lists only the packages that ship a joust-lib/ (a file
+   * added to one is still seen). A joust-lib/ made by hand inside an installed package is seen after the next change of
+   * node_modules, or Restart analysis.
+   */
   async function libraryListing(sel) {
     if (!sel.root || !inside(sel.root, sel.folder)) return [];
     const rootRel = relative(sel.folder, sel.root).split(sep).join('/') || '.';
-    const out = [];
-    const dirs = async (rel) => {
-      const r = await reader.resolveIn(sel.folder, rel);
-      if (r.error) return [];
+    const mtime = async (p) => {
       try {
-        return (await fsp.readdir(r.path, { withFileTypes: true }))
-          .filter((e) => !e.name.startsWith('.') && (e.isDirectory() || (e.isSymbolicLink() && !e.name.startsWith('@')))).map((e) => e.name).sort();
+        return (await fsp.stat(p)).mtimeMs;
       } catch {
-        return [];
+        return -1;
       }
     };
-    for (const n of await dirs(`${rootRel}/node_modules`)) {
-      const names = n.startsWith('@') ? (await dirs(`${rootRel}/node_modules/${n}`)).map((m) => `${n}/${m}`) : [n];
-      for (const name of names) {
-        const listed = await reader.list(sel.folder, `${rootRel}/node_modules/${name}/joust-lib`, { max: MAX_BUILD_FILES, kind: 'gradle' });
-        if (!listed.error) for (const f of listed.files) out.push(`${name}/${f}`);
-        if (out.length > MAX_BUILD_FILES) return out;
+    const top = await reader.resolveIn(sel.folder, `${rootRel}/node_modules`);
+    if (top.error) return [];
+    let scan = packageScans.get(sel.root);
+    let same = scan && scan.top === top.path && scan.mtime === await mtime(top.path);
+    for (const [p, m] of same ? scan.scopes : []) {
+      if (await mtime(p) !== m) {
+        same = false;
+        break;
       }
+    }
+    if (!same) {
+      listingStats.scans++;
+      const dirs = async (rel) => {
+        const r = await reader.resolveIn(sel.folder, rel);
+        if (r.error) return { names: [], path: null };
+        try {
+          return { path: r.path, names: (await fsp.readdir(r.path, { withFileTypes: true }))
+            .filter((e) => !e.name.startsWith('.') && (e.isDirectory() || (e.isSymbolicLink() && !e.name.startsWith('@')))).map((e) => e.name).sort() };
+        } catch {
+          return { names: [], path: null };
+        }
+      };
+      const nmMtime = await mtime(top.path);
+      const scopes = [];
+      const candidates = [];
+      for (const n of (await dirs(`${rootRel}/node_modules`)).names) {
+        let names = [n];
+        if (n.startsWith('@')) {
+          const d = await dirs(`${rootRel}/node_modules/${n}`);
+          if (d.path) scopes.push([d.path, await mtime(d.path)]);
+          names = d.names.map((m) => `${n}/${m}`);
+        }
+        for (const name of names) {
+          listingStats.packageChecks++;
+          if (!(await reader.resolveIn(sel.folder, `${rootRel}/node_modules/${name}/joust-lib`)).error) candidates.push(name);
+        }
+      }
+      scan = { top: top.path, mtime: nmMtime, scopes, candidates };
+      packageScans.set(sel.root, scan);
+      while (packageScans.size > 8) packageScans.delete(packageScans.keys().next().value);
+    }
+    const out = [];
+    for (const name of scan.candidates) {
+      const listed = await reader.list(sel.folder, `${rootRel}/node_modules/${name}/joust-lib`, { max: MAX_BUILD_FILES, kind: 'gradle' });
+      if (!listed.error) for (const f of listed.files) out.push(`${name}/${f}`);
+      if (out.length > MAX_BUILD_FILES) return out;
     }
     return out;
   }
@@ -1271,8 +1320,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   /**
    * The formatter's answer for the open document `uri` at the version it has now: `{ doc, version, f }` with the engine's
-   * `{ ok, text, edits }` (F4: `ok` false for a file that does not parse), or null (not open, too large, no engine with
-   * lang.format, cancelled, or a newer version arrived meanwhile: D4a's rule, nothing for a stale request).
+   * `{ ok, text, edits }`, checked (S1 on #120: only whitespace changes, and the edits give the text), or null: not
+   * open, too large, an engine without lang.info's "format" (F3 on #120: never asked, so never a failure that backs the
+   * analyses off), a file that does not parse (F4), cancelled, a newer version or another lifetime of the document
+   * (D4a; C1 on #120: a close and a reopen at the same version is another document).
    */
   async function formatted(uri, token) {
     const doc = documents.get(uri);
@@ -1282,17 +1333,58 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const text = doc.getText();
     if (text.length > MAX_FILE_CHARS) return null;
     const sel = s.selection ?? await selectionFor(uri);
-    const r = await host.request(sel.key, sel.engine, { op: 'format', source: text },
-      { scope: scopeOf(sel), input: text, what: 'the formatting', timeoutMs: FORMAT_MS }, token);
+    if (!Array.isArray(sel.engine?.features) || !sel.engine.features.includes('format')) {
+      if (!formatNoted.has(sel.engine?.id)) {
+        formatNoted.add(sel.engine?.id);
+        log(`formatting: the compiler ${sel.engine?.version ?? ''} (${sel.source}) predates the formatter (JOUST M5d): no formatting`);
+      }
+      return null;
+    }
+    // C3 on #120: as a module of its project, so its imports bring the types the build's parser reads.
+    const project = await projectOf(uri, text, sel);
+    if (state.get(uri) !== s || token?.isCancellationRequested) return null;
+    const r = await host.request(sel.key, sel.engine, { op: 'format', source: text, ...(project ? { moduleId: project.id, files: project.files } : {}) },
+      { scope: scopeOf(sel), input: project ? JSON.stringify([text, project.id, Object.entries(project.files).sort()]) : text, what: 'the formatting',
+        timeoutMs: FORMAT_MS }, token);
     const now = documents.get(uri);
-    if (!r.model || !now || now.version !== version || token?.isCancellationRequested) return null;
+    if (!r.model || !now || now.version !== version || state.get(uri) !== s || token?.isCancellationRequested) return null;
     let f;
     try {
       f = JSON.parse(r.model);
     } catch {
       return null;
     }
-    return f && f.ok === true && typeof f.text === 'string' ? { doc: now, version, f } : null;
+    if (!f || f.ok !== true || typeof f.text !== 'string' || !whitespaceOnly(text, f)) return null;
+    // F8 on #120: the style is the compiler's; in advisory mode that is the bundled one, which the project's may not share.
+    if (sel.mode !== 'project-matched' && !s.formatLabelled) {
+      s.formatLabelled = true;
+      log(`formatting ${fileNameOf(uri)} with the bundled compiler ${sel.engine?.version ?? ''} (advisory): the project's own may format it differently`);
+    }
+    return { doc: now, version, f };
+  }
+  const formatNoted = new Set();
+
+  /**
+   * S1 on #120: a formatter's answer is applied only when it changes nothing but whitespace: its edits are in order and
+   * inside the text, each replaces whitespace with spaces, tabs and line ends (or a block comment with the same comment,
+   * CRLF made LF), and together they give its text.
+   */
+  function whitespaceOnly(text, f) {
+    if (!Array.isArray(f.edits)) return false;
+    let at = 0;
+    let out = '';
+    for (const e of f.edits) {
+      if (!Array.isArray(e) || e.length !== 3) return false;
+      const [start, end, newText] = e;
+      if (!Number.isInteger(start) || !Number.isInteger(end) || typeof newText !== 'string' || start < at || end < start || end > text.length) return false;
+      const was = text.slice(start, end);
+      const space = WHITESPACE.test(was) && /^[ \t\n]*$/.test(newText);
+      const comment = was.startsWith('/*') && was.endsWith('*/') && was.replace(/\r\n/g, '\n') === newText;
+      if (!space && !comment) return false;
+      out += text.slice(at, start) + newText;
+      at = end;
+    }
+    return out + text.slice(at) === f.text;
   }
 
   // One edit of the whole document (F6), none when it is formatted already; a file that does not parse gets none (F4).
@@ -1305,20 +1397,31 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return [{ range: { start: { line: 0, character: 0 }, end: x.doc.positionAt(text.length) }, newText: x.f.text }];
   });
 
-  // The formatter's edits that end inside the range: the whitespace before each item in it (its line's indentation
-  // included) and the comments in it, never a line outside it.
+  /**
+   * C2 and F6 on #120: only the formatter's edits inside the range, and nothing outside it. An edit wholly inside is
+   * kept; the whitespace that ends at the range's first item and starts before the range (the line break and
+   * indentation above it) is cut at the range's start, and kept only when that part holds no line break: the first
+   * line's indentation is set, the lines and blank lines above are left as they are. Any other edit crossing a bound is
+   * left out.
+   */
   connection.onDocumentRangeFormatting(async (p, token) => {
     if (!edits) return null;
     const x = await formatted(p.textDocument.uri, token);
     if (!x) return null;
+    const text = x.doc.getText();
     const from = x.doc.offsetAt(p.range.start);
     const to = x.doc.offsetAt(p.range.end);
     const out = [];
-    for (const e of Array.isArray(x.f.edits) ? x.f.edits : []) {
-      const [start, end, newText] = e;
-      if (!Number.isInteger(start) || !Number.isInteger(end) || typeof newText !== 'string' || start > end) return null;
-      if (end < from || end > to) continue;
-      out.push({ range: { start: x.doc.positionAt(start), end: x.doc.positionAt(end) }, newText });
+    for (const [start, end, newText] of x.f.edits) {
+      if (from <= start && end <= to) {
+        out.push({ range: { start: x.doc.positionAt(start), end: x.doc.positionAt(end) }, newText });
+      } else if (start < from && from <= end && end <= to && !/[\r\n]/.test(text.slice(from, end)) && newText.includes('\n')) {
+        // The indentation of the range's first line: from the range's start (a line start) to its first item.
+        const indent = newText.slice(newText.lastIndexOf('\n') + 1);
+        const before = text.slice(0, from);
+        if (from !== 0 && !/\n$/.test(before)) continue;   // the range starts mid-line: its gap is outside
+        if (text.slice(from, end) !== indent) out.push({ range: { start: x.doc.positionAt(from), end: x.doc.positionAt(end) }, newText: indent });
+      }
     }
     return out;
   });
@@ -2415,7 +2518,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   if (flags.testHooks) {
     connection.onRequest('joust/test/stats', () => ({
-      ...host.stats, builds: { ...buildHost.stats }, reader: { ...reader.stats }, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
+      ...host.stats, builds: { ...buildHost.stats }, reader: { ...reader.stats }, listing: { ...listingStats }, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
     }));
   }
 

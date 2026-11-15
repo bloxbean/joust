@@ -21,11 +21,25 @@ import org.junit.jupiter.api.Test;
  */
 class JscFormatHashTest {
 
+    /** #120 C3: formatted as a module of the examples' project (its imports read as the build reads them). */
     static String format(String name, String src) {
-        var r = JscFormat.format(src);
+        String id = name.contains("/") ? name : JscV2HashStabilityTest.PKG + name;
+        var modules = org.julclang.state.dsl.v2.JscModules.of(project());
+        var r = JscFormat.format(src, id, modules);
         assertTrue(r.ok(), name + ": refused: " + r.error());
-        assertEquals(r.text(), JscFormat.format(r.text()).text(), name + ": F2, idempotent");
+        assertEquals(r.text(), JscFormat.format(r.text(), id, modules).text(), name + ": F2, idempotent");
         return r.text();
+    }
+
+    /** Every .jsc file of the examples, by module id. */
+    static Map<String, String> project() {
+        var out = new LinkedHashMap<String, String>();
+        try (var s = Files.list(JscV2HashStabilityTest.DSL)) {
+            for (Path p : s.filter(p -> p.toString().endsWith(".jsc")).sorted().toList()) out.put(JscV2HashStabilityTest.PKG + p.getFileName(), Files.readString(p));
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        return out;
     }
 
     @Test

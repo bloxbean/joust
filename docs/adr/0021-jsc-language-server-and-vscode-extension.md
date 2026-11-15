@@ -580,7 +580,8 @@ revision it also could not be safe: a moved line, a file name and some parameter
   ends, the file's name or any name. Names reach the ABI manifest, the description and the generated client (so an
   ABI-recorded rename changes those, D7), never the script. Reordering declarations changes the checked program and
   counts as a code change; the formatter never reorders.
-- **Design:** one fixed style with no options (as `gofmt`), over a trivia-preserving syntax tree (the lexer keeps
+- **Design:** one style with no options, versioned (§15, #120 F4: version 1 sets layout and the spacing around
+  punctuation, and keeps other spacing within a line as written), over a trivia-preserving syntax tree (the lexer keeps
   comments and blank lines as trivia attached to tokens; the existing `Syntax` tree is built from the same tokens).
   `joust fmt` (both CLIs) and the server's `textDocument/formatting` call the same core entry.
 - **Invariants (L7, L12):** idempotent; every comment survives, in order, attached to the same token; the checked IR is
@@ -1271,7 +1272,7 @@ What M5c's implementation chose (#115, on `feat/jsc-lsp-m5b` after #111).
 
 ## 15. The formatter (M5d, r9)
 
-Written before the code (D8's design, made exact). One fixed style, no options; `joust fmt` (the npm CLI), `jsc --fmt`
+Written before the code (D8's design, made exact). One style, no options, versioned (#120 F4, below); `joust fmt` (the npm CLI), `jsc --fmt`
 (the Gradle path's front end) and the server's `textDocument/formatting` call one language-core entry, `lang.format`.
 
 **Style.** The formatter changes only the whitespace between tokens and comments; it never adds, removes, splits or
@@ -1282,9 +1283,15 @@ however many brackets that line opened (`fold(s, (a, b) => ({` indents its body 
 bracket goes back to its opener's line; a continuation line (one that starts with, or follows a line that ends in, a
 binary operator, `.`, `?`, `:`, `=>` or `=`, or starts with `else`) is one level deeper. Visual alignment is not kept. Between two tokens on a line: none after `(`, `[` and `.` and before `)`, `]`, `,`,
 `;` and `.`; one after `,`; one inside a brace pair on one line (`{ a: 1 }`; an empty pair is `{}`); elsewhere one space where the
-source had any, none where it had none. A comment keeps its text; a trailing line comment has one space before it, a block comment the spacing the
+source had any, none where it had none. *(r9 after #120 F4)* That last rule is the style's: **version 1**
+(`JscFormat.STYLE`, `"style"` in `lang.format`'s answer) keeps spacing within a line that is not around `,`, `.`,
+brackets, `;` and braces as written (`x+1*2`, `max (x, 1)` stay), since the formatter reads tokens, not a parse, and
+cannot tell `List<Int>` from `a < b`. Normalising more is a later style version, said in the release notes; the style
+belongs to the compiler version that formats (F8). A comment keeps its text; a trailing line comment has one space before it, a block comment the spacing the
 source gave it; a block comment's later lines are kept as written. At most one blank line in a row, none at the start of the file or after
-`{`; no trailing whitespace; LF line ends; one newline at the end; a byte order mark stays.
+`{`; no trailing whitespace; LF line ends; one newline at the end; a byte order mark stays. A line comment's
+trailing whitespace and the CR of its CRLF belong to the gap after it (#120 C4), so a line end is replaced whole and no
+edit ends between CR and LF.
 
 **Invariants** (tested over the corpus and generated layouts, §15's vectors):
 
@@ -1293,7 +1300,7 @@ source gave it; a block comment's later lines are kept as written. At most one b
 | F1 | **L12.** Formatting never changes the checked program except for positions: the IR export (positions removed), the ABI manifest, the description and the script hash are the same before and after; the generated Java differs only in its position comments | `JscFormatTest` (IR, manifest, Java) and the toolchain's `JscFormatHashTest` (script hash, size and ABI manifest of every example, formatted, from generated layouts, with its libraries formatted) |
 | F2 | **Idempotent:** `fmt(fmt(x)) == fmt(x)`, byte for byte | the same tests, every input |
 | F3 | **Comments:** every comment survives, with its text, in the same order, attached to the same token (the token it follows, or the one it precedes at the start of a line) | the same tests: the comment and token sequences, compared |
-| F4 | **Refusal:** a file the lexer or the parser refuses is not formatted (the file is parsed alone, as the checker does when it cannot read its libraries: the names it imports may start constructors, and, when that parse fails in a file with imports, every capitalised name may, for an imported enum's variants; the first parse's error is the one answered): `lang.format` answers the first error and no text, the server no edit, `joust fmt` an error and leaves the file as it was; never a partial rewrite. The formatter also checks its own output (the same tokens and comments, re-lexed, with a line break between the same pairs) and refuses rather than return text that differs in anything but whitespace | `JscFormatTest`: every single-token deletion of the corpus is refused or formatted with the same tokens; the self-check |
+| F4 | **Refusal:** a file the lexer or the parser refuses is not formatted (*r9 after #120 C3:* the file is parsed with the type and variant names its imports bring, read as the build's loader reads them, from the project the front end passes (`lang.format`'s `id` and `files`); when an import cannot be read, the file alone, only its `java:` names; a file that then does not parse is refused, never formatted by guessing which names are types): `lang.format` answers the first error and no text, the server no edit, `joust fmt` an error and leaves the file as it was; never a partial rewrite. The formatter also checks its own output (the same tokens and comments, re-lexed, with a line break between the same pairs) and refuses rather than return text that differs in anything but whitespace | `JscFormatTest`: every single-token deletion of the corpus is refused or formatted with the same tokens; the self-check |
 | F5 | **Engines:** the Java (JVM) and the JS/Wasm engines give the same bytes for every input | `lang-in-node`'s parity file carries the formatted text of every corpus file |
 | F6 | **Latency (L7):** formatting the 1,889-line file takes at most the 60 ms of L10's analysis bound (p95, the server's worker, warm), and a `textDocument/formatting` answer is one edit of the whole document | `measure-l10` |
 
@@ -1307,6 +1314,31 @@ headerless `jsc 1` form and the explicit header; a byte order mark; tabs (indent
 a comment kept); an empty file and a file of comments only.
 
 **As built (M5d).**
+
+- **Round r2 (#120):**
+  - *C3:* no capitalised-names retry (`Checker.importedTypes`). The CLIs pass the project: `joust fmt` the contracts
+    directory with the npm packages' libraries, or a named file's directory; `jsc --fmt` its directory argument. The
+    server passes the file's project, as for the lowering.
+  - *F1:* both CLIs decode UTF-8 strictly. A file that is not valid UTF-8 is refused, that file only.
+  - *F2, S2:* a rewritten file keeps its mode. A read-only file is refused ("read-only", never made writable).
+    `jsc --fmt` refuses a linked directory, as `joust fmt` does.
+  - *F5:* both CLIs exit 0 formatted (with `--check`: already was), 1 not formatted (`--check`), 2 a file refused,
+    3 usage; `joust help` says so.
+  - *S3:* `joust fmt` without paths formats the configured contracts directory only inside the project root.
+  - *C1:* the server binds a formatting result to the document's lifetime (its state) as well as its version.
+  - *C2, F6:* range formatting keeps only edits inside the range. The whitespace ending at the range's first item is cut
+    at the range's start (a line start) and sets that line's indentation; nothing outside the range changes.
+  - *F3:* the server asks only an engine whose `lang.info` lists `format`. The worker answers any other request
+    "unsupported", which is no failure (no backoff, no quarantine).
+  - *S1:* an engine's answer is applied only when its edits replace whitespace with spaces, tabs and line ends (or a
+    block comment with itself, CRLF made LF), never touch the BOM, and give its text.
+  - *F8:* advisory-mode formatting (the bundled compiler) is labelled in the server's log. Its style is the bundled
+    compiler's, which a project's `jsc --fmt` or `joust fmt --check` at another version may not share once the style
+    changes.
+  - *F7:* the library listing walks `node_modules` once per change of it (directory mtimes), then lists only the
+    packages that ship a `joust-lib/`.
+  - *Fuzzing:* the hand-off to #95 is recorded in §15's fuzz note below and in #120's round-r2 reply. A fuzz target
+    belongs there, with `JscFormatTest`'s invariants (`Layouts`, `same`) as its oracle.
 
 - **Core:** `JscFormat` (julc-state-dsl) formats over the lexer's token and comment spans (`Lexer.lex(src, comments)`),
   not over the `Syntax` tree, so F4 of §1 (the tree holds no trivia) needs no change to the parser. `JscLang.formatJson`
@@ -1559,6 +1591,11 @@ later decision, like D11's automation.
   invariants E1–E8 (the lock gate agrees with `joust build` and never accepts; the lock is a confined snapshot input;
   configurations run only a user-installed `joust-lsp`; they work headless; the package is valid and reproducible; the
   release step only attaches, never publishes; the docs never recommend workspace code) and the vectors.
+- **r9, round r2** (2026-11-15; #120 round 1): §15's F4 refusal reads the build's import environment (no
+  capitalised-names retry, C3); the style is versioned and keeps other spacing as written (F4); the CLIs' exit codes
+  (F5), strict UTF-8 (F1), modes and read-only files (F2, S2), the project-confined default target (S3); the server's
+  lifetime binding (C1), range confinement (C2, F6), CRLF after line comments (C4), feature check (F3), whitespace-only
+  check (S1), advisory label (F8) and listing cache (F7), in the as-built notes.
 - **r9** (2026-11-15; with the M5d implementation): §15 states the formatter before its code: the style, invariants
   F1–F6 (L12's hash and IR, idempotence, comments, refusal of files that do not parse, engine parity, latency) and the
   attack and edge vectors; L7 points to it. The as-built notes follow the code. The indentation rule (one level per line that opens brackets,

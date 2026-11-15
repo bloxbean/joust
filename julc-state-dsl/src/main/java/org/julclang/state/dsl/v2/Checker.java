@@ -357,6 +357,34 @@ final class Checker {
     }
 
     /** Loads the main file and its libraries: each module once, dependencies first; an import cycle is refused. */
+    /**
+     * ADR-0021 r9 §15 F4 (#120 C3): the type, enum and variant names the file's imports bring, as the build reads them (a
+     * library's from the library; a {@code java:} import's capitalised names), or null when an import of a module does not
+     * resolve or load ({@code modules} null: the file alone, whose relative and package imports are not read). The
+     * formatter parses with exactly these, so it refuses what the build's parser refuses.
+     */
+    static Set<String> importedTypes(String source, String id, JscModules modules) {
+        var loader = new Loader(modules == null ? JscModules.NONE : modules);
+        if (id != null) loader.stack.push(id);
+        var types = new HashSet<String>();
+        for (Import im : Parser.imports(source)) {
+            if (im.from().startsWith("java:")) {
+                for (String n : im.names()) if (Character.isUpperCase(n.charAt(0))) types.add(n);
+                continue;
+            }
+            if (im.contract() || !isModuleSpec(im.from())) continue;
+            if (modules == null) return null;
+            JscModules.Source s = JscModules.isRelative(im.from()) || JscModules.isPackage(im.from()) ? modules.resolve(id, im.from()) : null;
+            if (s == null) return null;
+            try {
+                types.addAll(loader.load(s, im.pos()).typeNames());
+            } catch (JscException e) {
+                return null;
+            }
+        }
+        return types;
+    }
+
     private static final class Loader {
         final JscModules modules;
         final Map<String, Module> loaded = new HashMap<>();

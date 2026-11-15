@@ -23,6 +23,75 @@ class JscFormatTest {
 
     static final Path DSL = Path.of("../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl");
 
+    /**
+     * #120 C3: the formatter's parse reads the import environment the build reads, and guesses nothing. A contract
+     * that imports a valid library and builds an undeclared {@code Nope { … }} is refused (the build's parser refuses it,
+     * JSC0129), with its project and alone; the imported enum's variants parse with the project, and alone the file is
+     * refused rather than formatted by guessing.
+     */
+    @Test
+    void theParseIsTheBuildsWithItsImports() {
+        String lib = "jsc 1\nlibrary t\nfn f(x: Int): Int = x\n";
+        String bad = "jsc 1\npackage t\nimport { f } from \"./lib.jsc\"\ncontract C {\nstate { n: Int }\ninit() { return Nope { n: 0 } }\n}\n";
+        var modules = JscModules.of(java.util.Map.of("t/lib.jsc", lib, "t/C.jsc", bad));
+        var withProject = JscFormat.format(bad, "t/C.jsc", modules);
+        assertNull(withProject.text(), "refused with its project");
+        assertEquals("JSC0129", withProject.code());
+        assertNull(JscFormat.format(bad).text(), "refused alone");
+        assertTrue(JscLang.formatJson(bad, "t/C.jsc", java.util.Map.of("t/lib.jsc", lib, "t/C.jsc", bad)).startsWith("{\"ok\":false"));
+        // The build refuses it at the same place.
+        var e = org.junit.jupiter.api.Assertions.assertThrows(org.julclang.state.dsl.JscException.class, () -> JscV2.lower(bad, "C.jsc", "t/C.jsc", modules));
+        assertEquals("JSC0129", e.code);
+        // An imported enum's variant as a constructor and a pattern: formatted with the project; refused alone.
+        String fees = "jsc 1\nlibrary t\nenum Tier { Basic, Gold { since: Int } }\n";
+        String shop = "jsc 1\npackage t\nimport { Tier } from \"./fees.jsc\"\ncontract S {\n state { t: Tier }\n init() { return { t: Gold { since: 1 } } }\n"
+                + " view v(): Int = match t { Basic => 0, Gold { since: n } => n }\n}\n";
+        var shopModules = JscModules.of(java.util.Map.of("t/fees.jsc", fees, "t/S.jsc", shop));
+        var ok = JscFormat.format(shop, "t/S.jsc", shopModules);
+        assertTrue(ok.ok(), ok.error());
+        assertNull(JscFormat.format(shop).text(), "alone, its variants are unknown: refused, not guessed");
+    }
+
+    /**
+     * #120 C4: a line comment's CR is the gap's, so no edit starts or ends between the CR and the LF of a CRLF (an LSP
+     * position cannot name that point); a whole-file application of the edits is the formatted text.
+     */
+    @Test
+    void noEditSplitsACrlf() {
+        String src = "\uFEFFjsc 1\r\npackage t\r\ncontract C {\r\n  state { n: Int }\r\n  init() { require(true , \"😀 𝐀\") ; return {n: 0} } // 😀  \r\n"
+                + "  // a\t \r\n}\r\n";
+        var r = JscFormat.format(src);
+        assertTrue(r.ok(), r.error());
+        for (JscFormat.Edit e : r.edits()) {
+            for (int at : new int[]{e.start(), e.end()}) {
+                assertTrue(at == 0 || at >= src.length() || !(src.charAt(at - 1) == '\r' && src.charAt(at) == '\n'), "an edit boundary inside a CRLF at " + at + ": " + r.edits());
+            }
+        }
+        assertEquals(r.text(), apply(src, r.edits()));
+        assertTrue(r.text().indexOf('\r') < 0);
+        assertTrue(r.text().contains("// 😀\n"), r.text());
+    }
+
+    /**
+     * #120 F4: style version 1 keeps spacing within a line that is not around `,`, `.`, brackets, `;` and braces, as
+     * written (a later normalisation is a new style version, §15).
+     */
+    @Test
+    void styleOneKeepsOtherSpacingAsWritten() {
+        assertEquals(1, JscFormat.STYLE);
+        String src = "jsc 1\npackage t\n\ncontract C {\n  state { n: Int, xs: List< Int > }\n\n  init() {\n    return { n: max (1+2*3, 0), xs: [] }\n  }\n}\n";
+        var r = JscFormat.format(src);
+        assertTrue(r.ok(), r.error());
+        assertEquals(src, r.text());
+        assertTrue(JscLang.formatJson(src).contains("\"style\":1"));
+    }
+
+    /** #120 C3: a file of examples/dsl is formatted as a module of its project (its imports read), others alone. */
+    static JscFormat.Result fmt(Path p, String text) {
+        String id = JscLangTest.exampleId(p);
+        return id == null ? JscFormat.format(text) : JscFormat.format(text, id, Examples.modules());
+    }
+
     /** The edits applied to {@code src}, last first (they are in order and do not overlap). */
     static String apply(String src, List<JscFormat.Edit> edits) {
         var b = new StringBuilder(src);
@@ -148,7 +217,7 @@ class JscFormatTest {
         for (Path p : corpus()) {
             String src = Files.readString(p);
             String file = p.getFileName().toString();
-            var r = JscFormat.format(src);
+            var r = fmt(p, src);
             if (!r.ok()) {
                 refused++;
                 assertNull(r.text(), file);
@@ -160,9 +229,9 @@ class JscFormatTest {
             }
             formatted++;
             String f = r.text();
-            assertEquals(f, JscFormat.format(f).text(), file + ": F2, idempotent");
+            assertEquals(f, fmt(p, f).text(), file + ": F2, idempotent");
             assertEquals(f, apply(src, r.edits()), file + ": the edits give the formatted text");
-            assertTrue(JscFormat.format(f).edits().isEmpty(), file + ": a formatted file needs no edit");
+            assertTrue(fmt(p, f).edits().isEmpty(), file + ": a formatted file needs no edit");
             assertEquals(tokens(src), tokens(f), file + ": the same tokens");
             assertEquals(comments(src), comments(f), file + ": F3, the same comments in order");
             String lowerable = null;
@@ -181,7 +250,7 @@ class JscFormatTest {
             // to the same text.
             for (int k = 0; k < 3; k++) {
                 String layout = Layouts.relayout(src, rnd);
-                var lr = JscFormat.format(layout);
+                var lr = fmt(p, layout);
                 assertTrue(lr.ok(), file + ": a layout of a formatted file formats: " + lr.error());
                 assertEquals(f, lr.text(), file + ": a generated layout formats to the same text");
                 assertEquals(f, apply(layout, lr.edits()), file + ": a layout's edits give the formatted text");
@@ -199,7 +268,7 @@ class JscFormatTest {
         int refused = 0;
         for (Path p : corpus().subList(0, Math.min(25, corpus().size()))) {
             String src = Files.readString(p);
-            if (!JscFormat.format(src).ok()) continue;
+            if (!fmt(p, src).ok()) continue;
             List<Lexer.Tok> toks = Lexer.lex(src);
             for (int i = 0; i < toks.size() - 1; i += 7) {
                 Lexer.Tok t = toks.get(i);
@@ -208,7 +277,7 @@ class JscFormatTest {
                 for (int l = 0; l < t.line() - 1; l++) off += lines[l].length() + 1;
                 off += t.col() - 1;
                 String mutated = src.substring(0, off) + src.substring(off + (t.end() - t.col()));
-                var r = JscFormat.format(mutated);
+                var r = fmt(p, mutated);
                 if (r.ok()) assertEquals(tokens(mutated), tokens(r.text()), p + ": a deletion either refused or formatted with its tokens");
                 else {
                     assertNull(r.text());
