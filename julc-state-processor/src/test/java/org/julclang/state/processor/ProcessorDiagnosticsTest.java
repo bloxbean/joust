@@ -287,7 +287,7 @@ class ProcessorDiagnosticsTest {
 
         // Design F2 (r2): the marker is the one the dsl writes. A real lowering of c.jsc, with a fixed-width local put
         // into its fn, is linted; it compiles cleanly as lowered.
-        String lowered = org.julclang.state.dsl.v2.JscV2.lower("jsc 2\nlibrary t\nfn twice(x: Int): Int = x * 2\n", "c.jsc").java();
+        String lowered = org.julclang.state.dsl.v2.JscV2.lower("jsc 1\nlibrary t\nfn twice(x: Int): Int = x * 2\n", "c.jsc").java();
         assertTrue(lowered.contains(JoustProcessor.JSC_LIBRARY_MARKER), lowered);
         assertTrue(compileSource(lowered).success(), "the lowering as is");
         int at = lowered.indexOf("return ", lowered.indexOf("twice("));

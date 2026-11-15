@@ -48,8 +48,8 @@ class JscV2DiagnosticsTest {
             int coded = count(s, "\\.error\\(\"JSC") + count(s, "\\bwarn\\([^,]+, \"JSC");
             assertEquals(calls - count(s, "void warn\\("), coded, f + ": every error(…) and warn(…) names its code");
         }
-        // The build's own (JscMain): the ABI manifest check, the v1 deprecation warning; and migrate's refusals (D16).
-        for (String f : List.of("JscMain.java", "Migrate.java")) {
+        // The build's own (JscMain): the ABI manifest check.
+        for (String f : List.of("JscMain.java")) {
             String src = Files.readString(Path.of("src/main/java/org/julclang/state/dsl/" + f));
             var main = Pattern.compile("error\\[(JSC\\d{4})\\]|new JscException\\([^,]+, [^,]+, \"(JSC\\d{4})\"").matcher(src);
             while (main.find()) used.put(main.group(1) != null ? main.group(1) : main.group(2), "error");
@@ -77,20 +77,16 @@ class JscV2DiagnosticsTest {
     }
 
     @Test
-    void codesReachTheMessages_onBothFormats() {
-        var e = assertThrows(JscException.class, () -> JscV2.lower("jsc 2\npackage t\ncontract C {\n  state { n: Int }\n"
+    void codesReachTheMessages() {
+        var e = assertThrows(JscException.class, () -> JscV2.lower("jsc 1\npackage t\ncontract C {\n  state { n: Int }\n"
                 + "  init() { let x = 1\n return { n: 0 } }\n}\n", "C.jsc"));
         assertNotNull(e.code);
         assertTrue(e.format("C.jsc").startsWith("C.jsc:5:12: error[" + e.code + "]: values are immutable"), e.format("C.jsc"));
-        var w = JscMain.lowerWithWarnings("jsc 2\npackage t\ncontract C {\n  state { owner: Key, last: Int }\n"
+        var w = JscMain.lowerWithWarnings("jsc 1\npackage t\ncontract C {\n  state { owner: Key, last: Int }\n"
                 + "  init() { return { owner: caller, last: 0 } }\n  action a() { return { ...state, last: validFrom } }\n}\n", "C.jsc");
         assertEquals(1, w.diagnostics().size());
         assertTrue(w.warnings().get(0).matches("C\\.jsc:6:41: warning\\[JSC9\\d{3}\\]: a stores a value of the validity window in last.*"),
                 w.warnings().get(0));
-        // v1 keeps its format: no code.
-        var v1 = assertThrows(JscException.class, () -> JscMain.lower("package t\ncontract C { state n: Int\n init() { n = } }\n", "C.jsc"));
-        assertNull(v1.code);
-        assertTrue(v1.format("C.jsc").contains(": error: "), v1.format("C.jsc"));
     }
 
     @Test

@@ -23,8 +23,7 @@ public final class JscMain {
 
     /**
      * The Java source and warnings for one .jsc file's text. {@code fileName} is the bare file name, embedded in the
-     * generated Java: a {@code .jsc} 2 file's name may contain only ASCII letters, digits, '.', '_' and '-' (security S3);
-     * a v1 file's name is escaped instead, so existing v1 files keep rebuilding (ADR-0018 D16, review F16).
+     * generated Java: it may contain only ASCII letters, digits, '.', '_' and '-' (security S3).
      */
     public static Lowered lowerWithWarnings(String source, String fileName) {
         return lowerWithWarnings(source, fileName, null, org.julclang.state.dsl.v2.JscModules.NONE);
@@ -42,31 +41,13 @@ public final class JscMain {
     /** As above, with the certified Java libraries its {@code java:} imports may name (ADR-0018 D9, M4b). */
     public static Lowered lowerWithWarnings(String source, String fileName, String id, org.julclang.state.dsl.v2.JscModules modules,
                                             org.julclang.state.dsl.v2.JavaLibraries javaLibraries) {
-        if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
-            var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName, id, modules, javaLibraries);
-            return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
-                    fileName, r.sourceMapJson(), r.abiJson(), r.irJson(), r.libraries());
-        }
-        // .jsc v1 (ADR-0005): frozen, not removed (ADR-0018 D16): it compiles exactly as before, so a deployed v1 script stays
-        // rebuildable, and every build says it is deprecated and how to migrate.
-        var r = Lowering.lower(Parser.parse(source), fileName);
-        var warnings = new ArrayList<Warning>();
-        var first = Lexer.lex(source).get(0);
-        warnings.add(new Warning(first.line(), first.col(), "JSC9006", DEPRECATED));
-        warnings.addAll(r.warnings());
-        return new Lowered(r.java(), List.copyOf(warnings), fileName, null, null, null, List.of());
+        var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName, id, modules, javaLibraries);
+        return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
+                fileName, r.sourceMapJson(), r.abiJson(), r.irJson(), r.libraries());
     }
 
-    /** The v1 deprecation warning (ADR-0018 D16), at the first token of every v1 file. */
-    public static final String DEPRECATED = "this file is .jsc v1, which is deprecated (ADR-0018 D16): it still builds, unchanged,"
-            + " but new code is .jsc 2; run `joust migrate` (Gradle: the migrateJsc task) to translate it, as a new script";
-
-    /** A located warning: line and column in the .jsc file, and its stable code ({@code .jsc} 2; null for v1) (D12). */
+    /** A located warning: line and column in the .jsc file, and its stable code (D12). */
     public record Warning(int line, int col, String code, String message) {
-        public Warning(int line, int col, String message) {
-            this(line, col, null, message);
-        }
-
         /** {@code file:line:col: warning[CODE]: message} ({@code warning:} without a code). */
         public String format(String file) {
             return file + ":" + line + ":" + col + ": warning" + (code == null ? "" : "[" + code + "]") + ": " + message;
@@ -74,8 +55,8 @@ public final class JscMain {
     }
 
     /**
-     * Lowered Java and located warnings; for {@code .jsc} 2 also the source map and the ABI manifest (ADR-0018 D12) and
-     * the checked IR as JSON (D15, M1b), null for v1.
+     * Lowered Java and located warnings, the source map and the ABI manifest (ADR-0018 D12) and the checked IR as JSON
+     * (D15, M1b).
      */
     public record Lowered(String java, java.util.List<Warning> diagnostics, String fileName, String sourceMapJson, String abiJson,
                           String irJson, java.util.List<org.julclang.state.dsl.v2.JscV2.LibraryUse> libraries) {
@@ -100,11 +81,9 @@ public final class JscMain {
         return outputPath(source, null);
     }
 
-    /** As {@link #outputPath(String)}; a {@code .jsc} 2 library's class is its capitalised file name {@code fileName}. */
+    /** As {@link #outputPath(String)}; a library's class is its capitalised file name {@code fileName}. */
     public static String outputPath(String source, String fileName) {
-        if (org.julclang.state.dsl.v2.JscV2.isV2(source)) return org.julclang.state.dsl.v2.JscV2.outputPath(source, fileName);
-        var c = Parser.parse(source);
-        return c.pkg().replace('.', '/') + "/" + c.name() + ".java";
+        return org.julclang.state.dsl.v2.JscV2.outputPath(source, fileName);
     }
 
     /**
@@ -164,7 +143,7 @@ public final class JscMain {
         var modules = modules(src, files);
         for (Path f : files) {
             String text = Files.readString(f);
-            if (!org.julclang.state.dsl.v2.JscV2.isV2(text) || org.julclang.state.dsl.v2.JscV2.isLibrary(text)) continue;
+            if (org.julclang.state.dsl.v2.JscV2.isLibrary(text)) continue;
             String name = src.relativize(f).toString();
             var lowered = org.julclang.state.dsl.v2.JscV2.lower(text, f.getFileName().toString(), id(src, f), modules, javaLibraries);
             String path = lowered.javaPath();
@@ -184,259 +163,6 @@ public final class JscMain {
         if (errors > 0) return 1;
         System.out.println("jsc: " + checked + " ABI manifest(s) agree with the processor's descriptions");
         return 0;
-    }
-
-    /**
-     * {@code JscMain --migrate <srcDir> <outDir> [--in-place]} (ADR-0018 D16; Gradle's {@code migrateJsc}): every
-     * {@code .jsc} v1 file under {@code srcDir} translated to {@code .jsc} 2 ({@link Migrate}). By default each is written
-     * to {@code outDir} under its relative path, and nothing in {@code srcDir} changes. With {@code --in-place} the v1 file
-     * is replaced and its text kept beside it as {@code Name.jsc.v1}. 0 when every v1 file migrated, 1 on a refusal.
-     */
-    public static int migrate(Path src, Path out, boolean inPlace) throws IOException {
-        return migrate(src, out, inPlace, Path.of("").toAbsolutePath());
-    }
-
-    /** {@link #migrate(Path, Path, boolean)}, with links checked below {@code workingDir} (issue #75; a test's own). */
-    static int migrate(Path src, Path out, boolean inPlace, Path workingDir) throws IOException {
-        List<Path> files = new ArrayList<>();
-        boolean fileArgument = false;
-        if (Files.isRegularFile(src, java.nio.file.LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(src)) {
-            files.add(src);
-            fileArgument = true;
-            src = src.getParent() == null ? Path.of(".") : src.getParent();
-        } else if (Files.isDirectory(src)) {
-            // Files.walk does not follow directory links (review r2 S2).
-            try (Stream<Path> s = Files.walk(src)) {
-                s.filter(p -> p.toString().endsWith(".jsc")).sorted().forEach(files::add);
-            }
-        }
-        // Review r2 C2: without --in-place, nothing under the sources is written: the output may not be the source
-        // directory or lie inside it (by path or by link), and no target may be a source.
-        if (!inPlace && within(out, src)) {
-            System.err.println(src + ":1:1: error[JSC1108]: the output directory " + out + " is the source directory or inside it: without"
-                    + " --in-place, migrate writes outside the sources and never changes them; choose another output directory, or"
-                    + " pass --in-place to replace the v1 files (each kept as Name.jsc.v1)");
-            return 1;
-        }
-        int migrated = 0, refused = 0;
-        // Review r3 C2: every target checked before anything is written. A target is refused when, through any link on
-        // its path (resolved at its nearest existing ancestor), it lies in the sources, or is the same file as any source.
-        if (!inPlace) {
-            int bad = 0;
-            for (Path f : files) {
-                Path target = out.resolve(src.relativize(f).toString()).normalize();
-                String why = targetProblem(target, out, src, files);
-                if (why != null) {
-                    System.err.println(src.relativize(f) + ":1:1: error[JSC1108]: the output " + target + " " + why + ": without --in-place,"
-                            + " migrate never changes the sources; nothing was written");
-                    bad++;
-                }
-            }
-            if (bad > 0) return 1;
-        }
-        for (Path f : files) {
-            String name = src.relativize(f).toString();
-            try {
-                if (inPlace) inPlaceProblem(f, src, fileArgument, workingDir);
-                String text = Files.readString(f);
-                if (org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
-                var r = Migrate.migrate(text, f.getFileName().toString());
-                Path backup = f.resolveSibling(f.getFileName() + ".v1");
-                Path target = inPlace ? f : out.resolve(name).normalize();
-                if (inPlace) {
-                    // Never through a link and never over an existing file, a dangling link included (review r2 S2).
-                    try {
-                        Files.writeString(backup, text, java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE,
-                                java.nio.file.LinkOption.NOFOLLOW_LINKS);
-                    } catch (java.nio.file.FileAlreadyExistsException e) {
-                        throw new JscException(1, 1, "JSC1107", backup.getFileName() + " exists already: migrate --in-place keeps the v1"
-                                + " text there and never overwrites it; move it away first");
-                    }
-                    // Review r3 S5: a new file renamed over the source replaces the directory entry, never the contents of a
-                    // shared inode or a link's target.
-                    renameOver(f, r.source());
-                } else {
-                    // Review r4 C5: a new file renamed over the target, never a write into an existing one, so no inode
-                    // a target shares with a source is ever changed.
-                    Files.createDirectories(target.getParent());
-                    renameOver(target, r.source());
-                }
-                r.notes().forEach(n -> System.err.println(n.format(name)));
-                System.out.println("jsc: migrated " + name + " to .jsc 2: " + target + (inPlace ? " (the v1 text is in " + backup.getFileName() + ")" : ""));
-                migrated++;
-            } catch (JscException e) {
-                System.err.println(e.format(name));
-                refused++;
-            }
-        }
-        if (migrated > 0) {
-            // Review r2 S1: the Gradle path records no deployments, so the warning is said here, once per run.
-            System.err.println("jsc: warning: " + Migrate.NEW_SCRIPT);
-            if (inPlace) {
-                System.err.println("jsc: warning: the next build replaces the v1 contracts' generated Java, validators and clients: copy"
-                        + " build/classes/java/main/META-INF (scripts, descriptions) and the generated clients first if v1 instances are"
-                        + " deployed; the v1 text is in Name.jsc.v1, and rebuilding it with this JOUST version gives the same v1 scripts");
-            }
-        }
-        if (migrated == 0 && refused == 0) System.out.println("jsc: no .jsc v1 file under " + src);
-        return refused > 0 ? 1 : 0;
-    }
-
-    /** Writes {@code text} to a new file beside {@code target} and renames it over {@code target} (review r3 S5, r4 C5). */
-    static void renameOver(Path target, String text) throws IOException {
-        Path tmp = Files.createTempFile(target.getParent(), "." + target.getFileName(), ".migrating");
-        try {
-            Files.writeString(tmp, text);
-            Files.move(tmp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(tmp);
-        }
-    }
-
-    /** Why a default-mode target may not be written, or null (review r2 C2, r3 C2, r4 C5). */
-    static String targetProblem(Path target, Path out, Path src, List<Path> sources) throws IOException {
-        if (!target.toAbsolutePath().normalize().startsWith(out.toAbsolutePath().normalize())) return "is outside the output directory";
-        if (within(target, src)) return "lies in the sources (through a link on its path)";
-        Path real = resolved(target);
-        if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-            // The same file as a source by identity (a hard link has its own path, but the source's inode).
-            for (Path s : sources) {
-                if (Files.exists(s) && Files.isSameFile(target, s)) return "is the source " + s + " (the same file)";
-            }
-            if (links(target) > 1) return "has more than one hard link (another path shares its contents)";
-        }
-        for (Path s : sources) {
-            if (Files.exists(s) && real.equals(s.toRealPath())) return "is the source " + s;
-        }
-        return null;
-    }
-
-    /** The hard links of {@code f} (1 where the file system does not say). */
-    static int links(Path f) throws IOException {
-        try {
-            return Files.getAttribute(f, "unix:nlink", java.nio.file.LinkOption.NOFOLLOW_LINKS) instanceof Integer n ? n : 1;
-        } catch (UnsupportedOperationException | IllegalArgumentException e) {
-            return 1;
-        }
-    }
-
-    /**
-     * Review r3 S5: a file migrated in place is a plain file of the sources: no symbolic link (JSC1109), no hard link
-     * shared with another path, and no link on its path under the source directory (its real path lies under the source
-     * directory's, and no directory between them is a link), nor anywhere on its path below {@code workingDir} (issue
-     * #75), found by identity and checked on the physical path (#80 review C1, F1, S2); a path with {@code ..} is refused.
-     * Limits: a link above the working directory is the user's file system and allowed; a file outside the working
-     * directory is checked from its source directory down only (#80 review S10); on Windows a directory junction below
-     * the working directory is refused, but one outside it, and hard links (no {@code unix:nlink}), are not seen. The
-     * checks and the writes are separate steps (#80 review S8): they assume no concurrent writer changes the tree during
-     * the run (one that swaps a directory for a link between them could redirect the write; such a writer could do worse).
-     */
-    static void inPlaceProblem(Path f, Path src, boolean fileArgument, Path workingDir) throws IOException {
-        if (Files.isSymbolicLink(f)) {
-            throw new JscException(1, 1, "JSC1109", "this file is a symbolic link: migrate --in-place never replaces a file through a"
-                    + " link; migrate a copy, or the link's target in its own project");
-        }
-        try {
-            Object links = Files.getAttribute(f, "unix:nlink", java.nio.file.LinkOption.NOFOLLOW_LINKS);
-            if (links instanceof Integer n && n > 1) {
-                throw new JscException(1, 1, "JSC1109", "this file has " + n + " hard links: another path shares its contents (another"
-                        + " project, still on v1?), so migrate --in-place does not replace it; migrate a copy");
-            }
-        } catch (UnsupportedOperationException | IllegalArgumentException e) {
-            // No unix attributes (Windows): the real-path rule below still applies.
-        }
-        // #80 review C1, S2: never a path with '..': the file system resolves it after the link before it (src/.. is the
-        // link's target's parent), while normalize() drops both, so a link would vanish from the checks below.
-        for (Path part : f) {
-            if (part.toString().equals("..")) {
-                throw new JscException(1, 1, "JSC1109", "the path " + f + " contains '..': migrate --in-place takes a path without it,"
-                        + " so no link on the way can be skipped; give the path as it is");
-            }
-        }
-        Path root = src.toAbsolutePath().normalize();
-        Path abs = f.toAbsolutePath().normalize();
-        // Review r4 S8: a file given by itself has its directory as its root: that directory may not be a link either.
-        // (Links further up, such as macOS's /tmp, are the user's file system, not a shared source.)
-        if (fileArgument && Files.isSymbolicLink(root)) {
-            throw new JscException(1, 1, "JSC1109", "the directory " + root.getFileName() + " is a symbolic link: migrate --in-place never"
-                    + " replaces a file through a link; migrate the link's target in its own project");
-        }
-        for (Path p = abs.getParent(); p != null && p.startsWith(root) && !p.equals(root); p = p.getParent()) {
-            if (Files.isSymbolicLink(p)) {
-                throw new JscException(1, 1, "JSC1109", "the directory " + root.relativize(p) + " is a symbolic link: migrate --in-place"
-                        + " never replaces a file through a link; migrate the link's target in its own project");
-            }
-        }
-        // Issue #75 (security S8): above the source directory too, every directory below the working directory (src in
-        // src/lib/Points.jsc, linked to ../sharedsrc, say). Links at or above the working directory (macOS's /tmp and
-        // /var, a linked home) are the user's file system, not a shared source, and are not refused. #80 review C1, F1,
-        // S2: the working directory is found among the file's ancestors by identity, not by spelling (a path given as
-        // /tmp/… while the JVM's working directory is /private/tmp/…), and each directory below it is checked on the
-        // physical path: a symbolic link, or any directory whose real path is not itself (a Windows junction, which
-        // Files.isSymbolicLink does not see), is refused. ('..' was refused above: it is resolved after the link before it.)
-        Path cwdReal = workingDir.toRealPath();
-        var ancestors = new ArrayList<Path>();
-        for (Path p = abs.getParent(); p != null; p = p.getParent()) ancestors.add(0, p);
-        Path anchor = null;
-        for (Path p : ancestors) {
-            if (Files.isSameFile(p, cwdReal)) {
-                anchor = p;
-                break;
-            }
-        }
-        if (anchor != null) {
-            Path physical = cwdReal;
-            for (Path name : anchor.relativize(abs.getParent())) {
-                if (name.toString().isEmpty()) continue;
-                Path next = physical.resolve(name);
-                if (isLink(next, physical)) {
-                    throw new JscException(1, 1, "JSC1109", "the directory " + cwdReal.relativize(next) + " is a symbolic link (or another"
-                            + " kind of link): migrate --in-place never replaces a file through a link; migrate the link's target in its"
-                            + " own project");
-                }
-                physical = next.toRealPath();   // the spelling on disk (a case-insensitive file system keeps its own)
-            }
-        }
-        if (!f.toRealPath().startsWith(src.toRealPath())) {
-            throw new JscException(1, 1, "JSC1109", "this file's real path " + f.toRealPath() + " is not under the source directory: migrate"
-                    + " --in-place replaces only files of the sources");
-        }
-    }
-
-    /**
-     * Whether directory {@code dir}, an entry of {@code parentReal} (a real path), is a link (#80 review C3): a symbolic
-     * link, or another kind (a Windows junction, which the JDK reports as neither a link nor a directory without
-     * following it), or an entry whose real path is not in {@code parentReal} under its own name. The name is compared
-     * ignoring case and in Unicode normal form C, since a case- or normalization-insensitive file system answers a
-     * spelling other than the stored one with the same directory (#80 review C9, F9); a link between two such names is
-     * still a symbolic link.
-     */
-    static boolean isLink(Path dir, Path parentReal) throws IOException {
-        var attrs = Files.readAttributes(dir, java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
-        if (attrs.isSymbolicLink() || attrs.isOther() || !attrs.isDirectory()) return true;
-        Path real = dir.toRealPath();
-        return !parentReal.equals(real.getParent()) || !nfc(real.getFileName().toString()).equalsIgnoreCase(nfc(dir.getFileName().toString()));
-    }
-
-    /** A name in Unicode normal form C (#80 review C9, F9): a file system that ignores normalization keeps its own form. */
-    private static String nfc(String name) {
-        return java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFC);
-    }
-
-    /** {@code p}'s real path, through its nearest existing ancestor (the rest appended as written). */
-    static Path resolved(Path p) throws IOException {
-        Path d = p.toAbsolutePath().normalize();
-        Path e = d;
-        while (e != null && !Files.exists(e)) e = e.getParent();
-        return e == null ? d : e.toRealPath().resolve(e.relativize(d)).normalize();
-    }
-
-    /** Whether {@code dir} is {@code root} or inside it, by path or, where both exist, by their real paths. */
-    static boolean within(Path dir, Path root) throws IOException {
-        Path d = dir.toAbsolutePath().normalize(), r = root.toAbsolutePath().normalize();
-        if (d.startsWith(r)) return true;
-        // The nearest existing ancestor of dir, by its real path (a link into the sources counts).
-        return Files.exists(r) && resolved(d).startsWith(r.toRealPath());
     }
 
     /**
@@ -463,7 +189,7 @@ public final class JscMain {
             Path unit = Path.of(m.group(1)).toAbsolutePath().normalize();
             if (!unit.startsWith(root)) continue;
             Path map = unit.resolveSibling(unit.getFileName().toString().replace(".java", ".jscmap.json"));
-            if (!Files.exists(map)) continue;   // v1: no source map, but every generated line names its .jsc line
+            if (!Files.exists(map)) continue;
             int javaLine = Integer.parseInt(m.group(2));
             // javac prints the source line, then a caret under the column.
             int col = i + 2 < lines.length && lines[i + 2].strip().equals("^") ? lines[i + 2].indexOf('^') + 1 : -1;
@@ -721,14 +447,6 @@ public final class JscMain {
         if (args.length == 3 && args[0].equals("--check-library-classes")) return checkLibraryClasses(Path.of(args[1]), args[2]);
         if (args.length == 3 && args[0].equals("--library-manifest")) return libraryManifest(Path.of(args[1]), Path.of(args[2]));
         if (args.length == 3 && args[0].equals("--check-abi")) return checkAgainstDescriptions(Path.of(args[1]), Path.of(args[2]));
-        if (args.length >= 3 && args[0].equals("--migrate")) {
-            boolean inPlace = args.length == 4 && args[3].equals("--in-place");
-            if (args.length > 4 || args.length == 4 && !inPlace) {
-                System.err.println("usage: JscMain --migrate <srcDir> <outDir> [--in-place]");
-                return 2;
-            }
-            return migrate(Path.of(args[1]), Path.of(args[2]), inPlace);
-        }
         if (args.length == 4 && args[0].equals("--remap")) return remap(Path.of(args[1]), Path.of(args[2]), Path.of(args[3]));
         boolean accept = args.length == 3 && args[2].equals("--accept-abi");
         if (args.length != 2 && !accept) {

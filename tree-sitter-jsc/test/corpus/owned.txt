@@ -2,7 +2,7 @@
 Owned types, owned methods, shared and into, admits, an owned invariant (M3a)
 ================================================================================
 
-jsc 2
+jsc 1
 package t
 contract C {
   state { a: Int }

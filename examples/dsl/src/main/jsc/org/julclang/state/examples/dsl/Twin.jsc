@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M3a1 coverage (#101 review S2): the instance's datum and an object's decode as each other. State is

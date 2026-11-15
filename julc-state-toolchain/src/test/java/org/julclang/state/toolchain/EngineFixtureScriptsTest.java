@@ -171,7 +171,7 @@ class EngineFixtureScriptsTest {
 
     static final Map<String, Map<String, Toolchain.Contract>> BUILDS = new LinkedHashMap<>();
 
-    /** The example's Java contracts and its .jsc file of that name (examples/dsl's v1 contracts), by simple name. */
+    /** The example's Java contracts and its .jsc file of that name (examples/dsl's Jar and Points), by simple name. */
     static Map<String, Toolchain.Contract> buildAll(String example, String name) {
         try {
             Map<String, String> sources = new LinkedHashMap<>();

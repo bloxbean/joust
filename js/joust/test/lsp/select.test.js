@@ -63,7 +63,7 @@ test('a trusted project inside its folder runs its own engine, from a private co
     assert.equal(s.mode, 'project-matched');
     assert.ok(s.engine.file.startsWith(join(storage, 'engines')), s.engine.file);
     assert.match(dirname(s.engine.file), /[0-9a-f]{64}$/);
-    const r = await host.analyze(s.key, s.engine, { file: 'C.jsc', source: 'jsc 2\npackage t\ncontract C { state { n: Int } }\n' });
+    const r = await host.analyze(s.key, s.engine, { file: 'C.jsc', source: 'jsc 1\npackage t\ncontract C { state { n: Int } }\n' });
     assert.ok(r.model, JSON.stringify(r));
     assert.equal(existsSync(sentinel), false, 'no planted module ran');
   } finally {

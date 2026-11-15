@@ -6,7 +6,5 @@ known/v2/keyword-as-name.jsc invalid valid Names: a keyword is a name here where
 known/v2/format-character.jsc invalid valid File-level lexical rules: format characters (JSC0145) only in Java
 known/v2/lone-cr.jsc invalid valid File-level lexical rules: line ends other than LF and CRLF (JSC0147) only in Java
 known/v2/package-keyword.jsc invalid valid File-level lexical rules: a Java keyword as a package segment (JSC0111) only in Java
-known/v2/byte-order-mark.jsc invalid valid File-level lexical rules: a leading byte-order mark; Java's dispatch reads it as v1
 known/v2/minus-minus.jsc invalid valid `--x`: one token refused in Java (JSC0135), two minus signs here
 known/v2/some-pattern.jsc valid invalid `Some` as a bare pattern: accepted by Java, needs `(name)` here
-known/v1/non-ascii-name.jsc valid invalid v1 names: non-ASCII letters accepted by the v1 lexer, not here

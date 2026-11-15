@@ -66,9 +66,8 @@ public class Pool {
 - `@Batched(only = true)` drops the direct call. Nobody can then spend the instance with that action directly, which
   would invalidate the batches being built against it. Use it for actions users race on.
 
-In `.jsc` the modifier is `batched` (and `batched only` for intent-only). In `.jsc` 2 a batched action that pays
-says `open` ([the rules](/languages/jsc-reference/#modifiers)); `joust migrate` does not translate a v1 batched action
-(`JSC1103`):
+In `.jsc` the modifier is `batched` (and `batched only` for intent-only). In `.jsc` a batched action that pays
+says `open` ([the rules](/languages/jsc-reference/#modifiers)):
 
 <Tabs syncKey="lang">
 <TabItem label="Java">
@@ -257,5 +256,4 @@ a bound as an argument and check it: `buy(maxPrice)` refuses if the price has ri
   <LinkCard title="Tutorial: pool with batched intents" href="/tutorials/pool-batched-intents/" description="Lock intents, cancel one, batch the rest on DevKit." />
   <LinkCard title="Owned objects" href="/contracts/owned-objects/" description="Contention-free per-user state." />
   <LinkCard title="Time" href="/contracts/time/" description="Clock checks, which batched actions use instead of @ValidAfter." />
-  <LinkCard title=".jsc v1" href="/languages/jsc-v1/" description="The batched modifier in the v1 contract language." />
 </CardGrid>

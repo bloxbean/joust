@@ -18,7 +18,7 @@ class JscV2M1aCheckerTest {
 
     static String contract(String members) {
         return """
-                jsc 2
+                jsc 1
                 package t
                 import { slice, concat } from "std/bytes"
                 enum Phase { Open, Closed { day: Int, by: Key } }
@@ -49,7 +49,7 @@ class JscV2M1aCheckerTest {
     }
 
     static String file(String decls) {
-        return "jsc 2\npackage t\n" + decls + "\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n";
+        return "jsc 1\npackage t\n" + decls + "\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n";
     }
 
     // ------------------------------------------------------------------ enums (D5)
@@ -198,9 +198,9 @@ class JscV2M1aCheckerTest {
     void bigMaps_onlyAsStateFields() {
         bad("action a(m: BigMap<Key, Int>) { return state }", "state field only", 0, 13);
         badSource(file("type X = { m: BigMap<Key, Int> }"), "state field only", 3, 15);
-        badSource("jsc 2\npackage t\ncontract C {\n  state { m: BigMap<Key, Bool> }\n  init() { return { m: BigMap.empty() } }\n}\n",
+        badSource("jsc 1\npackage t\ncontract C {\n  state { m: BigMap<Key, Bool> }\n  init() { return { m: BigMap.empty() } }\n}\n",
                 "Int or Bytes values", 4, 26);
-        badSource("jsc 2\npackage t\ncontract C {\n  state { m: List<BigMap<Key, Int>> }\n  init() { return { m: [] } }\n}\n",
+        badSource("jsc 1\npackage t\ncontract C {\n  state { m: List<BigMap<Key, Int>> }\n  init() { return { m: [] } }\n}\n",
                 "state field only", 4, 19);
         bad("action a() { const b = bal\n return state }", "cannot be bound to a const", 0, 24);
         bad("action a(c: Bool) { return { ...state, bal: c ? bal : bal.set(owner, 1) } }", "chosen by a condition", 0, 45);

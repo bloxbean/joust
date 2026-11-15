@@ -1,0 +1,5 @@
+// The version as written: an integer's _ is not dropped from it (#111 r1: S1, C1).
+jsc 1_
+package corpus
+
+contract C { state { n: Int } init() { return { n: 0 } } }

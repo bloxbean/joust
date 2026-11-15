@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 import { Entry, isAllowed, limitOf, entry, total, clamp, tag } from "java:com.example.compliance.AllowList"

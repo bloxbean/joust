@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "90f619e68af3eeae3e20c0b8ac785f90fc9373e960ef029e9136ac774b226ffa",
+  "sourceSha256": "823d075dcc9d43fd6293915b638d012fb4e8beb3eac64c7a205b78bdbf7d5d6b",
   "package": "org.julclang.state.examples.dsl",
   "contract": "StdMath",
   "source": "StdMath.jsc",

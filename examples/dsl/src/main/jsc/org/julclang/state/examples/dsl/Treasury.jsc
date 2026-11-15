@@ -1,7 +1,7 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
-// examples/treasury in .jsc 2 (ADR-0018 M2b, J11; ADR-0009): a multisig treasury. A council of keys decides by quorum;
+// examples/treasury in .jsc (ADR-0018 M2b, J11; ADR-0009): a multisig treasury. A council of keys decides by quorum;
 // a guardian credential fixed at deploy (params) can freeze it, here a script that approves through a zero withdrawal;
 // every state keeps a reachable quorum (an invariant, beside the generated check that the council's keys are sorted,
 // distinct and 28 bytes); payouts, council changes and freezes emit authenticated events.

@@ -81,8 +81,6 @@ export const SIDEBAR = [
       { label: '.jsc', slug: 'languages/jsc', badge: { text: 'Preview', variant: 'caution' } },
       { label: '.jsc reference', slug: 'languages/jsc-reference' },
       { label: '.jsc standard library', slug: 'languages/jsc-std' },
-      { label: 'Migrating from .jsc v1', slug: 'languages/jsc-migration' },
-      { label: '.jsc v1 (deprecated)', slug: 'languages/jsc-v1' },
       { label: 'TypeScript', slug: 'languages/typescript', badge: { text: 'Experimental', variant: 'caution' } },
     ],
   },

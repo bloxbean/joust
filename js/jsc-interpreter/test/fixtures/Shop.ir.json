@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "ed363dd5ace13ee10b1e29f0a7e219f9df730a0d4018abf59c5d08d5e89989e4",
+  "sourceSha256": "8c93a647e90da7c6de823fe883dc63414ec1340e5412bf88276ab405965cd9a8",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Shop",
   "source": "Shop.jsc",
@@ -26,7 +26,7 @@
     {
       "library": "org.julclang.state.examples.dsl.Fees",
       "source": "fees.jsc",
-      "sourceSha256": "f9780036c1a59912129e6b551b01e74dc212fc878219f91f2f83516fb7c66c96",
+      "sourceSha256": "b343066278df19eb54d67ccbebc93dd245f0a4c6f5d998d389cae37aeac2c007",
       "records": [{ "name": "Line", "fields": [{ "name": "to", "type": "Key" }, { "name": "bps", "type": "Int" }], "at": [11, 1] }],
       "enums": [
         {

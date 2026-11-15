@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M2b: what the treasury port leaves out, on every leg. A quorum over the params (a board fixed at deploy) and

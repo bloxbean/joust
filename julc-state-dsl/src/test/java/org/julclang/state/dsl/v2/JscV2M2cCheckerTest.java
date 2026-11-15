@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2M2cCheckerTest {
 
     static final String ORACLE = """
-            jsc 2
+            jsc 1
             package t
             type Point = { when: Int, by: Key }
             enum Phase { Open, Closed }
@@ -30,7 +30,7 @@ class JscV2M2cCheckerTest {
             """;
 
     static final String POT = """
-            jsc 2
+            jsc 1
             package t
             type Note = { to: Key, tag: Bytes }
             contract Pot {
@@ -42,7 +42,7 @@ class JscV2M2cCheckerTest {
             """;
 
     static final String PLAIN = """
-            jsc 2
+            jsc 1
             package t
             contract Plain {
               state { n: Int }
@@ -51,7 +51,7 @@ class JscV2M2cCheckerTest {
             """;
 
     static final String BIG = """
-            jsc 2
+            jsc 1
             package t
             contract Big {
               state { m: BigMap<Key, Int> }
@@ -62,7 +62,7 @@ class JscV2M2cCheckerTest {
     /** A contract importing Oracle, Pot and Plain, with params naming an instance of each; members start at line 10. */
     static String shop(String members) {
         return """
-                jsc 2
+                jsc 1
                 package t
                 import contract { Oracle } from "./Oracle.jsc"
                 import contract { Pot } from "./Pot.jsc"
@@ -128,7 +128,7 @@ class JscV2M2cCheckerTest {
     void importContract_resolvesInTheBuild_andRefusesWhatCannotBeRead() {
         assertTrue(java("  fn f(o: Oracle.State): Int = o.price").contains("import t.Oracle;"),
                 "the imported contract's class is imported where its types are named (JuLC follows imports only)");
-        String head = "jsc 2\npackage t\n";
+        String head = "jsc 1\npackage t\n";
         String tail = "contract Shop {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n";
         badSource(head + "@@import contract { Gone } from \"./Gone.jsc\"\n" + tail, "no contract ./Gone.jsc");
         badSource(head + "@@import contract { Oracle } from \"java:t.Oracle\"\n" + tail, "not supported yet");
@@ -195,9 +195,9 @@ class JscV2M2cCheckerTest {
         bad("  view v(@@o: reads params.oracle): Int = 0", "reads is for an action or destroy");
         bad("  action a(@@o: reads params.cap) { return state }", "params.cap is Int");
         bad("  action a(@@o: reads params.nope) { return state }", "the params have no field nope");
-        badSource("jsc 2\npackage t\nimport contract { Big } from \"./Big.jsc\"\ncontract Shop {\n  params { big: Instance<Big> }\n  state { n: Int }\n"
+        badSource("jsc 1\npackage t\nimport contract { Big } from \"./Big.jsc\"\ncontract Shop {\n  params { big: Instance<Big> }\n  state { n: Int }\n"
                 + "  init() { return { n: 0 } }\n  action a(@@b: reads params.big) { return state }\n}\n", "keeps BigMap state");
-        badSource("jsc 2\npackage t\nimport contract { Oracle } from \"./Oracle.jsc\"\ncontract Shop {\n  state { n: Int }\n"
+        badSource("jsc 1\npackage t\nimport contract { Oracle } from \"./Oracle.jsc\"\ncontract Shop {\n  state { n: Int }\n"
                 + "  init() { return { n: 0 } }\n  action a(@@o: reads params.oracle) { return state }\n}\n", "declares no params");
         // A destroy may read too.
         assertTrue(java("  destroy close(o: reads params.oracle) only owner { pay(owner, min(balance, o.price)) }").contains("@Reads"));
@@ -289,7 +289,7 @@ class JscV2M2cCheckerTest {
         var w = lower(full("  action a() open { send(wallet(owner), Value.lovelace(1), validFrom)\n return state }")).diagnostics();
         assertTrue(w.stream().anyMatch(x -> "JSC9009".equals(x.code())), w.toString());
         // Stored values: a field of the state and of a record, held in their wire form, read back in the ledger's order.
-        String stored = lower("jsc 2\npackage t\ntype Box = { v: Value, n: Int }\ncontract S {\n  state { v: Value, b: Option<Box> }\n"
+        String stored = lower("jsc 1\npackage t\ntype Box = { v: Value, n: Int }\ncontract S {\n  state { v: Value, b: Option<Box> }\n"
                 + "  init() { return { v: Value.none(), b: None } }\n  action a() payable open {\n    accept(Value.none())\n"
                 + "    return { ...state, v: v + Value.lovelace(1), b: Some(Box { v: v, n: 1 }) }\n  }\n"
                 + "  view same(): Bool = (b ?? Box { v: Value.none(), n: 0 }) == Box { v: v, n: 1 }\n}\n").java();
@@ -297,8 +297,8 @@ class JscV2M2cCheckerTest {
         assertTrue(stored.contains("new Box(ValueAdapter.toWire(ValueAdapter.fromWire(s__.v())), BigInteger.valueOf(1L))"), stored);
         assertTrue(stored.contains("ValueAdapter.same(ValueAdapter.fromWire(a__.v()), ValueAdapter.fromWire(b__.v()))"), stored);
         // Still not: a Value in a List, an Option or a Map, or reaching a method through its parameters.
-        badSource("jsc 2\npackage t\ncontract S {\n  state { v: List<@@Value> }\n  init() { return { v: [] } }\n}\n", "a Value cannot be an element of a List");
-        badSource("jsc 2\npackage t\ntype Box = { v: Value }\ncontract S {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
+        badSource("jsc 1\npackage t\ncontract S {\n  state { v: List<@@Value> }\n  init() { return { v: [] } }\n}\n", "a Value cannot be an element of a List");
+        badSource("jsc 1\npackage t\ntype Box = { v: Value }\ncontract S {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
                 + "  action a(b: @@Box) { return state }\n}\n", "a method parameter cannot hold a Value");
     }
 

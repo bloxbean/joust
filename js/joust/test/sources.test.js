@@ -18,16 +18,16 @@ const put = (root, rel, text) => {
 test('sources: node_modules, dot-directories and links under the source directory are never project code (#92 S12)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'joust-sources-'));
   const contracts = join(dir, 'contracts');
-  put(contracts, 'app/Counter.jsc', 'jsc 2\npackage app\n');
+  put(contracts, 'app/Counter.jsc', 'jsc 1\npackage app\n');
   put(contracts, 'app/Require.java', 'package app; public final class Require {}');
   // The issue's case: a package installed under contracts/ ships a Require of the project's package.
   put(contracts, 'node_modules/evil/joust-lib/app/Require.java', 'package app; public final class Require { /* evil */ }');
-  put(contracts, 'node_modules/@scope/pkg/joust-lib/app/Other.jsc', 'jsc 2\nlibrary app\n');
-  put(contracts, 'app/node_modules/deep/X.jsc', 'jsc 2\npackage app\n');
-  put(contracts, '.cache/app/Hidden.jsc', 'jsc 2\npackage app\n');
+  put(contracts, 'node_modules/@scope/pkg/joust-lib/app/Other.jsc', 'jsc 1\nlibrary app\n');
+  put(contracts, 'app/node_modules/deep/X.jsc', 'jsc 1\npackage app\n');
+  put(contracts, '.cache/app/Hidden.jsc', 'jsc 1\npackage app\n');
   put(contracts, 'app/.idea/Y.java', 'package app; class Y {}');
   // Links: to a file outside, and to a directory outside, are not followed.
-  put(dir, 'outside/app/Linked.jsc', 'jsc 2\npackage app\n');
+  put(dir, 'outside/app/Linked.jsc', 'jsc 1\npackage app\n');
   symlinkSync(join(dir, 'outside/app/Linked.jsc'), join(contracts, 'app/Linked.jsc'));
   symlinkSync(join(dir, 'outside'), join(contracts, 'shared'));
   const files = sources(contracts);

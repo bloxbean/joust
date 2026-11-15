@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/bank in .jsc 2 (ADR-0018 M3a, J11; ADR-0003): a bank with one account per customer. The bank's own state

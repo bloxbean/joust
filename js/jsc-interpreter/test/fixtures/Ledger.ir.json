@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "a242b1d2389454dad9b59c94c3d34360b55f77417834a90c7ad7eb9f3954705a",
+  "sourceSha256": "f18fad4cbb12d4424823beb062a22ef6d6594b7d889fb9b5ee7dae2075c44a9f",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Ledger",
   "source": "Ledger.jsc",
