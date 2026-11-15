@@ -15,7 +15,16 @@ end
 
 local function clients()
   local out = {}
-  for _, c in ipairs(vim.lsp.get_clients({ bufnr = 0 })) do table.insert(out, { name = c.name, cmd = c.config.cmd }) end
+  for _, c in ipairs(vim.lsp.get_clients({ bufnr = 0 })) do
+    -- #121 MF1: what the server advertised to Neovim (the docs' table says which features each editor gets).
+    local caps = c.server_capabilities or {}
+    local has = {}
+    for _, k in ipairs({ 'hoverProvider', 'definitionProvider', 'referencesProvider', 'documentSymbolProvider', 'completionProvider',
+      'codeActionProvider', 'renameProvider', 'documentFormattingProvider', 'documentRangeFormattingProvider' }) do
+      has[k] = caps[k] ~= nil and caps[k] ~= false
+    end
+    table.insert(out, { name = c.name, cmd = c.config.cmd, capabilities = has })
+  end
   return out
 end
 

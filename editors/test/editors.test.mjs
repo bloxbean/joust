@@ -110,6 +110,8 @@ test('E8: the docs never show npx for an editor; the project-local server and --
   assert.match(page, /require\('joust'\)\.setup\(\{ path = '\/absolute\/path\/to\/joust-lsp' \}\)/);
   assert.match(page, /command = "\/ABSOLUTE\/PATH\/TO\/node"/);
   assert.match(page, /args = \["\/ABSOLUTE\/PATH\/TO\/joust-lsp", "--stdio"\]/);
+  // #121 MF1: the page says which editor gets the editing features.
+  assert.match(page, /\| Completion, quick fixes, rename, Format Document \| ✓ \| — \|/);
   // A test of the docs test: an npx line in a block is caught.
   assert.throws(() => { for (const b of blocks('```lua\ncmd = { "npx", "joust-lsp" }\n```\n')) assert.ok(!/\bnpx\b/.test(b.text)); });
 });
@@ -200,6 +202,12 @@ test('E5: Neovim starts the user-installed server through the module and gets .j
     const [node, server, stdio] = out.clients[0].cmd;
     assert.ok(node.startsWith('/') && node.endsWith('/node') && !node.startsWith(ws.dir), node);
     assert.deepEqual([server, stdio], [realpathSync(LSP), '--stdio']);
+    // #121 MF1: the read-only features, and no editing ones (D4a), as the editors page's table says.
+    const caps = out.clients[0].capabilities;
+    for (const k of ['hoverProvider', 'definitionProvider', 'referencesProvider', 'documentSymbolProvider']) assert.equal(caps[k], true, k);
+    for (const k of ['completionProvider', 'codeActionProvider', 'renameProvider', 'documentFormattingProvider', 'documentRangeFormattingProvider']) {
+      assert.equal(caps[k], false, k);
+    }
     if (pkg) assert.equal(out.treesitter, true, 'tree-sitter highlighting with the package');
     assert.ok(!existsSync(ws.sentinel), `workspace code ran: ${existsSync(ws.sentinel) && readFileSync(ws.sentinel, 'utf8')}`);
   });

@@ -1,19 +1,25 @@
 ---
 title: "Editors"
-description: "Edit .jsc with diagnostics, navigation, completion and formatting: the VS Code extension, Neovim, Helix and any LSP client, with the tree-sitter grammar for highlighting."
+description: "Edit .jsc with diagnostics and navigation in VS Code, Neovim, Helix and any LSP client, plus completion, quick fixes, rename and formatting in VS Code; joust fmt formats everywhere, and the tree-sitter grammar highlights."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 `.jsc` has a language server, `joust-lsp`. It ships in the `@julclang/joust` npm package and analyses each file with
 the same front end the build uses, so its errors are the build's ([ADR-0021](https://github.com/bloxbean/joust/blob/main/docs/adr/0021-jsc-language-server-and-vscode-extension.md)).
-It provides:
-- diagnostics as you type, with stable `JSC` codes;
-- hover, go to definition and references, across files and into `java:` libraries;
-- completion and quick fixes;
-- the formatter (`joust fmt`);
-- in a trusted npm project, the build on save. It runs in memory and adds the processor's and JuLC's errors, the
-  ABI comparison, and the `joust.lock` check.
+What each editor gets:
+
+| | VS Code | Neovim, Helix, other LSP clients |
+|---|---|---|
+| Diagnostics as you type, with stable `JSC` codes | ✓ | ✓ |
+| Hover, go to definition, references (across files and into `java:` libraries), symbols, folding, selection ranges, semantic tokens | ✓ | ✓ |
+| Completion, quick fixes, rename, Format Document | ✓ | — |
+| The build on save (in memory: the processor's and JuLC's errors, the ABI comparison, the `joust.lock` check) | ✓, in a trusted project | — |
+| `joust fmt` from the command line | ✓ | ✓ |
+
+The editing features are VS Code's only. The server offers an edit only to a client known to reject one when the text
+changed after the answer was computed (ADR-0021 D4a), and the extension is that client. Other editors get the
+read-only features. There, format with `joust fmt <file>` from the shell, or from an editor hook that runs it on save.
 
 The server never writes into your project. It runs advisory, with its own bundled compiler, unless the project's own
 compiler matches it.
