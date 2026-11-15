@@ -1719,11 +1719,12 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * C9 (r2), C14 (#114): a file a build read changed (a buffer opened on it with other text, edited, closed, or the file
    * changed on disk: `text` null, unknown): that build's results end, shown or in flight, whatever document they are on.
    */
-  async function invalidateInput(path, text, { resolve = true } = {}) {
+  async function invalidateInput(path, text, { resolve = true, digest } = {}) {
     // S3 on #115: a path the reader refused is never resolved (D4b rule 1): it is no build input either.
     const r = path && (resolve ? (await real(path)) ?? path : path);
     if (!r) return;
-    const h = text == null ? null : hash(text);
+    // C3 on #121: a caller may give the recorded form itself (a lock's absent, unreadable or readable state).
+    const h = digest !== undefined ? digest : text == null ? null : hash(text);
     const differs = (inputs) => inputs && inputs.has(r) && inputs.get(r) !== h;
     for (const b of inFlight.values()) {
       if (differs(b.disk)) {
@@ -1842,19 +1843,32 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (!sel.root || !inside(sel.root, sel.folder)) return null;
     const rel = `${relative(sel.folder, sel.root).split(sep).join('/') || '.'}/joust.lock`;
     const full = join(sel.root, 'joust.lock');
-    const r = await reader.read(sel.folder, rel, { cap: LOCK_CAP });
-    if (r.error === 'missing') {
-      disk.set((await real(full)) ?? full, null);
-      return null;
+    const v = await lockState(sel.folder, rel);
+    // C1 on #121: recorded under the project's logical joust.lock (a link replaced, removed or retargeted is still this
+    // input), and under a confined link's target as well; S3: a refused link is never resolved (D4b rule 1).
+    disk.set(full, v.digest);
+    if (v.readable) {
+      const target = await real(full);
+      if (target && target !== full) disk.set(target, v.digest);
     }
+    return v.lock;
+  }
+
+  /**
+   * The project's joust.lock as a build input (E3): `{ lock, digest, readable }`, where `lock` is what lockDecision
+   * reads (null: absent; `{ text }`; `{ unreadable }`) and `digest` its recorded form, which tells the three apart
+   * (C3 on #121: null absent, `unreadable:<why>`, or the text's SHA-256).
+   */
+  async function lockState(folder, rel) {
+    const r = await reader.read(folder, rel, { cap: LOCK_CAP });
+    if (r.error === 'missing') return { lock: null, digest: null, readable: false };
     if (r.error) {
-      disk.set((await real(full)) ?? full, `unreadable:${r.error}`);
-      return { unreadable: r.error === 'too-large' ? `larger than ${LOCK_CAP} bytes` : r.error === 'outside' || r.error === 'refused' ? 'it leads outside the workspace folder'
-        : r.error === 'not-a-file' ? 'not a regular file' : r.error };
+      const why = r.error === 'too-large' ? `larger than ${LOCK_CAP} bytes` : r.error === 'outside' || r.error === 'refused' ? 'it leads outside the workspace folder'
+        : r.error === 'not-a-file' ? 'not a regular file' : r.error;
+      return { lock: { unreadable: why }, digest: `unreadable:${r.error}`, readable: false };
     }
     const text = r.bytes.toString('utf8');
-    disk.set((await real(full)) ?? full, hash(text));
-    return { text };
+    return { lock: { text }, digest: hash(text), readable: true };
   }
 
   /**
@@ -2519,8 +2533,11 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       const folder = f && [...state.values()].map((st) => st.selection?.folder).find((d) => d && inside(f, d));
       if (!folder) continue;
       const rel = relative(folder, f).split(sep).join('/');
-      const now = await reader.read(folder, rel, { cap: LOCK_CAP });
-      await invalidateInput(f, now.error ? null : now.bytes.toString('utf8'));
+      // C1, C3, S3 on #121: by the logical path (never resolved), in the same three states the snapshot recorded; a
+      // confined link's target too.
+      const v = await lockState(folder, rel);
+      await invalidateInput(f, null, { resolve: false, digest: v.digest });
+      if (v.readable) await invalidateInput(f, null, { digest: v.digest });
     }
     const jsc = changes.filter((ch) => /\.jsc$/.test(ch.uri));
     if (changes.length > jsc.length + java.length + locks.length || !changes.length) {

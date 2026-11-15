@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { build } from '../../src/build.js';
+import { lockGate } from '../../src/libraries.js';
 import { ENGINE, HAS_ENGINE, startLsp, tmp, uriOf, VSCODE_CAPS } from './client.js';
 
 const skip = !HAS_ENGINE && 'needs the toolchain engine in js/joust/engine';
@@ -181,6 +182,82 @@ test('E3: a lock changed on disk while its build runs ends the build\'s results'
     lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(lockFile), type: 1 }] });
     const clean = await lsp.request('joust/checkBuild', { uri });
     assert.equal(clean.errors, 0, JSON.stringify(clean));
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('#121 F4: --accept-lock rewrites a lock that cannot be read, even when nothing needs pinning', () => {
+  const root = mkdtempSync(join(tmpdir(), 'joust-lock-f4-'));
+  writeFileSync(join(root, 'joust.lock'), '{ not json');
+  assert.match(lockGate({ generated: [], libraries: [], root, log: quiet })[0], /JSC0732.*cannot be read/);
+  assert.deepEqual(lockGate({ generated: [], libraries: [], root, acceptLock: true, log: quiet }), []);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, 'joust.lock'), 'utf8')), { lock: 1, libraries: {} });
+  assert.deepEqual(lockGate({ generated: [], libraries: [], root, log: quiet }), [], 'the advice works: the next build passes');
+});
+
+/** A project with no external library: a contract with no import, its ABI accepted, no joust.lock. */
+async function plainProject() {
+  const root = project();
+  writeFileSync(join(root, 'contracts', 'app', 'Shop.jsc'), PLAIN);
+  rmSync(join(root, 'node_modules', '@acme'), { recursive: true, force: true });
+  await build({ root, acceptAbi: true, log: quiet });
+  return root;
+}
+const PLAIN = SHOP.replace('import { fee } from "@acme/fees/fees.jsc"\n', '').replace(' + fee(price, 100)', '');
+
+async function pendingThen(lsp, uri, change) {
+  const pending = lsp.request('joust/checkBuild', { uri });
+  await new Promise((r) => setTimeout(r, 50));
+  change();
+  return pending;
+}
+
+test('#121 C1: a lock that is a link, replaced while its build runs, ends the build (the logical path is the input)', { skip, timeout: 300_000 }, async () => {
+  const root = project();
+  const lockFile = join(root, 'joust.lock');
+  await build({ root, acceptAbi: true, acceptLock: true, log: quiet });
+  const good = readFileSync(lockFile, 'utf8');
+  writeFileSync(join(root, 'pins.json'), good);
+  rmSync(lockFile);
+  symlinkSync('pins.json', lockFile);
+  const lsp = await startLsp({ folders: [root], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: {} });
+  try {
+    const uri = uriOf(join(root, 'contracts', 'app', 'Shop.jsc'));
+    lsp.open(uri, SHOP);
+    await lsp.until(() => lsp.statuses.find((s) => s.uri === uri && s.mode === 'project-matched'), 60000, 'project-matched');
+    await lsp.diagnostics(uri, 1, 60000);
+    assert.equal((await lsp.request('joust/checkBuild', { uri })).errors, 0, 'the linked lock pins the library');
+    const r = await pendingThen(lsp, uri, () => {
+      rmSync(lockFile);
+      writeFileSync(lockFile, good.replace(/"[0-9a-f]{64}"/, `"${'ab'.repeat(32)}"`));
+      lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(lockFile), type: 2 }] });
+    });
+    assert.match(r.error ?? '', /changed while it built/, JSON.stringify(r));
+    assert.equal((await lsp.request('joust/checkBuild', { uri })).ok, false, 'the next build reads the new lock');
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('#121 C3: a missing lock that becomes unreadable while its build runs ends the build', { skip, timeout: 300_000 }, async () => {
+  const root = await plainProject();
+  const lockFile = join(root, 'joust.lock');
+  rmSync(lockFile, { force: true });
+  const lsp = await startLsp({ folders: [root], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: {} });
+  try {
+    const uri = uriOf(join(root, 'contracts', 'app', 'Shop.jsc'));
+    lsp.open(uri, PLAIN);
+    await lsp.until(() => lsp.statuses.find((s) => s.uri === uri && s.mode === 'project-matched'), 60000, 'project-matched');
+    await lsp.diagnostics(uri, 1, 60000);
+    assert.equal((await lsp.request('joust/checkBuild', { uri })).errors, 0, 'no library, no lock: clean');
+    const r = await pendingThen(lsp, uri, () => {
+      mkdirSync(lockFile);
+      lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(lockFile), type: 1 }] });
+    });
+    assert.match(r.error ?? '', /changed while it built/, JSON.stringify(r));
+    const next = await lsp.request('joust/checkBuild', { uri });
+    assert.equal(next.ok, false, JSON.stringify(next));
   } finally {
     await lsp.stop();
   }

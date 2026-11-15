@@ -139,9 +139,9 @@ export function lockGate({ generated, libraries = [], root, acceptLock = false, 
   }
   const d = lockDecision({ used, lock });
   if (d.lockError && !acceptLock) return [d.lockError.line];
-  // Accepting rewrites a lock that cannot be read; one that pins exactly what the build needs is left as it is.
+  // Accepting rewrites a lock that cannot be read (#121 F4: also when nothing needs pinning, as JSC0732 advises); one
+  // that pins exactly what the build needs is left as it is.
   if (!d.errors.length && !d.unused.length && !d.lockError) return [];
-  if (d.lockError && !Object.keys(d.now).length) return [];
   if (acceptLock === true) {
     const sorted = Object.fromEntries(Object.entries(d.now).sort());
     writeFileSync(file, JSON.stringify({ lock: 1, libraries: sorted }, null, 2) + '\n');
