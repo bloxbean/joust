@@ -9,6 +9,7 @@
 
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { writeRegular } from './write-regular.js';
 
 // Review r2 (#82 S4): links are never followed. A link under joust-lib/ could make files outside the package (the
 // project's own contracts, say) package sources, or loop.
@@ -98,7 +99,9 @@ export function lockDecision({ used, lock }) {
       if (!j || j.lock !== 1 || typeof j.libraries !== 'object' || j.libraries === null) throw new Error('not a version 1 lock');
       pinned = j.libraries;
     } catch (e) {
-      const line = `error[JSC0732]: joust.lock cannot be read (${e.message}): fix it, or rewrite it with joust build --accept-lock`;
+      // #121 S5: a link is never written through, so the advice for one is to replace it.
+      const line = lock.link ? `error[JSC0732]: joust.lock cannot be read (${e.message}): replace the link with the lock file itself`
+        : `error[JSC0732]: joust.lock cannot be read (${e.message}): fix it, or rewrite it with joust build --accept-lock`;
       return { now, errors: [], unused: [], lockError: { code: 'JSC0732', message: e.message, line } };
     }
   }
@@ -144,7 +147,8 @@ export function lockGate({ generated, libraries = [], root, acceptLock = false, 
   if (!d.errors.length && !d.unused.length && !d.lockError) return [];
   if (acceptLock === true) {
     const sorted = Object.fromEntries(Object.entries(d.now).sort());
-    writeFileSync(file, JSON.stringify({ lock: 1, libraries: sorted }, null, 2) + '\n');
+    const refused = writeRegular(file, JSON.stringify({ lock: 1, libraries: sorted }, null, 2) + '\n');
+    if (refused) return [`error[JSC0732]: joust.lock not accepted: it ${refused}`];
     log(`joust.lock: ${exists ? 'updated' : 'created'} (${Object.keys(d.now).length} pinned librar${Object.keys(d.now).length === 1 ? 'y' : 'ies'}); review and commit it`);
     return [];
   }

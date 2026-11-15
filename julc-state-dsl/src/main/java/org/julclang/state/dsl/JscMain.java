@@ -162,7 +162,8 @@ public final class JscMain {
                     + bound.now() + " (a source changed since the diff); review the diff again (jscAbiDiff, Accept ABI…)";
         }
         if (abi.equals(old)) return null;
-        Files.writeString(committed, abi);
+        String refused = writeRegular(committed, abi);
+        if (refused != null) return name + ":1:1: error[JSC0002]: not accepted: the ABI manifest " + committed.getFileName() + " " + refused;
         System.err.println(name + ": note: " + (exists ? "accepted the changed" : "created the") + " ABI manifest " + committed.getFileName()
                 + " (" + bound.committed() + " -> " + now + "): commit it beside the .jsc file");
         return null;
@@ -173,7 +174,8 @@ public final class JscMain {
         String old = exists ? Files.readString(committed) : null;
         if (abi.equals(old)) return null;
         if (accept) {
-            Files.writeString(committed, abi);
+            String refused = writeRegular(committed, abi);
+            if (refused != null) return name + ":1:1: error[JSC0002]: not accepted: the ABI manifest " + committed.getFileName() + " " + refused;
             System.err.println(name + ": note: " + (exists ? "accepted the changed" : "created the") + " ABI manifest " + committed.getFileName()
                     + ": commit it beside the .jsc file");
             return null;
@@ -908,6 +910,40 @@ public final class JscMain {
      * --accept-lock}) writes the lock instead, to be reviewed and committed. The project's own {@code .jsc} libraries are
      * its code, pinned by its version control. 0 when every pin holds.
      */
+    /**
+     * #121 S5: writes {@code text} to {@code file} only as a regular file, never through a link (a link to a file outside
+     * the project would be overwritten, a dangling one would create a file there): a temporary file beside it, with its
+     * permissions, renamed over it. Null when written; else why not ("is a link: …", "is not a regular file").
+     */
+    static String writeRegular(Path file, String text) throws IOException {
+        if (Files.isSymbolicLink(file)) return "is a link: replace the link with the file itself, then accept again";
+        if (Files.exists(file, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return "is not a regular file: replace it with the file itself, then accept again";
+        }
+        Path dir = file.toAbsolutePath().getParent();
+        Path tmp = Files.createTempFile(dir, "." + file.getFileName(), ".tmp");
+        try {
+            Files.writeString(tmp, text);
+            if (Files.exists(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                try {
+                    Files.setPosixFilePermissions(tmp, Files.getPosixFilePermissions(file, java.nio.file.LinkOption.NOFOLLOW_LINKS));
+                } catch (UnsupportedOperationException e) {
+                    // not POSIX
+                }
+            } else {
+                try {
+                    Files.setPosixFilePermissions(tmp, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+                } catch (UnsupportedOperationException e) {
+                    // not POSIX
+                }
+            }
+            Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+        return null;
+    }
+
     public static int checkLock(Path lock, java.util.Collection<org.julclang.state.dsl.v2.JscV2.LibraryUse> used, boolean accept) throws IOException {
         var now = new java.util.TreeMap<String, String>();
         for (var u : used) if (u.external()) now.put(u.name(), u.sha256());
@@ -934,7 +970,11 @@ public final class JscMain {
             int i = 0;
             for (var e : now.entrySet()) json.append(i++ == 0 ? "\n" : ",\n").append("    \"").append(e.getKey()).append("\": \"").append(e.getValue()).append('"');
             json.append(now.isEmpty() ? "}\n}\n" : "\n  }\n}\n");
-            Files.writeString(lock, json.toString());
+            String refused = writeRegular(lock, json.toString());
+            if (refused != null) {
+                System.err.println(lock + ":1:1: error[JSC0732]: joust.lock not accepted: it " + refused);
+                return 1;
+            }
             System.err.println(lock + ": note: wrote joust.lock (" + now.size() + " pinned librar" + (now.size() == 1 ? "y" : "ies") + "): review and commit it");
             return 0;
         }

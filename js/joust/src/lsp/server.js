@@ -1865,7 +1865,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (r.error) {
       const why = r.error === 'too-large' ? `larger than ${LOCK_CAP} bytes` : r.error === 'outside' || r.error === 'refused' ? 'it leads outside the workspace folder'
         : r.error === 'not-a-file' ? 'not a regular file' : r.error;
-      return { lock: { unreadable: why }, digest: `unreadable:${r.error}`, readable: false };
+      // #121 S5: a link the reader refuses gets lockDecision's advice for a link (replace it), not --accept-lock's.
+      const link = r.error === 'outside' || r.error === 'refused';
+      return { lock: { unreadable: why, ...(link ? { link: true } : {}) }, digest: `unreadable:${r.error}`, readable: false };
     }
     const text = r.bytes.toString('utf8');
     return { lock: { text }, digest: hash(text), readable: true };

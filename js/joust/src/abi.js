@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { writeRegular } from './write-regular.js';
 
 /** `line N: committed …, now …` for the first line where two manifests differ. */
 export function firstDifference(committed, now) {
@@ -93,7 +94,12 @@ export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAb
     const old = exists ? readFileSync(committed, 'utf8') : null;
     if (old === g.abi) continue;
     if (acceptAbi === true) {   // only an explicit true accepts (a string "false" is not acceptance)
-      writeFileSync(committed, g.abi);
+      const why = writeRegular(committed, g.abi);
+      if (why) {
+        refused.add(g.javaFile);
+        errors.push(`${g.jscFile}:1:1: error[JSC0002]: not accepted: the ABI manifest ${relative(root, committed)} ${why}`);
+        continue;
+      }
       log(`${relative(root, committed)}: ${exists ? 'accepted the changed' : 'created the'} ABI manifest; commit it beside the .jsc file`);
       continue;
     }
@@ -113,7 +119,12 @@ export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAb
           + ' (a source changed since the diff); review the diff again (Accept ABI…, joust abi diff)');
         continue;
       }
-      writeFileSync(committed, g.abi);
+      const why = writeRegular(committed, g.abi);
+      if (why) {
+        refused.add(g.javaFile);
+        errors.push(`${g.jscFile}:1:1: error[JSC0002]: not accepted: the ABI manifest ${relative(root, committed)} ${why}`);
+        continue;
+      }
       log(`${relative(root, committed)}: ${exists ? 'accepted the changed' : 'created the'} ABI manifest (${bound.committed} -> ${now}); commit it beside the .jsc file`);
       continue;
     }
