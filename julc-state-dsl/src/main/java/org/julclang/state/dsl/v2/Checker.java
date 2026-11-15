@@ -2986,6 +2986,17 @@ final class Checker {
             throw at.error("JSC1302", "stakeSelf stakes the funds to the contract's own script, so it needs a withdraw handler (its rewards) and a"
                     + " certify handler (its registration and delegation); without them they are unreachable (ADR-0010 D2, I38)");
         }
+        // Review F1, S3 (A40, K47): an object's output under stakeSelf (its stake part) and a withdrawal beside objects are not
+        // covered by a contract yet, so neither is accepted beside owned types (a withdraw beside keyed types is JSC1244's).
+        if (!ownedTypes.isEmpty() && stakeSelf) {
+            Pos at = c.options().stream().filter(o -> o.name().equals("stakeSelf")).findFirst().get().pos();
+            throw at.error("JSC1305", "stakeSelf is not supported beside owned objects yet (" + String.join(", ", ownedTypes) + "): their outputs'"
+                    + " stake part is not covered (ADR-0010 D2, A40)");
+        }
+        if (!ownedTypes.isEmpty() && keyedDecls.isEmpty() && seen.containsKey(Ir.Kind.WITHDRAW)) {
+            throw seen.get(Ir.Kind.WITHDRAW).pos().error("JSC1305", "a withdraw handler is not supported beside owned objects yet ("
+                    + String.join(", ", ownedTypes) + "): reward sends composed with objects' payouts are not covered (ADR-0010, K42)");
+        }
         boolean bigState = stateFields.values().stream().anyMatch(t -> t instanceof Ty.BigMapT);
         for (Syntax.Method m : c.methods()) {
             boolean adopts = m.kind() == Kind.MIGRATE;

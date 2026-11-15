@@ -249,4 +249,6 @@ purpose('certify-funds', 'StakedVault', (p, m) => { m('certificate').body.stmts.
 purpose('vote-funds', 'StakedVault', (p, m) => { m('vote').body.stmts.unshift(fundsLet(90303)); }, '(JSC1315)');
 purpose('propose-funds', 'StakedVault', (p, m) => { m('proposal').body.stmts.unshift(fundsLet(90304)); }, '(JSC1315)');
 purpose('migrate-funds', 'CounterV2', (p, m) => { m('migrate').body.stmts.unshift(fundsLet(90305)); }, '(JSC1338)');
+// Review F1, S3 (r2): stakeSelf beside owned types (Bank's).
+purpose('stakeself-owned', 'Bank', (p) => { p.options.push({ name: 'stakeSelf', value: '1' }); }, '(JSC1305)');
 writeFileSync(new URL('./purpose-mutants.json', import.meta.url), JSON.stringify(purposeMutants, null, 1) + '\n');

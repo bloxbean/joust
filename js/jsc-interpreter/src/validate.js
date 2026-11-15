@@ -748,6 +748,8 @@ function purposeRules(p, owned, fail, contracts) {
   for (const f of p.fns ?? []) ledgerExpressions(f.body, `fn ${f.name}`, fail);
   const stake = p.options.filter((o) => o.name === 'stakeSelf');
   if (stake.length > 1 || stake.some((o) => o.value !== '1')) fail('options', 'the option stakeSelf is the flag "1", once (JSC1301)');
+  // Review F1, S3: not beside owned objects yet (their outputs' stake part is not covered).
+  if (stake.length > 0 && owned.length > 0) fail('options', 'the option stakeSelf is not supported beside owned types yet (JSC1305)');
   const stored = [...p.records, p.state, ...('params' in p ? [p.params] : []), ...p.enums.flatMap((e) => e.variants)];
   for (const c of contracts.values()) stored.push(c.state, ...c.records, ...c.enums.flatMap((e) => e.variants));
   for (const r of stored) {
@@ -765,6 +767,7 @@ function purposeRules(p, owned, fail, contracts) {
       if (seen.has(m.kind)) fail(where, `at most one ${m.kind}${m.kind === 'migrate' ? ' (JSC1337)' : ' handler (JSC1316)'}`);
       seen.set(m.kind, m);
     }
+    if (m.kind === 'withdraw' && owned.length > 0) fail(where, 'a withdraw handler is not supported beside owned types yet (JSC1305)');
     if (PURPOSES.has(m.kind)) {
       if (!('params' in p)) fail(where, 'a handler is governed by the params, which the contract lacks (JSC1317)');
       const shape = { certify: ['TxCert'], vote: ['Voter', 'GovernanceActionId', 'Vote'], propose: ['ProposalProcedure'] }[m.kind];

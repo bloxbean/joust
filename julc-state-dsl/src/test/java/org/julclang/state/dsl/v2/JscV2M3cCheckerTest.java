@@ -249,6 +249,12 @@ class JscV2M3cCheckerTest {
         cases.add(bad("JSC1322", "is not comparable",
                 pur("  vote v(voter: Voter, a: GovernanceActionId, x: Vote) " + Q + " = @@indexOf([Some(x)], Some(x)) != None\n")
                         .replace("package t\n", "package t\nimport { indexOf } from \"std/list\"\n")));
+        // Review F1, S3: stakeSelf, or a withdraw handler, beside owned objects (not covered yet).
+        String owned = "  owned Box { owner: Key, v: Int }\n  owned init Box.make() { return { owner: caller, v: 0 } }\n"
+                + "  owned destroy Box.close() only owner { pay(owner, balance) }\n";
+        cases.add(bad("JSC1305", "stakeSelf is not supported beside owned objects", pur("@@stakeSelf",
+                owned + "  withdraw w(amount: Int) " + Q + " { }\n  certify c(cert: TxCert) " + Q + " = true\n")));
+        cases.add(bad("JSC1305", "a withdraw handler is not supported beside owned objects", pur(owned + "  @@withdraw w(amount: Int) " + Q + " { }\n")));
         // ---- migration (ADR-0011 D4)
         cases.add(bad("JSC1303", "migrates to successor",
                 OLD.replace("only admin migrates to successor", "only admin migrates @@{").replace("{ }\n}", "\n}")));

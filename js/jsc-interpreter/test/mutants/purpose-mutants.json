@@ -166,5 +166,9 @@
  {
   "file": "purpose-migrate-funds.json",
   "message": "(JSC1338)"
+ },
+ {
+  "file": "purpose-stakeself-owned.json",
+  "message": "(JSC1305)"
  }
 ]

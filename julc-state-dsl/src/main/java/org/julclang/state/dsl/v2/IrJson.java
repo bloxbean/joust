@@ -1091,6 +1091,8 @@ final class IrJson {
             for (Ir.ContractOption o : options) {
                 if (!o.name().equals("stakeSelf")) continue;
                 if (stakeSelf || !o.value().equals(BigInteger.ONE)) throw new IllegalArgumentException("the option stakeSelf is the flag 1, once (JSC1301)");
+                // Review F1, S3: not beside owned objects yet (their outputs' stake part is not covered).
+                if (!owned.isEmpty()) throw new IllegalArgumentException("the option stakeSelf is not supported beside owned types yet (JSC1305)");
                 stakeSelf = true;
             }
             var stored = new ArrayList<Ir.RecordType>(records.values());
@@ -1125,6 +1127,9 @@ final class IrJson {
                     if (kinds.put(k, m) != null) {
                         throw new IllegalArgumentException(where + "at most one " + kindName(k) + (k == Ir.Kind.MIGRATE ? " (JSC1337)" : " handler (JSC1316)"));
                     }
+                }
+                if (k == Ir.Kind.WITHDRAW && !owned.isEmpty()) {
+                    throw new IllegalArgumentException(where + "a withdraw handler is not supported beside owned types yet (JSC1305)");
                 }
                 if (k.purpose()) {
                     if (params == null) throw new IllegalArgumentException(where + "a handler is governed by the params, which the contract lacks (JSC1317)");
