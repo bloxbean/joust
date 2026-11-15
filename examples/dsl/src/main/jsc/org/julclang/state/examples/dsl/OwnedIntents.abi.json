@@ -28,15 +28,23 @@
       { "name": "Tick", "constr": 0, "fields": [
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] },
-      { "name": "Drop", "constr": 1, "fields": [
+      { "name": "Admit", "constr": 1, "fields": [
+          { "name": "id", "type": "Bytes", "data": "bytes" },
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] },
-      { "name": "Batch", "constr": 2, "fields": [
+      { "name": "Go", "constr": 2, "fields": [
+          { "name": "into", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Drop", "constr": 3, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Batch", "constr": 4, "fields": [
           { "name": "validFrom", "type": "Int", "data": "int" },
           { "name": "validTo", "type": "Int", "data": "int" }
         ] },
-      { "name": "InBatch", "constr": 3, "fields": [] },
-      { "name": "CancelIntent", "constr": 4, "fields": [] }
+      { "name": "InBatch", "constr": 5, "fields": [] },
+      { "name": "CancelIntent", "constr": 6, "fields": [] }
     ],
     "mint": [
       { "name": "CreateInstance", "constr": 0, "fields": [

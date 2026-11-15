@@ -381,15 +381,16 @@ const withVault = (p) => {
     p.methods.push(m);
   }
 };
-purpose('mapobj-batched', 'OwnedIntents', (p) => { withVault(p); }, '(JSC1217)');
+const noMoves = (p) => p.methods.filter((m) => !('into' in m) && !m.mods.some((x) => x && x.name === 'admits'));
+purpose('mapobj-batched', 'OwnedIntents', (p) => { withVault(p); p.methods = noMoves(p); }, '(JSC1217)');
 purpose('mapobj-receives', 'Desk', (p) => {
   withVault(p);
-  p.methods = p.methods.filter((m) => m.kind !== 'ownedAction' || !('into' in m)).filter((m) => !m.mods.some((x) => x && x.name === 'admits'));
+  p.methods = noMoves(p);
 }, '(JSC1217)');
 purpose('mapobj-moves', 'Guild', (p) => { withVault(p); }, '(JSC1217)');
 purpose('mapobj-handler', 'OwnedIntents', (p) => {
   withVault(p);
-  p.methods = p.methods.filter((m) => !m.mods.some((x) => x && x.name === 'batched'));
+  p.methods = noMoves(p).filter((m) => !m.mods.some((x) => x && x.name === 'batched'));
 }, '(JSC1217)');
 purpose('mapobj-invariant', 'Bank', (p) => {
   withVault(p);

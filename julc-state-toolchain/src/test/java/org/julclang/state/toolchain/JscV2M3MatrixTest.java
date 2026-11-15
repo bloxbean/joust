@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>{@code Mixed}: a keyed type declared before a plain one (the plain holding's tag shifted), invariants by type, a
  *   move of the plain type and its admit, a read of another contract, and the certify, vote and propose handlers beside
  *   both kinds of object;</li>
- *   <li>{@code OwnedIntents}: plain objects beside a batched instance action and the three handlers;</li>
+ *   <li>{@code OwnedIntents}: plain objects that move beside a batched instance action and the three handlers;</li>
  *   <li>{@code Mix}: an instance, a plain owned type that moves, a keyed type with a retiring exit, a certify handler by a
  *   params quorum, invariants by type: a part of every M3 milestone in one contract;</li>
  *   <li>{@code Desk}: plain objects that move, with invariants, beside deposits and a read;</li>
@@ -52,7 +52,7 @@ class JscV2M3MatrixTest {
     static final Map<String, Toolchain.Contract> BUILT = new LinkedHashMap<>();
     static final Map<String, String> SOURCES = new LinkedHashMap<>();
     /** The recorded sizes (M3 final pass); a change of more than SLACK bytes must be justified again (§8's J11 rule). */
-    static final Map<String, Integer> RECORDED = Map.of("Mixed", 14_067, "OwnedIntents", 11_004, "Mix", 14_518, "Desk", 12_898, "StakedDesk", 14_597,
+    static final Map<String, Integer> RECORDED = Map.of("Mixed", 14_067, "OwnedIntents", 12_529, "Mix", 14_518, "Desk", 12_898, "StakedDesk", 14_597,
             "MapVotes", 13_017, "MapInbox", 14_798, "RelayV1", 10_876, "RelayV2", 10_796, "StakedQueue", 14_117);
     static final int SLACK = 100;
     static final byte[] MASTER = fill(0xAD), ANN = fill(0xA1), EVE = fill(0xEE), A = fill(0x0A), B = fill(0x0B), C = fill(0x0C);
@@ -149,6 +149,15 @@ class JscV2M3MatrixTest {
         ok(f.check("drop", badge, List.of(), at(a, 0, f.harness.minAda()), a));
         f.modifierRefused("drop", badge, List.of(), at(fill(0xee), 0, f.harness.minAda()), fill(0xee));
         ok(f.check("tick", s, List.of(), at(a, 0, 0), a));
+        // Design MD2: a move of a plain object beside the batched action.
+        f.partner = new FourWay.Partner("admit", s, List.of(), null, null);
+        ok(f.check("go", badge, List.of(), at(a, 0, 0).withInto(s), a));
+        f.modifierRefused("go", badge, List.of(), at(fill(0xee), 0, 0).withInto(s), fill(0xee));
+        f.mutants("go", badge, List.of(), at(a, 0, 0).withInto(s), a);
+        f.partner = new FourWay.Partner("go", badge, List.of(), null, s);
+        ok(f.check("admit", s, List.of(Bytes.of(f.harness.objectId())), at(a, 0, 0).withArriving(badge), a));
+        f.mutants("admit", s, List.of(Bytes.of(f.harness.objectId())), at(a, 0, 0).withArriving(badge), a);
+        f.partner = null;
         var p = new PurposeLegs(f);
         CredV self = scriptCred(f.harness.policy());
         ok(p.as(List.of(a), List.of()).check("register", List.of(cert("RegStaking", self, Opt.NONE)), null));

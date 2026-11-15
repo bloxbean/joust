@@ -1,7 +1,7 @@
 {
  "ir": 2,
  "language": "jsc 2",
- "sourceSha256": "74ccece14918054fa968177c39b71648b25e2ced54a0066a89070384eb48c51a",
+ "sourceSha256": "4dd5c591b4f910c0ac8a7133a3092579abffc60097a5716aa99cdd165283da11",
  "package": "org.julclang.state.examples.dsl",
  "contract": "OwnedIntents",
  "source": "OwnedIntents.jsc",
@@ -243,7 +243,7 @@
        "type": "Key",
        "taint": 0,
        "at": [
-        13,
+        14,
         47
        ]
       },
@@ -253,24 +253,24 @@
        "type": "Int",
        "taint": 0,
        "at": [
-        13,
+        14,
         54
        ]
       },
       "at": [
-       13,
+       14,
        43
       ]
      }
     ],
     "result": null,
     "at": [
-     13,
+     14,
      41
     ]
    },
    "at": [
-    13,
+    14,
     3
    ]
   },
@@ -279,12 +279,12 @@
    "name": "register",
    "params": [
     {
-     "id": 1,
+     "id": 4,
      "name": "cert",
      "type": "TxCert",
      "taint": 0,
      "at": [
-      14,
+      16,
       20
      ]
     }
@@ -308,17 +308,17 @@
      "type": "Bool",
      "taint": 0,
      "at": [
-      14,
+      16,
       75
      ]
     },
     "at": [
-     14,
+     16,
      75
     ]
    },
    "at": [
-    14,
+    16,
     3
    ]
   },
@@ -327,32 +327,32 @@
    "name": "choose",
    "params": [
     {
-     "id": 2,
+     "id": 5,
      "name": "voter",
      "type": "Voter",
      "taint": 0,
      "at": [
-      15,
+      17,
       15
      ]
     },
     {
-     "id": 3,
+     "id": 6,
      "name": "action",
      "type": "GovernanceActionId",
      "taint": 0,
      "at": [
-      15,
+      17,
       29
      ]
     },
     {
-     "id": 4,
+     "id": 7,
      "name": "vote",
      "type": "Vote",
      "taint": 0,
      "at": [
-      15,
+      17,
       57
      ]
     }
@@ -376,17 +376,17 @@
      "type": "Bool",
      "taint": 0,
      "at": [
-      15,
+      17,
       110
      ]
     },
     "at": [
-     15,
+     17,
      110
     ]
    },
    "at": [
-    15,
+    17,
     3
    ]
   },
@@ -395,12 +395,12 @@
    "name": "guard",
    "params": [
     {
-     "id": 5,
+     "id": 8,
      "name": "p",
      "type": "ProposalProcedure",
      "taint": 0,
      "at": [
-      16,
+      18,
       17
      ]
     }
@@ -418,17 +418,17 @@
      "type": "Bool",
      "taint": 0,
      "at": [
-      16,
+      18,
       41
      ]
     },
     "at": [
-     16,
+     18,
      41
     ]
    },
    "at": [
-    16,
+    18,
     3
    ]
   },
@@ -529,7 +529,7 @@
        "type": "Key",
        "taint": 0,
        "at": [
-        13,
+        14,
         47
        ]
       },
@@ -539,24 +539,24 @@
        "type": "Int",
        "taint": 0,
        "at": [
-        13,
+        14,
         54
        ]
       },
       "at": [
-       13,
+       14,
        43
       ]
      }
     ],
     "result": null,
     "at": [
-     13,
+     14,
      41
     ]
    },
    "at": [
-    13,
+    14,
     3
    ]
   }
