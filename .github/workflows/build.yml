@@ -281,6 +281,38 @@ jobs:
           node --test test/abi.test.js test/accept-abi.test.js
           node test/lsp/measure-l10.mjs --check
 
+      # ADR-0021 r10 §16 (M5e) E4-E6: the tree-sitter package, then the editor configurations in real editors: Neovim
+      # headless (the shipped module starts this commit's joust-lsp by absolute path and gets diagnostics; a planted
+      # node_modules/.bin/joust-lsp, .nvim.lua and .exrc never run) and Helix (`hx --health jsc`). Both editors are
+      # pinned releases, checked by SHA-256 (their release pages' digests).
+      - name: Package the tree-sitter grammar
+        working-directory: tree-sitter-jsc
+        run: |
+          npm ci
+          npm run package
+          sha256sum dist/*.tar.gz
+
+      - name: Test the editor configurations in Neovim and Helix
+        shell: bash
+        env:
+          NVIM_VERSION: v0.12.6
+          NVIM_SHA256: 474430d53e6264f6d6dd18db42d6dc9df3a1b56ca9e88a325bbf860e1a811d87
+          HELIX_VERSION: '25.07.1'
+          HELIX_SHA256: 3f08e63ecd388fff657ad39722f88bb03dcf326f1f2da2700d99e1dc40ab2e8b
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/nvim.tar.gz" "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-x86_64.tar.gz"
+          echo "${NVIM_SHA256}  $RUNNER_TEMP/nvim.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/nvim.tar.gz" -C "$RUNNER_TEMP"
+          f="helix-${HELIX_VERSION}-x86_64-linux.tar.xz"
+          curl -sSfL -o "$RUNNER_TEMP/$f" "https://github.com/helix-editor/helix/releases/download/${HELIX_VERSION}/$f"
+          echo "${HELIX_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar xJf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          export NVIM_BIN="$RUNNER_TEMP/nvim-linux-x86_64/bin/nvim" HX_BIN="$RUNNER_TEMP/helix-${HELIX_VERSION}-x86_64-linux/hx"
+          "$NVIM_BIN" --version | head -1
+          "$HX_BIN" --version
+          JOUST_REQUIRE_EDITORS=1 node --test --test-concurrency=1 editors/test/editors.test.mjs
+
       # For the cli job: the engines of this commit, so its npm build is real.
       - name: Upload the engines
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

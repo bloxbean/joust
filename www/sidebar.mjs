@@ -82,6 +82,7 @@ export const SIDEBAR = [
       { label: '.jsc reference', slug: 'languages/jsc-reference' },
       { label: '.jsc standard library', slug: 'languages/jsc-std' },
       { label: 'TypeScript', slug: 'languages/typescript', badge: { text: 'Experimental', variant: 'caution' } },
+      { label: 'Editors', slug: 'languages/editors' },
     ],
   },
   {
