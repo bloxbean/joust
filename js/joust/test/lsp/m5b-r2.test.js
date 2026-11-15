@@ -323,11 +323,12 @@ test('C6: the build reads the npm packages\' libraries as joust build does, and 
     const d = (await lsp.diagnostics(uri, 1)).diagnostics;
     assert.deepEqual(d.filter((x) => x.severity === 1), [], JSON.stringify(d));
     const c = await lsp.request('joust/checkBuild', { uri });
-    // It builds (one contract); only the missing manifest (JSC0003) is left, shown.
+    // It builds (one contract); the missing manifest (JSC0003) is left, shown, and (ADR-0021 r10, M5e E1) the package's
+    // library, not pinned in a joust.lock, is JSC0731, as joust build reports it.
     assert.equal(c.contracts, 1, JSON.stringify(c));
-    assert.equal(c.errors, 1, JSON.stringify(c));
+    assert.equal(c.errors, 2, JSON.stringify(c));
     const p = await lsp.until(() => lsp.published.find((x) => x.uri === uri && x.diagnostics.some((y) => y.code === 'JSC0003')), 60000, 'JSC0003');
-    assert.ok(p);
+    assert.ok(p.diagnostics.some((y) => y.code === 'JSC0731'), JSON.stringify(p.diagnostics));
     // A package library that does not check: the build fails, and says so (never zero errors on a failure).
     writeFileSync(join(dir, 'node_modules', '@acme', 'fees', 'joust-lib', 'fees.jsc'), 'jsc 1\nlibrary acme.fees\n\nfn fee(amount: Int): Int = amount / nope\n');
     const f = await lsp.request('joust/checkBuild', { uri });
