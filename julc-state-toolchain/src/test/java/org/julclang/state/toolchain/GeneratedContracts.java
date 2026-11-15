@@ -64,8 +64,48 @@ final class GeneratedContracts {
     /** The programs found over a reference script's size, each counted once (review r3, design F20: the 2% ceiling). */
     static final java.util.Map<String, OverScriptLimit> OVER = new java.util.HashMap<>();
 
+    /**
+     * The generated programs a run has seen, each counted once by its key, deployable or over a reference script's size,
+     * whether it was built, revisited from the cache, or rebuilt after the cache evicted it (#123, review r4 Codex C15).
+     * It is the one population the over-limit ceiling counts both its share and its threshold in; the "programs built"
+     * and "build ms" tallies stay what they are: cache misses and build time.
+     */
+    static final class Population {
+        private final java.util.Set<String> seen = new java.util.HashSet<>();
+        private final java.util.Set<String> over = new java.util.HashSet<>();
+
+        synchronized void seen(String key) {
+            seen.add(key);
+        }
+
+        synchronized void over(String key) {
+            seen.add(key);
+            over.add(key);
+        }
+
+        synchronized long total() {
+            return seen.size();
+        }
+
+        synchronized long over() {
+            return over.size();
+        }
+
+        /** Null when the share is within the ceiling, else why not: past 2% of the programs, once there are 100 of them. */
+        static String verdict(long total, long over) {
+            if (total >= 100 && over * 50 > total) {
+                return over + " of " + total + " generated programs are over a reference script's size (more than 2%): the"
+                        + " generator's programs have grown past what can be deployed";
+            }
+            return null;
+        }
+    }
+
+    static final Population POPULATION = new Population();
+
     static synchronized Built built(JscGen.Plan p) throws Exception {
         String key = String.join("\n", p.files().values()) + p.params();
+        POPULATION.seen(key);
         if (OVER.containsKey(key)) throw OVER.get(key);
         Built b = CACHE.get(key);
         if (b == null) {
@@ -73,6 +113,7 @@ final class GeneratedContracts {
                 b = build(p);
             } catch (OverScriptLimit e) {
                 OVER.put(key, e);
+                POPULATION.over(key);
                 FiveWayFuzzTest.TALLY.count(FiveWayFuzzTest.OVER_SCRIPT_LIMIT);
                 throw e;
             }
