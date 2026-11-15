@@ -254,9 +254,17 @@ public final class JscLang {
         return tooLarge(m, maxEntries, maxChars).json();
     }
 
-    /** The last diagnostics-only analysis: its inputs and the full model it can still give (one slot; ADR-0021 r8). */
-    private static String lastKey;
-    private static java.util.function.Supplier<Model> lastFull;
+    /**
+     * The last diagnostics-only analyses: their inputs and the full models they can still give (ADR-0021 r8). A few, not
+     * one (#115 F7): the importers a library's edit reschedules queue their diagnostics ahead of their indexes.
+     */
+    private static final int SLOTS = 4;
+    private static final java.util.LinkedHashMap<String, java.util.function.Supplier<Model>> recent = new java.util.LinkedHashMap<>(8, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<String, java.util.function.Supplier<Model>> e) {
+            return size() > SLOTS;
+        }
+    };
 
     private static String key(String source, String fileName, String id, java.util.Map<String, String> files) {
         var b = new StringBuilder().append(fileName).append('\0').append(id).append('\0').append(source.length()).append('\0');
@@ -277,8 +285,7 @@ public final class JscLang {
     public static String diagnosticsJson(String source, String fileName, String id, java.util.Map<String, String> files, String javaLibraries) {
         Analysis a = analysis(source, fileName, id, modulesOf(files), false, javaOf(javaLibraries));
         synchronized (JscLang.class) {
-            lastKey = key(source == null ? "" : source, fileName, id, files) + "\0" + (javaLibraries == null ? "" : javaLibraries);
-            lastFull = a.full();
+            recent.put(key(source == null ? "" : source, fileName, id, files) + "\0" + (javaLibraries == null ? "" : javaLibraries), a.full());
         }
         return bounded(a.diagnostics(), MAX_ENTRIES, MAX_JSON_CHARS);
     }
@@ -291,10 +298,7 @@ public final class JscLang {
     public static String indexJson(String source, String fileName, String id, java.util.Map<String, String> files, String javaLibraries) {
         java.util.function.Supplier<Model> full;
         synchronized (JscLang.class) {
-            full = lastKey != null && lastKey.equals(key(source == null ? "" : source, fileName, id, files) + "\0"
-                    + (javaLibraries == null ? "" : javaLibraries)) ? lastFull : null;
-            lastKey = null;
-            lastFull = null;
+            full = recent.remove(key(source == null ? "" : source, fileName, id, files) + "\0" + (javaLibraries == null ? "" : javaLibraries));
         }
         if (full == null) full = analysis(source, fileName, id, modulesOf(files), false, javaOf(javaLibraries)).full();
         return bounded(full.get(), MAX_ENTRIES, MAX_JSON_CHARS);

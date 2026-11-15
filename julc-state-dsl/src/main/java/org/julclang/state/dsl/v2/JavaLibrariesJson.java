@@ -75,7 +75,9 @@ public final class JavaLibrariesJson {
             }
             o.append("],\"verified\":").append(r.verified()).append(",\"opaqueWhy\":");
             str(o, r.opaqueWhy());
-            o.append('}');
+            o.append(",\"file\":");
+            str(o, r.file());
+            o.append(",\"line\":").append(r.line()).append(",\"col\":").append(r.col()).append('}');
         }
         o.append("],\"problems\":");
         strings(o, l.problems());
@@ -155,7 +157,7 @@ public final class JavaLibrariesJson {
                 for (Object t : (List<Object>) r.get("fieldTypes")) types.add(type(t));
                 recs.add(new JavaLibraries.Rec((String) r.get("binaryName"), (String) r.get("simpleName"), (String) r.get("canonicalOwner"),
                         (String) r.get("importClass"), (String) r.get("sourceName"), strings(r.get("fieldNames")), List.copyOf(types),
-                        Boolean.TRUE.equals(r.get("verified")), (String) r.get("opaqueWhy")));
+                        Boolean.TRUE.equals(r.get("verified")), (String) r.get("opaqueWhy"), (String) r.get("file"), num(r.get("line")), num(r.get("col"))));
             }
             var msgs = new ArrayList<JavaLibraries.Message>();
             for (Object mo : (List<Object>) l.get("messages")) {

@@ -262,22 +262,11 @@ public final class JavaLibraryCertifier {
                 // ADR-0021 r8 (M5c): where javac places the method's name (the language server's go to definition).
                 String file = null;
                 int line = 0, col = 0;
-                TreePath at = declared.get(m);
-                if (at != null) {
-                    CompilationUnitTree cu = at.getCompilationUnit();
-                    long start = trees.getSourcePositions().getStartPosition(cu, at.getLeaf());
-                    try {
-                        String text = cu.getSourceFile().getCharContent(true).toString();
-                        int k = start < 0 ? -1 : text.indexOf(name + "(", (int) start);
-                        if (k < 0 && start >= 0) k = text.indexOf(name, (int) start);
-                        if (k >= 0) {
-                            file = pathOf(cu);
-                            line = (int) cu.getLineMap().getLineNumber(k);
-                            col = (int) cu.getLineMap().getColumnNumber(k);
-                        }
-                    } catch (java.io.IOException e) {
-                        // no place: still a description
-                    }
+                int[] place = place(declared.get(m), name + "(");
+                if (place != null) {
+                    file = pathOf(declared.get(m).getCompilationUnit());
+                    line = place[0];
+                    col = place[1];
                 }
                 fns.add(new JavaLibraries.Fn(name, List.copyOf(pnames), List.copyOf(ptypes), result, refusal, file, line, col));
             }
@@ -488,6 +477,26 @@ public final class JavaLibraryCertifier {
             return n;
         }
 
+        /**
+         * ADR-0021 r8 (M5c): the 1-based line and character column of {@code needle} (a name) from the start of the tree at
+         * {@code at}, or null. The column counts characters (#115 F8: LineMap's column expands tabs).
+         */
+        int[] place(TreePath at, String needle) {
+            if (at == null) return null;
+            CompilationUnitTree cu = at.getCompilationUnit();
+            long start = trees.getSourcePositions().getStartPosition(cu, at.getLeaf());
+            if (start < 0) return null;
+            try {
+                String text = cu.getSourceFile().getCharContent(true).toString();
+                int k = text.indexOf(needle, (int) start);
+                if (k < 0) return null;
+                int lineStart = text.lastIndexOf('\n', k - 1) + 1;
+                return new int[]{(int) cu.getLineMap().getLineNumber(k), k - lineStart + 1};
+            } catch (java.io.IOException e) {
+                return null;
+            }
+        }
+
         String where(CompilationUnitTree cu, long pos) {
             String f = pathOf(cu);
             return pos < 0 ? f : f + ":" + cu.getLineMap().getLineNumber(pos);
@@ -587,8 +596,13 @@ public final class JavaLibraryCertifier {
             String canonicalOwner = owner instanceof PackageElement p ? p.getQualifiedName().toString() : ((TypeElement) owner).getQualifiedName().toString();
             TypeElement top = outermost(e);
             String sourceName = e.getQualifiedName().toString().substring(top.getQualifiedName().length() - top.getSimpleName().length());
+            // ADR-0021 r8 (F8 on #115): the record's name where javac's tree puts the declaration (never a match in a comment).
+            TreePath at = trees.getPath(e);
+            int[] place = at == null ? null : place(at, "record " + e.getSimpleName());
+            String file = place == null ? null : pathOf(at.getCompilationUnit());
             var r = new JavaLibraries.Rec(bin, e.getSimpleName().toString(), canonicalOwner, top.getQualifiedName().toString(), sourceName,
-                    why == null ? List.copyOf(fieldNames) : List.of(), why == null ? List.copyOf(fieldTypes) : List.of(), why == null, why);
+                    why == null ? List.copyOf(fieldNames) : List.of(), why == null ? List.copyOf(fieldTypes) : List.of(), why == null, why,
+                    file, place == null ? 0 : place[0], place == null ? 0 : place[1] + "record ".length());
             records.put(bin, r);
             return r;
         }

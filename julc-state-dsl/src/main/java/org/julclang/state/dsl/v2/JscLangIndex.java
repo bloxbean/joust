@@ -83,6 +83,22 @@ final class JscLangIndex {
         return meta.computeIfAbsent(d.id, k -> new Meta());
     }
 
+    /** Whether this file's token at 1-based {@code line:col} is {@code text} (the tokens are in order: a binary search). */
+    private boolean tokenIs(int line, int col, String text) {
+        var toks = spans.toks;
+        if (toks == null) return false;
+        int lo = 0, hi = toks.size() - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            Tok t = toks.get(mid);
+            int c = t.line() != line ? Integer.compare(t.line(), line) : Integer.compare(t.col(), col);
+            if (c == 0) return text.equals(t.text());
+            if (c < 0) lo = mid + 1;
+            else hi = mid - 1;
+        }
+        return false;
+    }
+
     /** The imports by name (M5c). */
     private final Map<String, Spans.Decl> imports = new HashMap<>();
 
@@ -155,7 +171,9 @@ final class JscLangIndex {
             }
             // Only this file's expressions (the checker also types its .jsc libraries' bodies, whose positions are theirs):
             // those with an extent here, and names (a shorthand's value has none of its own).
-            if (x != null || se instanceof Syntax.Name) resolve(se, ir, localDecl);
+            // A name counts as this file's only where this file has that token (#115 Codex: a library's parameter at the same
+            // place as one of the importer's would otherwise become a reference here).
+            if (x != null || se instanceof Syntax.Name nm && tokenIs(nm.pos().line(), nm.pos().col(), nm.name())) resolve(se, ir, localDecl);
         }
         // Written types: each use of a declared type, enum or event; the built-in types as built-ins.
         for (var t : spans.typeUses.entrySet()) {

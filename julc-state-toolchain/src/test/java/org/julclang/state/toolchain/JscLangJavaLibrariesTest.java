@@ -29,6 +29,18 @@ class JscLangJavaLibrariesTest {
         String text = sources.get(fn.file());
         String line = text.split("\n", -1)[fn.line() - 1];
         assertEquals(fn.name(), line.substring(fn.col() - 1, fn.col() - 1 + fn.name().length()), "the place names the fn");
+        // F8 on #115: a record is placed at its declaration's name, by javac's tree.
+        var rec = lib.records().stream().filter(r -> r.simpleName().equals("Entry")).findFirst().orElseThrow();
+        String recLine = sources.get(rec.file()).split("\n", -1)[rec.line() - 1];
+        assertEquals("Entry", recLine.substring(rec.col() - 1, rec.col() - 1 + "Entry".length()), rec.toString());
+        // F8: a tab-indented library: the column counts characters (javac's LineMap expands tabs to 8).
+        var tabbed = new java.util.LinkedHashMap<String, String>();
+        sources.forEach((k, v) -> tabbed.put(k, v.replaceAll("(?m)^    ", "\t")));
+        var tlib = JavaLibraryCertifier.certify(tabbed).values().iterator().next();
+        for (var f : tlib.fns()) {
+            String l = tabbed.get(f.file()).split("\n", -1)[f.line() - 1];
+            assertEquals(f.name(), l.substring(f.col() - 1, f.col() - 1 + f.name().length()), f + " in a tab-indented file");
+        }
         String src = Files.readString(JscV2HashStabilityTest.DSL.resolve("Guarded.jsc"));
         String without = JscLang.diagnosticsJson(src, "Guarded.jsc", null, null);
         String with = JscLang.diagnosticsJson(src, "Guarded.jsc", null, null, json);

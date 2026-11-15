@@ -100,7 +100,13 @@ public interface JavaLibraries {
      * mapped and no constructor logic, so {@code .jsc} reads its fields (read-only); otherwise it is opaque.
      */
     record Rec(String binaryName, String simpleName, String canonicalOwner, String importClass, String sourceName,
-               List<String> fieldNames, List<JType> fieldTypes, boolean verified, String opaqueWhy) {}
+               List<String> fieldNames, List<JType> fieldTypes, boolean verified, String opaqueWhy, String file, int line, int col) {
+        /** Without its place (ADR-0021 r8: where javac puts the record's name; null and 0 when unknown). */
+        public Rec(String binaryName, String simpleName, String canonicalOwner, String importClass, String sourceName,
+                   List<String> fieldNames, List<JType> fieldTypes, boolean verified, String opaqueWhy) {
+            this(binaryName, simpleName, canonicalOwner, importClass, sourceName, fieldNames, fieldTypes, verified, opaqueWhy, null, 0, 0);
+        }
+    }
 
     /**
      * A message the library's certified bodies can trace, where it is raised (D12, J20): its text, the source file and
