@@ -165,6 +165,51 @@ class JscLangHashTest {
         for (String k : RENAMABLE) assertTrue(kinds.containsKey(k), "no " + k + " renamed: " + kinds);
     }
 
+    /**
+     * ADR-0021 r8 (M5c), L12 across files: a rename of a library's fn, type or enum, as the server plans it in the library
+     * (its declaration and references) and in Shop.jsc, which imports it (the import's name and every use through it,
+     * flag 2), keeps Shop's script hash; the library's renamed text is what Shop is built with.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void renamesAcrossFilesKeepTheImportersScriptHash() throws Exception {
+        String lib = Files.readString(JscV2HashStabilityTest.DSL.resolve("fees.jsc"));
+        String shop = Files.readString(JscV2HashStabilityTest.DSL.resolve("Shop.jsc"));
+        var libs = JscV2HashStabilityTest.libraries();
+        String base = JscV2HashStabilityTest.build("Shop.jsc", shop, libs).hash();
+        String libId = JscV2HashStabilityTest.PKG + "fees.jsc";
+        var shopFiles = new java.util.LinkedHashMap<String, String>(libs);
+        var libModel = (Map<String, Object>) AbiCheck.Json.parse(JscLang.analyzeJson(lib, "fees.jsc"));
+        var shopModel = (Map<String, Object>) AbiCheck.Json.parse(JscLang.analyzeJson(shop, "Shop.jsc", JscV2HashStabilityTest.PKG + "Shop.jsc", shopFiles));
+        int checked = 0;
+        for (String name : List.of("fee", "total", "Line", "Tier")) {
+            int libDecl = -1, imp = -1;
+            for (Object o : list(libModel.get("declarations"))) {
+                var d = (Map<String, Object>) o;
+                if (name.equals(d.get("name")) && num(d.get("parent")) < 0) libDecl = num(d.get("id"));
+            }
+            for (Object o : list(shopModel.get("declarations"))) {
+                var d = (Map<String, Object>) o;
+                if (name.equals(d.get("name")) && "import".equals(d.get("kind"))) imp = num(d.get("id"));
+            }
+            assertTrue(libDecl >= 0 && imp >= 0, name);
+            String to = name + "Z";
+            String lib2 = apply(lib, rename(libModel, libDecl, name, to));
+            var shopEdits = rename(shopModel, imp, name, to);
+            assertTrue(shopEdits.size() >= 2, name + ": the import and a use (" + shopEdits.size() + ")");
+            String shop2 = apply(shop, shopEdits);
+            var libs2 = new java.util.LinkedHashMap<String, String>(libs);
+            libs2.put(libId, lib2);
+            var files2 = new java.util.LinkedHashMap<String, String>(libs2);
+            assertTrue(JscLang.analyze(lib2, "fees.jsc").accepted(), name + ": the library checks");
+            var after = (Map<String, Object>) AbiCheck.Json.parse(JscLang.analyzeJson(shop2, "Shop.jsc", JscV2HashStabilityTest.PKG + "Shop.jsc", files2));
+            assertTrue(Boolean.TRUE.equals(after.get("accepted")), name + ": Shop checks after the rename: " + after.get("diagnostics"));
+            assertEquals(base, JscV2HashStabilityTest.build("Shop.jsc", shop2, libs2).hash(), name + ": renaming across files moved Shop's script hash");
+            checked++;
+        }
+        System.out.println("[hash] L12 across files: " + checked + " library renames keep Shop's script hash");
+    }
+
     @Test
     void theDeliberateCodeChangingCompletionChangesIt() throws Exception {
         String counter = Files.readString(JscV2HashStabilityTest.DSL.resolve("Counter2.jsc"));

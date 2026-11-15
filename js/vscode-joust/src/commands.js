@@ -10,6 +10,7 @@ const { abiCommands, manifestWritten } = require('./tasks');
 
 const GEN = 'joust-gen';
 const ABI = 'joust-abi';
+const LIB = 'joust-lib';
 
 /**
  * N2 on #99 r2: a command's arguments (a new name, a confirmation, a contract, an answer to the unsaved-buffers modal,
@@ -41,6 +42,17 @@ function register(vscode, ctx, getClient) {
       const id = uri.path.split('/')[1];
       if (!c || !id) return '// the JOUST language server is not running';
       const r = await c.sendRequest('joust/generatedContent', { id });
+      return r.text ?? `// ${r.error}`;
+    },
+  }));
+  // M5c (ADR-0021 r8): a java: library's on-chain sources, read-only (joust-lib:/<id>/<path>; the server serves the text
+  // by its opaque id, never by a path the URI names).
+  ctx.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(LIB, {
+    async provideTextDocumentContent(uri) {
+      const c = running();
+      const id = uri.path.split('/')[1];
+      if (!c || !id) return '// the JOUST language server is not running';
+      const r = await c.sendRequest('joust/libraryContent', { id });
       return r.text ?? `// ${r.error}`;
     },
   }));
@@ -90,6 +102,16 @@ function register(vscode, ctx, getClient) {
       : await vscode.window.showInputBox({ title: `Rename '${prep.name}'`, value: prep.name, prompt: 'The new name (the server checks it before anything changes)' });
     if (!newName || newName === prep.name) return { applied: false, reason: 'cancelled' };
     let r = await c.sendRequest('joust/rename', { uri, position, newName });
+    // M5c (ADR-0021 r8): a rename across files edits open files only; the files it names are opened (no editor), and
+    // the rename asked again (once).
+    if (Array.isArray(r.needsOpen) && r.needsOpen.length && r.needsOpen.length <= 64) {
+      for (const u of r.needsOpen) {
+        const target = vscode.Uri.parse(u);
+        if (target.scheme !== 'file') return { applied: false, reason: 'not a file', uri: u };
+        await vscode.workspace.openTextDocument(target);
+      }
+      r = await c.sendRequest('joust/rename', { uri, position, newName });
+    }
     if (r.needsConfirmation) {
       const ok = args && 'confirm' in args ? args.confirm === true
         : (await vscode.window.showWarningMessage(r.warning, { modal: true }, 'Rename')) === 'Rename';
@@ -291,4 +313,4 @@ function register(vscode, ctx, getClient) {
   }));
 }
 
-module.exports = { register, GEN, ABI, testMode };
+module.exports = { register, GEN, ABI, LIB, testMode };

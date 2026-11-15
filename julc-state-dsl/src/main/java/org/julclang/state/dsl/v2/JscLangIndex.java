@@ -153,7 +153,9 @@ final class JscLangIndex {
             if (x != null && ir != null && ir.type() != null && !trivial) {
                 typed.add(new Typed(x[0] - 1, x[1] - 1, x[2] - 1, x[3] - 1, Ty.show(ir.type()), taint(ir)));
             }
-            resolve(se, ir, localDecl);
+            // Only this file's expressions (the checker also types its .jsc libraries' bodies, whose positions are theirs):
+            // those with an extent here, and names (a shorthand's value has none of its own).
+            if (x != null || se instanceof Syntax.Name) resolve(se, ir, localDecl);
         }
         // Written types: each use of a declared type, enum or event; the built-in types as built-ins.
         for (var t : spans.typeUses.entrySet()) {

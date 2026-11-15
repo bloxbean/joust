@@ -131,7 +131,9 @@ contract User {
     for (const [needle, name] of [['fee(amount', 'charge'], ['Fee = ', 'Charge'], ['bps: Int', 'basis']]) {
       const r = await lsp.request('joust/rename', { uri, position: at(LIB, needle), newName: name, confirm: true });
       assert.equal(r.applied, false, `${needle}: ${JSON.stringify(r)}`);
-      assert.match(r.error, /can be named by the files that import this one \((contracts\/)?app\/User\.jsc\).*M5c/, r.error);
+      // M5c: a fn or a type is renamed across files, which first needs the importer open; a field is still refused.
+      if (needle === 'bps: Int') assert.match(r.error, /can be named by the files that import this one \((contracts\/)?app\/User\.jsc\).*fns, types, enums and consts/, r.error);
+      else assert.deepEqual(r.needsOpen, [uriOf(join(dir, 'contracts', 'app', 'User.jsc'))], JSON.stringify(r));
     }
     // A fn's parameter is the file's own.
     const local = await lsp.request('joust/rename', { uri, position: at(LIB, 'amount: Int'), newName: 'value', confirm: true });
@@ -434,7 +436,8 @@ test('C11: an open importer not on disk yet keeps a library\'s name from being r
     lsp.open(user, 'jsc 1\npackage app\n\nimport { fee } from "./fees.jsc"\n\ncontract User {\n  state { n: Int }\n\n  init() {\n    return { n: fee(100) }\n  }\n}\n');
     const r = await lsp.request('joust/rename', { uri, position: at(LIB, 'fee(amount'), newName: 'charge', confirm: true });
     assert.equal(r.applied, false, JSON.stringify(r));
-    assert.match(r.error, /import this one \((contracts\/)?app\/User\.jsc\)/, r.error);
+    // M5c: the open importer is in the rename, and in Restricted Mode its import does not resolve: it has errors.
+    assert.match(r.error, /User\.jsc, which imports 'fee', has errors/, r.error);
     assert.equal(lsp.applied.length, 0);
     // Closed: nothing imports it any more, and the rename applies.
     lsp.close(user);
@@ -622,7 +625,7 @@ test('C16: an importer edited while the importer scan runs refuses the rename', 
     lsp.change(user, 2, USER0.replace('package app\n', 'package app\n\nimport { fee } from "./fees.jsc"\n').replace('n: 1', 'n: fee(100)'));
     const r = await pending;
     assert.equal(r.applied, false, JSON.stringify(r));
-    assert.match(r.error, /changed while the files that import this one were read|import this one/, r.error);
+    assert.match(r.error, /changed while the (files that import this one were read|rename was checked)|import this one|has errors/, r.error);
   } finally {
     await lsp.stop();
   }

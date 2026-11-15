@@ -20,7 +20,7 @@ import {
   diagnostics as toDiagnostics, MAX_PUBLISHED, documentSymbols, fixFor, foldingRanges, internalDiagnostic, MODEL_VERSION, parseModel, selectionRanges,
 } from './model.js';
 import {
-  completion, completionModel, definition, hover, importEdit, invisibleOccurrences, references, renamePlan, renamePreserves, semanticTokens, TOKEN_MODIFIERS,
+  completion, completionModel, definition, hover, importEdit, occurrences, symbolAt, invisibleOccurrences, references, renamePlan, renamePreserves, semanticTokens, TOKEN_MODIFIERS,
   TOKEN_TYPES,
 } from './features.js';
 import { inside, localPath } from './paths.js';
@@ -347,7 +347,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * `{ id, files, deps, advisory }` (deps: the real paths read, for rescheduling importers), or null: the file is not in a
    * project's contracts directory (analysed on its own, as before).
    */
-  async function projectOf(uri, text, sel, previous = new Map()) {
+  async function projectOf(uri, text, sel, previous = new Map(), overrides = null) {
     if (!sel.contracts || !sel.folder) return null;
     const file = localFileOf(uri);
     if (!file || !inside(file, sel.folder)) return null;
@@ -467,7 +467,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         if (!realPath) continue;   // missing or refused: the engine reports the import as the build does
         deps.add(realPath);
         resolved.set(path, realPath);
-        let body = open.get(realPath);
+        // M5c: a cross-file rename checks each file against the others' renamed texts (by real path).
+        let body = overrides?.get(realPath) ?? open.get(realPath);
         if (body === undefined) {
           const r = await reader.read(sel.folder, relative(sel.folder, realPath).split(sep).join('/'), { cap: MAX_FILE_CHARS });
           if (r.error) {
@@ -794,10 +795,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
   }
 
-  async function analyseText(uri, sel, source, token) {
+  async function analyseText(uri, sel, source, token, overrides = null) {
     // With the project's files the document's imports reach, as its analysis has them (else an edit's check would see
     // the file alone and refuse it for its imports).
-    const project = await projectOf(uri, source, sel);
+    const project = await projectOf(uri, source, sel, new Map(), overrides);
     const r = await host.analyze(sel.key, sel.engine, { file: fileNameOf(uri), source, scope: scopeOf(sel),
       ...(project ? { moduleId: project.id, files: project.files } : {}) }, token);
     if (!r.model) return null;
@@ -847,6 +848,13 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * the edit was validated on goes along (joustExpected), and the extension's handler compares it with the document right
    * before applying.
    */
+  /** Several documents' edits as one verified, versioned workspace edit (M5c's rename across files). */
+  async function applyVerifiedMany(files, label) {
+    const res = await connection.workspace.applyEdit({ label, edit: { documentChanges: files.map((x) => ({ textDocument: { uri: x.uri, version: x.version },
+      edits: x.edits })) }, joustExpected: files.map((x) => ({ uri: x.uri, sha256: hash(x.text) })) });
+    return { applied: res.applied === true, files: files.length };
+  }
+
   async function applyVerified(uri, version, text, editsToApply, label) {
     const expected = [{ uri, sha256: hash(text) }];
     const res = await connection.workspace.applyEdit({ label, edit: { documentChanges: [{ textDocument: { uri, version },
@@ -930,13 +938,35 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const std = await stdOf(f.s.selection);
     return freshModel(p.textDocument.uri)?.model === f.model ? hover(f.model, p.position, std) : null;
   });
-  connection.onDefinition(async (p) => {
+  // M5c (ADR-0021 r8): a name imported from another .jsc file (a library's, `import contract`) goes to its declaration
+  // there; references of a declaration other files can import include theirs.
+  connection.onDefinition(async (p, token) => {
     const f = await currentModel(p.textDocument.uri);
-    return f ? definition(f.model, p.textDocument.uri, p.position) : null;
+    if (!f) return null;
+    const sym = symbolAt(f.model, p.position);
+    if (sym?.decl?.kind === 'import') {
+      const t = await importTarget(p.textDocument.uri, f.model, sym.decl, token);
+      if (t) return { uri: t.uri, range: lspRangeOf(t.decl.nameRange) };
+    }
+    return definition(f.model, p.textDocument.uri, p.position);
   });
-  connection.onReferences(async (p) => {
-    const f = await currentModel(p.textDocument.uri);
-    return f ? references(f.model, p.textDocument.uri, p.position, p.context?.includeDeclaration === true) : [];
+  connection.onReferences(async (p, token) => {
+    const uri = p.textDocument.uri;
+    const f = await currentModel(uri);
+    if (!f) return [];
+    const include = p.context?.includeDeclaration === true;
+    const sym = symbolAt(f.model, p.position);
+    let at = null;
+    if (sym?.decl?.kind === 'import') {
+      const t = await importTarget(uri, f.model, sym.decl, token);
+      if (t) at = { uri: t.uri, model: t.model, decl: t.decl };
+    } else if (sym?.decl && IMPORTABLE.has(sym.decl.kind) && sym.decl.parent < 0) {
+      at = { uri, model: f.model, decl: sym.decl };
+    }
+    if (!at) return references(f.model, uri, p.position, include);
+    const all = await occurrencesAcross(at.uri, at.model, at.decl, token);
+    const list = all.occurrences ?? all.local ?? [];
+    return list.filter((o) => include || !o.decl).map((o) => ({ uri: o.uri, range: lspRangeOf(o.range) }));
   });
   connection.languages.semanticTokens.on(async (p) => {
     await waitIndex(p.textDocument.uri);
@@ -1000,6 +1030,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (!freshModel(uri) || documents.get(uri)?.version !== version) return { error: 'the file changed: try again' };
     // F2 on #99: a name other files can see is renamed only when no file imports this one (renaming across files comes
     // with M5c's project index). C11 (r2): checked last, on the buffers open now, just before the edit is applied.
+    // M5c (ADR-0021 r8): a library's fn, type, enum or const is renamed across the project (open files only).
+    if (plan.visible && RENAMABLE_ACROSS.has(plan.decl.kind) && plan.decl.parent < 0) {
+      return renameAcross(uri, f, plan, newName, version, text, token);
+    }
     if (plan.visible) {
       // C16 (#114): the scan is bound to the open buffers it read: if any opens, closes or changes meanwhile, refused.
       const revision = () => JSON.stringify(documents.all().map((d) => [d.uri, d.version, state.get(d.uri) ? 1 : 0]).sort());
@@ -1009,11 +1043,67 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       if (imp.error) return { error: `'${plan.decl.name}' can be named by other files, and ${imp.error}: rename it by hand (renaming across files comes with M5c)` };
       if (imp.importers.length) {
         return { error: `'${plan.decl.name}' can be named by the files that import this one (${imp.importers.slice(0, 3).join(', ')}${imp.importers.length > 3 ? ', …' : ''}):`
-          + ' renaming across files comes with M5c; rename it by hand' };
+          + ' renaming them across files is for a library\'s fns, types, enums and consts; rename it by hand' };
       }
       if (!freshModel(uri) || documents.get(uri)?.version !== version) return { error: 'the file changed: try again' };
     }
     return { plan, version, text, st: f.s };
+  }
+
+  const RENAMABLE_ACROSS = new Set(['fn', 'type', 'enum', 'const']);
+
+  /**
+   * M5c (ADR-0021 r8; L6 across files): the rename of a library's top-level declaration in its file and in every file
+   * that imports it (the import's name and each use through it). Every file it edits must be open (D4a: versioned,
+   * open files only: `{ needsOpen }` names the rest); each is re-analysed against the others' renamed texts and must add
+   * no diagnostic and keep every reference to the same declaration; bound to the open buffers it read.
+   */
+  async function renameAcross(uri, f, plan, newName, version, text, token) {
+    const revision = () => JSON.stringify(documents.all().map((d) => [d.uri, d.version, state.get(d.uri) ? 1 : 0]).sort());
+    const before = revision();
+    const occ = await occurrencesAcross(uri, f.model, plan.decl, token);
+    if (occ.error) return { error: `'${plan.decl.name}' can be named by other files, and ${occ.error}: rename it by hand` };
+    const byUri = new Map([[uri, { uri, version, text, model: f.model, edits: plan.edits }]]);
+    for (const o of occ.occurrences) {
+      if (o.uri === uri) continue;
+      if (!byUri.has(o.uri)) byUri.set(o.uri, { uri: o.uri, src: o.src, model: o.model, edits: [] });
+      byUri.get(o.uri).edits.push({ range: lspRangeOf(o.range), newText: newName });
+    }
+    const files = [...byUri.values()];
+    const closed = files.filter((x) => !documents.get(x.uri)).map((x) => x.uri);
+    if (closed.length) return { needsOpen: closed, error: `the rename edits files that are not open: ${closed.map((u) => basename(fileURLToPath(u))).join(', ')}` };
+    // S4, C2 on #99, across files: an importer with an error (an import it cannot resolve, a member recovery dropped)
+    // may hold uses its model does not show: no rename until it checks.
+    for (const x of byUri.values()) {
+      if (x.uri !== uri && x.model.diagnostics.some((d) => d.severity === 'error')) {
+        return { error: `${basename(fileURLToPath(x.uri))}, which imports '${plan.decl.name}', has errors: a rename needs every file it edits to check; fix them first` };
+      }
+    }
+    for (const x of files) {
+      const doc = documents.get(x.uri);
+      x.version = doc.version;
+      x.text = doc.getText();
+      if (x.src && x.src.text !== x.text) return { error: 'a file changed while the rename was planned: try again' };
+      x.after = TextDocument.applyEdits(doc, x.edits);
+    }
+    // Each file's real path -> its renamed text: every re-analysis reads the others' renamed texts.
+    const overrides = new Map();
+    for (const x of files) {
+      const p = localFileOf(x.uri);
+      if (p) overrides.set((await real(p)) ?? p, x.after);
+    }
+    const sel = f.s.selection;
+    for (const x of files) {
+      const after = await analyseText(x.uri, sel, x.after, token, overrides);
+      if (!after) return { error: `the rename could not be checked in ${basename(fileURLToPath(x.uri))}` };
+      const ok = renamePreserves(x.model, after, x.edits);
+      if (!ok.ok) return { error: `${basename(fileURLToPath(x.uri))}: ${ok.reason}` };
+    }
+    if (revision() !== before) return { error: 'an open file changed while the rename was checked: try again' };
+    for (const x of files) if (documents.get(x.uri)?.version !== x.version) return { error: 'the file changed: try again' };
+    // A type or enum a contract imports can be in its datum or redeemers: its manifest may change too (D7's warning).
+    const abi = plan.abi || (files.length > 1 && (plan.decl.kind === 'type' || plan.decl.kind === 'enum'));
+    return { plan: { ...plan, abi }, version, text, st: f.s, files };
   }
 
   const abiWarning = (d) => `'${d.name}' is recorded in the ABI manifest: renaming it changes the manifest, the generated client and the`
@@ -1024,8 +1114,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (!edits) return { applied: false, error: 'edits are off for this client' };
     if (!p || typeof p.uri !== 'string' || typeof p.newName !== 'string' || !p.position) return { applied: false, error: 'refused' };
     const r = await validatedRename(p.uri, p.position, p.newName, token);
-    if (r.error) return { applied: false, error: r.error };
+    if (r.error) return { applied: false, error: r.error, ...(r.needsOpen ? { needsOpen: r.needsOpen } : {}) };
     if (r.plan.abi && p.confirm !== true) return { applied: false, needsConfirmation: true, warning: abiWarning(r.plan.decl) };
+    if (r.files) return applyVerifiedMany(r.files, `Rename '${r.plan.decl.name}' to '${p.newName}'`);
     return applyVerified(p.uri, r.version, r.text, r.plan.edits, `Rename '${r.plan.decl.name}' to '${p.newName}'`);
   });
   connection.onRequest('joust/prepareRename', async (p) => {
@@ -1045,6 +1136,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       const r = await validatedRename(p.textDocument.uri, p.position, p.newName, token);
       if (r.error) throw new Error(r.error);
       if (r.plan.abi) throw new Error(`${abiWarning(r.plan.decl)} Rename it in VS Code (with its warning), or by hand.`);
+      if (r.files) return { documentChanges: r.files.map((x) => ({ textDocument: { uri: x.uri, version: x.version }, edits: x.edits })) };
       return { documentChanges: [{ textDocument: { uri: p.textDocument.uri, version: r.version }, edits: r.plan.edits }] };
     });
   }
@@ -1328,8 +1420,40 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * files, a file too large).
    */
   async function importersOf(uri, sel) {
+    const p = await projectSources(uri, sel);
+    if (p.error) return p;
+    const importers = [];
+    for (const src of p.sources) {
+      if (src.id === p.id) continue;
+      const yes = importsOf(src.id, src.text, p.id);
+      if (yes === null) return { error: `${src.id} has more imports than the language server reads` };
+      if (yes) importers.push(src.id);
+    }
+    return { importers };
+  }
+
+  /** Whether the file `fromId` (its text) imports the module `id` by a relative specifier; null past the scan's bound. */
+  function importsOf(fromId, text, id) {
+    const scanned = scanImports(text, MAX_IMPORTS_PER_FILE);
+    if (scanned.truncated) return null;
+    return scanned.imports.some(({ spec }) => resolveRelative(fromId, spec) === id);
+  }
+
+  /** A relative specifier's module id from the file `fromId`, or null (#98 S7: no backslash, no '//'). */
+  function resolveRelative(fromId, spec) {
+    if (typeof spec !== 'string' || !(spec.startsWith('./') || spec.startsWith('../')) || spec.includes('\\') || spec.includes('//')) return null;
+    const id = posix.normalize(posix.join(posix.dirname(fromId), spec));
+    return id.startsWith('..') ? null : id;
+  }
+
+  /**
+   * F2, C11 on #99; M5c: the project's .jsc files, by module id (the project's contracts directory, or the whole folder
+   * without a known project), listed by the build's walk, open buffers in place of their files, open buffers of files
+   * not on disk yet included, each read bounded: `{ id (the file uri's own), base, sources: [{ id, uri, text, doc }] }`
+   * or `{ error }`.
+   */
+  async function projectSources(uri, sel) {
     if (!sel?.folder) return { error: 'the file is outside every workspace folder' };
-    // The project's contracts directory, or (no project known: a bare folder, Restricted Mode) the whole folder.
     const project = sel.contracts && sel.contractsRel;
     const base = project ? sel.contracts : sel.folder;
     // A buffer not on disk yet is named by its own path (importers name it so).
@@ -1343,45 +1467,99 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const open = new Map();
     for (const d of documents.all()) {
       const p = await realPathOf(d.uri, sel);
-      if (p) open.set(p, d.getText());
+      if (p) open.set(p, d);
     }
     // Tests only: a pause after the open buffers are read, so a test can change one meanwhile (C16, #114).
     if (Number.isInteger(hostOptions.importerScanDelayMs)) await new Promise((res) => setTimeout(res, hostOptions.importerScanDelayMs));
-    const importers = [];
-    const imports = (f, text) => {
-      const scanned = scanImports(text, MAX_IMPORTS_PER_FILE);
-      if (scanned.truncated) return null;
-      return scanned.imports.some(({ spec }) => (spec.startsWith('./') || spec.startsWith('../')) && !spec.includes('\\') && !spec.includes('//')
-        && posix.normalize(posix.join(posix.dirname(f), spec)) === id);
-    };
+    const sources = [];
     for (const f of listed.files) {
-      if (f === id) continue;
       const full = join(listed.path, ...f.split('/'));
-      let text = open.get(full);
+      const doc = open.get(full);
+      let text = doc?.getText();
       if (text === undefined) {
         const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: MAX_FILE_CHARS });
         if (r.error) return { error: `${f} cannot be read (${r.error})` };
         text = r.bytes.toString('utf8');
       }
-      const yes = imports(f, text);
-      if (yes === null) return { error: `${f} has more imports than the language server reads` };
-      if (yes) importers.push(f);
+      sources.push({ id: f, uri: doc?.uri ?? pathToFileURL(full).toString(), text, doc: doc ?? null });
     }
     // C11 on #99 r2: and every open buffer of a file there that is not on disk (yet), under the same walk rules.
     const listedSet = new Set(listed.files);
     for (const d of documents.all()) {
-      if (d.uri === uri) continue;
       const p = localFileOf(d.uri);
       if (!p || !p.endsWith('.jsc') || !inside(p, base)) continue;
       const f = relative(base, p).split(sep).join('/');
-      if (listedSet.has(f) || f === id) continue;
+      if (listedSet.has(f)) continue;
       if (sel.kind !== 'gradle' && f.split('/').slice(0, -1).some((x) => x === 'node_modules' || x.startsWith('.'))) continue;
       if (Buffer.byteLength(d.getText(), 'utf8') > MAX_FILE_CHARS) return { error: `${f} is larger than the language server reads` };
-      const yes = imports(f, d.getText());
-      if (yes === null) return { error: `${f} has more imports than the language server reads` };
-      if (yes) importers.push(f);
+      sources.push({ id: f, uri: d.uri, text: d.getText(), doc: d });
+      listedSet.add(f);
     }
-    return { importers };
+    return { id, base, sources };
+  }
+
+  // ------------------------------------------------------------------ M5c: across files (ADR-0021 r8)
+
+  const lspRangeOf = (r) => ({ start: { line: r[0], character: r[1] }, end: { line: r[2], character: r[3] } });
+
+  /** The kinds another file can name through an import (a library's top-level declarations, a contract). */
+  const IMPORTABLE = new Set(['fn', 'type', 'enum', 'const', 'contract']);
+
+  /** The index model of a project source: its open buffer's (current version), else its text analysed with the project. */
+  async function indexOfSource(src, sel, token) {
+    if (src.doc) {
+      const f = await indexedModel(src.doc.uri);
+      if (f && f.doc.getText() === src.text) return f.model;
+    }
+    return analyseText(src.uri, sel, src.text, token);
+  }
+
+  /** The declaration an import names in the file it imports: `{ uri, decl, model, src }`, or null. */
+  async function importTarget(uri, model, imp, token) {
+    const s = state.get(uri);
+    const sel = s?.selection ?? await selectionFor(uri);
+    const p = await projectSources(uri, sel);
+    if (p.error) return null;
+    const targetId = resolveRelative(p.id, imp.detail);
+    const src = targetId && p.sources.find((x) => x.id === targetId);
+    if (!src) return null;
+    const m = await indexOfSource(src, sel, token);
+    if (!m) return null;
+    const decl = topLevel(m, imp.name);
+    return decl ? { uri: src.uri, decl, model: m, src } : null;
+  }
+
+  /** A file's top-level declaration named `name` that another file can import, or null. */
+  function topLevel(model, name) {
+    // A library's top-level type, enum, fn or const, or a file's contract (`import contract { C }`; JSC0708: a contract
+    // exports nothing else).
+    return model.declarations.find((d) => d.name === name && IMPORTABLE.has(d.kind) && d.parent < 0) ?? null;
+  }
+
+  /**
+   * Every occurrence across the project of `decl`, a top-level declaration of the file `uri` (model `model`): its own
+   * file's, and in each file that imports it, the import's name and every use through it. `[{ uri, range, model, src,
+   * importDecl?, shorthand }]` (ranges in the model's form), or `{ error }`.
+   */
+  async function occurrencesAcross(uri, model, decl, token) {
+    const s = state.get(uri);
+    const sel = s?.selection ?? await selectionFor(uri);
+    const out = occurrences(model, decl.id).map((o) => ({ uri, range: o.range, model, shorthand: o.shorthand, decl: o.decl === true }));
+    const p = await projectSources(uri, sel);
+    if (p.error) return { error: p.error, local: out };
+    for (const src of p.sources) {
+      if (src.id === p.id) continue;
+      const yes = importsOf(src.id, src.text, p.id);
+      if (yes === null) return { error: `${src.id} has more imports than the language server reads`, local: out };
+      if (!yes) continue;
+      const m = await indexOfSource(src, sel, token);
+      if (!m) return { error: `${src.id} could not be analysed`, local: out };
+      for (const imp of m.declarations) {
+        if (imp.kind !== 'import' || imp.name !== decl.name || resolveRelative(src.id, imp.detail) !== p.id) continue;
+        for (const o of occurrences(m, imp.id)) out.push({ uri: src.uri, range: o.range, model: m, src, importDecl: imp, shorthand: o.shorthand, decl: false });
+      }
+    }
+    return { occurrences: out };
   }
 
   /** `file://` URI of a build diagnostic's file (relative to the snapshot's directory), or null. */
