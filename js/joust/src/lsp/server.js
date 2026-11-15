@@ -1352,6 +1352,32 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       return null;
     }
     if (!f || f.ok !== true || typeof f.text !== 'string' || !whitespaceOnly(text, f)) return null;
+    // S4, C6 on #120 (round 2): whitespace carries meaning (a line break ends a // comment, a space inside a string is
+    // its value, a space separates two names), so another engine's answer (a project's) is accepted only when the
+    // bundled compiler's formatting of it equals the bundled compiler's formatting of the source: JscFormat's output is a
+    // function of the tokens, the comments and the line breaks between them, so equal normal forms are the same program.
+    if (sel.engine?.id !== bundled.id) {
+      const normal = async (source) => {
+        if (!bundled.features?.includes('format')) return null;
+        const b = await host.request(workerKey(bundled), bundled, { op: 'format', source, ...(project ? { moduleId: project.id, files: project.files } : {}) },
+          { scope: scopeOf(sel), input: project ? JSON.stringify([source, project.id, Object.entries(project.files).sort()]) : source,
+            what: 'the formatting check', timeoutMs: FORMAT_MS }, token);
+        try {
+          const g = b.model ? JSON.parse(b.model) : null;
+          return g && g.ok === true && typeof g.text === 'string' ? g.text : null;
+        } catch {
+          return null;
+        }
+      };
+      const before = await normal(text);
+      const after = before === null ? null : await normal(f.text);
+      if (before === null || after !== before) {
+        log(`formatting ${fileNameOf(uri)}: refused the ${sel.source} compiler's answer: the bundled compiler does not read it as the same program`);
+        return null;
+      }
+      const again = documents.get(uri);
+      if (!again || again.version !== version || state.get(uri) !== s || token?.isCancellationRequested) return null;
+    }
     // F8 on #120: the style is the compiler's; in advisory mode that is the bundled one, which the project's may not share.
     if (sel.mode !== 'project-matched' && !s.formatLabelled) {
       s.formatLabelled = true;
