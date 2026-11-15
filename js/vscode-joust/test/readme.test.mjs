@@ -21,4 +21,7 @@ test('the README describes M5a–M5e: formatting, the build on save with the ABI
   for (const k of ['Formatting', 'joust fmt', 'build on save', 'joust.lock', 'Completion', 'Rename Symbol', 'Hover', 'Quick fixes']) {
     assert.ok(readme.toLowerCase().includes(k.toLowerCase()), k);
   }
+  // #126 (MF6): completion adds an import only for a standard-library row; another file's name is offered once imported.
+  assert.ok(readme.includes('names in scope (an imported name included), fields, and the standard library (choosing a row adds its\n  import)'));
+  assert.ok(!/names from other files/.test(readme));
 });

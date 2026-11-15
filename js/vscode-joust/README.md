@@ -7,7 +7,7 @@ JOUST's contract language, `.jsc`, in VS Code (ADR-0021, milestones M5a–M5e). 
   [diagnostics catalogue](https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-diagnostics.md).
 - **Hover** (types, the standard library's documentation), **go to definition**, **find references** and **semantic
   highlighting**, within a file and across files (below).
-- **Completion**: names in scope, fields, the standard library, and names from other files (choosing one adds its
+- **Completion**: names in scope (an imported name included), fields, and the standard library (choosing a row adds its
   import).
 - **Quick fixes**: `let`/`var` → `const`, `===` → `==`, and adding a missing standard-library import. They are offered
   only when you ask (Ctrl+.), never on save.
