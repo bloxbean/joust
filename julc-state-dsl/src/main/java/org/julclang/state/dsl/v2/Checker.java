@@ -1010,6 +1010,9 @@ final class Checker {
         }
         // M3c (ADR-0010 D1): a withdraw handler's redeemer is the record Rewards.
         if (c.methods().stream().anyMatch(m -> m.kind() == Kind.WITHDRAW)) generated.add("Rewards");
+        // M3 final pass MD1: a contract with handlers imports the ledger types into its validator, beside the redeemer
+        // records named after its methods: a method vote (record Vote) would shadow org.julclang.ledger.Vote (JSC0203).
+        if (c.methods().stream().anyMatch(m -> kind(m.kind()).purpose())) generated.addAll(Gov.NAMES);
         boolean adopts = c.methods().stream().anyMatch(m -> m.kind() == Kind.MIGRATE);
         for (Syntax.Method m : c.methods()) {
             if (adopts && m.kind() != Kind.MIGRATE && m.name().equals("migrate")) {
@@ -1017,7 +1020,8 @@ final class Checker {
             }
             if (m.kind() != Kind.INIT && m.kind() != Kind.MIGRATE) checkUserName(m.name(), m.pos(), "method");
             String variant = Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1);
-            if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && m.kind() != Kind.MIGRATE && !generated.add(variant)) {
+            // A handler generates no redeemer record named after it (withdraw's is Rewards, the others' Unit): not checked here.
+            if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && m.kind() != Kind.MIGRATE && !kind(m.kind()).purpose() && !generated.add(variant)) {
                 boolean declared = records.containsKey(variant) || enums.containsKey(variant) || variantEnum.containsKey(variant);
                 throw m.pos().error("JSC0203", "the method name " + m.name() + " would clash with the generated name " + variant
                         + (declared ? " (a declared type or variant): a method's redeemer is a Java class named after it, beside the"

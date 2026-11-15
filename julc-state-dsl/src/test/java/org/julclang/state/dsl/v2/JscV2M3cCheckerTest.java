@@ -262,6 +262,11 @@ class JscV2M3cCheckerTest {
         cases.add(bad("JSC1305", "stakeSelf is not supported beside owned objects", pur("@@stakeSelf",
                 owned + "  withdraw w(amount: Int) " + Q + " { }\n  certify c(cert: TxCert) " + Q + " = true\n")));
         cases.add(bad("JSC1305", "a withdraw handler is not supported beside owned objects", pur(owned + "  @@withdraw w(amount: Int) " + Q + " { }\n")));
+        // M3 final pass MD1: a method named after a ledger type the handlers read (its redeemer record would shadow it).
+        cases.add(bad("JSC0203", "the generated name Vote", pur("  @@action vote(k: Int) payable { return { deposits: deposits + k } }\n"
+                + "  vote v(voter: Voter, a: GovernanceActionId, x: Vote) " + Q + " = true\n")));
+        cases.add(bad("JSC0203", "the generated name TxCert", pur("  @@action txCert() payable { return state }\n"
+                + "  certify c(cert: TxCert) " + Q + " = true\n")));
         // ---- migration (ADR-0011 D4)
         cases.add(bad("JSC1303", "migrates to successor",
                 OLD.replace("only admin migrates to successor", "only admin migrates @@{").replace("{ }\n}", "\n}")));

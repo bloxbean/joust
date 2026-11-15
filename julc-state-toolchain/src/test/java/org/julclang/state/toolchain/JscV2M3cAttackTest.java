@@ -438,6 +438,39 @@ class JscV2M3cAttackTest {
         System.out.println("[M3c attacks] MS1: a staked contract (withdraw and certify handlers) migrates into CounterV2; four I41 mutants refused by its SPEND");
     }
 
+
+    // ------------------------------------------------------------------ M3 final pass MD1: names beside handlers, compiled
+
+    @Test
+    void handlerWordsAsActionNames_compileBesideTheirHandlers_andLedgerNamesAreRefused() throws Exception {
+        String src = """
+                jsc 1
+                package t
+                contract Words {
+                  params { gov: Credential, payee: Key }
+                  state { admin: Key, n: Int }
+                  init() { return { admin: caller, n: 0 } }
+                  action withdraw(k: Int) only admin { return { ...state, n: n + k } }
+                  action certify() only admin { return { ...state, n: n + 1 } }
+                  action propose() only admin { return { ...state, n: n + 2 } }
+                  withdraw w(amount: Int) authorized params.gov {
+                    if amount > 0 { send(wallet(params.payee), Value.lovelace(amount)) }
+                  }
+                  certify c(cert: TxCert) authorized params.gov = true
+                  vote v(voter: Voter, action: GovernanceActionId, choice: Vote) authorized params.gov = true
+                  propose p(pp: ProposalProcedure) = pp.deposit > 0
+                }
+                """;
+        var r = Toolchain.build(Map.of("t/Words.jsc", src), Map.of());
+        assertTrue(r.ok(), "the handler words as action names compile beside their handlers: " + r.diagnostics());
+        // The clash MD1 found (a record Vote shadowing the ledger's), refused at its .jsc position instead of in JuLC.
+        var bad = Toolchain.build(Map.of("t/Words.jsc", src.replace("action propose() only admin { return { ...state, n: n + 2 } }",
+                "action vote(k: Int) only admin { return { ...state, n: n + k } }")), Map.of());
+        assertFalse(bad.ok());
+        assertTrue(bad.diagnostics().toString().contains("JSC0203"), bad.diagnostics().toString());
+        System.out.println("[M3c attacks] MD1: withdraw, certify and propose as action names compile beside the four handlers; an action vote is JSC0203");
+    }
+
     // ------------------------------------------------------------------ A43: the successor is no own policy
 
     @Test
