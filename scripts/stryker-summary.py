@@ -166,6 +166,7 @@ if kills_path and os.path.exists(kills_path):
     with open(kills_path) as f:
         base_kills = json.load(f).get('stryker', {})
     lost = []
+    gone_total = 0
     # The files measured, and the baselined files in scope that are not (their detections all count as lost; review r3,
     # Codex C13): every file of a --whole set, and every --expect file.
     in_scope = {n for n, b in baseline.items() if b.get('scope') in wholes} | set(expects)
@@ -174,10 +175,11 @@ if kills_path and os.path.exists(kills_path):
         for sig, n in sorted(base_kills.get(name, {}).items()):
             gone = n - detected_sigs[name][sig]
             if gone > 0:
+                gone_total += gone
                 mutator, text, repl = sig.split('|', 2)
                 lost.append(f"- `{name}` {mutator}: `{text[:80]}` → `{repl[:80]}`" + (f" (×{gone})" if gone > 1 else '')
                             + (" (file no longer measured)" if absent else ''))
-    print(f"\n<details><summary>{len(lost)} detections lost against the baseline run ({kills_path})</summary>\n")
+    print(f"\n<details><summary>{gone_total} detections lost against the baseline run ({len(lost)} mutant signatures; {kills_path})</summary>\n")
     print('\n'.join(lost) if lost else 'None: every mutant the baseline run detected in these files is still detected.')
     print("\n</details>")
 if write_path:

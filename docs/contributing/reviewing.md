@@ -214,7 +214,17 @@ A milestone that adds language features exits only when they are in `JscGen` wit
 (at least 60 minutes, `fuzz_minutes=60` above) has passed with them on the milestone's head. **Every milestone** also
 exits only after a whole-set mutation run on its head has passed: `gh workflow run build.yml --repo bloxbean/joust --ref
 <branch> -f mutation_all=true` (§4; pull requests mutate only their changed units). Both runs are linked in the
-milestone's pull request.
+milestone's pull request, and checked, from a trusted checkout, with
+
+```bash
+scripts/check-milestone-runs.sh <head-sha> --mutation-run <id> [--fuzz-run <id>]
+```
+
+which reads both from the API and the artifacts. The mutation run must be a `workflow_dispatch` of `build.yml` on that
+head, finished and successful, with every job but `fuzz-long` passed. Every PIT module and Stryker set must say it ran
+whole, and its artifacts must match their `SHA256SUMS` exactly. The fuzz run must be a dispatch on that head whose three
+`fuzz-long` jobs passed, with the five-way target set to, and run for, at least 60 minutes (design review r4, F21).
+`fetch-ci-build.sh` refuses dispatch runs by design, so this script, not the fetch, is where they are checked.
 
 ## 4. Mutation testing
 
@@ -239,20 +249,40 @@ outside the package (the repository's `fixtures/`, `../joust-runtime`, the engin
 In CI, the `mutation` job (PIT) and the `stryker` jobs (one per set, in parallel) select their units by event
 (`scripts/pit-changed.py`, `scripts/stryker-changed.sh`):
 
-- **A pull request** mutates only its changed target classes and files, as `JOUST_MUTATION_CHANGED_ONLY=1`. A set runs
-  whole only when a baselined class's or file's source was deleted or renamed. This keeps a pull request's CI to about
-  35 minutes; the joust set alone takes 80 minutes to two hours whole.
+- **A pull request** (`JOUST_MUTATION_CHANGED_ONLY=1`) mutates its changed target classes and files. A set or module
+  runs whole when any of these changes, whatever the event (review r4, Codex C14, security S14):
+  - its mutation configuration: a module's parsed `ext.pitTargets`, `ext.pitMutableCodePaths` or `ext.pitTests`
+    (another change to its `build.gradle` does not count), or `js/mutation/**` (a set's `all`, `testFiles`,
+    `SLOW_CASES`, its tap arguments);
+  - the gate itself: `gradle/pitest.gradle`, the four scripts, `gradle/mutation-baseline.json`,
+    `gradle/mutation-kills.json`;
+  - the source of a baselined class or file, deleted or renamed (the owning module or set is found from the baseline,
+    not from the configuration).
+
+  A preflight also judges every changed baselined unit by the baseline, not by the configuration the change may have
+  narrowed: the run must measure it, or the change must update the baseline visibly. A baselined module whose
+  `ext.pitTargets` is empty fails. Lowered or removed baseline entries are shown in the summary. This keeps a pull
+  request's CI to about 25–35 minutes; the joust set alone takes 80 minutes to two hours whole.
 - **A push** (to `main` or `release/**`) and **the manual run with `mutation_all`** run every set whole. Their reports
   are the source of `gradle/mutation-baseline.json` and `gradle/mutation-kills.json`.
-- Outside CI, with no `JOUST_MUTATION_CHANGED_ONLY`, a set also runs whole when the change touches what decides
-  whether its mutants die: the module's or package's tests, `ext.pitTargets`/`ext.pitTests`, `gradle/pitest.gradle`,
-  `js/mutation/**`, the scripts or the baseline file.
+- **A manual run without `mutation_all`** selects like a pull request, against `HEAD~1` only: its last commit, not the
+  branch's whole change.
+- Outside CI, with no `JOUST_MUTATION_CHANGED_ONLY`, a set also runs whole when its tests change.
 
-**The trade-off:** on a pull request, a mutant in an unchanged file whose killing test changed is caught only by the
-next whole-set run, a push to `main` or a `mutation_all` run. A test that stops asserting, in a file the pull request
-does not touch, therefore shows only there. That is why a milestone's exit requires a whole-set run (§3), and why a
-reviewer of a pull request that weakens tests asks for a `mutation_all` run of its head. Stryker runs with that
-commit's engines, and first checks that js/joust's selected tests skip nothing.
+**The trade-off,** and what it means here:
+
+- On a pull request, a change to the tests alone is not measured: a mutant in an unchanged file whose killing test
+  changed is caught only by the next whole-set run. A test that stops asserting, in a file the pull request does not
+  touch, therefore shows only there. The summary says so on the pull request where it applies ("not measured on this
+  pull request: … its tests changed"), so a reviewer asks for a `mutation_all` run of the head.
+- In this repository's workflow the next whole-set run is usually a milestone's exit or a manual dispatch, possibly
+  weeks after the change, not a push soon after it. The stacked milestone pull requests merge into `feat/*`
+  integration branches, and pushes run whole sets only on `main` and `release/**` (design review r4, F22).
+- A whole-set failure on a push to `main` comes after the merge. Since `bloxbean-snapshot.yml` publishes only commits
+  whose push run passed every job, it blocks snapshots until someone fixes the gate or updates the baseline visibly.
+
+That is why a milestone's exit requires a whole-set run, checked by `scripts/check-milestone-runs.sh` (§3). Stryker runs
+with that commit's engines, and first checks that js/joust's selected tests skip nothing.
 
 The gate is per unit. Every class and file must score at least its entry in `gradle/mutation-baseline.json` less 5
 points; a unit without an entry must reach 40% (PIT) or 10% (Stryker). It also requires the units to be measured

@@ -590,8 +590,9 @@ jobs:
         id: base
         shell: bash
         # Whole sets on pushes (main, release/**) and on the manual run's mutation_all: their reports are the baselines'
-        # and mutation-kills.json's source. A pull request (and a manual run without mutation_all) mutates only the
-        # changed units, renames and deletions of baselined files forcing their sets whole (reviewing.md §4).
+        # and mutation-kills.json's source. A pull request (and a manual run without mutation_all, against HEAD~1)
+        # mutates its changed units; a change to a set's mutation configuration, the gate's scripts or baselines, or a
+        # rename or deletion of a baselined file still runs that set whole (reviewing.md §4).
         env:
           BASE_REF: ${{ github.base_ref }}
           BEFORE: ${{ github.event.before }}
@@ -666,8 +667,9 @@ jobs:
         id: base
         shell: bash
         # Whole sets on pushes (main, release/**) and on the manual run's mutation_all: their reports are the baselines'
-        # and mutation-kills.json's source. A pull request (and a manual run without mutation_all) mutates only the
-        # changed units, renames and deletions of baselined files forcing their sets whole (reviewing.md §4).
+        # and mutation-kills.json's source. A pull request (and a manual run without mutation_all, against HEAD~1)
+        # mutates its changed units; a change to a set's mutation configuration, the gate's scripts or baselines, or a
+        # rename or deletion of a baselined file still runs that set whole (reviewing.md §4).
         env:
           BASE_REF: ${{ github.base_ref }}
           BEFORE: ${{ github.event.before }}

@@ -166,15 +166,17 @@ if kills_path and os.path.exists(kills_path):
     with open(kills_path) as f:
         base_kills = json.load(f).get('pit', {})
     lost = []
+    gone_total = 0
     for cls in sorted(set(per) | in_scope):
         absent = cls not in per
         for sig, n in sorted(base_kills.get(cls, {}).items()):
             gone = n - killed_sigs[cls][sig]
             if gone > 0:
+                gone_total += gone
                 method, mutator, desc = sig.split('|', 2)
                 lost.append(f"- `{cls.rsplit('.', 1)[-1]}` `{method}` {mutator}: {desc}" + (f" (×{gone})" if gone > 1 else '')
                             + (" (class no longer measured)" if absent else ''))
-    print(f"\n<details><summary>{len(lost)} kills lost against the baseline run ({kills_path})</summary>\n")
+    print(f"\n<details><summary>{gone_total} kills lost against the baseline run ({len(lost)} mutant signatures; {kills_path})</summary>\n")
     print('\n'.join(lost) if lost else 'None: every mutant the baseline run killed in these classes is still killed.')
     print("\n</details>")
 

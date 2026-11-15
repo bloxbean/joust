@@ -5,11 +5,13 @@
 #   joust-heap     js/joust's src/toolchain-heap.js, with every case (stryker.heap.config.mjs)
 #   state-client   js/state-client's verifiers src/verify.js, src/keyed.js (stryker.state-client.config.mjs)
 # JOUST_STRYKER_SETS (space-separated) runs only those sets: CI runs each set as its own job.
-# A set runs whole when the change touches what decides whether its mutants die: js/mutation/**, these scripts, the
-# baseline file, or the set's tests (review r1, design F6, security S6), or when a file the baseline records for the set
-# was deleted or renamed (review r2, design F14); else only its changed files run. With JOUST_MUTATION_CHANGED_ONLY=1
-# (CI's pull requests) only renames and deletions run a set whole. A whole run must measure every file
-# the baseline records for the set, and a changed run each file it selected (stryker-summary.py's --whole, --expect).
+# A set runs whole when the change touches what decides whether its mutants die: js/mutation/** (its `all`, testFiles,
+# SLOW_CASES and tap arguments), these scripts or the baseline files (review r4, Codex C14, security S14), or when a file
+# the baseline records for the set was deleted or renamed (review r2, design F14), in every mode; and when the set's
+# tests change, except with JOUST_MUTATION_CHANGED_ONLY=1 (CI's pull requests), which notes them as not measured
+# instead. Else only its changed files run. A changed baselined file the configuration no longer mutates fails (C14). A
+# whole run must measure every file the baseline records for the set, and a changed run each file it selected
+# (stryker-summary.py's --whole, --expect). JOUST_STRYKER_DRY_RUN=1 prints the selection and runs nothing.
 #   bash scripts/stryker-changed.sh <base-ref> [floor]
 #   bash scripts/stryker-changed.sh --all [floor]
 # Each file must score at least its baseline in gradle/mutation-baseline.json less 5 points (a file with no baseline: at
@@ -23,10 +25,11 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 BASELINE=gradle/mutation-baseline.json
 KILLS=gradle/mutation-kills.json
-if [[ "$base" == "--all" ]]; then changed=""; gone=""; else
+if [[ "$base" == "--all" ]]; then changed=""; gone=""; merge_base=""; else
   changed="$(git diff --name-only "$base...HEAD")"
   # The old path of each deletion and rename: a baselined file that leaves must be seen to leave.
   gone="$(git diff --name-status -M "$base...HEAD" | awk -F'\t' '$1 ~ /^R/ || $1 ~ /^D/ {print $2}')"
+  merge_base="$(git merge-base "$base" HEAD)"
 fi
 status=0
 ran=0
@@ -50,21 +53,57 @@ for set in ${JOUST_STRYKER_SETS:-$SETS}; do
   targets="$(node -e "import('./$config').then(m => console.log(m.default.mutate.join('\n')))")"
   whole=0
   why="the whole set"
-  [[ "$base" == "--all" ]] && whole=1
-  # On CI's pull requests (JOUST_MUTATION_CHANGED_ONLY=1) only the changed files run: a test or configuration change no
-  # longer runs the whole set; a renamed or deleted baselined file still does (below).
-  if [[ "${JOUST_MUTATION_CHANGED_ONLY:-0}" != 1 ]]; then
-    while read -r f; do
-      [[ -z "$f" ]] && continue
-      case "$f" in
-        js/mutation/*|scripts/stryker-changed.sh|scripts/stryker-summary.py|"$BASELINE"|"$dir"/test/*) whole=1 ;;
-      esac
-    done <<<"$changed"
+  [[ "$base" == "--all" ]] && { whole=1; why="the whole set (--all)"; }
+  set_tests=""
+  while read -r f; do
+    [[ -z "$f" || $whole -eq 1 ]] && continue
+    case "$f" in
+      js/mutation/*|scripts/stryker-changed.sh|scripts/stryker-summary.py|"$BASELINE"|"$KILLS")
+        whole=1; why="the whole set ($f changed: it decides whether the mutants die)" ;;
+      "$dir"/test/*) set_tests+="$f " ;;
+    esac
+  done <<<"$changed"
+  if [[ $whole -eq 0 && -n "$set_tests" ]]; then
+    if [[ "${JOUST_MUTATION_CHANGED_ONLY:-0}" == 1 ]]; then
+      # The pull-request trade-off, shown where it applies (review r4, design F22).
+      echo "**Note:** not measured on this pull request: set \`$set\` (its tests changed: ${set_tests% }); a \`mutation_all\` run on this head measures them"
+    else
+      whole=1; why="the whole set (${set_tests%% *} changed: it decides whether the mutants die)"
+    fi
   fi
   baselined="$(python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])).get("stryker", {}); print("\n".join(k for k, v in d.items() if v.get("scope") == sys.argv[2]))' "$BASELINE" "$set")"
   while read -r f; do
     if [[ -n "$f" ]] && grep -qxF -- "$f" <<<"$baselined"; then whole=1; why="the whole set ($f, baselined, was deleted or renamed)"; fi
   done <<<"$gone"
+  # Codex C14's preflight: a changed baselined file of this set must be one the configuration still mutates, judged by
+  # the baseline, not by the configuration the change may have narrowed.
+  while read -r f; do
+    [[ -z "$f" || ! -f "$f" ]] && continue
+    if grep -qxF -- "$f" <<<"$baselined" && ! grep -qxF -- "${f#"$dir"/}" <<<"$targets"; then
+      echo "**Error:** the baselined file \`$f\` changed but $config no longer mutates it: restore it to the set, or update $BASELINE, visibly"
+      status=1
+    fi
+  done <<<"$changed"
+  # What the change does to the set's baseline (security S14): lowered and removed entries are shown.
+  if [[ -n "$merge_base" ]]; then
+    git show "$merge_base:$BASELINE" 2>/dev/null | python3 -I -c '
+import json, sys
+try:
+    before = json.load(sys.stdin).get("stryker", {})
+except ValueError:
+    before = {}
+now = json.load(open(sys.argv[1])).get("stryker", {})
+for n, b in sorted(before.items()):
+    if b.get("scope") != sys.argv[2]:
+        continue
+    was = b.get("score", 0)
+    if n not in now:
+        print(f"**Note:** baseline entry removed: `{n}` (was {was}%)")
+    elif now[n].get("score", 0) < was:
+        new = now[n].get("score", 0)
+        print(f"**Note:** baseline lowered: `{n}` {was}% → {new}%")
+' "$BASELINE" "$set" || true
+  fi
   # A set whose configuration mutates nothing while the baseline still records files for it fails, under --all too
   # (review r3, Codex C12: `const all = []` would otherwise end the run with "nothing changed").
   if [[ -z "$targets" && -n "$baselined" ]]; then
@@ -90,7 +129,9 @@ for set in ${JOUST_STRYKER_SETS:-$SETS}; do
     continue
   fi
   ran=1
-  echo "$set: Stryker on ${files[*]} ($why)" >&2
+  # On stdout: the summary records what ran and why (scripts/check-milestone-runs.sh reads "(the whole set (--all))").
+  echo "$set: Stryker on ${files[*]} ($why)"
+  if [[ "${JOUST_STRYKER_DRY_RUN:-0}" == 1 ]]; then continue; fi
   if [[ $dir == js/joust && "${JOUST_REQUIRE_ENGINES:-0}" == 1 ]]; then
     tests="$(node -e "import('./$config').then(m => console.log(m.testFiles.join(' ')))")"
     tap="$(cd "$dir" && node --test --test-concurrency=1 --test-reporter=tap $tests 2>&1 || true)"
