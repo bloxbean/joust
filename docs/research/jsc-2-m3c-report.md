@@ -53,9 +53,9 @@ its description test; their DevKit tests too (below).
 |---|---|---|---|
 | StakedVault | 12,121 | 12,312 | +1.6% |
 | CounterV1 | 5,738 | 5,785 | +0.8% |
-| CounterV2 | 6,581 | 6,784 | +3.1% |
+| CounterV2 | 6,738 | 6,942 | +3.0% |
 
-All below 14 KB. The coverage contracts: Steward 13,783 B, Guardrail 6,556 B, TallyV1 7,990 B, TallyV2 8,049 B (under the
+All below 14 KB. The coverage contracts: Steward 13,783 B, Guardrail 6,556 B, TallyV1 8,532 B, TallyV2 8,331 B (r2: the Bool and the enum) (under the
 runtime's 15,000-byte limit; a first Steward with the guardrail in it was 15,557 B, so the guardrail is its own contract).
 
 **Encoding** (`encoding_equalsTheJavaExamples`): the manifests match the descriptions but for exactly the stated
@@ -80,9 +80,9 @@ example's against the port's):
 | Counter v1 init | 88,098,684 | 88,098,684 | +0.0% | 273,369 | 273,369 (+0.0%) | 0.88% / 1.95% |
 | Counter v1 increment | 73,940,932 | 73,940,932 | +0.0% | 207,108 | 207,108 (+0.0%) | 0.74% / 1.48% |
 | Counter v1 setSuccessor | 78,697,313 | 78,697,313 | +0.0% | 226,548 | 226,548 (+0.0%) | 0.79% / 1.62% |
-| Counter the migration (v1 upgrade + v2 adopt) | 242,504,672 | 245,443,056 | +1.2% | 769,558 | 782,502 (+1.7%) | 2.45% / 5.59% |
+| Counter the migration (v1 upgrade + v2 adopt) | 242,552,672 | 245,491,056 | +1.2% | 769,858 | 782,802 (+1.7%) | 2.45% / 5.59% |
 | Counter v2 setStep | 77,739,834 | 77,875,077 | +0.2% | 225,378 | 226,210 (+0.4%) | 0.78% / 1.62% |
-| Counter v2 close | 112,389,250 | 113,473,469 | +1.0% | 384,686 | 390,389 (+1.5%) | 1.13% / 2.79% |
+| Counter v2 close | 112,437,250 | 113,521,469 | +1.0% | 384,986 | 390,689 (+1.5%) | 1.14% / 2.79% |
 
 The proposal's -91.3% is the guardrail's sum: the port's `withdrawals.values.sum()` is entry-wise, the example's
 `totalOf` looks each key up again (quadratic). The init's +6.6% is the port's check of the params at the creation (M2c's
@@ -103,11 +103,11 @@ UPLC legs report no class (semantics §2.1), so the class is observed twice, not
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | StakedVault (port) | 41 | 21 | 52 | 16 | 0 | 4 | 0 | 0 | 16 | 27 | the state at the staked address; deposits; a close by the quorum; collect at 0 and 5 ADA; registration and stake-only delegation to the pool, refused for another pool, a StakeVote with an attacker DRep, unregistration, committee and pool certificates and a key credential (the filter before the handler); votes as the script DRep, a stake pool voter, no votes; the guardrail at, under and over the cap; every vector also on examples/staking, no difference |
 | CounterV1 (port) | 10 | 4 | 32 | 0 | 2 | 2 | 0 | 1 | 11 | 23 | the successor set by the admin only (and changeable, as the example allows); the upgrade into the policy its field names; another policy and an unset field (`migrate:to`); one lovelace skimmed (the old side's value rule); six old-side mutants (no mint, a key address, another script, another token name, the token not burned) |
-| CounterV2 (port) | 10 | 3 | 30 | 0 | 2 | 1 | 0 | 2 | 10 | 28 | the adoption as the new mint sees the whole migration; another previous policy (`migrate:from`); a 27-byte admin (`input:old`, the stated difference); ±1 lovelace (the new side's value rule); four new-side mutants (no burn, one into two, the seed not spent, a wallet seed); the attack suite on the whole migration, each attack refused by one half or both |
-| Steward (coverage) | 38 + 4 | 23 + 2 | 51 + 15 | 17 | 0 | 5 | 0 | 0 | 23 | 0 | a withdraw handler with arguments and Ctx (deadline, tip, a 27-byte `to`, a one-lovelace tip: `purpose:withdraw`), authorized by a governor; a total match over every TxCert constructor behind the filter; a vote by quorum deciding on the action's id, index and vote (the second vote refused; another voter's votes beside); K46's approval mutants (another policy, purpose, certificate, index, voter) |
+| CounterV2 (port) | 12 | 4 | 33 | 0 | 3 | 1 | 0 | 2 | 11 | 28 | the adoption as the new mint sees the whole migration; another previous policy (`migrate:from`); a 27-byte admin (`input:old`, the stated difference); ±1 lovelace (the new side's value rule); four new-side mutants (no burn, one into two, the seed not spent, a wallet seed); the attack suite on the whole migration, each attack refused by one half or both |
+| Steward (coverage) | 40 + 4 | 24 + 2 | 53 + 15 | 18 | 0 | 5 | 0 | 0 | 23 | 0 | a withdraw handler with arguments and Ctx (deadline, tip, a 27-byte `to`, a one-lovelace tip: `purpose:withdraw`), authorized by a governor; a total match over every TxCert constructor behind the filter; a vote by quorum deciding on the action's id, index and vote (the second vote refused; another voter's votes beside); K46's approval mutants (another policy, purpose, certificate, index, voter) |
 | Guardrail (coverage) | 24 | 16 | 24 | 16 | 0 | 0 | 0 | 0 | 3 | 16 | a propose handler over every GovernanceAction, its records' fields and LedgerMaps (`fold`, `all`, `has`, `size`, `keys`, `any`), a duplicate key counting twice |
-| TallyV1 (coverage) | 13 | 8 | 35 | 0 | 2 | 3 | 2 | 1 | 20 | 34 | a list, a map and an option in the migrating state; the successor set once (the lock); a migrating destroy by a quorum of the voters; its quorum's shape at the creation |
-| TallyV2 (coverage) | 13 | 8 | 33 | 0 | 3 | 2 | 1 | 1 | 10 | 28 | an adoption with an argument and Ctx (the old admin adopts, before a deadline); its invariant on the adopted state; a 27-byte voter and admin (`input:old`); a map out of order or with a key twice refused by both interpreters; the params' quorum checked at the adoption (a council out of order, its own build) |
+| TallyV1 (coverage) | 15 | 9 | 37 | 0 | 2 | 4 | 2 | 1 | 22 | 34 | a list, a map and an option in the migrating state; the successor set once (the lock); a migrating destroy by a quorum of the voters; its quorum's shape at the creation |
+| TallyV2 (coverage) | 14 | 9 | 35 | 0 | 4 | 2 | 1 | 1 | 12 | 28 | an adoption with an argument and Ctx (the old admin adopts, before a deadline); its invariant on the adopted state; a 27-byte voter and admin (`input:old`); a map out of order or with a key twice refused by both interpreters; the params' quorum checked at the adoption (a council out of order, its own build) |
 
 **Each defence fails a test without it.** Removing any one of the nine M3c call rules from either interpreter (the
 certificate filter, the voter, the votes, the withdrawal's allocation, the certify and propose decision, the vote's
@@ -162,6 +162,16 @@ it.
 | K50 separate gates | `JscV2M3cGateTest` |
 
 ## Builds and DevKit
+
+**Round r2** (the three round-1 reviews: security S1–S4, Codex C1–C6, design F1–F9; the author reply on #113 maps each to
+its change and test). The branch merges #111 (`baa2d6a3`: the header is `jsc 1`; M3a to M3c's files rewritten in
+place) and #112's round-2 head (`7bb5ec2e`, with the M3a heads). At the r2 head, `./gradlew build -PnoDevnet --continue
+--no-watch-fs` runs 1,132 JVM tests (fewer than r1's, since #111 removes `.jsc` v1 and its tests) with one failure,
+`EngineFixtureScriptsTest`: S1 changes examples/upgrade's CounterV2 script, so `fixtures/m3`'s CounterV2 contract file
+(and the upgrade groups of `fixtures/m3` and `fixtures/m0`) must be recorded again on DevKit, which was down for r2.
+`checkJscAbi`: 55 manifests agree. Every on-chain migration and withdrawal defence removed in isolation from the
+processor fails its test (11 of 11), and every M3c call rule removed from either interpreter fails the five-way (22 of
+22, S1's and C1's rules included). The r1 numbers below are kept where r2 did not change them.
 
 The branch is `origin/feat/jsc-2-m3b` (`17779afd`) plus M3c's commits; the base had no newer commits to merge.
 
