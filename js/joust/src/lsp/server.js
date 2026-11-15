@@ -51,8 +51,17 @@ export const BUILD_IDLE_MS = 5 * 60 * 1000;
 export const MAX_BUILD_FILES = 500;
 /** S7 on #99: at most this many characters in a build snapshot (sources and libraries). */
 export const MAX_BUILD_CHARS = 16 * 1024 * 1024;
+/** S1 on #115: navigation and rename across files read at most this much of the project, analyse at most this many importers, keep at most this many locations. */
+export const MAX_CROSS_CHARS = 16 * 1024 * 1024;
+export const MAX_CROSS_IMPORTERS = 64;
+export const MAX_LOCATIONS = 10000;
+export const MAX_OCCURRENCE_CACHE = 64;
 /** M5c: the cap on describing a project's Java libraries (javac attribution in the engine). */
 export const JAVA_LIBRARIES_MS = 60000;
+/** S5 on #115: the java: signature cache's bounds (entries in memory, files on disk, the bytes of one entry). */
+export const MAX_SIGNATURE_ENTRIES = 16;
+export const MAX_SIGNATURE_FILES = 32;
+export const MAX_SIGNATURE_BYTES = 4 * 1024 * 1024;
 /** D4: a script over this many bytes is reported on save (a transaction holds at most 16 KB, scripts included). */
 export const SCRIPT_WARN_BYTES = 14 * 1024;
 export const SERVER_NAME = 'joust-lsp';
@@ -182,7 +191,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   const reader = createReader();
   // uri -> the state of ONE open lifetime of the document (review C2 on #83): every asynchronous result checks that the
   // state it started with is still the current one, so a close and a reopen at the same version never mix lifetimes.
-  let signatureDir = null;   // M5c: the java: library signature cache (outside every workspace folder, as the engines)
+  let signatureDir = null;
+  let lifetimes = 0;   // C2 on #115: each open lifetime's serial (a close and a reopen at the same version is another)
+  /** The open documents' identities: uri, version and lifetime (C16 on #99, C2 on #115). */
+  const openRevision = () => JSON.stringify(documents.all().map((d) => [d.uri, d.version, state.get(d.uri)?.lifetime ?? 0]).sort());   // M5c: the java: library signature cache (outside every workspace folder, as the engines)
   const state = new Map();   // uri -> { lastPublished, model, modelVersion, modelGen, outlineModel, timer, cts, selection }
   const fixes = new Map();   // opaque single-use fix id -> { uri, st, version, gen, engineId, code, range, issued }
   const imports = new Map(); // opaque single-use import id -> { uri, st, gen, name, module, issued }
@@ -506,6 +518,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       else {
         javaLibraries = j.json;
         javaSources = j.sources;
+        // C3 on #115: the library sources read are deps: a change of one analyses this file again.
+        for (const path of j.paths ?? []) deps.add(path);
       }
     }
     return { id, files, deps, advisory, resolved, javaLibraries, javaSources };
@@ -519,7 +533,24 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * key }` or `{ error }`.
    */
   async function javaLibrariesOf(sel) {
-    const libs = await buildLibraries(sel, MAX_PROJECT_CHARS);
+    // C3 on #115: open buffers of the library sources are what is described (as the build reads them); the paths read
+    // are the analysis's deps. F7, S5: the read is kept until a library source changes (a buffer, a watched file).
+    const memoKey = sel.root ?? '';
+    let libs = libraryMemo.get(memoKey);
+    if (!libs) {
+      const openByPath = new Map();
+      for (const d of documents.all()) {
+        const p = localFileOf(d.uri);
+        if (p) openByPath.set((await real(p)) ?? p, d);
+      }
+      const inputs = { openByPath, disk: new Map(), versions: new Map(), states: new Map() };
+      libs = await buildLibraries(sel, MAX_PROJECT_CHARS, inputs);
+      if (!libs.error) {
+        libs.paths = [...inputs.disk.keys()];
+        libraryMemo.set(memoKey, libs);
+        while (libraryMemo.size > 8) libraryMemo.delete(libraryMemo.keys().next().value);
+      }
+    }
     if (libs.error) return { error: libs.error };
     const sources = libs.javaLibraries;
     if (!Object.keys(sources).length) return { error: 'no package of the project ships Java library sources (joust-lib/*.java)' };
@@ -528,14 +559,21 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const k = key.digest('hex');
     const engineKey = sel.engine?.id ?? 'engine';
     const memo = javaSignatures.get(`${engineKey}|${k}`);
-    if (memo) return { json: memo, sources, key: k };
+    if (memo) {
+      javaSignatures.delete(`${engineKey}|${k}`);
+      javaSignatures.set(`${engineKey}|${k}`, memo);
+      return { json: memo, sources, key: k, paths: libs.paths };
+    }
     const file = signatureDir ? join(signatureDir, `${engineKey}-${k}.json`) : null;
     if (file) {
       try {
-        const entry = JSON.parse(await fsp.readFile(file, 'utf8'));
+        // S5 on #115: an entry is read only up to MAX_SIGNATURE_BYTES; its digest detects corruption (the storage is the
+        // server's own, outside every workspace folder).
+        const st = await fsp.stat(file);
+        const entry = st.isFile() && st.size <= MAX_SIGNATURE_BYTES ? JSON.parse(await fsp.readFile(file, 'utf8')) : null;
         if (entry && entry.key === k && typeof entry.json === 'string' && entry.sha256 === hash(entry.json)) {
-          javaSignatures.set(`${engineKey}|${k}`, entry.json);
-          return { json: entry.json, sources, key: k };
+          rememberSignatures(`${engineKey}|${k}`, entry.json);
+          return { json: entry.json, sources, key: k, paths: libs.paths };
         }
       } catch {
         // not cached yet, or unreadable: described again
@@ -552,19 +590,41 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       return { error: 'the engine\'s description did not parse' };
     }
     if (parsed?.ok === false || typeof parsed?.json !== 'string') return { error: parsed?.error ?? 'this engine cannot describe Java libraries (an older JOUST)' };
-    javaSignatures.set(`${engineKey}|${k}`, parsed.json);
+    rememberSignatures(`${engineKey}|${k}`, parsed.json);
     log(`described the project's Java libraries in ${Date.now() - t} ms (javac attribution in the engine)`);
-    if (file) {
+    if (file && parsed.json.length <= MAX_SIGNATURE_BYTES) {
       try {
         await fsp.mkdir(signatureDir, { recursive: true });
         await fsp.writeFile(file, JSON.stringify({ key: k, json: parsed.json, sha256: hash(parsed.json) }));
+        await pruneSignatures();
       } catch {
         // the cache is an optimisation
       }
     }
-    return { json: parsed.json, sources, key: k };
+    return { json: parsed.json, sources, key: k, paths: libs.paths };
   }
-  const javaSignatures = new Map();   // engine id | sources' SHA-256 -> descriptions (JSON)
+  const javaSignatures = new Map();   // engine id | sources' SHA-256 -> descriptions (JSON), LRU (S5 on #115)
+  const libraryMemo = new Map();      // project root -> its packages' library read (C3, F7 on #115), until one changes
+  function rememberSignatures(key, json) {
+    javaSignatures.delete(key);
+    javaSignatures.set(key, json);
+    while (javaSignatures.size > MAX_SIGNATURE_ENTRIES) javaSignatures.delete(javaSignatures.keys().next().value);
+  }
+  /** S5 on #115: the disk cache keeps its MAX_SIGNATURE_FILES most recent entries. */
+  async function pruneSignatures() {
+    const names = (await fsp.readdir(signatureDir)).filter((n) => /^[0-9a-z_-]+\.json$/i.test(n));
+    if (names.length <= MAX_SIGNATURE_FILES) return;
+    const dated = [];
+    for (const n of names) {
+      try {
+        dated.push([(await fsp.stat(join(signatureDir, n))).mtimeMs, n]);
+      } catch {
+        // gone meanwhile
+      }
+    }
+    dated.sort((a, b) => b[0] - a[0]);
+    for (const [, n] of dated.slice(MAX_SIGNATURE_FILES)) await fsp.rm(join(signatureDir, n), { force: true });
+  }
 
   /** Every open document whose last analysis read `realPath` (it imports it, directly or not): analysed again. */
   function rescheduleImporters(paths, delay = DEBOUNCE_MS * 2, except = null) {
@@ -711,20 +771,29 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
   }
 
+  /** C3 on #115: a java: library's source buffer (the extension sends joust-lib/ .java files): an input, never analysed. */
+  const isJavaInput = (uri) => /\/joust-lib\/.*\.java$/.test(uri);
+  function javaInputChanged(uri, text) {
+    libraryMemo.clear();
+    rescheduleImporters([localFileOf(uri)], DEBOUNCE_MS * 2, uri);
+    invalidateInput(localFileOf(uri), text).catch(() => {});
+  }
   documents.onDidOpen((e) => {
+    if (isJavaInput(e.document.uri)) return javaInputChanged(e.document.uri, e.document.getText());
     const old = state.get(e.document.uri);
     if (old) {
       clearTimeout(old.timer);
       settle(old);
     }
-    state.set(e.document.uri, { lastPublished: null });
+    state.set(e.document.uri, { lastPublished: null, lifetime: ++lifetimes });
     schedule(e.document.uri, 0);
     withdrawDisk(e.document.uri, e.document.getText()).catch(() => {});
     // A buffer opened for a file an importer looked for (perhaps missing on disk) is now what it reads (#98 N1).
     rescheduleImporters([localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
   });
   documents.onDidChangeContent((e) => {
-    if (!state.has(e.document.uri)) state.set(e.document.uri, { lastPublished: null });
+    if (isJavaInput(e.document.uri)) return javaInputChanged(e.document.uri, e.document.getText());
+    if (!state.has(e.document.uri)) state.set(e.document.uri, { lastPublished: null, lifetime: ++lifetimes });
     const s = state.get(e.document.uri);
     // An analysis of an older version still running is cancelled (after the grace period its worker is replaced).
     s.cts?.cancel();
@@ -740,6 +809,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     rescheduleImporters([s.realPath, localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
   });
   documents.onDidClose((e) => {
+    if (isJavaInput(e.document.uri)) return javaInputChanged(e.document.uri, null);
     const s = state.get(e.document.uri);
     // Its importers read its buffer: they are analysed again with its file on disk (#98 F3d).
     rescheduleImporters([s?.realPath, localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
@@ -841,6 +911,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const cts = new CancellationTokenSource();
     s.indexCts?.cancel();
     s.indexCts = cts;
+    // Tests only: an index later than its diagnostics (C5 on #115).
+    if (Number.isInteger(hostOptions.indexDelayMs) && version > 1) await new Promise((res) => setTimeout(res, hostOptions.indexDelayMs));
     const r = await host.analyze(sel.key, sel.engine, { ...inputs, op: 'index' }, cts.token);
     if (s.indexCts === cts) s.indexCts = undefined;
     if (state.get(uri) !== s || s.seq !== seq || documents.get(uri)?.version !== version || selector.generation !== gen || !r.model) {
@@ -1039,19 +1111,19 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     let at = null;
     if (sym?.decl?.kind === 'import') {
       const t = await importTarget(uri, f.model, sym.decl, token);
-      if (t) at = { uri: t.uri, model: t.model, decl: t.decl };
+      if (t) at = { uri: t.uri, model: t.model, decl: t.decl, opts: { targetId: t.src.id, targetText: t.src.text, from: uri } };
     } else if (sym?.decl && IMPORTABLE.has(sym.decl.kind) && sym.decl.parent < 0) {
-      at = { uri, model: f.model, decl: sym.decl };
+      at = { uri, model: f.model, decl: sym.decl, opts: { targetText: f.doc.getText() } };
     }
     if (!at) return references(f.model, uri, p.position, include);
-    const all = await occurrencesAcross(at.uri, at.model, at.decl, token);
+    const all = await occurrencesAcross(at.uri, at.model, at.decl, token, at.opts);
     const list = all.occurrences ?? all.local ?? [];
     return list.filter((o) => include || !o.decl).map((o) => ({ uri: o.uri, range: lspRangeOf(o.range) }));
   });
   connection.languages.semanticTokens.on(async (p) => {
     await waitIndex(p.textDocument.uri);
-    const s = state.get(p.textDocument.uri);
-    const m = s?.indexModel ?? s?.model;
+    // C5 on #115: only the index of this version (a failed or late index never lends an older version's tokens).
+    const m = freshModel(p.textDocument.uri)?.model;
     return m ? semanticTokens(m) : { data: [] };
   });
 
@@ -1099,6 +1171,19 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const f = await indexedModel(uri);
     if (!f) return { error: 'the file changed or is still being analysed: try again' };
     if (f.model.modelVersion < 2) return { error: 'this compiler predates rename (JOUST M5b)' };
+    // F2 on #115: a rename started on an imported name (its import, or a use) is the rename of its declaration, in the
+    // file the import names: that file must be open too (D4a), and a package's library is never edited.
+    const sym = symbolAt(f.model, position);
+    if (sym?.decl?.kind === 'import' && !(f.model.diagnostics.some((d) => d.severity === 'error'))) {
+      if (String(sym.decl.detail ?? '').startsWith('java:') || String(sym.decl.detail ?? '').startsWith('std/')) {
+        return { error: `'${sym.decl.name}' comes from ${sym.decl.detail}, which the language server does not edit` };
+      }
+      const t = await importTarget(uri, f.model, sym.decl, token);
+      if (!t) return { error: `'${sym.decl.name}' is declared in ${sym.decl.detail}, which the language server cannot read: rename it there` };
+      if (t.src.pkg) return { error: `'${sym.decl.name}' is declared in the npm package library ${sym.decl.detail}: a package is never edited` };
+      if (!t.src.doc) return { needsOpen: [t.uri], error: `the rename edits ${basename(fileURLToPath(t.uri))}, which is not open` };
+      return validatedRename(t.uri, { line: t.decl.nameRange[0], character: t.decl.nameRange[1] }, newName, token);
+    }
     const plan = renamePlan(f.model, position, newName);
     if (plan.error) return plan;
     const version = f.doc.version;
@@ -1111,26 +1196,26 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // F2 on #99: a name other files can see is renamed only when no file imports this one (renaming across files comes
     // with M5c's project index). C11 (r2): checked last, on the buffers open now, just before the edit is applied.
     // M5c (ADR-0021 r8): a library's fn, type, enum or const is renamed across the project (open files only).
-    if (plan.visible && RENAMABLE_ACROSS.has(plan.decl.kind) && plan.decl.parent < 0) {
+    // F1 on #115: a library's only; a contract file's types stay under F2's refusal while a file imports the contract.
+    if (plan.visible && RENAMABLE_ACROSS.has(plan.decl.kind) && plan.decl.parent < 0 && isLibrary(f.model)) {
       return renameAcross(uri, f, plan, newName, version, text, token);
     }
     if (plan.visible) {
       // C16 (#114): the scan is bound to the open buffers it read: if any opens, closes or changes meanwhile, refused.
-      const revision = () => JSON.stringify(documents.all().map((d) => [d.uri, d.version, state.get(d.uri) ? 1 : 0]).sort());
-      const before = revision();
-      const imp = await importersOf(uri, f.s.selection ?? await selectionFor(uri));
-      if (revision() !== before) return { error: 'an open file changed while the files that import this one were read: try again' };
+      const before = openRevision();
+      const imp = await importersOf(uri, f.s.selection ?? await selectionFor(uri), token);
+      if (openRevision() !== before) return { error: 'an open file changed while the files that import this one were read: try again' };
       if (imp.error) return { error: `'${plan.decl.name}' can be named by other files, and ${imp.error}: rename it by hand (renaming across files comes with M5c)` };
       if (imp.importers.length) {
         return { error: `'${plan.decl.name}' can be named by the files that import this one (${imp.importers.slice(0, 3).join(', ')}${imp.importers.length > 3 ? ', …' : ''}):`
-          + ' renaming them across files is for a library\'s fns, types, enums and consts; rename it by hand' };
+          + ` ${isLibrary(f.model) ? 'a library\'s variants and fields are renamed in their file only' : 'a contract\'s names are renamed in its file only while no file imports it'}; rename it by hand` };
       }
       if (!freshModel(uri) || documents.get(uri)?.version !== version) return { error: 'the file changed: try again' };
     }
     return { plan, version, text, st: f.s };
   }
 
-  const RENAMABLE_ACROSS = new Set(['fn', 'type', 'enum', 'const']);
+  const RENAMABLE_ACROSS = new Set(['fn', 'type', 'enum']);
 
   /**
    * M5c (ADR-0021 r8; L6 across files): the rename of a library's top-level declaration in its file and in every file
@@ -1139,31 +1224,36 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * no diagnostic and keep every reference to the same declaration; bound to the open buffers it read.
    */
   async function renameAcross(uri, f, plan, newName, version, text, token) {
-    const revision = () => JSON.stringify(documents.all().map((d) => [d.uri, d.version, state.get(d.uri) ? 1 : 0]).sort());
-    const before = revision();
-    const occ = await occurrencesAcross(uri, f.model, plan.decl, token);
+    const before = openRevision();
+    const occ = await occurrencesAcross(uri, f.model, plan.decl, token, { targetText: text });
     if (occ.error) return { error: `'${plan.decl.name}' can be named by other files, and ${occ.error}: rename it by hand` };
+    if (occ.truncated) return { error: `'${plan.decl.name}' has more than ${MAX_LOCATIONS} occurrences, more than a rename edits` };
+    // C1 on #115: every importer the lexical scan found, before anything else: one with an error, or whose model shows no
+    // import of the name (a header error drops its imports), may hold uses its model does not show: refused.
+    for (const imp of occ.importers) {
+      if (imp.errors || imp.imports === 0) {
+        return { error: `${basename(fileURLToPath(imp.src.uri))}, which imports '${plan.decl.name}', has errors: a rename needs every file it edits to check; fix them first` };
+      }
+    }
     const byUri = new Map([[uri, { uri, version, text, model: f.model, edits: plan.edits }]]);
     for (const o of occ.occurrences) {
       if (o.uri === uri) continue;
-      if (!byUri.has(o.uri)) byUri.set(o.uri, { uri: o.uri, src: o.src, model: o.model, edits: [] });
+      if (!byUri.has(o.uri)) byUri.set(o.uri, { uri: o.uri, src: o.src, edits: [] });
       byUri.get(o.uri).edits.push({ range: lspRangeOf(o.range), newText: newName });
     }
     const files = [...byUri.values()];
     const closed = files.filter((x) => !documents.get(x.uri)).map((x) => x.uri);
     if (closed.length) return { needsOpen: closed, error: `the rename edits files that are not open: ${closed.map((u) => basename(fileURLToPath(u))).join(', ')}` };
-    // S4, C2 on #99, across files: an importer with an error (an import it cannot resolve, a member recovery dropped)
-    // may hold uses its model does not show: no rename until it checks.
-    for (const x of byUri.values()) {
-      if (x.uri !== uri && x.model.diagnostics.some((d) => d.severity === 'error')) {
-        return { error: `${basename(fileURLToPath(x.uri))}, which imports '${plan.decl.name}', has errors: a rename needs every file it edits to check; fix them first` };
-      }
-    }
     for (const x of files) {
       const doc = documents.get(x.uri);
       x.version = doc.version;
       x.text = doc.getText();
       if (x.src && x.src.text !== x.text) return { error: 'a file changed while the rename was planned: try again' };
+      if (!x.model) {
+        const m = freshModel(x.uri);
+        if (!m || m.doc.getText() !== x.text) return { error: 'a file changed while the rename was planned: try again' };
+        x.model = m.model;
+      }
       x.after = TextDocument.applyEdits(doc, x.edits);
     }
     // Each file's real path -> its renamed text: every re-analysis reads the others' renamed texts.
@@ -1174,17 +1264,21 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     const sel = f.s.selection;
     for (const x of files) {
+      if (token?.isCancellationRequested) return { error: 'cancelled' };
       const after = await analyseText(x.uri, sel, x.after, token, overrides);
       if (!after) return { error: `the rename could not be checked in ${basename(fileURLToPath(x.uri))}` };
       const ok = renamePreserves(x.model, after, x.edits);
       if (!ok.ok) return { error: `${basename(fileURLToPath(x.uri))}: ${ok.reason}` };
     }
-    if (revision() !== before) return { error: 'an open file changed while the rename was checked: try again' };
+    if (openRevision() !== before) return { error: 'an open file changed while the rename was checked: try again' };
     for (const x of files) if (documents.get(x.uri)?.version !== x.version) return { error: 'the file changed: try again' };
     // A type or enum a contract imports can be in its datum or redeemers: its manifest may change too (D7's warning).
     const abi = plan.abi || (files.length > 1 && (plan.decl.kind === 'type' || plan.decl.kind === 'enum'));
     return { plan: { ...plan, abi }, version, text, st: f.s, files };
   }
+
+  /** A library file (no contract declaration). */
+  const isLibrary = (model) => !model.declarations.some((d) => d.kind === 'contract');
 
   const abiWarning = (d) => `'${d.name}' is recorded in the ABI manifest: renaming it changes the manifest, the generated client and the`
     + ' description (the script does not change), and the next build\'s ABI gate asks you to accept the new manifest (Accept ABI…).';
@@ -1291,6 +1385,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   // ------------------------------------------------------------------ M5b: builds on save, in memory (D4)
 
   let buildSeq = 0;
+  /** S1 on #115: at most this many characters read for a cross-file request (a test may lower it). */
+  const crossChars = Number.isInteger(hostOptions.crossChars) ? hostOptions.crossChars : MAX_CROSS_CHARS;
   /** S7, C13: at most this many characters in a build snapshot (a test may lower it). */
   const buildChars = Number.isInteger(hostOptions.buildChars) ? hostOptions.buildChars : MAX_BUILD_CHARS;
   const builtFrom = new Map();   // uri of an open document -> the build seq that read it
@@ -1303,8 +1399,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * C9 (r2), C14 (#114): a file a build read changed (a buffer opened on it with other text, edited, closed, or the file
    * changed on disk: `text` null, unknown): that build's results end, shown or in flight, whatever document they are on.
    */
-  async function invalidateInput(path, text) {
-    const r = path && ((await real(path)) ?? path);
+  async function invalidateInput(path, text, { resolve = true } = {}) {
+    // S3 on #115: a path the reader refused is never resolved (D4b rule 1): it is no build input either.
+    const r = path && (resolve ? (await real(path)) ?? path : path);
     if (!r) return;
     const h = text == null ? null : hash(text);
     const differs = (inputs) => inputs && inputs.has(r) && inputs.get(r) !== h;
@@ -1499,24 +1596,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * their files, each read bounded): `{ importers }` (paths), or `{ error }` when they cannot all be read (too many
    * files, a file too large).
    */
-  async function importersOf(uri, sel) {
-    const p = await projectSources(uri, sel);
+  async function importersOf(uri, sel, token) {
+    const p = await projectImporters(uri, sel, null, token);
     if (p.error) return p;
-    const importers = [];
-    for (const src of p.sources) {
-      if (src.id === p.id) continue;
-      const yes = importsOf(src.id, src.text, p.id);
-      if (yes === null) return { error: `${src.id} has more imports than the language server reads` };
-      if (yes) importers.push(src.id);
-    }
-    return { importers };
-  }
-
-  /** Whether the file `fromId` (its text) imports the module `id` by a relative specifier; null past the scan's bound. */
-  function importsOf(fromId, text, id) {
-    const scanned = scanImports(text, MAX_IMPORTS_PER_FILE);
-    if (scanned.truncated) return null;
-    return scanned.imports.some(({ spec }) => resolveRelative(fromId, spec) === id);
+    return { importers: p.importers.map((x) => x.id) };
   }
 
   /** A relative specifier's module id from the file `fromId`, or null (#98 S7: no backslash, no '//'). */
@@ -1526,22 +1609,56 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return id.startsWith('..') ? null : id;
   }
 
+  const PACKAGE_SPEC = /^(@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*\/[^\\]+\.jsc$/;
+
   /**
-   * F2, C11 on #99; M5c: the project's .jsc files, by module id (the project's contracts directory, or the whole folder
-   * without a known project), listed by the build's walk, open buffers in place of their files, open buffers of files
-   * not on disk yet included, each read bounded: `{ id (the file uri's own), base, sources: [{ id, uri, text, doc }] }`
-   * or `{ error }`.
+   * The module id an import names from the file `fromId`, as the build's JscModules names it: a project file's path
+   * under the contracts directory, or `pkg:<specifier>` for an npm package's library (C4 on #115); null otherwise.
    */
-  async function projectSources(uri, sel) {
+  function moduleOf(fromId, spec) {
+    if (typeof spec !== 'string' || spec.includes('\\') || spec.includes('//')) return null;
+    if (spec.startsWith('./') || spec.startsWith('../')) {
+      if (fromId.startsWith('pkg:')) {
+        const inner = fromId.slice(4);
+        const pkg = inner.startsWith('@') ? inner.split('/').slice(0, 2).join('/') : inner.split('/')[0];
+        const rel = posix.normalize(posix.join(posix.dirname(inner.slice(pkg.length + 1)), spec));
+        return rel.startsWith('..') ? null : `pkg:${pkg}/${rel}`;
+      }
+      return resolveRelative(fromId, spec);
+    }
+    return PACKAGE_SPEC.test(spec) && !spec.split('/').some((x) => x === '' || x === '.' || x === '..') ? `pkg:${spec}` : null;
+  }
+
+  /** The module id of an open document (a project file's path under the contracts directory), or `{ error }`. */
+  async function moduleIdOf(uri, sel) {
     if (!sel?.folder) return { error: 'the file is outside every workspace folder' };
     const project = sel.contracts && sel.contractsRel;
     const base = project ? sel.contracts : sel.folder;
-    // A buffer not on disk yet is named by its own path (importers name it so).
     const own = localFileOf(uri);
-    const self = (await realPathOf(uri, sel)) ?? (own && inside(own, sel.folder) ? own : null);
+    const self = (await realPathOf(uri, sel)) ?? (own && inside(own, sel.folder) && await missingOnDisk(sel, own) ? own : null);
     if (!self || !inside(self, base)) return { error: 'the file is outside its project\'s contracts directory' };
-    const id = relative(base, self).split(sep).join('/');
-    const rel = project ? sel.contractsRel.join('/') : '.';
+    return { id: relative(base, self).split(sep).join('/'), base, project };
+  }
+
+  /** S2 on #115: a path lexically in the folder that the reader reports missing (not reached through a link). */
+  async function missingOnDisk(sel, path) {
+    const r = await reader.resolveIn(sel.folder, relative(sel.folder, path).split(sep).join('/'));
+    return r.error === 'missing';
+  }
+
+  /**
+   * F2, C11 on #99; S1, S2 on #115: the project's files that import the module `targetId` (the file `uri`'s own when
+   * null), with their texts: the build's walk over the contracts directory (or the whole folder without a known
+   * project), open buffers in place of their files, and open buffers of files not on disk yet (only those: a buffer
+   * reached through a link is its real file's or none). Each file's imports are scanned as it is read and only the
+   * importers' texts are kept; the reads are debited from MAX_BUILD_CHARS before they are made; a cancelled request
+   * stops between files. `{ id, base, importers: [{ id, uri, text, doc }] }` or `{ error }`.
+   */
+  async function projectImporters(uri, sel, targetId, token) {
+    const me = await moduleIdOf(uri, sel);
+    if (me.error) return me;
+    const target = targetId ?? me.id;
+    const rel = me.project ? sel.contractsRel.join('/') : '.';
     const listed = await reader.list(sel.folder, rel, { exts: ['.jsc'], max: MAX_BUILD_FILES, kind: sel.kind === 'gradle' ? 'gradle' : 'npm' });
     if (listed.error) return { error: listed.error === 'too-many' ? `the project has more than ${MAX_BUILD_FILES} source files` : 'the contracts directory cannot be read' };
     const open = new Map();
@@ -1549,33 +1666,48 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       const p = await realPathOf(d.uri, sel);
       if (p) open.set(p, d);
     }
-    // Tests only: a pause after the open buffers are read, so a test can change one meanwhile (C16, #114).
+    // Tests only: a pause after the open buffers are read, so a test can change one meanwhile (C16 on #99, C2 on #115).
     if (Number.isInteger(hostOptions.importerScanDelayMs)) await new Promise((res) => setTimeout(res, hostOptions.importerScanDelayMs));
-    const sources = [];
+    let left = crossChars;
+    const importers = [];
+    const seen = new Set();
+    const consider = (id, uri2, text, doc) => {
+      if (seen.has(uri2)) return null;
+      seen.add(uri2);
+      const scanned = scanImports(text, MAX_IMPORTS_PER_FILE);
+      if (scanned.truncated) return `${id} has more imports than the language server reads`;
+      if (id !== target && scanned.imports.some(({ spec }) => moduleOf(id, spec) === target)) importers.push({ id, uri: uri2, text, doc });
+      return null;
+    };
     for (const f of listed.files) {
+      if (token?.isCancellationRequested) return { error: 'cancelled' };
       const full = join(listed.path, ...f.split('/'));
       const doc = open.get(full);
       let text = doc?.getText();
       if (text === undefined) {
-        const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: MAX_FILE_CHARS });
+        if (left <= 0) return { error: `the project's sources are larger than the language server reads for this (${crossChars} characters)` };
+        const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: Math.min(MAX_FILE_CHARS, left) });
+        if (r.error === 'too-large' && left < MAX_FILE_CHARS) return { error: `the project's sources are larger than the language server reads for this (${crossChars} characters)` };
         if (r.error) return { error: `${f} cannot be read (${r.error})` };
         text = r.bytes.toString('utf8');
+        left -= text.length;
       }
-      sources.push({ id: f, uri: doc?.uri ?? pathToFileURL(full).toString(), text, doc: doc ?? null });
+      const e = consider(f, doc?.uri ?? pathToFileURL(full).toString(), text, doc ?? null);
+      if (e) return { error: e };
     }
-    // C11 on #99 r2: and every open buffer of a file there that is not on disk (yet), under the same walk rules.
+    // C11 on #99, S2 on #115: open buffers of files that are not on disk yet, under the same walk rules.
     const listedSet = new Set(listed.files);
     for (const d of documents.all()) {
       const p = localFileOf(d.uri);
-      if (!p || !p.endsWith('.jsc') || !inside(p, base)) continue;
-      const f = relative(base, p).split(sep).join('/');
-      if (listedSet.has(f)) continue;
+      if (!p || !p.endsWith('.jsc') || !inside(p, me.base)) continue;
+      const f = relative(me.base, p).split(sep).join('/');
+      if (listedSet.has(f) || !(await missingOnDisk(sel, p))) continue;
       if (sel.kind !== 'gradle' && f.split('/').slice(0, -1).some((x) => x === 'node_modules' || x.startsWith('.'))) continue;
       if (Buffer.byteLength(d.getText(), 'utf8') > MAX_FILE_CHARS) return { error: `${f} is larger than the language server reads` };
-      sources.push({ id: f, uri: d.uri, text: d.getText(), doc: d });
-      listedSet.add(f);
+      const e = consider(f, d.uri, d.getText(), d);
+      if (e) return { error: e };
     }
-    return { id, base, sources };
+    return { id: me.id, base: me.base, importers };
   }
 
   // ------------------------------------------------------------------ M5c: across files (ADR-0021 r8)
@@ -1634,9 +1766,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   const lspRangeOf = (r) => ({ start: { line: r[0], character: r[1] }, end: { line: r[2], character: r[3] } });
 
   /** The kinds another file can name through an import (a library's top-level declarations, a contract). */
-  const IMPORTABLE = new Set(['fn', 'type', 'enum', 'const', 'contract']);
+  // A file declares no top-level const (the grammar's top level: import, type, enum, fn, contract).
+  const IMPORTABLE = new Set(['fn', 'type', 'enum', 'contract']);
 
-  /** The index model of a project source: its open buffer's (current version), else its text analysed with the project. */
+  /** The index model of a source: its open buffer's (current version), else its text analysed with the project. */
   async function indexOfSource(src, sel, token) {
     if (src.doc) {
       const f = await indexedModel(src.doc.uri);
@@ -1645,15 +1778,45 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return analyseText(src.uri, sel, src.text, token);
   }
 
+  /**
+   * S1 on #115: the one file an import names, read alone (never the project): a project file by its module id under the
+   * contracts directory, or (C4) an npm package's library under node_modules/<package>/joust-lib/ (the package root may
+   * be a confined link, nothing below joust-lib/ may be, as the build's walk). `{ id, uri, text, doc, pkg }` or null.
+   */
+  async function targetSource(uri, sel, spec) {
+    const me = await moduleIdOf(uri, sel);
+    if (me.error) return null;
+    const id = moduleOf(me.id, spec);
+    if (!id) return null;
+    let path;
+    if (id.startsWith('pkg:')) {
+      if (!sel.root || sel.kind === 'gradle') return null;
+      const inner = id.slice(4);
+      const pkg = inner.startsWith('@') ? inner.split('/').slice(0, 2).join('/') : inner.split('/')[0];
+      const rootRel = relative(sel.folder, join(sel.root, 'node_modules', ...pkg.split('/'))).split(sep).join('/');
+      const root = await reader.resolveIn(sel.folder, rootRel);
+      if (root.error) return null;
+      const rest = inner.slice(pkg.length + 1).split('/');
+      const real2 = await reader.resolveIn(sel.folder, `${rootRel}/joust-lib/${rest.join('/')}`);
+      if (real2.error || real2.path !== join(root.path, 'joust-lib', ...rest)) return null;
+      path = real2.path;
+    } else {
+      path = join(me.base, ...id.split('/'));
+    }
+    for (const d of documents.all()) {
+      if ((await realPathOf(d.uri, sel)) === path) return { id, uri: d.uri, text: d.getText(), doc: d, pkg: id.startsWith('pkg:') };
+    }
+    const r = await reader.read(sel.folder, relative(sel.folder, path).split(sep).join('/'), { cap: MAX_FILE_CHARS });
+    if (r.error) return null;
+    return { id, uri: pathToFileURL(path).toString(), text: r.bytes.toString('utf8'), doc: null, pkg: id.startsWith('pkg:') };
+  }
+
   /** The declaration an import names in the file it imports: `{ uri, decl, model, src }`, or null. */
   async function importTarget(uri, model, imp, token) {
     const s = state.get(uri);
     const sel = s?.selection ?? await selectionFor(uri);
-    const p = await projectSources(uri, sel);
-    if (p.error) return null;
-    const targetId = resolveRelative(p.id, imp.detail);
-    const src = targetId && p.sources.find((x) => x.id === targetId);
-    if (!src) return null;
+    const src = await targetSource(uri, sel, imp.detail);
+    if (!src || token?.isCancellationRequested) return null;
     const m = await indexOfSource(src, sel, token);
     if (!m) return null;
     const decl = topLevel(m, imp.name);
@@ -1662,35 +1825,75 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   /** A file's top-level declaration named `name` that another file can import, or null. */
   function topLevel(model, name) {
-    // A library's top-level type, enum, fn or const, or a file's contract (`import contract { C }`; JSC0708: a contract
+    // A library's top-level type, enum or fn, or a file's contract (`import contract { C }`; JSC0708: a contract
     // exports nothing else).
     return model.declarations.find((d) => d.name === name && IMPORTABLE.has(d.kind) && d.parent < 0) ?? null;
   }
 
   /**
-   * Every occurrence across the project of `decl`, a top-level declaration of the file `uri` (model `model`): its own
-   * file's, and in each file that imports it, the import's name and every use through it. `[{ uri, range, model, src,
-   * importDecl?, shorthand }]` (ranges in the model's form), or `{ error }`.
+   * S1 on #115: an importer's occurrences of the import of `name`, from its model (an open buffer's current index; else
+   * its text analysed with the project, cached by the engine, its text and the target's text for the request burst).
+   * Ranges only: `{ ranges: [[l, c, el, ec, decl?]], errors, imports }` (imports: how many of its import declarations
+   * name it; C1 on #115: zero means its model cannot show its uses).
    */
-  async function occurrencesAcross(uri, model, decl, token) {
-    const s = state.get(uri);
-    const sel = s?.selection ?? await selectionFor(uri);
-    const out = occurrences(model, decl.id).map((o) => ({ uri, range: o.range, model, shorthand: o.shorthand, decl: o.decl === true }));
-    const p = await projectSources(uri, sel);
+  async function importerOccurrences(src, sel, name, targetId, targetText, token) {
+    const key = `${sel.engine?.id}|${hash(src.text)}|${hash(targetText ?? '')}|${name}|${targetId}`;
+    if (!src.doc && occurrenceCache.has(key)) {
+      const v = occurrenceCache.get(key);
+      occurrenceCache.delete(key);
+      occurrenceCache.set(key, v);
+      return v;
+    }
+    const m = await indexOfSource(src, sel, token);
+    if (!m) return null;
+    const out = { ranges: [], errors: m.diagnostics.some((d) => d.severity === 'error'), imports: 0, model: src.doc ? m : null };
+    for (const imp of m.declarations) {
+      if (imp.kind !== 'import' || imp.name !== name || moduleOf(src.id, imp.detail) !== targetId) continue;
+      out.imports++;
+      for (const o of occurrences(m, imp.id)) out.ranges.push([...o.range, o.decl === true]);
+    }
+    if (!src.doc) {
+      occurrenceCache.set(key, out);
+      while (occurrenceCache.size > MAX_OCCURRENCE_CACHE) occurrenceCache.delete(occurrenceCache.keys().next().value);
+    }
+    return out;
+  }
+  const occurrenceCache = new Map();   // engine | texts' SHA-256 | name | target -> an importer's occurrences (LRU)
+
+  /**
+   * Every occurrence across the project of `decl`, a top-level declaration of the module `targetId` (the file `uri`'s
+   * own when null; model `model`): its own file's, and in each file that imports it, the import's name and every use
+   * through it. S1 on #115: at most MAX_CROSS_IMPORTERS importers are analysed (past it, an error), at most
+   * MAX_LOCATIONS occurrences kept, the token checked between files, ranges kept (not models: an open importer's model
+   * is its state's). `{ occurrences: [{ uri, range, decl }], importers: [{ src, errors, imports, model }], truncated }`
+   * or `{ error }`.
+   */
+  async function occurrencesAcross(uri, model, decl, token, { targetId = null, targetText = null, from = uri } = {}) {
+    const s = state.get(from);
+    const sel = s?.selection ?? await selectionFor(from);
+    const out = occurrences(model, decl.id).map((o) => ({ uri, range: o.range, decl: o.decl === true }));
+    const p = await projectImporters(from, sel, targetId, token);
     if (p.error) return { error: p.error, local: out };
-    for (const src of p.sources) {
-      if (src.id === p.id) continue;
-      const yes = importsOf(src.id, src.text, p.id);
-      if (yes === null) return { error: `${src.id} has more imports than the language server reads`, local: out };
-      if (!yes) continue;
-      const m = await indexOfSource(src, sel, token);
-      if (!m) return { error: `${src.id} could not be analysed`, local: out };
-      for (const imp of m.declarations) {
-        if (imp.kind !== 'import' || imp.name !== decl.name || resolveRelative(src.id, imp.detail) !== p.id) continue;
-        for (const o of occurrences(m, imp.id)) out.push({ uri: src.uri, range: o.range, model: m, src, importDecl: imp, shorthand: o.shorthand, decl: false });
+    if (p.importers.length > MAX_CROSS_IMPORTERS) {
+      return { error: `more than ${MAX_CROSS_IMPORTERS} files import it, more than the language server reads for this`, local: out };
+    }
+    const importers = [];
+    let truncated = false;
+    for (const src of p.importers) {
+      if (token?.isCancellationRequested) return { error: 'cancelled', local: out };
+      const occ = await importerOccurrences(src, sel, decl.name, targetId ?? p.id, targetText, token);
+      if (!occ) return { error: `${src.id} could not be analysed`, local: out };
+      importers.push({ src, errors: occ.errors, imports: occ.imports, model: occ.model });
+      for (const r of occ.ranges) {
+        if (out.length >= MAX_LOCATIONS) {
+          truncated = true;
+          break;
+        }
+        // An importer's import is a reference to the declaration, not a declaration of it.
+        out.push({ uri: src.uri, range: r.slice(0, 4), decl: false, src });
       }
     }
-    return { occurrences: out };
+    return { occurrences: out, importers, truncated };
   }
 
   /** `file://` URI of a build diagnostic's file (relative to the snapshot's directory), or null. */
@@ -1899,8 +2102,23 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   // engine): everything is selected again, as before.
   connection.onDidChangeWatchedFiles(async (p) => {
     const changes = p?.changes ?? [];
+    // C3 on #115: a java: library source changed on disk: its importers again, and the builds that read it end.
+    const java = changes.filter((ch) => isJavaInput(ch.uri));
+    if (java.length) {
+      libraryMemo.clear();
+      for (const ch of java) {
+        const f = localFileOf(ch.uri);
+        if (!f || documents.get(ch.uri)) continue;
+        const folder = [...state.values()].map((st) => st.selection?.folder).find((d) => d && inside(f, d));
+        if (!folder) continue;
+        const r = await reader.resolveIn(folder, relative(folder, f).split(sep).join('/'));
+        rescheduleImporters([f, r.error ? null : r.path]);
+        const now = r.error ? null : await reader.read(folder, relative(folder, f).split(sep).join('/'), { cap: MAX_FILE_CHARS * 2 });
+        await invalidateInput(r.error ? f : r.path, now && !now.error ? now.bytes.toString('utf8') : null, { resolve: !r.error });
+      }
+    }
     const jsc = changes.filter((ch) => /\.jsc$/.test(ch.uri));
-    if (changes.length > jsc.length || !changes.length) {
+    if (changes.length > jsc.length + java.length || !changes.length) {
       if (selector) reselectAll();
       return;
     }
@@ -1915,7 +2133,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       // C14 (#114): a build that read other text from the file no longer describes it (a save writes the text the build
       // on save read: the same hash, nothing ends).
       const now = r.error ? null : await reader.read(folder, relative(folder, f).split(sep).join('/'), { cap: MAX_FILE_CHARS * 2 });
-      await invalidateInput(r.error ? f : r.path, now && !now.error ? now.bytes.toString('utf8') : null);
+      await invalidateInput(r.error ? f : r.path, now && !now.error ? now.bytes.toString('utf8') : null, { resolve: !r.error });
     }
   });
 

@@ -15,46 +15,7 @@ const at = (text, needle, delta = 0) => {
 };
 const modelOf = (lsp, uri, v) => lsp.until(() => lsp.statuses.find((s) => s.uri === uri && s.modelVersion >= v), 30000, `the model of v${v}`);
 
-export const FEES = `jsc 1
-library app
-
-type Fee = { bps: Int }
-
-fn fee(amount: Int, f: Fee): Int = amount * f.bps / 10000
-`;
-
-export const USER = `jsc 1
-package app
-
-import { fee, Fee } from "./fees.jsc"
-
-contract User {
-  state { paid: Int }
-
-  init() {
-    return { paid: 0 }
-  }
-
-  action pay(amount: Int) {
-    const f = Fee { bps: 30 }
-    return { paid: paid + fee(amount, f) }
-  }
-}
-`;
-
-/** A trusted npm project with the real engine as its compiler: fees.jsc and User.jsc under contracts/app. */
-export function crossProject(root) {
-  mkdirSync(join(root, 'contracts', 'app'), { recursive: true });
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { '@julclang/joust': '0.0.0' } }));
-  writeFileSync(join(root, 'joust.config.json'), '{ "contracts": "contracts" }');
-  const pkg = join(root, 'node_modules', '@julclang', 'joust');
-  mkdirSync(join(pkg, 'engine'), { recursive: true });
-  writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@julclang/joust', version: '9.9.9' }));
-  for (const f of readdirSync(ENGINE).filter((x) => /^(joust-toolchain\.js(\.wasm)?|package\.json)$/.test(x))) copyFileSync(join(ENGINE, f), join(pkg, 'engine', f));
-  writeFileSync(join(root, 'contracts', 'app', 'fees.jsc'), FEES);
-  writeFileSync(join(root, 'contracts', 'app', 'User.jsc'), USER);
-  return { fees: join(root, 'contracts', 'app', 'fees.jsc'), user: join(root, 'contracts', 'app', 'User.jsc') };
-}
+import { FEES, USER, crossProject } from './m5c-fixtures.js';
 
 const trusted = (dir) => startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: {} });
 

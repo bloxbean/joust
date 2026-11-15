@@ -22,6 +22,27 @@ function testMode(vscode, ctx) {
   return process.env.JOUST_EXTENSION_TESTS === '1' || (vscode.ExtensionMode && ctx.extensionMode === vscode.ExtensionMode.Test);
 }
 
+/**
+ * S4 on #115: the files a rename across files asks to open, as Uris: each a `file:` .jsc file inside a workspace
+ * folder, at most 64; null when any is not.
+ */
+function openableUris(vscode, uris) {
+  if (!Array.isArray(uris) || !uris.length || uris.length > 64) return null;
+  const out = [];
+  for (const u of uris) {
+    if (typeof u !== 'string') return null;
+    let target;
+    try {
+      target = vscode.Uri.parse(u, true);
+    } catch {
+      return null;
+    }
+    if (target.scheme !== 'file' || !/\.jsc$/.test(target.path) || !vscode.workspace.getWorkspaceFolder(target)) return null;
+    out.push(target);
+  }
+  return out;
+}
+
 function register(vscode, ctx, getClient) {
   const testArgs = (args) => (args && typeof args === 'object' && testMode(vscode, ctx) ? args : undefined);
   const abiDocs = new Map();   // joust-abi: path -> text (the two manifests of the last diff)
@@ -104,12 +125,14 @@ function register(vscode, ctx, getClient) {
     let r = await c.sendRequest('joust/rename', { uri, position, newName });
     // M5c (ADR-0021 r8): a rename across files edits open files only; the files it names are opened (no editor), and
     // the rename asked again (once).
-    if (Array.isArray(r.needsOpen) && r.needsOpen.length && r.needsOpen.length <= 64) {
-      for (const u of r.needsOpen) {
-        const target = vscode.Uri.parse(u);
-        if (target.scheme !== 'file') return { applied: false, reason: 'not a file', uri: u };
-        await vscode.workspace.openTextDocument(target);
+    if (Array.isArray(r.needsOpen) && r.needsOpen.length) {
+      // S4 on #115: only workspace .jsc files, at most 64; otherwise the whole retry is refused.
+      const targets = openableUris(vscode, r.needsOpen);
+      if (!targets) {
+        vscode.window.showWarningMessage('JOUST: rename refused: it named files outside the workspace\'s .jsc files');
+        return { applied: false, reason: 'not workspace .jsc files' };
       }
+      for (const target of targets) await vscode.workspace.openTextDocument(target);
       r = await c.sendRequest('joust/rename', { uri, position, newName });
     }
     if (r.needsConfirmation) {
@@ -313,4 +336,4 @@ function register(vscode, ctx, getClient) {
   }));
 }
 
-module.exports = { register, GEN, ABI, LIB, testMode };
+module.exports = { register, GEN, ABI, LIB, testMode, openableUris };

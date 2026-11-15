@@ -76,12 +76,15 @@ function makeClient() {
   // The selection's inputs, the project's two engine files included (review C6 on #83: replaced engine bytes with an
   // unchanged package.json must reach the server; Restart analysis also selects again).
   // And every .jsc file (the .jsc integration, #98 F3d): an importer's diagnostics follow its imports on disk.
-  const watchers = ['**/*.jsc', '**/joust.config.json', '**/package.json', '**/node_modules/@julclang/joust/package.json',
+  // C3 on #115 (ADR-0021 r8): and the java: libraries' sources that npm packages ship, which the analysis describes.
+  const watchers = ['**/*.jsc', '**/joust-lib/**/*.java', '**/joust.config.json', '**/package.json', '**/node_modules/@julclang/joust/package.json',
     '**/node_modules/@julclang/joust/engine/joust-toolchain.js', '**/node_modules/@julclang/joust/engine/joust-toolchain.js.wasm']
     .map((g) => vscode.workspace.createFileSystemWatcher(g));
   watchers.forEach((w) => context.subscriptions.push(w));
   const c = new LanguageClient('joust', 'JOUST language server', { run, debug: run }, {
-    documentSelector: [{ language: 'jsc', scheme: 'file' }, { language: 'jsc', scheme: 'untitled' }],
+    // C3 on #115: a joust-lib/ Java source's buffer is an input of the analysis (never analysed itself).
+    documentSelector: [{ language: 'jsc', scheme: 'file' }, { language: 'jsc', scheme: 'untitled' },
+      { language: 'java', scheme: 'file', pattern: '**/joust-lib/**/*.java' }],
     // The generated Java (joust-gen:) and manifests (joust-abi:) are the extension's own read-only documents: never sent.
     initializationOptions: {
       client: 'vscode-joust',

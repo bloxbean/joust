@@ -132,8 +132,9 @@ contract User {
       const r = await lsp.request('joust/rename', { uri, position: at(LIB, needle), newName: name, confirm: true });
       assert.equal(r.applied, false, `${needle}: ${JSON.stringify(r)}`);
       // M5c: a fn or a type is renamed across files, which first needs the importer open; a field is still refused.
-      if (needle === 'bps: Int') assert.match(r.error, /can be named by the files that import this one \((contracts\/)?app\/User\.jsc\).*fns, types, enums and consts/, r.error);
-      else assert.deepEqual(r.needsOpen, [uriOf(join(dir, 'contracts', 'app', 'User.jsc'))], JSON.stringify(r));
+      if (needle === 'bps: Int') assert.match(r.error, /can be named by the files that import this one \((contracts\/)?app\/User\.jsc\).*variants and fields are renamed in their file only/, r.error);
+      // C1 on #115: the importer has errors here (Restricted Mode does not read its import): refused before anything else.
+      else assert.match(r.error, /User\.jsc, which imports '.*', has errors/, JSON.stringify(r));
     }
     // A fn's parameter is the file's own.
     const local = await lsp.request('joust/rename', { uri, position: at(LIB, 'amount: Int'), newName: 'value', confirm: true });

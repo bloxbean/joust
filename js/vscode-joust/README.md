@@ -47,6 +47,18 @@ trusted folders).
 | JOUST: Build | the project's `joust build` or `./gradlew build`, as a task (trusted workspaces): the project at a workspace folder's root only; the npm CLI runs on VS Code's own Node (an absolute path), not the `node` on your PATH |
 | JOUST: Show compiler and mode | which compiler analyses the current file, and why |
 
+## Across files
+
+- **Go to definition and Find references** follow imports between `.jsc` files: a library's fns, types and enums, a
+  contract imported with `import contract`, and an npm package's libraries (read-only).
+- **JOUST: Rename Symbol** (F2) renames a library's fn, type or enum in the library and in every file that imports it,
+  started from the declaration or from a use. It edits open files only: when it needs others, the extension opens them
+  (without an editor) and asks again. A contract's names, and a library's variants and fields, are renamed in their
+  file only while no file imports it; an npm package's libraries are never edited.
+- **`java:` imports** resolve as the build checks them in npm projects (the packages' `joust-lib/*.java` sources, read
+  and described once, then cached); in Gradle projects they are advisory. Go to definition on a name a `java:` import
+  brings opens the library's source as a read-only `joust-lib:` document.
+
 ## Known issue: saves that hang with `codeActionsOnSave` "quickfix"
 
 With VS Code's built-in chat on (the default) and no chat model configured, a workspace or user setting

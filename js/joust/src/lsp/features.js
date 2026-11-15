@@ -770,7 +770,10 @@ export function renamePlan(model, pos, newName) {
   const s = symbolAt(model, pos);
   if (!s?.decl) return { error: 'nothing to rename here' };
   const d = s.decl;
-  if (!RENAMABLE.has(d.kind)) return { error: `a ${KIND_LABEL[d.kind] ?? d.kind} cannot be renamed` };
+  if (!RENAMABLE.has(d.kind)) {
+    const label = KIND_LABEL[d.kind] ?? d.kind;
+    return { error: `${/^[aeiou]/.test(label) ? 'an' : 'a'} ${label} cannot be renamed` };
+  }
   if (d.partial) return { error: 'the file does not parse around this declaration: fix it first' };
   if (typeof newName !== 'string' || !NAME.test(newName)) return { error: `'${newName}' is not a name: ASCII letters, digits and '_', not starting with a digit` };
   if (KEYWORDS.has(newName)) return { error: `'${newName}' is a keyword` };

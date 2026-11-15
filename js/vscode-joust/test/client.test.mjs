@@ -292,3 +292,18 @@ test('the manifest: M5b commands, F2 bound to JOUST: Rename Symbol in .jsc edito
   assert.deepEqual(pkg.contributes.keybindings, [{ command: 'joust.renameSymbol', key: 'f2', when: 'editorTextFocus && editorLangId == jsc && !editorReadonly' }]);
   assert.equal(pkg.contributes.semanticTokenModifiers[0].id, 'timeValue');
 });
+
+test('S4 on #115: a rename across files opens only workspace .jsc files', () => {
+  const { openableUris } = require('../src/commands.js');
+  const folder = '/ws';
+  const fake = {
+    Uri: { parse: (u) => { const m = /^([a-z]+):\/\/(.*)$/.exec(u); if (!m) throw new Error('bad'); return { scheme: m[1], path: m[2], toString: () => u }; } },
+    workspace: { getWorkspaceFolder: (t) => (t.path.startsWith(`${folder}/`) ? { uri: folder } : undefined) },
+  };
+  assert.deepEqual(openableUris(fake, ['file:///ws/contracts/app/User.jsc']).map(String), ['file:///ws/contracts/app/User.jsc']);
+  assert.equal(openableUris(fake, ['file:///elsewhere/User.jsc']), null, 'outside the workspace');
+  assert.equal(openableUris(fake, ['file:///ws/contracts/app/secrets.txt']), null, 'not a .jsc file');
+  assert.equal(openableUris(fake, ['untitled:///ws/a.jsc']), null, 'not a file');
+  assert.equal(openableUris(fake, ['file:///ws/a.jsc', 'file:///elsewhere/b.jsc']), null, 'all or nothing');
+  assert.equal(openableUris(fake, Array.from({ length: 65 }, (_, i) => `file:///ws/f${i}.jsc`)), null, 'at most 64');
+});
