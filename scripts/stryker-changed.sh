@@ -7,7 +7,8 @@
 # JOUST_STRYKER_SETS (space-separated) runs only those sets: CI runs each set as its own job.
 # A set runs whole when the change touches what decides whether its mutants die: js/mutation/**, these scripts, the
 # baseline file, or the set's tests (review r1, design F6, security S6), or when a file the baseline records for the set
-# was deleted or renamed (review r2, design F14); else only its changed files run. A whole run must measure every file
+# was deleted or renamed (review r2, design F14); else only its changed files run. With JOUST_MUTATION_CHANGED_ONLY=1
+# (CI's pull requests) only renames and deletions run a set whole. A whole run must measure every file
 # the baseline records for the set, and a changed run each file it selected (stryker-summary.py's --whole, --expect).
 #   bash scripts/stryker-changed.sh <base-ref> [floor]
 #   bash scripts/stryker-changed.sh --all [floor]
@@ -50,12 +51,16 @@ for set in ${JOUST_STRYKER_SETS:-$SETS}; do
   whole=0
   why="the whole set"
   [[ "$base" == "--all" ]] && whole=1
-  while read -r f; do
-    [[ -z "$f" ]] && continue
-    case "$f" in
-      js/mutation/*|scripts/stryker-changed.sh|scripts/stryker-summary.py|"$BASELINE"|"$dir"/test/*) whole=1 ;;
-    esac
-  done <<<"$changed"
+  # On CI's pull requests (JOUST_MUTATION_CHANGED_ONLY=1) only the changed files run: a test or configuration change no
+  # longer runs the whole set; a renamed or deleted baselined file still does (below).
+  if [[ "${JOUST_MUTATION_CHANGED_ONLY:-0}" != 1 ]]; then
+    while read -r f; do
+      [[ -z "$f" ]] && continue
+      case "$f" in
+        js/mutation/*|scripts/stryker-changed.sh|scripts/stryker-summary.py|"$BASELINE"|"$dir"/test/*) whole=1 ;;
+      esac
+    done <<<"$changed"
+  fi
   baselined="$(python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])).get("stryker", {}); print("\n".join(k for k, v in d.items() if v.get("scope") == sys.argv[2]))' "$BASELINE" "$set")"
   while read -r f; do
     if [[ -n "$f" ]] && grep -qxF -- "$f" <<<"$baselined"; then whole=1; why="the whole set ($f, baselined, was deleted or renamed)"; fi

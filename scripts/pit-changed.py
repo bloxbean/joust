@@ -10,7 +10,7 @@
     its old path no longer matches anything, and the gate must see the class go;
   - else the target classes whose sources changed (src/main/java, or julc-state-api's src/onchain/java variants).
 
-    python3 scripts/pit-changed.py <base-ref> [--floor N] [--dry-run]
+    python3 scripts/pit-changed.py <base-ref> [--floor N] [--dry-run] [--changed-only]
     python3 scripts/pit-changed.py --all [--floor N]      every module's whole set (the baselines)
 
 Each class must score at least its baseline in gradle/mutation-baseline.json less 5 points (a class with no baseline: at
@@ -38,6 +38,11 @@ if '--threshold' in args:   # the old name
     i = args.index('--threshold')
     floor = args[i + 1]
     del args[i:i + 2]
+# CI's pull requests (JOUST_MUTATION_CHANGED_ONLY=1, or --changed-only): only the changed target classes run, and a
+# test or configuration change no longer runs the whole set; a renamed or deleted baselined class still does. Pushes
+# and the manual run's mutation_all run every set whole (--all).
+CHANGED_ONLY = os.environ.get('JOUST_MUTATION_CHANGED_ONLY') == '1' or '--changed-only' in args
+args = [a for a in args if a != '--changed-only']
 base = args[0] if args else 'origin/main'
 everything = base == '--all'
 BASELINE = 'gradle/mutation-baseline.json'
@@ -91,7 +96,7 @@ for build in sorted(subprocess.run(['git', 'ls-files', '*/build.gradle'], captur
     if everything:
         why = 'the whole set (--all)'
     else:
-        for f in changed:
+        for f in changed if not CHANGED_ONLY else []:
             if f in SHARED or f == build or f.startswith(module + '/src/test/'):
                 why = f'the whole set ({f} changed: it decides whether the mutants die)'
                 break

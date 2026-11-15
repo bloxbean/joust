@@ -554,9 +554,10 @@ jobs:
 
   # Mutation testing of what a change can weaken (review r1, design F6), in parallel jobs: PIT here, on
   # gradle/pitest.gradle's targets (julc-state-api's ValueAdapter and AddressAdapter, the certifier, the checker, JscMain's
-  # joust.lock); Stryker in the stryker job, one job per js/mutation set. Each set runs whole when its tests or mutation
-  # configuration changed, else on the changed classes and files only. Each class and file must score at least its
-  # baseline in gradle/mutation-baseline.json less 5 points. The manual run's mutation_all runs everything.
+  # joust.lock); Stryker in the stryker job, one job per js/mutation set. A pull request mutates only its changed
+  # classes and files (a renamed or deleted baselined file forces its set whole); pushes and the manual run's
+  # mutation_all run every set whole. Each class and file must score at least its baseline in
+  # gradle/mutation-baseline.json less 5 points.
   mutation:
     needs: plan
     runs-on: ubuntu-24.04
@@ -588,22 +589,29 @@ jobs:
       - name: The base to compare with
         id: base
         shell: bash
+        # Whole sets on pushes (main, release/**) and on the manual run's mutation_all: their reports are the baselines'
+        # and mutation-kills.json's source. A pull request (and a manual run without mutation_all) mutates only the
+        # changed units, renames and deletions of baselined files forcing their sets whole (reviewing.md §4).
         env:
           BASE_REF: ${{ github.base_ref }}
           BEFORE: ${{ github.event.before }}
           ALL: ${{ inputs.mutation_all }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [[ "$ALL" == "true" ]]; then echo "base=--all" >> "$GITHUB_OUTPUT"; echo "Mutation testing the whole set" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          if [[ "$ALL" == "true" || "$EVENT" == "push" ]]; then
+            echo "base=--all" >> "$GITHUB_OUTPUT"; echo "changed_only=0" >> "$GITHUB_OUTPUT"
+            echo "Mutation testing the whole set ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
           elif [[ -n "$BASE_REF" ]]; then base="origin/$BASE_REF"
           elif [[ -n "$BEFORE" && "$BEFORE" != 0000000000000000000000000000000000000000 ]]; then base="$BEFORE"
           else base="HEAD~1"; fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "Mutation testing what changed since $base: $(git rev-parse "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "base=$base" >> "$GITHUB_OUTPUT"; echo "changed_only=1" >> "$GITHUB_OUTPUT"
+          echo "Mutation testing the units changed since $base: $(git rev-parse "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: PIT on the changed security-relevant Java
         env:
           BASE: ${{ steps.base.outputs.base }}
+          JOUST_MUTATION_CHANGED_ONLY: ${{ steps.base.outputs.changed_only }}
         run: |
           set -o pipefail
           mkdir -p build/mutation
@@ -657,24 +665,31 @@ jobs:
       - name: The base to compare with
         id: base
         shell: bash
+        # Whole sets on pushes (main, release/**) and on the manual run's mutation_all: their reports are the baselines'
+        # and mutation-kills.json's source. A pull request (and a manual run without mutation_all) mutates only the
+        # changed units, renames and deletions of baselined files forcing their sets whole (reviewing.md §4).
         env:
           BASE_REF: ${{ github.base_ref }}
           BEFORE: ${{ github.event.before }}
           ALL: ${{ inputs.mutation_all }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [[ "$ALL" == "true" ]]; then echo "base=--all" >> "$GITHUB_OUTPUT"; echo "Mutation testing the whole set" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          if [[ "$ALL" == "true" || "$EVENT" == "push" ]]; then
+            echo "base=--all" >> "$GITHUB_OUTPUT"; echo "changed_only=0" >> "$GITHUB_OUTPUT"
+            echo "Mutation testing the whole set ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
           elif [[ -n "$BASE_REF" ]]; then base="origin/$BASE_REF"
           elif [[ -n "$BEFORE" && "$BEFORE" != 0000000000000000000000000000000000000000 ]]; then base="$BEFORE"
           else base="HEAD~1"; fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "Mutation testing what changed since $base: $(git rev-parse "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "base=$base" >> "$GITHUB_OUTPUT"; echo "changed_only=1" >> "$GITHUB_OUTPUT"
+          echo "Mutation testing the units changed since $base: $(git rev-parse "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Stryker on the changed security-relevant JavaScript
         shell: bash
         env:
           BASE: ${{ steps.base.outputs.base }}
           JOUST_STRYKER_SETS: ${{ matrix.set }}
+          JOUST_MUTATION_CHANGED_ONLY: ${{ steps.base.outputs.changed_only }}
         run: |
           set -euo pipefail
           mkdir -p build/mutation

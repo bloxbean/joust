@@ -152,6 +152,40 @@ class SelectorsKeepBaselinedScopes(unittest.TestCase):
         self.assertEqual(x.returncode, 0, x.stdout + x.stderr)
         self.assertIn('no mutation run', x.stdout)
 
+    def test_changed_only_mode_keeps_renames_and_drops_test_changes(self):
+        # The pull-request policy (JOUST_MUTATION_CHANGED_ONLY=1): a test change no longer runs the whole set, a change
+        # to a target class runs that class, and a renamed baselined class still forces the whole set.
+        d, env = self.pit_repo("ext.pitTargets = ['org.example.A*']\n")
+        (d / 'm1/src/main/java/org/example').mkdir(parents=True)
+        (d / 'm1/src/main/java/org/example/A.java').write_text('class A {}\n')
+        subprocess.run(['git', 'add', '-A'], cwd=d, check=True, env=env)
+        subprocess.run(['git', 'commit', '-q', '-m', 'a'], cwd=d, check=True, env=env)
+
+        def select(change, only):
+            subprocess.run(['git', 'checkout', '-q', '-B', 'probe', 'HEAD'], cwd=d, check=True, env=env)
+            change()
+            subprocess.run(['git', 'add', '-A'], cwd=d, check=True, env=env)
+            subprocess.run(['git', 'commit', '-q', '-m', 'change'], cwd=d, check=True, env=env)
+            x = subprocess.run([sys.executable, 'scripts/pit-changed.py', 'HEAD~1', '--dry-run'], cwd=d, capture_output=True, text=True,
+                               env={**env, 'JOUST_MUTATION_CHANGED_ONLY': '1' if only else '0'})
+            subprocess.run(['git', 'reset', '-q', '--hard', 'HEAD~1'], cwd=d, check=True, env=env)
+            return x.returncode, x.stdout
+
+        test_change = lambda: (d / 'm1/src/test').mkdir(parents=True, exist_ok=True) or (d / 'm1/src/test/T.java').write_text('class T {}\n')
+        rc, out = select(test_change, only=False)
+        self.assertEqual(rc, 0)
+        self.assertIn('the whole set (m1/src/test/T.java changed', out)
+        rc, out = select(test_change, only=True)
+        self.assertEqual(rc, 0)
+        self.assertIn('no mutation run', out)
+        rc, out = select(lambda: (d / 'm1/src/main/java/org/example/A.java').write_text('class A { int x; }\n'), only=True)
+        self.assertIn('the changed classes org.example.A', out)
+
+        def rename():
+            subprocess.run(['git', 'mv', 'm1/src/main/java/org/example/A.java', 'm1/src/main/java/org/example/B.java'], cwd=d, check=True, env=env)
+        rc, out = select(rename, only=True)
+        self.assertIn('the whole set (the baselined org.example.A lost its source file', out)
+
     @unittest.skipIf(shutil.which('node') is None, 'needs node, to read the Stryker configurations')
     def test_an_emptied_stryker_set_fails(self):
         files = {'gradle/mutation-baseline.json': json.dumps(self.BASELINE),
