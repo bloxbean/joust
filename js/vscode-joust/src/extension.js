@@ -82,9 +82,9 @@ function makeClient() {
     .map((g) => vscode.workspace.createFileSystemWatcher(g));
   watchers.forEach((w) => context.subscriptions.push(w));
   const c = new LanguageClient('joust', 'JOUST language server', { run, debug: run }, {
-    // C3 on #115: a joust-lib/ Java source's buffer is an input of the analysis (never analysed itself).
-    documentSelector: [{ language: 'jsc', scheme: 'file' }, { language: 'jsc', scheme: 'untitled' },
-      { language: 'java', scheme: 'file', pattern: '**/joust-lib/**/*.java' }],
+    // F10 on #115: only .jsc documents; a joust-lib/ Java buffer goes by joust/javaInput (javaInputs below), so no
+    // JOUST language feature is registered for Java files.
+    documentSelector: [{ language: 'jsc', scheme: 'file' }, { language: 'jsc', scheme: 'untitled' }],
     // The generated Java (joust-gen:) and manifests (joust-abi:) are the extension's own read-only documents: never sent.
     initializationOptions: {
       client: 'vscode-joust',
@@ -124,9 +124,21 @@ function makeClient() {
   return c;
 }
 
+/**
+ * C3, F10 on #115: a java: library's source buffer (a joust-lib/ .java file in a workspace folder) is an input of the
+ * analysis: its text goes to the server by a notification on open, change and close (never as a document of its own).
+ */
+const isJavaInput = (doc) => doc.uri.scheme === 'file' && /[\\/]joust-lib[\\/].*\.java$/.test(doc.uri.fsPath)
+  && !!vscode.workspace.getWorkspaceFolder(doc.uri);
+function sendJavaInput(doc, closed = false) {
+  if (!client || client.state !== State.Running || !isJavaInput(doc)) return;
+  client.sendNotification('joust/javaInput', closed ? { uri: doc.uri.toString(), closed: true } : { uri: doc.uri.toString(), text: doc.getText() });
+}
+
 async function startClient() {
   client = makeClient();
   await client.start();
+  for (const d of vscode.workspace.textDocuments) sendJavaInput(d);
   client.onNotification('joust/status', onStatus);
   const s = await client.sendRequest('joust/status', {});
   onStatus({ ...s, uri: undefined });
@@ -158,6 +170,9 @@ function activate(ctx) {
     await client.sendRequest('joust/restartAnalysis');
   }));
   ctx.subscriptions.push(vscode.commands.registerCommand('joust.restartServer', restartServer));
+  ctx.subscriptions.push(vscode.workspace.onDidOpenTextDocument((d) => sendJavaInput(d)));
+  ctx.subscriptions.push(vscode.workspace.onDidChangeTextDocument((e) => sendJavaInput(e.document)));
+  ctx.subscriptions.push(vscode.workspace.onDidCloseTextDocument((d) => sendJavaInput(d, true)));
   // F9 on #99: a change of joust.buildOnSave reaches the running server (a restarted one reads it at initialize).
   ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
     if (!e.affectsConfiguration('joust.buildOnSave') || !client || client.state !== State.Running) return;

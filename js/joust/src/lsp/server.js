@@ -214,6 +214,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   /** Everything selected again: every open document re-analysed (C14), outstanding fixes invalid (C4). */
   function reselectAll(delay = 0) {
+    // C8, F11, S6 on #115: a reselection (a package.json change, an npm install, Restart analysis) reads the packages'
+    // libraries again; C7: and every cached importer analysis goes.
+    libraryMemo.clear();
+    occurrenceCache.clear();
     selector.invalidate();
     fixes.clear();
     imports.clear();
@@ -522,7 +526,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         for (const path of j.paths ?? []) deps.add(path);
       }
     }
-    return { id, files, deps, advisory, resolved, javaLibraries, javaSources };
+    return { id, files, deps, advisory, resolved, javaLibraries, javaSources, javaImports: javaImports.size > 0 };
   }
 
   /**
@@ -537,16 +541,18 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // are the analysis's deps. F7, S5: the read is kept until a library source changes (a buffer, a watched file).
     const memoKey = sel.root ?? '';
     let libs = libraryMemo.get(memoKey);
+    // C8 on #115: kept only while every file it read is unchanged on disk (size and mtime, checked on use).
+    if (libs && !(await sameFiles(libs.stamps))) {
+      libraryMemo.delete(memoKey);
+      libs = null;
+    }
     if (!libs) {
-      const openByPath = new Map();
-      for (const d of documents.all()) {
-        const p = localFileOf(d.uri);
-        if (p) openByPath.set((await real(p)) ?? p, d);
-      }
+      const openByPath = await openBuffers();
       const inputs = { openByPath, disk: new Map(), versions: new Map(), states: new Map() };
       libs = await buildLibraries(sel, MAX_PROJECT_CHARS, inputs);
       if (!libs.error) {
         libs.paths = [...inputs.disk.keys()];
+        libs.stamps = await stampsOf(libs.paths);
         libraryMemo.set(memoKey, libs);
         while (libraryMemo.size > 8) libraryMemo.delete(libraryMemo.keys().next().value);
       }
@@ -604,7 +610,31 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return { json: parsed.json, sources, key: k, paths: libs.paths };
   }
   const javaSignatures = new Map();   // engine id | sources' SHA-256 -> descriptions (JSON), LRU (S5 on #115)
-  const libraryMemo = new Map();      // project root -> its packages' library read (C3, F7 on #115), until one changes
+  const libraryMemo = new Map();
+  /** (size, mtime) of each path, read once (an lstat: the paths are the confined real paths the reader read). */
+  async function stampsOf(paths) {
+    const out = [];
+    for (const p of paths) {
+      try {
+        const st = await fsp.lstat(p);
+        out.push([p, st.size, st.mtimeMs]);
+      } catch {
+        out.push([p, -1, -1]);
+      }
+    }
+    return out;
+  }
+  async function sameFiles(stamps) {
+    for (const [p, size, mtime] of stamps ?? []) {
+      try {
+        const st = await fsp.lstat(p);
+        if (st.size !== size || st.mtimeMs !== mtime) return false;
+      } catch {
+        if (size !== -1) return false;
+      }
+    }
+    return true;
+  }      // project root -> its packages' library read (C3, F7 on #115), until one changes
   function rememberSignatures(key, json) {
     javaSignatures.delete(key);
     javaSignatures.set(key, json);
@@ -684,6 +714,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       ...(project?.javaLibraries ? { javaLibraries: project.javaLibraries } : {}) };
     s.javaSources = project?.javaSources ?? null;
     s.javaLibraries = project?.javaLibraries ?? null;
+    s.javaImports = project?.javaImports === true;
     const r = await host.analyze(sel.key, sel.engine, { ...inputs, index: false }, cts.token);
     if (s.cts === cts) s.cts = undefined;
     // D4a: a result is published only if nothing it read changed since: the open lifetime (C2), the buffer's version and
@@ -773,8 +804,31 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   /** C3 on #115: a java: library's source buffer (the extension sends joust-lib/ .java files): an input, never analysed. */
   const isJavaInput = (uri) => /\/joust-lib\/.*\.java$/.test(uri);
+  // F10 on #115: the extension sends joust-lib/ Java buffers by notification (no language feature applies to them).
+  const javaBuffers = new Map();   // uri -> text
+  connection.onNotification('joust/javaInput', (p) => {
+    if (!p || typeof p.uri !== 'string' || !isJavaInput(p.uri) || !localFileOf(p.uri)) return;
+    if (p.closed === true) javaBuffers.delete(p.uri);
+    else if (typeof p.text === 'string' && p.text.length <= MAX_FILE_CHARS * 2) javaBuffers.set(p.uri, p.text);
+    else return;
+    javaInputChanged(p.uri, p.closed === true ? null : p.text);
+  });
+  /** The open buffers by real path: documents, and the Java library buffers the extension sends (pseudo documents). */
+  async function openBuffers() {
+    const out = new Map();
+    for (const d of documents.all()) {
+      const p = localFileOf(d.uri);
+      if (p) out.set((await real(p)) ?? p, d);
+    }
+    for (const [uri, text] of javaBuffers) {
+      const p = localFileOf(uri);
+      if (p) out.set((await real(p)) ?? p, { uri, version: 0, pseudo: true, getText: () => text });
+    }
+    return out;
+  }
   function javaInputChanged(uri, text) {
     libraryMemo.clear();
+    occurrenceCache.clear();
     rescheduleImporters([localFileOf(uri)], DEBOUNCE_MS * 2, uri);
     invalidateInput(localFileOf(uri), text).catch(() => {});
   }
@@ -793,6 +847,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   });
   documents.onDidChangeContent((e) => {
     if (isJavaInput(e.document.uri)) return javaInputChanged(e.document.uri, e.document.getText());
+    // C7 on #115: a cached importer analysis read other files too: any change of a project file drops them.
+    occurrenceCache.clear();
     if (!state.has(e.document.uri)) state.set(e.document.uri, { lastPublished: null, lifetime: ++lifetimes });
     const s = state.get(e.document.uri);
     // An analysis of an older version still running is cancelled (after the grace period its worker is replaced).
@@ -1098,7 +1154,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     if (sym?.decl?.kind === 'import') {
       const t = await importTarget(p.textDocument.uri, f.model, sym.decl, token);
-      if (t) return { uri: t.uri, range: lspRangeOf(t.decl.nameRange) };
+      // C10 on #115: a package's library opens read-only (a joust-lib: document), never as its writable file.
+      if (t) return { uri: t.src.pkg ? libraryDocUri(t.src.text, t.src.id.slice(4)) : t.uri, range: lspRangeOf(t.decl.nameRange) };
     }
     return definition(f.model, p.textDocument.uri, p.position);
   });
@@ -1118,7 +1175,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (!at) return references(f.model, uri, p.position, include);
     const all = await occurrencesAcross(at.uri, at.model, at.decl, token, at.opts);
     const list = all.occurrences ?? all.local ?? [];
-    return list.filter((o) => include || !o.decl).map((o) => ({ uri: o.uri, range: lspRangeOf(o.range) }));
+    // C10 on #115: a package library's own locations are read-only documents too.
+    const pkgUri = at.opts.targetId?.startsWith('pkg:') ? libraryDocUri(at.opts.targetText, at.opts.targetId.slice(4)) : null;
+    return list.filter((o) => include || !o.decl).map((o) => ({ uri: pkgUri && o.uri === at.uri ? pkgUri : o.uri, range: lspRangeOf(o.range) }));
   });
   connection.languages.semanticTokens.on(async (p) => {
     await waitIndex(p.textDocument.uri);
@@ -1171,6 +1230,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const f = await indexedModel(uri);
     if (!f) return { error: 'the file changed or is still being analysed: try again' };
     if (f.model.modelVersion < 2) return { error: 'this compiler predates rename (JOUST M5b)' };
+    // C10 on #115: a package's library (under node_modules), or a file outside the project's contracts, is never edited.
+    const ro = await readOnlyReason(uri, f.s.selection);
+    if (ro) return { error: ro };
     // F2 on #115: a rename started on an imported name (its import, or a use) is the rename of its declaration, in the
     // file the import names: that file must be open too (D4a), and a package's library is never edited.
     const sym = symbolAt(f.model, position);
@@ -1228,10 +1290,11 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const occ = await occurrencesAcross(uri, f.model, plan.decl, token, { targetText: text });
     if (occ.error) return { error: `'${plan.decl.name}' can be named by other files, and ${occ.error}: rename it by hand` };
     if (occ.truncated) return { error: `'${plan.decl.name}' has more than ${MAX_LOCATIONS} occurrences, more than a rename edits` };
-    // C1 on #115: every importer the lexical scan found, before anything else: one with an error, or whose model shows no
-    // import of the name (a header error drops its imports), may hold uses its model does not show: refused.
+    // C1 on #115: every importer the lexical scan found, before anything else: one with an error (a header error drops its
+    // imports) may hold uses its model does not show: refused. C6: a clean one without an import of the name is skipped.
     for (const imp of occ.importers) {
-      if (imp.errors || imp.imports === 0) {
+      // C6 on #115: a clean importer that imports other names of the library has nothing to rename.
+      if (imp.errors) {
         return { error: `${basename(fileURLToPath(imp.src.uri))}, which imports '${plan.decl.name}', has errors: a rename needs every file it edits to check; fix them first` };
       }
     }
@@ -1277,6 +1340,18 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return { plan: { ...plan, abi }, version, text, st: f.s, files };
   }
 
+  /** C10 on #115: why the file `uri` is never edited (a package's, or outside the project's contracts), or null. */
+  async function readOnlyReason(uri, sel) {
+    const p = localFileOf(uri);
+    if (!p) return null;
+    const r = (await realPathOf(uri, sel)) ?? p;
+    if (r.split(sep).includes('node_modules')) return 'this file is an npm package\'s library: a package is never edited';
+    if (sel?.contracts && !inside(r, sel.contracts) && sel.folder && inside(r, sel.folder) && /\.jsc$/.test(r)) {
+      return 'this file is outside the project\'s contracts directory: the language server does not edit it';
+    }
+    return null;
+  }
+
   /** A library file (no contract declaration). */
   const isLibrary = (model) => !model.declarations.some((d) => d.kind === 'contract');
 
@@ -1293,9 +1368,24 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (r.files) return applyVerifiedMany(r.files, `Rename '${r.plan.decl.name}' to '${p.newName}'`);
     return applyVerified(p.uri, r.version, r.text, r.plan.edits, `Rename '${r.plan.decl.name}' to '${p.newName}'`);
   });
-  connection.onRequest('joust/prepareRename', async (p) => {
+  connection.onRequest('joust/prepareRename', async (p, token) => {
     const f = p && await indexedModel(p.uri);
     if (!f) return { error: 'the file changed or is still being analysed: try again' };
+    const ro = await readOnlyReason(p.uri, f.s.selection);
+    if (ro) return { error: ro };
+    // F2 on #115: on an imported name, the declaration it names (as joust/rename does); its file may be closed: the
+    // rename then names it (needsOpen).
+    const sym = symbolAt(f.model, p.position);
+    if (sym?.decl?.kind === 'import' && !f.model.diagnostics.some((d) => d.severity === 'error')) {
+      const detail = String(sym.decl.detail ?? '');
+      if (detail.startsWith('java:') || detail.startsWith('std/')) return { error: `'${sym.decl.name}' comes from ${detail}, which the language server does not edit` };
+      const t = await importTarget(p.uri, f.model, sym.decl, token);
+      if (!t) return { error: `'${sym.decl.name}' is declared in ${detail}, which the language server cannot read: rename it there` };
+      if (t.src.pkg) return { error: `'${sym.decl.name}' is declared in the npm package library ${detail}: a package is never edited` };
+      const tp = renamePlan(t.model, { line: t.decl.nameRange[0], character: t.decl.nameRange[1] }, '__joust_probe__');
+      if (tp.error && !tp.decl) return { error: tp.error };
+      return { name: t.decl.name, kind: t.decl.kind, abi: tp.abi === true, in: t.uri };
+    }
     const plan = renamePlan(f.model, p.position, '__joust_probe__');
     return plan.error && !plan.decl ? { error: plan.error } : { name: plan.decl.name, kind: plan.decl.kind, abi: plan.abi };
   });
@@ -1464,11 +1554,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       chars += text.length;
       digest.update(`${f.length}:${f}${text.length}:`).update(text);
     };
-    const openByPath = new Map();
-    for (const d of documents.all()) {
-      const p = localFileOf(d.uri);
-      if (p) openByPath.set((await real(p)) ?? p, d);
-    }
+    const openByPath = await openBuffers();
     if (!sel.contracts || !sel.folder || !sel.contractsRel) {
       const doc = documents.get(uri);
       if (!doc) return { error: 'the file is not open' };
@@ -1565,8 +1651,11 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         let text;
         if (open) {
           text = open.getText();
-          inputs.versions.set(open.uri, open.version);
-          inputs.states.set(open.uri, state.get(open.uri));
+          // A pseudo document (a Java buffer) has no version: its text's hash is what a later change is checked against.
+          if (!open.pseudo) {
+            inputs.versions.set(open.uri, open.version);
+            inputs.states.set(open.uri, state.get(open.uri));
+          }
         } else {
           // C13 on #99 r2: debited before it is kept; a file past what is left of the budget is not read at all.
           const r = await reader.read(sel.folder, `${libRel}/${f}`, { cap: Math.max(0, Math.min(MAX_FILE_CHARS * 2, left)) });
@@ -1740,7 +1829,12 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       const rec = (lib.records ?? []).find((r) => r.simpleName === imp.name);
       const file = `${fqcn.replace(/\./g, '/')}.java`;
       const text = s.javaSources[file];
-      if (rec && typeof text === 'string') {
+      // C13 on #115: javac's place of the record, when the engine gives one; else (an older engine) the text.
+      if (rec && typeof rec.file === 'string' && rec.line > 0) {
+        path = rec.file;
+        line = rec.line - 1;
+        col = rec.col - 1;
+      } else if (rec && typeof text === 'string') {
         const m = new RegExp(`\\brecord\\s+${imp.name}\\b`).exec(text);
         if (m) {
           path = file;
@@ -1752,10 +1846,15 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     const text = path && s.javaSources[path];
     if (typeof text !== 'string') return null;
-    for (const [k, v] of [...libraryDocs.entries()].sort((a, b) => b[1].issued - a[1].issued).slice(19)) libraryDocs.delete(k);
+    return { uri: libraryDocUri(text, path), range: { start: { line, character: col }, end: { line, character: col + imp.name.length } } };
+  }
+
+  /** A read-only library document's URI (joust-lib:/<opaque id>/<path>), its text kept in memory (20 at most). */
+  function libraryDocUri(text, path) {
+    for (const [k] of [...libraryDocs.entries()].sort((a, b) => b[1].issued - a[1].issued).slice(19)) libraryDocs.delete(k);
     const id = randomBytes(18).toString('base64url');
     libraryDocs.set(id, { text, path, issued: Date.now() });
-    return { uri: `joust-lib:/${id}/${path}`, range: { start: { line, character: col }, end: { line, character: col + imp.name.length } } };
+    return `joust-lib:/${id}/${path}`;
   }
   const libraryDocs = new Map();   // opaque id -> { text, path, issued }: the read-only java: library documents
   connection.onRequest('joust/libraryContent', (p) => {
@@ -1850,7 +1949,14 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     for (const imp of m.declarations) {
       if (imp.kind !== 'import' || imp.name !== name || moduleOf(src.id, imp.detail) !== targetId) continue;
       out.imports++;
-      for (const o of occurrences(m, imp.id)) out.ranges.push([...o.range, o.decl === true]);
+      for (const o of occurrences(m, imp.id)) {
+        // C12, S7 on #115: an entry keeps at most MAX_LOCATIONS ranges (and says it was cut).
+        if (out.ranges.length >= MAX_LOCATIONS) {
+          out.truncated = true;
+          break;
+        }
+        out.ranges.push([...o.range, o.decl === true]);
+      }
     }
     if (!src.doc) {
       occurrenceCache.set(key, out);
@@ -1871,7 +1977,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   async function occurrencesAcross(uri, model, decl, token, { targetId = null, targetText = null, from = uri } = {}) {
     const s = state.get(from);
     const sel = s?.selection ?? await selectionFor(from);
-    const out = occurrences(model, decl.id).map((o) => ({ uri, range: o.range, decl: o.decl === true }));
+    // C12 on #115: the location budget holds during collection: the file's own occurrences count too.
+    const own = occurrences(model, decl.id);
+    const out = own.slice(0, MAX_LOCATIONS).map((o) => ({ uri, range: o.range, decl: o.decl === true }));
+    if (own.length > MAX_LOCATIONS) return { occurrences: out, importers: [], truncated: true };
     const p = await projectImporters(from, sel, targetId, token);
     if (p.error) return { error: p.error, local: out };
     if (p.importers.length > MAX_CROSS_IMPORTERS) {
@@ -1884,6 +1993,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       const occ = await importerOccurrences(src, sel, decl.name, targetId ?? p.id, targetText, token);
       if (!occ) return { error: `${src.id} could not be analysed`, local: out };
       importers.push({ src, errors: occ.errors, imports: occ.imports, model: occ.model });
+      if (occ.truncated) truncated = true;
       for (const r of occ.ranges) {
         if (out.length >= MAX_LOCATIONS) {
           truncated = true;
@@ -1892,6 +2002,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         // An importer's import is a reference to the declaration, not a declaration of it.
         out.push({ uri: src.uri, range: r.slice(0, 4), decl: false, src });
       }
+      // S7 on #115: past the cap, nothing more can be returned: the scan stops.
+      if (truncated) break;
     }
     return { occurrences: out, importers, truncated };
   }
@@ -2102,10 +2214,14 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   // engine): everything is selected again, as before.
   connection.onDidChangeWatchedFiles(async (p) => {
     const changes = p?.changes ?? [];
+    // C7 on #115: a file on disk changed: every cached importer analysis goes.
+    occurrenceCache.clear();
     // C3 on #115: a java: library source changed on disk: its importers again, and the builds that read it end.
     const java = changes.filter((ch) => isJavaInput(ch.uri));
     if (java.length) {
       libraryMemo.clear();
+      // C9 on #115: a library source that appears or goes has no edge yet: every file with a java: import again.
+      for (const [u, st] of state) if (st.javaImports) schedule(u, DEBOUNCE_MS * 2);
       for (const ch of java) {
         const f = localFileOf(ch.uri);
         if (!f || documents.get(ch.uri)) continue;

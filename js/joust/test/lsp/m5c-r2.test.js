@@ -91,7 +91,9 @@ test('C4, F2: a package library: definition and references through it; a rename 
     const d = (await lsp.diagnostics(u, 1)).diagnostics;
     assert.deepEqual(d.filter((x) => x.severity === 1), [], JSON.stringify(d));
     const def = await lsp.request('textDocument/definition', { textDocument: { uri: u }, position: at(PKGUSER, 'fee(amount', 1) });
-    assert.equal(def?.uri, uriOf(join(pkg, 'joust-lib', 'fees.jsc')), JSON.stringify(def));
+    // C10 on #115: read-only, a joust-lib: document with the package library's text.
+    assert.match(def?.uri ?? '', /^joust-lib:\/[A-Za-z0-9_-]+\/@acme\/fees\/fees\.jsc$/, JSON.stringify(def));
+    assert.equal((await lsp.request('joust/libraryContent', { id: def.uri.split('/')[1] })).text, FEES);
     assert.deepEqual(def.range.start, at(FEES, 'fee(amount'));
     const refs = await lsp.request('textDocument/references', { textDocument: { uri: u }, position: at(PKGUSER, 'fee(amount', 1), context: { includeDeclaration: false } });
     assert.deepEqual(refs.map((r) => r.uri === u).sort(), [true, true], JSON.stringify(refs));

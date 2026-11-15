@@ -351,6 +351,17 @@ async function cross() {
   assert.match(user.getText(), /import \{ charge \} from/);
   assert.match(user.getText(), /charge\(amount\)/);
   assert.match(fees.getText(), /fn charge\(/);
+  // F2 on #115: a rename started from a use in the importer renames the library's declaration too.
+  step('rename from a use in the importer');
+  await analysed(user);
+  const ue = await vscode.window.showTextDocument(user);
+  await waitFor(async () => (await status()).statuses.find((s) => s.uri === user.uri.toString() && s.modelVersion >= user.version), 'the importer\'s model');
+  const useAt = user.positionAt(user.getText().indexOf('charge(amount') + 1);
+  ue.selection = new vscode.Selection(useAt, useAt);
+  const r2 = await within(vscode.commands.executeCommand('joust.renameSymbol', { newName: 'levy', confirm: true }), 'rename from a use', 120000);
+  assert.equal(r2 && r2.applied, true, JSON.stringify(r2));
+  assert.match(fees.getText(), /fn levy\(/);
+  assert.match(user.getText(), /import \{ levy \} from/);
   step('definition into a java: library');
   const guarded = await open('contracts/app/Guarded.jsc');
   await analysed(guarded);
@@ -364,6 +375,14 @@ async function cross() {
   assert.match(doc.getText(), /class AllowList/);
   const range = locs[0].range || locs[0].targetSelectionRange || locs[0].targetRange;
   assert.equal(doc.getText(range), 'isAllowed');
+  // F10 on #115: a joust-lib/ Java file gets no JOUST language feature (its own language's tokens stay).
+  const java = await vscode.workspace.openTextDocument(path.join(WS, 'node_modules', '@example', 'compliance', 'joust-lib', 'com', 'example',
+    'compliance', 'AllowList.java'));
+  await vscode.window.showTextDocument(java);
+  await sleep(1500);
+  const tokens = await vscode.commands.executeCommand('vscode.provideDocumentSemanticTokens', java.uri);
+  // No provider at all (with JOUST's provider registered for these files, an empty token set would come back instead).
+  assert.equal(tokens, undefined, `no semantic tokens provider on a Java file: ${JSON.stringify(tokens)}`);
 }
 
 async function run() {

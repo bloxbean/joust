@@ -57,7 +57,8 @@ trusted folders).
   file only while no file imports it; an npm package's libraries are never edited.
 - **`java:` imports** resolve as the build checks them in npm projects (the packages' `joust-lib/*.java` sources, read
   and described once, then cached); in Gradle projects they are advisory. Go to definition on a name a `java:` import
-  brings opens the library's source as a read-only `joust-lib:` document.
+  brings, or on an npm package's `.jsc` library, opens its source as a read-only `joust-lib:` document. An open
+  `joust-lib/` Java file's unsaved text is what the analysis reads; JOUST adds no features to Java files.
 
 ## Known issue: saves that hang with `codeActionsOnSave` "quickfix"
 
