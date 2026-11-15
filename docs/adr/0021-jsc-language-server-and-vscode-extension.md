@@ -1,9 +1,9 @@
 # ADR-0021: A language server and VS Code extension for `.jsc`
 
-**Status:** Proposed (r7, with r7a and r7b). r5 was approved on #66 (design, security, Codex); r6 records the amendments
+**Status:** Proposed (r8, with r7a and r7b). r5 was approved on #66 (design, security, Codex); r6 records the amendments
 that M5a's implementation (#83) made, which its reviews asked for, and was approved with #83. r7a records the project
-reading that the `.jsc` 2 integration (#98) brought forward from M5c; r7 records M5b's amendments (§13, #99); r7b
-records the `.jsc` v1 removal (#111).
+reading that the `.jsc` 2 integration (#98) brought forward from M5c; r7 records M5b's amendments (§13, #99), approved
+with #99; r7b records the `.jsc` v1 removal (#111); r8 records M5c's (§14, #115), to be reviewed with #115.
 **Date:** 2026-11-13
 **Builds on:** ADR-0018 (`.jsc`, called `.jsc` 2 before its r26), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
 D3 (names), D9 (libraries and `java:` imports, built in M4), D12 (stable codes, source maps, generated Java, ABI
@@ -808,7 +808,7 @@ Numbered L… so they are not confused with the validator invariants I1–I55, A
 | L7 | Formatting is idempotent, keeps every comment, and leaves the script hash, ABI manifest and description unchanged (generated Java differs only in position comments) | D8 | formatter corpus tests (M5d) |
 | L8 | `publishDiagnostics` carries the document version, and the server never publishes for a version older than one already published (enforced by the server, since `vscode-languageclient` ignores the version); results computed for an older snapshot generation are dropped, and build diagnostics are withdrawn when a newer generation exists | D4, D4a | protocol tests with interleaved edits, saves and dependency changes |
 | L9 | No input (hostile, huge, deeply nested, binary, a FIFO, a network path) hangs or crashes the server: engine workers do no I/O and run under a time cap, a heap limit and an explicit stack size; models are size-capped; a failure yields one internal-error diagnostic, a new worker, a quarantined input and backoff; repeated failures (cancellations excluded) lead to "analysis unavailable", while the protocol thread keeps answering | D2a, D4, D4b | watchdog protocol tests; hostile-workspace tests |
-| L10 | On the reference corpus: analysis p95 latency, **including the model's export** across the engine boundary, at most **60 ms** for the 1,889-line file *(r7; 50 ms through r6)*; server process RSS at most 600 MB with one analysis worker, at most 1.1 GB with one analysis worker and a build worker, and **at most 1.2 GB in D4's largest configuration** (two analysis workers and a build worker, after builds; §1: 1,003–1,012 MB). D2a's heap limits are set so these hold. CI enforces looser regression bounds on its own hardware. *(r6)* The strict bounds hold on §1's reference machine (Apple M4 Max, Node 22): M5a measured p95 26–35 ms, RSS 420–436 MB and 762–786 MB there. *(r7, M5b)* M5b, with recovery and model v2: p95 45.9 ms, RSS 450 MB and 819 MB (§13 note 10). CI's `ubuntu-24.04` runner measured p95 86.7 ms, RSS 358 MB and 826 MB (run 43350031856); CI fails past 250 ms p95 and the RSS bounds plus 50% (§12 note 17). *(r7, after #99's round r1, F3)* Why 60: M5b's model carries the index (references, types, expressions), 1.43–1.46 times M5a's cost by the review's interleaved measurement. Measured: 45.9 ms in one run on the idle reference machine; three runs on the same machine under load (load average 15–27 on 16 cores, round r2) p95 62.6, 64.9 and 72.9 ms (median 50.6–54.0), RSS 440–445 MB and 674–797 MB. M5b's CI runner: p95 78.9 ms (run 43588066993). CI also enforces two bounds that do not depend on its hardware: the 1,889-line file's model at most 252,000 characters (239,874 at M5b) and the analysis's median at most 0.5 times the same worker's warm lowering of that file (0.31 at M5b). *(r7)* **Before this ADR is accepted**, the 60 ms bound is measured over three runs on the idle reference machine (§1's practice); round r2's runs were all under load. Neither CI guard is raised to admit a larger model: M5c moves the index off the per-edit path or revisits L10 (§8's M5c row) | D2a, D4 | M5a measurement job (the export is measured at M5a's exit) |
+| L10 | On the reference corpus: analysis p95 latency, **including the model's export** across the engine boundary, at most **60 ms** for the 1,889-line file *(r7; 50 ms through r6)*; server process RSS at most 600 MB with one analysis worker, at most 1.1 GB with one analysis worker and a build worker, and **at most 1.2 GB in D4's largest configuration** (two analysis workers and a build worker, after builds; §1: 1,003–1,012 MB). D2a's heap limits are set so these hold. CI enforces looser regression bounds on its own hardware. *(r6)* The strict bounds hold on §1's reference machine (Apple M4 Max, Node 22): M5a measured p95 26–35 ms, RSS 420–436 MB and 762–786 MB there. *(r7, M5b)* M5b, with recovery and model v2: p95 45.9 ms, RSS 450 MB and 819 MB (§13 note 10). CI's `ubuntu-24.04` runner measured p95 86.7 ms, RSS 358 MB and 826 MB (run 43350031856); CI fails past 250 ms p95 and the RSS bounds plus 50% (§12 note 17). *(r7, after #99's round r1, F3)* Why 60: M5b's model carries the index (references, types, expressions), 1.43–1.46 times M5a's cost by the review's interleaved measurement. Measured: 45.9 ms in one run on the idle reference machine; three runs on the same machine under load (load average 15–27 on 16 cores, round r2) p95 62.6, 64.9 and 72.9 ms (median 50.6–54.0), RSS 440–445 MB and 674–797 MB. M5b's CI runner: p95 78.9 ms (run 43588066993). CI also enforces two bounds that do not depend on its hardware: the 1,889-line file's model at most 252,000 characters (239,874 at M5b) and the analysis's median at most 0.5 times the same worker's warm lowering of that file (0.31 at M5b). *(r7)* **Before this ADR is accepted**, the 60 ms bound is measured over three runs on the idle reference machine (§1's practice); round r2's runs were all under load. Neither CI guard is raised to admit a larger model: M5c moves the index off the per-edit path or revisits L10 (§8's M5c row) *(r8, M5c)* L10's path is the **diagnostics model** (§14 note 1): the index is built behind it on its own entry. Under load (load average 36 on 16 cores) the 1,889-line file's p95 was 14.4 ms (median 11.7), the index behind it 32.0 ms p95; RSS 446 MB and 816 MB. CI adds a third guard: the 1,889-line file's diagnostics model at most 55,000 characters (49,910 at M5c); the full model's guard stays at 252,000 (239,874) and the ratio's at 0.5 (0.097, now of the diagnostics path) | D2a, D4 | M5a measurement job (the export is measured at M5a's exit) |
 | L11 | Positions are UTF-16 code units, correct with non-BMP characters before the position on the same line | D6 | protocol tests |
 | L12 | **Hash-preserving edits keep the script hash.** Formatting, renames, import-adding edits and any edit the server labels hash-preserving leave the script hash (and, except for ABI-recorded renames, the ABI manifest and description) unchanged on every file that builds before and after. Edits the user chooses to change the program (inserting a completion item, accepting a quick fix that turns an invalid file into a valid one) are code changes and may change it. The server never labels a code change hash-preserving | D7, D8 | hash fixtures in both classes over the corpus (D12) |
 | L13 | Recovery adds no cascades: for a single-token mutation inside one declaration, every error the recovering mode reports outside that declaration is one the strict checker reports for the same text (a genuine non-local error, e.g. a duplicate name, at its code and position), or lies in a declaration that references the mutated one or depends on a name or signature the mutation changed | D5 | mutation corpus and the namespace fixture (M5b) |
@@ -865,7 +865,7 @@ it. The Web Image gains entries and reachability metadata for the model's record
 |---|---|---|---|
 | M5a | The server with diagnostics as you type (the first fatal error, or the warnings; codes and links), document symbols, selection ranges and folding (D6's M5a spans); engine hosting (D2a) with **Restart analysis** and **Restart server**; modes (D3a); engine selection and confinement (D3, D3b); snapshots and versioned diagnostics (D4a); input policy (D4b); `joust.lang.analyze`; the VS Code extension (M1d's TextMate grammar, language configuration, snippets, status bar, trust model, **JOUST: Build** task and the `$joust` problem matcher); `joust build` prints the catalogue's diagnostic shape (D9); *(r6)* D4a/D7's verified edit path with the quick fixes for JSC0128 and JSC0133, checked by M5a's weaker L6 (the fix's diagnostic gone and no error at or before its position; recovery gives M5b the full check); the `.vsix` built and smoke-tested in CI | ADR-0018 accepted, M1 exited (M1d's grammars and catalogue in place; Q1(b)) and **M1e exited as a whole** (§3a items 2–4); this ADR accepted | L1 (first error), L2, L3, L4, L8, L9, L10, L11 tested; the model's export measured and within L10; M1e's limit passes with margin on the smallest stack of each host (CLI main thread, engine worker at `stackSizeMb` 4, the extension host's runtime); both restart commands restore analysis after their unavailable states; the `.vsix` has no `.node` file and is under 16 MB; smoke tests green on the minimum and current VS Code; hostile-workspace and confinement tests green |
 | M5b | Recovery (lexer, parser, checker) and the remaining spans and reference mapping; hover, definition and references within a file, semantic tokens, completion, rename within a file, quick fixes and **Remove invisible characters…**, generated-Java view, ABI diff and **Accept ABI…** (D7a, with ADR-0018's D12 acceptance change), build diagnostics on save (worker) | M5a exit (Q1(b): may run alongside ADR-0018 M2/M3, with L5's corpus test in their front-end PRs) | L1 (recovered), L5, L6, L12, L13 tested; the recovery mutation corpus and the save tests green; latency still within L10. *(r7, M5b)* How each is tested: §13 note 9 |
-| M5c | Across files: `.jsc` libraries, `import contract`, `java:` imports (read-only library documents), project-wide references and rename, library signature cache. *(r7)* The index (references, types, expressions) leaves the per-edit diagnostics path (built on the first navigation request of a version, or behind its own entry), or L10 is revisited in this ADR with measurements: L10's model-size guard is not raised to make room for cross-file data | M5b exit; ADR-0018 M4 exited; javac attribution cost in the engine measured | definition and references across a `.jsc` library and into a Java library in the template's tests; L6 and L12 across files; L10 with its CI guards |
+| M5c | Across files: `.jsc` libraries, `import contract`, `java:` imports (read-only library documents), project-wide references and rename, library signature cache. *(r7)* The index (references, types, expressions) leaves the per-edit diagnostics path (built on the first navigation request of a version, or behind its own entry), or L10 is revisited in this ADR with measurements: L10's model-size guard is not raised to make room for cross-file data. *(r8)* Built in #115: the index left the per-edit path (§14 note 1); the java: libraries' signature cache is keyed by the engine and the SHA-256 of the sources read, in the server's private storage (outside every workspace folder, as the engine copies; not per workspace: a content key is safe to share) | M5b exit; ADR-0018 M4 exited; javac attribution cost in the engine measured | definition and references across a `.jsc` library and into a Java library in the template's tests; L6 and L12 across files; L10 with its CI guards |
 | M5d | Formatter: trivia-preserving lexing, `joust fmt`, `textDocument/formatting` | M5b exit (M1e's message scheme is in place since M5a) | L7 and L12 over the corpus and generated layouts |
 | M5e | Other editors: Neovim and Helix configurations (a user-installed `joust-lsp`), the tree-sitter grammar packaged with its queries, docs; the `.vsix` attached to a release for maintainers to publish (D11) | M5a exit (configurations), M5c exit (docs complete); the namespaces claimed and Q4 decided (D11) | the release checklist run by hand on each editor; the docs test refusing `npx joust` green |
 
@@ -1180,6 +1180,57 @@ checked as the build checks it.
     only), with the two CI guards there; M5b's CI runner measured p95 77.9–78.9 ms (runs 43588066993, 43604968443). The
     three-run idle measurement is owed before acceptance (L10).
 
+## 14. Implementation notes (M5c, r8)
+
+What M5c's implementation chose (#115, on `feat/jsc-lsp-m5b` after #111).
+
+1. **The index off the per-edit path** (the M5c row's r7 commitment, L10). The language core builds an analysis's
+   index (references, types, expressions, what the checker knows of each declaration) on request. `lang.analyze` with
+   `index: false` gives the **diagnostics model** (diagnostics, the outline's declarations, blocks, folding, advisory
+   tags; no per-declaration knowledge) and keeps that analysis in one slot of the engine; `lang.index` gives the full
+   model of the same inputs from it, byte for byte what `lang.analyze` gives (else it analyses them again). `lang.info`
+   lists `index` (and `javaLibraries`). The server publishes each edit's diagnostics from the diagnostics model and then
+   asks for that version's index on the same worker; navigation, completion, rename, semantic tokens and selection
+   ranges wait (bounded) for it, so a request made right after an edit is answered from that edit's version (C4 on #99).
+   The slot holds one analysis and is replaced by the next: no project state survives in the worker beyond it (D2a's
+   r7a note: a project file's analysis still posts the files it read). L10 is measured on the diagnostics path (L10's row).
+2. **Across files** (D7's definition, references and rename rows). The language core's references to an imported name
+   (a fn call, a type, a record's constructor, a `java:` fn) point to its import (flag 2), and only the file's own
+   expressions are resolved (the checker also types its libraries' bodies). *Definition* of an imported name goes to
+   the declaration in the file the import names (its open buffer's model, else its text analysed with the project).
+   *References* of a declaration another file can import (a library's top-level fn, type, enum or const; a contract)
+   are found across the project's `.jsc` files (the build's walk, open buffers included): its file's, and in each
+   importer the import's name and its uses through it. *Rename* of a library's fn, type, enum or const edits its file and
+   every importer as one versioned workspace edit with each target's digest (D4a): **open files only**, so a rename that
+   would edit a closed file names it (`needsOpen`) and the extension opens those files (no editor) and asks again once;
+   each file is re-analysed against the others' renamed texts (L6 in every file), an importer with an error refuses the
+   rename (S4/C2 on #99, across files), as does any change of the open buffers while it is checked; a type or enum warns
+   first (an importer's datum or redeemers can hold it: D7's ABI warning). A variant or field of a library type, and a
+   contract's members, stay renamable in their file only while no file imports it (F2 on #99). L12 across files:
+   renaming a library's fn, type or enum in it and in an importer keeps the importer's script hash (`JscLangHashTest`).
+3. **`java:` libraries** (D3a, D7). In an npm project the server reads the Java library sources its packages ship
+   (`joust-lib/*.java`, as the build reads them, confined: a package root may be a link, nothing below `joust-lib/` may
+   be) and asks the engine to describe them once (`lang.javaLibraries`: the toolchain's certifier, javac's attribution
+   and certification, as the build runs them); each description carries every fn's place, where javac puts its name.
+   The descriptions are cached by the engine's id and the SHA-256 of the sources read, in memory and in the server's
+   private storage, and re-verified on use (the entry's own digest; the key is the sources' content); the analyses take
+   them (`lang.analyze`'s `javaLibraries`), so a file with a `java:` import is analysed as the build checks it and is no
+   longer advisory for it (D3a). A Gradle project's Java libraries come from its `joustLibrary` jars, which the server
+   does not read: advisory there, as before. *Definition* of a name a `java:` import brings opens the library's source as
+   a **read-only** document, `joust-lib:/<id>/<path>`: the server serves the text by an opaque id (`joust/libraryContent`,
+   at most 20 kept), never by a path the URI names; a fn at its name, a record at its declaration.
+   *The M5c row's entry gate (javac attribution's cost in the engine):* describing examples/compliance's `AllowList`
+   (one library, 3.5 KB of JSON) took 216 ms in the engine (a warm analysis worker), once per set of sources (587 ms on a cold JVM);
+   from the cache, a new server described nothing.
+4. **#114** (Codex C14–C18 on #99): a build's results end on any change of any input it read (an open buffer, a file on
+   disk, a package library; a watched file whose content changed; a save of the same text does not); a member the current
+   model parsed is authoritative for completion; the importer scan is bound to the open buffers it read; package
+   libraries come from their open buffers; the budget test observes the bytes read.
+5. **Tests.** `m5c.test.js` (definition and references both ways, rename across files with closed files and a clash, a
+   `java:` library described once, cached, resolved and opened read-only), `JscLangIndexSplitTest`, `lang-in-node`'s
+   `lang.index` parity, `JscLangJavaLibrariesTest` (descriptions round-trip; places name the fns), `JscLangHashTest`'s
+   cross-file renames, `m5b-r2.test.js`'s #114 cases.
+
 ## Revision history
 
 - **r1** (2026-11-13): initial proposal, with the measurements of §1 (toolchain and front-end-only Web Images, JVM
@@ -1299,3 +1350,8 @@ checked as the build checks it.
 - **r7b** (2026-11-14; ADR-0018 r26, the `.jsc` v1 removal, #111; separate from M5b's r7 on #99): the title says
   `.jsc`, and §6's Commands row drops M5b's planned **Migrate to .jsc 2** command, since ADR-0018 r26 removes
   `joust migrate` (D16) and with it every v1 file such a command would translate.
+- **r8** (2026-11-15; with the M5c implementation, #115): §14 holds M5c's notes: the index off the per-edit path (L10
+  measured on the diagnostics model, with a third CI guard), navigation and rename across `.jsc` files (open files only,
+  L6 per file, L12 across files), `java:` libraries described once and cached by their sources' SHA-256, their imports no
+  longer advisory in npm projects, and read-only `joust-lib:` documents; #114's fixes. The M5c row records how its r7
+  commitment was met.
