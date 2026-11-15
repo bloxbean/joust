@@ -196,6 +196,10 @@
   "message": "(JSC1244)"
  },
  {
+  "file": "purpose-withdraw-bigmap.json",
+  "message": "(JSC1305)"
+ },
+ {
   "file": "purpose-owned-instance-destroy.json",
   "message": "(JSC1210)"
  },

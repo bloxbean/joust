@@ -1,0 +1,25 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3 final pass (Codex M1, design MD2): a coverage contract for the M3 combination matrix. A keyed type declared
+// before a plain one (the plain holding's constructor tag shifted), invariants by type, a move of the plain type with its
+// admit, and the certify, vote and propose handlers beside both kinds of object (JscV2M3MatrixTest).
+contract Mixed(maxDatumBytes = 512) {
+  params { council: List<Key>, threshold: Int }
+  state { admin: Key, count: Int }
+  owned Slot keyed by key { key: Key, count: Int }
+  owned Badge { owner: Key, level: Int }
+  init() { return { admin: caller, count: 0 } }
+  owned init Slot.claim() { return { key: caller, count: 0 } }
+  owned action Slot.bump() only key { return { ...state, count: count + 1 } }
+  owned destroy Slot.leave() only key retire { pay(key, balance) }
+  owned init Badge.award() { return { owner: caller, level: 1 } }
+  owned action Badge.go(to: into) only owner { return { ...state, level: level + to.count } }
+  owned destroy Badge.drop() only owner { pay(owner, balance) }
+  action admit(id: Bytes, arriving: Badge) only admin admits Badge { return { ...state, count: count + arriving.level } }
+  invariant Slot.positive = count >= 0
+  invariant Badge.leveled = level >= 1
+  certify register(cert: TxCert) quorum params.council params.threshold = true
+  vote choose(voter: Voter, action: GovernanceActionId, vote: Vote) quorum params.council params.threshold = true
+  propose guard(p: ProposalProcedure) = true
+}

@@ -1198,6 +1198,9 @@ final class IrJson {
                         throw new IllegalArgumentException(where + "at most one " + kindName(k) + (k == Ir.Kind.MIGRATE ? " (JSC1337)" : " handler (JSC1316)"));
                     }
                 }
+                if (k == Ir.Kind.WITHDRAW && state.fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                    throw new IllegalArgumentException(where + "a withdraw handler is not supported beside BigMap state yet (JSC1305)");
+                }
                 if (k == Ir.Kind.WITHDRAW && !owned.isEmpty()) {
                     // M3 final pass MD6: beside keyed types the checker's code is JSC1244 (the processor's keyed rule).
                     boolean keyed = r.get("keyed") instanceof List<?> kl && !kl.isEmpty();

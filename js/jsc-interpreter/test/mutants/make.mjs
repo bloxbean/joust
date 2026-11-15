@@ -324,6 +324,14 @@ purpose('withdraw-keyed', 'Keys', (p) => {
   w.body = { stmts: [], result: null, at };
   p.methods.push(w);
 }, '(JSC1244)');
+// M3 final pass MD2: a withdraw handler beside BigMap state (Token's).
+purpose('withdraw-bigmap', 'Token', (p) => {
+  const sv = fixture('StakedVault');
+  const w = JSON.parse(JSON.stringify(sv.methods.find((x) => x.kind === 'withdraw')), (k, v) => (k === 'id' || k === 'local') && typeof v === 'number' ? v + 93000 : v);
+  w.mods = [];
+  w.body = { stmts: [], result: null, at };
+  p.methods.push(w);
+}, '(JSC1305)');
 // M3 final pass MS2: owned, keyed and moving programs with an instance destroy (JSC1210) or BigMap state (JSC1211).
 const endDestroy = (field) => ({ kind: 'destroy', name: 'endAll', params: [], mods: [{ name: 'only', field }], checked: [], usesCtx: true, pays: true,
   result: null, body: { stmts: [{ stmt: 'Pay', to: { node: 'StateField', field, type: 'Key', taint: 0, at },

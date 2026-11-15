@@ -57,8 +57,12 @@ class JscV2DiagnosticsTest {
             while (warning.find()) used.put(warning.group(1), "warning");
         }
         // The toolchain's: the manifest checked against the processor's description.
-        var tool = Pattern.compile("\"(JSC\\d{4})\"").matcher(Files.readString(Path.of("../julc-state-toolchain/src/main/java/org/julclang/state/toolchain/Toolchain.java")));
+        String toolchain = Files.readString(Path.of("../julc-state-toolchain/src/main/java/org/julclang/state/toolchain/Toolchain.java"));
+        var tool = Pattern.compile("\"(JSC\\d{4})\"").matcher(toolchain);
         while (tool.find()) used.put(tool.group(1), "error");
+        // M3 final pass: the toolchain's warnings (a Diagnostic of Severity.WARNING naming its code), JSC9015.
+        var toolWarning = Pattern.compile("new Diagnostic\\(Severity\\.WARNING[^;]*?\"(JSC\\d{4})\"").matcher(toolchain);
+        while (toolWarning.find()) used.put(toolWarning.group(1), "warning");
         // One code, one rule: a code is raised from one file (JSC0930, nested patterns, is the parser's and the checker's).
         raisedIn.forEach((code, in) -> assertTrue(in.size() == 1 || code.equals("JSC0930"), code + " is raised in " + in));
         assertTrue(used.size() > 200, "codes found: " + used.size());

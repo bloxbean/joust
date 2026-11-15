@@ -267,6 +267,10 @@ class JscV2M3cCheckerTest {
                 + "  vote v(voter: Voter, a: GovernanceActionId, x: Vote) " + Q + " = true\n")));
         cases.add(bad("JSC0203", "the generated name TxCert", pur("  @@action txCert() payable { return state }\n"
                 + "  certify c(cert: TxCert) " + Q + " = true\n")));
+        // M3 final pass MD2: a withdraw handler (so stakeSelf) beside BigMap state.
+        cases.add(bad("JSC1305", "beside BigMap state", "jsc 1\npackage t\ncontract S {\n  params { gov: Credential }\n"
+                + "  state { book: BigMap<Bytes, Int> }\n  init() { return { book: BigMap.empty() } }\n"
+                + "  @@withdraw w(amount: Int) authorized params.gov { }\n}\n"));
         // ---- migration (ADR-0011 D4)
         cases.add(bad("JSC1303", "migrates to successor",
                 OLD.replace("only admin migrates to successor", "only admin migrates @@{").replace("{ }\n}", "\n}")));

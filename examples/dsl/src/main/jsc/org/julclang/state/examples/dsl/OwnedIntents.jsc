@@ -1,0 +1,17 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3 final pass (Codex M1, design MD2): a coverage contract: plain objects beside a batched instance action and
+// the certify, vote and propose handlers (JscV2M3MatrixTest).
+contract OwnedIntents(maxDatumBytes = 512) {
+  params { council: List<Key>, threshold: Int }
+  state { admin: Key, count: Int }
+  owned Badge { owner: Key, level: Int }
+  action tick() batched { return { ...state, count: count + 1 } }
+  init() { return { admin: caller, count: 0 } }
+  owned init Badge.award() { return { owner: caller, level: 1 } }
+  owned destroy Badge.drop() only owner { pay(owner, balance) }
+  certify register(cert: TxCert) quorum params.council params.threshold = true
+  vote choose(voter: Voter, action: GovernanceActionId, vote: Vote) quorum params.council params.threshold = true
+  propose guard(p: ProposalProcedure) = true
+}

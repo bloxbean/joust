@@ -3052,6 +3052,12 @@ final class Checker {
                     + String.join(", ", ownedTypes) + "): reward sends composed with objects' payouts are not covered (ADR-0010, K42)");
         }
         boolean bigState = stateFields.values().stream().anyMatch(t -> t instanceof Ty.BigMapT);
+        // M3 final pass MD2: a withdraw handler (so stakeSelf) beside BigMap state is not covered by a contract either (and
+        // the one probe of it, MapStake, is over the runtime's script limit).
+        if (bigState && seen.containsKey(Ir.Kind.WITHDRAW)) {
+            throw seen.get(Ir.Kind.WITHDRAW).pos().error("JSC1305", "a withdraw handler is not supported beside BigMap state yet: reward sends"
+                    + " composed with map claims are not covered (ADR-0010, M3 final pass)");
+        }
         for (Syntax.Method m : c.methods()) {
             boolean adopts = m.kind() == Kind.MIGRATE;
             Syntax.Mod to = m.mods().stream().filter(x -> x.name().equals("migrates")).findFirst().orElse(null);

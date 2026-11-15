@@ -821,6 +821,9 @@ function purposeRules(p, owned, fail, contracts) {
       if (seen.has(m.kind)) fail(where, `at most one ${m.kind}${m.kind === 'migrate' ? ' (JSC1337)' : ' handler (JSC1316)'}`);
       seen.set(m.kind, m);
     }
+    if (m.kind === 'withdraw' && p.state.fields.some((fd) => fd.type && typeof fd.type === 'object' && 'bigmap' in fd.type)) {
+      fail(where, 'a withdraw handler is not supported beside BigMap state yet (JSC1305)');
+    }
     // M3 final pass MD6: beside keyed types the checker's code is JSC1244 (the processor's keyed rule).
     if (m.kind === 'withdraw' && owned.length > 0) {
       fail(where, Array.isArray(p.keyed) && p.keyed.length > 0 ? 'a withdraw handler is not supported beside keyed types (JSC1244)'

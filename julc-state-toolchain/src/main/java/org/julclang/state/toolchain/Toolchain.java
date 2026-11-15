@@ -178,6 +178,14 @@ public final class Toolchain {
                 }
             }
         }
+        // M3 final pass MD2, MS3: a script over the runtime's reference-script limit is warned at build time (JSC9015).
+        for (Contract c : r.contracts()) {
+            String warning = org.julclang.state.dsl.v2.JscV2.scriptSizeWarning(c.scriptSizeBytes());
+            if (warning == null) continue;
+            String file = c.packageName().replace('.', '/') + "/" + c.name() + ".java";
+            for (Generated g : generated) if (g.javaFile().equals(file)) file = g.jscFile();
+            diagnostics.add(new Diagnostic(Severity.WARNING, c.name() + ": " + warning, file, 1, 1, "toolchain", "JSC9015"));
+        }
         boolean ok = r.ok() && diagnostics.stream().noneMatch(d -> d.severity() == Severity.ERROR);
         return new Result(ok, r.contracts(), r.validators(), diagnostics, List.copyOf(generated), r.libraries());
     }
