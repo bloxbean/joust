@@ -7,7 +7,9 @@
 //                      serverInfo names the project's compiler, settings that would act on save apply nothing;
 //   hostile-restricted the same workspace in Restricted Mode: the bundled compiler, advisory; no task; no sentinel;
 //   abi                the template with its own CLI: Accept ABI… refuses unsaved buffers, diffs app.Counter by its
-//                      qualified name, refuses a bound acceptance after the source changed, accepts after a new diff.
+//                      qualified name, refuses a bound acceptance after the source changed, accepts after a new diff;
+//   cross              M5c: JOUST: Rename Symbol in a library opens its closed importer and renames both; definition on
+//                      a java: import opens the library's source as a read-only joust-lib: document.
 // Usage: node test/electron/run.mjs [--vsix <file>] [--versions 1.109.0,stable] [--only <scenario>]
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
@@ -15,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { downloadAndUnzipVSCode, resolveCliArgsFromVSCodeExecutablePath } from '@vscode/test-electron';
-import { abiWorkspace, hostileWorkspace, templateWorkspace } from './workspaces.mjs';
+import { abiWorkspace, crossWorkspace, hostileWorkspace, templateWorkspace } from './workspaces.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const argv = process.argv.slice(2);
@@ -32,6 +34,7 @@ const scenarios = [
   { name: 'hostile-trusted', short: 'ht', trusted: true, make: (base) => hostileWorkspace(base, engine) },
   { name: 'hostile-restricted', short: 'hr', trusted: false, make: (base) => hostileWorkspace(base, engine) },
   { name: 'abi', short: 'ab', trusted: true, make: (base) => abiWorkspace(base, engine) },
+  { name: 'cross', short: 'cr', trusted: true, make: (base) => crossWorkspace(base, engine) },
 ].filter((s) => !only || s.name === only);
 
 let failed = 0;

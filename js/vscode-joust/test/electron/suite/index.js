@@ -336,6 +336,36 @@ async function abi() {
   assert.match(after, /"more"/);
 }
 
+/** F5 on #115: rename across files (a closed importer opened by the extension) and a read-only joust-lib: document. */
+async function cross() {
+  const fees = await open('contracts/app/fees.jsc');
+  await analysed(fees);
+  const editor = vscode.window.activeTextEditor;
+  const at = fees.positionAt(fees.getText().indexOf('fee(amount'));
+  editor.selection = new vscode.Selection(at, at);
+  step('rename fee across files');
+  const r = await within(vscode.commands.executeCommand('joust.renameSymbol', { newName: 'charge', confirm: true }), 'rename across files', 120000);
+  assert.equal(r && r.applied, true, JSON.stringify(r));
+  const user = vscode.workspace.textDocuments.find((d) => d.uri.fsPath.endsWith(path.join('contracts', 'app', 'User.jsc')));
+  assert.ok(user, 'the importer was opened by the extension');
+  assert.match(user.getText(), /import \{ charge \} from/);
+  assert.match(user.getText(), /charge\(amount\)/);
+  assert.match(fees.getText(), /fn charge\(/);
+  step('definition into a java: library');
+  const guarded = await open('contracts/app/Guarded.jsc');
+  await analysed(guarded);
+  const use = guarded.positionAt(guarded.getText().indexOf('isAllowed(list') + 1);
+  const locs = await waitFor(async () => {
+    const l = await vscode.commands.executeCommand('vscode.executeDefinitionProvider', guarded.uri, use);
+    return l && l.length && (l[0].uri || l[0].targetUri).scheme === 'joust-lib' ? l : null;
+  }, 'a joust-lib: definition', 120000);
+  const target = locs[0].uri || locs[0].targetUri;
+  const doc = await vscode.workspace.openTextDocument(target);
+  assert.match(doc.getText(), /class AllowList/);
+  const range = locs[0].range || locs[0].targetSelectionRange || locs[0].targetRange;
+  assert.equal(doc.getText(range), 'isAllowed');
+}
+
 async function run() {
   const ext = vscode.extensions.getExtension(EXT);
   assert.ok(ext, `${EXT} is installed`);
@@ -345,6 +375,7 @@ async function run() {
   else if (SCENARIO === 'hostile-trusted') await hostileTrusted();
   else if (SCENARIO === 'hostile-restricted') await hostileRestricted();
   else if (SCENARIO === 'abi') await abi();
+  else if (SCENARIO === 'cross') await cross();
   else throw new Error(`unknown scenario ${SCENARIO}`);
   await sleep(1000);
   assert.ok(!fs.existsSync(SENTINEL), `the sentinel appeared: ${fs.existsSync(SENTINEL) && fs.readFileSync(SENTINEL, 'utf8')}`);

@@ -1,5 +1,5 @@
 // The workspaces the extension tests open (ADR-0021 D12).
-import { copyFileSync, cpSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +32,25 @@ export function abiWorkspace(base, engineDir) {
     cpSync(join(repo, 'js', p, 'src'), join(d, 'src'), { recursive: true });
     copyFileSync(join(repo, 'js', p, 'package.json'), join(d, 'package.json'));
   }
+  return { folder };
+}
+
+/**
+ * M5c (F5 on #115): the abi workspace with a library and a closed importer, and an npm package shipping a java: library
+ * that a contract imports.
+ */
+export function crossWorkspace(base, engineDir) {
+  const { folder } = abiWorkspace(base, engineDir);
+  const app = join(folder, 'contracts', 'app');
+  writeFileSync(join(app, 'fees.jsc'), 'jsc 1\nlibrary app\n\nfn fee(amount: Int): Int = amount / 100\n');
+  writeFileSync(join(app, 'User.jsc'), 'jsc 1\npackage app\n\nimport { fee } from "./fees.jsc"\n\ncontract User {\n  state { paid: Int }\n\n'
+    + '  init() {\n    return { paid: 0 }\n  }\n\n  action pay(amount: Int) {\n    return { paid: paid + fee(amount) }\n  }\n}\n');
+  const lib = join(folder, 'node_modules', '@example', 'compliance', 'joust-lib', 'com', 'example', 'compliance');
+  mkdirSync(lib, { recursive: true });
+  writeFileSync(join(folder, 'node_modules', '@example', 'compliance', 'package.json'), JSON.stringify({ name: '@example/compliance', version: '1.0.0' }));
+  copyFileSync(join(repo, 'examples', 'compliance', 'src', 'main', 'java', 'com', 'example', 'compliance', 'AllowList.java'), join(lib, 'AllowList.java'));
+  const guarded = readFileSync(join(repo, 'examples', 'dsl', 'src', 'main', 'jsc', 'org', 'julclang', 'state', 'examples', 'dsl', 'Guarded.jsc'), 'utf8');
+  writeFileSync(join(app, 'Guarded.jsc'), guarded.replace('package org.julclang.state.examples.dsl', 'package app'));
   return { folder };
 }
 
