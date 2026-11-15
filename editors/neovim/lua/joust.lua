@@ -76,12 +76,13 @@ function M.setup(opts)
       local root = M.root(bufnr)
       local r = real(root)
       if r and inside(server, r) then
-        notify(('not starting %s: it is inside the project %s (a project cannot choose the server)'):format(server, r))
+        -- A warning, not an error: raised inside the FileType autocommand, an error would end the buffer's other handlers.
+        notify(('not starting %s: it is inside the project %s (a project cannot choose the server)'):format(server, r), vim.log.levels.WARN)
         return
       end
       local cwd = real(vim.fn.getcwd())
       if cwd and inside(server, cwd) then
-        notify(('not starting %s: it is inside the working directory %s'):format(server, cwd))
+        notify(('not starting %s: it is inside the working directory %s'):format(server, cwd), vim.log.levels.WARN)
         return
       end
       on_dir(root)

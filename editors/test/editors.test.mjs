@@ -229,7 +229,8 @@ test('E5: hx --health jsc reports the shipped server and the grammar\'s highligh
   const b = spawnSync(HX, ['--grammar', 'build'], { env, encoding: 'utf8', timeout: 300_000 });
   assert.equal(b.status, 0, `hx --grammar build: ${b.stderr}${b.stdout}`);
   const h = spawnSync(HX, ['--health', 'jsc'], { env, encoding: 'utf8', timeout: 60_000 });
-  const text = `${h.stdout}${h.stderr}`;
+  // Without its colours (ANSI escapes).
+  const text = `${h.stdout}${h.stderr}`.replace(/\u001b\[[0-9;]*m/g, '');
   assert.equal(h.status, 0, text);
   assert.match(text, new RegExp(`✓ joust: ${LSP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), text);
   assert.match(text, /Tree-sitter parser: ✓/, text);
