@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/registry's Registry in .jsc 2 (ADR-0018 M3b, J11; ADR-0016): a registry of keyed objects. Each key is its own

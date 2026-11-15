@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/market in .jsc 2 (ADR-0018 M3a, J11; ADR-0007, ADR-0012 D3): an NFT marketplace. Each listing is an owned

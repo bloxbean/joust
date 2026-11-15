@@ -2,7 +2,7 @@
 Script purposes, a staked contract, migration (M3c)
 ================================================================================
 
-jsc 2
+jsc 1
 package t
 contract C(stakeSelf) {
   params { gov: Credential, previous: Hash }

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/upgrade's CounterV1 in .jsc 2 (ADR-0018 M3c, J11; ADR-0011 D4): version 1 of an upgradeable counter. Its admin

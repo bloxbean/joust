@@ -1,6 +1,6 @@
-# `.jsc` 2 IR export (format 2)
+# `.jsc` IR export (format 2)
 
-The checker's typed IR of a `.jsc` 2 contract, as JSON (ADR-0018 D15, M1b). The JavaScript reference interpreter
+The checker's typed IR of a `.jsc` contract, as JSON (ADR-0018 D15, M1b). The JavaScript reference interpreter
 (`js/jsc-interpreter`) evaluates it. Its meaning is defined in [`jsc-2-semantics.md`](jsc-2-semantics.md).
 
 ## Where it is written
@@ -152,6 +152,9 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   "warnings": [{ "line", "col", "code", "message" }]
 }
 ```
+
+`"language": "jsc 2"` is IR format 2's fixed tag, not the source's header: the language's header is `jsc 1` (optional;
+ADR-0018 D2, r26), and the tag stays as long as the format does.
 
 - **Record:** `{ "name", "fields": [{ "name", "type": Type }], "at" }`, with the fields in declaration order. An enum's
   variants are records in declaration order, so a variant's tag is its index.

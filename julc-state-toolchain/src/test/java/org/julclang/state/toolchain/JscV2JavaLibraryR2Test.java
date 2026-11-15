@@ -57,7 +57,7 @@ class JscV2JavaLibraryR2Test {
     void aBinding_neverTakesAJavaLibrarysClassName() {
         var fees = JavaLibraryCertifier.certify(Map.of("lib/Fees.java", FEES));
         assertEquals(List.of(), fees.get("lib.Fees").problems());
-        String c = "jsc 2\npackage app\nimport { fee } from \"java:lib.Fees\"\ntype Item = { fee: Int }\ncontract C {\n  state { n: Int }\n"
+        String c = "jsc 1\npackage app\nimport { fee } from \"java:lib.Fees\"\ntype Item = { fee: Int }\ncontract C {\n  state { n: Int }\n"
                 + "  init(%s) { return { n: fee() } }\n%s\n}\n";
         var e = refusedWith(c.formatted("Fees: Item", ""), fees, "JSC0709");
         assertTrue(e.getMessage().contains("'Fees' is the class of a library"), e.getMessage());
@@ -80,7 +80,7 @@ class JscV2JavaLibraryR2Test {
         sources.put("lib/D.java", head + "public class D {\n    public record R(BigInteger m) {}\n"
                 + "    public static R other(BigInteger m) { return new R(m); }\n}\n");
         var libs = JavaLibraryCertifier.certify(sources);
-        String c = "jsc 2\npackage app\nimport { make } from \"java:lib.A\"\nimport { read } from \"java:lib.B\"\n%s"
+        String c = "jsc 1\npackage app\nimport { make } from \"java:lib.A\"\nimport { read } from \"java:lib.B\"\n%s"
                 + "contract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  view v(): Int = read(make(1))\n}\n";
         var ok = lower(c.formatted(""), libs);
         assertTrue(ok.java().contains("B.read(A.make(BigInteger.valueOf(1L)))"), ok.java());
@@ -107,7 +107,7 @@ class JscV2JavaLibraryR2Test {
         assertTrue(byName.get("unused").refusal().contains("a raw Optional"), byName.get("unused").refusal());
         assertTrue(byName.get("rawList").refusal().contains("a raw JulcList"), byName.get("rawList").refusal());
         var libs = Map.of("com.acme.L", l);
-        String c = "jsc 2\npackage app\nimport { %s } from \"java:com.acme.L\"\ncontract C {\n  state { n: Int }\n"
+        String c = "jsc 1\npackage app\nimport { %s } from \"java:com.acme.L\"\ncontract C {\n  state { n: Int }\n"
                 + "  init() { return { n: f() } }\n}\n";
         lower(c.formatted("f"), libs);
         refusedWith(c.formatted("f, unused"), libs, "JSC0722");
@@ -199,7 +199,7 @@ class JscV2JavaLibraryR2Test {
     void jscMain_writesTheClosure_andChecksNestedClasses(@TempDir Path dir) throws Exception {
         Path src = Files.createDirectories(dir.resolve("jsc/app"));
         Files.writeString(src.resolve("C.jsc"), """
-                jsc 2
+                jsc 1
                 package app
                 import { make, read } from "java:acme.Lib"
                 contract C {
@@ -256,7 +256,7 @@ class JscV2JavaLibraryR2Test {
                 + "public class L {\n    private static final byte[] TAG = new byte[]{1, 2};\n    public static byte[] tag() { return TAG; }\n}\n"));
         assertTrue(shared.get("lib.L").problems().stream().anyMatch(p -> p.contains("a static array is mutable on the JVM")),
                 shared.get("lib.L").problems().toString());
-        String c = "jsc 2\npackage app\nimport { tag } from \"java:lib.L\"\ncontract C {\n  state { b: Bytes }\n  init() { return { b: tag() } }\n"
+        String c = "jsc 1\npackage app\nimport { tag } from \"java:lib.L\"\ncontract C {\n  state { b: Bytes }\n  init() { return { b: tag() } }\n"
                 + "  view v(): Bytes = tag()\n}\n";
         refusedWith(c, shared, "JSC0721");
         // The same constant built per call (BigInteger's byte form here: certified, a fresh value each time).
@@ -283,7 +283,7 @@ class JscV2JavaLibraryR2Test {
         String body = "contract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  view v(): Int = make(f()).n\n}\n";
         for (String imports : List.of("import { make } from \"java:a.A\"\nimport { f } from \"java:c.B\"\n",
                 "import { f } from \"java:c.B\"\nimport { make } from \"java:a.A\"\n")) {
-            var e = refusedWith("jsc 2\npackage app\n" + imports + body, libs, "JSC0709");
+            var e = refusedWith("jsc 1\npackage app\n" + imports + body, libs, "JSC0709");
             assertTrue(e.getMessage().contains("imported as B"), e.getMessage());
         }
     }
@@ -292,7 +292,7 @@ class JscV2JavaLibraryR2Test {
     @Test
     void jscMain_takesAnOutputRootWrittenWithDot(@TempDir Path dir) throws Exception {
         Path src = Files.createDirectories(dir.resolve("src/app"));
-        Files.writeString(src.resolve("C.jsc"), "jsc 2\npackage app\nimport { f } from \"java:lib.L\"\ncontract C {\n  state { n: Int }\n"
+        Files.writeString(src.resolve("C.jsc"), "jsc 1\npackage app\nimport { f } from \"java:lib.L\"\ncontract C {\n  state { n: Int }\n"
                 + "  init() { return { n: f() } }\n}\n");
         Path libs = Files.createDirectories(dir.resolve("libs/lib"));
         Files.writeString(libs.resolve("L.java"), "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
@@ -329,7 +329,7 @@ class JscV2JavaLibraryR2Test {
             var libs = JavaLibraryCertifier.certify(sources);
             assertEquals(List.of(), libs.get("lib.L").problems(), owner);
             String declared = owner.equals("Box") ? "type Box = { x: Int }\n" : "";
-            var e = refusedWith("jsc 2\npackage app\nimport { f } from \"java:lib.L\"\n" + declared + body, libs, "JSC0709");
+            var e = refusedWith("jsc 1\npackage app\nimport { f } from \"java:lib.L\"\n" + declared + body, libs, "JSC0709");
             assertTrue(e.getMessage().contains("imported as " + owner), owner + ": " + e.getMessage());
         }
         // Control: a top-level record is its own class.
@@ -337,7 +337,7 @@ class JscV2JavaLibraryR2Test {
         sources.put("lib/L.java", "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
                 + "@OnchainLibrary\npublic class L {\n    public static b.Duo f(BigInteger n) { return new b.Duo(n); }\n}\n");
         sources.put("b/Duo.java", "package b;\npublic record Duo(java.math.BigInteger n) {}\n");
-        var ok = lower("jsc 2\npackage app\nimport { f } from \"java:lib.L\"\n" + body, JavaLibraryCertifier.certify(sources));
+        var ok = lower("jsc 1\npackage app\nimport { f } from \"java:lib.L\"\n" + body, JavaLibraryCertifier.certify(sources));
         assertTrue(ok.java().contains("import b.Duo;"), ok.java());
     }
 

@@ -17,7 +17,7 @@ class JscV2M3bCheckerTest {
 
     /** A keyed contract: one keyed type with an initializer and a retiring exit; {@code %K} is the keyed clause. */
     static final String HEAD = """
-            jsc 2
+            jsc 1
             package t
             contract R(maxDatumBytes = 384) {
               state { admin: Key, isOpen: Bool }
@@ -134,7 +134,7 @@ class JscV2M3bCheckerTest {
         // retire only on a keyed type's owned destroy.
         bad(src(RETIRE + "  action close() only admin @@retire { return state }\n"), "JSC1245", "retire goes on an owned destroy of a keyed type");
         bad("""
-                jsc 2
+                jsc 1
                 package t
                 contract P {
                   state { a: Int }
@@ -183,7 +183,7 @@ class JscV2M3bCheckerTest {
         // result is a time value when an argument is, so a result made by a fn from a time value makes every field of the
         // type a time field, the key with it.
         bad("""
-                jsc 2
+                jsc 1
                 package t
                 contract S {
                   state { admin: Key }
@@ -198,7 +198,7 @@ class JscV2M3bCheckerTest {
                 """, "JSC1251", "set from a time value");
         // Field by field, only the time field is one: the key stays ordinary.
         lower("""
-                jsc 2
+                jsc 1
                 package t
                 contract S {
                   state { admin: Key }

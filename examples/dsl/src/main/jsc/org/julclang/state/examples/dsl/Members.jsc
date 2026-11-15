@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M3a1 coverage: what the bank port leaves out of owned objects. A member's object holds a List, a Map, an

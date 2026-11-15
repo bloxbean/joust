@@ -23,7 +23,7 @@ class JscV2M3cCheckerTest {
 
     /** A params-governed contract; {@code %O} its options, {@code %M} its members. */
     static final String PURPOSES = """
-            jsc 2
+            jsc 1
             package t
             contract S(%O) {
               params { council: List<Key>, quorum: Int, pool: Bytes, payee: Key, cap: Int, gov: Credential }
@@ -43,7 +43,7 @@ class JscV2M3cCheckerTest {
 
     /** The previous version: a successor field its admin sets once, and a migrating destroy. */
     static final String OLD = """
-            jsc 2
+            jsc 1
             package t
             contract Old {
               state { admin: Key, successor: Bytes, count: Int, started: Int }
@@ -58,7 +58,7 @@ class JscV2M3cCheckerTest {
 
     /** A previous version that keeps BigMap state. */
     static final String BIG = """
-            jsc 2
+            jsc 1
             package t
             contract Big {
               state { admin: Key, successor: Bytes, m: BigMap<Key, Int> }
@@ -68,7 +68,7 @@ class JscV2M3cCheckerTest {
 
     /** The next version: {@code %P} its params, {@code %M} its members. */
     static final String NEW = """
-            jsc 2
+            jsc 1
             package t
             import contract { Old } from "./Old.jsc"
             import contract { Big } from "./Big.jsc"
@@ -179,7 +179,7 @@ class JscV2M3cCheckerTest {
                   }
                   action migrates(migrate: Int) payable { return { deposits: migrate } }
                 """));
-        lower("jsc 2\npackage t\ncontract S {\n  state { withdraw: Int, vote: Bool }\n  init() { return { withdraw: 0, vote: false } }\n}\n");
+        lower("jsc 1\npackage t\ncontract S {\n  state { withdraw: Int, vote: Bool }\n  init() { return { withdraw: 0, vote: false } }\n}\n");
     }
 
     @Test
@@ -214,7 +214,7 @@ class JscV2M3cCheckerTest {
         cases.add(bad("JSC1316", "at most one withdraw handler",
                 pur("  withdraw w(amount: Int) " + Q + " { }\n  @@withdraw x(amount: Int) " + Q + " { }\n")));
         cases.add(bad("JSC1317", "is governed by the params",
-                "jsc 2\npackage t\ncontract S {\n  state { n: Int }\n  init() { return { n: 0 } }\n  @@propose p(x: ProposalProcedure) = true\n}\n"));
+                "jsc 1\npackage t\ncontract S {\n  state { n: Int }\n  init() { return { n: 0 } }\n  @@propose p(x: ProposalProcedure) = true\n}\n"));
         cases.add(bad("JSC1318", "sees no instance", pur("  certify c(cert: TxCert) " + Q + " = @@deposits > 0\n")));
         cases.add(bad("JSC1318", "sees no instance", pur("  vote v(voter: Voter, a: GovernanceActionId, x: Vote) " + Q + " { const s = @@state\n true }\n")));
         cases.add(bad("JSC1319", "only effect is send", pur("  withdraw w(amount: Int) " + Q + " { @@pay(params.payee, amount) }\n")));
@@ -226,12 +226,12 @@ class JscV2M3cCheckerTest {
         // ---- the ledger types (D5): read-only, never stored, passed, compared or built
         cases.add(bad("JSC1320", "is PlutusData in the ledger", pur(
                 "  propose p(x: ProposalProcedure) = match x.governanceAction { ParameterChange { @@parameters } => true, _ => true }\n")));
-        cases.add(bad("JSC1321", "a ledger type of the script purposes", "jsc 2\npackage t\ncontract S {\n  state { c: @@TxCert }\n  init() { return { c: 0 } }\n}\n"));
+        cases.add(bad("JSC1321", "a ledger type of the script purposes", "jsc 1\npackage t\ncontract S {\n  state { c: @@TxCert }\n  init() { return { c: 0 } }\n}\n"));
         cases.add(bad("JSC1321", "a ledger type of the script purposes", pur("  action a(v: @@Vote) payable { return state }\n")));
         cases.add(bad("JSC1321", "a ledger type of the script purposes", pur("  view f(): @@Voter = 1\n")));
         cases.add(bad("JSC1321", "LedgerMap<Credential, Int>", pur("  fn f(m: @@LedgerMap<Credential>): Int = 0\n")));
         cases.add(bad("JSC1321", "a ledger type of the script purposes",
-                "jsc 2\npackage t\ntype R = { v: @@Vote }\ncontract S {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n"));
+                "jsc 1\npackage t\ntype R = { v: @@Vote }\ncontract S {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n"));
         cases.add(bad("JSC1322", "is not comparable", pur("  vote v(voter: Voter, a: GovernanceActionId, x: Vote) " + Q + " = @@x == x\n")));
         cases.add(bad("JSC1323", "is a sealed ledger type", pur("  certify c(cert: TxCert) " + Q + " = @@cert.credential == cert.credential\n")));
         cases.add(bad("JSC1323", "has no methods", pur("  vote v(voter: Voter, a: GovernanceActionId, x: Vote) " + Q + " = @@a.size() > 0\n")));
@@ -255,7 +255,7 @@ class JscV2M3cCheckerTest {
         cases.add(bad("JSC1334", "owned objects", next("  owned Item { owner: Key }\n  owned init Item.make() { return { owner: caller } }\n"
                 + "  owned destroy Item.drop() only owner { pay(owner, balance) }\n"
                 + "  @@init migrate from params.previous(old: Old.State) { return { admin: old.admin, count: old.count } }\n")));
-        cases.add(bad("JSC1334", "native assets", "jsc 2\npackage t\ncontract O {\n  state { admin: Key, successor: Bytes }\n"
+        cases.add(bad("JSC1334", "native assets", "jsc 1\npackage t\ncontract O {\n  state { admin: Key, successor: Bytes }\n"
                 + "  init() { return { admin: caller, successor: # } }\n"
                 + "  action give(to: Key) only admin { send(wallet(to), Value.lovelace(1))\n return state }\n"
                 + "  destroy up() only admin @@migrates to successor { }\n}\n"));

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package t
 
 import contract { Old } from "./Old.jsc"

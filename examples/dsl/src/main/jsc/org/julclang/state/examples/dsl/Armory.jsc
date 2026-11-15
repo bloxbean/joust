@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // examples/guild's Armory in .jsc 2 (ADR-0018 M3a, J11; ADR-0012 D2): player vaults, each an owned object whose

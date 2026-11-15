@@ -194,7 +194,7 @@ final class JavaEmitter {
         for (String im : imports) out.append("import ").append(im).append(";\n");
         // The file name was checked to [A-Za-z0-9._-] at the boundary (JscV2.checkFileName), so it is safe in comments.
         out.append("\n/**\n * GENERATED from ").append(p.fileName())
-                .append(" by julc-state-dsl (ADR-0018, .jsc 2). Do not edit: change the .jsc file.\n");
+                .append(" by julc-state-dsl (ADR-0018, .jsc). Do not edit: change the .jsc file.\n");
         // ADR-0018 D9 (review r2: F1, F2, S1): the java: libraries the contract is built with, for its client, which checks
         // their classes' bytes when it loads and refuses to run without its record of them (JoustProcessor reads this line).
         if (!p.javaLibraries().isEmpty()) {

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M3c's coverage contract for the propose purpose (ADR-0010 D1): a guardrail over every governance action, which

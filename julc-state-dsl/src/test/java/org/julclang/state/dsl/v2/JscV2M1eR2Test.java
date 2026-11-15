@@ -35,7 +35,7 @@ class JscV2M1eR2Test {
     }
 
     static String contract(String members) {
-        return "jsc 2\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n" + members + "\n}\n";
+        return "jsc 1\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n" + members + "\n}\n";
     }
 
     /** {@code fn f(x)}: branches returning 0 … n-1 for x == 0 … n-1, else {@code f(x - 1)} (Codex C1's Recursive9). */
@@ -91,7 +91,7 @@ class JscV2M1eR2Test {
             String inner = k == named - 1 ? "Key" : "T" + (k + 1);
             t.append("type T").append(k).append(" = { f: ").append("List<".repeat(wrappers)).append(inner).append(">".repeat(wrappers)).append(" }\n");
         }
-        return "jsc 2\npackage t\n" + t + "contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n" + root + "\n}\n";
+        return "jsc 1\npackage t\n" + t + "contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n" + root + "\n}\n";
     }
 
     @Test
@@ -126,7 +126,7 @@ class JscV2M1eR2Test {
     void c3_explainMatchesWholeMessages_andTheLongestWins() {
         var pays = new StringBuilder();
         for (int k = 1; k <= 11; k++) pays.append("    pay(caller, x - ").append(k).append(")\n");
-        var l = lower("jsc 2\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n  destroy close(x: Int) open {\n"
+        var l = lower("jsc 1\npackage t\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n  destroy close(x: Int) open {\n"
                 + pays + "    pay(caller, balance)\n  }\n}\n");
         assertEquals(List.of("D.jsc:7:5 (a payout in close is negative)"), l.explain("#pay:spend0.1"));
         assertEquals(List.of("D.jsc:16:5 (a payout in close is negative)"), l.explain("#pay:spend0.10"));
@@ -165,7 +165,7 @@ class JscV2M1eR2Test {
 
     @Test
     void c5_f3_everyAdapterRowRecordsItsMessagesAtTheCallSite() {
-        var l = lower("jsc 2\npackage t\nimport { pow, div } from \"std/math\"\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
+        var l = lower("jsc 1\npackage t\nimport { pow, div } from \"std/math\"\ncontract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
                 + "  action a(e: Int) { return { ...state, n: pow(2, e) + div(7, e) } }\n}\n");
         String line7 = "  action a(e: Int) { return { ...state, n: pow(2, e) + div(7, e) } }";
         assertEquals(List.of("D.jsc:7:" + (line7.indexOf("pow(") + 1) + " (in a)"), l.explain("pow: the exponent must be in [0, 1024]"));

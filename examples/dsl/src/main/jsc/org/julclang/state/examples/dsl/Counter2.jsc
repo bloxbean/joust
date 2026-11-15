@@ -1,7 +1,7 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
-// The template counter in .jsc 2 (ADR-0018 §4).
+// The template counter in .jsc (ADR-0018 §4).
 contract Counter2(maxDatumBytes = 128) {
   state { count: Int, owner: Key }
 

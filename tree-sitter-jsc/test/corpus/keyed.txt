@@ -2,7 +2,7 @@
 Keyed types, their options, a retiring exit (M3b)
 ================================================================================
 
-jsc 2
+jsc 1
 package t
 contract C {
   state { a: Int }

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M3b coverage: what the registry port leaves out of keyed objects (ADR-0016). A plain owned type before the

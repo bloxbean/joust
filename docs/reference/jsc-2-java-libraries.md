@@ -1,6 +1,6 @@
-# `.jsc` 2: Java (JuLC) libraries (`java:` imports)
+# `.jsc`: Java (JuLC) libraries (`java:` imports)
 
-ADR-0018 D9, M4b. A `.jsc` 2 file may import the public static methods and records of a Java (JuLC) on-chain library:
+ADR-0018 D9, M4b. A `.jsc` file may import the public static methods and records of a Java (JuLC) on-chain library:
 
 ```jsc
 import { Entry, isAllowed, limitOf, entry } from "java:com.example.compliance.AllowList"

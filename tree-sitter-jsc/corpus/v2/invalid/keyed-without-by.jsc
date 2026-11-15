@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package t
 
 // M3b: a keyed type names its key with 'keyed by'.

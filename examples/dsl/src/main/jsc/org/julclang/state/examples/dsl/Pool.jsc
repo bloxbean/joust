@@ -1,7 +1,7 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
-// examples/pool in .jsc 2 (ADR-0018 M1c, J11; ADR-0004): a community pool. Anyone donates, and anyone buys a ticket
+// examples/pool in .jsc (ADR-0018 M1c, J11; ADR-0004): a community pool. Anyone donates, and anyone buys a ticket
 // whose price rises with every ticket sold. Both are batched: each runs as an intent the batcher applies, so buyers
 // never contend for the pool UTxO. buy runs only as an intent (batched only), so nobody can invalidate pending batches
 // with a direct buy; the buyer bounds the price with maxPrice and gets the change back.

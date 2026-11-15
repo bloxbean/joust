@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2IntegrationTest {
 
     static final String LIB = """
-            jsc 2
+            jsc 1
             library app
 
             type Line = { to: Key, bps: Int }
@@ -28,11 +28,11 @@ class JscV2IntegrationTest {
 
     /** A contract Feed whose {@code members} are given, importing app/lib.jsc. */
     static String feed(String members) {
-        return "jsc 2\npackage app\n\nimport { Line, Tier, fee } from \"./lib.jsc\"\n\ncontract Feed {\n" + members + "\n}\n";
+        return "jsc 1\npackage app\n\nimport { Line, Tier, fee } from \"./lib.jsc\"\n\ncontract Feed {\n" + members + "\n}\n";
     }
 
     static final String SHOP = """
-            jsc 2
+            jsc 1
             package app
 
             import contract { Feed } from "./Feed.jsc"
@@ -95,9 +95,9 @@ class JscV2IntegrationTest {
     /** #98 review C2: an imported contract and a Java library of the same simple name: JSC0744, not uncompilable Java. */
     @Test
     void anImportedContractAndAJavaLibraryOfOneSimpleName_areRefused() {
-        String l = "jsc 2\npackage data\n\ncontract L {\n  state { owner: Key, n: Int }\n  init() {\n    return { owner: caller, n: 0 }\n  }\n}\n";
+        String l = "jsc 1\npackage data\n\ncontract L {\n  state { owner: Key, n: Int }\n  init() {\n    return { owner: caller, n: 0 }\n  }\n}\n";
         String shop = """
-                jsc 2
+                jsc 1
                 package app
 
                 import contract { L } from "./L.jsc"
@@ -129,7 +129,7 @@ class JscV2IntegrationTest {
     @Test
     void aJscLibraryOverJavaRecords_lowersInTheContractThatImportsIt() {
         String wrapper = """
-                jsc 2
+                jsc 1
                 library app
 
                 import { mk, P } from "java:com.acme.L"
@@ -137,7 +137,7 @@ class JscV2IntegrationTest {
                 fn same(): Bool = mk(#01, 1) == mk(#01, 1)
                 """;
         String c = """
-                jsc 2
+                jsc 1
                 package app
 
                 import { same } from "./wrapper.jsc"

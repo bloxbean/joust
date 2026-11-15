@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M3c's coverage contract for migration (ADR-0011 D4), version 1, beside the upgrade port: a state whose checked

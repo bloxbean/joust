@@ -83,7 +83,7 @@ public final class Toolchain {
 
     /**
      * The Java a {@code .jsc} file lowered to (ADR-0018 D12: written to {@code build/joust/generated/} by the npm CLI),
-     * with its source map, ABI manifest and checked IR ({@code .jsc} 2, ADR-0018 D12, D15; null for v1). {@code javaFile} is
+     * with its source map, ABI manifest and checked IR (ADR-0018 D12, D15). {@code javaFile} is
      * {@code a/b/Name.java}.
      */
     public record Generated(String jscFile, String javaFile, String java, String sourceMapJson, String abiJson, String irJson,
@@ -381,8 +381,8 @@ public final class Toolchain {
         files.forEach((name, text) -> {
             if (name.endsWith(".jsc")) {
                 try {
-                    // The bare file name, as Gradle's generateJsc passes it: the lowering embeds it. A .jsc 2 file's name
-                    // must be [A-Za-z0-9][A-Za-z0-9._-]* (else a 1:1 error, security S3); a v1 file's name is escaped.
+                    // The bare file name, as Gradle's generateJsc passes it: the lowering embeds it. Its name
+                    // must be [A-Za-z0-9][A-Za-z0-9._-]* (else a 1:1 error, security S3).
                     String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
                     var lowered = JscMain.lowerWithWarnings(text, base, name.replace('\\', '/'), modules, javaLibraries);
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());

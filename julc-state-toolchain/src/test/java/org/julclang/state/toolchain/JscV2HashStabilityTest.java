@@ -18,7 +18,7 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * ADR-0018 D12 (r12): what may reach the script. Every {@code .jsc} 2 example is built by the toolchain (javac, the
+ * ADR-0018 D12 (r12): what may reach the script. Every {@code .jsc} example is built by the toolchain (javac, the
  * processor, JuLC) as committed and under edits that change no behaviour, and its script hash must not move: blank
  * lines at several places, re-indentation, CRLF line ends, comments added and removed, the file renamed, and every
  * local, lambda and loop variable, {@code fn}, parameter and method renamed (the ABI's names included: no name reaches
@@ -34,7 +34,7 @@ class JscV2HashStabilityTest {
             return s.filter(p -> p.toString().endsWith(".jsc")).filter(p -> {
                 try {
                     String t = Files.readString(p);
-                    return t.startsWith("jsc 2") && !org.julclang.state.dsl.v2.JscV2.isLibrary(t);
+                    return !org.julclang.state.dsl.v2.JscV2.isLibrary(t);   // every .jsc file, with a header or without (#111 S3)
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -72,7 +72,7 @@ class JscV2HashStabilityTest {
         try (Stream<Path> s = Files.list(DSL)) {
             for (Path p : s.filter(p -> p.toString().endsWith(".jsc")).sorted().toList()) {
                 String t = Files.readString(p);
-                if (t.startsWith("jsc 2") && org.julclang.state.dsl.v2.JscV2.isLibrary(t)) out.put(PKG + p.getFileName(), t);
+                if (org.julclang.state.dsl.v2.JscV2.isLibrary(t)) out.put(PKG + p.getFileName(), t);
             }
         }
         return out;
@@ -330,6 +330,8 @@ class JscV2HashStabilityTest {
         e.put("a blank line before the last '}'", nl.substring(0, nl.lastIndexOf('}')) + "\n" + nl.substring(nl.lastIndexOf('}')));
         e.put("re-indented", nl.replaceAll("(?m)^( +)", "$1$1"));
         e.put("CRLF line ends", nl.replace("\n", "\r\n"));
+        // ADR-0018 r26 (#111 S3): the header is optional, and neither dropping it nor adding one moves the hash.
+        e.put("the header dropped, or added", nl.startsWith("jsc 1\n") ? nl.substring("jsc 1\n".length()) : "jsc 1\n" + nl);
         e.put("comments added", nl.replaceFirst("(?m)^(package [^\\n]*\\n)", "$1/* a comment\n   over lines */\n")
                 .replaceAll("(?m)\\{[ \\t]*$", "{ // opened"));
         e.put("comments removed", stripComments(nl));

@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 // ADR-0018 M3a3 coverage (#107 review C2, K22): moves that change the very field the destination's admission reads.

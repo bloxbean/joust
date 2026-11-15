@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
 import contract { TallyV1 } from "./TallyV1.jsc"
