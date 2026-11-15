@@ -344,6 +344,12 @@ thread that loaded it (F8). So:
   configurations. The native `joust` of ADR-0017 does not serve as a language server: it would dispatch `lsp` to the
   project's package (ADR-0017 D9).
 - Every executable is spawned by absolute path, never a bare name.
+- *(r10, S8 on #121)* **Which edits a project compiler is trusted for.** A trusted project's own compiler produces its
+  build, so its answers are trusted for the edits the user asks for: rename (`renamePreserves` re-analyses with that
+  compiler), quick fixes, import edits and removing invisible characters. Each one is chosen and confirmed by the user,
+  and applied through the extension's verified `handleApplyEdit`. **Formatting is the exception:** it runs unasked
+  (format on save, which a workspace's settings can turn on), so a project compiler's formatting is applied only when the
+  bundled compiler formats its text to the bundled compiler's formatting of the source (§15, §16; #120 S4).
 
 ### D4. Checking model: whole files on every edit, builds in a worker
 
@@ -356,7 +362,8 @@ thread that loaded it (F8). So:
   engine's id and that SHA-256, and kept in the server's private storage, shared by every workspace: a description is a
   function of the sources and the engine, so sharing it is safe. "Re-verified" means the entry's own digest is checked,
   which detects corruption, not a writer of that private storage. A `joust.lock` mismatch is **not reported in the editor**
-  in r8: `joust build` reports it (ADR-0018 J12), and M5e adds it to the on-save build. Attribution cost in the engine:
+  in r8: `joust build` reports it (ADR-0018 J12), and M5e adds it to the on-save build. *(r10, MF4 on #121)* Built in
+  M5e: §16 E1–E3. Attribution cost in the engine:
   §14 note 3.
 - **On save (trusted, project-matched npm projects):** the server runs `joust.build` over the snapshot, in memory, on a
   build worker, and adds the later stages' diagnostics: processor and JuLC errors remapped to `.jsc` positions (with
@@ -583,8 +590,8 @@ revision it also could not be safe: a moved line, a file name and some parameter
   ABI-recorded rename changes those, D7), never the script. Reordering declarations changes the checked program and
   counts as a code change; the formatter never reorders.
 - **Design:** one style with no options, versioned (§15, #120 F4: version 1 sets layout and the spacing around
-  punctuation, and keeps other spacing within a line as written), over a trivia-preserving syntax tree (the lexer keeps
-  comments and blank lines as trivia attached to tokens; the existing `Syntax` tree is built from the same tokens).
+  punctuation, and keeps other spacing within a line as written), *(as built, MF3 on #121)* over the lexer's token and comment spans,
+  not a syntax tree: the parser is unchanged, the output is re-lexed and compared before it is returned (§15).
   `joust fmt` (both CLIs) and the server's `textDocument/formatting` call the same core entry.
 - **Invariants (L7, L12):** idempotent; every comment survives, in order, attached to the same token; the checked IR is
   unchanged except for positions; the script hash, the ABI manifest and the description are unchanged, and the
@@ -1344,6 +1351,12 @@ a comment kept); an empty file and a file of comments only.
   - *Round r3 (#120 round 2):*
     - *F9 = C5:* `joust fmt` decodes with `ignoreBOM: true`, so a leading BOM stays. Both CLIs' tests pin the same
       bytes for the same file.
+    - *(MF5 on #121, #120 F11)* The bundled compiler's check runs on the bundled engine's worker (one of D4's two
+      analysis workers, with its watchdog and limits). A project-matched file is therefore formatted only when the
+      bundled compiler can read it. The check adds two bundled format calls, of the source and of the answer, each the
+      call F6 measures (`measure-l10`: 12–15 ms p95 on the 1,889-line file in #121's runs). The check path as a whole is
+      not measured separately; that is tracked in #124. A refused answer is logged and shown to the user once per
+      document (`window/showMessage`).
     - *S4, C6:* another compiler's answer (a project's) is applied only when the bundled compiler formats its text to
       the bundled compiler's formatting of the source. Equal normal forms are the same program; the whitespace-only
       check stays as the first gate.
@@ -1488,6 +1501,10 @@ decisions (D11); M5e builds what they publish from.
 - **After #120's round r2** (merged at `2391e292`): the editor's formatting is unchanged by M5e. The C6 fixture's JSC0731
   is the lock gate's (E1).
 
+**Trust of a project compiler's edits** *(S8 on #121)*: only formatting is re-checked by the bundled compiler, because
+it runs unasked on save. Rename, quick fixes, import edits and removing invisible characters trust the project's own
+compiler, which is the build's, for edits the user chooses and confirms (D3b).
+
 **Not in M5e:** publishing to the Marketplace, Open VSX, npm (`tree-sitter-jsc`) or crates.io; other editors' plugins
 (Emacs, Zed, Sublime): the generic LSP instructions cover them. Wiring the attachment into `release.yml`'s tag run is a
 later decision, like D11's automation.
@@ -1616,6 +1633,9 @@ later decision, like D11's automation.
   L6 per file, L12 across files), `java:` libraries described once and cached by their sources' SHA-256, their imports no
   longer advisory in npm projects, and read-only `joust-lib:` documents; #114's fixes. The M5c row records how its r7
   commitment was met.
+- **r10, M5 final pass** (2026-11-15; #121): D8's design as built (MF3); D4's note that M5e built the lock gate (MF4); D3b
+  on which edits trust a project compiler, and why formatting is the exception (S8); §15 on the bundled check's worker
+  and cost, and its refusal shown to the user (MF5).
 - **r10, round r3** (2026-11-15; #121 round 2): accepting never writes through a link (S5, JscMain and joust build
   alike); the Status and Implementation lines name the PRs and ADR-0018's acceptance as the second condition (F8); the
   home directory is never a project, and Windows needs an explicit `node` (F9); the attach job checks the `release`
