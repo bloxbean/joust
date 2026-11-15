@@ -218,5 +218,25 @@
  {
   "file": "purpose-keyed-bigmap-state.json",
   "message": "(JSC1211)"
+ },
+ {
+  "file": "purpose-mapobj-batched.json",
+  "message": "(JSC1217)"
+ },
+ {
+  "file": "purpose-mapobj-receives.json",
+  "message": "(JSC1217)"
+ },
+ {
+  "file": "purpose-mapobj-moves.json",
+  "message": "(JSC1217)"
+ },
+ {
+  "file": "purpose-mapobj-handler.json",
+  "message": "(JSC1217)"
+ },
+ {
+  "file": "purpose-mapobj-invariant.json",
+  "message": "(JSC1217)"
  }
 ]

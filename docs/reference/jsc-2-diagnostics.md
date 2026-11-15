@@ -483,6 +483,7 @@ rule is the processor's (ContractReader), refused at the `.jsc` position.
 | JSC1213 | error | the owned type … holds a BigMap, so it cannot have invariants: on chain only the opened reads are visible, so the JVM and the chain would disagree (ADR-0009 r2, ADR-0012 D2) | Checker (M3a) |
 | JSC1214 | error | … moves a … to another instance, which must consent: declare an action admits … (ADR-0012 D3) / … admits …, but no owned action moves a … (an into parameter): no object could ever arrive through it (ADR-0012 D3) | Checker (M3a) |
 | JSC1216 | error | … is its type's escape hatch but never reads balance: an owned destroy pays out everything the object holds (the validator refuses any other allocation), so no object could ever be closed | Checker (M3a1, #101 review S3) |
+| JSC1217 | error | … is not supported beside an owned type that keeps a BigMap (…) yet: beside one, M3 covers plain owned types, shared reads and native assets (Armory, Safes), and the map claims composed with the other parts are not covered (ADR-0012 D2, ADR-0018 §2.12). The parts: a move or an admits action, a batched action, taking deposits (receives), a read of another contract, a certify, vote or propose handler, an invariant by type (a withdraw handler and stakeSelf are JSC1305) | Checker, both IR readers (M3 final pass, design MD2) |
 
 JSC1215 (the parts of M3a not built yet) is retired in M3a3.
 

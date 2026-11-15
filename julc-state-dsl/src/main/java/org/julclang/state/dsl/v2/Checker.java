@@ -1899,6 +1899,13 @@ final class Checker {
         }
     }
 
+    /** JSC1217's message (M3 final pass, design MD2): {@code part} beside the owned type {@code mapped}, which keeps a BigMap. */
+    static String bigMapObjects(String mapped, String part) {
+        return part + " is not supported beside an owned type that keeps a BigMap (" + mapped + ") yet: beside one, M3 covers plain"
+                + " owned types, shared reads and native assets (Armory, Safes), and the map claims composed with the other parts are"
+                + " not covered (ADR-0012 D2, ADR-0018 §2.12)";
+    }
+
     /**
      * M3a (ADR-0003 r2, ADR-0012): the processor's contract-level rules for owned objects, at {@code .jsc} positions. An owned
      * type is no field of another value; each owned type has an owned init and an escape hatch (an owned destroy without
@@ -1942,6 +1949,24 @@ final class Checker {
             if (stateFields.get(f.name()) instanceof Ty.BigMapT) {
                 throw f.type().pos().error("JSC1211", "a contract with owned objects keeps no BigMap state: a shared read has no proof path for its"
                         + " maps (ADR-0003 r2); a BigMap may be a field of an owned type instead (ADR-0012 D2)");
+            }
+        }
+        // M3 final pass (design MD2): beside an owned type that keeps a BigMap, M3 covers plain owned types, shared reads and
+        // native assets (Armory, Safes); the other parts are not covered yet, so they are refused, as JSC1305 refuses its cells.
+        String mapped = c.owned().stream().map(TypeDecl::name)
+                .filter(o -> records.get(o).values().stream().anyMatch(t -> t instanceof Ty.BigMapT)).findFirst().orElse(null);
+        if (mapped != null) {
+            for (Ir.Method m : methods) {
+                String part = m.owned() != null && m.owned().into() != null || m.admits() != null ? "a move (" + m.name() + ")"
+                        : m.mods().stream().anyMatch(md -> md.name().equals("batched")) ? "a batched action (" + m.name() + ")"
+                        : m.mods().stream().anyMatch(md -> md.name().equals("receives")) ? "taking deposits (" + m.name() + " receives)"
+                        : !m.reads().isEmpty() ? "a read of another contract (" + m.name() + ")"
+                        : m.kind() == Ir.Kind.CERTIFY || m.kind() == Ir.Kind.VOTE || m.kind() == Ir.Kind.PROPOSE
+                                ? "a " + m.kind().name().toLowerCase() + " handler (" + m.name() + ")" : null;
+                if (part != null) throw m.pos().error("JSC1217", bigMapObjects(mapped, part));
+            }
+            for (Syntax.InvariantDecl inv : c.invariants()) {
+                if (inv.on() != null) throw inv.pos().error("JSC1217", bigMapObjects(mapped, "an invariant by type (" + inv.on() + "." + inv.name() + ")"));
             }
         }
         var moving = new LinkedHashSet<String>();

@@ -352,4 +352,48 @@ purpose('keyed-instance-destroy', 'Keys', (p) => { p.methods.push(endDestroy(key
 purpose('moves-instance-destroy', 'Guild', (p) => { p.methods.push(endDestroy(keyField(p))); }, '(JSC1210)');
 purpose('owned-bigmap-state', 'Bank', (p) => { withBook(p); }, '(JSC1211)');
 purpose('keyed-bigmap-state', 'Keys', (p) => { withBook(p); }, '(JSC1211)');
+// M3 final pass MD2: an owned type that keeps a BigMap (a copy of the program's first plain owned type, its owned init and
+// its escape hatch, with a BigMap field) beside a part M3 does not cover there (JSC1217).
+const withVault = (p) => {
+  const keyedTypes = new Set((p.keyed ?? []).map((k) => k.type));
+  const base = p.owned.find((o) => !keyedTypes.has(o));
+  const rec = JSON.parse(JSON.stringify(p.records.find((r) => r.name === base)));
+  rec.name = 'Vault';
+  rec.fields.push({ name: 'notes', type: { bigmap: ['Bytes', 'Int'] } });
+  p.records.push(rec);
+  p.owned.push('Vault');
+  const shift = (o) => JSON.parse(JSON.stringify(o), (k, v) => (k === 'id' || k === 'local') && typeof v === 'number' ? v + 94000 : v);
+  const retype = (o) => {
+    if (Array.isArray(o)) { o.forEach(retype); return; }
+    if (!o || typeof o !== 'object') return;
+    if (o.node === 'New' && o.record === base) { o.record = 'Vault'; o.values.push({ node: 'BigEmpty', type: { bigmap: ['Bytes', 'Int'] }, taint: 0, at }); }
+    if (o.type === base) o.type = 'Vault';
+    if (o.record === base) o.record = 'Vault';
+    Object.values(o).forEach(retype);
+  };
+  const init = shift(p.methods.find((m) => m.kind === 'ownedInit' && m.on === base));
+  const hatch = shift(p.methods.find((m) => m.kind === 'ownedDestroy' && m.on === base && !('shared' in m)
+    && !m.mods.some((x) => x && (x.name === 'before' || x.name === 'after'))));
+  for (const [m, n] of [[init, 'openVault'], [hatch, 'closeVault']]) {
+    m.on = 'Vault';
+    m.name = n;
+    retype(m);
+    p.methods.push(m);
+  }
+};
+purpose('mapobj-batched', 'OwnedIntents', (p) => { withVault(p); }, '(JSC1217)');
+purpose('mapobj-receives', 'Desk', (p) => {
+  withVault(p);
+  p.methods = p.methods.filter((m) => m.kind !== 'ownedAction' || !('into' in m)).filter((m) => !m.mods.some((x) => x && x.name === 'admits'));
+}, '(JSC1217)');
+purpose('mapobj-moves', 'Guild', (p) => { withVault(p); }, '(JSC1217)');
+purpose('mapobj-handler', 'OwnedIntents', (p) => {
+  withVault(p);
+  p.methods = p.methods.filter((m) => !m.mods.some((x) => x && x.name === 'batched'));
+}, '(JSC1217)');
+purpose('mapobj-invariant', 'Bank', (p) => {
+  withVault(p);
+  const o = p.owned.find((x) => x !== 'Vault');
+  p.invariants = [...(p.invariants ?? []), { name: 'someOwner', on: o, body: { stmts: [], result: lit(true, 'Bool'), at }, at }];
+}, '(JSC1217)');
 writeFileSync(new URL('./purpose-mutants.json', import.meta.url), JSON.stringify(purposeMutants, null, 1) + '\n');

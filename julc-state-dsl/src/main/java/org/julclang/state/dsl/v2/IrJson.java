@@ -1022,6 +1022,24 @@ final class IrJson {
             if (!owned.isEmpty() && state.fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
                 throw new IllegalArgumentException("a contract with owned objects keeps no BigMap state (JSC1211)");
             }
+            // M3 final pass (design MD2): beside an owned type that keeps a BigMap, no move, batched action, deposits, read of
+            // another contract, certify, vote or propose handler, or invariant by type (JSC1217, as the checker).
+            String mapped = owned.stream().filter(o -> records.get(o).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT))
+                    .findFirst().orElse(null);
+            if (mapped != null) {
+                for (Ir.Method m : methods) {
+                    String part = m.owned() != null && m.owned().into() != null || m.admits() != null ? "a move"
+                            : m.mods().stream().anyMatch(md -> md.name().equals("batched")) ? "a batched action"
+                            : m.mods().stream().anyMatch(md -> md.name().equals("receives")) ? "taking deposits"
+                            : !m.reads().isEmpty() ? "a read of another contract"
+                            : m.kind() == Ir.Kind.CERTIFY || m.kind() == Ir.Kind.VOTE || m.kind() == Ir.Kind.PROPOSE
+                                    ? "a " + m.kind().name().toLowerCase() + " handler" : null;
+                    if (part != null) {
+                        throw new IllegalArgumentException("method " + m.name() + ": " + part + " is not supported beside an owned type that"
+                                + " keeps a BigMap (" + mapped + ") yet (JSC1217)");
+                    }
+                }
+            }
             // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy
             // without shared, before or after, so no object is trapped behind its instance or a deadline.
             for (String o : owned) {
@@ -1066,6 +1084,10 @@ final class IrJson {
                     if (on != null && records.get(on).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
                         throw new IllegalArgumentException("invariant " + x.get("name") + ": the owned type " + on + " keeps a BigMap, so it has no"
                                 + " invariants (JSC1213)");
+                    }
+                    if (on != null && mapped != null) {
+                        throw new IllegalArgumentException("invariant " + x.get("name") + ": an invariant by type is not supported beside an owned"
+                                + " type that keeps a BigMap (" + mapped + ") yet (JSC1217)");
                     }
                     invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at")), on));
                 }

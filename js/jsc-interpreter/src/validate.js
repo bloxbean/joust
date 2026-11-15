@@ -626,6 +626,23 @@ export function validate(p) {
   if (owned.length > 0 && p.state.fields.some((fd) => fd.type && typeof fd.type === 'object' && 'bigmap' in fd.type)) {
     fail('owned', 'a contract with owned objects keeps no BigMap state (JSC1211)');
   }
+  // M3 final pass (design MD2): beside an owned type that keeps a BigMap, no move, batched action, deposits, read of another
+  // contract, certify, vote or propose handler, or invariant by type (JSC1217, as the checker).
+  const mapped = owned.find((o) => keepsBigMap(o));
+  if (mapped !== undefined) {
+    for (const m of p.methods) {
+      const has = (w) => m.mods.some((x) => x && x.name === w);
+      const part = 'into' in m || has('admits') ? 'a move' : has('batched') ? 'a batched action' : has('receives') ? 'taking deposits'
+        : (m.reads ?? []).length > 0 ? 'a read of another contract'
+          : ['certify', 'vote', 'propose'].includes(m.kind) ? `a ${m.kind} handler` : null;
+      if (part) fail(`method ${m.name}`, `${part} is not supported beside an owned type that keeps a BigMap (${mapped}) yet (JSC1217)`);
+    }
+    for (const inv of p.invariants ?? []) {
+      if ('on' in inv && !keepsBigMap(inv.on)) {
+        fail(`invariant ${inv.name}`, `an invariant by type is not supported beside an owned type that keeps a BigMap (${mapped}) yet (JSC1217)`);
+      }
+    }
+  }
   // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy without
   // shared, before or after.
   for (const o of owned) {
