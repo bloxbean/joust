@@ -418,7 +418,7 @@ class JscV2M3MatrixTest {
         v2.adoption = JscV2M3cFourWayTest.adoption(v1, "upgrade", oldJ, funds, v2, 0, MASTER);
         JscV2M3cFourWayTest.newSideMutants(v2, v1, oldJ, adopted, funds);
         ok(v2.check("tick", adopted, List.of(), at(B, 0, 0), B));
-        ok(v2.check("quote", adopted, List.of(), at(B, 0, 0).withReads(Map.of("feed", oracle(42))), null));
+        ok(v2.check("peek", adopted, List.of(), at(B, 0, 0).withReads(Map.of("feed", oracle(42))), null));
         ok(v2.check("setSuccessor", adopted, List.of(Bytes.of(p3)), null, MASTER));
         v2.mutants("tick", adopted, List.of(), at(B, 0, 0), B);
         Rec named2 = rec("State", Bytes.of(MASTER), Bytes.of(p3), n(41));

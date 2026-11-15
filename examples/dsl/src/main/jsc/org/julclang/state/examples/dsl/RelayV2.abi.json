@@ -19,7 +19,7 @@
       { "name": "Tick", "constr": 0, "fields": [
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] },
-      { "name": "Quote", "constr": 1, "fields": [] },
+      { "name": "Peek", "constr": 1, "fields": [] },
       { "name": "SetSuccessor", "constr": 2, "fields": [
           { "name": "next", "type": "Bytes", "data": "bytes" }
         ] },

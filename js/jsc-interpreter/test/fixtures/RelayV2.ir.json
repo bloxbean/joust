@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "224b4d8e8c4ac19c2799e7e06ff09b8411f3d58f8048d527b5c4e3cea42d343a",
+  "sourceSha256": "5defb515e2de6416acb20acb7ba8b0fcce87119693d7e63d6ec9e4874fee399b",
   "package": "org.julclang.state.examples.dsl",
   "contract": "RelayV2",
   "source": "RelayV2.jsc",
@@ -194,7 +194,7 @@
     },
     {
       "kind": "action",
-      "name": "quote",
+      "name": "peek",
       "params": [],
       "mods": [{ "name": "open" }],
       "checked": [],
@@ -202,10 +202,10 @@
         {
           "local": {
             "id": 2,
-            "name": "p",
+            "name": "latest",
             "type": { "record": "Oracle.State" },
             "taint": 1,
-            "at": [26, 16],
+            "at": [26, 15],
             "fieldTaints": { "price": 0, "publisher": 0, "updatedAt": 1 }
           },
           "field": "feed"
@@ -252,7 +252,7 @@
           "taint": 0,
           "at": [27, 12]
         },
-        "at": [26, 43]
+        "at": [26, 47]
       },
       "at": [26, 3]
     },

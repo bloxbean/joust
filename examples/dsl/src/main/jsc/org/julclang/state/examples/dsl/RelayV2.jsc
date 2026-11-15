@@ -23,8 +23,8 @@ contract RelayV2(maxDatumBytes = 256) {
     return { ...state, count: count + 1 }
   }
 
-  action quote(p: reads params.feed) open {
-    return { ...state, count: p.price }
+  action peek(latest: reads params.feed) open {
+    return { ...state, count: latest.price }
   }
 
   action setSuccessor(next: Bytes) only admin {
