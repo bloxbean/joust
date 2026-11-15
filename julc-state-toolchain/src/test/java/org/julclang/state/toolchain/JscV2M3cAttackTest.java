@@ -31,6 +31,7 @@ import org.julclang.state.examples.dsl.CounterV1Client;
 import org.julclang.state.examples.dsl.CounterV1Validator;
 import org.julclang.state.examples.dsl.CounterV2;
 import org.julclang.state.examples.dsl.CounterV2Client;
+import org.julclang.state.examples.dsl.CounterV2Validator;
 import org.julclang.state.examples.dsl.Guardrail;
 import org.julclang.state.examples.dsl.GuardrailClient;
 import org.julclang.state.examples.dsl.StakedVault;
@@ -75,7 +76,7 @@ class JscV2M3cAttackTest {
     static final BigInteger ADA = BigInteger.valueOf(1_000_000);
     static final byte[] ADMIN = StateHarness.fill(28, 0xAD), A = StateHarness.fill(28, 0x11), B = StateHarness.fill(28, 0x22),
             C = StateHarness.fill(28, 0x33), POOL = StateHarness.fill(28, 0x90), PAYEE = StateHarness.fill(28, 0xFA),
-            GOVERNOR = StateHarness.fill(28, 0x61);
+            GOVERNOR = StateHarness.fill(28, 0x61), EVE = StateHarness.fill(28, 0xEE);
     static final HexFormat HEX = HexFormat.of();
 
     @BeforeAll
@@ -303,6 +304,79 @@ class JscV2M3cAttackTest {
                 PlutusData.bytes(new byte[]{4})))));
         accepted(h2.evaluate(tallyAdoption(h1, h2, old, unread)), "stated: a tag value of the wrong kind, never read");
         System.out.println("[M3c attacks] A44/K48: " + bad.size() + " malformed old states refused by the adopting mint: " + bad.keySet());
+    }
+
+
+    // ------------------------------------------------------------------ review S1 / F2: the handshake's two sides
+
+    /** CounterV1's migrating destroy of a deposit-only instance, with CounterV2's instance minted for it holding {@code next}. */
+    static TxModel counterMigration(StateHarness<Object> h1, StateHarness<Object> h2, Object next) {
+        var s = new CounterV1.State(ADMIN, h2.policy(), BigInteger.valueOf(41));
+        var live = h1.live(s, BigInteger.ZERO);
+        Ctx c = h1.ctx(ADMIN, BigInteger.ZERO, live.lovelace());
+        JulcList<Payout> none = JulcList.empty();
+        var tx = h1.destroy(live, new CounterV1Validator.Upgrade(c), new CounterV1Validator.BurnInstance(), none, ADMIN, c);
+        tx.outputs.add(new TxOut(h2.stateAddress(), Value.lovelace(BigInteger.valueOf(h2.minAda())).merge(token(h2.policy(), successorId(), 1)),
+                new OutputDatum.OutputDatumInline(StateHarness.data(next)), Optional.empty()));
+        tx.mint = tx.mint.merge(token(h2.policy(), successorId(), 1));
+        tx.stateOutput = tx.outputs.size() - 1;
+        tx.token = successorId();
+        return tx;
+    }
+
+    static void scriptRejects(StateHarness.Verdict v, String prefix, String what) {
+        JscV2M3cFourWayTest.scriptRejects(v, prefix, what);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void anOrdinaryInitSeededByThePreviousInstance_isNoAdoption() {
+        var h1 = (StateHarness<Object>) (StateHarness<?>) StateHarness.of(CounterV1Client.SPEC);
+        var h2 = (StateHarness<Object>) (StateHarness<?>) StateHarness.of(CounterV2Client.SPEC, new CounterV2.Config(h1.policy()));
+        assertTrue(h2.minAda() >= h1.minAda(), "the successor's deposit covers the old one's");
+        // The state the attacker makes up (EVE the admin), in place of the adoption's (the old admin's, the old count).
+        var made = new CounterV2.State(EVE, BigInteger.ZERO, BigInteger.ONE);
+        var tx = counterMigration(h1, h2, made);
+        tx.signers.add(EVE);
+        // The old side accepts it: its rules are the successor's token, address and value, which the ordinary init meets.
+        accepted(h1.evaluate(tx), "the old side, as it was before and after S1 (its half is sound alone)");
+        Ctx c2 = h2.ctx(EVE, BigInteger.ZERO, BigInteger.ZERO);
+        var mine = tx.copy();
+        mine.spendRedeemers.clear();
+        mine.mintRedeemer = StateHarness.data(new CounterV2Validator.CreateInstance(StateHarness.LIVE_REF, c2));
+        mine.range = StateHarness.window(c2.validFrom(), c2.validTo());
+        scriptRejects(h2.evaluate(mine), "MINT", "CounterV2's ordinary init seeded by the CounterV1 instance (S1)");
+        // Controls: the same init from a wallet seed is accepted; the honest adoption of the same instance is accepted.
+        accepted(h2.evaluate(h2.create(new CounterV2Validator.CreateInstance(h2.seed(), c2), made, c2)), "CounterV2's init from a wallet seed");
+        var adopted = new CounterV2.State(ADMIN, BigInteger.valueOf(41), BigInteger.ONE);
+        var honest = counterMigration(h1, h2, adopted).copy();
+        honest.spendRedeemers.clear();
+        honest.mintRedeemer = StateHarness.data(new CounterV2Validator.Adopt(StateHarness.LIVE_REF));
+        accepted(h2.evaluate(honest), "the honest adoption");
+        System.out.println("[M3c attacks] S1: an ordinary init seeded by the previous instance refused by the new mint (the old side accepts it; the controls pass)");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void twoOldInstancesIntoOneNew_isRefused() {
+        var h1 = (StateHarness<Object>) (StateHarness<?>) StateHarness.of(CounterV1Client.SPEC);
+        var h2 = (StateHarness<Object>) (StateHarness<?>) StateHarness.of(CounterV2Client.SPEC, new CounterV2.Config(h1.policy()));
+        var adopted = new CounterV2.State(ADMIN, BigInteger.valueOf(41), BigInteger.ONE);
+        var tx = counterMigration(h1, h2, adopted);
+        accepted(h1.evaluate(tx), "the control: one instance into one");
+        // A second CounterV1 instance spent by its migrating destroy in the same transaction, its token burned, with no
+        // successor of its own: only the first one's is minted.
+        var ref2 = new org.julclang.ledger.TxOutRef(new TxId(StateHarness.fill(32, 0x7B)), BigInteger.ONE);
+        byte[] id2 = HEX.parseHex(StateContractHandle.instanceIdOf(HEX.formatHex(ref2.txId().hash()), ref2.index().intValueExact()));
+        var s2 = new CounterV1.State(ADMIN, h2.policy(), BigInteger.valueOf(7));
+        var two = tx.copy();
+        two.inputs.add(new TxInInfo(ref2, new TxOut(h1.stateAddress(), Value.lovelace(BigInteger.valueOf(h1.minAda())).merge(token(h1.policy(), id2, 1)),
+                new OutputDatum.OutputDatumInline(StateHarness.data(s2)), Optional.empty())));
+        Ctx c = h1.ctx(ADMIN, BigInteger.ZERO, BigInteger.valueOf(h1.minAda()));
+        two.spendRedeemers.put(ref2, StateHarness.data(new CounterV1Validator.Upgrade(c)));
+        two.mint = two.mint.merge(token(h1.policy(), id2, -1));
+        scriptRejects(h1.evaluate(two), "SPEND", "two CounterV1 instances into one CounterV2 (F2)");
+        System.out.println("[M3c attacks] F2: two old instances into one new refused by the old side (the second has no successor)");
     }
 
     // ------------------------------------------------------------------ A43: the successor is no own policy
