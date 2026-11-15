@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** ADR-0011 D4: v1 migrates into v2 in one transaction, both sides checking the handshake. */
 class UpgradeTest {
-    static final byte[] ADMIN = StateHarness.fill(28, 0xAD);
+    static final byte[] ADMIN = StateHarness.fill(28, 0xAD), EVE = StateHarness.fill(28, 0xEE);
     static final BigInteger ADA = BigInteger.valueOf(1_000_000);
 
     final StateHarness<CounterV1.State> v1 = StateHarness.of(CounterV1Client.SPEC);
@@ -84,5 +84,33 @@ class UpgradeTest {
         notBurned.mint = Value.singleton(new org.julclang.ledger.PolicyId(v2.policy()),
                 new org.julclang.ledger.TokenName(successorId()), BigInteger.ONE);
         v2.assertRejected(notBurned, "the previous instance must end");
+    }
+    /**
+     * ADR-0018 M3c review S1, S6 (I41): v2's ordinary creation seeded by the v1 instance (its token named as @MigrateTo
+     * expects) in place of the adoption. The v1 instance holds only its deposit, so v2's exact-value rule fits and only
+     * the seed rule refuses it; the old side accepts the same transaction. Controls: v2's creation from a wallet seed.
+     */
+    @Test
+    void anOrdinaryCreationSeededByTheV1Instance_isRefused() {
+        assertTrue(CounterV2Client.SPEC.minAda() >= CounterV1Client.SPEC.minAda(), "the successor's deposit covers the old one's");
+        var old = new CounterV1.State(ADMIN, v2.policy(), BigInteger.valueOf(41));
+        var live = v1.live(old, BigInteger.ZERO);
+        Ctx c1 = v1.ctx(ADMIN, BigInteger.ZERO, live.lovelace());
+        JulcList<Payout> none = JulcList.empty();
+        var tx = v1.destroy(live, new CounterV1Validator.Upgrade(c1), new CounterV1Validator.BurnInstance(), none, ADMIN, c1);
+        Ctx c2 = v2.ctx(EVE, BigInteger.ZERO, BigInteger.ZERO);
+        var made = CounterV2.open(cfg, c2);   // a state EVE makes up: EVE the admin, the count reset
+        var token = Value.singleton(new org.julclang.ledger.PolicyId(v2.policy()), new org.julclang.ledger.TokenName(successorId()), BigInteger.ONE);
+        tx.outputs.add(new TxOut(v2.stateAddress(), Value.lovelace(BigInteger.valueOf(CounterV2Client.SPEC.minAda())).merge(token),
+                new OutputDatum.OutputDatumInline(StateHarness.data(made)), Optional.empty()));
+        tx.mint = tx.mint.merge(token);
+        tx.signers.add(EVE);
+        v1.assertAccepted(tx);   // the old half alone is satisfied: its successor's token, address and value
+        var ordinary = tx.copy();
+        ordinary.spendRedeemers.clear();
+        ordinary.mintRedeemer = StateHarness.data(new CounterV2Validator.CreateInstance(StateHarness.LIVE_REF, c2));
+        ordinary.range = StateHarness.window(c2.validFrom(), c2.validTo());
+        v2.assertRejected(ordinary, "an ordinary creation consumes the previous version's instance");
+        v2.assertAccepted(v2.create(new CounterV2Validator.CreateInstance(v2.seed(), c2), made, c2));
     }
 }
