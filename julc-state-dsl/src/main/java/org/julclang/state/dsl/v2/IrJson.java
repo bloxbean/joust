@@ -463,8 +463,11 @@ final class IrJson {
     // ------------------------------------------------------------------ reading
 
     /**
-     * Rebuilds the program. Strict, like the JavaScript reader (review S3): another format version, a duplicate key, a
-     * number that is not a plain integer, an unknown node, a reference to an undeclared local are all refused.
+     * Rebuilds the program, for the tests only (nothing in main code calls it). It refuses another format version, a
+     * duplicate key, a number that is not a plain integer, an unknown node and a reference to an undeclared local, but it
+     * is laxer than the JavaScript reader (validate.js): it lacks some of that reader's semantic checks (#97).
+     * IrReaderFuzzTest's {@code KNOWN_97} registers exactly those classes, and holds only while no main code reads IR with
+     * it: a caller that relied on it would need those checks first.
      */
     @SuppressWarnings("unchecked")
     static Ir.Program read(String json) {

@@ -18,6 +18,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Stream;
 
@@ -299,25 +300,71 @@ class IrReaderFuzzTest {
     // ------------------------------------------------------------------ the target
 
     /**
-     * #97's classes, exactly: the semantic checks of the JavaScript validator the Java reader does not make (its rule name,
-     * and a pattern over the JavaScript reader's message after its {@code invalid IR (where): } prefix). A message no rule
-     * matches is a new divergence and fails the input.
+     * #97's classes, exactly: the semantic checks of the JavaScript validator the Java reader does not make. Each rule is
+     * its name, the check it covers (validate.js's {@code irCheck}: {@code check}, a semantic check; {@code schema}, the
+     * export's shape, keys(); {@code enum}, a node attribute outside its set) and a pattern over the check's own words
+     * ({@code irWhat}, never the message, whose location holds IR-supplied text: review r2, security S13). A refusal no
+     * rule matches is a new divergence and fails the input.
+     * <p>
+     * A schema error is never registered except a missing field, which #97 lists: an unknown field is the reader refusing
+     * the format itself, which no Java laxness explains (review r2, Codex C4; {@code aReaderThatRefusesAFormatField_fails}).
+     * An enumerated value is registered only for the attributes #97 lists, at the node kinds that have them
+     * ({@link #ENUMS_97}).
      */
     static final List<String[]> KNOWN_97 = List.of(
-            new String[]{"arity", ".*takes \\d+ argument\\(s\\), not \\d+"},
-            new String[]{"a missing field", "missing field \".*\""},
-            new String[]{"a name declared twice", "(two methods of that name|a name taken by another method, fn or invariant|two declarations named .*|a bad or repeated name|two fns named .*)"},
-            new String[]{"a type check", "(a bad (big)?map type|.* is of type .*, not .*|a literal of type .*|an emitted value is an Event|not a string)"},
-            new String[]{"a name that resolves to nothing", "(no (fn|record|enum|variant|imported contract) .*|.* has no field .*|the (state|params) (has|have) no field .*|unknown (name|op|kind|field) \".*\"|a reference to the local \\d+ \\(.*\\) outside its scope|reads params\\..*, which is not an Instance<C>)"},
-            new String[]{"a method's checked inputs or transaction use", "(checked is \\[.*\\], but .*|usesCtx is (true|false), but .*)"},
-            new String[]{"a declaration's shape", "(the (state|params) record .* named .*|its state is named .*|a (type|variant) not qualified by .*|a bad enum name .*|a bad name.*|binds and fields differ in length|only a single-constructor arm binds)"},
-            new String[]{"a number out of the format's range", "(IR JSON: the integer -?\\d+ outside the safe range at offset \\d+|not a non-negative integer|not a decimal integer: .*)"});
+            new String[]{"arity", "check", ".*takes \\d+ argument\\(s\\), not \\d+"},
+            new String[]{"a missing field", "schema", "missing field \".*\""},
+            new String[]{"a name declared twice", "check", "(two methods of that name|a name taken by another method, fn or invariant|two declarations named .*|a bad or repeated name|two fns named .*)"},
+            new String[]{"a type check", "check", "(a bad (big)?map type|.* is of type .*, not .*|a literal of type .*|an emitted value is an Event|not a string)"},
+            new String[]{"a name that resolves to nothing", "check", "(no (fn|record|enum|variant|imported contract) .*|.* has no field .*|the (state|params) (has|have) no field .*|a reference to the local \\d+ \\(.*\\) outside its scope|reads params\\..*, which is not an Instance<C>)"},
+            new String[]{"a method's checked inputs or transaction use", "check", "(checked is \\[.*\\], but .*|usesCtx is (true|false), but .*)"},
+            new String[]{"a declaration's shape", "check", "(the (state|params) record .* named .*|its state is named .*|a (type|variant) not qualified by .*|a bad enum name .*|a bad name.*|binds and fields differ in length|only a single-constructor arm binds)"},
+            new String[]{"a number out of the format's range", "check", "(not a non-negative integer|not a decimal integer: .*)"});
 
-    /** The #97 rule a JavaScript refusal's message falls under, or null. */
-    static String known97(String jsMessage) {
-        String m = jsMessage.replaceFirst("^invalid IR \\((?:[^()]|\\([^()]*\\))*\\): ", "");
-        for (String[] r : KNOWN_97) if (m.matches("(?s)" + r[1])) return r[0];
+    /**
+     * #97's enumerated attributes the Java reader takes as any string, and the node kinds that have each (validate.js's
+     * NODES): a value outside the set there is "a name that resolves to nothing".
+     */
+    static final Map<String, Set<String>> ENUMS_97 = Map.of(
+            "op", Set.of("Prelude", "Arith", "Compare", "Logic", "ListProp", "MapOp", "BigOp", "ListArg", "LedgerOp"),
+            "name", Set.of("CtxRef"),
+            "kind", Set.of("Hof", "MapHof"),
+            "field", Set.of("FundsRef", "DepositField"));
+
+    /** The #97 rule a JavaScript refusal (the reader's answer, parsed) falls under, or null. */
+    static String known97(Map<String, Object> answer) {
+        if (!(answer.get("irWhat") instanceof String what) || !(answer.get("irCheck") instanceof String check)) {
+            // A refusal that is not validate.js's own (strict JSON's, load's): its message is all there is, and it holds
+            // no IR-supplied location.
+            String m = answer.get("message") instanceof String x ? x : "";
+            return m.matches("(?s)IR JSON: the integer -?\\d+ outside the safe range at offset \\d+") ? "a number out of the format's range" : null;
+        }
+        if (check.equals("enum")) {
+            var m = java.util.regex.Pattern.compile("unknown (\\w+) \".*\"", java.util.regex.Pattern.DOTALL).matcher(what);
+            if (!m.matches() || !(answer.get("irNode") instanceof String node)) return null;
+            Set<String> nodes = ENUMS_97.get(m.group(1));
+            return nodes != null && nodes.contains(node) ? "a name that resolves to nothing" : null;
+        }
+        for (String[] r : KNOWN_97) if (r[1].equals(check) && what.matches("(?s)" + r[2])) return r[0];
         return null;
+    }
+
+    /**
+     * What one input's two answers come to: {@code "agree"}, {@code "known: <rule>"} (a registered #97 divergence) or
+     * {@code "fail: <why>"} (a crash, or a disagreement no rule registers).
+     */
+    static String verdict(String javaAnswer, String jsAnswer) {
+        boolean jsOk = jsAnswer.startsWith("{\"ok\":true");
+        boolean jsCrash = jsAnswer.contains("\"kind\":\"crash\"");
+        if (javaAnswer.startsWith("crash") || jsCrash) return "fail: a reader crashed";
+        if (javaAnswer.equals("ok") == jsOk) return "agree";
+        if (javaAnswer.equals("ok")) {
+            @SuppressWarnings("unchecked")
+            var answer = (Map<String, Object>) AbiCheck.Json.parse(jsAnswer);
+            String rule = known97(answer);
+            if (rule != null) return "known: " + rule;
+        }
+        return "fail: the readers disagree";
     }
 
     static String java(String text) {
@@ -377,6 +424,80 @@ class IrReaderFuzzTest {
         assertTrue(js(ir).startsWith("{\"ok\":true"), js(ir));
     }
 
+    /**
+     * The oracle's negative control (review r2, Codex C4): a JavaScript reader that refuses a field the format has (here a
+     * copy of js/jsc-interpreter whose decl() no longer allows {@code fieldTaints}) must fail the target on a valid export,
+     * not pass as a registered #97 divergence. The real reader agrees with the Java one on the same export.
+     */
+    @org.junit.jupiter.api.Test
+    void aReaderThatRefusesAFormatField_fails() throws IOException, InterruptedException {
+        var files = new LinkedHashMap<String, String>();
+        files.put("app/Source.jsc", """
+                jsc 2
+                package app
+                contract Source {
+                  state { fields: Int, args: Int, values: Int }
+                  init() { return { fields: 0, args: 0, values: 0 } }
+                }
+                """);
+        files.put("app/Reader.jsc", """
+                jsc 2
+                package app
+                import contract { Source } from "./Source.jsc"
+                contract Reader {
+                  params { src: Instance<Source> }
+                  state { n: Int }
+                  init() { return { n: 0 } }
+                  action peek(got: reads params.src) open { return { n: got.fields + got.args + got.values } }
+                }
+                """);
+        String ir = JscV2.lower(files.get("app/Reader.jsc"), "Reader.jsc", "app/Reader.jsc", JscModules.of(files)).irJson();
+        assertEquals("agree", verdict(java(ir), js(ir)));
+
+        Path copy = Files.createTempDirectory("jsc-interpreter-mutant");
+        Path src = INTERPRETER.toAbsolutePath().getParent();
+        try (Stream<Path> fs = Files.walk(src)) {
+            for (Path f : fs.toList()) {
+                Path to = copy.resolve(src.relativize(f).toString());
+                if (Files.isDirectory(f)) Files.createDirectories(to);
+                else Files.copy(f, to);
+            }
+        }
+        Path validate = copy.resolve("validate.js");
+        String original = "keys(l, ['id', 'name', 'type', 'taint', 'at', 'fieldTaints'], where);";
+        String code = Files.readString(validate);
+        assertTrue(code.contains(original), "decl()'s allowed fields, which the mutant drops one of");
+        Files.writeString(validate, code.replace(original, "keys(l, ['id', 'name', 'type', 'taint', 'at'], where);"));
+        Process p = new ProcessBuilder("node", SERVER.toString(), copy.resolve("index.js").toString())
+                .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+        String mutant;
+        try (var w = new BufferedWriter(new OutputStreamWriter(p.getOutputStream(), StandardCharsets.UTF_8));
+             var r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+            w.write(Base64.getEncoder().encodeToString(ir.getBytes(StandardCharsets.UTF_8)));
+            w.newLine();
+            w.flush();
+            mutant = r.readLine();
+        } finally {
+            p.destroy();
+        }
+        assertNotNull(mutant, "the mutant reader's answer");
+        assertTrue(mutant.contains("unknown field \\\"fieldTaints\\\"") && mutant.contains("\"irCheck\":\"schema\""), mutant);
+        assertEquals("fail: the readers disagree", verdict(java(ir), mutant), mutant);
+    }
+
+    /** S13: the rules read the check's own words, so a location holding such a phrase cannot classify a new check. */
+    @org.junit.jupiter.api.Test
+    void aLocationHoldingARulesWords_isNotRegistered() {
+        String answer = "{\"ok\":false,\"kind\":\"refused\",\"error\":\"Error\",\"message\":\"invalid IR (fn g(h(i)) is of type A, not B): some new class\","
+                + "\"irWhere\":\"fn g(h(i)) is of type A, not B\",\"irWhat\":\"some new class\",\"irCheck\":\"check\"}";
+        assertEquals("fail: the readers disagree", verdict("ok", answer));
+        String enumElsewhere = "{\"ok\":false,\"kind\":\"refused\",\"error\":\"Error\",\"message\":\"x\",\"irWhere\":\"Lit at 1,1\","
+                + "\"irWhat\":\"unknown kind \\\"z\\\"\",\"irCheck\":\"enum\",\"irNode\":\"Lit\"}";
+        assertEquals("fail: the readers disagree", verdict("ok", enumElsewhere));
+        String enumHof = enumElsewhere.replace("\"irNode\":\"Lit\"", "\"irNode\":\"Hof\"");
+        assertEquals("known: a name that resolves to nothing", verdict("ok", enumHof));
+    }
+
     @FuzzTest(maxDuration = "30s")
     void readersAgree(FuzzedDataProvider data) throws IOException {
         synchronized (IrReaderFuzzTest.class) {
@@ -398,22 +519,21 @@ class IrReaderFuzzTest {
         boolean jsCrash = js.contains("\"kind\":\"crash\"");
         count("java " + (j.startsWith("crash") ? "crash" : j.startsWith("refused") ? "refused" : j) + ", js " + (jsOk ? "ok" : jsCrash ? "crash" : "refused"));
         String what = "\n  Java: " + j + "\n  JS: " + js + "\n  input (from " + from + "): " + text;
-        @SuppressWarnings("unchecked")
-        var answer = (Map<String, Object>) AbiCheck.Json.parse(js);
-        String jsMessage = answer.get("message") instanceof String x ? x : "";
-        String rule = j.equals("ok") && !jsOk && !jsCrash ? known97(jsMessage) : null;
-        if (rule == null && j.equals("ok") && !jsOk && !jsCrash && System.getenv("JOUST_IR_SURVEY") != null) {
+        String v = verdict(j, js);
+        if (v.equals("fail: the readers disagree") && j.equals("ok") && System.getenv("JOUST_IR_SURVEY") != null) {
             // A survey run (JOUST_IR_SURVEY set; never in CI): count an unregistered class instead of failing, to list
             // the Java reader's missing checks in one run before they are reviewed into KNOWN_97 or fixed.
-            String cls = jsMessage.replaceFirst("^invalid IR \\((?:[^()]|\\([^()]*\\))*\\): ", "").replaceAll("\\d+", "N")
-                    .replaceAll("\"[^\"]*\"", "\"X\"");
+            @SuppressWarnings("unchecked")
+            var answer = (Map<String, Object>) AbiCheck.Json.parse(js);
+            String cls = (answer.get("irCheck") + " " + answer.get("irWhat")).replaceAll("\\d+", "N").replaceAll("\"[^\"]*\"", "\"X\"");
             count("survey, unregistered: " + (cls.length() > 100 ? cls.substring(0, 100) : cls));
             return;
         }
-        if (rule != null) {
+        if (v.startsWith("known: ")) {
             // A registered divergence (as JuLC's KnownDivergences: an exact rule, counted and reported, never silent): the
             // Java reader, which only the tests use, lacks one of the JavaScript reader's semantic checks that #97 lists.
-            // Only the rules below pass; any other "Java accepts, JS refuses" fails as a finding (review r1, S3 and C4).
+            // Only the rules above pass; any other "Java accepts, JS refuses" fails as a finding (review r1, S3 and C4).
+            String rule = v.substring(7);
             count("known divergence (" + KNOWN_ISSUE + "): " + rule);
             Path p = Path.of("build/fuzz/IrReaderFuzzTest.known-" + Integer.toHexString(rule.hashCode()) + ".txt");
             if (!Files.exists(p)) {
@@ -422,12 +542,12 @@ class IrReaderFuzzTest {
             }
             return;
         }
-        if (j.startsWith("crash") || jsCrash || (j.equals("ok") != jsOk)) {
+        if (v.startsWith("fail: ")) {
             what = what.length() > 400_000 ? what.substring(0, 400_000) : what;
             Path p = Path.of("build/fuzz/IrReaderFuzzTest.failure-" + Integer.toHexString(text.hashCode()) + ".txt");
             Files.createDirectories(p.getParent());
             Files.writeString(p, what + "\n");
-            fail((j.startsWith("crash") || jsCrash ? "a reader crashed" : "the readers disagree") + " (" + p + "):\n  Java: " + j + "\n  JS: " + js);
+            fail(v.substring(6) + " (" + p + "):\n  Java: " + j + "\n  JS: " + js);
         }
     }
 }

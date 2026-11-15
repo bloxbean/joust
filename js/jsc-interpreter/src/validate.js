@@ -131,13 +131,22 @@ function show(v) {
 }
 
 export function validate(p) {
-  const fail = (where, what) => {
-    throw new Error(`invalid IR (${show(where)}): ${show(what)}`);
+  // A refusal carries its parts as well as its text (review r2, security S13 and Codex C4): irWhere and irWhat (the
+  // location and the check's own words, so a reader of the error never parses the message back), irCheck (which check:
+  // 'schema' for the export's shape, keys() below; 'enum' for a node attribute outside its set; 'check' otherwise) and,
+  // for an enumerated attribute, irNode (the node or statement kind).
+  const fail = (where, what, check = 'check', node = undefined) => {
+    const e = new Error(`invalid IR (${show(where)}): ${show(what)}`);
+    e.irWhere = show(where);
+    e.irWhat = show(what);
+    e.irCheck = check;
+    if (node !== undefined) e.irNode = show(node);
+    throw e;
   };
   const keys = (o, allowed, where) => {
-    if (!o || typeof o !== 'object' || Array.isArray(o)) fail(where, 'not an object');
-    for (const k of Object.keys(o)) if (!allowed.includes(k)) fail(where, `unknown field "${show(k)}"`);
-    for (const k of allowed) if (!(k in o) && !(k === 'fieldTaints' || k === 'field')) fail(where, `missing field "${show(k)}"`);
+    if (!o || typeof o !== 'object' || Array.isArray(o)) fail(where, 'not an object', 'schema');
+    for (const k of Object.keys(o)) if (!allowed.includes(k)) fail(where, `unknown field "${show(k)}"`, 'schema');
+    for (const k of allowed) if (!(k in o) && !(k === 'fieldTaints' || k === 'field')) fail(where, `missing field "${show(k)}"`, 'schema');
   };
   const str = (v, where) => {
     if (typeof v !== 'string') fail(where, 'not a string');
@@ -435,7 +444,7 @@ export function validate(p) {
     for (const [k, kind] of Object.entries(spec)) {
       const v = o[k];
       if (kind instanceof Set) {
-        if (!kind.has(v)) fail(where, `unknown ${show(k)} ${JSON.stringify(v)}`);
+        if (!kind.has(v)) fail(where, `unknown ${show(k)} ${JSON.stringify(v)}`, 'enum', o.node ?? o.stmt);
       } else if (kind === 'e') expr(v, scope);
       else if (kind === 'e?') { if (v !== null) expr(v, scope); }
       else if (kind === 'es') { if (!Array.isArray(v)) fail(where, `${show(k)} is not a list`); v.forEach((x) => expr(x, scope)); }
