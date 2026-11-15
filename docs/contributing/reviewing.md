@@ -277,18 +277,21 @@ at 525ff225, with the engines (the file holds every class and file):
 | PIT julc-state-dsl, all (the checker's and lock's tests) | 2,069 | 1,323 | 63.9% |
 | `Checker` | 1,668 | 1,131 | 68% |
 | `JscMain` | 343 | 154 | 45% |
-| Stryker js/joust `src/toolchain-heap.js` (set `joust-heap`) | 35 | 31–34 | 89–97% |
-| Stryker js/joust `src/toolchain.js` | 382 | 306–328 | 80–86% |
+| Stryker js/joust `src/toolchain-heap.js` (set `joust-heap`), Killed only | 35 | 31 | 89% |
+| Stryker js/joust `src/toolchain.js`, Killed only | 382 | 237–243 | 62–64% |
 | Stryker js/joust `src/lsp/select.js` | 698 | 246 | 35% |
 | Stryker js/joust `src/build.js` | 283 | 78 | 28% |
 | Stryker js/state-client `src/keyed.js` | 1,542 | 952 | 62% |
 | Stryker js/state-client `src/verify.js` | 1,003 | 86 | 9% |
 
-Two files vary between CI's whole-set runs, both through mutants that stop on a timeout (Stryker counts those as
-detected; whether one stops depends on the runner's speed): the ranges above are over that run and the pull request's
-runs 43629816769 and 43643527993. Their baseline is the lowest score measured, so the gate does not depend on a timeout.
-Every other unit, and all of PIT, scored the same in all three. In the `mutation_all` run the `mutation` job took 25 minutes and the Stryker jobs 26 (`joust-heap`), 79 (`joust`) and 25
-(`state-client`). #106 sets targets for the low ones (`verify.js`, `build.js`, `select.js`) and asks whether the
+Two files are scored on Killed alone (`"count": "killed"` in the baseline): `toolchain.js` and `toolchain-heap.js`.
+Stryker counts a mutant that stops on a timeout as detected, and whether one stops depends on the runner's speed. Over
+six CI runs, `toolchain.js`'s timeouts ran from 45 to 89 while its kills stayed at 237–243, and the score with timeouts
+went from 75% to 86% against a floor of 75%. Their baseline is the lowest Killed score measured. Every other unit, and
+all of PIT, scored the same in every run.
+
+In the `mutation_all` run the `mutation` job took 25 minutes, and the Stryker jobs 26 (`joust-heap`), 79 (`joust`) and
+25 (`state-client`). #106 sets targets for the low ones (`verify.js`, `build.js`, `select.js`) and asks whether the
 processor's output checks can be mutated. `src/toolchain-host.js` and `src/toolchain-worker.js` are not mutated: they
 run only in the forked engine host and its worker, where Stryker's coverage cannot follow (0 of 68 mutants covered).
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Summarizes Stryker JSON reports (mutation-testing-report-schema) as Markdown: the score per file and in all, each
 surviving or uncovered mutant, and each mutant the baseline run killed that is no longer killed. Killed and timed-out
-mutants count as detected (Stryker's own score).
+mutants count as detected (Stryker's own score), except in a file whose baseline entry has "count": "killed", which is
+scored on Killed alone (its timeouts depend on the runner's speed).
 
     python3 scripts/stryker-summary.py <mutation.json>... [--prefix js/joust/] [--baseline gradle/mutation-baseline.json]
         [--slack 5] [--floor 10] [--whole <set>]... [--expect <file>]... [--kills gradle/mutation-kills.json]
@@ -76,8 +77,17 @@ gate = baseline_path is not None
 if write_path and not scope:
     sys.exit("stryker-summary: --write-baseline needs --scope <set>")
 
+# A file whose baseline entry says "count": "killed" is scored on Killed alone: a Timeout there is not counted as
+# detected (review r3: toolchain.js's timeouts ran from 45 to 89 across CI runs while its kills stayed at 237-243, so a
+# score counting them could fail or pass by the runner's speed). Read from the baseline (or the file being written).
+policy_file = baseline_path or write_path
+KILLED_ONLY = set()
+if policy_file and os.path.exists(policy_file):
+    with open(policy_file) as f:
+        KILLED_ONLY = {n for n, b in json.load(f).get('stryker', {}).items() if b.get('count') == 'killed'}
 rows, survivors, errors = {}, [], []
 detected_sigs = defaultdict(Counter)
+timeouts_not_counted = Counter()
 for path in args:
     try:
         with open(path) as f:
@@ -95,7 +105,9 @@ for path in args:
             if s in ('CompileError', 'RuntimeError', 'Ignored'):
                 continue
             valid += 1
-            if s in ('Killed', 'Timeout'):
+            if s == 'Timeout' and name in KILLED_ONLY:
+                timeouts_not_counted[name] += 1
+            elif s in ('Killed', 'Timeout'):
                 detected += 1
                 detected_sigs[name][signature(m, f.get('source', ''))] += 1
             else:
@@ -144,7 +156,8 @@ for name, (d, v) in rows.items():
     if gate and base and v < base.get('mutants', 0) / 2:
         below.append(f"`{name}` lost most of its mutants ({v} of {base['mutants']}): update the baseline, visibly")
         mark += ' **lost mutants**'
-    print(f"| `{name}` | {d} | {v} | {score:.0f}% | {need:.0f}%{mark} |")
+    note = f" (Killed only; {timeouts_not_counted[name]} timeouts not counted)" if name in KILLED_ONLY else ''
+    print(f"| `{name}`{note} | {d} | {v} | {score:.0f}% | {need:.0f}%{mark} |")
 if survivors:
     print(f"\n<details><summary>{len(survivors)} surviving or uncovered mutants</summary>\n")
     print('\n'.join(survivors))
@@ -172,7 +185,8 @@ if write_path:
     if os.path.exists(write_path):
         with open(write_path) as f:
             data = json.load(f)
-    data.setdefault('stryker', {}).update({n: {'score': round(100.0 * d / v, 1), 'mutants': v, 'scope': scope}
+    data.setdefault('stryker', {}).update({n: {'score': round(100.0 * d / v, 1), 'mutants': v, 'scope': scope,
+                                               **({'count': 'killed'} if n in KILLED_ONLY else {})}
                                            for n, (d, v) in rows.items() if v})
     with open(write_path, 'w') as f:
         json.dump(data, f, indent=2, sort_keys=True)

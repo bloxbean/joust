@@ -1,5 +1,5 @@
 {
-  "_comment": "Mutation baselines per class (PIT) and per file (Stryker): score in percent, mutant count, and the unit's PIT module or Stryker set (a whole-set run of that module or set must measure every unit named for it). CI's mutation and stryker jobs (scripts/pit-changed.py, scripts/stryker-changed.sh) fail a changed unit that scores more than 5 points below its entry; a unit with no entry needs the job's default floor. Written with scripts/pit-summary.py and scripts/stryker-summary.py --write-baseline from a whole-set CI run (the Build workflow's manual run with mutation_all). Where CI's whole-set runs differ (a mutant that stops on a timeout counts as detected, and whether it stops depends on the runner's speed), the entry is the lowest score measured: js/joust/src/toolchain-heap.js 88.6-97.1 and src/toolchain.js 80.1-85.9 over runs 43629689255, 43629816769 and 43643527993; every other unit scored the same in all three. A change that means to lower one updates it here, visibly.",
+  "_comment": "Mutation baselines per class (PIT) and per file (Stryker): score in percent, mutant count, and the unit's PIT module or Stryker set (a whole-set run of that module or set must measure every unit named for it). CI's mutation and stryker jobs (scripts/pit-changed.py, scripts/stryker-changed.sh) fail a changed unit that scores more than 5 points below its entry; a unit with no entry needs the job's default floor. Written with scripts/pit-summary.py and scripts/stryker-summary.py --write-baseline from a whole-set CI run (the Build workflow's manual run with mutation_all). js/joust/src/toolchain.js and toolchain-heap.js are \"count\": \"killed\": scored on Killed alone, since whether a mutant stops on a timeout depends on the runner's speed (toolchain.js's timeouts ran from 45 to 89 over six CI runs while its kills stayed at 237-243). Their entries are the lowest Killed score measured: toolchain.js 237 of 382 (mutation_all 43629689255), toolchain-heap.js 31 of 35 (every run). Every other unit scored the same in all of them. A change that means to lower one updates it here, visibly.",
   "pit": {
     "org.julclang.state.api.AddressAdapter": {
       "module": "julc-state-toolchain",
@@ -94,14 +94,16 @@
       "score": 35.2
     },
     "js/joust/src/toolchain-heap.js": {
+      "count": "killed",
       "mutants": 35,
       "scope": "joust-heap",
       "score": 88.6
     },
     "js/joust/src/toolchain.js": {
+      "count": "killed",
       "mutants": 382,
       "scope": "joust",
-      "score": 80.1
+      "score": 62.0
     },
     "js/state-client/src/keyed.js": {
       "mutants": 1542,
