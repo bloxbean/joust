@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // joust: JOUST contracts with npm only (ADR-0015 D9), the npm side of ADR-0017's one `joust` command.
 //   joust build                 compile contracts/ (.java, .jsc) into build/joust/
+//   joust fmt [--check] [paths] format the .jsc files (contracts/ by default) in place
 //   joust deploy [--network n]  publish the reference scripts; write build/joust/deployments.<n>.json
 //   joust dev [--network n] [--port p]  attach to the chain (DevKit/Yaci Store, or Blockfrost), build, deploy, rebuild
 //                               on save, serve the page with the chain API proxied at /chain
@@ -27,6 +28,7 @@ const handedOver = deferredTo === SELF;
 const COMMANDS = {
   build: 'build [--accept-abi[=<Contract>@<committed>..<new>]] [--accept-lock] [--traces]   compile contracts/ (.java, .jsc) into build/joust/',
   abi: 'abi diff <Contract> [--out <file>]   (<Contract>: package.Name, or a Name only one contract has) the committed ABI manifest and the one the build computes now, with their SHA-256',
+  fmt: 'fmt [--check] [<file or dir>...]   format the .jsc files (contracts/ by default) in place; --check lists those that are not',
   test: 'test [-- <node --test args>]   build, then run test/*.test.js offline (an in-memory ledger: @julclang/joust/test)',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
   dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
@@ -161,6 +163,16 @@ async function project() {
         writeFileSync(out, JSON.stringify(d, null, 2) + '\n');
       }
       return 0;
+    }
+    case 'fmt': {
+      // ADR-0021 r9 §15: the engine's lang.format; a file that does not parse is reported and left as it was (F4).
+      const { fmt } = await import('../src/fmt.js');
+      const paths = args.slice(1).filter((a) => a !== '--check');
+      if (paths.some((a) => a.startsWith('-'))) {
+        console.error(`usage: joust ${COMMANDS.fmt}`);
+        return 2;
+      }
+      return fmt({ paths: paths.length ? paths : [config.contracts], check: args.includes('--check') });
     }
     case 'deploy': {
       const { deploy } = await import('../src/deploy.js');
