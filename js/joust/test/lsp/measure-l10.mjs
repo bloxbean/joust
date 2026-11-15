@@ -35,13 +35,25 @@ await host.info('a', engine);
 for (const [name, src] of files) {
   const lines = src.split('\n').length;
   const ts = [];
+  // ADR-0021 r8 (M5c): L10's path is the per-edit diagnostics model (index: false); the index, which the server asks
+  // for behind it on the same worker, is measured beside it.
+  const ix = [];
   for (let k = 0; k < 110; k++) {
     const t = performance.now();
-    const r = await host.analyze('a', engine, { file: 'Ledger.jsc', source: src + ' '.repeat(k) });
+    const r = await host.analyze('a', engine, { file: 'Ledger.jsc', source: src + ' '.repeat(k), index: false });
     JSON.parse(r.model);
-    if (k >= 10) ts.push(performance.now() - t);
+    const t2 = performance.now();
+    const i = await host.analyze('a', engine, { file: 'Ledger.jsc', source: src + ' '.repeat(k), op: 'index' });
+    JSON.parse(i.model);
+    if (k >= 10) {
+      ts.push(t2 - t);
+      ix.push(performance.now() - t2);
+    }
   }
-  out.latency[name] = { lines, median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2), modelChars: (await host.analyze('a', engine, { file: 'Ledger.jsc', source: src })).model.length };
+  const diagChars = (await host.analyze('a', engine, { file: 'Ledger.jsc', source: src, index: false })).model.length;
+  out.latency[name] = { lines, median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2), diagnosticsChars: diagChars,
+    indexMedian: +pct(ix, 0.5).toFixed(2), indexP95: +pct(ix, 0.95).toFixed(2),
+    modelChars: (await host.analyze('a', engine, { file: 'Ledger.jsc', source: src, op: 'index' })).model.length };
 }
 // F3 on #99: the 1,889-line file's lowering in the same worker (warm), the yardstick of a hardware-independent guard.
 {
@@ -92,6 +104,11 @@ const results = [
 // same file, measured in the same job (M5b: about 0.3): at most 0.5.
 results.push(['model of 1,889 lines (characters)', check ? out.latency['Ledger1889.jsc'].modelChars <= 252000 && { v: out.latency['Ledger1889.jsc'].modelChars, strict: 252000, withinStrict: true }
   : { v: out.latency['Ledger1889.jsc'].modelChars, strict: 252000, withinStrict: out.latency['Ledger1889.jsc'].modelChars <= 252000 }]);
+// ADR-0021 r8 (M5c): the per-edit diagnostics model of the 1,889-line file (49,910 characters at M5c): at most 55,000.
+{
+  const c = out.latency['Ledger1889.jsc'].diagnosticsChars;
+  results.push(['diagnostics model of 1,889 lines (characters)', check ? c <= 55000 && { v: c, strict: 55000, withinStrict: true } : { v: c, strict: 55000, withinStrict: c <= 55000 }]);
+}
 results.push(['analysis / lowering, median (1,889 lines)', check ? out.latency.ratio <= 0.5 && { v: out.latency.ratio, strict: 0.5, withinStrict: true }
   : { v: out.latency.ratio, strict: 0.5, withinStrict: out.latency.ratio <= 0.5 }]);
 let failed = 0;

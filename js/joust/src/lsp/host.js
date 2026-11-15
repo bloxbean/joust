@@ -304,13 +304,15 @@ export class EngineHost {
    * quarantined), `{ cancelled: true }` (cancelled, or displaced by a stop: `displaced`), `{ unavailable: true }`,
    * `{ retryAt }` (in backoff) or `{ missing: true }` (the engine's file is gone).
    */
-  analyze(key, engine, { file, source, scope = '', moduleId, files }, token) {
+  analyze(key, engine, { file, source, scope = '', moduleId, files, index, op = 'analyze' }, token) {
     // #98 review C4: a project file's analysis depends on its module id and the project files it reads, so its
     // quarantine key is all of them: an edit to an imported library frees an importer quarantined for it.
     // The module id travels as `moduleId`: `id` is the call's own (EngineWorker.call), its correlation id.
-    const msg = files ? { op: 'analyze', file, source, moduleId, files } : { op: 'analyze', file, source };
+    // ADR-0021 r8: `index: false` (the diagnostics model), or op 'index' (the full model of the same inputs).
+    const msg = files ? { op, file, source, moduleId, files } : { op, file, source };
+    if (index === false) msg.index = false;
     const input = files ? JSON.stringify([source, moduleId ?? null, Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))]) : source;
-    return this.request(key, engine, msg, { scope, input, what: 'analysis' }, token);
+    return this.request(key, engine, msg, { scope, input, what: op === 'index' ? 'the index' : 'analysis' }, token);
   }
 
   /**

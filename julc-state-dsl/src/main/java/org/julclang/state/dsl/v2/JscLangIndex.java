@@ -61,7 +61,13 @@ final class JscLangIndex {
             if (d.name == null || d.endLine < 0) continue;
             // Only what a reference can name is indexed (L10: a local is found by its anchor, never by name).
             switch (d.kind) {
-                case "const", "param", "loopVar", "binding", "lambdaParam", "import" -> {
+                case "import" -> {
+                    // ADR-0021 r8 (M5c): a use of an imported name refers to its import (flag 2), which the server follows
+                    // into the file it names.
+                    imports.putIfAbsent(d.name, d);
+                    continue;
+                }
+                case "const", "param", "loopVar", "binding", "lambdaParam" -> {
                     continue;
                 }
                 default -> {
@@ -75,6 +81,16 @@ final class JscLangIndex {
 
     Meta meta(Spans.Decl d) {
         return meta.computeIfAbsent(d.id, k -> new Meta());
+    }
+
+    /** The imports by name (M5c). */
+    private final Map<String, Spans.Decl> imports = new HashMap<>();
+
+    /** Flag 2 of a reference: the name is another file's, through this import (ADR-0021 r8). */
+    static final int IMPORTED = 2;
+
+    private Spans.Decl imported(String name) {
+        return name == null ? null : imports.get(name);
     }
 
     private Spans.Decl decl(String kind, String name) {
@@ -147,6 +163,7 @@ final class JscLangIndex {
             String n = tr.name();
             Spans.Decl d = typeDecl(n);
             if (d != null) ref(first.line(), first.col(), last.end(), d, 0);
+            else if (imported(n) != null && first.line() == last.line()) ref(first.line(), first.col(), last.end(), imported(n), IMPORTED);
             else if (first.line() == last.line()) builtin(first.line(), first.col(), last.end(), "type:" + n);
         }
         // Imported names: a std row, or a name of another file (resolved across files in M5c).
@@ -252,7 +269,11 @@ final class JscLangIndex {
             case Syntax.Call c -> {
                 int end = c.pos().col() + c.fn().length();
                 switch (ir) {
-                    case Ir.CallFn cf -> ref(c.pos().line(), c.pos().col(), end, decl("fn", cf.fn()), 0);
+                    case Ir.CallFn cf -> {
+                        Spans.Decl d = decl("fn", cf.fn());
+                        if (d != null) ref(c.pos().line(), c.pos().col(), end, d, 0);
+                        else ref(c.pos().line(), c.pos().col(), end, imported(cf.fn()), IMPORTED);
+                    }
                     case Ir.CallStd cs -> builtin(c.pos().line(), c.pos().col(), end, cs.binding().module() + "." + cs.binding().name());
                     case Ir.SomeOf s -> builtin(c.pos().line(), c.pos().col(), end, "Some");
                     case Ir.TimePred t -> builtin(c.pos().line(), c.pos().col(), end, "prelude." + c.fn());
@@ -271,7 +292,8 @@ final class JscLangIndex {
                     // A variant, or an event (a variant of the contract's Event).
                     Spans.Decl d = ir instanceof Ir.Variant ? (decl("variant", record) != null ? decl("variant", record) : decl("event", record))
                             : typeDecl(o.type());
-                    ref(o.pos().line(), o.pos().col(), o.pos().col() + o.type().length(), d, 0);
+                    if (d == null && imported(o.type()) != null) ref(o.pos().line(), o.pos().col(), o.pos().col() + o.type().length(), imported(o.type()), IMPORTED);
+                    else ref(o.pos().line(), o.pos().col(), o.pos().col() + o.type().length(), d, 0);
                 }
                 String owner = ir instanceof Ir.Variant v ? v.variant() : record;
                 for (Syntax.FieldInit fi : o.fields()) {

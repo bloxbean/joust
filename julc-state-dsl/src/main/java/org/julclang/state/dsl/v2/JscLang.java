@@ -37,7 +37,7 @@ public final class JscLang {
      * {@code modules} (the integration with ADR-0018 M2c and M4): {@code lang.analyze} takes a project's files, which a
      * file's library and contract imports resolve to as in the build.
      */
-    public static final List<String> FEATURES = List.of("analyze", "modules", "std", "lower");
+    public static final List<String> FEATURES = List.of("analyze", "modules", "std", "lower", "index");
 
     /** D2a: a model's bounds. Over either, the analysis reports one diagnostic instead of the model. */
     public static final int MAX_ENTRIES = 200_000;
@@ -243,12 +243,51 @@ public final class JscLang {
     }
 
     static String analyzeJson(String source, String fileName, String id, java.util.Map<String, String> files, int maxEntries, int maxChars) {
-        Model m = analysis(source, fileName, id, modulesOf(files), false).model();
+        return bounded(analysis(source, fileName, id, modulesOf(files), false).model(), maxEntries, maxChars);
+    }
+
+    private static String bounded(Model m, int maxEntries, int maxChars) {
         if (m.entries() <= maxEntries) {
             String json = m.json();
             if (json.length() <= maxChars) return json;
         }
         return tooLarge(m, maxEntries, maxChars).json();
+    }
+
+    /** The last diagnostics-only analysis: its inputs and the full model it can still give (one slot; ADR-0021 r8). */
+    private static String lastKey;
+    private static java.util.function.Supplier<Model> lastFull;
+
+    private static String key(String source, String fileName, String id, java.util.Map<String, String> files) {
+        var b = new StringBuilder().append(fileName).append('\0').append(id).append('\0').append(source.length()).append('\0');
+        if (files != null) new java.util.TreeMap<>(files).forEach((k, v) -> b.append(k).append('\0').append(v.length()).append('\0').append(v).append('\0'));
+        return b.append(source).toString();
+    }
+
+    /**
+     * ADR-0021 r8 (M5c): the diagnostics model alone: diagnostics, the outline's declarations, blocks, folding (no
+     * references, types, expressions or per-declaration knowledge). {@link #indexJson} gives the full model of the same
+     * inputs, from this analysis when it was the last one.
+     */
+    public static String diagnosticsJson(String source, String fileName, String id, java.util.Map<String, String> files) {
+        Analysis a = analysis(source, fileName, id, modulesOf(files), false);
+        synchronized (JscLang.class) {
+            lastKey = key(source == null ? "" : source, fileName, id, files);
+            lastFull = a.full();
+        }
+        return bounded(a.diagnostics(), MAX_ENTRIES, MAX_JSON_CHARS);
+    }
+
+    /** ADR-0021 r8 (M5c): the full model (with the index) of these inputs: the last analysis's when it had them. */
+    public static String indexJson(String source, String fileName, String id, java.util.Map<String, String> files) {
+        java.util.function.Supplier<Model> full;
+        synchronized (JscLang.class) {
+            full = lastKey != null && lastKey.equals(key(source == null ? "" : source, fileName, id, files)) ? lastFull : null;
+            lastKey = null;
+            lastFull = null;
+        }
+        if (full == null) full = analysis(source, fileName, id, modulesOf(files), false).full();
+        return bounded(full.get(), MAX_ENTRIES, MAX_JSON_CHARS);
     }
 
     static Model tooLarge(Model m, int maxEntries, int maxChars) {
@@ -264,7 +303,20 @@ public final class JscLang {
     }
 
     /** The model and, when asked and the front end accepted the file, the lowering (for L5's tests). */
-    record Analysis(Model model, JscV2.Lowered lowered) {}
+    /**
+     * The diagnostics model (outline declarations, no index), the lowering when asked, and the full model (with the
+     * index) built on request.
+     */
+    record Analysis(Model diagnostics, JscV2.Lowered lowered, java.util.function.Supplier<Model> full) {
+        Analysis(Model model, JscV2.Lowered lowered) {
+            this(model, lowered, () -> model);
+        }
+
+        /** The full model, with the index (what M5b's model was). */
+        Model model() {
+            return full.get();
+        }
+    }
 
     /**
      * As you type the analysis runs the front end alone (parse and check, {@link JscV2#check}), where every coded
@@ -350,13 +402,6 @@ public final class JscLang {
             }
         }
         diagnostics.sort((x, y) -> x.line() != y.line() ? Integer.compare(x.line(), y.line()) : Integer.compare(x.col(), y.col()));
-        JscLangIndex index;
-        try {
-            index = new JscLangIndex(spans, facts, program).build();
-        } catch (RuntimeException e) {
-            // The index is the editor's; a failure in it never costs the diagnostics.
-            index = new JscLangIndex(spans, null, null);
-        }
         var advisory = new ArrayList<String>();
         if (!facts.unresolvedImports.isEmpty()) advisory.add("imports");
         if (more > 0) advisory.add("more-errors");   // S2 on #99: past MAX_ERRORS (the server says so)
@@ -381,12 +426,34 @@ public final class JscLang {
         var blocks = new ArrayList<Range>();
         for (int[] b : spans.blocks) blocks.add(new Range(b[0] - 1, b[1] - 1, b[2] - 1, b[3] - 1));
         boolean accepted = diagnostics.stream().noneMatch(d -> d.severity().equals("error"));
-        for (Spans.Decl d : spans.decls) {
-            int[] sc = spans.scopes.get(d);
-            if (sc != null) index.meta(d).scope = new int[]{sc[0] - 1, sc[1] - 1, sc[2] - 1, sc[3] - 1};
-        }
-        return new Analysis(new Model("jsc2", fileName, accepted, contract, List.copyOf(diagnostics), List.copyOf(fixed),
-                List.copyOf(blocks), folding(source, spans, fixed), index, List.copyOf(advisory)), lowered);
+        final Ir.Program checked = program;
+        final String owner = contract;
+        var folds = folding(source, spans, fixed);
+        // ADR-0021 r8 (M5c; the r7 commitment of the M5c row): the index (references, types, expressions and what the
+        // checker knows of each declaration) is built on request, not on the per-edit diagnostics path.
+        java.util.function.Supplier<Model> build = () -> {
+            JscLangIndex index;
+            try {
+                index = new JscLangIndex(spans, facts, checked).build();
+            } catch (RuntimeException e) {
+                // The index is the editor's; a failure in it never costs the diagnostics.
+                index = new JscLangIndex(spans, null, null);
+            }
+            for (Spans.Decl d : spans.decls) {
+                int[] sc = spans.scopes.get(d);
+                if (sc != null) index.meta(d).scope = new int[]{sc[0] - 1, sc[1] - 1, sc[2] - 1, sc[3] - 1};
+            }
+            return new Model("jsc2", fileName, accepted, owner, List.copyOf(diagnostics), List.copyOf(fixed),
+                    List.copyOf(blocks), folds, index, List.copyOf(advisory));
+        };
+        // Built once, on the first request.
+        var memo = new Model[1];
+        java.util.function.Supplier<Model> full = () -> memo[0] != null ? memo[0] : (memo[0] = build.get());
+        var outline = new ArrayList<Declaration>();
+        for (Declaration d : fixed) if (d.outline() || d.kind().equals("contract")) outline.add(d);
+        Model diagnosticsOnly = new Model("jsc2", fileName, accepted, owner, List.copyOf(diagnostics), List.copyOf(outline),
+                List.copyOf(blocks), folds, null, List.copyOf(advisory));
+        return new Analysis(diagnosticsOnly, lowered, full);
     }
 
     /**

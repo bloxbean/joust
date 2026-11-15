@@ -545,7 +545,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const cts = new CancellationTokenSource();
     s.cts = cts;
     const file = fileNameOf(uri);
-    const r = await host.analyze(sel.key, sel.engine, { file, source: text, scope: scopeOf(sel), ...(project ? { moduleId: project.id, files: project.files } : {}) }, cts.token);
+    // ADR-0021 r8 (M5c): the diagnostics model first (no index), then the index behind its own entry (requestIndex).
+    const inputs = { file, source: text, scope: scopeOf(sel), ...(project ? { moduleId: project.id, files: project.files } : {}) };
+    const r = await host.analyze(sel.key, sel.engine, { ...inputs, index: false }, cts.token);
     if (s.cts === cts) s.cts = undefined;
     // D4a: a result is published only if nothing it read changed since: the open lifetime (C2), the buffer's version and
     // the selection.
@@ -608,13 +610,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     s.model = model;
     s.modelVersion = version;
     s.modelGen = gen;
-    // C4, F1 on #99: the last model without an error, with its text: completion maps it onto a newer text it has no
-    // complete model of (features.reconcile keeps only what the edit did not touch).
-    if (!model.diagnostics.some((d) => d.severity === 'error')) {
-      s.goodModel = model;
-      s.goodText = text;
-      s.goodGen = gen;
-    }
+    // An engine without lang.index (or index: false) gave the full model: it is the index too.
+    const full = r.model.includes(',"references":[');
+    if (full) setIndex(s, model, version, gen, text);
+    else requestIndex(uri, s, seq, version, gen, sel, inputs);
     s.modelEngine = sel.engine.id;
     // C9: an accepted model replaces the outline even when it has no declarations (a v1 file, an emptied contract); a
     // file the front end stopped in early keeps the last outline only while its own model has none.
@@ -699,9 +698,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return m ? foldingRanges(m) : [];
   });
   connection.onSelectionRanges(async (p) => {
-    await waitModel(p.textDocument.uri);
+    // The index model's declarations (locals too, ADR-0021 r8); the diagnostics model's outline without it.
+    await waitIndex(p.textDocument.uri);
     const doc = documents.get(p.textDocument.uri);
-    const m = modelOf(p.textDocument.uri);
+    const m = freshModel(p.textDocument.uri)?.model ?? modelOf(p.textDocument.uri);
     if (!doc || !m) return [];
     const last = doc.positionAt(doc.getText().length);
     return selectionRanges(m, p.positions, last.line, last.character);
@@ -741,6 +741,59 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   });
 
   /** Analyses `source` as the file `uri` with its current selection; the parsed model, or null. */
+  /** The full model (with the index) of `version`: what navigation, completion, rename and semantic tokens read. */
+  function setIndex(s, model, version, gen, text) {
+    s.indexModel = model;
+    s.indexVersion = version;
+    s.indexGen = gen;
+    // C4, F1 on #99: the last model without an error, with its text: completion maps it onto a newer text it has no
+    // complete model of (features.reconcile keeps only what the edit did not touch).
+    if (!model.diagnostics.some((d) => d.severity === 'error')) {
+      s.goodModel = model;
+      s.goodText = text;
+      s.goodGen = gen;
+    }
+    for (const w of (s.indexWaiters ?? []).splice(0)) w();
+  }
+
+  /**
+   * ADR-0021 r8 (M5c): the index of the version just published, on the same worker (the engine keeps the analysis of
+   * its last diagnostics model, so this builds the index alone). Superseded by a newer version, it is dropped.
+   */
+  async function requestIndex(uri, s, seq, version, gen, sel, inputs) {
+    const cts = new CancellationTokenSource();
+    s.indexCts?.cancel();
+    s.indexCts = cts;
+    const r = await host.analyze(sel.key, sel.engine, { ...inputs, op: 'index' }, cts.token);
+    if (s.indexCts === cts) s.indexCts = undefined;
+    if (state.get(uri) !== s || s.seq !== seq || documents.get(uri)?.version !== version || selector.generation !== gen || !r.model) {
+      for (const w of (s.indexWaiters ?? []).splice(0)) w();
+      return;
+    }
+    try {
+      setIndex(s, parseModel(r.model), version, gen, inputs.source);
+    } catch {
+      for (const w of (s.indexWaiters ?? []).splice(0)) w();
+    }
+  }
+
+  /** Waits (bounded) for the index of the document's current version; see waitModel. */
+  async function waitIndex(uri) {
+    await waitModel(uri);
+    const end = Date.now() + (host.opts.analysisMs ?? 2000);
+    for (;;) {
+      const s = state.get(uri);
+      const doc = documents.get(uri);
+      if (!s || !doc || (s.indexModel && s.indexVersion === doc.version) || s.modelVersion !== doc.version) return;
+      const left = end - Date.now();
+      if (left <= 0) return;
+      await new Promise((res) => {
+        (s.indexWaiters ??= []).push(res);
+        setTimeout(res, left);
+      });
+    }
+  }
+
   async function analyseText(uri, sel, source, token) {
     // With the project's files the document's imports reach, as its analysis has them (else an edit's check would see
     // the file alone and refuse it for its imports).
@@ -831,11 +884,18 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   // ------------------------------------------------------------------ M5b: lookups in the model (D7)
 
   /** The model of the current text and selection, or null (edits are computed only from one, D4a). */
+  /** The index model of the document's current version (ADR-0021 r8: navigation, completion, rename read it), or null. */
   function freshModel(uri) {
     const doc = documents.get(uri);
     const s = state.get(uri);
-    if (!doc || !s?.model || s.modelVersion !== doc.version || s.modelGen !== selector.generation) return null;
-    return { doc, s, model: s.model };
+    if (!doc || !s?.indexModel || s.indexVersion !== doc.version || s.indexGen !== selector.generation) return null;
+    return { doc, s, model: s.indexModel };
+  }
+
+  /** freshModel, after waiting (bounded) for the current version's index. */
+  async function indexedModel(uri) {
+    await waitIndex(uri);
+    return freshModel(uri);
   }
 
   /** The engine's std catalogue ({ rows, types, members, modifiers }), once per engine; null for an engine without one. */
@@ -862,8 +922,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   // C4 on #99: hover, definition, references and completion answer from the model of the version they are asked about
   // (waiting for its analysis, bounded as waitModel is), never from an older one: names and ranges move with every edit.
   async function currentModel(uri) {
-    await waitModel(uri);
-    return freshModel(uri);
+    return indexedModel(uri);
   }
   connection.onHover(async (p) => {
     const f = await currentModel(p.textDocument.uri);
@@ -880,8 +939,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return f ? references(f.model, p.textDocument.uri, p.position, p.context?.includeDeclaration === true) : [];
   });
   connection.languages.semanticTokens.on(async (p) => {
-    await waitModel(p.textDocument.uri);
-    const m = state.get(p.textDocument.uri)?.model;
+    await waitIndex(p.textDocument.uri);
+    const s = state.get(p.textDocument.uri);
+    const m = s?.indexModel ?? s?.model;
     return m ? semanticTokens(m) : { data: [] };
   });
 
@@ -919,14 +979,14 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       return { ...rest, command: { title: `Import ${needsImport.name}`, command: IMPORT_COMMAND, arguments: [id] } };
     });
     // Not from a clean model of this version: the client asks again as typing goes on.
-    return { isIncomplete: !usable || !!good, items };
+    return { isIncomplete: !usable || !!good || usable.diagnostics.some((d) => d.severity === 'error'), items };
   });
 
   // ------------------------------------------------------------------ M5b: rename (D7, L6)
 
   /** The rename at `position`, validated on the current snapshot: `{ plan, version, text, st }` or `{ error }`. */
   async function validatedRename(uri, position, newName, token) {
-    const f = freshModel(uri);
+    const f = await indexedModel(uri);
     if (!f) return { error: 'the file changed or is still being analysed: try again' };
     if (f.model.modelVersion < 2) return { error: 'this compiler predates rename (JOUST M5b)' };
     const plan = renamePlan(f.model, position, newName);
@@ -968,8 +1028,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (r.plan.abi && p.confirm !== true) return { applied: false, needsConfirmation: true, warning: abiWarning(r.plan.decl) };
     return applyVerified(p.uri, r.version, r.text, r.plan.edits, `Rename '${r.plan.decl.name}' to '${p.newName}'`);
   });
-  connection.onRequest('joust/prepareRename', (p) => {
-    const f = p && freshModel(p.uri);
+  connection.onRequest('joust/prepareRename', async (p) => {
+    const f = p && await indexedModel(p.uri);
     if (!f) return { error: 'the file changed or is still being analysed: try again' };
     const plan = renamePlan(f.model, p.position, '__joust_probe__');
     return plan.error && !plan.decl ? { error: plan.error } : { name: plan.decl.name, kind: plan.decl.kind, abi: plan.abi };
@@ -994,8 +1054,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   // Lists every invisible or control character (JSC0145, JSC0148) of the current text; the extension shows them in a modal
   // and only on confirmation sends joust/removeInvisible with the single-use id, which deletes exactly those characters
   // from exactly that version.
-  connection.onRequest('joust/invisible', (p) => {
-    const f = p && freshModel(p.uri);
+  connection.onRequest('joust/invisible', async (p) => {
+    const f = p && await indexedModel(p.uri);
     if (!f) return { error: 'the file changed or is still being analysed: try again' };
     const all = invisibleOccurrences(f.model, f.doc.getText());
     if (!all.length) return { occurrences: [] };

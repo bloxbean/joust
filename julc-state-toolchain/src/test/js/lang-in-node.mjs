@@ -88,7 +88,7 @@ if (!isMainThread) {
   const fail = (m) => { failures++; console.log('FAIL ' + m); };
   const engine = await load(dir);
   const info = JSON.parse(engine.lang.info({}).info);
-  if (info.protocol !== 1 || info.modelVersion !== 2 || !['analyze', 'modules', 'std', 'lower'].every((f) => info.features.includes(f))) {
+  if (info.protocol !== 1 || info.modelVersion !== 2 || !['analyze', 'modules', 'std', 'lower', 'index'].every((f) => info.features.includes(f))) {
     fail(`lang.info ${JSON.stringify(info)}`);
   }
 
@@ -118,8 +118,14 @@ if (!isMainThread) {
     const r = engine.lang.analyze(request(p));
     if (!r.ok) fail(`[parity] ${p.key}: ${r.error}`);
     else if (r.model !== p.model) fail(`[parity] ${p.key}: the engine's model differs from the JVM's`);
+    // ADR-0021 r8 (M5c): the diagnostics model, then lang.index of the same inputs, is the full model again.
+    const d = engine.lang.analyze({ ...request(p), index: false });
+    const x = engine.lang.index(request(p));
+    if (!d.ok || d.model.includes('"references":')) fail(`[parity] ${p.key}: the diagnostics model carries an index`);
+    else if (!x.ok || x.model !== p.model) fail(`[parity] ${p.key}: lang.index after the diagnostics model differs from the full model`);
   }
-  console.log(`[lang wasm] parity: ${parity.length} document models (${withProject} in their project), JVM and Wasm byte-identical`);
+  console.log(`[lang wasm] parity: ${parity.length} document models (${withProject} in their project), JVM and Wasm byte-identical;`
+    + ' lang.index after the diagnostics model gives each again');
 
   // 2. L1: the model's front-end diagnostics are the build's.
   if (!noBuild) {

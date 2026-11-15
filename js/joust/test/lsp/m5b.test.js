@@ -170,10 +170,11 @@ test('JOUST: Rename Symbol: validated on the snapshot, applied through workspace
     const ok = await lsp.request('joust/rename', { uri, position: at(SHOP, 'total: Int'), newName: 'sum2', confirm: true });
     assert.equal(ok.applied, true, JSON.stringify(ok));
     assert.equal(lsp.applied.length, n + 1);
-    // A changed buffer: the rename is refused until the new version has a model.
+    // A changed buffer: the rename waits for the new version's model and is planned on it (ADR-0021 r8), bound to it.
     lsp.change(uri, 2, SHOP.replace('"never negative"', '"never below zero"'));
-    const stale = await lsp.request('joust/rename', { uri, position: at(SHOP, 'sum = lines'), newName: 'subtotal' });
-    assert.equal(stale.applied, false);
+    const later = await lsp.request('joust/rename', { uri, position: at(SHOP, 'sum = lines'), newName: 'subtotal' });
+    assert.equal(later.applied, true, JSON.stringify(later));
+    assert.deepEqual(lsp.applied.at(-1).edit.documentChanges[0].textDocument, { uri, version: 2 });
   } finally {
     await lsp.stop();
   }

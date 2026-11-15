@@ -68,7 +68,17 @@ export async function runEngineWorker({ engineFile }) {
       // A project's files go only to an engine that takes them (lang.info's "modules": the integration with ADR-0018 M2c
       // and M4); an older engine analyses the file on its own.
       const modules = m.files && Array.isArray(info?.features) && info.features.includes('modules');
-      const r = api.lang.analyze(modules ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source });
+      // ADR-0021 r8 (M5c): `index: false` asks an engine with lang.info's "index" for the diagnostics model alone.
+      const lazy = m.index === false && Array.isArray(info?.features) && info.features.includes('index');
+      const req = modules ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source };
+      const r = api.lang.analyze(lazy ? { ...req, index: false } : req);
+      return r && r.ok ? { model: r.model } : { failed: String(r?.error ?? 'the engine returned no result') };
+    },
+    // The full model (with the index) of the same inputs; an engine without lang.index analyses them in full.
+    index: (m) => {
+      const modules = m.files && Array.isArray(info?.features) && info.features.includes('modules');
+      const req = modules ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source };
+      const r = typeof api.lang?.index === 'function' ? api.lang.index(req) : api.lang.analyze(req);
       return r && r.ok ? { model: r.model } : { failed: String(r?.error ?? 'the engine returned no result') };
     },
     std: () => {

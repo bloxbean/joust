@@ -73,7 +73,7 @@ public final class JoustToolchainWasm {
      * {@code .jsc} files by id ({@code pkg:<package>/<path>} for a package's library), which its imports resolve to as in
      * the build. Without {@code files}: the file on its own.
      */
-    public record AnalyzeRequest(String file, String source, String id, Map<String, String> files) {}
+    public record AnalyzeRequest(String file, String source, String id, Map<String, String> files, Boolean index) {}
 
     /**
      * The document model's JSON ({@link org.julclang.state.dsl.v2.JscLang}), or, when the analysis itself failed (never a
@@ -107,6 +107,8 @@ public final class JoustToolchainWasm {
         // M5b: the catalogue hover and completion read, and the lowering the generated-Java view shows (on request only).
         api.add("lang.std", StdRequest.class, JoustToolchainWasm::std);
         api.add("lang.lower", LowerRequest.class, JoustToolchainWasm::lower);
+        // M5c (ADR-0021 r8): the full model with the index, from the last diagnostics-only analysis of the same inputs.
+        api.add("lang.index", AnalyzeRequest.class, JoustToolchainWasm::index);
         JsApi.install(api, new EngineInfo("joustToolchain", "joust-toolchain", VERSION, List.of("vm", "debug", "joust", "lang")));
     }
 
@@ -139,9 +141,22 @@ public final class JoustToolchainWasm {
     static ServiceResult<AnalyzeResult> analyze(AnalyzeRequest request) {
         try {
             String file = request.file() == null ? "File.jsc" : request.file();
-            String model = request.files() == null ? org.julclang.state.dsl.v2.JscLang.analyzeJson(request.source(), file)
+            // ADR-0021 r8 (M5c): index false gives the diagnostics model alone (lang.info's "index"); lang.index the full one.
+            String model = Boolean.FALSE.equals(request.index())
+                    ? org.julclang.state.dsl.v2.JscLang.diagnosticsJson(request.source(), file, request.id(), request.files())
+                    : request.files() == null ? org.julclang.state.dsl.v2.JscLang.analyzeJson(request.source(), file)
                     : org.julclang.state.dsl.v2.JscLang.analyzeJson(request.source(), file, request.id(), request.files());
             return ServiceResult.ok(new AnalyzeResult(true, model, null));
+        } catch (Throwable t) {
+            return ServiceResult.ok(new AnalyzeResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
+        }
+    }
+
+    static ServiceResult<AnalyzeResult> index(AnalyzeRequest request) {
+        try {
+            String file = request.file() == null ? "File.jsc" : request.file();
+            return ServiceResult.ok(new AnalyzeResult(true, org.julclang.state.dsl.v2.JscLang.indexJson(request.source(), file, request.id(),
+                    request.files()), null));
         } catch (Throwable t) {
             return ServiceResult.ok(new AnalyzeResult(false, null, t.getClass().getName() + ": " + t.getMessage()));
         }
