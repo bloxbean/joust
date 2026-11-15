@@ -1,10 +1,10 @@
-# ADR-0021: A language server and VS Code extension for `.jsc` 2
+# ADR-0021: A language server and VS Code extension for `.jsc`
 
-**Status:** Proposed (r6, with r7a). r5 was approved on #66 (design, security, Codex); r6 records the amendments that M5a's
+**Status:** Proposed (r6, with r7a and r7b). r5 was approved on #66 (design, security, Codex); r6 records the amendments that M5a's
 implementation (#83, draft) made, which its reviews asked for, and is to be reviewed with #83. r7a records the project
 reading that the `.jsc` 2 integration (#98) brought forward from M5c; M5b's amendments are r7 (#99), a separate entry.
 **Date:** 2026-11-13
-**Builds on:** ADR-0018 (`.jsc` 2), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
+**Builds on:** ADR-0018 (`.jsc`, called `.jsc` 2 before its r26), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
 D3 (names), D9 (libraries and `java:` imports, built in M4), D12 (stable codes, source maps, generated Java, ABI
 manifest), D13 (tree-sitter and TextMate grammars), D14 (npm projects), D16 (deployed scripts stay rebuildable), §8
 (M5 is named there but not designed). ADR-0015 (the toolchain engine: JOUST's processor and JuLC in a GraalVM Web
@@ -26,7 +26,7 @@ revision any edit that moves a line changes the script hash (F12), which is why 
 
 ## 1. Context
 
-ADR-0018 makes `.jsc` 2 the language JavaScript developers start with, and promises editor support in two steps:
+ADR-0018 makes `.jsc` the language JavaScript developers start with, and promises editor support in two steps:
 grammars now (D13, being built in M1d) and a language server later (M5). Since the front end already has stable
 diagnostic codes, positions on both build paths, source maps and an ABI manifest (M1a), the question is no longer
 whether a language server is possible but where it runs, which compiler it uses, how it stays responsive and safe on
@@ -522,7 +522,7 @@ errors at once, and a tree to complete in while the user is half way through a l
 | Code actions | **Offered only on explicit request, never applicable on save** (r4). The server returns actions only when `context.triggerKind` is `Invoked` (the Quick Fix command, Ctrl+.); every `Automatic` request gets none, whatever its `only` filter. Every save request is `Automatic` (`saveParticipants.ts:481-485` at 1.146.0: `type: CodeActionTriggerType.Auto`), including one from a workspace setting with an empty kind (`{"": "explicit"}`, which VS Code turns into a request with no `only`; review C8). The cost: the automatic light bulb shows no JOUST fixes; the diagnostic still says what to write. Actions carry no `edit`, only the LSP command `joust.applyFix` whose **one argument is an opaque, single-use fix id** issued by the server for that request (no edit text, no paths); the server refuses an unknown, used or stale id, recomputes the fix on the current snapshot, re-checks it (L6) and applies it through `workspace/applyEdit` (D4a). The command is hidden from the command palette (`menus.commandPalette`, `when: false`). Kind `quickfix`, never `source.*`, never `isPreferred`. Fixes are machine-applicable: `let`/`var` → `const` (JSC0128), `===`/`!==` → `==`/`!=` (JSC0133), add the missing `std` import (JSC0704). Deleting invisible or control characters (JSC0145, JSC0148), which can change a string's content, is **not a code action**: it is the explicit command **Remove invisible characters…**, which lists every occurrence in a modal before changing anything. Diagnostics whose fix needs restructuring (JSC0115's `function` → a typed `fn`, JSC0130's spread update, JSC0129's early return) link to the catalogue instead of guessing | M5b (*r6:* the path, with JSC0128 and JSC0133, in M5a; see the M5a row) |
 | Generated Java | "Show generated Java" opens the lowering as a read-only virtual document at the line the source map gives for the cursor; "peek" shows it inline. *(r6)* As you type the server runs the front end alone (§12 note 10), so M5b adds an on-demand lowering entry (`lang.lower` or the like) for this view, run only on request, with its own latency budget | M5b |
 | ABI manifest | D7a | M5b |
-| Commands | **Restart analysis** and **Restart server** (D2a), **JOUST: Build** (the project's `joust build` or `./gradlew build`), **Show compiler and mode**: M5a. **Accept ABI…** (D7a), **Migrate to .jsc 2** (`joust migrate`, ADR-0018 D16, once M1d ships it), **Show generated Java**, **Check build (in memory)** (D4), **Remove invisible characters…**: M5b. Commands that run anything run it as a VS Code task through the project's own CLI or `gradlew`, only in a trusted workspace and only when that CLI's package (or `gradlew`) is inside a workspace folder (D3b's comparison). Such a task runs what typing the command in a terminal would run, by the user's choice; D3b's two-file confinement governs what the extension loads by itself. Commands are reachable from the command palette and code lenses, never from links inside markdown (D10) *(r6)* In VS Code the npm CLI runs on the editor's own Node (an absolute path, D3b) rather than the `node` on the user's PATH, and only for the project at a workspace folder's root (§12 note 13) | M5a, M5b |
+| Commands | **Restart analysis** and **Restart server** (D2a), **JOUST: Build** (the project's `joust build` or `./gradlew build`), **Show compiler and mode**: M5a. **Accept ABI…** (D7a), **Show generated Java**, **Check build (in memory)** (D4), **Remove invisible characters…**: M5b. Commands that run anything run it as a VS Code task through the project's own CLI or `gradlew`, only in a trusted workspace and only when that CLI's package (or `gradlew`) is inside a workspace folder (D3b's comparison). Such a task runs what typing the command in a terminal would run, by the user's choice; D3b's two-file confinement governs what the extension loads by itself. Commands are reachable from the command palette and code lenses, never from links inside markdown (D10) *(r6)* In VS Code the npm CLI runs on the editor's own Node (an absolute path, D3b) rather than the `node` on the user's PATH, and only for the project at a workspace folder's root (§12 note 13) | M5a, M5b |
 | Formatting | D8 | M5d |
 
 Not in M5: inlay hints, signature help beyond hover, call hierarchy, workspace symbols across libraries,
@@ -1148,3 +1148,6 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
   mode, freshness, keys), D4b's note on import text and roots, and D2a's note on worker state. This brings forward the
   part of M5c that L1 needs for files with `.jsc` and contract imports; navigation and rename across files, and `java:`
   imports, stay M5c's.
+- **r7b** (2026-11-14; ADR-0018 r26, the `.jsc` v1 removal, #111; separate from M5b's r7 on #99): the title says
+  `.jsc`, and §6's Commands row drops M5b's planned **Migrate to .jsc 2** command, since ADR-0018 r26 removes
+  `joust migrate` (D16) and with it every v1 file such a command would translate.

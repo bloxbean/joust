@@ -1,7 +1,7 @@
-jsc 2
+jsc 1
 package org.julclang.state.examples.dsl
 
-// examples/oracle's Oracle in .jsc 2 (ADR-0018 M2c, J11; ADR-0011 D2): a price feed. The publisher posts a price with
+// examples/oracle's Oracle in .jsc (ADR-0018 M2c, J11; ADR-0011 D2): a price feed. The publisher posts a price with
 // the time it was set, the start of the posting call's validity window, so updatedAt is a time field (D11): a reader
 // (Kiosk.jsc) checks its freshness with before(updatedAt + maxAge), never by comparing it.
 contract Oracle {

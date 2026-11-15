@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2LoweringMeasureTest {
 
     static final String SOURCE = """
-            jsc 2
+            jsc 1
             package m
             contract Filter {
               state { xs: List<Int>, total: Int }

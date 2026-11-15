@@ -123,7 +123,7 @@ destroy refund() open {
 ```
 
 `after(t)` and `before(t)` hold for the whole window, so `.jsc` allows them only at the top of a `require`, alone or
-as an operand of `&&` or `||`: never negated, in an `if` or a `?:`, in a `const`, a `fn` or a lambda. And `.jsc` 2
+as an operand of `&&` or `||`: never negated, in an `if` or a `?:`, in a `const`, a `fn` or a lambda. And `.jsc`
 goes further: a value computed from `validFrom` or `validTo` never decides anything and never makes an operation
 fail; it may only flow into amounts and state, with a warning ([the time rule](/languages/jsc-reference/#time-d11)).
 

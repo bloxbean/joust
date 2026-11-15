@@ -13,7 +13,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 
-/** Parses a {@code .jsc} 2 file (ADR-0018 D2–D7). The file starts with {@code jsc 2}. */
+/** Parses a {@code .jsc} file (ADR-0018 D2–D7). The file may start with the header {@code jsc 1}. */
 final class Parser {
     private final List<Tok> toks;
     private int i;
@@ -164,10 +164,7 @@ final class Parser {
     static Header header(String src) {
         var toks = Lexer.lex(src);
         var p = new Parser(toks);
-        if (!p.at("jsc")) throw p.peek().pos().error("JSC0112", "a .jsc 2 file starts with 'jsc 2'");
-        p.next();
-        p.next();
-        p.semis();
+        p.version();
         boolean library = p.at("library");
         if (library) p.next();
         else p.expect("package");
@@ -301,14 +298,6 @@ final class Parser {
         return i > 0 && peek().line() > toks.get(i - 1).line();
     }
 
-    /**
-     * Whether a source is {@code .jsc} 2: its first word, after whitespace and comments, is {@code jsc}. Only the head is
-     * read: a lexical error further down is reported by the {@code .jsc} 2 front end, at its position (F8).
-     */
-    static boolean isV2(String src) {
-        return "jsc".equals(Lexer.firstWord(src));
-    }
-
     // ------------------------------------------------------------------ tokens
 
     private Tok peek() {
@@ -369,13 +358,30 @@ final class Parser {
 
     // ------------------------------------------------------------------ file
 
-    private File file() {
-        Tok j = peek();
-        if (!j.is("jsc")) throw j.pos().error("JSC0112", "a .jsc 2 file starts with 'jsc 2'");
+    /**
+     * The optional header (ADR-0018 r26): {@code jsc 1}, or nothing, since a file with no header is version 1. Any other
+     * version is refused (JSC0113), {@code jsc 2} with a pointer to {@code jsc 1}: no alias.
+     */
+    private void version() {
+        if (!at("jsc")) return;
         next();
         Tok v = next();
-        if (v.kind() != K.INT || !v.text().equals("2")) throw v.pos().error("JSC0113", "this compiler reads 'jsc 2' files");
+        // The version as written (#111 r1: security S1, Codex C1): the lexer drops an integer's '_', so 'jsc 1_' would
+        // read as 1; a version is one digit, spelt exactly.
+        boolean literal = v.kind() == K.INT && v.end() - v.col() == v.text().length();
+        if (literal && v.text().equals("2")) {
+            throw v.pos().error("JSC0113", "'jsc 2' is no longer a header: the language is version 1, so write 'jsc 1' or drop the line"
+                    + " (a file with no header is version 1)");
+        }
+        if (!literal || !v.text().equals("1")) {
+            throw v.pos().error("JSC0113", "this compiler reads .jsc version 1: the header is 'jsc 1', or none (a file with no header is"
+                    + " version 1)");
+        }
         semis();
+    }
+
+    private File file() {
+        version();
         // A library (ADR-0018 D9, M4): 'library <package>' instead of 'package', then types, enums and fns only.
         boolean library = at("library");
         if (library) next();

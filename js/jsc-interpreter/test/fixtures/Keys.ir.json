@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "248c7f93f93b82aa1ca113c471cc5438f8d09654090dbedbf6263ca0a2041536",
+  "sourceSha256": "8f91f0aa3dae8fb16b079189542dbd1c88a274bdc60f3dacf8e923c1da4187e1",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Keys",
   "source": "Keys.jsc",

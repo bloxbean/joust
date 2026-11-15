@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "df6fd0e61fec4e624ef5ddfb638c6137195e6044d9c1bf147c29a1baaae539b2",
+  "sourceSha256": "75ee16e115bf3103da8117c027b165e52fc448514a64f12ce2973ad5aafc6f33",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Crowdfund",
   "source": "Crowdfund.jsc",

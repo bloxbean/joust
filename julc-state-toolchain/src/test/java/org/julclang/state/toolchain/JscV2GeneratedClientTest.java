@@ -52,7 +52,7 @@ class JscV2GeneratedClientTest {
         }
         // Batched actions whose parameters take every other name the client's intent method could plausibly use.
         String fixture = """
-                jsc 2
+                jsc 1
                 package probe
                 contract Many {
                   state { admin: Key, n: Int }
@@ -87,7 +87,7 @@ class JscV2GeneratedClientTest {
         var errors = compile("probe", "Deadline", java);
         assertTrue(errors.stream().anyMatch(e -> e.contains("variable deadline is already defined")), errors.toString());
         var e = assertThrows(org.julclang.state.dsl.JscException.class, () -> JscV2.lower("""
-                jsc 2
+                jsc 1
                 package probe
                 contract Deadline {
                   state { n: Int }

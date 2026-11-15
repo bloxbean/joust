@@ -1,7 +1,7 @@
 {
  "ir": 2,
  "language": "jsc 2",
- "sourceSha256": "34c5a76bb3d6546267b7d9224c6f1149e8a395506528f9d7ebaacf245a7eb374",
+ "sourceSha256": "7ade5cae1e57eb50ea3b63771aab1cfd7662be8dd1c361bd213404d6c8c2659e",
  "package": "org.julclang.state.examples.dsl",
  "contract": "Registry",
  "source": "Registry.jsc",
@@ -187,14 +187,10 @@
     {
      "name": "only",
      "field": "admin"
-    },
-    {
-     "name": "admits",
-     "field": "Ballot"
     }
    ],
    "checked": [],
-   "usesCtx": true,
+   "usesCtx": false,
    "pays": false,
    "result": {
     "record": "State"
@@ -1865,6 +1861,56 @@
    "at": [
     83,
     3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "take",
+   "params": [
+    {
+     "id": 99902,
+     "name": "id",
+     "type": "Bytes",
+     "taint": 0,
+     "at": [
+      1,
+      1
+     ]
+    }
+   ],
+   "mods": [
+    {
+     "name": "admits",
+     "field": "Ballot"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "StateRef",
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      1,
+      1
+     ]
+    },
+    "at": [
+     1,
+     1
+    ]
+   },
+   "at": [
+    1,
+    1
    ]
   }
  ],

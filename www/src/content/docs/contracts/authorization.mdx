@@ -275,7 +275,7 @@ await treasury.at(id).freeze(walletA, { frozen: true }, { governor: { governor, 
 <Aside type="note">
 
 `@Quorum` and `@AuthorizedBy` read the current state, so neither can go on an `@Init` or `@Migrate` creation. Neither
-can go on a `@Batched` action: an intent's owner is the caller. `.jsc` 2 gets `quorum` and `authorized` in milestone M2;
+can go on a `@Batched` action: an intent's owner is the caller. `.jsc` gets `quorum` and `authorized` in milestone M2;
 until then write those contracts in Java.
 
 </Aside>

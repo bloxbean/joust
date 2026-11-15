@@ -1,7 +1,7 @@
 {
  "ir": 2,
  "language": "jsc 2",
- "sourceSha256": "34c5a76bb3d6546267b7d9224c6f1149e8a395506528f9d7ebaacf245a7eb374",
+ "sourceSha256": "7ade5cae1e57eb50ea3b63771aab1cfd7662be8dd1c361bd213404d6c8c2659e",
  "package": "org.julclang.state.examples.dsl",
  "contract": "Registry",
  "source": "Registry.jsc",

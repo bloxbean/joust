@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package t
 
 // M3a (ADR-0018 D10): owned types, their methods, shared and into parameters, admits, an owned type's invariant.

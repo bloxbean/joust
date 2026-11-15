@@ -1,4 +1,4 @@
-jsc 2
+jsc 1
 package t
 
 // M3b (ADR-0018 D10, ADR-0016): keyed types (one object per key, unique per instance), their options, a retiring exit.

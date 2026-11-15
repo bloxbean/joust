@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2M3a3CheckerTest {
 
     static final String HEAD = """
-            jsc 2
+            jsc 1
             package t
             contract G {
               state { master: Key, isOpen: Bool, arrivals: Int }
@@ -100,7 +100,7 @@ class JscV2M3a3CheckerTest {
         bad(src(MOVE + "  @@invariant Wand.x = true"), "JSC1203", "Wand is not an owned type");
         // An owned type that keeps a BigMap has no invariants (on chain only its root is there).
         bad("""
-                jsc 2
+                jsc 1
                 package t
                 contract V {
                   state { keeper: Key }
@@ -121,7 +121,7 @@ class JscV2M3a3CheckerTest {
     @Test
     void anObjectWithABigMap_neitherMovesNorArrivesAsAParameter() {
         String vault = """
-                jsc 2
+                jsc 1
                 package t
                 contract A {
                   state { keeper: Key }

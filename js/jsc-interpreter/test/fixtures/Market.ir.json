@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "fcdddbe8a39ffd860bee8540d5737a71c4fe49ace0d28aa41c393d505a629143",
+  "sourceSha256": "39a2a401ba895cb606e2d6e7225b8b9c36fc02c85eb47430c83c780e4fe9afcb",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Market",
   "source": "Market.jsc",

@@ -126,8 +126,9 @@ keyed('max-datum-2049', 'Registry', (p) => { p.options.find((o) => o.name === 'm
 keyed('batched', 'Registry', (p, m) => { m('setOpen').mods = [{ name: 'batched' }]; m('setOpen').usesCtx = true; }, 'a keyed contract has no batched action');
 // A move of a keyed type with its admit (M3a's JSC1214 satisfied): the keyed rule refuses the move.
 keyed('move', 'Registry', (p, m) => {
-  m('setOpen').mods.push({ name: 'admits', field: 'Ballot' });
-  m('setOpen').usesCtx = true;
+  p.methods.push({ kind: 'action', name: 'take', params: [{ id: 99902, name: 'id', type: 'Bytes', taint: 0, at }],
+    mods: [{ name: 'admits', field: 'Ballot' }], checked: [], usesCtx: true, pays: false, result: { record: 'State' },
+    body: { stmts: [], result: { node: 'StateRef', type: { record: 'State' }, taint: 0, at }, at }, at });
   m('change').into = { id: 99901, name: 'dest', type: { record: 'State' }, taint: 0, at };
   m('change').usesCtx = true;
 }, 'a keyed object does not move');

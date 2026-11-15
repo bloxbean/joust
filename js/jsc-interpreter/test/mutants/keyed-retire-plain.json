@@ -1,7 +1,7 @@
 {
  "ir": 2,
  "language": "jsc 2",
- "sourceSha256": "54371af4cd7a83092b40a870f7030830684e3140b243144d167a62377154db31",
+ "sourceSha256": "c7e60a768eab61a544cc67b70870d414a3be2551e2186d19ec9705c16daaf4ce",
  "package": "org.julclang.state.examples.dsl",
  "contract": "Bank",
  "source": "Bank.jsc",
