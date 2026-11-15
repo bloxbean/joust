@@ -93,6 +93,8 @@ export function createReader(fs = { ...realFs, descriptorPath }) {
    * The bytes of `rel` inside `folder`, at most `cap` of them: `{ bytes, path }`, or `{ error }` (the above, `not-a-file`,
    * `too-large`, `unreadable`). Directory symlinks on the way are followed only under the rules above.
    */
+  const stats = { bytes: 0, reads: 0 };
+
   async function read(folder, rel, { cap = 64 * 1024, base = [] } = {}) {
     const r = await resolveIn(folder, rel, { base });
     if (r.error) return r;
@@ -137,6 +139,8 @@ export function createReader(fs = { ...realFs, descriptorPath }) {
         if (bytesRead === 0) break;
         n += bytesRead;
       }
+      stats.bytes += n;   // C18 (#114): what the reader read (tests observe the snapshot budget's stopping point)
+      stats.reads++;
       if (n > cap) return { error: 'too-large' };
       if (!anchored) {
         const e = await samePath();
@@ -213,5 +217,5 @@ export function createReader(fs = { ...realFs, descriptorPath }) {
     return { path: r.path, segments: r.segments, files: out };
   }
 
-  return { resolveIn, read, readJson, isFile, list };
+  return { resolveIn, read, readJson, isFile, list, stats };
 }

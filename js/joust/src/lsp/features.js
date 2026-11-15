@@ -495,6 +495,15 @@ export function completionModel(current, good, goodText, text) {
   // A declaration both models hold (the same word at the same place) keeps the current one, with what the checker
   // knew of it before (its type, signature, context, scope) where the current model, which stopped in it, has none.
   const known = new Map();
+  // C15 (#114): a member the current model parsed (it has it, not partial) is authoritative: what it no longer declares
+  // (a local commented out, removed) is gone. Only the members recovery dropped or cut short take the old declarations.
+  const oldById = new Map(old.declarations.map((d) => [d.id, d]));
+  const memberOf = (d) => {
+    let m = d;
+    for (let p = oldById.get(m.parent); p && p.kind !== 'contract'; p = oldById.get(p.parent)) m = p;
+    return m;
+  };
+  const currentMembers = new Map(current.declarations.map((d) => [key(d), d]));
   for (const d of old.declarations) {
     const same = have.get(key(d));
     if (same !== undefined) {
@@ -502,6 +511,9 @@ export function completionModel(current, good, goodText, text) {
       known.set(same, d);
       continue;
     }
+    const m = memberOf(d);
+    const now = m !== d ? currentMembers.get(key(m)) : null;
+    if (now && !now.partial) continue;
     ids.set(d.id, next++);
     added.push(d);
   }

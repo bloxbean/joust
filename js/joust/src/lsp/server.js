@@ -656,6 +656,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // (their snapshot read this buffer).
     if (s.build) s.build = null;
     withdrawBuilds(e.document.uri);
+    // C14 (#114): by path too, for a build that read this file from disk or as another buffer.
+    invalidateInput(localFileOf(e.document.uri), e.document.getText()).catch(() => {});
     schedule(e.document.uri);
     // The open files that import this one (a library, a contract they read) are analysed again after it, and only they
     // (#98 F4): their last analysis read its path.
@@ -667,6 +669,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     rescheduleImporters([s?.realPath, localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
     // C7 on #99: a build that read this buffer no longer describes anything open: withdrawn, and one in flight cancelled.
     withdrawBuilds(e.document.uri);
+    invalidateInput(localFileOf(e.document.uri), null).catch(() => {});
     if (s) {
       clearTimeout(s.timer);
       s.cts?.cancel();
@@ -938,7 +941,11 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // F2 on #99: a name other files can see is renamed only when no file imports this one (renaming across files comes
     // with M5c's project index). C11 (r2): checked last, on the buffers open now, just before the edit is applied.
     if (plan.visible) {
+      // C16 (#114): the scan is bound to the open buffers it read: if any opens, closes or changes meanwhile, refused.
+      const revision = () => JSON.stringify(documents.all().map((d) => [d.uri, d.version, state.get(d.uri) ? 1 : 0]).sort());
+      const before = revision();
       const imp = await importersOf(uri, f.s.selection ?? await selectionFor(uri));
+      if (revision() !== before) return { error: 'an open file changed while the files that import this one were read: try again' };
       if (imp.error) return { error: `'${plan.decl.name}' can be named by other files, and ${imp.error}: rename it by hand (renaming across files comes with M5c)` };
       if (imp.importers.length) {
         return { error: `'${plan.decl.name}' can be named by the files that import this one (${imp.importers.slice(0, 3).join(', ')}${imp.importers.length > 3 ? ', …' : ''}):`
@@ -1061,18 +1068,22 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   const builtDisk = new Map();   // build seq -> its snapshot's files read from disk (real path -> SHA-256), while shown
 
   /**
-   * C9 on #99 r2: a buffer opened on a file a build read from disk, with other text, ends that build's results (shown or
-   * in flight): they describe a file the server no longer reads.
+   * C9 (r2), C14 (#114): a file a build read changed (a buffer opened on it with other text, edited, closed, or the file
+   * changed on disk: `text` null, unknown): that build's results end, shown or in flight, whatever document they are on.
    */
-  async function withdrawDisk(uri, text) {
-    const p = localFileOf(uri);
-    const r = p && ((await real(p)) ?? p);
+  async function invalidateInput(path, text) {
+    const r = path && ((await real(path)) ?? path);
     if (!r) return;
-    const h = hash(text);
-    const differs = (disk) => disk && disk.has(r) && disk.get(r) !== h;
-    for (const b of inFlight.values()) if (differs(b.disk)) b.cts?.cancel();
-    for (const [seq, disk] of builtDisk) {
-      if (!differs(disk)) continue;
+    const h = text == null ? null : hash(text);
+    const differs = (inputs) => inputs && inputs.has(r) && inputs.get(r) !== h;
+    for (const b of inFlight.values()) {
+      if (differs(b.disk)) {
+        b.flight.stale = true;
+        b.cts?.cancel();
+      }
+    }
+    for (const [seq, inputs] of builtDisk) {
+      if (!differs(inputs)) continue;
       builtDisk.delete(seq);
       for (const [u, st] of state) {
         if (st.build && st.build.seq === seq) {
@@ -1081,6 +1092,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         }
       }
     }
+  }
+
+  async function withdrawDisk(uri, text) {
+    return invalidateInput(localFileOf(uri), text);
   }
 
   /** Withdraws every build result whose snapshot read `uri` (it changed); a build in flight that read it is cancelled (F7). */
@@ -1109,7 +1124,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // C7 on #99: each open buffer's lifetime (its state object) with its version: a close and a reopen at the same
     // version is another buffer.
     const states = new Map();
-    const disk = new Map();   // the real path of each file read from disk -> the SHA-256 of what was read (C9)
+    // C9 (r2), C14 and C17 (#114): every file the snapshot read, open buffer or disk, project source or package library:
+    // its real path -> the SHA-256 of the text built. Any later change of one (a buffer opened, edited or closed, a
+    // watched file changed) ends the build's results.
+    const disk = new Map();
     const overBudget = `the project's sources and libraries are larger than the language server builds (${buildChars} characters)`;
     let chars = 0;
     const digest = createHash('sha256');
@@ -1129,6 +1147,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       versions.set(uri, doc.version);
       states.set(uri, state.get(uri));
       keep(fileNameOf(uri), doc.getText());
+      const p = localFileOf(uri);
+      if (p) disk.set((await real(p)) ?? p, hash(doc.getText()));
       return { files, versions, states, disk, dir: null, packages: {}, javaLibraries: {}, digest: digest.digest('hex') };
     }
     const rel = sel.contractsRel.join('/');
@@ -1141,6 +1161,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         files[f] = open.getText();
         versions.set(open.uri, open.version);
         states.set(open.uri, state.get(open.uri));
+        disk.set(full, hash(files[f]));
         if (chars + files[f].length > buildChars) return { error: overBudget };
       } else {
         // C13 on #99 r2: the total is debited before anything is kept; a file past what is left is not read.
@@ -1158,7 +1179,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     // C6 on #99: the npm packages' libraries (joust-lib/: .jsc by <package>/<path>, Java sources by path), as joust
     // build passes them (libraries.js), read confined, within what is left of the same budget (C13).
-    const libs = sel.kind === 'gradle' ? { packages: {}, javaLibraries: {} } : await buildLibraries(sel, buildChars - chars);
+    const libs = sel.kind === 'gradle' ? { packages: {}, javaLibraries: {} }
+      : await buildLibraries(sel, buildChars - chars, { openByPath, disk, versions, states });
     if (libs.error) return { error: libs.error };
     for (const [k, v] of [...Object.entries(libs.packages), ...Object.entries(libs.javaLibraries)]) keep(`lib:${k}`, v);
     if (chars > buildChars) return { error: overBudget };
@@ -1171,7 +1193,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * reader: a package root may be a link (confined); a joust-lib/ or anything below it reached by a link is left out
    * (as projectOf's package imports). `{ packages, javaLibraries }` or `{ error }` (one Java class shipped twice: JSC0709; a bound).
    */
-  async function buildLibraries(sel, budget = buildChars) {
+  async function buildLibraries(sel, budget = buildChars, inputs = null) {
     let left = budget;
     const packages = {};
     const javaLibraries = {};
@@ -1207,13 +1229,25 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       if (listed.error) return { error: listed.error === 'too-many' ? `the package ${name} ships more than ${MAX_BUILD_FILES} library files` : `${name}/joust-lib cannot be read` };
       for (const f of listed.files) {
         if (++count > MAX_BUILD_FILES) return { error: `the npm packages ship more than ${MAX_BUILD_FILES} library files` };
-        // C13 on #99 r2: debited before it is kept; a file past what is left of the budget is not read at all.
-        const r = await reader.read(sel.folder, `${libRel}/${f}`, { cap: Math.max(0, Math.min(MAX_FILE_CHARS * 2, left)) });
-        if (r.error === 'too-large' && left < MAX_FILE_CHARS * 2) {
-          return { error: `the project's sources and libraries are larger than the language server builds (${buildChars} characters)` };
+        // C17 (#114): an open buffer of the library is what the build reads (as the analysis does), recorded with its
+        // lifetime and version; else the file, recorded by its hash.
+        const full = join(listed.path, ...f.split('/'));
+        const open = inputs?.openByPath.get(full);
+        let text;
+        if (open) {
+          text = open.getText();
+          inputs.versions.set(open.uri, open.version);
+          inputs.states.set(open.uri, state.get(open.uri));
+        } else {
+          // C13 on #99 r2: debited before it is kept; a file past what is left of the budget is not read at all.
+          const r = await reader.read(sel.folder, `${libRel}/${f}`, { cap: Math.max(0, Math.min(MAX_FILE_CHARS * 2, left)) });
+          if (r.error === 'too-large' && left < MAX_FILE_CHARS * 2) {
+            return { error: `the project's sources and libraries are larger than the language server builds (${buildChars} characters)` };
+          }
+          if (r.error) return { error: `${name}/joust-lib/${f} cannot be read (${r.error})` };
+          text = r.bytes.toString('utf8');
         }
-        if (r.error) return { error: `${name}/joust-lib/${f} cannot be read (${r.error})` };
-        const text = r.bytes.toString('utf8');
+        inputs?.disk.set(full, hash(text));
         left -= text.length;
         if (left < 0) return { error: `the project's sources and libraries are larger than the language server builds (${buildChars} characters)` };
         if (f.endsWith('.jsc')) packages[`${name}/${f}`] = text;
@@ -1251,6 +1285,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       const p = await realPathOf(d.uri, sel);
       if (p) open.set(p, d.getText());
     }
+    // Tests only: a pause after the open buffers are read, so a test can change one meanwhile (C16, #114).
+    if (Number.isInteger(hostOptions.importerScanDelayMs)) await new Promise((res) => setTimeout(res, hostOptions.importerScanDelayMs));
     const importers = [];
     const imports = (f, text) => {
       const scanned = scanImports(text, MAX_IMPORTS_PER_FILE);
@@ -1306,7 +1342,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const snap = await buildSnapshot(uri, sel);
     if (snap.error) return { error: snap.error };
     if (token?.isCancellationRequested) return { error: 'cancelled' };
-    inFlight.set(seq, { uris: new Set(snap.versions.keys()), disk: snap.disk, cts: token?.cts });
+    const flight = { stale: false };
+    inFlight.set(seq, { uris: new Set(snap.versions.keys()), disk: snap.disk, cts: token?.cts, flight });
     let r;
     try {
       r = await buildHost.request(`build:${engine.id}`, engine,
@@ -1326,7 +1363,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       }
       return false;
     };
-    const stale = async () => selector.generation !== gen
+    const stale = async () => flight.stale || selector.generation !== gen
       || [...snap.versions].some(([u, v]) => documents.get(u)?.version !== v || state.get(u) !== snap.states.get(u))
       || await openOnDisk();
     if (!r.model) return { error: r.internal?.message ?? (r.cancelled ? 'cancelled' : r.unavailable ? 'builds are unavailable' : 'the build did not run') };
@@ -1506,12 +1543,16 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       if (!folder) continue;
       const r = await reader.resolveIn(folder, relative(folder, f).split(sep).join('/'));
       rescheduleImporters([f, r.error ? null : r.path]);
+      // C14 (#114): a build that read other text from the file no longer describes it (a save writes the text the build
+      // on save read: the same hash, nothing ends).
+      const now = r.error ? null : await reader.read(folder, relative(folder, f).split(sep).join('/'), { cap: MAX_FILE_CHARS * 2 });
+      await invalidateInput(r.error ? f : r.path, now && !now.error ? now.bytes.toString('utf8') : null);
     }
   });
 
   if (flags.testHooks) {
     connection.onRequest('joust/test/stats', () => ({
-      ...host.stats, builds: { ...buildHost.stats }, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
+      ...host.stats, builds: { ...buildHost.stats }, reader: { ...reader.stats }, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
     }));
   }
 

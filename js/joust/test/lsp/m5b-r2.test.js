@@ -512,9 +512,136 @@ test('C13: the snapshot budget is debited while reading: a file past it is not r
   try {
     lsp.open(uri, SHOP);
     await modelOf(lsp, uri, 1);
+    await new Promise((res) => setTimeout(res, 500));
+    const before = (await lsp.stats()).reader;
     const r = await lsp.request('joust/checkBuild', { uri });
+    const after = (await lsp.stats()).reader;
     assert.match(r.error ?? '', /larger than the language server builds \(8000 characters\)/, JSON.stringify(r));
     assert.doesNotMatch(r.error, /zz-too-large/);
+    // C18 (#114): the stopping point itself. The reads during the build stay within the budget: fees.jsc and a-pad's
+    // body, not b-pad's (it would pass 8,000) nor the oversized file's.
+    const read = after.bytes - before.bytes;
+    assert.ok(read <= 8000, `${read} bytes read during the build (${after.reads - before.reads} reads)`);
+    assert.ok(read >= 5000, `a-pad was read: ${read}`);
+  } finally {
+    await lsp.stop();
+  }
+});
+
+// ------------------------------------------------------------------ #114 (Codex C14-C18 on #99 r3), in M5c
+
+test('C14: a build that read a closed file ends when its buffer is edited after opening with the same text', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  const uri = uriOf(libraryProject(dir));
+  writeFileSync(join(dir, 'contracts', 'app', 'Other.jsc'), OTHER);
+  const lsp = await trusted(dir);
+  try {
+    lsp.open(uri, SHOP);
+    await modelOf(lsp, uri, 1);
+    const done = await lsp.request('joust/checkBuild', { uri });
+    assert.equal(done.contracts, 2, JSON.stringify(done));
+    await lsp.until(() => lsp.published.filter((x) => x.uri === uri).at(-1)?.diagnostics.some((d) => /in memory/.test(d.source)), 60000, 'shown');
+    const other = uriOf(join(dir, 'contracts', 'app', 'Other.jsc'));
+    lsp.open(other, OTHER);   // the text the build read: nothing ends yet
+    await modelOf(lsp, other, 1);
+    assert.ok(lsp.published.filter((x) => x.uri === uri).at(-1).diagnostics.some((d) => /in memory/.test(d.source)), 'still shown');
+    lsp.change(other, 2, OTHER.replace('"positive"', '"strictly positive"'));
+    await lsp.until(() => !lsp.published.filter((x) => x.uri === uri).at(-1).diagnostics.some((d) => /in memory/.test(d.source)), 10000, 'withdrawn from Shop');
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('C14: a watched change of a closed file the build read ends it; a save of the same text does not', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  const uri = uriOf(libraryProject(dir));
+  const otherPath = join(dir, 'contracts', 'app', 'Other.jsc');
+  writeFileSync(otherPath, OTHER);
+  const lsp = await trusted(dir);
+  try {
+    lsp.open(uri, SHOP);
+    await modelOf(lsp, uri, 1);
+    const before = (await lsp.stats()).builds.calls;
+    const pending = lsp.request('joust/checkBuild', { uri });
+    for (let i = 0; i < 300 && (await lsp.stats()).builds.calls === before; i++) await new Promise((res) => setTimeout(res, 10));
+    writeFileSync(otherPath, OTHER);   // the same bytes (a save): nothing ends
+    lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(otherPath), type: 2 }] });
+    const same = await pending;
+    assert.equal(same.contracts, 2, JSON.stringify(same));
+    const before2 = (await lsp.stats()).builds.calls;
+    const pending2 = lsp.request('joust/checkBuild', { uri });
+    for (let i = 0; i < 300 && (await lsp.stats()).builds.calls === before2; i++) await new Promise((res) => setTimeout(res, 10));
+    writeFileSync(otherPath, OTHER.replace('"positive"', '"strictly positive"'));
+    lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(otherPath), type: 2 }] });
+    const r = await pending2;
+    assert.match(r.error ?? '', /changed while it built|cancelled/, JSON.stringify(r));
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('C15: completion does not bring back a local that was commented out', { skip }, async () => {
+  const dir = tmp();
+  const lsp = await vscode(dir);
+  try {
+    const uri = uriOf(join(dir, 'Count.jsc'));
+    const v1 = COUNT.replace('require(by > 0, "positive")', 'const oldLocal = by + 1\n    require(oldLocal > 0, "positive")');
+    lsp.open(uri, v1);
+    await modelOf(lsp, uri, 1);
+    const v2 = v1.replace('const oldLocal', '//const oldLocal');
+    lsp.change(uri, 2, v2);
+    const d = (await lsp.diagnostics(uri, 2)).diagnostics;
+    assert.ok(d.some((x) => x.code === 'JSC0217'), JSON.stringify(d));
+    const labels = (await lsp.request('textDocument/completion', { textDocument: { uri }, position: at(v2, 'oldLocal > 0') })).items.map((i) => i.label);
+    assert.ok(!labels.includes('oldLocal'), JSON.stringify(labels));
+    assert.ok(labels.includes('by'), JSON.stringify(labels));
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('C16: an importer edited while the importer scan runs refuses the rename', { skip }, async () => {
+  const dir = tmp();
+  mkdirSync(join(dir, 'contracts', 'app'), { recursive: true });
+  writeFileSync(join(dir, 'joust.config.json'), '{ "contracts": "contracts" }');
+  const LIB = 'jsc 1\nlibrary app\n\nfn fee(amount: Int): Int = amount / 100\n';
+  const USER0 = 'jsc 1\npackage app\n\ncontract User {\n  state { n: Int }\n\n  init() {\n    return { n: 1 }\n  }\n}\n';
+  writeFileSync(join(dir, 'contracts', 'app', 'fees.jsc'), LIB);
+  writeFileSync(join(dir, 'contracts', 'app', 'User.jsc'), USER0);
+  const lsp = await startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: false },
+    hostOptions: { importerScanDelayMs: 800 } });
+  try {
+    const uri = uriOf(join(dir, 'contracts', 'app', 'fees.jsc'));
+    const user = uriOf(join(dir, 'contracts', 'app', 'User.jsc'));
+    lsp.open(uri, LIB);
+    lsp.open(user, USER0);
+    await modelOf(lsp, uri, 1);
+    await modelOf(lsp, user, 1);
+    const pending = lsp.request('joust/rename', { uri, position: at(LIB, 'fee(amount'), newName: 'charge', confirm: true });
+    await new Promise((res) => setTimeout(res, 300));
+    lsp.change(user, 2, USER0.replace('package app\n', 'package app\n\nimport { fee } from "./fees.jsc"\n').replace('n: 1', 'n: fee(100)'));
+    const r = await pending;
+    assert.equal(r.applied, false, JSON.stringify(r));
+    assert.match(r.error, /changed while the files that import this one were read|import this one/, r.error);
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('C17: a package library opened with other text during a build ends it', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  const uri = uriOf(libraryProject(dir));
+  const libPath = join(dir, 'node_modules', '@acme', 'fees', 'joust-lib', 'fees.jsc');
+  const lsp = await trusted(dir);
+  try {
+    lsp.open(uri, SHOP);
+    await modelOf(lsp, uri, 1);
+    const before = (await lsp.stats()).builds.calls;
+    const pending = lsp.request('joust/checkBuild', { uri });
+    for (let i = 0; i < 300 && (await lsp.stats()).builds.calls === before; i++) await new Promise((res) => setTimeout(res, 10));
+    lsp.open(uriOf(libPath), 'jsc 1\nlibrary acme.fees\n\nfn fee(amount: Int): Int = amount / 50\n');
+    const r = await pending;
+    assert.match(r.error ?? '', /changed while it built|cancelled/, JSON.stringify(r));
   } finally {
     await lsp.stop();
   }

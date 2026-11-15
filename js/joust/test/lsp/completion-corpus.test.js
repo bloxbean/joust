@@ -151,9 +151,20 @@ test('inside a method with an error, completion offers what the valid file offer
         completionModel(bad, model, src, broken), std));
       renamed++;
       if (got.has(name) || !got.has(`${name}Q`)) failures.push(`${f}: const ${name} renamed ${name}Q: old ${got.has(name)}, new ${got.has(`${name}Q`)}`);
+      // C15 (#114): commented out, the declaration is gone (its member parses: authoritative). The use is on a later
+      // line, so its position does not move.
+      const lineStart = src.lastIndexOf('\n', m.index) + 1;
+      if (doc.positionAt(lineStart).line === pos.line) continue;
+      const commented = src.slice(0, lineStart) + '//' + src.slice(lineStart);
+      const cbad = analyse(commented, f);
+      if (!cbad.diagnostics.some((d) => d.severity === 'error')) continue;
+      const cpos = { line: pos.line, character: pos.character };
+      const cgot = labels(completion(commented, cpos, completionModel(cbad, model, src, commented), std));
+      renamed++;
+      if (cgot.has(name)) failures.push(`${f}: const ${name} commented out, still offered`);
     }
   }
-  console.log(`[completion] C8: ${renamed} declarations renamed before their uses`);
+  console.log(`[completion] C8, C15: ${renamed} declarations renamed or commented out before their uses`);
   console.log(`[completion] F1: ${positions} positions inside a method with an error; ${failures.length} failures`);
   assert.deepEqual(failures.slice(0, 20), []);
   assert.ok(positions > 30, `${positions} positions`);
