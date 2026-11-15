@@ -137,3 +137,75 @@ test('#120 C3: a file is formatted with its imports (a library\'s enum); an unde
   const c = run(root, ['fmt', '--check', 'contracts/app/N.jsc']);
   assert.equal(c.status, 2, 'a refused file under --check: 2');
 });
+
+// #120 F9 (C5): the same bytes as JscMainFmtTest.aByteOrderMarkStays (the two CLIs agree).
+const BOM_MESSY = '﻿jsc 1\npackage t\n\ncontract C {\nstate {n: Int}\n\n  init() {\n        return {n: 0}\n  }\n}\n';
+const BOM_FORMATTED = '﻿jsc 1\npackage t\n\ncontract C {\n  state { n: Int }\n\n  init() {\n    return { n: 0 }\n  }\n}\n';
+
+test('#120 F9: a byte order mark stays, byte for byte as jsc --fmt writes it', { skip, timeout: 300_000 }, () => {
+  const root = project();
+  const f = join(root, 'contracts', 'app', 'C.jsc');
+  writeFileSync(f, Buffer.from(BOM_MESSY, 'utf8'));
+  let r = run(root, ['fmt']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const out = readFileSync(f);
+  assert.deepEqual([...out.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.deepEqual(out, Buffer.from(BOM_FORMATTED, 'utf8'));
+  r = run(root, ['fmt', '--check']);
+  assert.equal(r.status, 0, 'formatted: nothing more to do');
+});
+
+test('#120 F10: a named file finds its module root as the build does; outside one, the refusal names the import', { skip, timeout: 300_000 }, () => {
+  const root = project();
+  const tiers = 'jsc 1\nlibrary lib\n\nenum Tier { Basic, Gold { since: Int } }\n';
+  const c = 'jsc 1\npackage app\n\nimport { Tier } from "../lib/tiers.jsc"\n\ncontract C {\n  state { t: Tier }\n\n  init() {\n    return { t: Gold { since: 1 } }\n  }\n}\n';
+  // Under the configured contracts directory, named from elsewhere: contracts/lib and contracts/app.
+  mkdirSync(join(root, 'contracts', 'lib'), { recursive: true });
+  writeFileSync(join(root, 'contracts', 'lib', 'tiers.jsc'), tiers);
+  writeFileSync(join(root, 'contracts', 'app', 'C.jsc'), c.replace('    return', '      return'));
+  let r = run(join(root, 'contracts', 'app'), ['fmt', 'C.jsc']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(readFileSync(join(root, 'contracts', 'app', 'C.jsc'), 'utf8'), c);
+  // A Gradle-style source set outside it: src/main/jsc is the module root.
+  const set = join(root, 'other', 'src', 'main', 'jsc');
+  mkdirSync(join(set, 'lib'), { recursive: true });
+  mkdirSync(join(set, 'app'), { recursive: true });
+  writeFileSync(join(set, 'lib', 'tiers.jsc'), tiers);
+  writeFileSync(join(set, 'app', 'C.jsc'), c.replace('    return', '      return'));
+  r = run(root, ['fmt', join(set, 'app', 'C.jsc')]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(readFileSync(join(set, 'app', 'C.jsc'), 'utf8'), c);
+  // Neither: the import cannot be read from the file's directory, and the error names it.
+  const loose = join(root, 'loose');
+  mkdirSync(join(loose, 'app'), { recursive: true });
+  mkdirSync(join(loose, 'lib'), { recursive: true });
+  writeFileSync(join(loose, 'lib', 'tiers.jsc'), tiers);
+  writeFileSync(join(loose, 'app', 'C.jsc'), c);
+  r = run(root, ['fmt', join(loose, 'app', 'C.jsc')]);
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /the import "\.\.\/lib\/tiers\.jsc" cannot be read here/);
+});
+
+test('#120 S5: an unreadable directory never ends the run', { skip, timeout: 300_000 }, () => {
+  const root = project();
+  const a = join(root, 'contracts', 'app', 'A.jsc');
+  writeFileSync(a, FORMATTED.replace('    return', '        return'));
+  const locked = join(root, 'contracts', 'app', 'locked');
+  mkdirSync(locked);
+  writeFileSync(join(locked, 'L.jsc'), FORMATTED);
+  chmodSync(locked, 0);
+  try {
+    // A named file (its imports' walk meets the directory): formatted.
+    let r = run(root, ['fmt', 'contracts/app/A.jsc']);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(readFileSync(a, 'utf8'), FORMATTED);
+    // The default target: the readable files formatted, the directory reported (exit 2).
+    writeFileSync(a, FORMATTED.replace('    return', '        return'));
+    r = run(root, ['fmt']);
+    assert.equal(r.status, 2, r.stdout + r.stderr);
+    assert.match(r.stderr, /locked: error: cannot be read/);
+    assert.equal(readFileSync(a, 'utf8'), FORMATTED);
+  } finally {
+    chmodSync(locked, 0o755);
+  }
+});

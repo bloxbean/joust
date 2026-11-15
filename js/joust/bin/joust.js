@@ -17,6 +17,8 @@ import { constants } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { locate, resolveJoust } from '../src/project.js';
 
+// The directory joust was started in: a project command runs at the project's root, and the paths it is given are this one's.
+const INVOKED = process.cwd();
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const SELF = realpathSync(fileURLToPath(import.meta.url));
 
@@ -173,7 +175,9 @@ async function project() {
         console.error(`usage: joust ${COMMANDS.fmt}`);
         return FMT_USAGE;
       }
-      let targets = paths;
+      // #120 F10: named paths are the invoking directory's (the command itself runs at the project's root).
+      const { resolve: resolvePath } = await import('node:path');
+      let targets = paths.map((p) => resolvePath(INVOKED, p));
       if (!targets.length) {
         const t = defaultTarget(process.cwd(), config.contracts);
         if (t.error) {

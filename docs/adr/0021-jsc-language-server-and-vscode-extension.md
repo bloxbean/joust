@@ -1337,6 +1337,17 @@ a comment kept); an empty file and a file of comments only.
     changes.
   - *F7:* the library listing walks `node_modules` once per change of it (directory mtimes), then lists only the
     packages that ship a `joust-lib/`.
+  - *Round r3 (#120 round 2):*
+    - *F9 = C5:* `joust fmt` decodes with `ignoreBOM: true`, so a leading BOM stays. Both CLIs' tests pin the same
+      bytes for the same file.
+    - *S4, C6:* another compiler's answer (a project's) is applied only when the bundled compiler formats its text to
+      the bundled compiler's formatting of the source. Equal normal forms are the same program; the whitespace-only
+      check stays as the first gate.
+    - *F10:* a named file's or directory's module root is the build's: the configured contracts directory, else the
+      nearest `src/<set>/jsc`, else its own directory. A refusal whose parse lacked an import's types names that
+      import. `joust fmt` resolves named paths against the directory it was started in.
+    - *S5:* the walks skip directories that cannot be read (a target's are reported, exit 2) and stop at 5,000 files or
+      64 MiB for imports.
   - *Fuzzing:* the hand-off to #95 is recorded in §15's fuzz note below and in #120's round-r2 reply. A fuzz target
     belongs there, with `JscFormatTest`'s invariants (`Layouts`, `same`) as its oracle.
 
@@ -1602,6 +1613,8 @@ later decision, like D11's automation.
   invariants E1–E8 (the lock gate agrees with `joust build` and never accepts; the lock is a confined snapshot input;
   configurations run only a user-installed `joust-lsp`; they work headless; the package is valid and reproducible; the
   release step only attaches, never publishes; the docs never recommend workspace code) and the vectors.
+- **r9, round r3** (2026-11-15; #120 round 2): the BOM in `joust fmt` (F9 = C5); a bundled-compiler check of
+  another compiler's formatting (S4, C6); the build's module root for named files (F10); unreadable directories (S5).
 - **r9, round r2** (2026-11-15; #120 round 1): §15's F4 refusal reads the build's import environment (no
   capitalised-names retry, C3); the style is versioned and keeps other spacing as written (F4); the CLIs' exit codes
   (F5), strict UTF-8 (F1), modes and read-only files (F2, S2), the project-confined default target (S3); the server's

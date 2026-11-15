@@ -15,13 +15,29 @@ export const FMT_NOT_FORMATTED = 1;
 export const FMT_REFUSED = 2;
 export const FMT_USAGE = 3;
 
-const strict = new TextDecoder('utf-8', { fatal: true });
+// #120 F1: malformed bytes refuse the file; F9: a leading byte order mark is kept (TextDecoder drops it by default).
+const strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+/** #120 S5: at most this many files, and characters, are read for a file's imports. */
+const IMPORT_FILES = 5000;
+const IMPORT_CHARS = 64 * 1024 * 1024;
 
-/** The .jsc files under `paths` (directories walked, node_modules and links skipped), sorted, each with its root; or `{ error }`. */
-export function jscFiles(paths) {
+/**
+ * The .jsc files under `paths` (directories walked, node_modules, dot-directories and links skipped), sorted, each with
+ * its root; or `{ error }`. #120 S5: a directory that cannot be read is listed in `unreadable` and skipped.
+ */
+export function jscFiles(paths, { max = Infinity } = {}) {
   const out = [];
+  const unreadable = [];
   const walk = (dir, root) => {
-    for (const e of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      unreadable.push(dir);
+      return;
+    }
+    for (const e of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      if (out.length >= max) return;
       const p = join(dir, e.name);
       if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')) walk(p, root);
       else if (e.isFile() && e.name.endsWith('.jsc')) out.push({ file: p, root });
@@ -38,16 +54,41 @@ export function jscFiles(paths) {
     else if (st.isFile()) out.push({ file: p, root: dirname(p) });
     else return { error: `${p}: not a regular file or a directory` };
   }
-  return { files: out };
+  return { files: out, unreadable };
+}
+
+/**
+ * #120 F10: the root the module ids of files in `dir` (a named file's directory, or a directory argument) are relative
+ * to, as the build finds it: the contracts directory of the nearest joust.config.json above it (when `dir` is inside
+ * it), else the nearest src/<set>/jsc directory (a Gradle source set), else `dir` itself.
+ */
+export function moduleRootOf(dir) {
+  const real = realpathSync(dir);
+  for (let d = real; ; d = dirname(d)) {
+    try {
+      const cfg = JSON.parse(readFileSync(join(d, 'joust.config.json'), 'utf8'));
+      const c = realpathSync(resolve(d, typeof cfg.contracts === 'string' ? cfg.contracts : 'contracts'));
+      if (real === c || real.startsWith(c + sep)) return c;
+    } catch {
+      // no project here
+    }
+    if (basename(d) === 'jsc' && basename(dirname(dirname(d))) === 'src') return d;
+    if (dirname(d) === d) break;
+  }
+  return real;
 }
 
 /** The .jsc modules under `root` by id (and the npm packages' libraries as pkg:<package>/<path>), for imports (C3). */
 function projectFiles(root, packagesRoot) {
   const files = {};
-  const { files: found = [] } = jscFiles([root]);
+  const { files: found = [] } = jscFiles([root], { max: IMPORT_FILES });
+  let chars = 0;
   for (const { file } of found) {
     try {
-      files[relative(root, file).split(sep).join('/')] = strict.decode(readFileSync(file));
+      const text = strict.decode(readFileSync(file));
+      chars += text.length;
+      if (chars > IMPORT_CHARS) break;
+      files[relative(root, file).split(sep).join('/')] = text;
     } catch {
       // not a module the build could read either
     }
@@ -84,7 +125,8 @@ export async function fmt({ paths, check = false, engine, root = null, contracts
     if (!projects.has(r)) projects.set(r, projectFiles(r, r === contractsReal && root ? root : null));
     return projects.get(r);
   };
-  let refused = 0;
+  let refused = found.unreadable.length;
+  for (const d of found.unreadable) error(`${d}: error: cannot be read (skipped)`);
   let changed = 0;
   for (const { file: f, root: given } of found.files) {
     let text;
@@ -97,7 +139,8 @@ export async function fmt({ paths, check = false, engine, root = null, contracts
     }
     // A file under the project's contracts directory is a module of it; any other, of the directory it was found in.
     const real = realpathSync(f);
-    const base = contractsReal && (real === contractsReal || real.startsWith(contractsReal + sep)) ? contractsReal : realpathSync(given);
+    const base = contractsReal && (real === contractsReal || real.startsWith(contractsReal + sep)) ? contractsReal
+      : moduleRootOf(given);
     const id = relative(base, real).split(sep).join('/');
     const r = api.lang.format({ source: text, id, files: projectOf(base) });
     const a = r?.ok ? JSON.parse(r.json) : null;

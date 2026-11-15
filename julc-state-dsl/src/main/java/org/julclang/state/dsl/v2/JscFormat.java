@@ -65,11 +65,23 @@ public final class JscFormat {
         if (source == null) source = "";
         String bom = source.startsWith("﻿") ? "﻿" : "";
         // F4: the file must lex and parse.
+        Set<String> types = null;
         try {
-            Set<String> types = Checker.importedTypes(source, id, modules);
+            types = Checker.importedTypes(source, id, modules);
             Parser.parse(source, types == null ? Set.of() : types);
         } catch (JscException e) {
-            return new Result(null, e.getMessage(), e.line, e.col, e.code, List.of());
+            // #120 F10: a parse that ran without an import's types names that import (the likely cause).
+            String unread = null;
+            if (types == null) {
+                try {
+                    unread = Checker.unreadableImport(source, id, modules);
+                } catch (JscException ignored) {
+                    // the lexer's error is the one reported
+                }
+            }
+            String why = unread == null ? e.getMessage() : e.getMessage() + " (the import \"" + unread + "\" cannot be read here, so its types are "
+                    + "unknown: format the file with its source directory)";
+            return new Result(null, why, e.line, e.col, e.code, List.of());
         } catch (RuntimeException | StackOverflowError e) {
             return new Result(null, "the file could not be read: " + e, 1, 1, "JSC0005", List.of());
         }

@@ -562,8 +562,9 @@ public final class JscMain {
             System.err.println("usage: JscMain --fmt [--check] <file or dir>...   (exit 0 formatted, 1 not formatted (--check), 2 refused, 3 usage)");
             return FMT_USAGE;
         }
-        // Each file with the root its module id is relative to (its directory argument, or its own directory).
+        // Each file with the root its module id is relative to (F10: the source set's directory, as the build's).
         var files = new ArrayList<Path[]>();
+        int[] unreadable = {0};
         for (String a : paths) {
             Path p = Path.of(a);
             if (Files.isSymbolicLink(p)) {
@@ -571,20 +572,34 @@ public final class JscMain {
                 return FMT_USAGE;
             }
             if (Files.isDirectory(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                try (Stream<Path> s = Files.walk(p)) {
-                    for (Path f : s.filter(f -> f.toString().endsWith(".jsc") && Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)).sorted().toList()) {
-                        files.add(new Path[]{f, p});
+                // #120 S5: a directory that cannot be read is reported and skipped (refused), and the walk goes on.
+                var found = new ArrayList<Path>();
+                Path root = moduleRoot(p);
+                Files.walkFileTree(p, new java.nio.file.SimpleFileVisitor<>() {
+                    @Override
+                    public java.nio.file.FileVisitResult visitFile(Path f, java.nio.file.attribute.BasicFileAttributes attrs) {
+                        if (attrs.isRegularFile() && f.toString().endsWith(".jsc")) found.add(f);
+                        return java.nio.file.FileVisitResult.CONTINUE;
                     }
-                }
+
+                    @Override
+                    public java.nio.file.FileVisitResult visitFileFailed(Path f, IOException e) {
+                        System.err.println(f + ": error: cannot be read (" + e.getClass().getSimpleName() + "; skipped)");
+                        unreadable[0]++;
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                });
+                found.sort(null);
+                for (Path f : found) files.add(new Path[]{f, root});
             } else if (Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                files.add(new Path[]{p, p.toAbsolutePath().getParent()});
+                files.add(new Path[]{p, moduleRoot(p.toAbsolutePath().getParent())});
             } else {
                 System.err.println("jsc --fmt: " + p + ": not a regular file or a directory");
                 return FMT_USAGE;
             }
         }
         var projects = new java.util.HashMap<Path, java.util.Map<String, String>>();
-        int refused = 0, changed = 0;
+        int refused = unreadable[0], changed = 0;
         for (Path[] fr : files) {
             Path f = fr[0];
             String text;
@@ -641,19 +656,64 @@ public final class JscMain {
                 .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
     }
 
-    /** The .jsc files under {@code root} that read as UTF-8, by module id (links not followed), for imports (C3). */
+    /** #120 S5: at most this many files, and this many characters, are read for a file's imports. */
+    static final int IMPORT_FILES = 5_000;
+    static final long IMPORT_CHARS = 64L * 1024 * 1024;
+
+    /**
+     * #120 F10: the root module ids are relative to, as the build finds it: the nearest {@code src/<set>/jsc} directory
+     * at or above {@code dir} (the Gradle source set's), else {@code dir} itself.
+     */
+    static Path moduleRoot(Path dir) {
+        Path a = dir.toAbsolutePath().normalize();
+        for (Path p = a; p != null; p = p.getParent()) {
+            Path set = p.getParent();
+            if (p.getFileName() != null && p.getFileName().toString().equals("jsc") && set != null && set.getParent() != null
+                    && set.getParent().getFileName() != null && set.getParent().getFileName().toString().equals("src")) {
+                return p;
+            }
+        }
+        return a;
+    }
+
+    /**
+     * The .jsc files under {@code root} that read as UTF-8, by module id, for imports (C3). #120 S5: links are not followed,
+     * dot-directories and node_modules are skipped, a directory that cannot be read is skipped (the build would not
+     * read it either), and the walk stops at {@link #IMPORT_FILES} files or {@link #IMPORT_CHARS} characters.
+     */
     static java.util.Map<String, String> jscFilesUnder(Path root) {
         var out = new java.util.LinkedHashMap<String, String>();
-        try (Stream<Path> s = Files.walk(root)) {
-            for (Path f : s.filter(f -> f.toString().endsWith(".jsc") && Files.isRegularFile(f, java.nio.file.LinkOption.NOFOLLOW_LINKS)).sorted().toList()) {
-                try {
-                    out.put(root.relativize(f).toString().replace('\\', '/'), strictUtf8(Files.readAllBytes(f)));
-                } catch (java.nio.charset.CharacterCodingException e) {
-                    // not a module the build could read either
+        long[] chars = {0};
+        try {
+            Files.walkFileTree(root, new java.nio.file.SimpleFileVisitor<>() {
+                @Override
+                public java.nio.file.FileVisitResult preVisitDirectory(Path d, java.nio.file.attribute.BasicFileAttributes attrs) {
+                    String n = d.getFileName() == null ? "" : d.getFileName().toString();
+                    return !d.equals(root) && (n.startsWith(".") || n.equals("node_modules")) ? java.nio.file.FileVisitResult.SKIP_SUBTREE
+                            : java.nio.file.FileVisitResult.CONTINUE;
                 }
-            }
+
+                @Override
+                public java.nio.file.FileVisitResult visitFile(Path f, java.nio.file.attribute.BasicFileAttributes attrs) {
+                    if (!attrs.isRegularFile() || !f.toString().endsWith(".jsc")) return java.nio.file.FileVisitResult.CONTINUE;
+                    if (out.size() >= IMPORT_FILES || chars[0] + attrs.size() > IMPORT_CHARS) return java.nio.file.FileVisitResult.TERMINATE;
+                    try {
+                        String text = strictUtf8(Files.readAllBytes(f));
+                        chars[0] += text.length();
+                        out.put(root.relativize(f).toString().replace('\\', '/'), text);
+                    } catch (IOException e) {
+                        // unreadable, or not UTF-8: not a module the build could read either
+                    }
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult visitFileFailed(Path f, IOException e) {
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+            });
         } catch (IOException e) {
-            // an unreadable directory: the files alone
+            // the root itself cannot be read: the files alone
         }
         return out;
     }
