@@ -25,7 +25,11 @@ npx tree-sitter query queries/highlights.scm path/to/File.jsc
 
 The generated parser (`src/parser.c`, `src/grammar.json`, `src/node-types.json`, `src/tree_sitter/`) is not committed
 (`.gitignore`): `npm run generate` writes it, and CI regenerates it on every run. ADR-0018 D13 (r13) keeps it out of the
-repository until the grammar is packaged (ADR-0021 M5e), when the generated files go into the release artefact.
+repository: the package carries them. `npm run package` (ADR-0021 §16) writes `dist/tree-sitter-jsc-<version>.tar.gz`
+with the grammar, the generated parser, the queries (also laid out for Neovim, and for Helix with its capture names),
+`tree-sitter.json`, the licence and [`EDITORS.md`](EDITORS.md). It compiles every query against the grammar over the
+corpus, and two builds from one commit are byte-identical (`test/package.test.mjs`, part of `npm test`). The package is
+attached to a GitHub release by a maintainer; it is not published to npm or crates.io.
 
 ## The shared parse corpus
 

@@ -9,13 +9,28 @@
     "url": "git+https://github.com/bloxbean/joust.git",
     "directory": "tree-sitter-jsc"
   },
-  "keywords": ["incremental", "parsing", "tree-sitter", "jsc", "joust", "cardano"],
-  "files": ["grammar.js", "tree-sitter.json", "queries/*", "src/**"],
+  "keywords": [
+    "incremental",
+    "parsing",
+    "tree-sitter",
+    "jsc",
+    "joust",
+    "cardano"
+  ],
+  "files": [
+    "grammar.js",
+    "tree-sitter.json",
+    "queries/*",
+    "src/**",
+    "EDITORS.md"
+  ],
   "devDependencies": {
     "tree-sitter-cli": "0.25.10"
   },
   "scripts": {
     "generate": "tree-sitter generate --abi 14",
-    "test": "tree-sitter generate --abi 14 && tree-sitter test && node test/shared-corpus.mjs"
+    "test": "tree-sitter generate --abi 14 && tree-sitter test && node test/shared-corpus.mjs && node --test test/package.test.mjs",
+    "package": "node scripts/package.mjs",
+    "test:package": "node --test test/package.test.mjs"
   }
 }

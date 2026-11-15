@@ -13,3 +13,5 @@ node_modules/
 *.o
 *.a
 log.html
+# The package (npm run package)
+dist/
