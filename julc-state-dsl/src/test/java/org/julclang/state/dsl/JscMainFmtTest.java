@@ -108,4 +108,75 @@ class JscMainFmtTest {
         Files.writeString(s, shop.replace("    return", "      return"));
         assertEquals(JscMain.FMT_REFUSED, JscMain.run(new String[]{"--fmt", s.toString()}));
     }
+
+    /** #120 F9 (C5): a byte order mark stays; the bytes are those `joust fmt` writes for the same file (fmt.test.js). */
+    static final String BOM_MESSY = "\uFEFFjsc 1\npackage t\n\ncontract C {\nstate {n: Int}\n\n  init() {\n        return {n: 0}\n  }\n}\n";
+    static final String BOM_FORMATTED = "\uFEFFjsc 1\npackage t\n\ncontract C {\n  state { n: Int }\n\n  init() {\n    return { n: 0 }\n  }\n}\n";
+
+    @Test
+    void aByteOrderMarkStays(@TempDir Path dir) throws Exception {
+        Path f = dir.resolve("C.jsc");
+        Files.write(f, BOM_MESSY.getBytes(StandardCharsets.UTF_8));
+        assertEquals(JscMain.FMT_OK, JscMain.run(new String[]{"--fmt", f.toString()}));
+        byte[] out = Files.readAllBytes(f);
+        assertArrayEquals(BOM_FORMATTED.getBytes(StandardCharsets.UTF_8), out);
+        assertEquals((byte) 0xEF, out[0]);
+        assertEquals(JscMain.FMT_OK, JscMain.run(new String[]{"--fmt", "--check", f.toString()}));
+    }
+
+    /**
+     * #120 F10: a file named alone finds its module root as the build does (the source set's {@code src/main/jsc}), so
+     * its {@code ../} imports resolve; outside a source set, the refusal names the import it cannot read.
+     */
+    @Test
+    void aNamedFileFindsItsModuleRoot(@TempDir Path dir) throws Exception {
+        String tiers = "jsc 1\nlibrary lib\n\nenum Tier { Basic, Gold { since: Int } }\n";
+        String c = "jsc 1\npackage app\n\nimport { Tier } from \"../lib/tiers.jsc\"\n\ncontract C {\n  state { t: Tier }\n\n  init() {\n    return { t: Gold { since: 1 } }\n  }\n}\n";
+        Path set = dir.resolve("src/main/jsc");
+        Files.createDirectories(set.resolve("lib"));
+        Files.createDirectories(set.resolve("app"));
+        Files.writeString(set.resolve("lib/tiers.jsc"), tiers);
+        Path file = set.resolve("app/C.jsc");
+        Files.writeString(file, c.replace("    return", "      return"));
+        assertEquals(JscMain.FMT_NOT_FORMATTED, JscMain.run(new String[]{"--fmt", "--check", file.toString()}));
+        assertEquals(JscMain.FMT_OK, JscMain.run(new String[]{"--fmt", file.toString()}));
+        assertEquals(c, Files.readString(file));
+        // No source set: the import cannot be read from the file's own directory, and the error says so.
+        Path loose = dir.resolve("loose/app");
+        Files.createDirectories(loose);
+        Files.createDirectories(dir.resolve("loose/lib"));
+        Files.writeString(dir.resolve("loose/lib/tiers.jsc"), tiers);
+        Path other = loose.resolve("C.jsc");
+        Files.writeString(other, c);
+        var err = new java.io.ByteArrayOutputStream();
+        var was = System.err;
+        System.setErr(new java.io.PrintStream(err, true, StandardCharsets.UTF_8));
+        try {
+            assertEquals(JscMain.FMT_REFUSED, JscMain.run(new String[]{"--fmt", other.toString()}));
+        } finally {
+            System.setErr(was);
+        }
+        org.junit.jupiter.api.Assertions.assertTrue(err.toString(StandardCharsets.UTF_8).contains("the import \"../lib/tiers.jsc\" cannot be read here"), err.toString());
+    }
+
+    /** #120 S5: an unreadable directory beside a named file, or inside a directory argument, never ends the run. */
+    @Test
+    void anUnreadableDirectoryIsSkipped(@TempDir Path dir) throws Exception {
+        Path a = dir.resolve("A.jsc");
+        Files.writeString(a, FORMATTED.replace("    return", "        return"));
+        Path locked = dir.resolve("locked");
+        Files.createDirectories(locked);
+        Files.writeString(locked.resolve("L.jsc"), FORMATTED);
+        Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("---------"));
+        try {
+            assertEquals(JscMain.FMT_OK, JscMain.run(new String[]{"--fmt", a.toString()}));
+            assertEquals(FORMATTED, Files.readString(a));
+            Files.writeString(a, FORMATTED.replace("    return", "        return"));
+            // A directory argument: the readable file formatted, the unreadable directory reported (exit 2).
+            assertEquals(JscMain.FMT_REFUSED, JscMain.run(new String[]{"--fmt", dir.toString()}));
+            assertEquals(FORMATTED, Files.readString(a));
+        } finally {
+            Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("rwx------"));
+        }
+    }
 }

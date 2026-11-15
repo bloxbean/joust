@@ -363,6 +363,24 @@ final class Checker {
      * resolve or load ({@code modules} null: the file alone, whose relative and package imports are not read). The
      * formatter parses with exactly these, so it refuses what the build's parser refuses.
      */
+    /** #120 F10: the first module import of the file that cannot be read (resolved and loaded), or null. */
+    static String unreadableImport(String source, String id, JscModules modules) {
+        var loader = new Loader(modules == null ? JscModules.NONE : modules);
+        if (id != null) loader.stack.push(id);
+        for (Import im : Parser.imports(source)) {
+            if (im.from().startsWith("java:") || im.contract() || !isModuleSpec(im.from())) continue;
+            JscModules.Source s = modules == null ? null
+                    : JscModules.isRelative(im.from()) || JscModules.isPackage(im.from()) ? modules.resolve(id, im.from()) : null;
+            if (s == null) return im.from();
+            try {
+                loader.load(s, im.pos());
+            } catch (JscException e) {
+                return im.from();
+            }
+        }
+        return null;
+    }
+
     static Set<String> importedTypes(String source, String id, JscModules modules) {
         var loader = new Loader(modules == null ? JscModules.NONE : modules);
         if (id != null) loader.stack.push(id);
