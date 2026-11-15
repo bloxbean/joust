@@ -157,4 +157,35 @@ class JscV2M3a3AttackTest {
         swapped.outputs.set(obj, new TxOut(o.address(), v, o.datum(), o.referenceScript()));
         h.assertRejected(swapped, "the moved hero continuing with another object's token");
     }
+
+    /**
+     * A22 (#107 round-r2 security S1, H1): an item carried into its own instance, which the transaction spends with
+     * admitItem naming it. carry reads no shared, so the transaction is ledger-valid, and only the move's into check
+     * (intoOk: into is not the object's own instance) refuses it. The same carry into B is accepted.
+     */
+    @Test
+    void aMoveIntoItsOwnInstance_isRefused() {
+        var item = new Guild.Item(ANN, BigInteger.ONE);
+        var obj = h.liveObject(new GuildValidator.Holding_Item(h.instanceId(), item), BigInteger.ZERO);
+        var toB = h.actObject(obj, new GuildValidator.Carry(B, ctx), new GuildValidator.Holding_Item(B, item), JulcList.empty(), ANN, ctx, null);
+        h.assertAccepted(h.withInstance(toB, B, B_REF, open, new GuildValidator.AdmitItem(h.objectId(), ctx), open, BigInteger.valueOf(h.minAda())));
+        var self = h.actObject(obj, new GuildValidator.Carry(h.instanceId(), ctx), new GuildValidator.Holding_Item(h.instanceId(), item),
+                JulcList.empty(), ANN, ctx, null);
+        h.assertRejected(h.withInstance(self, h.instanceId(), B_REF, open, new GuildValidator.AdmitItem(h.objectId(), ctx), open,
+                BigInteger.valueOf(h.minAda())), "an item carried into its own instance, admitted there");
+    }
+
+    /**
+     * A20 "with another action" (#107 round-r2 security S2, H10): a level-2 hero moves into B, which is spent with
+     * setOpen signed by B's master, so B's own spend is valid and no admit runs. Only the move's admission check
+     * (admittedBy: an admit naming the hero) refuses it.
+     */
+    @Test
+    void aMoveWhoseDestinationRunsAnotherActionSignedByItsMaster_isRefused() {
+        var obj = h.liveObject(hero(h.instanceId(), TWO), BigInteger.ZERO);
+        var tx = h.actObject(obj, new GuildValidator.Transfer(B, ctx), hero(B, TWO), JulcList.empty(), ANN, ctx, open);
+        var other = h.withInstance(tx, B, B_REF, open, new GuildValidator.SetOpen(true), open, BigInteger.valueOf(h.minAda()));
+        other.signers.add(MASTER);
+        h.assertRejected(other, "B runs setOpen, signed by its master, instead of admitting the hero");
+    }
 }

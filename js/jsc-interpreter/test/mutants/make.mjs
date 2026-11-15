@@ -108,7 +108,7 @@ keyed('action-open', 'Registry', (p, m) => { m('change').mods = [{ name: 'open' 
 keyed('no-hatch', 'Registry', (p, m) => { m('leave').mods = m('leave').mods.filter((x) => x.name !== 'retire'); }, 'Ballot has no retiring exit');
 keyed('max-key-65', 'Registry', (p) => { entryK(p).maxKeyBytes = 65; }, 'maxKeyBytes is 1 to 64');
 keyed('max-key-0', 'Registry', (p) => { entryK(p).maxKeyBytes = 0; }, 'maxKeyBytes is 1 to 64');
-keyed('signed-27', 'Registry', (p) => { ballot(p).maxKeyBytes = 27; }, 'a signed key is a 28-byte key hash');
+keyed('signed-27', 'Registry', (p) => { entryK(p).signed = true; entryK(p).maxKeyBytes = 27; }, 'a signed key is a 28-byte key hash');
 keyed('cooldown-59999', 'Registry', (p) => { entryK(p).linkCooldownMs = 59999; }, 'linkCooldownMs is 0 or 60000 to 3600000');
 keyed('window-19999', 'Registry', (p) => { entryK(p).linkWindowMs = 19999; }, 'linkWindowMs is 20000 to min(900000, maxValidityMs)');
 keyed('window-900001', 'Registry', (p) => { entryK(p).linkWindowMs = 900001; }, 'linkWindowMs is 20000 to min(900000, maxValidityMs)');
@@ -126,8 +126,9 @@ keyed('max-datum-2049', 'Registry', (p) => { p.options.find((o) => o.name === 'm
 keyed('batched', 'Registry', (p, m) => { m('setOpen').mods = [{ name: 'batched' }]; m('setOpen').usesCtx = true; }, 'a keyed contract has no batched action');
 // A move of a keyed type with its admit (M3a's JSC1214 satisfied): the keyed rule refuses the move.
 keyed('move', 'Registry', (p, m) => {
-  m('setOpen').mods.push({ name: 'admits', field: 'Ballot' });
-  m('setOpen').usesCtx = true;
+  p.methods.push({ kind: 'action', name: 'take', params: [{ id: 99902, name: 'id', type: 'Bytes', taint: 0, at }],
+    mods: [{ name: 'admits', field: 'Ballot' }], checked: [], usesCtx: true, pays: false, result: { record: 'State' },
+    body: { stmts: [], result: { node: 'StateRef', type: { record: 'State' }, taint: 0, at }, at }, at });
   m('change').into = { id: 99901, name: 'dest', type: { record: 'State' }, taint: 0, at };
   m('change').usesCtx = true;
 }, 'a keyed object does not move');
@@ -135,6 +136,11 @@ keyed('send', 'Registry', (p, m) => { m('withdraw').body.stmts.unshift(sendStmt(
 keyed('retire-plain', 'Bank', (p, m) => { m('close').mods.push({ name: 'retire' }); }, 'only a keyed type');
 keyed('retire-on-action', 'Registry', (p, m) => { m('setOpen').mods.push({ name: 'retire' }); m('setOpen').usesCtx = true; }, 'only an owned destroy retires');
 keyed('retire-field', 'Registry', (p, m) => { m('leave').mods[1] = { name: 'retire', field: 'voter' }; }, 'field');
+// #112 security S1: a Key key under 28 bytes admits no key.
+keyed('key-short', 'Registry', (p) => { entryK(p).key = 'owner'; entryK(p).maxKeyBytes = 20; }, 'a Key or Hash key is 28 bytes');
+// #112 review C5: a retiring exit with a present empty or null reads: both readers refuse either, alike.
+keyed('retire-empty-reads', 'Registry', (p, m) => { m('leave').reads = []; }, '"reads" is empty: an absent field is not written');
+keyed('retire-null-reads', 'Registry', (p, m) => { m('leave').reads = null; }, '"reads" is null');
 writeFileSync(new URL('./keyed-mutants.json', import.meta.url), JSON.stringify(keyedMutants, null, 1) + '\n');
 
 // M3b (K32, A28): a keyed action that changes its key, in the IR (the checker refuses it, JSC1248): both readers accept

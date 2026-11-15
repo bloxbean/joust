@@ -163,4 +163,44 @@ class JscV2M3bAttackTest {
         System.out.println("[M3b kinds] 4 crossings refused (a keyed node with a plain or instance arm, a plain object with a keyed arm, a"
                 + " keyed token on a plain datum)");
     }
+
+    @Test
+    void theGeneratedClient_ofNeighbouringKeyedNames() throws Exception {
+        // #112 review C1: keyed Name and keyed NameExists would give the Java client two nameExists(byte[]); the checker
+        // refuses it at the .jsc position (JSC1249) before any Java is generated. Name beside Named compiles, client and all.
+        java.util.function.BiFunction<String, String, String> two = (a, b) -> "jsc 1\npackage org.example.names\ncontract N {\n  state { admin: Key }\n"
+                + "  init() { return { admin: caller } }\n"
+                + String.join("", List.of(a, b).stream().map(t -> "  owned " + t + " keyed by k { k: Bytes, owner: Key }\n  owned init " + t + ".make" + t
+                + "(k: Bytes) { return { k, owner: caller } }\n  owned destroy " + t + ".end" + t + "() only owner retire { pay(owner, balance) }\n").toList())
+                + "}\n";
+        var refused = Toolchain.build(Map.of("org/example/names/N.jsc", two.apply("Name", "NameExists")), Map.of());
+        assertFalse(refused.ok());
+        assertTrue(refused.diagnostics().toString().contains("JSC1249"), refused.diagnostics().toString());
+        var built = Toolchain.build(Map.of("org/example/names/N.jsc", two.apply("Name", "Named")), Map.of());
+        assertTrue(built.ok(), built.diagnostics().toString());
+        System.out.println("[M3b names] Name + NameExists refused (JSC1249); Name + Named built, client included");
+    }
+
+    @Test
+    void theValidatorsRefusal_tellsARequireFromACooldown() throws Exception {
+        // #112 review C3: cast(ANN, 10) after a cooling head fails both its require and the cooldown. The validator traces the
+        // require (its policy runs the initializer first): FourWay.keyedParity accepts the interpreters' require class and
+        // refuses round r1's keyed:cooldown, so the five-way would have caught r1's order.
+        var f = LEGS.get("Registry");
+        var t = JscV2M1aFourWayTest.at(ANN, 0, 0).withShared(rec("State", Bytes.of(ADMIN), true));
+        f.anchor = FourWay.Node.head("Ballot", f.harness.instanceId(), Bytes.of(new byte[0]), T0.subtract(BigInteger.valueOf(60_000)).add(BigInteger.ONE));
+        Rec candidate = rec("Ballot", Bytes.of(ANN), n(10));
+        var tx = f.keyedTx("cast", null, List.of(Bytes.of(ANN), n(10)), t, ANN, false, null, JulcList.empty(), null, candidate);
+        var v = f.harness.evaluate(tx);
+        assertFalse(v.accepted(), v.toString());
+        f.keyedParity("cast", "require:32:5:choose 0 to 9", v, "cast(10), cooling");
+        assertThrows(AssertionError.class, () -> f.keyedParity("cast", "keyed:cooldown", v, "cast(10), cooling"));
+        // A cooling anchor alone: the policy refuses with no require traced, so keyed:cooldown is the validator's too.
+        var o = f.interp.transition("cast", null, List.of(Bytes.of(ANN), n(3)), t);
+        var cool = f.harness.evaluate(f.keyedTx("cast", null, List.of(Bytes.of(ANN), n(3)), t, ANN, true, f.java(o.value()), JulcList.empty(), o, null));
+        assertFalse(cool.accepted(), cool.toString());
+        f.keyedParity("cast", "keyed:cooldown", cool, "cast(3), cooling");
+        assertThrows(AssertionError.class, () -> f.keyedParity("cast", "require:32:5:choose 0 to 9", cool, "cast(3), cooling"));
+        System.out.println("[M3b parity] a require beside a cooling anchor is the validator's require; a cooling anchor alone, its policy's refusal");
+    }
 }

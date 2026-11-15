@@ -96,7 +96,8 @@ final class FourWay {
     final Class<?> stateClass;
     final Interpreter interp;
     final Map<String, String> transitions;
-    final StateHarness<Object> harness;
+    /** The validator's harness; {@link #useScript} replaces it with another build of the contract (a mutant). */
+    StateHarness<Object> harness;
     final LinkedHashMap<String, Boolean> bigMaps;
     final InMemoryNodeStore store = new InMemoryNodeStore();
     /** Each root this harness built, with its contents (key hex → stored bytes), for the transition leg's reads. */
@@ -169,6 +170,7 @@ final class FourWay {
         while (lm.find()) libraries.add(lm.group(1));
         this.transitions = transitions;
         var spec = (org.julclang.state.runtime.ContractSpec) Class.forName(PKG + "." + name + "Client").getField("SPEC").get(null);
+        this.spec = spec;
         this.harness = (StateHarness<Object>) (params == null ? StateHarness.of(spec) : StateHarness.of(spec, java(params)));
         this.events = interp.methods().keySet().stream().anyMatch(interp::carriesEvents);
         this.bigMaps = interp.bigMaps();
@@ -190,6 +192,28 @@ final class FourWay {
 
     /** Whether a method takes Funds (M2): an asset-aware contract's legs carry its native assets. */
     final boolean assets;
+
+    /** The contract's spec, as generated. */
+    @SuppressWarnings("rawtypes")
+    final org.julclang.state.runtime.ContractSpec spec;
+
+    /**
+     * #107 round-r2 review C4: this leg's validator becomes {@code cborHex}, another build of the contract (a mutant with
+     * a defence removed). The policy is that script's, and every transaction is built for it; the other legs are unchanged,
+     * so a vector whose defence is gone fails on "validator vs interpreter".
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void useScript(String cborHex) throws Exception {
+        var comps = org.julclang.state.runtime.ContractSpec.class.getRecordComponents();
+        var types = new Class<?>[comps.length];
+        var vals = new Object[comps.length];
+        for (int i = 0; i < comps.length; i++) {
+            types[i] = comps[i].getType();
+            vals[i] = comps[i].getName().equals("scriptCborHex") ? cborHex : comps[i].getAccessor().invoke(spec);
+        }
+        var mutant = (org.julclang.state.runtime.ContractSpec) org.julclang.state.runtime.ContractSpec.class.getDeclaredConstructor(types).newInstance(vals);
+        harness = (StateHarness<Object>) (params == null ? StateHarness.of(mutant) : StateHarness.of(mutant, java(params)));
+    }
 
     /** The deploy-time params (M2b), or null. */
     final Rec params;
@@ -423,7 +447,16 @@ final class FourWay {
         }
         for (Object a : args) redeemerArgs.add(java(a));
         if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
-        if (interp.carriesEvents(method)) redeemerArgs.add(events(o));
+        // #112 review C2: a refused keyed action proposes what its body would make without the defence (FourWay.unguarded),
+        // so the validator must refuse that outcome itself; a refused insert proposes its candidate, the same.
+        Rec unNext = ok ? null : unguardedNext;
+        List<Object> unEvents = ok ? null : unguardedEvents;
+        List<Interpreter.Payment> unPays = ok ? null : unguardedPays;
+        unguardedNext = null;
+        unguardedEvents = null;
+        unguardedPays = null;
+        if (unPays != null) pays = payouts(unPays);
+        if (interp.carriesEvents(method)) redeemerArgs.add(unEvents != null ? java(unEvents) : events(o));
         Object redeemer = construct(insert ? "Insert_" + method : cap(method), redeemerArgs);
         var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
         var fields = new ArrayList<>(encoded.fields());
@@ -472,18 +505,18 @@ final class FourWay {
         tx.spendRedeemers.put(StateHarness.OBJECT_REF, StateHarness.data(redeemer));
         BigInteger received = t == null ? BigInteger.ZERO : t.received();
         if (k.equals("ownedAction")) {
-            Object after = ok ? next : java(state);
+            Object after = ok ? next : unNext != null ? java(unNext) : java(state);
             tx.outputs.add(nodeOut(construct("Keyed_" + T, List.of(inst, nodeNext.bytes(), nodeLinkedAt, after)),
                     in.add(received).subtract(StateHarness.total(pays)), id));
             tx.stateOutput = 0;
             payoutsFor(tx, StateHarness.OBJECT_REF, pays);
         } else if (retire) {
-            JulcList<Payout> out = ok ? pays : Payouts.of(signer, t.balance());
+            JulcList<Payout> out = ok || unPays != null ? pays : Payouts.of(signer, t.balance());
             tx.outputs.add(nodeOut(nodeDatum(new Node(T, "retired", key, nodeNext, nodeLinkedAt, null, inst)), minAda, id));
             tx.stateOutput = 0;
             payoutsFor(tx, StateHarness.OBJECT_REF, out);
         } else {
-            JulcList<Payout> out = ok ? pays : Payouts.of(signer, in);
+            JulcList<Payout> out = ok || unPays != null ? pays : Payouts.of(signer, in);
             var a = tx.inputs.get(1).resolved();
             tx.outputs.add(new TxOut(a.address(), a.value(), new OutputDatum.OutputDatumInline(relinkedDatum(
                     ((OutputDatum.OutputDatumInline) a.datum()).datum(), nodeNext.bytes(), upper)), Optional.empty()));
@@ -492,6 +525,50 @@ final class FourWay {
             payoutsFor(tx, StateHarness.OBJECT_REF, out);
         }
         return tx;
+    }
+
+    /** The messages of the program's requires (and its warnings', which no validator traces), read from the exported IR. */
+    java.util.Set<String> requireMessages() {
+        var out = new java.util.HashSet<String>();
+        var mm = java.util.regex.Pattern.compile("\"message\": \"((?:[^\"\\\\]|\\\\.)*)\"").matcher(irJson);
+        while (mm.find()) out.add(mm.group(1).replace("\\\"", "\""));
+        return out;
+    }
+
+    /** Keyed refusals asserted against the validator's own refusal (#112 review C3). */
+    int keyedParityChecks;
+
+    /**
+     * #112 review C3: a keyed call refused by both interpreters is refused by the validator in the same place and for the
+     * same reason, as far as the validator tells it. A require's message is traced by the failing purpose; a checked input's
+     * key (#input:) too; a rule of the list (keyed:anchor, window, cooldown, length, signed, order) fails the policy (MINT)
+     * of an insert or a removal with neither, since the validator checks the list after the initializer's requires and
+     * inputs; keyed:fixed fails the node's spend with neither. The validator gives no finer class: rules that fail together
+     * after the body (the key's length, signer and place, the output checks) are told apart by the interpreters only.
+     * Modifier and output-check classes are not compared here (the validator does not trace them).
+     */
+    void keyedParity(String method, String cls, StateHarness.Verdict v, String what) {
+        if (keyedType(method) == null || v == null) return;
+        var failing = v.results().entrySet().stream().filter(e -> !e.getValue().isSuccess()).toList();
+        var traces = new ArrayList<String>();
+        for (var e : failing) traces.addAll(e.getValue().traces());
+        var requires = requireMessages();
+        boolean requireTraced = traces.stream().anyMatch(requires::contains);
+        boolean inputTraced = traces.stream().anyMatch(x -> x.startsWith("#input:"));
+        String where = what + ": the interpreters' " + cls + " against the validator's\n" + v;
+        if (cls.startsWith("require:")) {
+            String msg = cls.split(":", 4)[3];
+            assertTrue(traces.contains(msg), "a require's refusal is the validator's require: " + where);
+        } else if (cls.startsWith("input:")) {
+            assertTrue(inputTraced, "a checked input's refusal is the validator's input check: " + where);
+        } else if (cls.startsWith("keyed:")) {
+            assertFalse(requireTraced || inputTraced, "a list rule's refusal: the validator refused for a require or an input first: " + where);
+            String purpose = cls.equals("keyed:fixed") ? "SPEND" : "MINT";
+            assertTrue(failing.stream().anyMatch(e -> e.getKey().startsWith(purpose)), "the list rule fails " + purpose + ": " + where);
+        } else {
+            return;
+        }
+        keyedParityChecks++;
     }
 
     /** M3b: whether a keyed call needs a signer (Ctx, an audience, a signed key), as the runtime builds it. */
@@ -638,6 +715,8 @@ final class FourWay {
     /** A move's half, the object continuing under the destination: adds the destination spent with its admits action. */
     org.julclang.state.testkit.TxModel withDestination(org.julclang.state.testkit.TxModel tx, Rec object, Tx t) throws Exception {
         assertNotNull(partner, "a move's transaction needs the destination's half: set partner");
+        // #107 round-r2 review F1: the legs see the destination the validator's transaction spends, never another state.
+        assertEquals(partner.state(), t.into(), "the move's into (what the legs read) is the destination the validator spends");
         var admitArgs = new ArrayList<Object>();
         admitArgs.add(Bytes.of(harness.objectId()));
         admitArgs.addAll(partner.args());
@@ -662,6 +741,8 @@ final class FourWay {
      */
     org.julclang.state.testkit.TxModel withArrival(org.julclang.state.testkit.TxModel tx, Tx t) throws Exception {
         assertNotNull(partner, "an admits action's transaction needs the arriving object's move: set partner");
+        // #107 round-r2 review F1: the legs see the arriving object the validator's transaction spends, never another one.
+        assertEquals(partner.state(), t.arriving(), "the arriving object (what the legs read) is the input the validator spends");
         Ctx c = new Ctx(t.caller().bytes(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo());
         Tx mt = new Tx(t.caller(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo(), t.signers(), null, List.of(), Map.of(),
                 partner.shared(), partner.destination(), null);
@@ -753,6 +834,14 @@ final class FourWay {
         this.unguardedNext = next;
         this.unguardedEvents = events;
         return this;
+    }
+
+    /** #112 review C2: the payouts a refused keyed call's body would make without the defence (null: none). */
+    List<Interpreter.Payment> unguardedPays;
+
+    FourWay unguarded(Rec next, List<Object> events, List<Interpreter.Payment> pays) {
+        this.unguardedPays = pays;
+        return unguarded(next, events);
     }
 
     /**
@@ -1437,6 +1526,10 @@ final class FourWay {
             lastVerdict = v;
             return v.accepted();
         }
+        // #107 round-r2 review C4: a refused instance action may propose its unguarded outcome too (FourWay.unguarded).
+        Rec unNext = ok ? null : unguardedNext;
+        unguardedNext = null;
+        unguardedEvents = null;
         var redeemerArgs = new ArrayList<Object>();
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
         for (Object a : args) redeemerArgs.add(java(a));
@@ -1514,7 +1607,7 @@ final class FourWay {
                     batchRuns++;
                 } else if (!hasMaps()) {
                     v = evaluate(method, t, signer, withReads(method, ok ? harness.act(live, redeemer, nextJ, paysJ, signer, c)
-                            : harness.act(live, redeemer, before, JulcList.empty(), signer, c), t));
+                            : harness.act(live, redeemer, unNext != null ? java(unNext) : before, JulcList.empty(), signer, c), t));
                 } else {
                     Object after = ok ? nextState(run(ms, method, before, args, t)) : before;
                     var p = ms.prepare(harness.policy(), (Class) stateClass, before, after, StateHarness.LIVE_REF);
@@ -2720,6 +2813,7 @@ final class FourWay {
                 assertEquals(Boolean.FALSE, accepted, "a transaction-level failure: the validator (or the ledger) refuses " + what + " " + lastVerdict);
             } else if (accepted != null) {
                 assertEquals(!want.equals("refused"), accepted, "validator vs interpreter: " + what + " " + lastVerdict);
+                if (refused != null) keyedParity(method, refused.refusal(), lastVerdict, what);
             }
         }
         calls++;

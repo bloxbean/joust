@@ -74,10 +74,20 @@ public final class AbiCheck {
                         problems.add("keyed type " + t + ": " + e.getKey() + " is " + e.getValue() + " here, " + d.get(e.getKey()) + " described");
                     }
                 }
-                Object link = d.get("link") instanceof Map<?, ?> l ? l.get("index") : null;
-                if (!same(st.get("link"), link)) problems.add("keyed type " + t + ": Link is spend " + st.get("link") + " here, " + link + " described");
-                Object remove = d.get("remove") instanceof Map<?, ?> r ? r.get("index") : null;
-                if (!same(st.get("remove"), remove)) problems.add("keyed type " + t + ": Remove_" + t + " is mint " + st.get("remove") + " here, " + remove + " described");
+                // #112 review C4: the operational descriptors clients read, exactly: the lookup, the three datums' schemas,
+                // Link's and Remove_T's purpose, constructor and index (Remove_T null without a removing exit).
+                want = new java.util.LinkedHashMap<String, Object>();
+                want.put("lookup", Character.toLowerCase(t.charAt(0)) + t.substring(1));
+                want.put("head", Map.of("$ref", "#/definitions/" + validator + "Head_" + t));
+                want.put("node", Map.of("$ref", "#/definitions/" + validator + "Keyed_" + t));
+                want.put("retired", Map.of("$ref", "#/definitions/" + validator + "Retired_" + t));
+                want.put("link", Map.of("purpose", "spend", "constructor", "Link", "index", st.get("link")));
+                want.put("remove", st.get("remove") == null ? null : Map.of("purpose", "mint", "constructor", "Remove_" + t, "index", st.get("remove")));
+                for (var e : want.entrySet()) {
+                    if (!d.containsKey(e.getKey()) || !same(e.getValue(), d.get(e.getKey()))) {
+                        problems.add("keyed type " + t + ": " + e.getKey() + " is " + e.getValue() + " here, " + d.get(e.getKey()) + " described");
+                    }
+                }
             }
         }
         // M3c (ADR-0010 D2): the state's address staked to the own script, as x-joust.stakeSelf says.
@@ -204,6 +214,11 @@ public final class AbiCheck {
     /** Two JSON values alike (numbers by value, whatever their Java type). */
     private static boolean same(Object a, Object b) {
         if (a instanceof Number x && b instanceof Number y) return x.longValue() == y.longValue();
+        if (a instanceof Map<?, ?> x && b instanceof Map<?, ?> y) {
+            if (!x.keySet().equals(y.keySet())) return false;
+            for (var k : x.keySet()) if (!same(x.get(k), y.get(k))) return false;
+            return true;
+        }
         if (a instanceof List<?> x && b instanceof List<?> y) {
             if (x.size() != y.size()) return false;
             for (int i = 0; i < x.size(); i++) if (!same(x.get(i), y.get(i))) return false;

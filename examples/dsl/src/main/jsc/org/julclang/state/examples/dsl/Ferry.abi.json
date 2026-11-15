@@ -43,6 +43,12 @@
           { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
           { "name": "instance", "type": "Bytes", "data": "bytes" },
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "IssueAt", "constr": 3, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "lv", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] }
     ]
   },

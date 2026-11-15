@@ -59,5 +59,12 @@ contract Studio {
     pay(holder, balance)
   }
 
+  // #104 review S1: a destroy that leaves the seat's value over (it pays the host the tip and nothing of balance). Every
+  // leg computes its payouts; only the validator, whose rule is that a destroy pays out everything the object holds
+  // (I8), refuses the transaction (a transaction-level vector).
+  owned destroy Seat.tip(s: shared) payable open {
+    pay(s.host, received)
+  }
+
   view isOpen(): Bool = isOpen
 }

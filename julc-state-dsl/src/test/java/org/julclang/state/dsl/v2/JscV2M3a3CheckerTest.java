@@ -113,9 +113,13 @@ class JscV2M3a3CheckerTest {
                 """, "JSC1213", "holds a BigMap");
     }
 
-    /** #107 review C3: an arriving object that keeps a BigMap is admitted by its id alone (JSC1212 at the parameter). */
+    /**
+     * #107 review C3: an arriving object that keeps a BigMap cannot be a parameter (JSC1212 at the parameter); #107 review
+     * F6: and until a test runs a move of an object with map claims, such an object cannot move (JSC1212 at the into
+     * parameter). The admits action comes first, so its parameter is checked before the move.
+     */
     @Test
-    void anArrivingObjectWithABigMap_isAdmittedByIdAlone() {
+    void anObjectWithABigMap_neitherMovesNorArrivesAsAParameter() {
         String vault = """
                 jsc 1
                 package t
@@ -124,11 +128,10 @@ class JscV2M3a3CheckerTest {
                   owned Vault { owner: Key, inventory: BigMap<Bytes, Int> }
                   init() { return { keeper: caller } }
                   owned init Vault.open() { return { owner: caller, inventory: BigMap.empty() } }
-                  owned action Vault.move(to: into) only owner { return state }
-                  owned destroy Vault.close() only owner { pay(owner, balance) }
                 """;
-        lower(vault + "  action admit(id: Bytes) admits Vault { return state }\n}\n");
-        bad(vault + "  action admit(id: Bytes, @@v: Vault, k: Bytes) admits Vault { require(v.inventory[k] > 0, \"x\"); return state }\n}\n",
-                "JSC1212", "keeps a BigMap");
+        String move = "  owned action Vault.move(@@to: into) only owner { return state }\n  owned destroy Vault.close() only owner { pay(owner, balance) }\n}\n";
+        bad(vault + "  action admit(id: Bytes, @@v: Vault, k: Bytes) admits Vault { require(v.inventory[k] > 0, \"x\"); return state }\n"
+                + move.replace("@@", ""), "JSC1212", "keeps a BigMap, so an admits action cannot take it");
+        bad(vault + "  action admit(id: Bytes) admits Vault { return state }\n" + move, "JSC1212", "keeps a BigMap, so it cannot move yet");
     }
 }

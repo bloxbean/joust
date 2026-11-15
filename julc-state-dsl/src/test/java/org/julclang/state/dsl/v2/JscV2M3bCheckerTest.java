@@ -104,6 +104,9 @@ class JscV2M3bCheckerTest {
         lower(src("keyed by name (maxKeyBytes = 1)", RETIRE));
         lower(src("keyed by name (maxKeyBytes = 64)", RETIRE));
         bad(src("keyed by name (@@signed, maxKeyBytes = 27)", RETIRE), "JSC1242", "at least 28");
+        // #112 security S1: a Key key under 28 bytes admits no key (a Key is 28 bytes wherever it crosses a boundary).
+        bad(src("keyed by owner (@@maxKeyBytes = 20)", RETIRE), "JSC1242", "the key owner is a Key, 28 bytes");
+        lower(src("keyed by owner (maxKeyBytes = 28)", RETIRE));
         lower(src("keyed by name (signed, maxKeyBytes = 28)", RETIRE));
         // JSC1243: C is 0 or 60,000 to 3,600,000; W 20,000 to min(900,000, maxValidityMs).
         bad(src("keyed by name (@@linkCooldownMs = 59999)", RETIRE), "JSC1243", "linkCooldownMs is 0, or 60000 to 3600000");
@@ -133,6 +136,11 @@ class JscV2M3bCheckerTest {
         bad(src("  owned destroy Name.leave(@@s: shared) only owner retire { pay(owner, balance) }\n"), "JSC1245", "reads no shared state");
         // retire only on a keyed type's owned destroy.
         bad(src(RETIRE + "  action close() only admin @@retire { return state }\n"), "JSC1245", "retire goes on an owned destroy of a keyed type");
+        // #112 security S2: nor a time gate in its body.
+        bad(src("  @@owned destroy Name.leave() only owner retire { require(before(needed), \"late\") pay(owner, balance) }\n"), "JSC1245",
+                "decides on time");
+        bad(src("  @@owned destroy Name.leave() only owner retire { require(needed > 0 || after(needed), \"soon\") pay(owner, balance) }\n"), "JSC1245",
+                "decides on time");
         bad("""
                 jsc 1
                 package t
@@ -252,6 +260,32 @@ class JscV2M3bCheckerTest {
         // retire is a modifier word: no field or binding takes it (JSC0211); method names may (Guild's Hero.retire).
         bad(src(RETIRE + "  action set(@@retire: Int) only admin { return state }\n"), "JSC0211", "modifier");
         lower(src(RETIRE + "  owned destroy Name.retire() only owner retire { pay(owner, balance) }\n"));
+    }
+
+    /** Two owned types, keyed or plain as written, each with an initializer and an exit. */
+    static String two(String first, String second) {
+        StringBuilder b = new StringBuilder("jsc 1\npackage t\ncontract N {\n  state { admin: Key }\n  init() { return { admin: caller } }\n");
+        for (String t : List.of(first, second)) {
+            boolean keyed = !t.startsWith("plain ");
+            String n = t.replace("plain ", "").replace("@@", "");
+            b.append("  owned ").append(t.replace("plain ", "")).append(keyed ? " keyed by k" : "").append(" { k: Bytes, owner: Key }\n");
+            b.append("  owned init ").append(n).append(".make").append(n).append("(k: Bytes) { return { k, owner: caller } }\n");
+            b.append("  owned destroy ").append(n).append(".end").append(n).append("() only owner").append(keyed ? " retire" : "")
+                    .append(" { pay(owner, balance) }\n");
+        }
+        return b.append("}\n").toString();
+    }
+
+    @Test
+    void theClientsMembers_areOneNamespace_acrossOwnedTypes() {
+        // #112 review C1: a keyed Name's nameExists is a NameExists' lookup, whichever comes first; a plain type's lookup
+        // meets a keyed type's accessors too. Each is refused at the type declared second.
+        bad(two("Name", "@@NameExists"), "JSC1249", "both give the generated client a member nameExists");
+        bad(two("NameExists", "@@Name"), "JSC1249", "both give the generated client a member nameExists");
+        bad(two("plain NameKeys", "@@Name"), "JSC1249", "member nameKeys");
+        bad(two("Name", "plain @@NameList"), "JSC1249", "member nameList");
+        lower(two("Name", "Named"));
+        lower(two("plain Name", "Names"));
     }
 
     @Test

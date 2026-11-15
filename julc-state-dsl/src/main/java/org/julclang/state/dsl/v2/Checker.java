@@ -2042,6 +2042,12 @@ final class Checker {
                 throw t.pos().error("JSC1243", "the default link window min(120000, maxValidityMs) = " + window + " ms is under 20000 ms: raise"
                         + " maxValidityMs (ADR-0016 D1, D9)");
             }
+            // #112 security S1: a Key or Hash is 28 bytes wherever it crosses a boundary (D5), so a shorter bound admits no key.
+            if ((kt.equals(Ty.KEY) || kt.equals(Ty.HASH)) && maxKey < 28) {
+                Syntax.Option mk = k.options().stream().filter(o -> o.name().equals("maxKeyBytes")).findFirst().orElseThrow();
+                throw mk.pos().error("JSC1242", "the key " + k.field() + " is a " + Ty.show(kt) + ", 28 bytes: maxKeyBytes must be at least 28, or no"
+                        + " object could ever be inserted (ADR-0018 D5)");
+            }
             if (k.isSigned() && maxKey < 28) {
                 throw k.signed().error("JSC1242", "a signed key is a 28-byte key hash: maxKeyBytes must be at least 28 (ADR-0016 I53)");
             }
@@ -2063,6 +2069,22 @@ final class Checker {
         var names = new LinkedHashSet<String>(List.of("Link"));
         var members = new HashMap<String, String>();
         var constants = new HashMap<String, String>();
+        // #112 review C1: the client's instance members are one namespace, in Java as in the JavaScript wrapper: every owned
+        // type's lookup (t) and every keyed type's tList, tExists and tKeys. Two types may not give one name (a keyed Name's
+        // nameExists and a NameExists' lookup), whichever is declared first.
+        var given = new LinkedHashMap<String, String>();
+        for (TypeDecl t : c.owned()) {
+            String lookup = Character.toLowerCase(t.name().charAt(0)) + t.name().substring(1);
+            var own = new ArrayList<String>(List.of(lookup));
+            if (keyedDecls.containsKey(t.name())) own.addAll(List.of(lookup + "List", lookup + "Exists", lookup + "Keys"));
+            for (String x : own) {
+                String other = given.putIfAbsent(x, t.name());
+                if (other != null) {
+                    throw t.pos().error("JSC1249", "the owned types " + other + " and " + t.name() + " both give the generated client a member "
+                            + x + " (an owned type's lookup, a keyed type's List, Exists and Keys); rename one (ADR-0016 D7)");
+                }
+            }
+        }
         for (String o : keyedDecls.keySet()) {
             names.addAll(List.of("Head_" + o, "Keyed_" + o, "Retired_" + o, "Remove_" + o));
             String lookup = Character.toLowerCase(o.charAt(0)) + o.substring(1);
@@ -2116,6 +2138,12 @@ final class Checker {
                     throw mod.pos().error("JSC1245", "a retiring exit takes no '" + mod.name() + "': it is the escape hatch, which nothing may"
                             + " stop and nobody else need sign (ADR-0016 D1, §2)");
                 }
+            }
+            // #112 security S2: nor does its body gate it on time: after(…) and before(…) are allowed only in a require, so
+            // either would let the escape hatch expire (or not open yet).
+            if (mentionsCall(m.body(), "after") || mentionsCall(m.body(), "before")) {
+                throw m.pos().error("JSC1245", "the retiring exit " + m.name() + " decides on time (after(…) or before(…) in its body): it is the"
+                        + " escape hatch, which nothing may stop, so it cannot expire or wait (ADR-0016 D1, §2)");
             }
             if (!modNames.contains("only")) {
                 throw m.pos().error("JSC1245", "the retiring exit " + m.name() + " needs 'only <field>': unsigned, anyone could retire anyone's "
@@ -2286,7 +2314,9 @@ final class Checker {
             if (timeFields.contains(timeKey(o, k.key()))) {
                 throw keyedDecls.get(o).fieldPos().error("JSC1251", "the key " + k.key() + " of " + o + " is set from a time value somewhere: a key"
                         + " decides the list's order and whether an insert succeeds (a taken key refuses it), so a window-dependent key"
-                        + " would let the submitter's window decide, as a map key would (ADR-0018 D11)");
+                        + " would let the submitter's window decide, as a map key would (ADR-0018 D11). If a fn or another expression the checker"
+                        + " follows as a whole builds the object, build it as a record literal ({ " + k.key() + ", …, t: … }) so its fields are"
+                        + " followed one by one");
             }
             var retireSigners = new ArrayList<List<String>>();
             for (Ir.Method m : methods) {
@@ -2656,6 +2686,12 @@ final class Checker {
                 }
                 if (!isShared && (p.name().equals("into") || p.name().equals("destination_state"))) {
                     throw p.pos().error("JSC0216", "'" + p.name() + "' is a name a move's generated redeemer and client use; rename the parameter");
+                }
+                // #107 review F6: a move of an object that keeps a BigMap (its map claims keyed to its input while it
+                // continues under another instance) is run by no test yet, so it is refused until one runs it.
+                if (!isShared && records.get(m.on()).values().stream().anyMatch(ft -> ft instanceof Ty.BigMapT)) {
+                    throw p.pos().error("JSC1212", m.on() + " keeps a BigMap, so it cannot move yet: a move of an object with map claims is not"
+                            + " supported until a test runs one (ADR-0012 D3, ADR-0014)");
                 }
                 // The instance's time fields are time values here (D11), as in its own methods.
                 var fts = new LinkedHashMap<String, Integer>();

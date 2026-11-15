@@ -475,6 +475,8 @@ final class JavaEmitter {
     /** M3a (size): the effect kinds the method being emitted makes at most once: one statement of the kind, in no loop. */
     private Set<String> once = Set.of();
 
+    // #104 review F3: exhaustive over Ir.Stmt (no default), so a new statement kind, compound or not, must say here what
+    // it makes and what it nests: a kind made twice and counted once would lose its .reverse() and its source order.
     private static void countEffects(List<Ir.Stmt> ss, Map<String, Integer> n, boolean loop) {
         for (Ir.Stmt s : ss) {
             String k = switch (s) {
@@ -482,7 +484,13 @@ final class JavaEmitter {
                 case Ir.Send x -> "send";
                 case Ir.Emit x -> "emit";
                 case Ir.Deposit x -> "deposit";
-                default -> null;
+                case Ir.Let x -> null;
+                case Ir.Require x -> null;
+                case Ir.Mint x -> null;
+                case Ir.Accept x -> null;
+                case Ir.If x -> null;
+                case Ir.For x -> null;
+                case Ir.MatchStmt x -> null;
             };
             if (k != null) n.merge(k, loop ? 2 : 1, Integer::sum);
             switch (s) {
@@ -492,8 +500,14 @@ final class JavaEmitter {
                 }
                 case Ir.MatchStmt ms -> ms.arms().forEach(a -> countEffects(a.body().stmts(), n, loop));
                 case Ir.For f -> countEffects(f.body().stmts(), n, true);
-                default -> {
-                }
+                case Ir.Let x -> { }
+                case Ir.Require x -> { }
+                case Ir.Pay x -> { }
+                case Ir.Send x -> { }
+                case Ir.Mint x -> { }
+                case Ir.Accept x -> { }
+                case Ir.Emit x -> { }
+                case Ir.Deposit x -> { }
             }
         }
     }

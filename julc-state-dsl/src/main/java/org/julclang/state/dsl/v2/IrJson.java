@@ -535,10 +535,10 @@ final class IrJson {
         return (String) ((Map<String, Object>) AbiCheck.Json.parseStrict(json)).get("sourceSha256");
     }
 
-    @SuppressWarnings("unchecked")
     /** #101 review F2: the parts of M3a the readers admit (the Reader's stage, for its tests). */
     static final int OWNED_STAGE = Reader.OWNED_STAGE;
 
+    @SuppressWarnings("unchecked")
     private static final class Reader {
         private final Map<Long, Ir.Local> locals = new HashMap<>();
 
@@ -760,6 +760,15 @@ final class IrJson {
                     owned.add(n);
                 }
                 if (owned.isEmpty()) throw new IllegalArgumentException("owned lists the owned types; it is absent when there are none");
+                // #101 review C3 (round r2): M3a2's owned-type forms (several owned types, a BigMap in an owned type) are staged.
+                if (OWNED_STAGE < 2 && owned.size() > 1) {
+                    throw new IllegalArgumentException("a second owned type (" + owned.get(1) + ") is not produced yet (M3a2; JSC1215)");
+                }
+                for (String n : owned) {
+                    if (OWNED_STAGE < 2 && records.get(n).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                        throw new IllegalArgumentException("a BigMap in the owned type " + n + " is not produced yet (M3a2; JSC1215)");
+                    }
+                }
             } else if (r.containsKey("owned")) {
                 throw new IllegalArgumentException("\"owned\" is null: absent owned types are not written");
             }
@@ -824,8 +833,15 @@ final class IrJson {
                 known(x, Set.of("kind", "name", "params", "mods", "checked", "usesCtx", "pays", "result", "body", "at", "reads", "on", "shared",
                         "into", "arriving", "from", "old"), "a method");
                 // M3a: the locals an owned method binds before its parameters, then the arriving object after the first.
-                Ir.Local shared = x.get("shared") == null ? null : decl(x.get("shared"));
-                Ir.Local into = x.get("into") == null ? null : decl(x.get("into"));
+                // #101 review C5 (round r2): these optional fields by presence (containsKey), never by value: a present
+                // null is a malformed field, not an absent one (as the JavaScript reader reads them).
+                for (String k : List.of("on", "shared", "into", "arriving", "reads", "old")) {
+                    if (x.containsKey(k) && x.get(k) == null) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": \"" + k + "\" is null: an absent field is not written");
+                    }
+                }
+                Ir.Local shared = x.containsKey("shared") ? decl(x.get("shared")) : null;
+                Ir.Local into = x.containsKey("into") ? decl(x.get("into")) : null;
                 // M3c: init migrate's adopted state (checked with the program: purposesChecked).
                 if (x.containsKey("from") != x.containsKey("old") || x.containsKey("from") && !(x.get("from") instanceof String)) {
                     throw new IllegalArgumentException("method " + x.get("name") + ": an init migrate names its params field (from) and its adopted"
@@ -833,8 +849,13 @@ final class IrJson {
                 }
                 Ir.Migration migration = x.containsKey("old") ? new Ir.Migration(s(x.get("from")), decl(x.get("old"))) : null;
                 var params = decls(x.get("params"));
-                Ir.Local arriving = x.get("arriving") == null ? null : decl(x.get("arriving"));
+                Ir.Local arriving = x.containsKey("arriving") ? decl(x.get("arriving")) : null;
                 var reads = new ArrayList<Ir.Read>();
+                // #112 review C5: reads is written only when a method reads another contract, so a present empty list is
+                // malformed too, as the JavaScript reader reads it.
+                if (x.get("reads") instanceof List<?> rl && rl.isEmpty()) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": \"reads\" is empty: an absent field is not written");
+                }
                 if (x.get("reads") != null) {
                     for (Object ro : l(x.get("reads"))) {
                         known(m(ro), Set.of("local", "field"), "a read");
@@ -958,13 +979,40 @@ final class IrJson {
                     throw new IllegalArgumentException("method " + x.get("name") + ": native assets in an owned method (accept, send, mint, burn,"
                             + " deposit, funds) are not produced yet (M3a2; JSC1215)");
                 }
-                if (OWNED_STAGE < 3 && (into != null || arriving != null || admitted != null)) {
+                if (OWNED_STAGE < 3 && (x.containsKey("into") || x.containsKey("arriving") || admitted != null)) {
                     throw new IllegalArgumentException("method " + x.get("name") + ": moves (into, admits) are not produced yet (M3a3; JSC1215)");
+                }
+                // #107 round-r2 review C5, F7: the shapes stage 3 admits, as the checker produces them. A move's destination
+                // is a State; a move's object keeps no BigMap (JSC1212, #107 F6); an admits action's first parameter is
+                // the arriving object's id, a Bytes; it is never batched; its arriving object keeps no BigMap (JSC1212).
+                if (into != null && !into.type.equals(new Ty.Rec("State"))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": a move's destination is a State");
+                }
+                if (into != null && on != null && records.get(on).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": " + on + " keeps a BigMap, so it cannot move yet (JSC1212)");
+                }
+                if (admitted != null) {
+                    if (params.isEmpty() || !params.get(0).type.equals(Ty.BYTES)) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": an admits action's first parameter is the arriving object's id,"
+                                + " a Bytes (JSC1212)");
+                    }
+                    if (mods.stream().anyMatch(md -> md.name().equals("batched"))) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": an admits action cannot be batched (JSC1212)");
+                    }
+                    if (arriving != null && records.get(admitted).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                        throw new IllegalArgumentException("method " + x.get("name") + ": the arriving " + admitted + " keeps a BigMap, so an admits"
+                                + " action cannot take it as a parameter (JSC1212)");
+                    }
                 }
                 Ir.Owned ow = on != null || admitted != null ? new Ir.Owned(on, shared, into, arriving) : null;
                 methods.add(new Ir.Method(kind, s(x.get("name")), params, mods, checked,
                         (Boolean) x.get("usesCtx"), pays, body,
                         x.get("result") == null ? null : type(x.get("result")), pos(x.get("at")), List.copyOf(reads), ow, migration));
+                // #101 review C4 (round r2): an escape hatch that never reads balance could never pay out what its object
+                // holds (JSC1216, as the checker).
+                if (on != null && escapeHatch(methods.getLast(), on) && !readsBalance(x.get("body"))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": it is its type's escape hatch but never reads balance (JSC1216)");
+                }
             }
             // #101 review F2: each owned type has an owned init (JSC1208) and an escape hatch (JSC1209): an owned destroy
             // without shared, before or after, so no object is trapped behind its instance or a deadline.
@@ -984,6 +1032,7 @@ final class IrJson {
                             + " (JSC1209)");
                 }
             }
+
             var timeFields = new LinkedHashSet<String>();
             for (Object o : l(r.get("timeFields"))) timeFields.add(s(o));
             var recursive = new TreeSet<String>();
@@ -1004,6 +1053,11 @@ final class IrJson {
                     if (on != null && !owned.contains(on)) throw new IllegalArgumentException("invariant " + x.get("name") + ": " + on + " is not an owned type");
                     if (on != null && OWNED_STAGE < 3) {
                         throw new IllegalArgumentException("invariant " + x.get("name") + ": an owned type's invariant is not produced yet (M3a3; JSC1215)");
+                    }
+                    // #107 round-r2 review F7: an owned type that keeps a BigMap has no invariants (JSC1213).
+                    if (on != null && records.get(on).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                        throw new IllegalArgumentException("invariant " + x.get("name") + ": the owned type " + on + " keeps a BigMap, so it has no"
+                                + " invariants (JSC1213)");
                     }
                     invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at")), on));
                 }
@@ -1267,6 +1321,9 @@ final class IrJson {
                     throw new IllegalArgumentException("keyed type " + t + ": its key " + k.key() + " is not a Bytes, Key or Hash field");
                 }
                 if (k.maxKeyBytes() < 1 || k.maxKeyBytes() > 64) throw new IllegalArgumentException("keyed type " + t + ": maxKeyBytes is 1 to 64");
+                if ((kt.equals(Ty.KEY) || kt.equals(Ty.HASH)) && k.maxKeyBytes() < 28) {
+                    throw new IllegalArgumentException("keyed type " + t + ": a Key or Hash key is 28 bytes: maxKeyBytes at least 28");
+                }
                 if (k.signed() && (k.maxKeyBytes() < 28 || kt.equals(Ty.HASH))) {
                     throw new IllegalArgumentException("keyed type " + t + ": a signed key is a 28-byte key hash (maxKeyBytes at least 28, no Hash)");
                 }
@@ -1494,6 +1551,17 @@ final class IrJson {
         static boolean escapeHatch(Ir.Method m, String type) {
             return m.kind() == Ir.Kind.OWNED_DESTROY && type.equals(m.on()) && (m.owned() == null || m.owned().shared() == null)
                     && m.mods().stream().noneMatch(md -> md.name().equals("before") || md.name().equals("after"));
+        }
+
+        /** Whether raw IR JSON reads {@code balance} (a CtxRef of that name), at any depth (#101 review C4). */
+        static boolean readsBalance(Object json) {
+            if (json instanceof Map<?, ?> mp) {
+                if ("CtxRef".equals(mp.get("node")) && "balance".equals(mp.get("name"))) return true;
+                for (Object v : mp.values()) if (readsBalance(v)) return true;
+            } else if (json instanceof List<?> ls) {
+                for (Object v : ls) if (readsBalance(v)) return true;
+            }
+            return false;
         }
 
         /** Whether raw IR JSON holds a statement or expression node of one of {@code names}, at any depth. */

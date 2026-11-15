@@ -64,7 +64,8 @@ class JscV2M3bFourWayTest {
     static void report(FourWay f) {
         System.out.println("[M3b five-way] " + f.name + ": " + f.calls + " calls, interpreter = JVM = transition program = validator (" + f.refusals
                 + " refusals, " + f.validatorRuns + " validator runs); keyed refusals: " + f.keyedRefusals + ", modifier refusals: "
-                + f.modifierRefusals + ", invariant refusals: " + f.invariantRefusals + "; mutants rejected: " + f.mutantsRejected
+                + f.modifierRefusals + ", invariant refusals: " + f.invariantRefusals + ", validator refusals compared: " + f.keyedParityChecks
+                + "; mutants rejected: " + f.mutantsRejected
                 + ", attacks rejected: " + f.attacksRejected + (f.javaDiffs.isEmpty() ? "" : "; differs from the Java example on: " + f.javaDiffs));
         assertTrue(f.refusals > 0 && f.refusals < f.calls, "accepted and refused calls");
         assertTrue(f.mutantsRejected > 0 && f.attacksRejected > 0, "mutation and attack coverage");
@@ -149,12 +150,31 @@ class JscV2M3bFourWayTest {
         f.keyedRefused("keyed:window", "cast", null, List.of(Bytes.of(ANN), n(3)),
                 shared(window(ANN, 0, 0, n(4_294_900_000L), n(4_294_967_295L)), open), ANN);
         ok(f.check("cast", null, List.of(Bytes.of(ANN), n(3)), shared(window(ANN, 0, 0, n(4_294_900_000L), n(4_294_967_296L)), open), ANN));
+        f.anchor = FourWay.Node.head("Ballot", inst, EMPTY, BigInteger.ZERO);
+        f.keyedRefused("keyed:window", "cast", null, List.of(Bytes.of(ANN), n(3)),
+                shared(window(ANN, 0, 0, BigInteger.ONE.shiftLeft(64).subtract(n(1_000)), BigInteger.ONE.shiftLeft(64)), open), ANN);
+        ok(f.check("cast", null, List.of(Bytes.of(ANN), n(3)),
+                shared(window(ANN, 0, 0, BigInteger.ONE.shiftLeft(64).subtract(n(1_000)), BigInteger.ONE.shiftLeft(64).subtract(n(1))), open), ANN));
+        // #112 review C3: overlapping failures are reported as the validator reports them: its policy runs the initializer
+        // (its requires and checked inputs) before the list's rules, so a require wins over the cooldown and the window.
+        f.anchor = FourWay.Node.head("Ballot", inst, EMPTY, cooled.add(BigInteger.ONE));
+        assertEquals("refused", f.check("cast", null, List.of(Bytes.of(ANN), n(10)), shared(at(ANN, 0, 0), open), ANN, ballot(ANN, 10)));
+        assertTrue(f.lastRefusal.endsWith(":choose 0 to 9"), f.lastRefusal);
+        assertEquals("refused", f.check("cast", null, List.of(Bytes.of(ANN), n(3)), shared(window(ANN, 0, 0, T0, T0.add(n(120_001))), closed), ANN,
+                ballot(ANN, 3)));
+        assertTrue(f.lastRefusal.endsWith(":voting is closed"), f.lastRefusal);
+        // ... and among the list's rules after the body, the window before the key's length, and the signer before the place.
+        f.anchor = FourWay.Node.head("Ballot", inst, Bytes.of(ANN), cooled);
+        f.keyedRefused("keyed:signed", "cast", null, List.of(Bytes.of(ANN), n(3)), shared(at(EVE, 0, 0), open), EVE);
         // A fresh head (linkedAt 0) is cooled for any window in the time domain.
+        f.anchor = FourWay.Node.head("Ballot", inst, EMPTY, BigInteger.ZERO);
         ok(f.check("cast", null, List.of(Bytes.of(ANN), n(3)), shared(at(ANN, 0, 0), open), ANN));
         // A ballot's own methods: change (only the voter), leave (a retire: what it holds beyond the deposit).
         Rec b = ballot(ANN, 3);
         ok(f.check("change", b, List.of(n(7)), null, ANN));
-        assertEquals("refused", f.check("change", b, List.of(n(10)), null, ANN));
+        // #112 review C2: the refusal's transaction proposes what the body would make without its require (choice 10), so
+        // the validator must refuse that outcome itself (JscV2M3bGuardMutationTest: a validator without it accepts it).
+        assertEquals("refused", f.unguarded(ballot(ANN, 10), null).check("change", b, List.of(n(10)), null, ANN));
         f.modifierRefused("change", b, List.of(n(7)), null, EVE);
         ok(f.check("leave", b, List.of(), at(ANN, 0, ada(2).longValue()), ANN));
         ok(f.check("leave", b, List.of(), at(ANN, 0, 0), ANN));   // only its deposit: no payout (I55, K31)
@@ -197,7 +217,12 @@ class JscV2M3bFourWayTest {
         f.invariantRefused("invariant:tierInRange", "upgrade", e, List.of(n(4)), at(ANN, ada(3).longValue(), ada(5).longValue()), ANN);
         f.modifierRefused("upgrade", e, List.of(n(2)), at(EVE, ada(3).longValue(), ada(5).longValue()), EVE);
         ok(f.check("withdraw", e, List.of(ada(2)), at(ANN, 0, ada(5).longValue()), ANN));
-        assertEquals("refused", f.check("withdraw", e, List.of(ada(6)), at(ANN, 0, ada(5).longValue()), ANN));
+        // #112 review C2: over the stake (5 ADA) but within what the node holds (8 ADA): the unguarded outcome (stake -1 ADA,
+        // 6 ADA paid) is a valid transaction but for the require.
+        assertEquals("refused", f.unguarded(entry(name, ANN, -1, 1, keys(ANN, BOB), 1), null,
+                List.of(new org.julclang.state.dsl.v2.Interpreter.Payment(Bytes.of(ANN), ada(6)))).check("withdraw", e, List.of(ada(6)),
+                at(ANN, 0, ada(8).longValue()), ANN));
+        assertTrue(f.lastRefusal.endsWith(":withdraw within the stake"), f.lastRefusal);
         assertEquals("refused", f.check("withdraw", e, List.of(BigInteger.ZERO), at(ANN, 0, ada(5).longValue()), ANN));
         f.modifierRefused("withdraw", e, List.of(ada(2)), at(EVE, 0, ada(5).longValue()), EVE);
         // K32: a guardian recovers the entry for a new owner, without the old owner; a stranger cannot.
@@ -213,6 +238,11 @@ class JscV2M3bFourWayTest {
         ok(f.check("release", e, List.of(), at(ANN, 0, lovelace), ANN));
         f.modifierRefused("release", e, List.of(), at(EVE, 0, lovelace), EVE);
         f.anchor = FourWay.Node.head("Entry", inst, Bytes.of(new byte[]{0x62}), cooled);
+        f.keyedRefused("keyed:anchor", "release", e, List.of(), at(ANN, 0, lovelace), ANN);
+        // Design F5: a predecessor of another instance, and the other type's head, each pointing at the name.
+        f.anchor = FourWay.Node.head("Entry", FourWay.OTHER, Bytes.of(name), cooled);
+        f.keyedRefused("keyed:anchor", "release", e, List.of(), at(ANN, 0, lovelace), ANN);
+        f.anchor = FourWay.Node.head("Ballot", inst, Bytes.of(name), cooled);
         f.keyedRefused("keyed:anchor", "release", e, List.of(), at(ANN, 0, lovelace), ANN);
         f.anchor = new FourWay.Node("Entry", "retired", Bytes.of(new byte[]{0x60}), Bytes.of(name), cooled.add(BigInteger.ONE), null, inst);
         f.keyedRefused("keyed:cooldown", "release", e, List.of(), at(ANN, 0, lovelace), ANN);

@@ -80,6 +80,38 @@ class JscV2M3a3GateTest {
             assertTrue(s[1] <= RUNTIME_LIMIT, c + ": over the runtime's reference-script limit");
         });
         assertTrue(SIZES.get("Guild")[1] < SIZE_LIMIT && SIZES.get("Armory")[1] < SIZE_LIMIT, "the guild ports are below 14 KB");
+        // #107 round-r2 review F3: Market's J11 exception pinned at its recorded size plus 100 B (ADR-0018 §8's rule).
+        assertTrue(SIZES.get("Market")[1] <= MARKET_RECORDED + 100, "Market: " + SIZES.get("Market")[1] + " B, more than 100 B over its recorded "
+                + MARKET_RECORDED + " B (J11's exception, ADR-0018 §8): record the growth and its reason");
+    }
+
+    static final int MARKET_RECORDED = 14_372;
+
+    /**
+     * #107 round-r2 review F3: what Market's checks that examples/market does not make cost, each measured by building the
+     * port's lowering without that group of checks (the lines with its tag) and comparing the script's size. The rows are
+     * printed for the report; each variant must build and be smaller.
+     */
+    @Test
+    void marketsChecks_theirBytes() throws Exception {
+        String lowered = org.julclang.state.dsl.v2.JscV2.lower(read(JscV2M1aFourWayTest.DSL.resolve("Market.jsc").toString()), "Market.jsc").java();
+        int full = SIZES.get("Market")[1];
+        var groups = new LinkedHashMap<String, List<String>>();
+        groups.put("#input: (the init's Address, the offer's Hash policy)", List.of("\"#input:"));
+        groups.put("#pay: (each payout's sign)", List.of("\"#pay:"));
+        groups.put("#send: (the royalty's sendable and notOwnScript)", List.of("\"#send:"));
+        groups.put("#funds: (accepted against offered)", List.of("\"#funds:"));
+        groups.put("all four", List.of("\"#input:", "\"#pay:", "\"#send:", "\"#funds:"));
+        for (var g : groups.entrySet()) {
+            String mutated = lowered.lines().filter(l -> !(l.contains("Require.that(") && g.getValue().stream().anyMatch(l::contains)))
+                    .collect(java.util.stream.Collectors.joining("\n", "", "\n"));
+            assertNotEquals(lowered, mutated, g.getKey());
+            var built = Toolchain.build(Map.of("org/julclang/state/examples/dsl/Market.java", mutated), Map.of());
+            assertTrue(built.ok(), g.getKey() + ": " + built.diagnostics());
+            int size = built.contracts().get(0).scriptSizeBytes();
+            System.out.printf("[M3a3 market bytes] %-55s %,6d B (%,d B less)%n", g.getKey(), size, full - size);
+            assertTrue(size < full, g.getKey());
+        }
     }
 
     @Test

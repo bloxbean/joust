@@ -13,7 +13,9 @@ by examples/guild's Guild and Armory and by examples/market (moved here from M3a
 |---|---|---|
 | **Moves** (ADR-0012 D3): an owned action with `to: into` (`@Into State to`) moves its object; the destination consents with `admits T` (`@Admits("T")`), first parameter the object's id, optionally the arriving object (`obj: T`) as its input holds it | `Checker` (JSC1215 retired; JSC1212–JSC1214 at `.jsc` positions); the lowering M3a1 already had | `JscV2M3a3CheckerTest`; five-way (Guild's transfer and carry, Market's relist) |
 | **Invariants by type** (ADR-0012 D1): `invariant T.name` on every continuing object of `T`; none on a type with a BigMap (JSC1213) | `Checker` | `invariantsByType`; five-way (`invariant:itemPower` on every leg) |
-| **The order of a move's halves** (A24, decision): the source's half first; each half reads the other's input | ADR-0018 D10 (r25), the semantics §2.8 | five-way (both halves refusing: the source's class), `admissionReadsTheArrivingInput_notTheMoveResult` |
+| **An arriving object with a BigMap** is admitted by its id alone (JSC1212 at the parameter, as the processor refuses it; #107 review C3) | `Checker` | `anArrivingObjectWithABigMap_isAdmittedByIdAlone` |
+| **Both IR readers** recompute JSC1214 (a move needs its admits, and the reverse) and admit M3a3's shapes (`OWNED_STAGE` 3) | `IrJson`, `validate.js` | `JscV2M3a1IrStrictTest.aMoveAndItsAdmits_comeTogether`, `owned-strict.test.js` |
+| **The order of a move's halves** (A24, decision, narrowed after #107 review C1): each half is its own call, reads the other's input and reports its own class; the transaction is accepted only if both halves are; no transaction-wide order | ADR-0018 D10 (r25), the semantics §2.8 | five-way (each half's class from its own side), Ferry (each half's verdict) |
 | **FourWay** (the five-way harness): a move's two halves in one transaction (a partner half: the destination admitting, or the arriving object's move); a move's redeemer names its destination first; the arriving object for the JVM and the transition program (leading fields after the Funds); `Interpreter.admitsType`, `readsArriving` | `FourWay`, `Interpreter` | the M3a3 five-way suite, and every earlier one |
 | Docs | ADR-0018 r25, the semantics (§2.8), the language reference, the diagnostics catalogue (JSC1215 retired) | `JscV2DiagnosticsTest` |
 
@@ -31,7 +33,18 @@ state field's name (D3: `nowOpen`, `pause`, `newPrice`); market's state record i
 record's name), and buy's result record is `Exchanged`. Market's port pays its fee without an `if` (a zero `pay` is
 skipped, as examples/market's `fee.signum() > 0` does), which saves 110 B. Its payouts and sends are in source order
 (the seller, then the admin; the NFT, then the royalty), where examples/market's `Payouts.add` and `Sends.add` put the
-later one first. The validator checks each, whatever their order.
+later one first. The order of payouts does not matter (the validator sums them per recipient, `payoutsTagged`), but the
+order of sends is part of the transaction: the validator matches the sends to the output registry's claims head by head
+(`claimedAll`), so the port's transaction has its claims and send outputs in the other order from examples/market's.
+Each is self-consistent (the runtime builds the claims from the same JVM result), and the gate compares sends as sets
+(#107 round-r2 review F4).
+
+Two more behaviour differences (#107 round-r2 review F8):
+- **`enlist` takes no arriving listing.** examples/market's `enlist` takes the arriving `Listing` and ignores it; the
+  port's reads only the id, which is also why relist with its enlist costs less (the budget table).
+- **The port's `offer` refuses a junk token alongside the NFT on the JVM** (`#funds:`, accepted against offered), where
+  examples/market refuses it only at the validator. `copyPortTests` rewrites that copied test to expect the
+  `RequireException` (`examples/dsl/build.gradle`).
 
 **Size** (`JscV2M3a3GateTest.size_within15PercentOfJava`):
 
@@ -45,9 +58,21 @@ later one first. The validator checks each, whatever their order.
 above examples/market and 628 B under the runtime's reference-script limit. What it checks that the Java example does
 not: its init's `Address` argument (`#input:`), the offer's policy (a `Key`, 28 bytes), each payout's sign, the royalty
 send's value and address (`sendable`, `notOwnScript`), and what each payable method accepts against what it is offered
-(`#funds:`). The royalty's `if` is a generated helper threading the effects record. Getting below 14 KB would mean
-dropping those checks, which hold for these values only because of the call's context. The ADR asks for the case to
-be made rather than the checks dropped.
+(`#funds:`). The royalty's `if` is a generated helper threading the effects record. Measured (#107 round-r2 review F3,
+`JscV2M3a3GateTest.marketsChecks_theirBytes`, each group's checks removed from the port's lowering and the script
+rebuilt):
+
+| Checks removed | Script | Saved |
+|---|---|---|
+| `#input:` (the init's `Address`, the offer's `Hash` policy) | 14,082 B | 290 B |
+| `#pay:` (each payout's sign) | 14,292 B | 80 B |
+| `#send:` (the royalty's `sendable` and `notOwnScript`) | 14,016 B | 356 B |
+| `#funds:` (accepted against offered) | 14,294 B | 78 B |
+| all four | 13,568 B | 804 B |
+
+No single group brings the port below 14 KB, and without all four it is 54 B above examples/market (the royalty helper
+and the rest). The ADR asks for the case to be made rather than the checks dropped. The gate pins Market at 14,372 B
+plus 100 B, and ADR-0018 §8's J11 rule now names this case.
 
 **Encoding** (`encoding_equalsTheJavaExamples`): each manifest matches the description structurally, but for exactly the
 stated renamings (asserted as lists). **Modifiers** (`modifiers_perMethod_equalTheJavaExamples`, A9): all 25 calls as
@@ -79,41 +104,79 @@ saturation (fixed-width states and objects; Armory's map at depth).
 
 | Contract | Calls | Refused | Validator runs | Modifier refusals | Mutants rejected | Attacks rejected | What they cover |
 |---|---|---|---|---|---|---|---|
-| Guild (port) | 27 | 13 | 26 | 3 | 30 | 101 | heroes and items; a move with its admit in one transaction, from level 2 only, from an open guild only; the admit's level and open checks (the arriving hero as its input holds it); A24 (both halves refusing: the source's class); an item's invariant (`invariant:itemPower`); escape hatches |
+| Guild (port) | 27 | 13 | 26 | 3 | 30 | 101 | heroes and items; a move with its admit in one transaction, from level 2 only, from an open guild only; the admit's level and open checks (the arriving hero as its input holds it); A24 (each half refused with its own class, checked from its own side); an item's invariant (`invariant:itemPower`); escape hatches |
 | Armory (port) | 13 | 6 | 13 | 1 | 15 | 53 | an owned BigMap without native assets: stash, take within and over the count, the close of an empty vault only |
 | Market (port) | 19 | 11 | 19 | 2 | 31 | 92 | an offer of exactly the NFT (paused, under 2 ADA, a junk token alongside refused); buys of exactly the price (underpaid, the seller, paused refused), with and without fees; a relist with its enlist, into a paused market refused; the escape hatch |
-| **Total** | **59** | 30 | 58 | 6 | **76** | **246** | |
+| Ferry (coverage, #107 reviews C2, round r2 C4, F1, F5) | 13 | 6 | 13 | 0 | 10 | 32 | each half changes what the other reads, so input and outcome give different verdicts: a level-1 pass lifted to 3 refused at a level-3 ferry (the ferry's unguarded outcome proposed), a level-3 pass lowered to 1 boarded; lift into a ferry with 1 arrival accepted (it leaves full) and into a full one refused, lower onto an empty ferry refused (it leaves with 1); each half's verdict asserted; the invariant by type broken through a move and an owned init |
+| **Total** | **72** | 36 | 71 | 6 | **86** | **278** | |
 
 ## The security reviews' items
 
 | Item | Test, or why not here |
 |---|---|
-| A12 invariants by type | five-way `invariant:itemPower` (Guild's enchant past 100, on every leg); `invariantsByType` (JSC1203, JSC1213) |
+| A12 invariants by type | five-way `invariant:itemPower` (Guild's enchant past 100, on every leg) and Ferry's `invariant:cap` through a move (lift from 4) and an owned init (issueAt 6) (#107 round-r2 review F5); `invariantsByType` (JSC1203, JSC1213) |
 | A16 the arriving object written by a writer the reader refuses | the arriving object comes only from an instance of the same policy (its token under the own policy at the own script's address), so its datum is this validator's own output (as A25 below) |
 | A17 nested tags in the arriving object | as A16: not a checked input; the five-way's raw redeemer arguments still cover the move's arguments |
-| A20 a move without its admit, or with another action | copied `move_withoutTheDestination_orWithAnotherAction_rejected`, `admit_withoutAMove_rejected`, `move_bindingBroken_rejected` (an admit naming another object); `aMoveIntoAnInstanceNotInTheTransaction_isRefused`; `twoMovesIntoOneDestinationWithOneAdmit_isRefused`; DevKit `GuildDevnetPortTest` |
+| A20 a move without its admit, or with another action | `aMoveWhoseDestinationRunsAnotherActionSignedByItsMaster_isRefused` (#107 round-r2 security S2: the destination's setOpen signed by its master, so only the move's admission check refuses it; it kills mutant M7); copied `move_withoutTheDestination_orWithAnotherAction_rejected`, `admit_withoutAMove_rejected`, `move_bindingBroken_rejected` (an admit naming another object); `aMoveIntoAnInstanceNotInTheTransaction_isRefused`; `twoMovesIntoOneDestinationWithOneAdmit_isRefused`; DevKit `GuildDevnetPortTest` |
 | A21 admits bound to their type | copied `admitsAreBoundToTheirType` (an Item admitted as a Hero); `admitsAreBoundToTheirType_atTheChecker` (an arriving parameter typed Item on `admits Hero`: JSC1207); copied `move_bindingBroken_rejected` (the object continuing under its source) |
-| A22 a move into its own instance, a closed or paused destination, a closed source | copied `move_bindingBroken_rejected` (into its own instance); five-way (the admit into a closed guild and an elite one, the enlist into a paused market, the transfer from a closed guild, each refused on every leg); copied `relist_intoAPausedMarket_orUnadmitted_rejected` |
+| A22 a move into its own instance, a closed or paused destination, a closed source | `aMoveIntoItsOwnInstance_isRefused` (#107 round-r2 security S1: an item carried into its own instance, spent there with admitItem; only intoOk refuses it, and it kills mutant M6); copied `move_bindingBroken_rejected`; five-way (the admit into a closed guild and an elite one, the enlist into a paused market, the transfer from a closed guild, each refused on every leg); copied `relist_intoAPausedMarket_orUnadmitted_rejected` |
 | A23 a move's value accounting | `theObjectsValueTravelsWithIt` (a lovelace of the object into the destination refused); the five-way mutants and `Attacks` on the move's transaction (one lovelace added or skimmed, token dust); copied `royaltyClaimedByASpentVaultContinuation_rejected` |
-| A24 the order of the halves | decision (ADR-0018 D10, r25; semantics §2.8); five-way (a move from a closed guild into a closed guild: the source's class); DevKit `GuildDevnetPortTest` (a move built outside Compose refused by the runtime, `JoustException`; `transferAdmitted` inside Compose, then refusals for a low level and a closed source) |
+| A24 the order of the halves | decision (ADR-0018 D10, r25, narrowed after #107 review C1: each half its own call and class; no transaction-wide order; semantics §2.8); five-way (each half's class from its side); DevKit `GuildDevnetPortTest` (a move built outside Compose refused by the runtime, `JoustException`; `transferAdmitted` inside Compose, then refusals for a low level and a closed source) |
 | A25 the arriving object as a checked input | the id: the admit finds the arriving token itself (copied `move_bindingBroken_rejected`, an admit naming another object); the data: not a checked input (its datum is the own validator's output), pinned by `anArrivingHeroWithA27ByteOwner_isNotACheckedInput` |
 | A19 syntax at the new positions | `theMoveRules_atTheirPositions` (admits on an owned action, admits not first-parameter Bytes, admits of an unknown type); `admitsAreBoundToTheirType_atTheChecker` (into in an owned init or destroy: JSC1205; into on an instance action: JSC1205) |
-| A47 mutants | 76 (table above) |
+| A47 mutants | 86 (table above) |
 | A48 byte-identical earlier contracts | the checker's change (JSC1215's removal) changes no earlier file's output |
 | K21 a mutually bound handshake | A20, A21 |
-| K22 admission reads the input | `admissionReadsTheArrivingInput_notTheMoveResult` (a level-2 hero arriving as level 3 at an elite guild refused; the honest level-3 hero admitted) |
+| K22 admission reads the input | `JscV2M3a3FourWayTest.ferry` alone (#107 review C2 and round-r2 C4, security S2): the low-in/high-out refusal proposes the destination's unguarded outcome, so it fails without the admission's level check (`ferry_withoutItsAdmissionCheck_failsTheVector`) and with an admission that reads the move's output (processor mutant run by hand); the high-in/low-out vector boards. `admissionReadsTheArrivingInput_notTheMoveResult` is refused by the move's half first, so it does not pin input-reading |
+| K22's dual: the move reads the destination's input | `JscV2M3a3FourWayTest.ferry` (#107 round-r2 review F1): lift into a ferry with 1 arrival accepted, lower onto an empty ferry refused, each half's verdict asserted; a move that read the destination's output fails it (processor mutant run by hand); `FourWay` asserts that the legs' `into` and `arriving` are the states the validator spends |
 | K23 atomic halves | each half refused refuses the transaction (five-way, the copied tests' `move_refusedByEitherSide`) |
 | K24 identity across the move | `aMoveKeepsTheObjectsToken`; `Attacks` "object's instance changed" |
 | K25 move signatures | `theMoveRules_atTheirPositions` |
 
+## Review round r2 (#107)
+
+Security approved round r2; design and Codex requested changes. Each item:
+
+| Item | What changed | Test |
+|---|---|---|
+| Design F1 (P2) | Ferry's moves read the destination's arrivals (lift: room below 2; lower: only onto a ferry that has boarded a pass), where board changes them; `FourWay` asserts that the legs' `into` and `arriving` are the partner states the validator spends | `ferry` (lift into a ferry with 1 arrival accepted, into a full one refused, lower onto an empty one refused, each half's verdict); a processor mutant whose move reads the destination's output fails it |
+| Design F2 (P2) | the reference's moves paragraph says each half is its own call with its own class, both must accept, and `Compose` reports the first refusal in call order | |
+| Codex C4 (P2) | the K22 refusal proposes the destination's unguarded outcome (`FourWay.unguarded` for instance actions); `FourWay.useScript` runs a leg against another build of the validator | `ferry_withoutItsAdmissionCheck_failsTheVector` (the level check removed: "validator vs interpreter"); an output-reading admission fails `ferry` (processor mutant run by hand) |
+| Codex C5 (P2), design F7 | at stage 3 both readers require an admits action's first parameter to be a Bytes id, refuse a batched admission, a move's destination that is not a State, an arriving object, a move or an invariant of a type that keeps a BigMap (JSC1212, JSC1213) | `stage3_admitsOnlyTheCheckersMoveShapes`, the twin in `owned-strict.test.js` |
+| Design F3 | Market's extra checks measured per group; Market pinned at 14,372 B plus 100 B; J11's rule names the case | `marketsChecks_theirBytes`, `size_within15PercentOfJava` |
+| Design F4 | send order is part of the transaction (the claims' order), self-consistent both ways | |
+| Design F5 | Ferry's invariant by type (`level <= 5`) broken through a move and an owned init | `ferry` (`invariant:cap` on every leg) |
+| Design F6 | a move of an object that keeps a BigMap is refused (JSC1212 at the `into` parameter) until a test runs one; the readers mirror it | `anObjectWithABigMap_neitherMovesNorArrivesAsAParameter` |
+| Design F8 | the semantics and the reference state one move per destination per transaction; A47's count; the two missing stated differences (enlist's arriving listing, offer's junk token on the JVM) | |
+| Security S1 | the self-move (an item carried into its own instance, admitted there) | `aMoveIntoItsOwnInstance_isRefused` (kills mutant M6) |
+| Security S2 | a move whose destination runs another action signed by its master; K22 lists `ferry` alone | `aMoveWhoseDestinationRunsAnotherActionSignedByItsMaster_isRefused` (kills mutant M7) |
+| Security S3 | §2.8 and the reference: an admission's conditions hold for the object as it arrives, not for the object that lands | |
+| Design note for M3c | "the arriving object is not a checked input" fails if migration lets objects of another policy arrive: the M3c author has it | |
+
 ## Builds and DevKit
+
+Round r3 (after the round-r2 reviews of #101, #104 and #107), at `65b13d80`: `./gradlew clean build -PnoDevnet
+--continue --no-watch-fs` gives 1,077 JVM tests, 0 failures (1 skipped): julc-state-dsl 229, julc-state-toolchain 219,
+examples/dsl 148. `toolchainWasm`, `toolchainWasmTest` and `runtimeWasm` at this head: BUILD SUCCESSFUL. The Web Image
+against the JVM gives 154 results the same (116 build outputs, 38 depth runs), 124 language-server models
+byte-identical, 3,689/3,689 S2 cases, 21 depth cases and 43/43 S2b token calls. With those engines, npm gives:
+`js/jsc-interpreter` 59/59; `tree-sitter-jsc` 20/20, with the shared corpus (91 corpus, 53 repository, 70 research
+files) in agreement; `js/state-client` 48/48; `js/joust` 169/170 (1 skipped, 0 failures); `js/joust-runtime` 34/37
+(1 skipped). Its two failures are environmental: the Ogmios probe, as before, and "Counter and Bank on DevKit through
+the runtime engine", where the DevKit faucet was dry and no genesis account could pay 500 ADA. DevKit was not re-run
+this round.
+
+Round r2 (after the round-r1 reviews of #101, #104 and #107), at `66586603`: `./gradlew clean build -PnoDevnet --continue
+--no-watch-fs` gives 1,071 JVM tests, 0 failures (1 skipped): julc-state-dsl 227, julc-state-toolchain 215, examples/dsl
+148. `toolchainWasm`, `toolchainWasmTest` and `runtimeWasm` at this head: BUILD SUCCESSFUL; the Web Image against the JVM gives 154 results the same (116 build outputs and 38 depth runs; earlier rounds' "build outputs" counts include the depth runs too), 124 language-server models byte-identical, 3,680/3,680 S2 cases, 21 depth cases, 43/43 S2b token calls. With these engines copied into `js/joust/engine` and `js/joust-runtime/engine`, npm: `js/jsc-interpreter` 57/57, `tree-sitter-jsc` 20/20 and the shared corpus (91 corpus, 53 repository, 70 research files) in agreement, `js/state-client` 48/48, `js/joust` 169/170 (1 skipped, 0 failures) and `js/joust-runtime` 35/37 (1 skipped; the one failure is the environmental Ogmios probe: 3 of the reference-script outputs it needs on a reset devnet). The DevKit results below were measured at the round-r1 head (`79228781`):
 
 `./gradlew clean build -PnoDevnet --continue --no-watch-fs` at `79228781`: 1,051 JVM tests, 0 failures (1 skipped); julc-state-dsl 217, julc-state-toolchain 205, examples/dsl 148. DevKit: `:examples:dsl:test` 164 tests, 0 failures (`GuildDevnetPortTest` 2 and `MarketDevnetPortTest` among them). `toolchainWasmTest` (the Web Image against the JVM): 146 build outputs identical, 120 language-server models byte-identical, 3,660/3,660 S2 cases, 21 depth cases. npm: `js/jsc-interpreter` 50/50, `tree-sitter-jsc` 20/20 and the shared corpus (91 corpus, 49 repository, 70 research files) in agreement, `js/state-client` 48/48, `js/joust` 157/159 (1 skipped) and `js/joust-runtime` 35/37 (1 skipped). Each of the last two has the one environmental failure M3a1 and M3a2 have too: `joust dev … redeploys on save` (Node's recursive `fs.watch` fires no events in this sandbox) and the Ogmios provider test (it probes the M0 fixtures' transactions, not all on a reset devnet).
 
 ## Decisions for the maintainers
 
-1. **A24: a move's source half first; each half reads the other's input** (ADR-0018 D10, r25).
+1. **A24: each half of a move is its own call**, reading the other's input and reporting its own class; the transaction is accepted only if both halves are; no transaction-wide order (ADR-0018 D10, r25, narrowed after #107's review).
 2. **The arriving object is not a checked input**: it comes only from an instance of the same policy (A25's data case).
 3. **Market and J11's 14 KB bound**: an exception, with the numbers above.
-4. **Market's payouts and sends are in source order**, which differs from examples/market's (the validator checks each,
-   whatever their order).
+4. **Market's payouts and sends are in source order**, which differs from examples/market's. Payout order does not
+   matter to the validator; send order is the order of the transaction's claims and send outputs, self-consistent either
+   way (#107 round-r2 review F4).

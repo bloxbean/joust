@@ -114,5 +114,17 @@
  {
   "file": "keyed-retire-field.json",
   "message": "field"
+ },
+ {
+  "file": "keyed-key-short.json",
+  "message": "a Key or Hash key is 28 bytes"
+ },
+ {
+  "file": "keyed-retire-empty-reads.json",
+  "message": "\"reads\" is empty: an absent field is not written"
+ },
+ {
+  "file": "keyed-retire-null-reads.json",
+  "message": "\"reads\" is null"
  }
 ]

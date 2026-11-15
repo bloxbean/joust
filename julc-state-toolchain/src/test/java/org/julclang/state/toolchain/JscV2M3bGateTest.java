@@ -145,9 +145,16 @@ class JscV2M3bGateTest {
 
         @SuppressWarnings("unchecked")
         Impl(boolean java) throws Exception {
+            this(java, null);
+        }
+
+        /** The port's or the Java example's classes evaluated by {@code harness} (#112 review C2: a mutant validator). */
+        @SuppressWarnings("unchecked")
+        Impl(boolean java, StateHarness<Object> harness) throws Exception {
             this.java = java;
             this.pkg = java ? "org.julclang.state.examples.registry" : "org.julclang.state.examples.dsl";
-            this.h = StateHarness.of((org.julclang.state.runtime.ContractSpec<Object>) cls("RegistryClient").getField("SPEC").get(null));
+            this.h = harness != null ? harness
+                    : StateHarness.of((org.julclang.state.runtime.ContractSpec<Object>) cls("RegistryClient").getField("SPEC").get(null));
         }
 
         Class<?> cls(String name) throws Exception {

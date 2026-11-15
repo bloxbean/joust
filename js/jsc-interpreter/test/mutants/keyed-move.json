@@ -187,14 +187,10 @@
     {
      "name": "only",
      "field": "admin"
-    },
-    {
-     "name": "admits",
-     "field": "Ballot"
     }
    ],
    "checked": [],
-   "usesCtx": true,
+   "usesCtx": false,
    "pays": false,
    "result": {
     "record": "State"
@@ -1865,6 +1861,56 @@
    "at": [
     83,
     3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "take",
+   "params": [
+    {
+     "id": 99902,
+     "name": "id",
+     "type": "Bytes",
+     "taint": 0,
+     "at": [
+      1,
+      1
+     ]
+    }
+   ],
+   "mods": [
+    {
+     "name": "admits",
+     "field": "Ballot"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "StateRef",
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      1,
+      1
+     ]
+    },
+    "at": [
+     1,
+     1
+    ]
+   },
+   "at": [
+    1,
+    1
    ]
   }
  ],

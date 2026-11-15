@@ -189,10 +189,14 @@ ADR-0018 D2, r26), and the tag stays as long as the format does.
   `{ "name": "admits", "field": T }`. An owned type's invariant names it in `on` (M3a3). A time field of an owned type is
   `T.f` in `timeFields`. Both readers refuse an owned kind without `on`, an `on` that is not an owned type, `shared` outside
   an owned method or of another type than `State`, `into` outside an owned action, `arriving` without `admits`, modifiers
-  naming fields the object does not have, `receives` on an owned method, and an owned type without an owned init or an
-  escape hatch (an owned destroy without `shared`, `before` or `after`). **Not produced until their part** (#101 review
-  F2, F9; refused by both readers until then): `into`, `arriving`, `admits` and an invariant's `on` (M3a3), a payable owned
-  destroy and native assets in an owned method (M3a2).
+  naming fields the object does not have, `receives` on an owned method, an owned type without an owned init or an
+  escape hatch (an owned destroy without `shared`, `before` or `after`), an escape hatch that never reads `balance`
+  (JSC1216), and a present `null` for `on`, `shared`, `into`, `arriving` or `reads` (an absent field is not written; #101
+  round-r2 review C4, C5). From M3a3 (#107 round-r2 review C5, F7) they also refuse a move whose `into` is not a
+  `State` or whose object keeps a `BigMap`, an `admits` action whose first parameter is not a `Bytes` id or that is
+  `batched`, an `arriving` object that keeps a `BigMap` (JSC1212), and an invariant of a type that keeps one (JSC1213). **Not produced until their part** (#101 review F2, F9, round-r2 C3; refused by both readers until
+  then): `into`, `arriving`, `admits` and an invariant's `on` (M3a3); a payable owned destroy, native assets in an owned
+  method, a second owned type and a BigMap in an owned type (M3a2).
 - **M3b** (additive within format 2, ADR-0016). `keyed` (present only when the contract declares keyed types) lists each
   keyed type, in declaration order, with its options as the checker resolved them (the processor's defaults applied):
   `type` (an owned type), `key` (its key field), `maxKeyBytes`, `signed` (a boolean), `linkCooldownMs` and `linkWindowMs`

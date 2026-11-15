@@ -393,6 +393,15 @@ a record (§1), compared and encoded as one. Owned methods name their type: `own
   the validator refuses it when either half refuses. No order between the halves is defined beyond that: a tool that
   runs both reports the first refusal it meets (the runtime's `Compose`, in the order calls were added). An object
   arrives only from an instance of the same policy, so its datum is this contract's own output and not a checked input.
+  **What an admission holds for** (#107 round-r2 review S3): the admits action's conditions hold for the object as it
+  arrives, its input, not for the object that lands: the move's half may change it (Ferry's `lower` of a level-3 pass
+  boards it although the ferry then holds a level-1 pass, whose admission requires level 3). Both halves are the
+  contract's own code, so this is not a bypass, but an author who wants "every object here satisfies P" checks P on the
+  move's side too (or with an invariant by type). **One move per destination per transaction** (ADR-0012 D3): the
+  destination has one redeemer, so one admits action, which names one object; a second object moving into the same
+  instance in that transaction is refused.
+- **Moves of objects that keep a `BigMap`** are refused (JSC1212 at the `into` parameter, #107 round-r2 review F6) until
+  a test runs one: such an object's map claims are keyed to its input while it continues under another instance.
 - **Invariants by type** (M3a3, ADR-0012 D1): `invariant T.name = …` reads an object of type `T` (its fields as bare
   names) and is checked on every continuing object of that type (an owned init's, an owned action's, a move's), never
   on another type's objects or on the state. A type that keeps a `BigMap` has none (JSC1213).
@@ -408,12 +417,16 @@ transaction.
 
 | Kind | τ | Checked |
 |---|---|---|
-| `owned init T.m` (an insert) | τ.`instance`, τ.`anchor` (the node it is linked after: a head, a live node or a retired node, with its key, `next` and `linkedAt`) | before the body: the anchor, the window, the cooldown; after: the key's length, signer and place |
+| `owned init T.m` (an insert) | τ.`instance`, τ.`anchor` (the node it is linked after: a head, a live node or a retired node, with its key, `next` and `linkedAt`) | after the body: the anchor, the window, the cooldown, then the key's length, signer and place |
 | `owned action T.m` | | after the body: the key is kept |
 | `owned destroy T.m … retire` (a retire) | τ.`received` is 0; τ.`balance` is what the node holds less its deposit (I55) | the modifiers only |
-| `owned destroy T.m` (a removal) | τ.`instance`, τ.`anchor` (the node's predecessor) | before the body: the anchor, the window, the cooldown |
+| `owned destroy T.m` (a removal) | τ.`instance`, τ.`anchor` (the node's predecessor) | after the body: the anchor, the window, the cooldown |
 
-After the modifiers and before the checked inputs, in this order:
+After the body (its checked inputs, statements and result) and before the output checks (§2.7), in this order, which
+is the validator's: its policy runs the initializer (and a removal's spend runs the destroy) before it checks the list,
+so a require or a checked input that fails is the refusal whatever the list says (#112 review C3). A τ without its
+instance and anchor is the caller's error, never a refusal.
+
 
 1. **The anchor** (`keyed:anchor`): τ.`anchor` is a node of τ.`instance`'s list of `T` (its instance and type); for a
    removal, its `next` is the removed node's key.
@@ -423,7 +436,7 @@ After the modifiers and before the checked inputs, in this order:
 3. **The cooldown** (`keyed:cooldown`): when C (`linkCooldownMs`) > 0, τ.`validFrom` ≥ anchor.`linkedAt` + C. C = 0
    removes this rule, never the window's.
 
-After the body and before the output checks (§2.7), for an insert of key `k` (the new object's key field):
+Then, for an insert of key `k` (the new object's key field):
 
 4. **The length** (`keyed:length`): 1 ≤ |k| ≤ maxKeyBytes.
 5. **The signer** (`keyed:signed`), with `signed`: |k| = 28 and `k` is one of τ.`signers` (not necessarily the caller).
@@ -433,6 +446,13 @@ After the body and before the output checks (§2.7), for an insert of key `k` (t
 
 For a keyed action: **the key is fixed** (`keyed:fixed`): its result's key field equals its input's. The checker refuses
 any action that could change it (JSC1248), so only a hand-made IR reaches this rule.
+
+**What the validator tells.** The validator has no classes: what the five-way compares with it (`FourWay.keyedParity`)
+is where and how it refuses. A `require:` class is the failing purpose's traced message, an `input:` class a traced
+checked-input key (`#input:`), a `keyed:` class a failure of the policy (an insert's or a removal's) or of the node's
+spend (`keyed:fixed`) with neither traced. The rules checked together after the body (the key's length, signer and place,
+and the output checks) are told apart by the interpreters only; the JVM method and the transition program agree on the
+transition (#112 security S3).
 
 **Not evaluated by a call** (§2's transaction-level rules): the size rule (a node's datum, with `next` padded to
 maxKeyBytes and `linkedAt` to 9 bytes, fits maxDatumBytes, ADR-0016 D2: the validator refuses an insert or an action
