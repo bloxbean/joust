@@ -723,6 +723,8 @@ function keyedRules(p, owned, fail, keys) {
         if (!names.has('only') || ['payable', 'quorum', 'authorized', 'after', 'before'].some((x) => names.has(x)) || 'shared' in m || 'reads' in m) {
           fail(`method ${m.name}`, 'a retiring exit is signed by its owner (only f) and needs nobody else (no shared, reads, payable, quorum, authorized, after or before)');
         }
+        // #112 round r2, Codex C6 (JSC1245, as the checker since security S2): nor does its body decide on time.
+        if (hasTimePred(m.body)) fail(`method ${m.name}`, 'a retiring exit decides nothing on time (no after or before in its body)');
         hatch = true;
       }
       if (m.kind === 'ownedAction' && !['only', 'quorum', 'authorized'].some((x) => names.has(x))) {
@@ -993,6 +995,13 @@ function needsCheck(t, shapes, enums) {
   if (k === 'bigmap') return false;
   if (k === 'record') return shapes.get(v).some((f) => needsCheck(f.type, shapes, enums));
   return enums.get(v).some((variant) => shapes.get(variant).some((f) => needsCheck(f.type, shapes, enums)));
+}
+
+/** Whether IR holds a TimePred (after(…) or before(…)) at any depth. */
+function hasTimePred(node) {
+  if (Array.isArray(node)) return node.some(hasTimePred);
+  if (!node || typeof node !== 'object') return false;
+  return node.node === 'TimePred' || Object.values(node).some(hasTimePred);
 }
 
 /** Whether a method body names the transaction: caller, received, balance, the window, after/before or std/time. */

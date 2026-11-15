@@ -103,6 +103,10 @@ keyed('retire-open', 'Registry', (p, m) => { m('leave').mods[0] = { name: 'open'
 keyed('retire-payable', 'Registry', (p, m) => { m('leave').mods.push({ name: 'payable' }); }, 'needs nobody else');
 // (on Entry, whose release is an escape hatch of M3a's kind, so only the keyed rule refuses it)
 keyed('retire-after', 'Registry', (p, m) => { m('retire').mods.push({ name: 'after', field: 'stake' }); }, 'needs nobody else');
+// #112 round r2, Codex C6: a time gate in a retiring exit's body, not its modifiers (Entry.retire: require(before(stake), …)).
+keyed('retire-body-time', 'Registry', (p, m) => {
+  m('retire').body.stmts.unshift({ stmt: 'Require', cond: { node: 'TimePred', after: false, threshold: { node: 'StateField', field: 'stake', type: 'Int', taint: 0, at: [84, 20] }, type: 'Bool', taint: 0, at: [84, 13] }, message: 'still open', at: [84, 5] });
+}, 'a retiring exit decides nothing on time');
 keyed('retire-quorum', 'Registry', (p, m) => { m('retire').mods.push({ name: 'quorum', keys: 'guardians', threshold: 'needed' }); }, 'needs nobody else');
 keyed('action-open', 'Registry', (p, m) => { m('change').mods = [{ name: 'open' }]; }, 'a keyed action names its audience');
 keyed('no-hatch', 'Registry', (p, m) => { m('leave').mods = m('leave').mods.filter((x) => x.name !== 'retire'); }, 'Ballot has no retiring exit');

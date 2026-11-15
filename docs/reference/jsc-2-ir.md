@@ -207,7 +207,7 @@ ADR-0018 D2, r26), and the tag stays as long as the format does.
   16 keyed types, maxDatumBytes over 2048, a batched action, a `BigMap` in any owned type, a native-asset statement or
   `funds` read, `receives`, a keyed type that moves (`into`, `admits`), a key that is a time field, a keyed type without a
   retiring exit signed by its owner (`only f`) that needs nobody else (no `shared`, reads, `payable`, `quorum`,
-  `authorized`, `after` or `before`), a keyed action without an audience (`only`, `quorum` or `authorized`), and `retire`
+  `authorized`, `after` or `before`, and no `TimePred` in its body: #112 round r2, Codex C6), a keyed action without an audience (`only`, `quorum` or `authorized`), and `retire`
   anywhere else (`js/jsc-interpreter/test/mutants/keyed-*.json`, shared by both readers' tests). A keyed action that
   changes its key is well-formed IR (the checker refuses it, JSC1248): the interpreters refuse its call (`keyed:fixed`).
 - **Vectors (M3b):** a keyed insert's or removal's transaction carries `"instance"` (hex: the instance it acts under) and

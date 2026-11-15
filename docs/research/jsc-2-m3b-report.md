@@ -106,8 +106,8 @@ shows the validator then accepts the refused call (cast(10), a withdrawal over t
 `keyed:fixed` cannot be reached from a checked program (JSC1248): a hand-made IR that changes a ballot's key
 (`keyed-key-changed.json`) loads in both readers and both interpreters refuse its call with `keyed:fixed`, while the
 transition computes it (`JscV2M3bIrStrictTest`, `keyed-strict.test.js`); the validator refuses the transaction (the
-five-way's key mutants). Each reader rule has its mutant (32; round r2 adds a Key or Hash key under 28 bytes, an
-empty and a null `reads` on a retire, C5 and security S1), refused by both readers with a shared fragment, and each
+five-way's key mutants). Each reader rule has its mutant (33; round r2 adds a Key or Hash key under 28 bytes, an
+empty and a null `reads` on a retire, and a time gate in a retiring exit's body: C5, security S1, Codex C6), refused by both readers with a shared fragment, and each
 checker rule its refusal at its position.
 
 **Raw cases** (`JscV2M3bAttackTest`, 5 tests): the size rule counts the envelope at an insert (a claim with a 47-byte
@@ -181,7 +181,7 @@ again on DevKit (Points' and Jar's scripts under this head's lowering). At the r
 - **Wasm** (GraalVM 25.3.4.1): toolchainWasmTest 157 outputs the same as the JVM's (Registry's and Keys' among them), 129
   language-server models byte-identical (49 in their project), 21 depth cases; the engines copied into `js/joust/engine`
   and `js/joust-runtime/engine`.
-- **npm**: `js/jsc-interpreter` 62/62 (32 shared keyed reader mutants); `tree-sitter-jsc` 21/21 corpus parses, the shared
+- **npm**: `js/jsc-interpreter` 62/62 (33 shared keyed reader mutants, after C6); `tree-sitter-jsc` 21/21 corpus parses, the shared
   corpus agreeing with the hand-written parsers; `js/vscode-joust` 14/14; `js/state-client` 48/48; `js/joust` 151/158 with
   its language-server tests, 0 failures (7 skipped: 6 need DevKit, 1 is Linux-only); `js/joust-runtime` 18/37, 0 failures
   (19 skipped, DevKit not reachable).
