@@ -15,6 +15,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { EngineHost } from './host.js';
 import { createReader } from './inputs.js';
+import { librariesUsed, lockDecision } from '../libraries.js';
 import { scanImports } from './imports.js';
 import {
   diagnostics as toDiagnostics, MAX_PUBLISHED, documentSymbols, fixFor, foldingRanges, internalDiagnostic, MODEL_VERSION, parseModel, selectionRanges,
@@ -42,6 +43,8 @@ export const MAX_IMPORTS_PER_FILE = 128;
 export const DEBOUNCE_MS = 150;
 /** D7: Show generated Java runs the lowering on request only, with its own cap (§12 note 10's latency budget). */
 export const LOWER_MS = 10000;
+/** M5e (E3): at most this many bytes of joust.lock are read. */
+export const LOCK_CAP = 1024 * 1024;
 /** M5d: how long a formatting request may take in the engine (F6's bound is 60 ms warm; this is the watchdog's cap). */
 export const FORMAT_MS = 5000;
 /** D2a, D4: the build worker's limits (joust build's ENGINE_STACK_MB; the build heap of §1), its cap and idle stop. */
@@ -1697,7 +1700,32 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (libs.error) return { error: libs.error };
     for (const [k, v] of [...Object.entries(libs.packages), ...Object.entries(libs.javaLibraries)]) keep(`lib:${k}`, v);
     if (chars > buildChars) return { error: overBudget };
-    return { files, versions, states, disk, dir: listed.path, packages: libs.packages, javaLibraries: libs.javaLibraries, digest: digest.digest('hex') };
+    // ADR-0021 r10 (M5e, E3): joust.lock at the project root, an input of the build's J12 check: read confined (a link
+    // leaving the folder, a directory, a FIFO or more than LOCK_CAP bytes cannot be read: JSC0732, failing closed), in
+    // the digest, and recorded with the files read, so a change ends the results (null: there was none).
+    const lock = sel.kind === 'gradle' ? undefined : await lockInput(sel, disk);
+    if (lock) keep('joust.lock', lock.text ?? `unreadable:${lock.unreadable}`);
+    return { files, versions, states, disk, dir: listed.path, packages: libs.packages, javaLibraries: libs.javaLibraries, lock, digest: digest.digest('hex') };
+  }
+
+  /** The project's joust.lock for J12: null (none), `{ text }` or `{ unreadable }`; recorded in `disk` (E3). */
+  async function lockInput(sel, disk) {
+    if (!sel.root || !inside(sel.root, sel.folder)) return null;
+    const rel = `${relative(sel.folder, sel.root).split(sep).join('/') || '.'}/joust.lock`;
+    const full = join(sel.root, 'joust.lock');
+    const r = await reader.read(sel.folder, rel, { cap: LOCK_CAP });
+    if (r.error === 'missing') {
+      disk.set((await real(full)) ?? full, null);
+      return null;
+    }
+    if (r.error) {
+      disk.set((await real(full)) ?? full, `unreadable:${r.error}`);
+      return { unreadable: r.error === 'too-large' ? `larger than ${LOCK_CAP} bytes` : r.error === 'outside' || r.error === 'refused' ? 'it leads outside the workspace folder'
+        : r.error === 'not-a-file' ? 'not a regular file' : r.error };
+    }
+    const text = r.bytes.toString('utf8');
+    disk.set((await real(full)) ?? full, hash(text));
+    return { text };
   }
 
   /**
@@ -2187,6 +2215,30 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         message: old === null ? `no ABI manifest ${name}.abi.json: the encoding of the datum and redeemers must be committed; create it with Accept ABI… (joust build --accept-abi), review it and commit it`
           : `the ABI manifest differs from the committed ${name}.abi.json: a datum or redeemer encoding changed, which strands deployed instances; if it is intended, run Accept ABI… and commit the new manifest` });
     }
+    // ADR-0021 r10 (M5e, E1, E2): J12, decided as joust build decides it (libraries.js lockDecision), never accepted
+    // here. Each error at the import that brought the library in (every file that used it), else where it was asked.
+    if (snap.lock !== undefined && result.ok === true) {
+      const d = lockDecision({ used: librariesUsed(result.generated ?? [], result.libraries ?? []), lock: snap.lock });
+      const at = (code, message, u, line = 0) => {
+        errors++;
+        add(u, { range: { start: { line, character: 0 }, end: { line, character: 0 } }, severity: 1, code, source: label, message });
+      };
+      const strip = (line) => line.replace(/^error\[JSC\d+\]: /, '');
+      if (d.lockError) at(d.lockError.code, strip(d.lockError.line), uri);
+      for (const e of d.errors) {
+        let placed = false;
+        for (const g of result.generated ?? []) {
+          if (!(g.libraries ?? []).some((l) => l.name.replace(/^pkg:/, '') === e.name)) continue;
+          const u = uriOfBuilt(snap.dir, g.jscFile, uri);
+          const text = snap.files[g.jscFile] ?? '';
+          const spec = `"${e.name}"`;
+          const line = Math.max(0, text.split('\n').findIndex((l) => /^\s*import\b/.test(l) && l.includes(spec)));
+          at(e.code, strip(e.line), u, line);
+          placed = true;
+        }
+        if (!placed) at(e.code, strip(e.line), uri);
+      }
+    }
     for (const c of result.contracts ?? []) {
       if (c.scriptSizeBytes > SCRIPT_WARN_BYTES) {
         const g = (result.generated ?? []).find((x) => x.javaFile === `${c.packageName.replaceAll('.', '/')}/${c.name}.java`);
@@ -2331,8 +2383,18 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         await invalidateInput(r.error ? f : r.path, now && !now.error ? now.bytes.toString('utf8') : null, { resolve: !r.error });
       }
     }
+    // M5e (E3): joust.lock changed on disk: the builds that read it end (it is no selection input).
+    const locks = changes.filter((ch) => /\/joust\.lock$/.test(ch.uri));
+    for (const ch of locks) {
+      const f = localFileOf(ch.uri);
+      const folder = f && [...state.values()].map((st) => st.selection?.folder).find((d) => d && inside(f, d));
+      if (!folder) continue;
+      const rel = relative(folder, f).split(sep).join('/');
+      const now = await reader.read(folder, rel, { cap: LOCK_CAP });
+      await invalidateInput(f, now.error ? null : now.bytes.toString('utf8'));
+    }
     const jsc = changes.filter((ch) => /\.jsc$/.test(ch.uri));
-    if (changes.length > jsc.length + java.length || !changes.length) {
+    if (changes.length > jsc.length + java.length + locks.length || !changes.length) {
       if (selector) reselectAll();
       return;
     }

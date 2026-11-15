@@ -77,7 +77,8 @@ function makeClient() {
   // unchanged package.json must reach the server; Restart analysis also selects again).
   // And every .jsc file (the .jsc integration, #98 F3d): an importer's diagnostics follow its imports on disk.
   // C3 on #115 (ADR-0021 r8): and the java: libraries' sources that npm packages ship, which the analysis describes.
-  const watchers = ['**/*.jsc', '**/joust-lib/**/*.java', '**/joust.config.json', '**/package.json', '**/node_modules/@julclang/joust/package.json',
+  // ADR-0021 r10 (M5e, E3): and joust.lock, an input of the on-save build's J12 check.
+  const watchers = ['**/*.jsc', '**/joust-lib/**/*.java', '**/joust.config.json', '**/package.json', '**/joust.lock', '**/node_modules/@julclang/joust/package.json',
     '**/node_modules/@julclang/joust/engine/joust-toolchain.js', '**/node_modules/@julclang/joust/engine/joust-toolchain.js.wasm']
     .map((g) => vscode.workspace.createFileSystemWatcher(g));
   watchers.forEach((w) => context.subscriptions.push(w));
