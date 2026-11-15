@@ -1032,9 +1032,61 @@ final class IrJson {
          * Neither side in a contract with owned types, BigMap state or native assets (JSC1334): so an arriving object is
          * always this contract's own output.
          */
+        /** Whether a JSON IR type is, or holds, a purposes' ledger type or a LedgerMap (Gov.holds on the wire form). */
+        static boolean holdsGovJson(Object t) {
+            if (t instanceof String n) return Gov.NAMES.contains(n) || n.equals("Data");
+            if (!(t instanceof Map<?, ?> m) || m.isEmpty()) return false;
+            var e = m.entrySet().iterator().next();
+            String k = String.valueOf(e.getKey());
+            if (k.equals("ledgerMap")) return true;
+            if (k.equals("list") || k.equals("option")) return holdsGovJson(e.getValue());
+            if (k.equals("map") && e.getValue() instanceof List<?> kv && kv.size() == 2) return holdsGovJson(kv.get(1));
+            return false;
+        }
+
+        /**
+         * Review C2 (r2): the ledger types' expression rules, as the checker's, anywhere in a body or a fn: no equality on a
+         * ledger value (JSC1322: an Equals operand, a list's contains or indexOf over ledger elements), no set or delete on a
+         * LedgerMap (JSC1324), no binding of an opaque field (JSC1320: a match arm's bind of type Data).
+         */
+        static void ledgerExpressions(Object json, String where) {
+            if (json instanceof List<?> l) {
+                for (Object o : l) ledgerExpressions(o, where);
+                return;
+            }
+            if (!(json instanceof Map<?, ?> m)) return;
+            Object node = m.get("node");
+            if ("Equals".equals(node) && holdsGovJson(m.get("operand"))) {
+                throw new IllegalArgumentException(where + "a ledger value of the purposes is not comparable (JSC1322)");
+            }
+            if ("ListArg".equals(node) && ("contains".equals(m.get("op")) || "indexOf".equals(m.get("op")))
+                    && m.get("list") instanceof Map<?, ?> lm && holdsGovJson(lm.get("type"))) {
+                throw new IllegalArgumentException(where + "a ledger value of the purposes is not comparable (JSC1322)");
+            }
+            if ("CallStd".equals(node) && "indexOf".equals(m.get("name")) && m.get("args") instanceof List<?> as && !as.isEmpty()
+                    && as.get(0) instanceof Map<?, ?> a0 && holdsGovJson(a0.get("type"))) {
+                throw new IllegalArgumentException(where + "a ledger value of the purposes is not comparable (JSC1322)");
+            }
+            if ("MapOp".equals(node) && ("set".equals(m.get("op")) || "delete".equals(m.get("op")))
+                    && m.get("map") instanceof Map<?, ?> mm && mm.get("type") instanceof Map<?, ?> mt && mt.containsKey("ledgerMap")) {
+                throw new IllegalArgumentException(where + "a LedgerMap is read-only (JSC1324)");
+            }
+            if (m.get("binds") instanceof List<?> bs) {
+                for (Object b : bs) {
+                    if (b instanceof Map<?, ?> bm && "Data".equals(bm.get("type"))) {
+                        throw new IllegalArgumentException(where + "a PlutusData field is never bound (JSC1320)");
+                    }
+                }
+            }
+            for (Object v : m.values()) ledgerExpressions(v, where);
+        }
+
         static void purposesChecked(Map<String, Object> r, List<Ir.ContractOption> options, Map<String, Ir.RecordType> records,
                                     Map<String, Ir.EnumType> enums, Ir.RecordType state, Ir.RecordType params, List<Ir.Method> methods,
                                     List<Ir.Fn> fns, List<String> owned, Map<String, Ir.Foreign> contracts, Set<String> timeFields) {
+            // Review C2: the ledger types' expression rules, over every method's and fn's body.
+            for (Object mo : l(r.get("methods"))) ledgerExpressions(m(mo).get("body"), "method " + m(mo).get("name") + ": ");
+            if (r.get("fns") instanceof List<?> fl) for (Object fo : fl) ledgerExpressions(m(fo).get("body"), "fn " + m(fo).get("name") + ": ");
             boolean stakeSelf = false;
             for (Ir.ContractOption o : options) {
                 if (!o.name().equals("stakeSelf")) continue;
@@ -1097,6 +1149,9 @@ final class IrJson {
                     if (hasNodeIn(m.body(), Set.of("StateRef", "StateField"))) {
                         throw new IllegalArgumentException(where + "a handler reads no instance state (JSC1318)");
                     }
+                    if (hasNodeIn(m.body(), Set.of("FundsRef"))) {
+                        throw new IllegalArgumentException(where + "a handler reads no funds (JSC1315)");
+                    }
                     if (k == Ir.Kind.WITHDRAW && effectsOtherThan(m.body(), "Send")) {
                         throw new IllegalArgumentException(where + "a withdraw handler's only effect is send (JSC1319)");
                     }
@@ -1117,6 +1172,7 @@ final class IrJson {
                 }
                 if (k == Ir.Kind.MIGRATE) {
                     if (!m.mods().isEmpty()) throw new IllegalArgumentException(where + "an init migrate takes no modifiers (JSC1339)");
+                    if (hasNodeIn(m.body(), Set.of("FundsRef"))) throw new IllegalArgumentException(where + "an init migrate reads no funds (JSC1338)");
                     Ty from = params == null ? null : params.fields().get(m.migration().from());
                     if (from == null || !(from.equals(Ty.HASH) || from.equals(Ty.BYTES))) {
                         throw new IllegalArgumentException(where + "init migrate's from names a Hash or Bytes params field (JSC1335)");

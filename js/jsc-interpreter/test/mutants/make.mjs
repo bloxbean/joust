@@ -216,4 +216,37 @@ purpose('migrates-int-field', 'CounterV1', (p, m) => { m('upgrade').mods.find((x
 purpose('migrates-on-action', 'CounterV1', (p, m) => { m('setSuccessor').mods.push({ name: 'migrates', field: 'successor' }); },
   'only an instance destroy migrates');
 purpose('migrates-with-send', 'CounterV1', (p, m) => { m('setSuccessor').body.stmts.push(sendStmt()); }, '(JSC1334)');
+// Review C2 (r2): the ledger types' expression rules: equality on a ledger value, a set on a LedgerMap, an opaque bind.
+const findNode = (o, pred) => {
+  if (Array.isArray(o)) { for (const x of o) { const r = findNode(x, pred); if (r) return r; } return null; }
+  if (!o || typeof o !== 'object') return null;
+  if (pred(o)) return o;
+  for (const v of Object.values(o)) { const r = findNode(v, pred); if (r) return r; }
+  return null;
+};
+purpose('ledger-equality', 'StakedVault', (p, m) => {
+  const cert = m('certificate').params[0];
+  const ref = { node: 'LocalRef', local: cert.id, type: 'TxCert', taint: 0, at };
+  m('certificate').body.result = { node: 'Equals', negate: false, left: ref, right: { ...ref }, operand: 'TxCert', type: 'Bool', taint: 0, at };
+}, '(JSC1322)');
+purpose('ledger-map-set', 'Guardrail', (p, m) => {
+  const has = findNode(m('rail').body, (o) => o.node === 'MapOp' && o.op === 'has');
+  const original = JSON.parse(JSON.stringify(has));
+  const set = { node: 'MapOp', op: 'set', map: original.map, args: [original.args[0], lit('1', 'Int')], type: original.map.type, taint: 0, at };
+  for (const k of Object.keys(has)) delete has[k];
+  Object.assign(has, { node: 'MapOp', op: 'isEmpty', map: set, args: [], type: 'Bool', taint: 0, at });
+}, '(JSC1324)');
+purpose('opaque-bind', 'Guardrail', (p, m) => {
+  const arm = findNode(m('rail').body, (o) => Array.isArray(o.ctors) && o.ctors[0] === 'ParameterChange');
+  arm.fields.push('parameters');
+  arm.binds.push({ id: 90201, name: 'parameters', type: 'Data', taint: 0, at });
+}, '(JSC1320)');
+// Review C3 (r2): funds in a handler or an init migrate (the processor's signatures take no Funds).
+const fundsLet = (id) => ({ stmt: 'Let', local: { id, name: `zf${id}`, type: 'Hash', taint: 0, at },
+  value: { node: 'FundsRef', field: 'policy', type: 'Hash', taint: 0, at }, at });
+purpose('withdraw-funds', 'StakedVault', (p, m) => { m('collect').body.stmts.unshift(fundsLet(90301)); }, '(JSC1315)');
+purpose('certify-funds', 'StakedVault', (p, m) => { m('certificate').body.stmts.unshift(fundsLet(90302)); }, '(JSC1315)');
+purpose('vote-funds', 'StakedVault', (p, m) => { m('vote').body.stmts.unshift(fundsLet(90303)); }, '(JSC1315)');
+purpose('propose-funds', 'StakedVault', (p, m) => { m('proposal').body.stmts.unshift(fundsLet(90304)); }, '(JSC1315)');
+purpose('migrate-funds', 'CounterV2', (p, m) => { m('migrate').body.stmts.unshift(fundsLet(90305)); }, '(JSC1338)');
 writeFileSync(new URL('./purpose-mutants.json', import.meta.url), JSON.stringify(purposeMutants, null, 1) + '\n');

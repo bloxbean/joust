@@ -709,7 +709,43 @@ function keyedRules(p, owned, fail, keys) {
  * state. A migrating destroy: no effects (JSC1332), an audience (JSC1333), its field no time field. Neither side with
  * owned types, BigMap state or native assets (JSC1334).
  */
+/** Whether an IR type is, or holds, a purposes' ledger type or a LedgerMap (holdsGov, Data included). */
+function holdsLedger(t) {
+  return holdsGov(t);
+}
+
+/**
+ * Review C2 (r2): the ledger types' expression rules, as the checker's, anywhere in a body or a fn: no equality on a ledger
+ * value (JSC1322: an Equals operand, a list's contains or indexOf over ledger elements), no set or delete on a LedgerMap
+ * (JSC1324), no binding of an opaque field (JSC1320: a match arm's bind of type Data).
+ */
+function ledgerExpressions(json, where, fail) {
+  if (Array.isArray(json)) {
+    for (const o of json) ledgerExpressions(o, where, fail);
+    return;
+  }
+  if (!json || typeof json !== 'object') return;
+  const n = json.node;
+  if (n === 'Equals' && holdsLedger(json.operand)) fail(where, 'a ledger value of the purposes is not comparable (JSC1322)');
+  if (n === 'ListArg' && (json.op === 'contains' || json.op === 'indexOf') && json.list && holdsLedger(json.list.type)) {
+    fail(where, 'a ledger value of the purposes is not comparable (JSC1322)');
+  }
+  if (n === 'CallStd' && json.name === 'indexOf' && Array.isArray(json.args) && json.args[0] && holdsLedger(json.args[0].type)) {
+    fail(where, 'a ledger value of the purposes is not comparable (JSC1322)');
+  }
+  if (n === 'MapOp' && (json.op === 'set' || json.op === 'delete') && json.map && json.map.type && typeof json.map.type === 'object'
+    && 'ledgerMap' in json.map.type) {
+    fail(where, 'a LedgerMap is read-only (JSC1324)');
+  }
+  if (Array.isArray(json.binds)) {
+    for (const b of json.binds) if (b && b.type === 'Data') fail(where, 'a PlutusData field is never bound (JSC1320)');
+  }
+  for (const v of Object.values(json)) ledgerExpressions(v, where, fail);
+}
+
 function purposeRules(p, owned, fail, contracts) {
+  for (const m of p.methods) ledgerExpressions(m.body, `method ${m.name}`, fail);
+  for (const f of p.fns ?? []) ledgerExpressions(f.body, `fn ${f.name}`, fail);
   const stake = p.options.filter((o) => o.name === 'stakeSelf');
   if (stake.length > 1 || stake.some((o) => o.value !== '1')) fail('options', 'the option stakeSelf is the flag "1", once (JSC1301)');
   const stored = [...p.records, p.state, ...('params' in p ? [p.params] : []), ...p.enums.flatMap((e) => e.variants)];
@@ -739,6 +775,7 @@ function purposeRules(p, owned, fail, contracts) {
       if (m.kind === 'withdraw' ? m.result !== null : m.result !== 'Bool') fail(where, `a ${m.kind} handler ${m.kind === 'withdraw' ? 'has no result (JSC1340)' : 'is a Bool (JSC1341)'}`);
       if (m.kind !== 'withdraw' && m.usesCtx) fail(where, `a ${m.kind} handler takes no transaction (JSC1315)`);
       if (hasNode(m.body, ['StateRef', 'StateField'])) fail(where, 'a handler reads no instance state (JSC1318)');
+      if (hasNode(m.body, ['FundsRef'])) fail(where, 'a handler reads no funds (JSC1315)');
       if (m.kind === 'withdraw' && hasNode(m.body, ['Pay', 'Mint', 'Accept', 'Deposit', 'Emit'])) fail(where, 'a withdraw handler\'s only effect is send (JSC1319)');
       if (m.kind === 'propose' && m.mods.length > 0) fail(where, 'a propose handler takes no modifiers (JSC1313)');
       for (const x of m.mods) {
@@ -749,6 +786,7 @@ function purposeRules(p, owned, fail, contracts) {
       if (m.kind !== 'propose' && m.mods.length === 0) fail(where, `a ${m.kind} handler needs quorum or authorized (JSC1312)`);
     }
     if (m.kind === 'migrate') {
+      if (hasNode(m.body, ['FundsRef'])) fail(where, 'an init migrate reads no funds (JSC1338)');
       const from = (p.params?.fields ?? []).find((x) => x.name === m.from);
       if (!from || !['Hash', 'Bytes'].includes(from.type)) fail(where, 'init migrate\'s from names a Hash or Bytes params field (JSC1335)');
       const c = [...contracts.values()].find((x) => JSON.stringify(m.old.type) === JSON.stringify({ record: x.state.name }));

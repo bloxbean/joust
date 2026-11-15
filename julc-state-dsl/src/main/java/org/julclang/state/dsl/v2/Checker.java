@@ -3769,6 +3769,15 @@ final class Checker {
 
     /** {@code funds.received}, {@code funds.held}, {@code funds.policy}, {@code funds.self} (M2, ADR-0007 D1). */
     private Ir.Expr fundsRef(Field f, Sc sc) {
+        // Review C3: a script purpose's handler and an init migrate take no Funds (the processor's fixed signatures).
+        if (sc.kind != null && sc.kind.purpose()) {
+            throw f.pos().error("JSC1315", "funds is not available in " + handlerWord(sc.kind) + ": no input of the contract is spent for a"
+                    + " script purpose, so there are no funds to read; it takes the params and the purpose's data only (ADR-0010 D1)");
+        }
+        if (sc.kind == Ir.Kind.MIGRATE) {
+            throw f.pos().error("JSC1338", "funds is not available in init migrate: it adopts exactly the previous instance's lovelace and"
+                    + " no assets (ADR-0011 D4)");
+        }
         if (sc.kind == null || sc.kind == Ir.Kind.VIEW) {
             throw f.pos().error("JSC0427", "funds is part of the transaction: it is not available in a view or fn (pass what you need as an"
                     + " argument)");
@@ -4130,6 +4139,7 @@ final class Checker {
                 expectType(e, v, c.args().get(1).pos());
                 if (((v.taint() | taint) & TIME) != 0) throw c.pos().error("JSC0511", "a time value cannot decide here: indexOf compares it (ADR-0018 D11)");
                 noBigMap(e, c.pos(), "compared");
+                notComparable(e, c.pos());   // review C5: a ledger value is no indexOf element (JSC1322 at the call)
                 args.add(v);
                 return new Ir.CallStd(b, args, new Ty.OptT(Ty.INT), 0, c.pos());
             }

@@ -238,6 +238,17 @@ class JscV2M3cCheckerTest {
         cases.add(bad("JSC1324", "is read-only", pur("  fn f(m: LedgerMap<Credential, Int>, k: Credential): Int = @@m.delete(k).size\n")));
         cases.add(bad("JSC1324", "has no property", pur("  fn f(m: LedgerMap<Credential, Int>): Int = @@m.length\n")));
         cases.add(bad("JSC1325", "its values come from", pur("  certify c(cert: TxCert) " + Q + " = @@VoteYes == VoteYes\n")));
+        // Review C3: funds in a handler (no Funds in the purposes' signatures) and in init migrate.
+        cases.add(bad("JSC1315", "funds is not available in", pur("  certify c(cert: TxCert) " + Q + " = @@funds.policy == #\n")));
+        cases.add(bad("JSC1315", "funds is not available in", pur("  withdraw w(amount: Int) " + Q + " { const p = @@funds.policy\n }\n")));
+        cases.add(bad("JSC1315", "funds is not available in", pur("  vote v(voter: Voter, a: GovernanceActionId, x: Vote) " + Q + " = @@funds.self == #\n")));
+        cases.add(bad("JSC1315", "funds is not available in", pur("  propose p(x: ProposalProcedure) = @@funds.policy == #\n")));
+        // Review C5: indexOf over ledger values, refused at the call (direct, and nested in an Option).
+        cases.add(bad("JSC1322", "is not comparable",
+                pur("  certify c(cert: TxCert) " + Q + " = @@indexOf([cert], cert) != None\n").replace("package t\n", "package t\nimport { indexOf } from \"std/list\"\n")));
+        cases.add(bad("JSC1322", "is not comparable",
+                pur("  vote v(voter: Voter, a: GovernanceActionId, x: Vote) " + Q + " = @@indexOf([Some(x)], Some(x)) != None\n")
+                        .replace("package t\n", "package t\nimport { indexOf } from \"std/list\"\n")));
         // ---- migration (ADR-0011 D4)
         cases.add(bad("JSC1303", "migrates to successor",
                 OLD.replace("only admin migrates to successor", "only admin migrates @@{").replace("{ }\n}", "\n}")));
@@ -269,6 +280,8 @@ class JscV2M3cCheckerTest {
         cases.add(bad("JSC0204", "the method migrate is declared twice", next(ADOPT + "  @@init migrate from params.previous(old: Old.State) { return { admin: old.admin, count: 1 } }\n")));
         cases.add(bad("JSC1337", "rename this method", next(ADOPT + "  @@action migrate() only admin { return state }\n")));
         cases.add(bad("JSC1338", "pays,", next("  init migrate from params.previous(old: Old.State) { @@pay(old.admin, 1)\n return { admin: old.admin, count: 0 } }\n")));
+        cases.add(bad("JSC1338", "funds is not available in init migrate",
+                next("  init migrate from params.previous(old: Old.State) { return { admin: old.admin, count: @@funds.held.lovelace } }\n")));
         cases.add(bad("JSC1338", "nothing is received", next("  init migrate from params.previous(old: Old.State) { return { admin: old.admin, count: @@received } }\n")));
         cases.add(bad("JSC1339", "takes no modifiers", next("  init migrate from params.previous(old: Old.State) @@payable { return { admin: old.admin, count: 0 } }\n")));
         cases.add(bad("JSC1339", "takes no modifiers", next("  init migrate from params.previous(old: Old.State) @@open { return { admin: old.admin, count: 0 } }\n")));

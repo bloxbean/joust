@@ -134,5 +134,37 @@
  {
   "file": "purpose-migrates-with-send.json",
   "message": "(JSC1334)"
+ },
+ {
+  "file": "purpose-ledger-equality.json",
+  "message": "(JSC1322)"
+ },
+ {
+  "file": "purpose-ledger-map-set.json",
+  "message": "(JSC1324)"
+ },
+ {
+  "file": "purpose-opaque-bind.json",
+  "message": "(JSC1320)"
+ },
+ {
+  "file": "purpose-withdraw-funds.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-certify-funds.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-vote-funds.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-propose-funds.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-migrate-funds.json",
+  "message": "(JSC1338)"
  }
 ]
