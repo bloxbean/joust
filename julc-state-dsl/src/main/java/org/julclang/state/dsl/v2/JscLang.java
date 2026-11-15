@@ -765,7 +765,8 @@ public final class JscLang {
      * javaLine]} (each {@code .jsc} line's first Java line); or {@code ok} false with the first error.
      */
     /**
-     * ADR-0021 r9 §15 (M5d): the formatted text, {@code {"ok":true,"text":…}}, or, for a file that does not lex or parse
+     * ADR-0021 r9 §15 (M5d): the formatted text and the edits from the source, {@code {"ok":true,"text":…,"edits":[[start,
+     * end, text], …]}} (UTF-16 offsets of the source), or, for a file that does not lex or parse
      * (F4), {@code {"ok":false,"error":{"code","line","col","message"}}} and no text. One entry for every front end:
      * {@code joust fmt}, {@code jsc --fmt} and the server's {@code textDocument/formatting}.
      */
@@ -776,7 +777,16 @@ public final class JscLang {
             if (r.ok()) {
                 o.append("{\"ok\":true,\"text\":");
                 str(o, r.text());
-                return o.append('}').toString();
+                // The edits from the source, by UTF-16 offsets: [start, end, text] (range formatting applies those in its range).
+                o.append(",\"edits\":[");
+                for (int k = 0; k < r.edits().size(); k++) {
+                    JscFormat.Edit e = r.edits().get(k);
+                    if (k > 0) o.append(',');
+                    o.append('[').append(e.start()).append(',').append(e.end()).append(',');
+                    str(o, e.text());
+                    o.append(']');
+                }
+                return o.append("]}").toString();
             }
             o.append("{\"ok\":false,\"error\":{\"code\":");
             str(o, r.code() == null ? "JSC0005" : r.code());

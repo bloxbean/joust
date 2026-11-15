@@ -1,5 +1,5 @@
 // ADR-0021 D2a: an engine worker. It loads ONE engine file (the bundled engine, or the checked private copy of a project's,
-// D3b), answers lang.info, lang.analyze, lang.std, lang.lower and (a build worker) joust.build, and does no other I/O: the protocol thread reads every input and posts
+// D3b), answers lang.info, lang.analyze, lang.std, lang.lower, lang.format and (a build worker) joust.build, and does no other I/O: the protocol thread reads every input and posts
 // contents only. The engine's loader requires only Node built-ins (ADR-0021 §1), which Node always prefers to a file of
 // the same name. A restart is always a new worker (F8: an engine cannot be loaded twice in one thread).
 import { createRequire } from 'node:module';
@@ -98,6 +98,12 @@ export async function runEngineWorker({ engineFile }) {
     lower: (m) => {
       if (typeof api.lang?.lower !== 'function') return { failed: 'this engine has no lang.lower' };
       const r = api.lang.lower(m.files ? { file: m.file, source: m.source, id: m.moduleId, files: m.files } : { file: m.file, source: m.source });
+      return r && r.ok ? { model: r.json } : { failed: String(r?.error ?? 'the engine returned no result') };
+    },
+    // M5d (ADR-0021 r9 §15): the formatter, {ok, text} or {ok: false, error}; an engine without "format" has none.
+    format: (m) => {
+      if (typeof api.lang?.format !== 'function' || !info?.features?.includes('format')) return { failed: 'this engine has no lang.format' };
+      const r = api.lang.format({ source: m.source });
       return r && r.ok ? { model: r.json } : { failed: String(r?.error ?? 'the engine returned no result') };
     },
     build: (m) => {

@@ -16,11 +16,19 @@ public final class JscFormat {
     private JscFormat() {}
 
     /** The formatted text, or the reason it is not formatted (the first error of a file that does not parse). */
-    public record Result(String text, String error, int line, int col, String code) {
+    public record Result(String text, String error, int line, int col, String code, List<Edit> edits) {
         public boolean ok() {
             return text != null;
         }
     }
+
+    /**
+     * One change from the source to the formatted text: the source's UTF-16 offsets [{@code start}, {@code end}) become
+     * {@code text}. The edits are in order and do not overlap; each is the whitespace between two items (tokens or
+     * comments), the whitespace at either end of the file, or a comment's own text (line ends and trailing spaces). A
+     * client's range formatting applies those in its range.
+     */
+    public record Edit(int start, int end, String text) {}
 
     /** An item of the file: a token or a comment, by its offsets in the source. */
     private record Item(int start, int end, int line, int endLine, boolean comment, boolean lineComment, String text) {}
@@ -41,9 +49,9 @@ public final class JscFormat {
         try {
             parses(source);
         } catch (JscException e) {
-            return new Result(null, e.getMessage(), e.line, e.col, e.code);
+            return new Result(null, e.getMessage(), e.line, e.col, e.code, List.of());
         } catch (RuntimeException | StackOverflowError e) {
-            return new Result(null, "the file could not be read: " + e, 1, 1, "JSC0005");
+            return new Result(null, "the file could not be read: " + e, 1, 1, "JSC0005", List.of());
         }
         // The byte order mark stays, outside the items (the lexer's columns on line 1 do not count it).
         String body = source.substring(bom.length());
@@ -51,20 +59,23 @@ public final class JscFormat {
         try {
             items = items(body);
         } catch (JscException e) {
-            return new Result(null, e.getMessage(), e.line, e.col, e.code);
+            return new Result(null, e.getMessage(), e.line, e.col, e.code, List.of());
         }
         String rendered = render(body, items);
         String out = bom + rendered;
         // F4: the output holds the same tokens and comments, in order, with the same line breaks between them.
+        List<Item> after;
         try {
-            if (!same(items, items(rendered), body, rendered)) {
+            after = items(rendered);
+            if (!same(items, after, body, rendered)) {
                 return new Result(null, "the formatter's output differs from the source in more than whitespace (an internal error: please report it)",
-                        1, 1, "JSC0005");
+                        1, 1, "JSC0005", List.of());
             }
         } catch (JscException e) {
-            return new Result(null, "the formatter's output does not lex (an internal error: please report it): " + e.getMessage(), 1, 1, "JSC0005");
+            return new Result(null, "the formatter's output does not lex (an internal error: please report it): " + e.getMessage(), 1, 1, "JSC0005",
+                    List.of());
         }
-        return new Result(out, null, 0, 0, null);
+        return new Result(out, null, 0, 0, null, edits(body, items, rendered, after, bom.length()));
     }
 
     /**
@@ -139,6 +150,26 @@ public final class JscFormat {
         }
         out.sort((a, b) -> Integer.compare(a.start, b.start));
         return out;
+    }
+
+    /** The edits from {@code src} to {@code out}, item by item (both have the same items); offsets shifted by the BOM. */
+    private static List<Edit> edits(String src, List<Item> a, String out, List<Item> b, int shift) {
+        var edits = new ArrayList<Edit>();
+        int at = 0, bt = 0;
+        for (int i = 0; i <= a.size(); i++) {
+            int as = i < a.size() ? a.get(i).start : src.length();
+            int bs = i < b.size() ? b.get(i).start : out.length();
+            String was = src.substring(at, as), now = out.substring(bt, bs);
+            if (!was.equals(now)) edits.add(new Edit(at + shift, as + shift, now));
+            if (i == a.size()) break;
+            Item x = a.get(i), y = b.get(i);
+            // A comment's own text: CRLF inside a block comment, a line comment's trailing whitespace.
+            String xs = src.substring(x.start, x.end), ys = out.substring(y.start, y.end);
+            if (!xs.equals(ys)) edits.add(new Edit(x.start + shift, x.end + shift, ys));
+            at = x.end;
+            bt = y.end;
+        }
+        return edits;
     }
 
     private static int[] lineStarts(String src) {

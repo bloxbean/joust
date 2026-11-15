@@ -23,6 +23,19 @@ class JscFormatTest {
 
     static final Path DSL = Path.of("../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl");
 
+    /** The edits applied to {@code src}, last first (they are in order and do not overlap). */
+    static String apply(String src, List<JscFormat.Edit> edits) {
+        var b = new StringBuilder(src);
+        int last = Integer.MAX_VALUE;
+        for (int k = edits.size() - 1; k >= 0; k--) {
+            JscFormat.Edit e = edits.get(k);
+            assertTrue(e.start() <= e.end() && e.end() <= last, "edits in order, not overlapping: " + edits);
+            b.replace(e.start(), e.end(), e.text());
+            last = e.start();
+        }
+        return b.toString();
+    }
+
     /** The known/ files whose hand-written (Java) verdict tree-sitter-jsc/corpus/known.txt pins as invalid. */
     static java.util.Set<Path> knownInvalid() throws Exception {
         var out = new java.util.HashSet<Path>();
@@ -148,6 +161,8 @@ class JscFormatTest {
             formatted++;
             String f = r.text();
             assertEquals(f, JscFormat.format(f).text(), file + ": F2, idempotent");
+            assertEquals(f, apply(src, r.edits()), file + ": the edits give the formatted text");
+            assertTrue(JscFormat.format(f).edits().isEmpty(), file + ": a formatted file needs no edit");
             assertEquals(tokens(src), tokens(f), file + ": the same tokens");
             assertEquals(comments(src), comments(f), file + ": F3, the same comments in order");
             String lowerable = null;
@@ -169,6 +184,7 @@ class JscFormatTest {
                 var lr = JscFormat.format(layout);
                 assertTrue(lr.ok(), file + ": a layout of a formatted file formats: " + lr.error());
                 assertEquals(f, lr.text(), file + ": a generated layout formats to the same text");
+                assertEquals(f, apply(layout, lr.edits()), file + ": a layout's edits give the formatted text");
                 layouts++;
             }
         }
@@ -213,6 +229,7 @@ class JscFormatTest {
         String messy = "\uFEFFpackage t\r\n\r\n\r\ncontract C {\r\n\tstate {   n: Int }\r\n\r\n  init( ) {\r\n        return {n: 0}\r\n  }\r\n}";
         String f = JscFormat.format(messy).text();
         assertEquals("\uFEFFpackage t\n\ncontract C {\n  state { n: Int }\n\n  init() {\n    return { n: 0 }\n  }\n}\n", f);
+        assertEquals(f, apply(messy, JscFormat.format(messy).edits()), "the edits' offsets count the byte order mark");
         // Comments everywhere, non-BMP text in strings and comments.
         String cm = "jsc 1 // header\n/* a\n   block */\npackage t // pkg\n\ncontract C { // open\n  state { /* in */ n: Int /* after */ }\n"
                 + "  // before init\n  init() {\n    require(true, \"😀 ok\") // 𝐀\n    return { n: 0 } // end\n  }\n}\n// eof\n";

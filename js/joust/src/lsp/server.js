@@ -42,6 +42,8 @@ export const MAX_IMPORTS_PER_FILE = 128;
 export const DEBOUNCE_MS = 150;
 /** D7: Show generated Java runs the lowering on request only, with its own cap (§12 note 10's latency budget). */
 export const LOWER_MS = 10000;
+/** M5d: how long a formatting request may take in the engine (F6's bound is 60 ms warm; this is the watchdog's cap). */
+export const FORMAT_MS = 5000;
 /** D2a, D4: the build worker's limits (joust build's ENGINE_STACK_MB; the build heap of §1), its cap and idle stop. */
 export const BUILD_STACK_MB = 8;
 export const BUILD_HEAP_MB = 384;
@@ -102,7 +104,8 @@ const hash = (b) => createHash('sha256').update(b).digest('hex');
  * The advertised capabilities (D10's allow-list): nothing else is ever advertised. M5b adds hover, definition,
  * references and semantic tokens to every client; completion, code actions and their commands only to clients that apply
  * edits through a verified, versioned path (D4a: the VS Code extension's handleApplyEdit, or another client enabled by
- * flag); `textDocument/rename` only to such another client (VS Code renames through JOUST: Rename Symbol).
+ * flag), and from M5d document and range formatting to the same clients; `textDocument/rename` only to such another client
+ * (VS Code renames through JOUST: Rename Symbol).
  */
 export function capabilities({ edits, rename = false }) {
   return {
@@ -122,6 +125,9 @@ export function capabilities({ edits, rename = false }) {
       completionProvider: { triggerCharacters: ['.'] },
     } : {}),
     ...(edits && rename ? { renameProvider: true } : {}),
+    // M5d (ADR-0021 r9 §15): document and range formatting, to the same clients as completion (D4a: they reject a
+    // response once the text changed after it was sent).
+    ...(edits ? { documentFormattingProvider: true, documentRangeFormattingProvider: true } : {}),
     experimental: { joust: { protocol: 1, modelVersion: MODEL_VERSION } },
   };
 }
@@ -1256,6 +1262,62 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     });
     // Not from a clean model of this version: the client asks again as typing goes on.
     return { isIncomplete: !usable || !!good || usable.diagnostics.some((d) => d.severity === 'error'), items };
+  });
+
+  // ------------------------------------------------------------------ M5d: formatting (§15, D4a, L7)
+
+  /**
+   * The formatter's answer for the open document `uri` at the version it has now: `{ doc, version, f }` with the engine's
+   * `{ ok, text, edits }` (F4: `ok` false for a file that does not parse), or null (not open, too large, no engine with
+   * lang.format, cancelled, or a newer version arrived meanwhile: D4a's rule, nothing for a stale request).
+   */
+  async function formatted(uri, token) {
+    const doc = documents.get(uri);
+    const s = state.get(uri);
+    if (!doc || !s) return null;
+    const version = doc.version;
+    const text = doc.getText();
+    if (text.length > MAX_FILE_CHARS) return null;
+    const sel = s.selection ?? await selectionFor(uri);
+    const r = await host.request(sel.key, sel.engine, { op: 'format', source: text },
+      { scope: scopeOf(sel), input: text, what: 'the formatting', timeoutMs: FORMAT_MS }, token);
+    const now = documents.get(uri);
+    if (!r.model || !now || now.version !== version || token?.isCancellationRequested) return null;
+    let f;
+    try {
+      f = JSON.parse(r.model);
+    } catch {
+      return null;
+    }
+    return f && f.ok === true && typeof f.text === 'string' ? { doc: now, version, f } : null;
+  }
+
+  // One edit of the whole document (F6), none when it is formatted already; a file that does not parse gets none (F4).
+  connection.onDocumentFormatting(async (p, token) => {
+    if (!edits) return null;
+    const x = await formatted(p.textDocument.uri, token);
+    if (!x) return null;
+    const text = x.doc.getText();
+    if (x.f.text === text) return [];
+    return [{ range: { start: { line: 0, character: 0 }, end: x.doc.positionAt(text.length) }, newText: x.f.text }];
+  });
+
+  // The formatter's edits that end inside the range: the whitespace before each item in it (its line's indentation
+  // included) and the comments in it, never a line outside it.
+  connection.onDocumentRangeFormatting(async (p, token) => {
+    if (!edits) return null;
+    const x = await formatted(p.textDocument.uri, token);
+    if (!x) return null;
+    const from = x.doc.offsetAt(p.range.start);
+    const to = x.doc.offsetAt(p.range.end);
+    const out = [];
+    for (const e of Array.isArray(x.f.edits) ? x.f.edits : []) {
+      const [start, end, newText] = e;
+      if (!Number.isInteger(start) || !Number.isInteger(end) || typeof newText !== 'string' || start > end) return null;
+      if (end < from || end > to) continue;
+      out.push({ range: { start: x.doc.positionAt(start), end: x.doc.positionAt(end) }, newText });
+    }
+    return out;
   });
 
   // ------------------------------------------------------------------ M5b: rename (D7, L6)
