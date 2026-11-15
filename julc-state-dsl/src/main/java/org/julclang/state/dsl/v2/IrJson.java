@@ -1096,6 +1096,14 @@ final class IrJson {
                             throw new IllegalArgumentException("method " + m.name() + ": a retiring exit is signed by its owner (only f) and needs"
                                     + " nobody else (no shared, reads, payable, quorum, authorized, after or before)");
                         }
+                        // #112 round r2, Codex C6 (JSC1245, as the checker since security S2): nor does its body decide on
+                        // time; an after(…) or before(…) anywhere in it would let the escape hatch expire or wait.
+                        for (Object raw : l(r.get("methods"))) {
+                            if (raw instanceof Map<?, ?> rm && m.name().equals(rm.get("name")) && hasNode(rm.get("body"), Set.of("TimePred"))) {
+                                throw new IllegalArgumentException("method " + m.name() + ": a retiring exit decides nothing on time (no after"
+                                        + " or before in its body)");
+                            }
+                        }
                         hatch = true;
                     }
                     if (m.kind() == Ir.Kind.OWNED_ACTION && names.stream().noneMatch(Set.of("only", "quorum", "authorized")::contains)) {

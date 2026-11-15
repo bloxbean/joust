@@ -12,6 +12,10 @@
   "message": "needs nobody else"
  },
  {
+  "file": "keyed-retire-body-time.json",
+  "message": "a retiring exit decides nothing on time"
+ },
+ {
   "file": "keyed-retire-quorum.json",
   "message": "needs nobody else"
  },
