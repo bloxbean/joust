@@ -264,6 +264,11 @@ class JscV2M3cFourWayTest {
         p.as(List.of(GOV), List.of()).refused("input:to", "take", List.of(ada(10), Bytes.of(new byte[27]), ada(1)), byGov);
         // I37: the sends allocate the amount exactly: a one-lovelace tip is not sent, so the allocation is short (purpose:withdraw).
         p.as(List.of(GOV), List.of()).refused("purpose:withdraw", "take", List.of(ada(10), Bytes.of(B), BigInteger.ONE), byGov);
+        // Review C1: a negative send (a tip of -1) cancelling one lovelace of the other: the total is the amount, but each
+        // send must hold a positive quantity, as the validator's sends do (purpose:withdraw on every leg). The control: a
+        // tip of 2 lovelace, two positive sends with the same total, accepted.
+        p.as(List.of(GOV), List.of()).refused("purpose:withdraw", "take", List.of(ada(10), Bytes.of(B), BigInteger.ONE.negate()), byGov);
+        ok(p.as(List.of(GOV), List.of()).check("take", List.of(ada(10), Bytes.of(B), BigInteger.TWO), byGov));
         p.as(List.of(EVE), List.of()).refused("modifier:authorized params.gov", "take", List.of(ada(10), Bytes.of(B), ada(1)), at(EVE, 0, 0));
         p.as(List.of(GOV), List.of()).withdrawMutants("take", List.of(ada(10), Bytes.of(B), ada(1)), byGov);
         // K41: the withdrawal's Ctx: its balance is the amount, received 0, the caller signs (each one step away).

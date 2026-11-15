@@ -811,6 +811,9 @@ public final class Interpreter {
                 boolean lovelace = true;
                 for (SendV sd : o.sends()) {
                     for (var e : sd.value().entries().entrySet()) if (!e.getKey().isEmpty()) lovelace = false;
+                    // Review C1: each send's own domain, as every send's (§5.1): no quantity zero or negative, so one send
+                    // cannot cancel another's excess.
+                    if (sd.value().quantities().stream().anyMatch(q -> q.signum() <= 0)) lovelace = false;
                     total = total.add(sd.value().quantity(Bytes.of(new byte[0]), Bytes.of(new byte[0])));
                 }
                 if (!lovelace || total.compareTo(integer(args.get(0))) != 0) {

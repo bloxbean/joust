@@ -220,6 +220,9 @@ class Program {
       let lovelace = true;
       for (const x of out.sends) {
         for (const [policy] of x.value.entries) if (policy !== '') lovelace = false;
+        // Review C1: each send's own domain, as every send's (§5.1): no quantity zero or negative, so one send cannot
+        // cancel another's excess.
+        for (const [, , q] of x.value.entries) if (q <= 0n) lovelace = false;
         total += x.value.quantity(new Uint8Array(0), new Uint8Array(0));
       }
       if (!lovelace || total !== args[0]) throw new Refused('the reward sends do not allocate exactly the amount withdrawn, in lovelace', 'purpose', 'withdraw');

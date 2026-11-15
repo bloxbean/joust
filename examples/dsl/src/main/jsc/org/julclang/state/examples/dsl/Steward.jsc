@@ -26,12 +26,13 @@ contract Steward {
   // The rewards, less a tip to the params' payee, to a key the governor names in the call, before the deadline.
   withdraw take(amount: Int, to: Key, tip: Int) authorized params.gov {
     require(before(params.deadline), "too late to withdraw")
-    require(tip >= 0 && tip <= amount, "the tip is within the amount")
+    require(tip <= amount, "the tip is within the amount")
     if amount - tip > 0 {
       send(wallet(to), Value.lovelace(amount - tip))
     }
-    // (Coverage of purpose:withdraw: a one-lovelace tip makes no output, so its allocation is short and refused.)
-    if tip > 1 {
+    // (Coverage of purpose:withdraw: a one-lovelace tip makes no output, so its allocation is short; a negative tip is a
+    // negative send, which cancels part of the first and which no allocation may hold: both are refused.)
+    if tip > 1 || tip < 0 {
       send(wallet(params.payee), Value.lovelace(tip))
     }
   }
