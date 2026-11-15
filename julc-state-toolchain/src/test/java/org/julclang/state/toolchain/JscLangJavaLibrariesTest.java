@@ -53,6 +53,19 @@ class JscLangJavaLibrariesTest {
         String rline = spaced.get(srec.file()).split("\n", -1)[srec.line() - 1];
         assertFalse(rline.contains("//"), "not the comment: " + rline);
         assertEquals("Entry", rline.substring(srec.col() - 1, srec.col() - 1 + "Entry".length()), srec.toString());
+        // C16 (#119): comments between the name and '(', a misleading comment in the header, and `record /* c */ Entry`.
+        var commented = new java.util.LinkedHashMap<String, String>();
+        sources.forEach((k, v) -> commented.put(k, v.replaceFirst("(boolean )isAllowed\\(", "/* isAllowed( documented */ $1isAllowed /* note */ (")
+                .replace("record Entry", "record /* note */ Entry")));
+        var clib = JavaLibraryCertifier.certify(commented).values().iterator().next();
+        var cfn = clib.fns().stream().filter(f -> f.name().equals("isAllowed")).findFirst().orElseThrow();
+        assertTrue(cfn.line() > 0, cfn.toString());
+        String cline = commented.get(cfn.file()).split("\n", -1)[cfn.line() - 1];
+        assertEquals("isAllowed /* note */ (", cline.substring(cfn.col() - 1, cfn.col() - 1 + "isAllowed /* note */ (".length()), cfn + ": " + cline);
+        var crec = clib.records().stream().filter(r -> r.simpleName().equals("Entry")).findFirst().orElseThrow();
+        assertTrue(crec.line() > 0, crec.toString());
+        String crline = commented.get(crec.file()).split("\n", -1)[crec.line() - 1];
+        assertEquals("Entry", crline.substring(crec.col() - 1, crec.col() - 1 + 5), crec + ": " + crline);
         String src = Files.readString(JscV2HashStabilityTest.DSL.resolve("Guarded.jsc"));
         String without = JscLang.diagnosticsJson(src, "Guarded.jsc", null, null);
         String with = JscLang.diagnosticsJson(src, "Guarded.jsc", null, null, json);

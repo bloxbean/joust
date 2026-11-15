@@ -264,7 +264,7 @@ public final class JavaLibraryCertifier {
                 int line = 0, col = 0;
                 // C11 on #115: the method's name in its header (between the tree's start and its body), whatever trivia
                 // stands before its '(' (never a later call).
-                int[] place = place(declared.get(m), "\\b" + java.util.regex.Pattern.quote(name) + "\\s*\\(");
+                int[] place = place(declared.get(m), name, false);
                 if (place != null) {
                     file = pathOf(declared.get(m).getCompilationUnit());
                     line = place[0];
@@ -484,28 +484,66 @@ public final class JavaLibraryCertifier {
          * in the header of the tree at {@code at}, or null. The column counts characters (#115 F8: LineMap's column
          * expands tabs); the header is bounded by the body (C11: never a later call).
          */
-        int[] place(TreePath at, String pattern) {
+        int[] place(TreePath at, String name, boolean record) {
             if (at == null) return null;
             CompilationUnitTree cu = at.getCompilationUnit();
             var positions = trees.getSourcePositions();
             long start = positions.getStartPosition(cu, at.getLeaf());
             if (start < 0) return null;
-            // A method's header ends where its body starts; a record's header is the first match in its own tree.
             long end = -1;
             if (at.getLeaf() instanceof MethodTree mt && mt.getBody() != null) end = positions.getStartPosition(cu, mt.getBody());
-            else if (at.getLeaf() instanceof ClassTree) end = positions.getEndPosition(cu, at.getLeaf());   // the first match is its own header
+            else if (at.getLeaf() instanceof ClassTree) end = positions.getEndPosition(cu, at.getLeaf());
             try {
                 String text = cu.getSourceFile().getCharContent(true).toString();
-                int to = end > start ? (int) end : (int) Math.min(text.length(), start + 4096);
-                var m = java.util.regex.Pattern.compile(pattern).matcher(text);
-                m.region((int) start, Math.max((int) start, to));
-                if (!m.find()) return null;
-                int k = m.groupCount() >= 1 && m.group(1) != null ? m.start(1) : m.start();
-                int lineStart = text.lastIndexOf('\n', k - 1) + 1;
-                return new int[]{(int) cu.getLineMap().getLineNumber(k), k - lineStart + 1};
+                int to = (int) (end > start ? Math.min(end, text.length()) : Math.min(text.length(), start + 4096));
+                // C16 (#119): the header's tokens, Java's comments and literals skipped: a method's name is the identifier
+                // followed by '(', a record's the identifier after `record`.
+                var toks = headerTokens(text, (int) start, to);
+                for (int i = 0; i + 1 < toks.size(); i++) {
+                    int[] t = toks.get(i), u = toks.get(i + 1);
+                    String a = text.substring(t[0], t[1]), b = text.substring(u[0], u[1]);
+                    int k = -1;
+                    if (!record && a.equals(name) && b.equals("(")) k = t[0];
+                    if (record && a.equals("record") && b.equals(name)) k = u[0];
+                    if (k >= 0) {
+                        int lineStart = text.lastIndexOf('\n', k - 1) + 1;
+                        return new int[]{(int) cu.getLineMap().getLineNumber(k), k - lineStart + 1};
+                    }
+                }
+                return null;
             } catch (java.io.IOException e) {
                 return null;
             }
+        }
+
+        /** Java tokens of text[from, to) as [start, end) offsets: identifiers and single punctuation, no comment or literal. */
+        static java.util.List<int[]> headerTokens(String text, int from, int to) {
+            var out = new java.util.ArrayList<int[]>();
+            int i = from;
+            while (i < to) {
+                char c = text.charAt(i);
+                if (Character.isWhitespace(c)) {
+                    i++;
+                } else if (c == '/' && i + 1 < to && text.charAt(i + 1) == '/') {
+                    while (i < to && text.charAt(i) != '\n') i++;
+                } else if (c == '/' && i + 1 < to && text.charAt(i + 1) == '*') {
+                    int e = text.indexOf("*/", i + 2);
+                    i = e < 0 ? to : e + 2;
+                } else if (c == '"' || c == '\'') {
+                    int j = i + 1;
+                    while (j < to && text.charAt(j) != c) j += text.charAt(j) == '\\' ? 2 : 1;
+                    i = j + 1;
+                } else if (Character.isJavaIdentifierStart(c)) {
+                    int j = i + 1;
+                    while (j < to && Character.isJavaIdentifierPart(text.charAt(j))) j++;
+                    out.add(new int[]{i, j});
+                    i = j;
+                } else {
+                    out.add(new int[]{i, i + 1});
+                    i++;
+                }
+            }
+            return out;
         }
 
         String where(CompilationUnitTree cu, long pos) {
@@ -610,7 +648,7 @@ public final class JavaLibraryCertifier {
             // ADR-0021 r8 (F8 on #115): the record's name where javac's tree puts the declaration (never a match in a comment).
             TreePath at = trees.getPath(e);
             // C11, F8 on #115: `record`, any whitespace, the name, within the record's header.
-            int[] place = at == null ? null : place(at, "\\brecord\\s+(" + java.util.regex.Pattern.quote(e.getSimpleName().toString()) + ")\\b");
+            int[] place = at == null ? null : place(at, e.getSimpleName().toString(), true);
             String file = place == null ? null : pathOf(at.getCompilationUnit());
             var r = new JavaLibraries.Rec(bin, e.getSimpleName().toString(), canonicalOwner, top.getQualifiedName().toString(), sourceName,
                     why == null ? List.copyOf(fieldNames) : List.of(), why == null ? List.copyOf(fieldTypes) : List.of(), why == null, why,

@@ -542,7 +542,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const memoKey = sel.root ?? '';
     let libs = libraryMemo.get(memoKey);
     // C8 on #115: kept only while every file it read is unchanged on disk (size and mtime, checked on use).
-    if (libs && !(await sameFiles(libs.stamps))) {
+    if (libs && (!(await sameFiles(libs.stamps)) || JSON.stringify(await libraryListing(sel)) !== libs.listing)) {
       libraryMemo.delete(memoKey);
       libs = null;
     }
@@ -553,6 +553,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       if (!libs.error) {
         libs.paths = [...inputs.disk.keys()];
         libs.stamps = await stampsOf(libs.paths);
+        // C15 (#119): and the packages' library files as listed (an addition or a removal, with no watcher event).
+        libs.listing = JSON.stringify(await libraryListing(sel));
         libraryMemo.set(memoKey, libs);
         while (libraryMemo.size > 8) libraryMemo.delete(libraryMemo.keys().next().value);
       }
@@ -611,6 +613,35 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   }
   const javaSignatures = new Map();   // engine id | sources' SHA-256 -> descriptions (JSON), LRU (S5 on #115)
   const libraryMemo = new Map();
+  /**
+   * C15 (#119): the packages' joust-lib/ files as buildLibraries lists them (the same confined walk, nothing read): a
+   * file added or removed changes it.
+   */
+  async function libraryListing(sel) {
+    if (!sel.root || !inside(sel.root, sel.folder)) return [];
+    const rootRel = relative(sel.folder, sel.root).split(sep).join('/') || '.';
+    const out = [];
+    const dirs = async (rel) => {
+      const r = await reader.resolveIn(sel.folder, rel);
+      if (r.error) return [];
+      try {
+        return (await fsp.readdir(r.path, { withFileTypes: true }))
+          .filter((e) => !e.name.startsWith('.') && (e.isDirectory() || (e.isSymbolicLink() && !e.name.startsWith('@')))).map((e) => e.name).sort();
+      } catch {
+        return [];
+      }
+    };
+    for (const n of await dirs(`${rootRel}/node_modules`)) {
+      const names = n.startsWith('@') ? (await dirs(`${rootRel}/node_modules/${n}`)).map((m) => `${n}/${m}`) : [n];
+      for (const name of names) {
+        const listed = await reader.list(sel.folder, `${rootRel}/node_modules/${name}/joust-lib`, { max: MAX_BUILD_FILES, kind: 'gradle' });
+        if (!listed.error) for (const f of listed.files) out.push(`${name}/${f}`);
+        if (out.length > MAX_BUILD_FILES) return out;
+      }
+    }
+    return out;
+  }
+
   /** (size, mtime) of each path, read once (an lstat: the paths are the confined real paths the reader read). */
   async function stampsOf(paths) {
     const out = [];
@@ -829,6 +860,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   function javaInputChanged(uri, text) {
     libraryMemo.clear();
     occurrenceCache.clear();
+    // C17 (#119): an importer whose library was missing has no edge to it: every file with a java: import again.
+    for (const [u, st] of state) if (st.javaImports) schedule(u, DEBOUNCE_MS * 2);
     rescheduleImporters([localFileOf(uri)], DEBOUNCE_MS * 2, uri);
     invalidateInput(localFileOf(uri), text).catch(() => {});
   }
@@ -866,6 +899,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   });
   documents.onDidClose((e) => {
     if (isJavaInput(e.document.uri)) return javaInputChanged(e.document.uri, null);
+    // C14 (#119): a closed buffer's file is read from disk now: a cached importer analysis that read the buffer goes.
+    occurrenceCache.clear();
     const s = state.get(e.document.uri);
     // Its importers read its buffer: they are analysed again with its file on disk (#98 F3d).
     rescheduleImporters([s?.realPath, localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
@@ -1384,10 +1419,11 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       if (t.src.pkg) return { error: `'${sym.decl.name}' is declared in the npm package library ${detail}: a package is never edited` };
       const tp = renamePlan(t.model, { line: t.decl.nameRange[0], character: t.decl.nameRange[1] }, '__joust_probe__');
       if (tp.error && !tp.decl) return { error: tp.error };
-      return { name: t.decl.name, kind: t.decl.kind, abi: tp.abi === true, in: t.uri };
+      // F14 (#119): no ABI flag here: only joust/rename knows the importers that decide it (its needsConfirmation).
+      return { name: t.decl.name, kind: t.decl.kind, in: t.uri };
     }
     const plan = renamePlan(f.model, p.position, '__joust_probe__');
-    return plan.error && !plan.decl ? { error: plan.error } : { name: plan.decl.name, kind: plan.decl.kind, abi: plan.abi };
+    return plan.error && !plan.decl ? { error: plan.error } : { name: plan.decl.name, kind: plan.decl.kind };
   });
 
   // Other editors with edits enabled (flag): the standard rename, versioned (D4a); an ABI-recorded name is refused there,
