@@ -224,7 +224,10 @@ which reads both from the API and the artifacts. The mutation run must be a `wor
 head, finished and successful, with every job but `fuzz-long` passed. Every PIT module and Stryker set must say it ran
 whole, and its artifacts must match their `SHA256SUMS` exactly. The fuzz run must be a dispatch on that head whose three
 `fuzz-long` jobs passed, with the five-way target set to, and run for, at least 60 minutes (design review r4, F21).
-`fetch-ci-build.sh` refuses dispatch runs by design, so this script, not the fetch, is where they are checked.
+It also checks the full job matrix (every devnet shard of that head's shard file) and that the artifacts hold the raw
+reports, not only their summaries. `fetch-ci-build.sh` refuses dispatch runs by design, so this script, not the fetch,
+is where they are checked. It accepts mutation runs only from 090192b5 on, the first head whose Stryker jobs print their
+selection line, and fuzz runs only from the head whose `fuzz-long` summaries carry `SHA256SUMS` (round r6 of #95).
 
 ## 4. Mutation testing
 
@@ -261,8 +264,10 @@ In CI, the `mutation` job (PIT) and the `stryker` jobs (one per set, in parallel
 
   A preflight also judges every changed baselined unit by the baseline, not by the configuration the change may have
   narrowed: the run must measure it, or the change must update the baseline visibly. A baselined module whose
-  `ext.pitTargets` is empty fails. Lowered or removed baseline entries are shown in the summary. This keeps a pull
-  request's CI to about 25–35 minutes; the joust set alone takes 80 minutes to two hours whole.
+  `ext.pitTargets` is empty fails. Lowered or removed baseline entries are shown in the summary. A pull request that
+  changes only product code or tests keeps its CI to about 25–35 minutes. **A pull request that touches the mutation
+  configuration, the baselines or the gate's scripts costs about two hours**, since it runs those sets whole: the
+  joust set alone takes 88 to 128 minutes (design review r5, F24).
 - **A push** (to `main` or `release/**`) and **the manual run with `mutation_all`** run every set whole. Their reports
   are the source of `gradle/mutation-baseline.json` and `gradle/mutation-kills.json`.
 - **A manual run without `mutation_all`** selects like a pull request, against `HEAD~1` only: its last commit, not the
@@ -333,8 +338,10 @@ six CI runs, `toolchain.js`'s timeouts ran from 45 to 89 while its kills stayed 
 went from 75% to 86% against a floor of 75%. Their baseline is the lowest Killed score measured. Every other unit, and
 all of PIT, scored the same in every run.
 
-In the `mutation_all` run the `mutation` job took 25 minutes, and the Stryker jobs 26 (`joust-heap`), 79 (`joust`) and
-25 (`state-client`). #106 sets targets for the low ones (`verify.js`, `build.js`, `select.js`) and asks whether the
+In the latest whole-set runs, [43735820740](https://github.com/bloxbean/joust/actions/runs/43735820740) and
+[43773978853](https://github.com/bloxbean/joust/actions/runs/43773978853), the `mutation` job took 34 minutes, and the
+Stryker jobs 18–21 (`state-client`), 19–27 (`joust-heap`) and 88–128 (`joust`). A whole-set run therefore takes about two
+hours (1h44m and 2h21m). #106 sets targets for the low ones (`verify.js`, `build.js`, `select.js`) and asks whether the
 processor's output checks can be mutated. `src/toolchain-host.js` and `src/toolchain-worker.js` are not mutated: they
 run only in the forked engine host and its worker, where Stryker's coverage cannot follow (0 of 68 mutants covered).
 

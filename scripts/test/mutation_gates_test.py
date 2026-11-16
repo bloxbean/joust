@@ -344,6 +344,50 @@ class PullRequestSelection(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn('the baselined file `js/joust/src/toolchain.js` changed but js/mutation/stryker.config.mjs no longer mutates it', out)
 
+    # ---- Codex C16: a renamed set orphans its baseline scope
+
+    def rename_joust_set(self, baseline=None):
+        f = 'scripts/stryker-changed.sh'
+        text = (self.d / f).read_text()
+        self.assertIn('SETS="joust joust-heap state-client"', text)
+        self.edit(f, text.replace('SETS="joust joust-heap state-client"', 'SETS="renamed joust-heap state-client"')
+                  .replace('    joust) config=', '    renamed) config='))
+        self.edit('js/joust/src/toolchain.js', 'export const t = 2;\n')
+        cfg = (self.d / 'js/mutation/stryker.config.mjs').read_text()
+        self.edit('js/mutation/stryker.config.mjs', cfg.replace(", 'src/toolchain.js'", ''))
+        if baseline is not None:
+            # The repository's own baseline and kills files, as Codex's real_rename_set_probe kept them.
+            self.edit('gradle/mutation-baseline.json', (ROOT / 'gradle/mutation-baseline.json').read_text())
+            self.edit('gradle/mutation-kills.json', (ROOT / 'gradle/mutation-kills.json').read_text())
+            self.commit()
+            self.git('checkout', '-q', '-B', 'master')
+            self.git('checkout', '-q', '-b', 'pr2')
+            self.edit('js/joust/src/toolchain.js', 'export const t = 3;\n')
+        self.commit()
+
+    def test_a_renamed_set_with_its_old_scope_retained_fails(self):
+        if shutil.which('node') is None:
+            self.skipTest('needs node')
+        self.rename_joust_set()
+        rc, out = self.stryker('renamed')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('The baseline records files for the Stryker set joust, which this script no longer has', out)
+
+    def test_a_renamed_set_fails_with_the_real_baseline(self):
+        if shutil.which('node') is None:
+            self.skipTest('needs node')
+        self.rename_joust_set(baseline='real')
+        rc, out = self.stryker('renamed')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('Stryker set joust, which this script no longer has', out)
+
+    def test_a_set_not_in_the_list_is_refused(self):
+        if shutil.which('node') is None:
+            self.skipTest('needs node')
+        rc, out = self.stryker('joust-h')
+        self.assertEqual(rc, 2, out)
+        self.assertIn("joust-h is not one of this script's sets", out)
+
     # ---- security S14
 
     def test_weakened_tests_are_noted_as_not_measured(self):
@@ -412,6 +456,120 @@ class PullRequestSelection(unittest.TestCase):
         rc, out = self.stryker('state-client')
         self.assertIn('baseline lowered: `js/state-client/src/verify.js` 9.0% → 1.0%', out)
         self.assertIn('(the whole set (gradle/mutation-baseline.json changed', out)
+
+
+class MilestoneCheck(unittest.TestCase):
+    """scripts/check-milestone-runs.sh against a gh stand-in serving a run record, its jobs, the head's devnet shard file and
+    artifacts built from the real baseline (review r5: Codex's two limits of the checker, security N1-N3)."""
+
+    SHA = 'a' * 40
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        (self.d / 'bin').mkdir()
+        (self.d / 'bin/gh').write_text(r"""#!/usr/bin/env python3
+import base64, json, os, shutil, subprocess, sys
+from pathlib import Path
+a = sys.argv[1:]; D = Path(os.environ['MS_DIR']); mode = os.environ.get('MS_MODE', 'valid'); sha = 'a' * 40
+def out(obj):
+    text = json.dumps(obj)
+    if '--jq' in a:
+        sys.stdout.write(subprocess.run(['jq', '-r', a[a.index('--jq') + 1]], input=text, capture_output=True, text=True, check=True).stdout)
+    else:
+        print(text)
+if a[0] == 'api':
+    path = a[1]
+    if '/commits/' in path: out({'sha': sha})
+    elif '/contents/' in path: out({'content': base64.b64encode(b'# shards\n:a:test\n:b:test\n:c:test\n:d:test\n').decode()})
+    elif path.endswith('/jobs?per_page=100'):
+        names = ['plan', 'build', 'engines', 'cli', 'vscode', 'mutation', 'stryker (joust)', 'stryker (joust-heap)', 'stryker (state-client)']
+        names += [f'devnet ({i})' for i in range(1, 5) if not (mode == 'missing-devnet' and i > 1)]
+        jobs = [{'name': n, 'conclusion': 'success', 'started_at': '2026-01-01T00:00:00Z', 'completed_at': '2026-01-01T00:10:00Z'} for n in names]
+        jobs.append({'name': 'fuzz-long (x)', 'conclusion': 'skipped', 'started_at': '2026-01-01T00:00:00Z', 'completed_at': '2026-01-01T00:00:00Z'})
+        for t in ('FiveWayFuzzTest', 'IrReaderFuzzTest', 'NodeOptionsFuzzTest'):
+            jobs.append({'name': f'fuzz-long ({t})', 'conclusion': 'success', 'started_at': '2026-01-01T00:00:00Z', 'completed_at': '2026-01-01T01:05:00Z'})
+        out({'jobs': jobs})
+    else:
+        out({'repository': {'full_name': 'bloxbean/joust'}, 'head_repository': {'full_name': 'bloxbean/joust'},
+             'path': '.github/workflows/build.yml', 'event': 'workflow_dispatch', 'head_sha': sha, 'status': 'completed', 'conclusion': 'success'})
+elif a[:2] == ['run', 'download']:
+    name = a[a.index('-n') + 1]; dest = Path(a[a.index('-D') + 1])
+    src = D / 'artifacts' / mode / name
+    if not src.exists(): src = D / 'artifacts' / 'valid' / name
+    if not src.exists(): sys.exit(1)
+    shutil.copytree(src, dest)
+""")
+        (self.d / 'bin/gh').chmod(0o755)
+        base = json.loads((ROOT / 'gradle/mutation-baseline.json').read_text())
+        self.make('valid', base)
+        self.make('summary-only', base, summary_only=True)
+        self.make('split-line', base, split=True)
+        self.make('fuzz-no-sums', base, fuzz_sums=False)
+
+    def make(self, mode, base, summary_only=False, split=False, fuzz_sums=True):
+        art = self.d / 'artifacts' / mode
+        def write(name, rel, text):
+            p = art / name / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text)
+        mods = sorted({b['module'] for b in base['pit'].values()})
+        write('mutation', 'build/mutation/pit.md', ''.join(f':{m}: the whole set (--all)\n' for m in mods) + '### Mutation score\n')
+        if not summary_only:
+            for m in mods:
+                classes = [c for c, b in base['pit'].items() if b['module'] == m]
+                pit_report(art / 'mutation' / m / 'build/reports/pitest/mutations.xml', {c: killed(1) for c in classes})
+        for st in ('joust', 'joust-heap', 'state-client'):
+            names = [n for n, b in base['stryker'].items() if b['scope'] == st]
+            line = f'{st}: Stryker on x (the whole set (--all))\n' if not split else f'{st}: Stryker on x\n(the whole set (--all))\n'
+            write(f'stryker-{st}', f'build/mutation/stryker-{st}.md', line)
+            if not summary_only:
+                prefix = 'js/state-client/' if st == 'state-client' else 'js/joust/'
+                files = {n[len(prefix):]: {'source': 'x', 'mutants': [{'status': 'Killed'}]} for n in names}
+                write(f'stryker-{st}', f'{prefix}reports/mutation/{st}/mutation.json', json.dumps({'files': files}))
+        write('fuzz-summary-FiveWayFuzzTest', 'build/fuzz-gradle.log', '-Djazzer.max_duration=60m\n#1438\tDONE   cov: 1\n')
+        for name in [p.name for p in art.iterdir()]:
+            if name == 'fuzz-summary-FiveWayFuzzTest' and not fuzz_sums:
+                continue
+            root = art / name
+            sums = ''.join(f"{__import__('hashlib').sha256(p.read_bytes()).hexdigest()}  {p.relative_to(root).as_posix()}\n"
+                           for p in sorted(root.rglob('*')) if p.is_file())
+            (root / 'SHA256SUMS').write_text(sums)
+
+    def check(self, mode, *args):
+        x = subprocess.run(['bash', str(SCRIPTS / 'check-milestone-runs.sh'), self.SHA, *args], capture_output=True, text=True,
+                           env={**os.environ, 'PATH': f"{self.d / 'bin'}:{os.environ['PATH']}", 'MS_DIR': str(self.d), 'MS_MODE': mode})
+        return x.returncode, x.stdout + x.stderr
+
+    def test_a_complete_run_passes(self):
+        rc, out = self.check('valid', '--mutation-run', '1', '--fuzz-run', '2')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('PIT and the three Stryker sets whole', out)
+
+    def test_a_summary_only_artifact_is_refused(self):
+        rc, out = self.check('summary-only', '--mutation-run', '1')
+        self.assertEqual(rc, 1, out)
+        self.assertIn("mutations.xml is missing or unreadable", out)
+
+    def test_three_missing_devnet_shards_are_refused(self):
+        rc, out = self.check('missing-devnet', '--mutation-run', '1')
+        self.assertEqual(rc, 1, out)
+        self.assertIn("has 0 jobs named 'devnet (2)', not 1", out)
+
+    def test_the_whole_set_phrase_must_be_on_the_selection_line(self):
+        rc, out = self.check('split-line', '--mutation-run', '1')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('did not run the Stryker set joust whole', out)
+
+    def test_fuzz_minutes_must_be_a_positive_integer(self):
+        for bad in ('0', '-5', 'x', '1.5'):
+            rc, out = self.check('valid', '--fuzz-run', '2', '--fuzz-minutes', bad)
+            self.assertEqual(rc, 2, bad + ': ' + out)
+
+    def test_a_fuzz_summary_without_its_manifest_is_refused(self):
+        rc, out = self.check('fuzz-no-sums', '--fuzz-run', '2')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('fuzz-summary-FiveWayFuzzTest has no SHA256SUMS', out)
 
 
 if __name__ == '__main__':

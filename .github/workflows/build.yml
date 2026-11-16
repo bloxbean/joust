@@ -561,7 +561,9 @@ jobs:
   mutation:
     needs: plan
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.mutation_all && 330 || 150 }}
+    # 330 minutes whatever the event (review r5, design F23): a pull request that changes the mutation configuration, the
+    # baselines or the gate's scripts runs whole sets too (the joust set alone takes up to two hours and more).
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -639,7 +641,9 @@ jobs:
   stryker:
     needs: engines
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.mutation_all && 330 || 150 }}
+    # 330 minutes whatever the event (review r5, design F23): a pull request that changes the mutation configuration, the
+    # baselines or the gate's scripts runs whole sets too (the joust set alone takes up to two hours and more).
+    timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
@@ -807,15 +811,21 @@ jobs:
             build/fuzz-gradle.log
           retention-days: 30
 
+      # With SHA256SUMS, which scripts/check-milestone-runs.sh checks (review r5, security N1).
+      - name: Stage the summary
+        if: success()
+        env:
+          MODULE: ${{ matrix.module }}
+        run: >-
+          bash scripts/stage-artifact.sh build/artifact-fuzz-summary "$MODULE/build/fuzz/*.summary.txt"
+          'build/verification/fuzz.txt' 'build/fuzz-gradle.log'
+
       - name: Upload the summary
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-summary-${{ matrix.target }}
-          path: |
-            ${{ matrix.module }}/build/fuzz/*.summary.txt
-            build/verification/fuzz.txt
-            build/fuzz-gradle.log
+          path: build/artifact-fuzz-summary/
           retention-days: 30
 
   devnet:

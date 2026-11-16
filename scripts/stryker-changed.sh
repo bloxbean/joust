@@ -34,15 +34,23 @@ fi
 status=0
 ran=0
 SETS="joust joust-heap state-client"
+# Exact membership of a name in a space-separated list (review r5, Codex C16: `grep -w` took `joust` as a word of
+# `joust-heap`, so renaming the joust set left its baseline scope unseen).
+is_one_of() {
+  local x="$1" y
+  for y in $2; do [[ "$x" == "$y" ]] && return 0; done
+  return 1
+}
 # Every set the baseline records must still be one of the sets here (review r3, Codex C12): a set dropped from this list
 # would take its files out of every run and out of the gate.
 for s in $(python3 -I -c 'import json,sys; print("\n".join(sorted({v.get("scope", "") for v in json.load(open(sys.argv[1])).get("stryker", {}).values()})))' "$BASELINE"); do
-  if ! grep -qw -- "$s" <<<"$SETS"; then
+  if ! is_one_of "$s" "$SETS"; then
     echo "**The baseline records files for the Stryker set $s, which this script no longer has**: restore it, or remove its entries from $BASELINE, visibly"
     status=1
   fi
 done
 for set in ${JOUST_STRYKER_SETS:-$SETS}; do
+  is_one_of "$set" "$SETS" || { echo "stryker-changed: $set is not one of this script's sets ($SETS)" >&2; exit 2; }
   case $set in
     joust) config=js/mutation/stryker.config.mjs; dir=js/joust ;;
     joust-heap) config=js/mutation/stryker.heap.config.mjs; dir=js/joust ;;
