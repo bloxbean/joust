@@ -769,14 +769,14 @@ final class JscGen {
             String name = "C" + hash;
             String libName = "l" + hash;
             var files = new LinkedHashMap<String, String>();
-            var head = new StringBuilder("jsc 2\npackage " + PKG + "\n\n");
+            var head = new StringBuilder("jsc 1\npackage " + PKG + "\n\n");
             if (library) {
                 var names = new ArrayList<String>();
                 if (pt) names.add("Pt");
                 if (tier) names.add("Tier");
                 for (String[] f : fns) names.add(f[0]);
                 head.append("import { ").append(String.join(", ", names)).append(" } from \"./").append(libName).append(".jsc\"\n");
-                files.put(DIR + libName + ".jsc", "jsc 2\nlibrary " + PKG + "\n\n" + libImports + "\n" + decls + fnText);
+                files.put(DIR + libName + ".jsc", "jsc 1\nlibrary " + PKG + "\n\n" + libImports + "\n" + decls + fnText);
             }
             head.append(imports("std/math", math)).append(imports("std/bytes", bytes)).append(imports("std/crypto", crypto))
                     .append(imports("std/value", value)).append('\n');

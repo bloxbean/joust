@@ -1088,6 +1088,8 @@ final class IrJson {
                     var x = m(o);
                     known(x, Set.of("name", "on", "body", "at"), "an invariant");
                     noPayInExpressions(x.get("body"), true, "invariant " + x.get("name"));   // #98 F1: an invariant moves nothing
+                    // #101 review C5: a present null is a malformed field, not an absent one (as validate.js reads it; IrReaderFuzzTest).
+                    if (x.containsKey("on") && x.get("on") == null) throw new IllegalArgumentException("invariant " + x.get("name") + ": \"on\" is null");
                     String on = x.get("on") == null ? null : s(x.get("on"));
                     if (on != null && !owned.contains(on)) throw new IllegalArgumentException("invariant " + x.get("name") + ": " + on + " is not an owned type");
                     if (on != null && OWNED_STAGE < 3) {
@@ -1822,6 +1824,11 @@ final class IrJson {
             return switch (s(x.get("node"))) {
                 case "Lit" -> {
                     Object v = x.get("value");
+                    // A Bool literal's value is a JSON boolean, as validate.js requires (IrReaderFuzzTest: "" as a Bool was read as
+                    // no bytes here and refused there).
+                    if (t.equals(Ty.BOOL) != (v instanceof Boolean)) {
+                        throw new IllegalArgumentException(t.equals(Ty.BOOL) ? "a Bool literal is a boolean" : "a literal of type " + Ty.show(t) + " is no boolean");
+                    }
                     if (v instanceof String text && !(t.equals(Ty.INT) ? text.matches("-?(0|[1-9][0-9]*)") : text.matches("([0-9a-f]{2})*"))) {
                         throw new IllegalArgumentException("a literal that is not " + (t.equals(Ty.INT) ? "a decimal integer" : "lower-case hex") + ": " + text);
                     }

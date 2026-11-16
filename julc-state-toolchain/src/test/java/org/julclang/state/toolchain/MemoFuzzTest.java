@@ -131,7 +131,7 @@ class MemoFuzzTest {
     // ------------------------------------------------------------------ the oracle's own controls (review r1, Codex C1)
 
     static JscGen.Plan keyBox(String name, String memoType) {
-        String src = "jsc 2\npackage " + JscGen.PKG + "\n\ncontract " + name + "(maxDatumBytes = 512) {\n"
+        String src = "jsc 1\npackage " + JscGen.PKG + "\n\ncontract " + name + "(maxDatumBytes = 512) {\n"
                 + "  state { owner: Key, keys: Int }\n  init() { return { owner: caller, keys: 0 } }\n"
                 + "  action keyed() receives " + memoType + " { return { ...state, keys: keys + funds.deposits.length } }\n}\n";
         var files = new java.util.LinkedHashMap<String, String>();

@@ -317,8 +317,8 @@ class IrReaderFuzzTest {
             new String[]{"arity", "arity", ".* takes \\d+ argument\\(s\\), not \\d+"},
             new String[]{"a missing field", "schema", "missing field \".*\""},
             new String[]{"a name declared twice", "check", "(two methods of that name|a name taken by another method, fn or invariant|two declarations named .*|a bad or repeated name|two fns named .*)"},
-            new String[]{"a type check", "check", "(a bad (big)?map type|a literal of type .*|an emitted value is an Event|not a string)"},
-            new String[]{"a name that resolves to nothing", "check", "(no (fn|record|enum|variant|imported contract) .*|the params (has|have) no field .*|a reference to the local \\d+ \\(.*\\) outside its scope|reads params\\..*, which is not an Instance<C>)"},
+            new String[]{"a type check", "check", "(a bad (big|ledger)?(map|Map) type|a .* field read from a .*|a literal of type .*|an emitted value is an Event|not a string)"},
+            new String[]{"a name that resolves to nothing", "check", "(no (fn|record|enum|variant|imported contract) .*|.* is not a constructor of .*|the params (has|have) no field .*|a reference to the local \\d+ \\(.*\\) outside its scope|reads params\\..*, which is not an Instance<C>)"},
             new String[]{"a type check", "type", ".* is of type .*, not .*"},
             new String[]{"a name that resolves to nothing", "field", ".* has no field .*"},
             new String[]{"a method's checked inputs or transaction use", "check", "(checked is \\[.*\\], but .*|usesCtx is (true|false), but .*)"},
@@ -344,7 +344,7 @@ class IrReaderFuzzTest {
             return m.matches("(?s)IR JSON: the integer -?\\d+ outside the safe range at offset \\d+") ? "a number out of the format's range" : null;
         }
         if (check.equals("enum")) {
-            var m = java.util.regex.Pattern.compile("unknown (\\w+) \".*\"", java.util.regex.Pattern.DOTALL).matcher(what);
+            var m = java.util.regex.Pattern.compile("unknown (\\w+) (\".*\"|null|true|false|-?[0-9].*|[\\[{].*)", java.util.regex.Pattern.DOTALL).matcher(what);
             if (!m.matches() || !(answer.get("irNode") instanceof String node)) return null;
             Set<String> nodes = ENUMS_97.get(m.group(1));
             return nodes != null && nodes.contains(node) ? "a name that resolves to nothing" : null;
@@ -404,7 +404,7 @@ class IrReaderFuzzTest {
     void userNamesThatAreTheFormatsOwn_load() throws IOException {
         var files = new LinkedHashMap<String, String>();
         files.put("app/Source.jsc", """
-                jsc 2
+                jsc 1
                 package app
                 contract Source {
                   state { fields: Int, args: Int, values: Int }
@@ -412,7 +412,7 @@ class IrReaderFuzzTest {
                 }
                 """);
         files.put("app/Reader.jsc", """
-                jsc 2
+                jsc 1
                 package app
                 import contract { Source } from "./Source.jsc"
                 contract Reader {
@@ -437,7 +437,7 @@ class IrReaderFuzzTest {
     void aReaderThatRefusesAFormatField_fails() throws IOException, InterruptedException {
         var files = new LinkedHashMap<String, String>();
         files.put("app/Source.jsc", """
-                jsc 2
+                jsc 1
                 package app
                 contract Source {
                   state { fields: Int, args: Int, values: Int }
@@ -445,7 +445,7 @@ class IrReaderFuzzTest {
                 }
                 """);
         files.put("app/Reader.jsc", """
-                jsc 2
+                jsc 1
                 package app
                 import contract { Source } from "./Source.jsc"
                 contract Reader {
