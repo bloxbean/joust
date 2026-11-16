@@ -163,7 +163,8 @@ export function validate(p) {
   // A refusal carries its parts as well as its text (review r2, security S13 and Codex C4): irWhere and irWhat (the
   // location and the check's own words, so a reader of the error never parses the message back), irCheck (which check:
   // 'schema' for the export's shape, keys() below; 'enum' for a node attribute outside its set; 'arity', 'type' and
-  // 'field' for the checks whose words embed IR-supplied names (review r4, security S13); 'check' otherwise) and,
+  // 'field' for the checks whose words embed IR-supplied names (review r4, security S13), and M3's 'ctor' (a ledger
+  // type's constructor) and 'ledgerType' (a ledger record's field read from another type; #130 r1, Z1); 'check' otherwise) and,
   // for an enumerated attribute, irNode (the node or statement kind).
   const fail = (where, what, check = 'check', node = undefined) => {
     const e = new Error(`invalid IR (${show(where)}): ${show(what)}`);
@@ -472,7 +473,7 @@ export function validate(p) {
       const gov = typeof scrutineeType === 'string' && govCtors(scrutineeType).length > 0 ? scrutineeType : null;
       for (const c of a.ctors) {
         if (gov) {
-          if (!govCtors(gov).includes(c)) fail(where, `${show(c)} is not a constructor of ${show(gov)}`);
+          if (!govCtors(gov).includes(c)) fail(where, `${show(c)} is not a constructor of ${show(gov)}`, 'ctor');
           continue;
         }
         if (c === 'Some' || c === 'None' || key(c) in CRED_FIELDS) continue;
@@ -574,7 +575,7 @@ export function validate(p) {
       const gf = GOV_RECORDS[e.record].find((x) => x.name === e.field);
       if (!gf) fail(where, `${show(e.record)} has no field ${show(e.field)}`, 'field');
       if (gf.type === 'Data') fail(where, `${show(e.record)}.${show(e.field)} is PlutusData, never read (JSC1320)`);
-      if (JSON.stringify(e.target.type) !== JSON.stringify(e.record)) fail(where, `a ${show(e.record)} field read from a ${JSON.stringify(e.target.type)}`);
+      if (JSON.stringify(e.target.type) !== JSON.stringify(e.record)) fail(where, `a ${show(e.record)} field read from a ${JSON.stringify(e.target.type)}`, 'ledgerType');
     }
     if ((e.node === 'New' || (e.node === 'GetField' && !govRecord)) && !shapes.has(e.record)) fail(where, `no record ${show(e.record)}`);
     if (e.node === 'Variant' && !(enums.get(e.enum) ?? []).includes(e.variant)) fail(where, `no variant ${show(e.enum)}.${show(e.variant)}`);
@@ -723,6 +724,8 @@ export function validate(p) {
     // M3a: an owned method's modifiers read its object's fields.
     const input = 'on' in m ? new Map(p.records.find((r) => r.name === m.on).fields.map((f) => [f.name, f.type])) : stateFields;
     modifiers(m, where, fail, keys, input, (ref, want, w) => modField(ref, want, w, 'on' in m ? m.on : 'State'), type);
+    // #130 round r1 (Codex X4): a view has a result type, as the Java reader requires (it read null as a ledger type).
+    if (m.kind === 'view' && m.result === null) fail(where, 'a view has a result type');
     if (m.result !== null) type(m.result, where);
     inputRec = m.on ?? 'State';
     block(m.body, where, scope);

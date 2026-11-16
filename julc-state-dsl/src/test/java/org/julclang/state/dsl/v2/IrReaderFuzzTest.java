@@ -317,10 +317,14 @@ class IrReaderFuzzTest {
             new String[]{"arity", "arity", ".* takes \\d+ argument\\(s\\), not \\d+"},
             new String[]{"a missing field", "schema", "missing field \".*\""},
             new String[]{"a name declared twice", "check", "(two methods of that name|a name taken by another method, fn or invariant|two declarations named .*|a bad or repeated name|two fns named .*)"},
-            new String[]{"a type check", "check", "(a bad (big|ledger)?(map|Map) type|a .* field read from a .*|a literal of type .*|an emitted value is an Event|not a string)"},
-            new String[]{"a name that resolves to nothing", "check", "(no (fn|record|enum|variant|imported contract) .*|.* is not a constructor of .*|the params (has|have) no field .*|a reference to the local \\d+ \\(.*\\) outside its scope|reads params\\..*, which is not an Instance<C>)"},
+            new String[]{"a type check", "check", "(a bad (big|ledger)?(map|Map) type|a literal of type .*|an emitted value is an Event|not a string)"},
+            new String[]{"a name that resolves to nothing", "check", "(no (fn|record|enum|variant|imported contract) .*|the params (has|have) no field .*|a reference to the local \\d+ \\(.*\\) outside its scope|reads params\\..*, which is not an Instance<C>)"},
             new String[]{"a type check", "type", ".* is of type .*, not .*"},
             new String[]{"a name that resolves to nothing", "field", ".* has no field .*"},
+            // ADR-0018 M3 (#130 round r1, Z1): the ledger types' checks embed IR-supplied names too, so they have codes of their
+            // own: a constructor that is not the ledger type's, and a ledger record's field read from another type.
+            new String[]{"a name that resolves to nothing", "ctor", ".* is not a constructor of .*"},
+            new String[]{"a type check", "ledgerType", "a .* field read from a .*"},
             new String[]{"a method's checked inputs or transaction use", "check", "(checked is \\[.*\\], but .*|usesCtx is (true|false), but .*)"},
             new String[]{"a declaration's shape", "check", "(the (state|params) record .* named .*|its state is named .*|a (type|variant) not qualified by .*|a bad enum name .*|a bad name.*|binds and fields differ in length|only a single-constructor arm binds)"},
             new String[]{"a number out of the format's range", "check", "(not a non-negative integer|not a decimal integer: .*)"});
@@ -489,6 +493,29 @@ class IrReaderFuzzTest {
         assertEquals("fail: the readers disagree", verdict(java(ir), mutant), mutant);
     }
 
+    /**
+     * #130 round r1 (Codex X4): a view whose result is null, in M3's exports (Bank, Guild, Members, Studio) and Counter2's
+     * control. The Java reader read null as a ledger type and threw; validate.js accepted it. Both now refuse it, with the
+     * same rule: a view has a result type.
+     */
+    @org.junit.jupiter.api.Test
+    void aViewWithoutAResultType_isRefusedByBothReaders() throws IOException {
+        Path dir = Path.of("src/test/resources/ir-regressions");
+        List<Path> cases;
+        try (Stream<Path> s = Files.list(dir)) {
+            cases = s.filter(p -> p.getFileName().toString().startsWith("null-view-result-")).sorted().toList();
+        }
+        assertEquals(5, cases.size(), cases.toString());
+        for (Path c : cases) {
+            String text = Files.readString(c);
+            String j = java(text);
+            String js = js(text);
+            assertTrue(j.startsWith("refused") && j.contains("a view has a result type"), c + ": " + j);
+            assertTrue(js.contains("\"irWhat\":\"a view has a result type\""), c + ": " + js);
+            assertEquals("agree", verdict(j, js), c.toString());
+        }
+    }
+
     /** S13: the rules read the check's own words, so a location holding such a phrase cannot classify a new check. */
     @org.junit.jupiter.api.Test
     void aLocationHoldingARulesWords_isNotRegistered() {
@@ -517,6 +544,10 @@ class IrReaderFuzzTest {
         assertNull(rule.apply("check", "an unregistered check: g(h) is of type A, not B"));
         assertNull(rule.apply("check", "something new where evil has no field x"));
         assertNull(rule.apply("schema", "Pt has no field z"));
+        assertEquals("a name that resolves to nothing", rule.apply("ctor", "Arith is not a constructor of GovernanceAction"));
+        assertEquals("a type check", rule.apply("ledgerType", "a ProtocolVersion field read from a {\"option\":\"GovernanceActionId\"}"));
+        assertNull(rule.apply("check", "x is not a constructor of y"));
+        assertNull(rule.apply("check", "a P field read from a Q"));
     }
 
     @FuzzTest(maxDuration = "30s")

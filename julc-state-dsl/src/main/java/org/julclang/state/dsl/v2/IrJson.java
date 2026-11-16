@@ -1229,6 +1229,8 @@ final class IrJson {
                     if (Gov.holds(l.type)) throw new IllegalArgumentException(where + "the parameter " + l.name + " is a ledger type of the purposes,"
                             + " which no redeemer carries (JSC1321)");
                 }
+                // #130 round r1 (Codex X4): a view has a result type, as validate.js requires (Gov.holds read null and threw).
+                if (k == Ir.Kind.VIEW && m.resultType() == null) throw new IllegalArgumentException(where + "a view has a result type");
                 if (k == Ir.Kind.VIEW && Gov.holds(m.resultType())) throw new IllegalArgumentException(where + "a view's result is no ledger type (JSC1321)");
                 if (k.purpose() || k == Ir.Kind.MIGRATE) {
                     if (kinds.put(k, m) != null) {
