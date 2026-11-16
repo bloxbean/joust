@@ -31,7 +31,7 @@ Install the JOUST extension (`vscode-joust`). It bundles the server and its comp
 - In a trusted folder, it may use the project's own compiler: only that compiler's two engine files, after checking them.
 
 Rename goes through **JOUST: Rename Symbol**. It renames locals, parameters, `fn`s, types, enums, variants, fields, state
-fields and owned types. Renaming an owned type also renames its methods' and invariants' qualifiers and its `admits`. A
+fields, actions, destroys, views, events and owned types. Renaming an owned type also renames its methods' and invariants' qualifiers and its `admits`. A
 field renamed in an owned type is renamed where the object is read: in its methods' bodies and modifiers, and in
 `keyed by` for a keyed type's key. A params field is also renamed in `init migrate from params.f`. Owned methods, the
 purposes' handlers and `init migrate` cannot be renamed: the rename refuses them. **JOUST: Show generated Java** opens the lowered class, and **Accept ABI…**

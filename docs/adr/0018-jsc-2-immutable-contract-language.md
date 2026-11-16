@@ -1165,7 +1165,7 @@ validator never accepts it (r17, #76 review S5, S6).
   nothing is committed), and `joust build --accept-abi=<Contract>@<committed-sha256>..<new-sha256>` (Gradle:
   `acceptJscAbi --contract <C> --committed-sha256 <h1> --sha256 <h2>`, task options) accepts that contract only, and
   refuses when the committed manifest is no longer `h1` or the build now computes another manifest than `h2`. The
-  editor's **Accept ABI…** runs only this form; the bare `--accept-abi` stays for a terminal. *(r23)* `<Contract>` is
+  editor's **Accept ABI…** runs only this form; the bare `--accept-abi` stays for a terminal. *(the r26 note; ADR-0021 r7, §3a item 5)* `<Contract>` is
   the contract's package and name (`app.Counter`); a simple name is taken only when one contract of the build has it,
   and an ambiguous one is refused with nothing accepted. `acceptJscAbi` gives the bare acceptance only when none of its
   three options is set: a partial or malformed set fails the task, nothing accepted.

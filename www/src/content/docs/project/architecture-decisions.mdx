@@ -313,7 +313,7 @@ Covered in: [Quick start: Java & Gradle](/start/quick-start-java/#create-it-with
 ### ADR-0018: The `.jsc` language, an immutable contract language
 
 [`0018-jsc-2-immutable-contract-language.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)
-· Proposed (r26)
+· Proposed (r29); M0–M4 built, and M3 (owned and keyed objects, moves, the script purposes, migration) exited in r29
 
 `.jsc` makes the language npm projects start with able to express every JOUST contract. It is **immutable**, like
 UPLC: names are bound once with `const`, blocks and `if`/`match` are expressions, and an action evaluates to the next
@@ -329,7 +329,7 @@ The first language, `.jsc` v1 (ADR-0005), and its migration were removed in r26.
 ### ADR-0021: A language server and VS Code extension for `.jsc`
 
 [`0021-jsc-language-server-and-vscode-extension.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0021-jsc-language-server-and-vscode-extension.md)
-· Proposed (r6, with r7a and r7b); M5a in the `.jsc` integration (#98)
+· Proposed (r10, with r7a and r7b); M5a–M5e built (#83, #99, #115, #120, #121), integrated in #130
 
 The editor runs the build's own `.jsc` front end, so the editor and the build cannot disagree about the language.
 A Java language core beside the checker turns files into a document model (diagnostics with their stable codes,

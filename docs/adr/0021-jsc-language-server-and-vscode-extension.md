@@ -1643,17 +1643,24 @@ later decision, like D11's automation.
   L6 per file, L12 across files), `java:` libraries described once and cached by their sources' SHA-256, their imports no
   longer advisory in npm projects, and read-only `joust-lib:` documents; #114's fixes. The M5c row records how its r7
   commitment was met.
-- **r10, #126** (2026-11-16; the final pass's P3 wording): D3b and §16 say exactly what the user confirms for each edit
-  a project compiler is trusted for. A quick fix's title is chosen; for Rename Symbol, only the new name, while the files
-  and ranges are the project compiler's and closed importers are opened in the background and may be auto-saved
-  (S8 wording). The extension README's completion bullet is corrected (MF6).
-- **r10, M5 final pass** (2026-11-15; #121): D8's design as built (MF3); D4's note that M5e built the lock gate (MF4); D3b
-  on which edits trust a project compiler, and why formatting is the exception (S8); §15 on the bundled check's worker
-  and cost, and its refusal shown to the user (MF5).
-- **r10, round r3** (2026-11-15; #121 round 2): accepting never writes through a link (S5, JscMain and joust build
-  alike); the Status and Implementation lines name the PRs and ADR-0018's acceptance as the second condition (F8); the
-  home directory is never a project, and Windows needs an explicit `node` (F9); the attach job checks the `release`
-  environment's reviewers (F10).
+- **r9** (2026-11-15; with the M5d implementation): §15 states the formatter before its code: the style, invariants
+  F1–F6 (L12's hash and IR, idempotence, comments, refusal of files that do not parse, engine parity, latency) and the
+  attack and edge vectors; L7 points to it. The as-built notes follow the code. The indentation rule (one level per line that opens brackets,
+  back to the opener's line at a closer) and F4's parse of a file alone (imported names, then every capitalised name
+  for an imported enum's variants) are stated as the implementation needed them. #119 (C14–C17, F14 on #115) is
+  folded in.
+- **r9, round r2** (2026-11-15; #120 round 1): §15's F4 refusal reads the build's import environment (no
+  capitalised-names retry, C3); the style is versioned and keeps other spacing as written (F4); the CLIs' exit codes
+  (F5), strict UTF-8 (F1), modes and read-only files (F2, S2), the project-confined default target (S3); the server's
+  lifetime binding (C1), range confinement (C2, F6), CRLF after line comments (C4), feature check (F3), whitespace-only
+  check (S1), advisory label (F8) and listing cache (F7), in the as-built notes.
+- **r9, round r3** (2026-11-15; #120 round 2): the BOM in `joust fmt` (F9 = C5); a bundled-compiler check of
+  another compiler's formatting (S4, C6); the build's module root for named files (F10); unreadable directories (S5).
+- **r10** (2026-11-15; with the M5e implementation): §16 states M5e before its code: the scope (the editor's
+  `joust.lock` gate, Neovim and Helix configurations, the tree-sitter package, docs, the release attachment),
+  invariants E1–E8 (the lock gate agrees with `joust build` and never accepts; the lock is a confined snapshot input;
+  configurations run only a user-installed `joust-lsp`; they work headless; the package is valid and reproducible; the
+  release step only attaches, never publishes; the docs never recommend workspace code) and the vectors.
 - **r10, round r2** (2026-11-15; #121 round 1):
   - E3 records the lock by its logical path in three states, and states that an unsaved lock buffer is not an input
     (C1–C3, F7);
@@ -1661,27 +1668,20 @@ later decision, like D11's automation.
   - the M5e row's entry and exit describe what was built (F2);
   - the acceptance cleanup (F3): the Status line, the Depends-on line, F15, and §10 (Q1 and Q2 resolved; Q3 and Q5–Q9
     decided; Q4 left to the maintainers).
+- **r10, round r3** (2026-11-15; #121 round 2): accepting never writes through a link (S5, JscMain and joust build
+  alike); the Status and Implementation lines name the PRs and ADR-0018's acceptance as the second condition (F8); the
+  home directory is never a project, and Windows needs an explicit `node` (F9); the attach job checks the `release`
+  environment's reviewers (F10).
+- **r10, M5 final pass** (2026-11-15; #121): D8's design as built (MF3); D4's note that M5e built the lock gate (MF4); D3b
+  on which edits trust a project compiler, and why formatting is the exception (S8); §15 on the bundled check's worker
+  and cost, and its refusal shown to the user (MF5).
+- **r10, #126** (2026-11-16; the final pass's P3 wording): D3b and §16 say exactly what the user confirms for each edit
+  a project compiler is trusted for. A quick fix's title is chosen; for Rename Symbol, only the new name, while the files
+  and ranges are the project compiler's and closed importers are opened in the background and may be auto-saved
+  (S8 wording). The extension README's completion bullet is corrected (MF6).
 - **r10 note** (2026-11-16; the integration with ADR-0018 M3, #130 round r1, Codex X1–X3; no revision of its own): in an
   owned action, destroy or invariant by type, a bare name and a modifier's field name the object's field (the checked
   input's record), never the state's, so a rename of one never edits the other. M3's header references are indexed:
   `keyed by f` (the type's field), `init migrate from params.f`, owned methods' and invariants' qualifiers, and
   `admits T`. Owned types are renamable (with the ABI warning); owned methods, handlers and `init migrate` are refused.
   Completion after `state.` in an owned method, and on an arriving object, offers its owned type's fields.
-- **r10** (2026-11-15; with the M5e implementation): §16 states M5e before its code: the scope (the editor's
-  `joust.lock` gate, Neovim and Helix configurations, the tree-sitter package, docs, the release attachment),
-  invariants E1–E8 (the lock gate agrees with `joust build` and never accepts; the lock is a confined snapshot input;
-  configurations run only a user-installed `joust-lsp`; they work headless; the package is valid and reproducible; the
-  release step only attaches, never publishes; the docs never recommend workspace code) and the vectors.
-- **r9, round r3** (2026-11-15; #120 round 2): the BOM in `joust fmt` (F9 = C5); a bundled-compiler check of
-  another compiler's formatting (S4, C6); the build's module root for named files (F10); unreadable directories (S5).
-- **r9, round r2** (2026-11-15; #120 round 1): §15's F4 refusal reads the build's import environment (no
-  capitalised-names retry, C3); the style is versioned and keeps other spacing as written (F4); the CLIs' exit codes
-  (F5), strict UTF-8 (F1), modes and read-only files (F2, S2), the project-confined default target (S3); the server's
-  lifetime binding (C1), range confinement (C2, F6), CRLF after line comments (C4), feature check (F3), whitespace-only
-  check (S1), advisory label (F8) and listing cache (F7), in the as-built notes.
-- **r9** (2026-11-15; with the M5d implementation): §15 states the formatter before its code: the style, invariants
-  F1–F6 (L12's hash and IR, idempotence, comments, refusal of files that do not parse, engine parity, latency) and the
-  attack and edge vectors; L7 points to it. The as-built notes follow the code. The indentation rule (one level per line that opens brackets,
-  back to the opener's line at a closer) and F4's parse of a file alone (imported names, then every capitalised name
-  for an imported enum's variants) are stated as the implementation needed them. #119 (C14–C17, F14 on #115) is
-  folded in.

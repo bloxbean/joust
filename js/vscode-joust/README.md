@@ -28,7 +28,8 @@ JOUST's contract language, `.jsc`, in VS Code (ADR-0021, milestones M5a–M5e). 
 - **JOUST: Remove invisible characters…** removes bidirectional controls and other format characters the compiler
   refuses, after you confirm.
 - **The outline, folding and selection ranges**: contract, state fields, init, actions, destroys, views, fns, types,
-  enums and variants.
+  enums and variants; the params, events and invariants; owned types, their methods (owned init, action and destroy),
+  the script purposes' handlers (withdraw, certify, vote, propose) and init migrate.
 - **Highlighting** (the TextMate grammar, which the docs site's Shiki also loads), a language configuration and snippets
   (`contract`, `action`, `match`, `fn`, `enum`).
 - **JOUST: Build** runs the project's own `joust build` (npm) or `./gradlew build` as a task; its errors land in the
@@ -80,7 +81,11 @@ trusted folders).
 - **JOUST: Rename Symbol** (F2) renames a library's fn, type or enum in the library and in every file that imports it,
   started from the declaration or from a use. It edits open files only: when it needs others, the extension opens them
   (without an editor) and asks again. A contract's names, and a library's variants and fields, are renamed in their
-  file only while no file imports it; an npm package's libraries are never edited.
+  file only while no file imports it; an npm package's libraries are never edited. Locals, parameters, fns, types,
+  enums, variants, fields, state fields, actions, destroys, views, events and owned types can be renamed; renaming an
+  owned type renames its methods' and invariants' qualifiers and its `admits`. A field of an owned type is renamed where
+  its object is read (its methods' bodies and modifiers, and `keyed by`), and a params field in `init migrate from
+  params.f` too. Owned methods, the purposes' handlers and init migrate cannot be renamed.
 - **`java:` imports** resolve as the build checks them in npm projects (the packages' `joust-lib/*.java` sources, read
   and described once, then cached); in Gradle projects they are advisory. Go to definition on a name a `java:` import
   brings, or on an npm package's `.jsc` library, opens its source as a read-only `joust-lib:` document. An open
