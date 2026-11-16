@@ -14,7 +14,7 @@
     "org.julclang.state.dsl.JscMain": {
       "module": "julc-state-dsl",
       "mutants": 376,
-      "score": 41.0
+      "score": 47.1
     },
     "org.julclang.state.dsl.JscMain$1": {
       "module": "julc-state-dsl",

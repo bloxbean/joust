@@ -129,14 +129,22 @@ final class JscLangIndex {
      * destroy or invariant by type there), or null where the input is the state.
      */
     private String inputAt(int line, int col) {
+        // The members with an object input, collected once (#130 r3: a lookup per name scans only them, never every
+        // declaration, so a file of n names and n declarations stays linear).
+        if (inputs == null) {
+            inputs = new ArrayList<>();
+            for (Spans.Decl d : spans.decls) if (d.input != null && d.endLine >= 0) inputs.add(d);
+        }
         Spans.Decl best = null;
-        for (Spans.Decl d : spans.decls) {
-            if (d.input == null || d.endLine < 0) continue;
+        for (Spans.Decl d : inputs) {
             boolean in = (line > d.startLine || line == d.startLine && col >= d.startCol) && (line < d.endLine || line == d.endLine && col <= d.endCol);
             if (in && (best == null || d.startLine > best.startLine || d.startLine == best.startLine && d.startCol >= best.startCol)) best = d;
         }
         return best == null ? null : best.input;
     }
+
+    /** The members whose input is an owned object (inputAt), or null until first asked. */
+    private List<Spans.Decl> inputs;
 
     private Spans.Decl typeDecl(String name) {
         for (String k : new String[]{"type", "enum", "event", "variant", "owned"}) {   // M3: an owned type too
