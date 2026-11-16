@@ -451,10 +451,16 @@ test('Treasury: a script governor (Guardian, built by joust build) approves @Aut
   const view = await walletView(CSL, stranger);
   const chainNow = { params: await rt.chain.params(), tip: await rt.chain.tip() };
   assert.deepEqual(verifyRegistration({ CSL, txHex: reg.cbor, governor: g0, wallet: view, chain: chainNow, networkId: 0 }).problems, []);
-  const regTamperings = Object.entries(tamperings(CSL, reg.cbor, [stranger.address]));
+  // The tampering of the TTL is relative to the tip: the registration has no TTL, and 0 + 500,000 slots lies below a
+  // long-running DevKit's tip (a validity interval that already ended is not a long one).
+  const regTamperings = Object.entries(tamperings(CSL, reg.cbor, [stranger.address], { tip: chainNow.tip }));
+  const longTtl = CSL.Transaction.from_hex(Object.fromEntries(regTamperings)['a validity interval of days']).body().ttl_bignum();
+  assert.ok(Number(longTtl.to_str()) >= chainNow.tip + 500_000, `the tampered TTL ${longTtl.to_str()} is days past the tip ${chainNow.tip}`);
   for (const [what, hex] of regTamperings) {
     assert.notDeepEqual(verifyRegistration({ CSL, txHex: hex, governor: g0, wallet: view, chain: chainNow, networkId: 0 }).problems, [], what);
   }
+  assert.ok(verifyRegistration({ CSL, txHex: Object.fromEntries(regTamperings)['a validity interval of days'], governor: g0, wallet: view,
+    chain: chainNow, networkId: 0 }).problems.some((x) => /validity interval/.test(x)), 'refused for its validity interval');
   assert.notDeepEqual(verifyRegistration({ CSL, txHex: reg.cbor, governor: { hash: '00'.repeat(28) }, wallet: view, chain: chainNow, networkId: 0 }).problems, []);
   console.log(`I5: ${regTamperings.length} tamperings of an engine-built governor registration refused before signing`);
 

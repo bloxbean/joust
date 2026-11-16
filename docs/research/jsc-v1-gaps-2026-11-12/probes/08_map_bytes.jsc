@@ -1,0 +1,5 @@
+package p
+contract P {
+    state m: Map<Key, Bytes>
+    init() { }
+}

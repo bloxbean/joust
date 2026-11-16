@@ -1,0 +1,121 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Mix",
+  "source": "Mix.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "master", "type": "Key", "data": "bytes28" },
+      { "name": "isOpen", "type": "Bool", "data": "bool" },
+      { "name": "arrivals", "type": "Int", "data": "int" }
+    ] },
+  "params": { "name": "Config", "constr": 0, "fields": [
+      { "name": "council", "type": "List<Key>", "data": "list<bytes28>" },
+      { "name": "quorum", "type": "Int", "data": "int" },
+      { "name": "pool", "type": "Bytes", "data": "bytes" }
+    ] },
+  "purposes": [
+    { "purpose": "certify", "name": "reg" }
+  ],
+  "owned": ["Hero", "Seat"],
+  "holdings": [
+      { "name": "Holding_Hero", "constr": 0, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "value", "type": "Hero", "data": "Hero" }
+        ] },
+      { "name": "Head_Seat", "constr": 1, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Keyed_Seat", "constr": 2, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "value", "type": "Seat", "data": "Seat" }
+        ] },
+      { "name": "Retired_Seat", "constr": 3, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "key", "type": "Bytes", "data": "bytes" }
+        ] }
+  ],
+  "keyed": [
+    { "type": "Seat", "key": "code", "keyIndex": 1, "maxKeyBytes": 32, "signedKey": false, "linkCooldownMs": 0, "linkWindowMs": 30000,
+      "typeId": "0453656174", "headTag": 1, "nodeTag": 2, "retiredTag": 3, "link": 8, "remove": 4,
+      "inserts": ["take"], "actions": ["write"], "removes": ["free"], "retires": ["leave"] }
+  ],
+  "redeemers": {
+    "spend": [
+      { "name": "SetOpen", "constr": 0, "fields": [
+          { "name": "nowOpen", "type": "Bool", "data": "bool" }
+        ] },
+      { "name": "Admit", "constr": 1, "fields": [
+          { "name": "heroId", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "LevelUp", "constr": 2, "fields": [] },
+      { "name": "Transfer", "constr": 3, "fields": [
+          { "name": "into", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Write", "constr": 4, "fields": [
+          { "name": "text", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Retire", "constr": 5, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Free", "constr": 6, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Leave", "constr": 7, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Link", "constr": 8, "fields": [] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] },
+      { "name": "Recruit", "constr": 2, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Insert_take", "constr": 3, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "code", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Remove_Seat", "constr": 4, "fields": [
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "removed", "type": "TxOutRef", "data": "TxOutRef" }
+        ] }
+    ]
+  },
+  "types": {
+    "Hero": { "kind": "record", "constructors": [{ "name": "Hero", "constr": 0, "fields": [
+        { "name": "owner", "type": "Key", "data": "bytes28" },
+        { "name": "level", "type": "Int", "data": "int" }
+      ] }] },
+    "Seat": { "kind": "record", "constructors": [{ "name": "Seat", "constr": 0, "fields": [
+        { "name": "holder", "type": "Key", "data": "bytes28" },
+        { "name": "code", "type": "Bytes", "data": "bytes" },
+        { "name": "note", "type": "Bytes", "data": "bytes" }
+      ] }] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

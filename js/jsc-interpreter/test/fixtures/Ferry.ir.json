@@ -1,0 +1,431 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "ed0962c3b77303ee26180d766e7c202dbfb5fc3edd65c35c2550565e11c06260",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Ferry",
+  "source": "Ferry.jsc",
+  "options": [],
+  "records": [
+    {
+      "name": "Pass",
+      "fields": [{ "name": "owner", "type": "Key" }, { "name": "level", "type": "Int" }],
+      "at": [18, 9]
+    }
+  ],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "keeper", "type": "Key" }, { "name": "minLevel", "type": "Int" }, { "name": "arrivals", "type": "Int" }],
+    "at": [15, 1]
+  },
+  "owned": ["Pass"],
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [{ "id": 1, "name": "minLevel", "type": "Int", "taint": 0, "at": [20, 8] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [21, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [21, 24] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [21, 13]
+            },
+            "message": "a level of at least 1",
+            "at": [21, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [22, 22] },
+            { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [22, 30] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [22, 50] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [22, 12]
+        },
+        "at": [20, 23]
+      },
+      "at": [20, 3]
+    },
+    {
+      "kind": "ownedInit",
+      "name": "issue",
+      "on": "Pass",
+      "shared": {
+        "id": 2,
+        "name": "f",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [25, 25],
+        "fieldTaints": { "arrivals": 0, "keeper": 0, "minLevel": 0 }
+      },
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Pass" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "Pass",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [26, 21] },
+            { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [26, 36] }
+          ],
+          "type": { "record": "Pass" },
+          "taint": 0,
+          "at": [26, 12]
+        },
+        "at": [25, 36]
+      },
+      "at": [25, 3]
+    },
+    {
+      "kind": "ownedInit",
+      "name": "issueAt",
+      "on": "Pass",
+      "shared": {
+        "id": 3,
+        "name": "f",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [29, 27],
+        "fieldTaints": { "arrivals": 0, "keeper": 0, "minLevel": 0 }
+      },
+      "params": [{ "id": 4, "name": "lv", "type": "Int", "taint": 0, "at": [29, 38] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Pass" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "Pass",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [30, 21] },
+            { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [30, 36] }
+          ],
+          "type": { "record": "Pass" },
+          "taint": 0,
+          "at": [30, 12]
+        },
+        "at": [29, 47]
+      },
+      "at": [29, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "lift",
+      "on": "Pass",
+      "into": {
+        "id": 5,
+        "name": "to",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [33, 26],
+        "fieldTaints": { "arrivals": 0, "keeper": 0, "minLevel": 0 }
+      },
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Pass" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": "<",
+              "left": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 5, "type": { "record": "State" }, "taint": 0, "at": [34, 13] },
+                "record": "State",
+                "field": "arrivals",
+                "type": "Int",
+                "taint": 0,
+                "at": [34, 13]
+              },
+              "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [34, 27] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [34, 13]
+            },
+            "message": "the ferry is full",
+            "at": [34, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Pass",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Pass" }, "taint": 0, "at": [35, 17] },
+              "record": "Pass",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [35, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "level", "type": "Int", "taint": 0, "at": [35, 31] },
+              "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [35, 39] },
+              "type": "Int",
+              "taint": 0,
+              "at": [35, 31]
+            }
+          ],
+          "type": { "record": "Pass" },
+          "taint": 0,
+          "at": [35, 12]
+        },
+        "at": [33, 47]
+      },
+      "at": [33, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "lower",
+      "on": "Pass",
+      "into": {
+        "id": 6,
+        "name": "to",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [38, 27],
+        "fieldTaints": { "arrivals": 0, "keeper": 0, "minLevel": 0 }
+      },
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Pass" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "StateField", "field": "level", "type": "Int", "taint": 0, "at": [39, 13] },
+              "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [39, 21] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [39, 13]
+            },
+            "message": "too low to lower",
+            "at": [39, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 6, "type": { "record": "State" }, "taint": 0, "at": [40, 13] },
+                "record": "State",
+                "field": "arrivals",
+                "type": "Int",
+                "taint": 0,
+                "at": [40, 13]
+              },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [40, 27] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [40, 13]
+            },
+            "message": "the ferry has not sailed yet",
+            "at": [40, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "Pass",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Pass" }, "taint": 0, "at": [41, 17] },
+              "record": "Pass",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [41, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "-",
+              "left": { "node": "StateField", "field": "level", "type": "Int", "taint": 0, "at": [41, 31] },
+              "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [41, 39] },
+              "type": "Int",
+              "taint": 0,
+              "at": [41, 31]
+            }
+          ],
+          "type": { "record": "Pass" },
+          "taint": 0,
+          "at": [41, 12]
+        },
+        "at": [38, 48]
+      },
+      "at": [38, 3]
+    },
+    {
+      "kind": "action",
+      "name": "board",
+      "params": [{ "id": 7, "name": "passId", "type": "Bytes", "taint": 0, "at": [44, 16] }],
+      "arriving": {
+        "id": 8,
+        "name": "pass",
+        "type": { "record": "Pass" },
+        "taint": 0,
+        "at": [44, 31],
+        "fieldTaints": { "level": 0, "owner": 0 }
+      },
+      "mods": [{ "name": "admits", "field": "Pass" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 8, "type": { "record": "Pass" }, "taint": 0, "at": [45, 13] },
+                "record": "Pass",
+                "field": "level",
+                "type": "Int",
+                "taint": 0,
+                "at": [45, 13]
+              },
+              "right": { "node": "StateField", "field": "minLevel", "type": "Int", "taint": 0, "at": [45, 27] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [45, 13]
+            },
+            "message": "below the ferry's level",
+            "at": [45, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "keeper",
+              "type": "Key",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "minLevel",
+              "type": "Int",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "arrivals", "type": "Int", "taint": 0, "at": [46, 34] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [46, 45] },
+              "type": "Int",
+              "taint": 0,
+              "at": [46, 34]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [46, 12]
+        },
+        "at": [44, 55]
+      },
+      "at": [44, 3]
+    },
+    {
+      "kind": "ownedDestroy",
+      "name": "scrap",
+      "on": "Pass",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [50, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [50, 16] },
+            "at": [50, 5]
+          }
+        ],
+        "result": null,
+        "at": [49, 41]
+      },
+      "at": [49, 3]
+    }
+  ],
+  "invariants": [
+    {
+      "name": "cap",
+      "on": "Pass",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Compare",
+          "op": "<=",
+          "left": { "node": "StateField", "field": "level", "type": "Int", "taint": 0, "at": [53, 24] },
+          "right": { "node": "Lit", "value": "5", "type": "Int", "taint": 0, "at": [53, 33] },
+          "type": "Bool",
+          "taint": 0,
+          "at": [53, 24]
+        },
+        "at": [53, 24]
+      },
+      "at": [53, 3]
+    }
+  ],
+  "warnings": []
+}

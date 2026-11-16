@@ -1,0 +1,45 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+import { isRegistration, delegatesOnlyTo } from "std/certs"
+import contract { Oracle } from "./Oracle.jsc"
+
+// ADR-0018 M3 final pass (design MD2): a coverage contract for the M3 combination matrix. The purposes and stakeSelf
+// beside M2's parts: deposits (receives), a read of another contract (reads) and native assets (accept), with the
+// withdraw, certify, vote and propose handlers. JscV2M3MatrixTest runs it on all five legs.
+contract StakedDesk(maxDatumBytes = 512, assetSlots = 2, stakeSelf) {
+  params { feed: Instance<Oracle>, council: List<Key>, quorum: Int, pool: Bytes, payee: Key }
+  state { clerk: Key, credits: Int, price: Int }
+
+  init() {
+    return { clerk: caller, credits: 0, price: 0 }
+  }
+
+  action credit() receives Key {
+    require(!funds.deposits.isEmpty, "nothing deposited")
+    return { ...state, credits: credits + funds.deposits.length }
+  }
+
+  action quote(p: reads params.feed) open {
+    return { ...state, price: p.price }
+  }
+
+  action lodge(policy: Hash, name: Bytes, qty: Int) payable {
+    require(qty > 0, "lodge something")
+    accept(Value.asset(policy, name, qty))
+    return state
+  }
+
+  withdraw collect(amount: Int) quorum params.council params.quorum {
+    if amount > 0 {
+      send(wallet(params.payee), Value.lovelace(amount))
+    }
+  }
+
+  certify certificate(cert: TxCert) quorum params.council params.quorum =
+    isRegistration(cert) || delegatesOnlyTo(cert, params.pool)
+
+  vote decide(voter: Voter, action: GovernanceActionId, choice: Vote) quorum params.council params.quorum = true
+
+  propose guard(p: ProposalProcedure) = true
+}

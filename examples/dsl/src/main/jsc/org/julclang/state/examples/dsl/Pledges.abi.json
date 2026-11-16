@@ -1,0 +1,60 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Pledges",
+  "source": "Pledges.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "owner", "type": "Key", "data": "bytes28" },
+      { "name": "goal", "type": "Int", "data": "int" },
+      { "name": "deadline", "type": "Int", "data": "int" },
+      { "name": "raised", "type": "Int", "data": "int" },
+      { "name": "shares", "type": "List<Share>", "data": "list<Share>" },
+      { "name": "tag", "type": "Bytes", "data": "bytes" },
+      { "name": "lastBacker", "type": "Option<Key>", "data": "option<bytes28>" }
+    ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Pledge", "constr": 0, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Reassign", "constr": 1, "fields": [
+          { "name": "from", "type": "Share", "data": "Share" },
+          { "name": "to", "type": "Key", "data": "bytes28" }
+        ] },
+      { "name": "SetBacker", "constr": 2, "fields": [
+          { "name": "who", "type": "Option<Key>", "data": "option<bytes28>" }
+        ] },
+      { "name": "Distribute", "constr": 3, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "goal", "type": "Int", "data": "int" },
+          { "name": "deadline", "type": "Int", "data": "int" },
+          { "name": "shares", "type": "List<Share>", "data": "list<Share>" },
+          { "name": "label", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "Share": { "kind": "record", "constructors": [{ "name": "Share", "constr": 0, "fields": [
+        { "name": "to", "type": "Key", "data": "bytes28" },
+        { "name": "bps", "type": "Int", "data": "int" }
+      ] }] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

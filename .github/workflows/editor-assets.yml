@@ -1,0 +1,194 @@
+# ADR-0021 r10 §16 (M5e) E7, D11: attaches the editor assets to an existing JOUST release, when a maintainer runs it
+# (Actions -> "Editor assets" -> Run workflow, with the release's version). Nothing else starts it: no push, tag, pull
+# request or schedule, so adding this file changes no release.
+#
+#   vscode-joust-<ext>.vsix             the extension, its engine from the release's published @julclang/joust tarball
+#   tree-sitter-jsc-<ts>.tar.gz         the tree-sitter package
+#   editor-assets-<version>.json        the engine's digests and where they came from
+#   editor-assets-<version>-SHA256SUMS.txt
+#
+# Each is attested first, then attached (#121 F6: a failure between the two leaves nothing unattested), and an asset is
+# never replaced: one already on the release with the same bytes is accepted, one with other bytes fails the run.
+# #121 S1: it runs only from main (both jobs check github.ref), builds the tag itself (refs/tags/v<version>, checked to be
+# the tag's commit and reachable from main), and attaches only in the `release` environment, whose reviewers a
+# maintainer sets up (docs/release-ops.md); #121 F10: the attach job checks, before anything is uploaded, that the
+# environment has required reviewers.
+#
+# Nothing is published: no Marketplace or Open VSX token exists here, and no step runs vsce publish or ovsx publish. A
+# maintainer publishes from the attached .vsix by hand (D11), once the publisher (Q4) is decided, after verifying it:
+#
+#   gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust \
+#     --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml --source-ref refs/heads/main
+name: Editor assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The JOUST release whose editor assets to attach (its tag v<version> and GitHub release must exist)'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: editor-assets-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  # Builds from the release's tag with a read-only token and no secrets; installs with --ignore-scripts except the
+  # pinned tree-sitter-cli (its install step fetches its binary, as build.yml's grammar job does).
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      # The token only where gh runs (#121 S4): no install script or build step sees it.
+      - name: Check the version and its release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::not a version: $VERSION" >&2; exit 1; }
+          gh release view "v$VERSION" --json tagName --jq .tagName
+
+      # #121 S1: the tag, fully qualified (an unqualified ref would prefer a branch of the same name), with main's history.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: refs/tags/v${{ inputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check that the tag's commit is built, and that main reaches it
+        shell: bash
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          tag=$(git rev-parse "refs/tags/v${VERSION}^{commit}")
+          [[ "$head" == "$tag" ]] || { echo "::error::HEAD $head is not the tag v$VERSION ($tag)" >&2; exit 1; }
+          git merge-base --is-ancestor "$head" origin/main || { echo "::error::v$VERSION ($head) is not reachable from main" >&2; exit 1; }
+          echo "building v$VERSION at $head" >> "$GITHUB_STEP_SUMMARY"
+
+      # An exact Node (#121 S4): the tree-sitter archive's gzip bytes depend on its zlib; the record names it.
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.12.0'
+
+      # The engine as npm serves it for this release (npm pack checks the registry's integrity), never this checkout's.
+      - name: Fetch the release's @julclang/joust
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/npm"
+          npm pack "@julclang/joust@$VERSION" --ignore-scripts --pack-destination "$RUNNER_TEMP/npm"
+          ls -l "$RUNNER_TEMP/npm"
+
+      # #121 S4: no install scripts. tree-sitter-cli's would download its binary unchecked: the pinned release asset is
+      # fetched here and checked by its SHA-256 (GitHub's digest of tree-sitter v0.25.10's tree-sitter-linux-x64.gz).
+      - name: Install the build tools
+        shell: bash
+        env:
+          TREE_SITTER_VERSION: '0.25.10'
+          TREE_SITTER_SHA256: 8283ddba69253c698f6e987ba0e2f9285e079c8db4d36ebe1394b5bb3a0ebdfd
+        run: |
+          set -euo pipefail
+          (cd js/vscode-joust && npm ci --ignore-scripts)
+          (cd tree-sitter-jsc && npm ci --ignore-scripts)
+          f="$RUNNER_TEMP/tree-sitter-linux-x64.gz"
+          curl -sSfL -o "$f" "https://github.com/tree-sitter/tree-sitter/releases/download/v${TREE_SITTER_VERSION}/tree-sitter-linux-x64.gz"
+          echo "${TREE_SITTER_SHA256}  $f" | sha256sum -c -
+          bin=tree-sitter-jsc/node_modules/tree-sitter-cli/tree-sitter
+          gunzip -c "$f" > "$bin"
+          chmod 0755 "$bin"
+          [[ "$("$bin" --version)" == "tree-sitter ${TREE_SITTER_VERSION}"* ]]
+
+      - name: Build and check the assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/editor-assets.mjs --version "$VERSION" \
+            --engine-tarball "$RUNNER_TEMP/npm/julclang-joust-$VERSION.tgz" --out "$RUNNER_TEMP/editor-assets"
+          cat "$RUNNER_TEMP/editor-assets/editor-assets-$VERSION.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: editor-assets
+          path: ${{ runner.temp }}/editor-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # Attaches them (never replacing one) and attests their provenance. Runs no repository code (no checkout).
+  attach:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    # #121 S1: reviewers approve the attachment (a maintainer creates this environment; docs/release-ops.md).
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      actions: read   # #121 F10: to read the environment's protection rules
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      # #121 F10: GitHub creates a missing environment, unprotected, on first use; this run then needed no approval.
+      - name: Check that the release environment has required reviewers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          n=$(gh api "repos/${GH_REPO}/environments/release" --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if [[ "$n" -lt 1 ]]; then
+            echo "::error::the release environment has no required reviewers: set them up (docs/release-ops.md), then run again" >&2
+            exit 1
+          fi
+
+      - name: Download the assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: editor-assets
+          path: dist
+
+      # #121 F6: attested before anything is uploaded (an attestation needs only the files' digests).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.vsix
+            dist/*.tar.gz
+
+      - name: Attach the assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          (cd dist && sha256sum -c "editor-assets-${VERSION}-SHA256SUMS.txt")
+          existing=$(gh release view "$tag" --json assets --jq '.assets[].name')
+          mkdir -p published
+          for f in $(cd dist && ls); do
+            if grep -qxF "$f" <<< "$existing"; then
+              gh release download "$tag" --pattern "$f" --dir published
+              if ! cmp -s "dist/$f" "published/$f"; then
+                echo "::error::$f on the release differs from this run's build. Assets are never replaced: delete it" \
+                  "from the release to attach this build's." >&2
+                exit 1
+              fi
+            else
+              gh release upload "$tag" "dist/$f"
+            fi
+          done

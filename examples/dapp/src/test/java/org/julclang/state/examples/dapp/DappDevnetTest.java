@@ -36,8 +36,8 @@ class DappDevnetTest {
         var dapp = DappServer.start(runtime, Path.of("build/e2e-frontend"), "127.0.0.1", 0, 600);
         try {
             var user = DevKit.fundedAccount(300);
-            // Node 22 needs exnref for GraalVM Web Image's Wasm (on by default from Node 24).
-            var pb = new ProcessBuilder("node", "--experimental-wasm-exnref", "e2e/run.mjs").directory(FRONTEND).redirectErrorStream(true);
+            // The scripts enable Wasm exnref themselves when this Node lacks it (js/joust-runtime/src/exnref.js).
+            var pb = new ProcessBuilder("node", "e2e/run.mjs").directory(FRONTEND).redirectErrorStream(true);
             var env = pb.environment();
             env.put("SERVICE", "http://127.0.0.1:" + dapp.port());
             env.put("STORE", DevKit.STORE_URL.endsWith("/") ? DevKit.STORE_URL.substring(0, DevKit.STORE_URL.length() - 1) : DevKit.STORE_URL);

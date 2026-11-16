@@ -1,0 +1,8 @@
+{
+  "name": "joust-test-harness",
+  "displayName": "JOUST extension test harness (not the extension: the tests drive the installed .vsix)",
+  "publisher": "joust-test",
+  "version": "0.0.0",
+  "private": true,
+  "engines": { "vscode": "^1.91.0" }
+}

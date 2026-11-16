@@ -1,0 +1,98 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Treasury",
+  "source": "Treasury.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "council", "type": "List<Key>", "data": "list<bytes28>" },
+      { "name": "quorum", "type": "Int", "data": "int" },
+      { "name": "frozen", "type": "Bool", "data": "bool" }
+    ] },
+  "params": { "name": "Config", "constr": 0, "fields": [
+      { "name": "guardian", "type": "Credential", "data": "Credential" },
+      { "name": "maxPayout", "type": "Int", "data": "int" }
+    ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Fund", "constr": 0, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Pay", "constr": 1, "fields": [
+          { "name": "to", "type": "Key", "data": "bytes28" },
+          { "name": "amount", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" },
+          { "name": "events", "type": "List<Event>", "data": "list<Event>" }
+        ] },
+      { "name": "Rotate", "constr": 2, "fields": [
+          { "name": "newCouncil", "type": "List<Key>", "data": "list<bytes28>" },
+          { "name": "newQuorum", "type": "Int", "data": "int" },
+          { "name": "events", "type": "List<Event>", "data": "list<Event>" }
+        ] },
+      { "name": "Freeze", "constr": 3, "fields": [
+          { "name": "on", "type": "Bool", "data": "bool" },
+          { "name": "events", "type": "List<Event>", "data": "list<Event>" }
+        ] },
+      { "name": "Close", "constr": 4, "fields": [
+          { "name": "to", "type": "Key", "data": "bytes28" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "council", "type": "List<Key>", "data": "list<bytes28>" },
+          { "name": "quorum", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "Event": { "kind": "enum", "constructors": [
+      { "name": "Paid", "constr": 0, "fields": [
+          { "name": "to", "type": "Key", "data": "bytes28" },
+          { "name": "amount", "type": "Int", "data": "int" }
+        ] },
+      { "name": "CouncilChanged", "constr": 1, "fields": [
+          { "name": "members", "type": "Int", "data": "int" },
+          { "name": "quorum", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Frozen", "constr": 2, "fields": [
+          { "name": "frozen", "type": "Bool", "data": "bool" }
+        ] }
+    ] },
+    "Address": { "kind": "ledger", "constructors": [{ "name": "Address", "constr": 0, "fields": [
+        { "name": "credential", "type": "Credential", "data": "Credential" },
+        { "name": "stakingCredential", "type": "Option<StakingCredential>", "data": "option<StakingCredential>" }
+      ] }] },
+    "Credential": { "kind": "ledger", "constructors": [
+      { "name": "PubKeyCredential", "constr": 0, "fields": [
+          { "name": "hash", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "ScriptCredential", "constr": 1, "fields": [
+          { "name": "hash", "type": "Bytes", "data": "bytes" }
+        ] }
+    ] },
+    "StakingCredential": { "kind": "ledger", "constructors": [
+      { "name": "StakingHash", "constr": 0, "fields": [
+          { "name": "credential", "type": "Credential", "data": "Credential" }
+        ] },
+      { "name": "StakingPtr", "constr": 1, "fields": [
+          { "name": "slot", "type": "Int", "data": "int" },
+          { "name": "txIndex", "type": "Int", "data": "int" },
+          { "name": "certIndex", "type": "Int", "data": "int" }
+        ] }
+    ] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

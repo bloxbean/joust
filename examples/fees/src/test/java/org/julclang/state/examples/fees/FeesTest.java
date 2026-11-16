@@ -110,6 +110,23 @@ class FeesTest {
         pot.assertRejected(sale(withThreadToken, true, true), "a reserved-kind token in a deposit");
     }
 
+    /**
+     * #85: a deposit claim holding two token names of one policy whose lengths differ ({@code 00ff}, {@code 01}). The
+     * registry is written as cardano-client-lib writes it (canonical CBOR: {@code 01} first), not in the ledger's order;
+     * the output verifier and the receiver read it as a value either way. (The stall refuses this claim: it deposited the
+     * fee alone.)
+     */
+    @Test
+    void aClaimOfTokenNamesOfUnequalLength_passesTheVerifierAndTheReceiver() {
+        byte[] p = StateHarness.fill(28, 0x70);
+        Value claimed = Assets.add(Assets.lovelace(FEE), Assets.add(Assets.of(p, new byte[]{0, (byte) 0xFF}, BigInteger.ONE),
+                Assets.of(p, new byte[]{1}, BigInteger.ONE)));
+        var tx = sale(claimed, true, true);
+        var v = pot.evaluate(tx);
+        assertTrue(v.accepted(), "the verifier and the pot read the claim in the wire's order:\n" + v);
+        stall.assertRejected(tx, "the claim is not the stall's deposit (the fee alone)");
+    }
+
     @Test
     void anExtraClaimByTheDepositor_rejected() {
         var tx = sale(Assets.lovelace(FEE), true, true);

@@ -24,7 +24,7 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   plus `SubsetLint` (syntactic pass + typed pass on ANALYZE: rejects fixed-width numbers in contract code).
 - `julc-state-runtime`: off-chain runtime for generated clients (StateRuntime, StateContractHandle, StateInstance).
 - `julc-state-testkit`: `StateHarness` (evaluates the compiled validator) + `Attacks` (attack suite).
-- `julc-state-dsl`: `.jsc` lexer/parser/checker and the lowering to a Java `@StateContract` (ADR-0005). Run by each
+- `julc-state-dsl`: `.jsc` lexer/parser/checker and the lowering to a Java `@StateContract` (ADR-0018; header `jsc 1`, optional; v1/ADR-0005 removed). Run by each
   consumer's `generateJsc` JavaExec task into `build/generated/sources/jsc`.
 - `julc-state-server`: the prepare service (ADR-0013 D2) over generated clients by reflection; `js/state-client`: the
   JS client (codec, verifier, CIP-30 flow, dev wallet, `joust-gen`); `examples/dapp`: the browser dApp on DevKit.
@@ -41,14 +41,18 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `.github/scripts/joust-cli-e2e.sh`. The npm side of the shared vocabulary is `js/joust/bin/joust.js` +
   `js/joust/src/project.js`.
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
+- ADR-0021 (M5a): `JscLang` (julc-state-dsl) is the language core, served by the toolchain engine as `lang.analyze`
+  (julc-wasm names operations `group.operation`); `js/joust/src/lsp` is the language server (`joust-lsp`, engines in
+  workers, D2a); `js/vscode-joust` is the VS Code extension (the TextMate grammar lives there now). The server's stdout is
+  the JSON-RPC channel: nothing else may print to it (engine workers' stdout is captured).
 - `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees,locker,registry,wallet,dapp}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
   DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D
-  (ADR-0004, batched intents, pool) E (ADR-0005, `.jsc`, dsl) and the F spike (ADR-0006, optimistic L2, rollup) run on Yaci DevKit.
+  (ADR-0004, batched intents, pool) E (ADR-0005, superseded by ADR-0018's `.jsc`; dsl) and the F spike (ADR-0006, optimistic L2, rollup) run on Yaci DevKit.
 - Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007), #9 H (fees, ADR-0008), #10 I (params/quorum/auth/invariants/events, ADR-0009), #11 J (purposes/staking, ADR-0010), #12 K (composition, ADR-0011), #13 L (owned objects v2, ADR-0012), #14 deposits (ADR-0011 D3), #15 ADR-0013 (design), #16 maps v2 (ADR-0014), #17 M phase 1 (wallets), #18 snapshot publishing, #20 M phases 2+3 (descriptions, JS client, service, dApp), #21 M phase 4 (plan, portable transitions, Wasm; experimental). JuLC changes: worktree `../julc-joust`, PR label
   `joust` (julc#311).
 
 ## Build / test
-- JDK 25. `./gradlew build`.
+- JDK 25 and Node 22 (the `.jsc` 2 five-way tests run the JavaScript reference interpreter, `js/jsc-interpreter`). `./gradlew build`.
 - Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is the release **`0.1.0-pre21-rc1`** (with
   #311/#313), resolved from the BloxBean release repository (`https://repo.bloxbean.org/maven/releases`; not on Maven
   Central). `settings.gradle` lists the BloxBean repositories for the `org.julclang.julc` plugin too. A release refuses
@@ -130,6 +134,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `fixtures/m0` holds the oracle (each DevKit transaction, unsigned, with the chain reads behind it, results
   content-addressed in `blobs/`). Re-record with DevKit up: `./gradlew :examples:<m>:test -PjoustFixtures` (or all
   examples); `FixturesTest` checks the oracle. `StateRuntime.Builder.onBuilt` observes every built transaction.
+  When a script changes (the output verifier's hash moves every sending contract's), delete each affected group of
+  `fixtures/m0` and `fixtures/m3` (and its m3 contract file) before recording it again, then prune unread blobs:
+  `FixturesTest` wants one recording per group and no orphaned blob; `EngineFixtureScriptsTest` checks m3's scripts and
+  m0's unparameterized contracts' hashes, so a parameterized contract's m0 group must be recorded again with its m3 one.
 - ADR-0015 M3: the toolchain also compiles plain JuLC validators (governors) into `validators.json`; Web Image needs
   reachability metadata for every new record it serialises. Yaci Store cannot tell whether a stake credential is
   registered (`/accounts` answers alike): register and treat "already registered" as success. Runtime code that builds
@@ -187,6 +195,74 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `ProgramManifestTest`'s committed variant hashes when a variant changes on purpose.
   The comparison mode (`ReplayDifferentialTest`, `GeneratedVectorsTest`: programs vs JVM methods) is in
   `julc-state-runtime-wasm`'s tests.
+- **Validators are found by simple name in JuLC** (bloxbean/julc#326): JuLC writes and `JulcScriptLoader` reads
+  `META-INF/plutus/<SimpleName>.plutus.json`, so two validators with one simple name (`…vault.VaultValidator`,
+  `…dsl.VaultValidator`) share a resource. JOUST loads scripts through `ValidatorScripts` (the copy beside the validator
+  class: its own readable location must hold it; JuLC's parameter checks kept); never call `JulcScriptLoader.load(Class)`
+  for a generated validator. Two contracts with one simple name must not share a runtime class path: `check` runs
+  `checkPlutusResources`, and a fat or shaded jar must never merge or drop duplicate `META-INF/plutus/*` entries (a
+  resource-only plant would replace a contract's script). When a validator's location can't be read, a lone class-path
+  copy is taken only from under that location (#73). Inside a GraalVM native or Web Image (`imagecode` property set) the
+  image's one `resource:/<n>!/…` copy is taken **unverified** (an image doesn't record which jar a resource came from):
+  JOUST's own engine images run `checkImageScripts` (no name twice; every location with a class named after a script
+  holds it, once) to stand behind it. **Any other GraalVM image that bundles `julc-state-runtime` gets no such check**:
+  it must run `plutusScriptProblems` (`gradle/plutus-scripts.gradle`) over its class path, until julc#326's recorded
+  hash (#80 review S1, F8).
+- ADR-0018 M1c: the Java examples vault, escrow, crowdfund, token and pool also run against their `.jsc` 2 ports
+  (`examples/dsl`'s `copyPortTests` copies their `*Test.java`; `:examples:dsl:test` runs them). Keep those tests in their
+  package directory (the copy fails on subpackages or resources), and call the init as `<Contract>.<init>(`. M2a adds dex,
+  whose records the copy renames (`Dex.Pool` → `Dex.State`, `Moved` → `Received`, `Closed` → `Settled`).
+- ADR-0018 M2a (values): generated `.jsc` code computes values only through `ValueAdapter` (JVM body fails where the PV11
+  Value builtins fail: a quantity out of the 128-bit range, a token name over 32 bytes, `covers` on negatives; on-chain
+  variant in `src/onchain/java`), never `Assets` directly. A value's entries are in the ledger's order (bytewise, a prefix
+  first), not CCL's canonical order: build value data with `Value.toPlutusData()`, never through CCL's canonical writer.
+  Under the own policy a 32-byte name (an instance id) is reserved: name minted tokens `blake2b_224(funds.self)`.
+  Offered assets arrive in CCL's order (a redeemer is canonical CBOR): validators and transition programs convert them
+  with `ValueAdapter.fromWire` (Java contracts too) before a method or I31 sees them. `Address`/`Credential` checked
+  inputs are decided on the data (`AddressAdapter`: tags, field counts; a staking pointer refused), since a transition
+  program decodes nothing. `StateHarness` refuses what the ledger would (negative or > 2^64 - 1 output quantities, a mint
+  outside Int64; `ledgerRules(false)` only for worst-case budgets). `ValueAdapterDifferentialTest` covers both bodies.
+- ADR-0018 M2b (params, events, quorum, authorized, invariants): the generated params record is `Config` (parameter
+  `params__`; an init always takes it, other methods when they read `params.f`), the events' type `Event`; both names
+  are reserved when declared. Result records hold `events` last; the redeemer of any method whose record has them
+  carries them (empty when it emits none). The interpreters model quorum/authorized as modifiers (their `Tx` has
+  `approvers`: scripts approving the action) and the validator's output checks (quorum shapes, invariants; class
+  `invariant:…`) after the body; `FourWay.as(signers, approvers)` signs and approves the next call on every leg.
+  `copyPortTests` also renames words: treasury's tests use `Guardian`, which examples/dsl copies as `TreasuryGuardian`
+  (never put a Java example on examples/dsl's class path: its validator shares a script resource name with its port's).
+- ADR-0018 M2c (composition): `import contract { C } from "./C.jsc"` resolves through `JscModules` (M4a's interface;
+  JscMain and the toolchain pass the build's files; tests: `DslExamples.lower`, `JscModules.of(map)`), each import
+  checked on its own; its types are `C.State`/`C.T` (Java `C.State`, imported) and never stored. `reads params.f` lowers to
+  `@Reads` right after the params (checked: `#read:`); `receives [T]` to `@Receives` + Funds + Ctx (memos decoded where
+  the action starts: `#memo:`); `deposit` to the `deposits` component (no Funds). A stored `Value` (a record/state/params
+  field) is held in its wire form: `ValueAdapter.toWire` where built, `fromWire` where read. #85 (fixed here): deposit
+  claims are read from the wire (verifier, `depositsMade`, `claimsFromWire`), so the verifier's hash moved. Ports:
+  Oracle, Kiosk (oracle's Shop: M4a holds `Shop.jsc`), Pot, Stall; coverage: Tips, Tipper. `FourWay` composes reads
+  (reference inputs) and deposits (target in/out + claims; receiver claims on its output) per contract harness.
+- ADR-0018 `.jsc` 2 generated artifacts: after changing the IR, the lowering or an example, rewrite the JS
+  interpreter's IR fixtures (`./gradlew :julc-state-dsl:test -Pjoust.writeIrFixtures`; `JscV2IrTest` fails when stale)
+  and tree-sitter's shapes (`... --tests '*JscCorpusTest*' -Djsc.writeShapes=true`), and run `npm test` in
+  `tree-sitter-jsc` (its shared corpus fails when the grammar lags the parser). `.jsc` 2 refusals show their sites
+  (`… [app/Counter.jsc:22:5 (a require in increment)]`, M1e), so tests match them for `.jsc`, not for Java. Message keys
+  are ABI facts (`#pay:spend<i>.<n>`, `intent<k>` for `batched only`). The interpreters check `only`/`after`/`before`
+  (their `Tx` has `signers`); the JVM method and transition program don't: compare those with `Interpreter.transition`.
+- ADR-0018 M4a (`.jsc` libraries): `library <package>` files lower to an `@OnchainLibrary` class named by the file
+  (`fees.jsc` → `Fees`); imports are relative (`./fees.jsc`); a build's declarations share one namespace; the IR is
+  format 2 (`libraries`). Lower a file of a build with `JscV2.lower(src, name, id, JscModules.of(files))` (tests:
+  `v2/Examples`), never alone, or its imports are JSC0706.
+- ADR-0018 M4b (`java:` imports): a Java library is certified from its on-chain sources (`JavaLibraryCertifier`, in
+  julc-state-toolchain; the dsl finds it through `ServiceLoader`, so a `jsc` tool class path needs the toolchain).
+  Gradle takes it through `joustLibrary` (sources only: `generateJsc` writes each used library's source closure beside
+  the generated Java; `checkJoustLibraries` before `compileJava`; `recordJoustLibraries` writes a record per contract,
+  which the generated client checks, failing closed); `examples/dsl` imports `examples/compliance`. The plugin fails
+  fast on `joustLibrary` (the toolchain is unpublished; `-Pjoust.javaLibraries=experimental` keeps the wiring). Interpreters give no answer for `CallJava`
+  (three legs in `FourWay.threeLegs`). Rules and catalogue: `docs/reference/jsc-2-java-libraries.md`.
+- ADR-0018 M4c: npm packages ship libraries under `joust-lib/` (`"@acme/fees/fees.jsc"`; module ids `pkg:…`);
+  `joust.lock` (root, committed) pins only external libraries (`--accept-lock`, Gradle `acceptJoustLock`; `examples/dsl`
+  has one). Only the source closures of the Java libraries a build imports (by `java:` or a Java contract's `import`)
+  reach the toolchain's pools, and the lock pins them. Offline tests: `@julclang/joust/test` (`js/joust/src/test/offline.js`;
+  its phase-1 rules are listed at `memoryLedger`), phase 2 by the runtime engine's `joust.evaluate`/`joust.attacks`
+  (`Offline.java`; only a script's refusal counts). Nested `node --test` runs need `NODE_TEST_CONTEXT` removed.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

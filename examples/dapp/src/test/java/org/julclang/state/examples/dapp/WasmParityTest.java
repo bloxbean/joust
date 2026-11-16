@@ -132,7 +132,7 @@ class WasmParityTest {
             out.add(m);
         }
         Files.writeString(file.toPath(), new ObjectMapper().writeValueAsString(out));
-        var pb = new ProcessBuilder("node", "--experimental-wasm-exnref", "e2e/parity.mjs", WASM.getParentFile().getAbsolutePath(), file.getAbsolutePath())
+        var pb = new ProcessBuilder("node", "e2e/parity.mjs", WASM.getParentFile().getAbsolutePath(), file.getAbsolutePath())
                 .directory(FRONTEND).redirectErrorStream(true);
         Process node = pb.start();
         String text = new String(node.getInputStream().readAllBytes(), StandardCharsets.UTF_8);

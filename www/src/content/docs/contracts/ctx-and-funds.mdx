@@ -103,15 +103,13 @@ public static State deposit(State s, Ctx ctx) {
 
 ```jsc
 init(unlockAt: Int) payable {
-    require before(unlockAt) "unlockAt must be in the future"
-    owner = caller
-    this.unlockAt = unlockAt
-    total = received
+  require(before(unlockAt), "unlockAt must be in the future")
+  return { owner: caller, unlockAt, total: received }
 }
 
 action deposit() payable {
-    require received > 0 "deposit must be positive"
-    total += received
+  require(received > 0, "deposit must be positive")
+  return { ...state, total: total + received }
 }
 ```
 
@@ -174,7 +172,8 @@ public static Result withdraw(State s, BigInteger amount, Ctx ctx) {
 }
 ```
 
-In `.jsc`, `pay amount to owner` adds a payout (a zero amount pays nothing; a negative one fails).
+In `.jsc`, `pay(owner, amount)` adds a payout (a zero amount pays nothing; a negative one fails); payouts are in source
+order.
 
 ### What the validator checks for payouts
 

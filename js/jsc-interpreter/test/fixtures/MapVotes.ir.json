@@ -1,0 +1,173 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "0e5ab94680207feb24c2d1cc28aa8aaf162b74e767fa5c6704284e3ceb377d65",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "MapVotes",
+  "source": "MapVotes.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "256" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "admin", "type": "Key" }, { "name": "book", "type": { "bigmap": ["Key", "Int"] } }],
+    "at": [7, 1]
+  },
+  "params": {
+    "name": "Config",
+    "fields": [{ "name": "council", "type": { "list": "Key" } }, { "name": "quorum", "type": "Int" }],
+    "at": [8, 3]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [12, 21] },
+            { "node": "BigEmpty", "type": { "bigmap": ["Key", "Int"] }, "taint": 0, "at": [12, 35] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [12, 12]
+        },
+        "at": [11, 10]
+      },
+      "at": [11, 3]
+    },
+    {
+      "kind": "action",
+      "name": "note",
+      "params": [{ "id": 1, "name": "v", "type": "Int", "taint": 0, "at": [15, 15] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [16, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [16, 17] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [16, 13]
+            },
+            "message": "note a positive value",
+            "at": [16, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [17, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [17, 12]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "book",
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [17, 30]
+              },
+              "args": [
+                { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [17, 39] },
+                { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [17, 47] }
+              ],
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [17, 30]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [17, 12]
+        },
+        "at": [15, 23]
+      },
+      "at": [15, 3]
+    },
+    {
+      "kind": "certify",
+      "name": "register",
+      "params": [{ "id": 2, "name": "cert", "type": "TxCert", "taint": 0, "at": [20, 20] }],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.quorum" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [20, 72] },
+        "at": [20, 72]
+      },
+      "at": [20, 3]
+    },
+    {
+      "kind": "vote",
+      "name": "decide",
+      "params": [
+        { "id": 3, "name": "voter", "type": "Voter", "taint": 0, "at": [22, 15] },
+        { "id": 4, "name": "action", "type": "GovernanceActionId", "taint": 0, "at": [22, 29] },
+        { "id": 5, "name": "choice", "type": "Vote", "taint": 0, "at": [22, 57] }
+      ],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.quorum" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [22, 109] },
+        "at": [22, 109]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "propose",
+      "name": "guard",
+      "params": [{ "id": 6, "name": "p", "type": "ProposalProcedure", "taint": 0, "at": [24, 17] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [24, 41] },
+        "at": [24, 41]
+      },
+      "at": [24, 3]
+    }
+  ],
+  "warnings": []
+}

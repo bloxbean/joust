@@ -1,0 +1,75 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.StdBytes",
+  "source": "StdBytes.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "owner", "type": "Key", "data": "bytes28" },
+      { "name": "b", "type": "Bytes", "data": "bytes" },
+      { "name": "n", "type": "Int", "data": "int" },
+      { "name": "r", "type": "Int", "data": "int" },
+      { "name": "flag", "type": "Bool", "data": "bool" }
+    ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Cat", "constr": 0, "fields": [
+          { "name": "x", "type": "Bytes", "data": "bytes" },
+          { "name": "y", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Cut", "constr": 1, "fields": [
+          { "name": "x", "type": "Bytes", "data": "bytes" },
+          { "name": "k", "type": "Int", "data": "int" },
+          { "name": "front", "type": "Bool", "data": "bool" }
+        ] },
+      { "name": "Num", "constr": 2, "fields": [
+          { "name": "x", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Hash", "constr": 3, "fields": [
+          { "name": "x", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Sig", "constr": 4, "fields": [
+          { "name": "key", "type": "Bytes", "data": "bytes" },
+          { "name": "msg", "type": "Bytes", "data": "bytes" },
+          { "name": "signature", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Logic", "constr": 5, "fields": [
+          { "name": "pad", "type": "Bool", "data": "bool" },
+          { "name": "x", "type": "Bytes", "data": "bytes" },
+          { "name": "y", "type": "Bytes", "data": "bytes" },
+          { "name": "op", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Count", "constr": 6, "fields": [
+          { "name": "x", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Bit", "constr": 7, "fields": [
+          { "name": "x", "type": "Bytes", "data": "bytes" },
+          { "name": "i", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Move", "constr": 8, "fields": [
+          { "name": "x", "type": "Bytes", "data": "bytes" },
+          { "name": "k", "type": "Int", "data": "int" },
+          { "name": "rot", "type": "Bool", "data": "bool" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

@@ -1,0 +1,24 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+// examples/upgrade's CounterV1 in .jsc 2 (ADR-0018 M3c, J11; ADR-0011 D4): version 1 of an upgradeable counter. Its admin
+// names the successor contract (setSuccessor), then upgrade ends the instance by moving it, count and funds, into that
+// successor, in one transaction with the successor's adoption (CounterV2.jsc's init migrate).
+contract CounterV1 {
+  state { admin: Key, successor: Bytes, count: Int }
+
+  init() payable {
+    return { admin: caller, successor: #, count: 0 }
+  }
+
+  action increment() {
+    return { ...state, count: count + 1 }
+  }
+
+  action setSuccessor(newSuccessor: Bytes) only admin {
+    return { ...state, successor: newSuccessor }
+  }
+
+  // Ends v1 by migrating: nothing is paid out, everything moves to the successor's new instance.
+  destroy upgrade() only admin migrates to successor { }
+}

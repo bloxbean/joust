@@ -37,7 +37,9 @@ for (const lang of ['jsc', 'java']) {
     const { stdout } = await promisify(execFile)(process.execPath, ['index.js'], { cwd: root, timeout: 300_000 });
     assert.match(stdout, /^created +[0-9a-f]{64} tx [0-9a-f]{64}$/m, stdout);
     assert.match(stdout, /^count +7n$/m, stdout);
-    assert.match(stdout, /^refused +increment must be positive$/m, stdout);
+    // A .jsc 2 refusal names its .jsc site (ADR-0018 D12, M1e); the Java template's has none.
+    const site = lang === 'jsc' ? String.raw` \[app/Counter\.jsc:\d+:\d+ \(a require in increment\)\]` : '';
+    assert.match(stdout, new RegExp(String.raw`^refused +increment must be positive${site}$`, 'm'), stdout);
     assert.match(stdout, /^closed +tx [0-9a-f]{64}$/m, stdout);
     assert.match(stdout, /^state +null$/m, stdout);
   });

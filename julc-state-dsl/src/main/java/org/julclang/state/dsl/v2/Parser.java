@@ -1,0 +1,1944 @@
+package org.julclang.state.dsl.v2;
+
+import org.julclang.state.dsl.JscException;
+import org.julclang.state.dsl.v2.Lexer.K;
+import org.julclang.state.dsl.v2.Lexer.Tok;
+import org.julclang.state.dsl.v2.Syntax.*;
+
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Set;
+
+/** Parses a {@code .jsc} file (ADR-0018 D2–D7). The file may start with the header {@code jsc 1}. */
+final class Parser {
+    private final List<Tok> toks;
+    private int i;
+    /** The type names the file declares: only these start a constructor {@code Name { … }} (F14). */
+    private final Set<String> typeNames = new HashSet<>();
+    /** Expressions written in parentheses: {@code ??} may not be mixed with {@code &&}/{@code ||} without them (F14). */
+    private final Set<Expr> parenthesised = Collections.newSetFromMap(new IdentityHashMap<>());
+    /** Where a parenthesised expression starts: its '('. Every expression's position is where it starts (J5). */
+    private final IdentityHashMap<Expr, Pos> parenStart = new IdentityHashMap<>();
+
+    private Pos startOf(Expr e) {
+        return parenStart.getOrDefault(e, e.pos());
+    }
+
+    /**
+     * The nesting cap (ADR-0018 J18, review S2): at most {@value #MAX_DEPTH} levels, the same on every build path, so the
+     * front end never recurses deeper than a small, fixed bound (the Web Image's stack held about 250 nested
+     * parentheses before this cap). The parser counts its own recursion here (each expression, block and type argument
+     * opens a level); {@link Depth} measures the tree it built, where a chain that is not balanced counts a level per link.
+     */
+    static final int MAX_DEPTH = 64;
+    private int depth;
+
+    private void enter(Pos p) {
+        if (++depth > MAX_DEPTH) {
+            throw p.error("JSC0149", "this nests deeper than " + MAX_DEPTH + " levels (each parenthesis, block, argument, arm, lambda and"
+                    + " type argument opens one): name a part with const or move it into a fn (ADR-0018 J18)");
+        }
+    }
+
+    private void leave() {
+        depth--;
+    }
+
+    /** ADR-0021 D6: the language core's spans, or null (the build's parse records none). */
+    private final Spans spans;
+
+    /** A parse that records no spans (the header and import scans, M4). */
+    private Parser(List<Tok> toks) {
+        this(toks, null);
+    }
+
+    /** ADR-0021 D5: the recovering mode (the language core's parse only). */
+    private final boolean recover;
+
+    private Parser(List<Tok> toks, Spans spans) {
+        this.toks = toks;
+        this.spans = spans;
+        this.recover = spans != null && spans.recover;
+        for (int k = 0; k + 1 < toks.size(); k++) {
+            if (toks.get(k).is("type") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
+            // M2b: an event is a variant of the contract's Event, so it starts a constructor too: Paid { to, amount }.
+            if (toks.get(k).is("event") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
+            // M3a: an owned type is a record too: Account { owner, saved }.
+            if (toks.get(k).is("owned") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
+                typeNames.add(toks.get(k + 1).text());
+            }
+            // M3b: a keyed owned type too: owned Entry keyed by name (…) { … }.
+            if (toks.get(k).is("owned") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("keyed")) {
+                typeNames.add(toks.get(k + 1).text());
+            }
+            // An enum's variants start constructors too: Closed { at: t } (D5).
+            if (toks.get(k).is("enum") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
+                int depth = 0;
+                for (int j = k + 2; j < toks.size(); j++) {
+                    Tok t = toks.get(j);
+                    if (t.is("{")) depth++;
+                    else if (t.is("}")) {
+                        if (--depth == 0) break;
+                    } else if (depth == 1 && t.kind() == K.IDENT && j + 1 < toks.size()
+                            && (toks.get(j + 1).is(",") || toks.get(j + 1).is("}") || toks.get(j + 1).is("{") || toks.get(j + 1).is(";"))) {
+                        typeNames.add(t.text());
+                    }
+                }
+            }
+        }
+    }
+
+    static File parse(String src) {
+        return parse(src, Set.of(), null);
+    }
+
+    /**
+     * Parses {@code src}; {@code importedTypes} are the type, enum and variant names its {@code .jsc} imports bring
+     * (ADR-0018 D9, M4): like the file's own, only these start a constructor {@code Name { … }}.
+     */
+    static File parse(String src, Set<String> importedTypes) {
+        return parse(src, importedTypes, null);
+    }
+
+    /** {@link #parse(String)}, recording the language core's spans into {@code spans} (ADR-0021 D6). */
+    static File parse(String src, Spans spans) {
+        return parse(src, Set.of(), spans);
+    }
+
+    /**
+     * Parses {@code src} with the type names its imports bring (M4); with {@code spans}, also records the language core's
+     * spans into it (ADR-0021 D6). The tree, its positions and every error are the same with or without spans (L5).
+     */
+    static File parse(String src, Set<String> importedTypes, Spans spans) {
+        boolean recover = spans != null && spans.recover;
+        // Recovering, the loader lexed the file once already (its imports came from those tokens).
+        List<Tok> lexed = recover && spans.lexed != null ? spans.lexed : Lexer.lex(src, spans == null ? null : spans.comments, recover ? spans.errors : null);
+        var p = new Parser(lexed, spans);
+        p.typeNames.addAll(importedTypes);
+        if (spans != null) spans.toks = p.toks;
+        int lexical = recover ? spans.errors.size() : 0;
+        File f;
+        try {
+            f = p.file();
+        } catch (JscException e) {
+            if (spans != null) spans.stop(p.i > 0 ? p.toks.get(p.i - 1) : null);
+            if (!recover) throw hinted(e, p.leadingMinus, p.members());
+            // ADR-0021 D5: an error the recovering parser cannot resume after (the file's head): recorded, no tree.
+            spans.errors.add(e);
+            f = null;
+        } catch (RuntimeException | Error e) {
+            if (spans != null) spans.stop(p.i > 0 ? p.toks.get(p.i - 1) : null);
+            throw e;
+        }
+        if (recover) {
+            // The parser's errors get the build's note on a leading '-' (the lexer's never do: the build throws them first).
+            var members = p.members();
+            // The first ones only: a model reports JscLang.MAX_ERRORS (N1 on #99: the search is per error and member).
+            for (int k = lexical; k < Math.min(spans.errors.size(), lexical + 10 * JscLang.MAX_ERRORS); k++) {
+                spans.errors.set(k, hinted(spans.errors.get(k), p.leadingMinus, members));
+            }
+            if (f == null) return null;
+            try {
+                Depth.check(f);
+            } catch (JscException e) {
+                spans.errors.add(e);
+                return null;
+            }
+            return f;
+        }
+        Depth.check(f);
+        return f;
+    }
+
+    /** A file's header: its package, whether it is a library, and its contract's name (null for a library). */
+    record Header(String pkg, boolean library, String contract) {}
+
+    // ------------------------------------------------------------------ recovery (ADR-0021 D5; the language core only)
+
+    /** Where the recovering parser resumes at a file's top level, and among a contract's members. */
+    private static final Set<String> FILE_SYNC = Set.of("import", "type", "enum", "fn", "contract", "function", "class");
+    private static final Set<String> MEMBER_SYNC = Set.of("state", "params", "event", "invariant", "init", "action", "destroy", "view",
+            "fn", "type", "enum", "function", "owned", "withdraw", "certify", "vote", "propose");
+    /** Where it resumes among a block's statements (a keyword that starts a statement, at the start of its line). */
+    private static final Set<String> STMT_SYNC = Set.of("const", "let", "var", "require", "pay", "for", "if", "match", "return", "send",
+            "mint", "burn", "accept", "emit", "deposit", "while", "do", "function");
+
+    /** The recovering mode's errors so far (0 when not recovering). */
+    private int errors() {
+        return recover ? spans.errors.size() : 0;
+    }
+
+    /**
+     * Records {@code e} (recovering) and skips to where parsing resumes: from the construct that started at token
+     * {@code from}, at brace depth 0 relative to it, the next token of {@code sync} (for statements: at the start of a
+     * line, or just after a ';'), or a '}' that closes the enclosing block ({@code stopAtClose}). Declarations opened
+     * since {@code spansDepth} end there, partial; the nesting count is restored.
+     */
+    private boolean eofReported;
+
+    /** The '{' of the innermost block or contract body being read (recovery reads the layout around it). */
+    private Tok openedAt;
+
+    /** Whether the '}' here starts its line deeper than the line of {@code open} (recovering: not {@code open}'s close). */
+    private boolean strayClose(Tok open) {
+        Tok t = peek();
+        boolean lineStart = i == 0 || toks.get(i - 1).line() < t.line();
+        return t.is("}") && lineStart && t.line() > open.line() && t.col() > indentOf(open);
+    }
+
+    /** The column of each line's first token (0: none), built once (N1 on #99: a token search per call was quadratic). */
+    private int[] lineIndent;
+
+    /** The column of the first token on {@code t}'s line. */
+    private int indentOf(Tok t) {
+        if (lineIndent == null) {
+            int max = 0;
+            for (Tok x : toks) max = Math.max(max, x.line());
+            lineIndent = new int[max + 2];
+            for (Tok x : toks) if (x.line() >= 0 && lineIndent[x.line()] == 0) lineIndent[x.line()] = x.col();
+        }
+        int c = t.line() >= 0 && t.line() < lineIndent.length ? lineIndent[t.line()] : 0;
+        return c == 0 ? t.col() : c;
+    }
+
+    /** The number of declarations when the current top-level member started (its own are dropped with it). */
+    private int memberDecls = Integer.MAX_VALUE;
+
+    private void recovered(JscException e, int from, int spansDepth, int nesting, Set<String> sync, boolean stopAtClose, boolean statement) {
+        // One error at the end of the file: the enclosing constructs that end there with it add none.
+        Tok eof = toks.get(toks.size() - 1);
+        boolean atEof = e.line == eof.line() && e.col == eof.col();
+        if (!(atEof && eofReported)) spans.errors.add(e);
+        if (atEof) eofReported = true;
+        spans.incomplete = true;
+        // Every name the dropped member declared (an import's names, an enum's variants) is unchecked from now on.
+        for (int k = memberDecls; k < spans.decls.size(); k++) {
+            Spans.Decl x = spans.decls.get(k);
+            if (x.name != null && !statement) spans.droppedNames.add(x.name);
+        }
+        var beyond = spans.openBeyond(spansDepth);
+        for (Spans.Decl d : beyond) {
+            if (d.name != null) spans.droppedNames.add(d.name);
+            spans.droppedNames.add("#" + d.kind);
+        }
+        // A member dropped without a name (or the state, the params, the contract's head): every unknown name is unchecked.
+        // A statement's error drops its member, which dropMember judges.
+        if (!statement && (beyond.isEmpty() || beyond.get(0).name == null || beyond.get(0).kind.equals("state")
+                || beyond.get(0).kind.equals("params") || beyond.get(0).kind.equals("contract"))) {
+            spans.namelessDropped = true;
+        }
+        // A member cut short ends with the token the error was found at, so the error lies inside it.
+        spans.unwind(spansDepth, peek().kind() == K.EOF ? toks.get(Math.max(i - 1, 0)) : peek());
+        depth = nesting;
+        int d = 0;
+        for (int k = from; k < i; k++) {
+            if (toks.get(k).is("{")) d++;
+            else if (toks.get(k).is("}")) d = Math.max(0, d - 1);
+        }
+        boolean moved = i > from;
+        boolean first = true;
+        while (peek().kind() != K.EOF) {
+            Tok t = peek();
+            if (statement && t.is("}") && d == 0) {
+                // In a block, a '}' that does not start its line and is followed by a token on a later line closed something
+                // of the broken statement (an object whose '{' went wrong), not the block; so is a stray '}' the error was
+                // found at. A '}' that starts its line, or is followed on its line ({ return x } }), closes the block.
+                boolean lineStart = i == 0 || toks.get(i - 1).line() < t.line();
+                boolean followedOnLine = peek(1).line() == t.line() && peek(1).kind() != K.EOF;
+                // A '}' that starts its line deeper than the line that opened the block closes something inside it.
+                boolean deeper = lineStart && openedAt != null && t.col() > indentOf(openedAt);
+                // On the line where the block itself opened (`init() { return { n: 0 } }` with the object's '{' deleted),
+                // the last '}' closes the block and any before it belong to the broken statement.
+                boolean blockLine = openedAt != null && openedAt.line() == t.line() && !lineStart;
+                boolean own = blockLine ? followedOnLine : !lineStart && (first || !followedOnLine) || deeper;
+                if (!own) return;
+                i++;
+                moved = true;
+                first = false;
+                continue;
+            }
+            first = false;
+            if (moved && d == 0) {
+                // A keyword resumes only at the start of its line (`import contract { … }` holds `contract`, a lambda `fn`…).
+                if (t.kind() == K.IDENT && sync.contains(t.text()) && startsLine()) return;
+                if (statement && t.is(";")) {
+                    i++;
+                    return;
+                }
+            }
+            if (t.is("{")) d++;
+            else if (t.is("}")) {
+                if (d == 0) {
+                    // Among a contract's members, a '}' followed by a member keyword on a later line is the broken member's
+                    // own (its '{' is what went wrong), not the contract's: it is skipped.
+                    Tok next = peek(1);
+                    boolean lineStart = i == 0 || toks.get(i - 1).line() < t.line();
+                    boolean own = !statement && stopAtClose && (next.line() > t.line()
+                            && (next.kind() == K.IDENT && MEMBER_SYNC.contains(next.text()) || next.is("}"))
+                            || lineStart && openedAt != null && t.col() > indentOf(openedAt));
+                    if (stopAtClose && !own) return;
+                } else d--;
+            }
+            i++;
+            moved = true;
+        }
+    }
+
+    /** The member whose first declaration is {@code decls[at]} is dropped: its name becomes unchecked (D5, L13). */
+    private void dropMember(int at) {
+        spans.incomplete = true;
+        Spans.Decl d = at < spans.decls.size() ? spans.decls.get(at) : null;
+        if (d != null) spans.droppedNames.add("#" + d.kind);
+        if (d == null || d.name == null || d.kind.equals("state") || d.kind.equals("params") || d.kind.equals("contract")) spans.namelessDropped = true;
+        else spans.droppedNames.add(d.name);
+    }
+
+    /** A member's list back to {@code size}: the member had a recovered error inside it, so it is dropped (D5). */
+    private static <T> void truncate(List<T> list, int size) {
+        while (list.size() > size) list.remove(list.size() - 1);
+    }
+
+    // ------------------------------------------------------------------ spans (ADR-0021 D6; no-ops without Spans)
+
+    private void openDecl(String kind) {
+        if (spans != null) spans.open(kind, peek());
+    }
+
+    private void openDecl(String kind, Tok start) {
+        if (spans != null) spans.open(kind, start);
+    }
+
+    private void named(Tok t) {
+        if (spans != null) spans.name(t);
+    }
+
+    private void closeDecl() {
+        if (spans != null) spans.close(toks.get(Math.max(i - 1, 0)));
+    }
+
+    private void leafDecl(String kind, Tok name) {
+        if (spans != null) spans.leaf(kind, name);
+    }
+
+    private void braces(Tok lbrace) {
+        if (spans != null) spans.block(lbrace, toks.get(Math.max(i - 1, 0)));
+    }
+
+    /**
+     * The header of a file, from its tokens: what {@code a/b/Name.java} a lowering writes, without checking the body
+     * (whose constructors of imported types need the imports loaded). Refused as the parse refuses it when the head is
+     * malformed.
+     */
+    static Header header(String src) {
+        var toks = Lexer.lex(src);
+        var p = new Parser(toks);
+        p.version();
+        boolean library = p.at("library");
+        if (library) p.next();
+        else p.expect("package");
+        var pkg = new StringBuilder(p.packageSegment("a package name"));
+        while (p.eat(".")) pkg.append('.').append(p.packageSegment("a package segment"));
+        String contract = null;
+        int depth = 0;
+        for (int k = p.i; k < toks.size(); k++) {
+            Tok t = toks.get(k);
+            if (t.is("{") || t.is("(") || t.is("[")) depth++;
+            else if (t.is("}") || t.is(")") || t.is("]")) depth--;
+            else if (depth == 0 && t.is("contract") && k + 1 < toks.size() && toks.get(k + 1).kind() == K.IDENT) {
+                contract = toks.get(k + 1).text();
+                break;
+            }
+        }
+        if (contract == null && !library) throw toks.get(toks.size() - 1).pos().error("JSC0119", "the file declares no contract (a library starts 'library <package>')");
+        return new Header(pkg.toString(), library, contract);
+    }
+
+    /**
+     * The file's imports, read before it is parsed (ADR-0018 D9, M4): the {@code .jsc} libraries they name are loaded first,
+     * so their type names start constructors here. Only top-level {@code import} declarations count; a malformed one is
+     * reported as the parse would report it.
+     */
+    /**
+     * ADR-0021 D5 (M5b): the imports the recovering mode can read: each one that parses (a broken one is skipped, and the
+     * main parse reports it), from tokens lexed with recovery.
+     */
+    static List<Import> importsRecovering(String src) {
+        return importsRecovering(Lexer.lex(src, null, new ArrayList<>()));
+    }
+
+    /** The same from tokens already lexed (recovering, the main file is lexed once). */
+    static List<Import> importsRecovering(List<Tok> toks) {
+        var out = new ArrayList<Import>();
+        int depth = 0;
+        for (int k = 0; k < toks.size(); k++) {
+            Tok t = toks.get(k);
+            if (t.is("{") || t.is("(") || t.is("[")) depth++;
+            else if (t.is("}") || t.is(")") || t.is("]")) depth = Math.max(0, depth - 1);
+            else if (depth == 0 && t.is("import") && t.kind() != K.STRING) {
+                // Leniently: `import [contract] { names… } from "spec"`, whatever else is broken in it.
+                int j = k + 1;
+                boolean contract = j < toks.size() && toks.get(j).is("contract");
+                if (contract) j++;
+                if (j >= toks.size() || !toks.get(j).is("{")) continue;
+                var names = new ArrayList<String>();
+                j++;
+                while (j < toks.size() && !toks.get(j).is("}") && toks.get(j).kind() != K.EOF && toks.get(j).line() - t.line() < 50) {
+                    if (toks.get(j).kind() == K.IDENT) names.add(toks.get(j).text());
+                    j++;
+                }
+                if (j + 1 < toks.size() && toks.get(j).is("}") && !names.isEmpty()) {
+                    // The module string, a token or two after the '}' (a missing or mangled 'from' is the main parse's error).
+                    int at = j + 1;
+                    while (at < Math.min(toks.size(), j + 4) && toks.get(at).kind() != K.STRING) at++;
+                    if (at < toks.size() && toks.get(at).kind() == K.STRING) {
+                        out.add(new Import(names, toks.get(at).text(), t.pos(), contract));
+                        k = at;
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    static List<Import> imports(String src) {
+        var toks = Lexer.lex(src);
+        var out = new ArrayList<Import>();
+        int depth = 0;
+        for (int k = 0; k < toks.size(); k++) {
+            Tok t = toks.get(k);
+            if (t.is("{") || t.is("(") || t.is("[")) depth++;
+            else if (t.is("}") || t.is(")") || t.is("]")) depth--;
+            else if (depth == 0 && t.is("import") && t.kind() != K.STRING) {
+                var p = new Parser(toks);
+                p.i = k;
+                out.add(p.importDecl());
+                k = p.i - 1;
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The span of each declaration and contract member (review r3 F12; issue #75, Codex C7): {startLine, startCol,
+     * startToken, endLine, endCol}, from its first token to its last. A member still being parsed when an error is thrown
+     * ends at the '}' that closes its first '{' (or at the end of the file). Spans, not lines: two members may share a
+     * line ({@code fn a(): Int = 1; fn b(): Int = 2}).
+     */
+    private final List<int[]> members = new ArrayList<>();
+
+    private int[] startMember() {
+        int[] m = {peek().line(), peek().col(), i, -1, -1};
+        members.add(m);
+        return m;
+    }
+
+    private void endMember(int[] m) {
+        Tok last = toks.get(Math.max(i - 1, 0));
+        m[3] = last.line();
+        m[4] = last.col();
+    }
+
+    /** Each member's span: {startLine, startCol, endLine, endCol} (the end is its last token's start). */
+    private List<int[]> members() {
+        var out = new ArrayList<int[]>();
+        for (int[] m : members) {
+            int endLine = m[3], endCol = m[4];
+            if (endLine < 0) {
+                int depth = 0;
+                Tok end = toks.get(toks.size() - 1);
+                for (int k = m[2]; k < toks.size(); k++) {
+                    if (toks.get(k).is("{")) depth++;
+                    else if (toks.get(k).is("}") && --depth == 0) {
+                        end = toks.get(k);
+                        break;
+                    }
+                }
+                endLine = end.line();
+                endCol = end.col();
+            }
+            out.add(new int[]{m[0], m[1], endLine, endCol});
+        }
+        return out;
+    }
+
+    /** Binary '-' tokens that start a line (review r2 F2, S4). */
+    private final List<Pos> leadingMinus = new ArrayList<>();
+
+    /** Whether position (line, col) is at or after (l2, c2). */
+    private static boolean atOrAfter(int line, int col, int l2, int c2) {
+        return line > l2 || line == l2 && col >= c2;
+    }
+
+    /** Whether position {@code p} lies in member span {@code m} ({startLine, startCol, endLine, endCol}). */
+    private static boolean inSpan(int line, int col, int[] m) {
+        return atOrAfter(line, col, m[0], m[1]) && atOrAfter(m[2], m[3], line, col);
+    }
+
+    /**
+     * An error with a note when a line starting with '-', on or before the error's line, continued the expression above it: the cause is often there,
+     * not where the error is found (a block without its value, an unknown name).
+     */
+    static JscException hinted(JscException e, List<Pos> leadingMinus, List<int[]> members) {
+        // No line starts with '-': nothing to note (N1 on #99: the member search below is per error).
+        if (leadingMinus.isEmpty()) return e;
+        // The member (declaration, method) the error is in, by span: a leading '-' there, the nearest on or before the
+        // error's line, else the first after it within the member, since an error found at a construct's start (a value
+        // block without its value) comes before its cause (review r3 F12). A '-' of another member is never named, even
+        // on the same line (issue #75). Outside any member: the nearest on or before (F10).
+        int[] in = null;
+        for (int[] m : members) {
+            if (inSpan(e.line, e.col, m) && (in == null || atOrAfter(m[0], m[1], in[0], in[1]))) in = m;
+        }
+        Pos near = null;
+        for (Pos p : leadingMinus) {
+            if (in != null && !inSpan(p.line(), p.col(), in)) continue;
+            if (p.line() <= e.line && (near == null || p.line() > near.line())) near = p;
+        }
+        if (near == null && in != null) {
+            for (Pos p : leadingMinus) {
+                if (p.line() > e.line && inSpan(p.line(), p.col(), in) && (near == null || p.line() < near.line())) near = p;
+            }
+        }
+        if (near == null) return e;
+        return new JscException(e.line, e.col, e.code, e.getMessage() + " (note: the line starting with '-' at " + near
+                + " continues the expression above it, as newlines do not end statements in .jsc; if it is meant to stand alone, end"
+                + " the line above with ';', else put the whole expression in parentheses)");
+    }
+
+    /** Whether the current token starts a line (no earlier token on its line). */
+    private boolean startsLine() {
+        return i > 0 && peek().line() > toks.get(i - 1).line();
+    }
+
+    // ------------------------------------------------------------------ tokens
+
+    private Tok peek() {
+        return toks.get(i);
+    }
+
+    private Tok peek(int k) {
+        return toks.get(Math.min(i + k, toks.size() - 1));
+    }
+
+    private Tok next() {
+        return toks.get(i++);
+    }
+
+    private boolean at(String s) {
+        return peek().is(s);
+    }
+
+    private boolean eat(String s) {
+        if (at(s)) { i++; return true; }
+        return false;
+    }
+
+    private Tok expect(String s) {
+        if (!at(s)) throw peek().pos().error("JSC0109", "expected '" + s + "' but found " + peek());
+        return next();
+    }
+
+    private String ident(String what) {
+        Tok t = peek();
+        if (t.kind() != K.IDENT) throw t.pos().error("JSC0110", "expected " + what + " but found " + t);
+        i++;
+        return t.text();
+    }
+
+    /** The method modifiers (D4, D10); none is a field or binding name (M1c review F4). */
+    static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched", "receives",
+            "admits", "retire", "migrates");
+
+    /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
+    private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
+            "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum",
+            "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int",
+            "interface", "long", "native", "new", "package", "private", "protected", "public", "return", "short", "static",
+            "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void", "volatile",
+            "while", "true", "false", "null");
+
+    private String packageSegment(String what) {
+        Tok t = peek();
+        String n = ident(what);
+        if (JAVA_KEYWORDS.contains(n)) throw t.pos().error("JSC0111", "'" + n + "' is a Java keyword, so it cannot be a package segment");
+        return n;
+    }
+
+    private void semis() {
+        while (eat(";")) { /* optional separators */ }
+    }
+
+    // ------------------------------------------------------------------ file
+
+    /**
+     * The optional header (ADR-0018 r26): {@code jsc 1}, or nothing, since a file with no header is version 1. Any other
+     * version is refused (JSC0113), {@code jsc 2} with a pointer to {@code jsc 1}: no alias.
+     */
+    private void version() {
+        if (!at("jsc")) return;
+        next();
+        Tok v = next();
+        // The version as written (#111 r1: security S1, Codex C1): the lexer drops an integer's '_', so 'jsc 1_' would
+        // read as 1; a version is one digit, spelt exactly.
+        boolean literal = v.kind() == K.INT && v.end() - v.col() == v.text().length();
+        if (literal && v.text().equals("2")) {
+            throw v.pos().error("JSC0113", "'jsc 2' is no longer a header: the language is version 1, so write 'jsc 1' or drop the line"
+                    + " (a file with no header is version 1)");
+        }
+        if (!literal || !v.text().equals("1")) {
+            throw v.pos().error("JSC0113", "this compiler reads .jsc version 1: the header is 'jsc 1', or none (a file with no header is"
+                    + " version 1)");
+        }
+        semis();
+    }
+
+    private File file() {
+        version();
+        // A library (ADR-0018 D9, M4): 'library <package>' instead of 'package', then types, enums and fns only.
+        boolean library = at("library");
+        if (library) next();
+        else expect("package");
+        var pkg = new StringBuilder(packageSegment("a package name"));
+        while (eat(".")) pkg.append('.').append(packageSegment("a package segment"));
+        semis();
+        var imports = new ArrayList<Import>();
+        var types = new ArrayList<TypeDecl>();
+        var enums = new ArrayList<EnumDecl>();
+        var fns = new ArrayList<Fn>();
+        Contract contract = null;
+        while (peek().kind() != K.EOF) {
+            Tok t = peek();
+            // Recovering: a '}' at the top level after an error is that error's consequence (a contract whose '{' was lost, or
+            // closed early, leaves its last members, such as a fn, at the top level and its '}' behind them), no error of its
+            // own (ADR-0021 L13; met with M3's contracts, whose last member is often a fn).
+            if (recover && t.is("}") && errors() > 0) {
+                i++;
+                continue;
+            }
+            int[] member = startMember();
+            int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth, errs = errors();
+            int declsBefore = spans == null ? 0 : spans.decls.size();
+            memberDecls = declsBefore;
+            int[] sizes = {imports.size(), types.size(), enums.size(), fns.size()};
+            try {
+            if (t.is("import")) imports.add(importDecl());
+            else if (t.is("type")) types.add(typeDecl());
+            else if (t.is("enum")) enums.add(enumDecl());
+            else if (t.is("fn")) fns.add(fn());
+            else if (t.is("contract")) {
+                if (library) throw t.pos().error("JSC0711", "a library holds imports, types, enums and fns, not a contract: write the contract in"
+                        + " its own file and import the library there");
+                if (contract != null) throw t.pos().error("JSC0114", "one contract per file");
+                contract = contract();
+            } else if (t.is("function")) throw t.pos().error("JSC0115", "functions are written 'fn name(x: Int): Int = …' in .jsc");
+            else if (t.is("class")) throw t.pos().error("JSC0116", "there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }'");
+            else if (t.is("const") || t.is("let") || t.is("var")) throw t.pos().error("JSC0117", "a file holds imports, types, fns and one contract: put constants in a fn (fn limit(): Int = 10)");
+            else throw t.pos().error("JSC0118", "expected import, type, enum, fn or contract but found " + t);
+            } catch (JscException e) {
+                if (!recover) throw e;
+                recovered(e, from, sd, nesting, FILE_SYNC, false, false);
+            }
+            if (recover && errors() > errs && !t.is("contract")) {
+                // An error inside the member: it is dropped (its name, if read, is unknown to the checker, not wrong).
+                truncate(imports, sizes[0]);
+                truncate(types, sizes[1]);
+                truncate(enums, sizes[2]);
+                truncate(fns, sizes[3]);
+                dropMember(declsBefore);
+            }
+            if (!t.is("contract")) endMember(member);
+            semis();
+        }
+        if (contract == null && !library) {
+            JscException e = peek().pos().error("JSC0119", "the file declares no contract (a library starts 'library <package>')");
+            if (!recover) throw e;
+            // A contract dropped by an earlier error is not missing.
+            if (!spans.incomplete) spans.errors.add(e);
+        }
+        return new File(pkg.toString(), library, imports, types, enums, fns, contract, List.copyOf(leadingMinus), members());
+    }
+
+    private Import importDecl() {
+        Pos p = next().pos();
+        // M2c (ADR-0018 D9): import contract { C } from "./C.jsc": another contract's state type and instances.
+        boolean contract = at("contract") && peek(1).is("{");
+        if (contract) next();
+        expect("{");
+        var names = new ArrayList<String>();
+        var nameToks = new ArrayList<Tok>();
+        do {
+            Tok nt = peek();
+            names.add(ident("a name to import"));
+            leafDecl("import", nt);
+            nameToks.add(nt);
+        } while (eat(","));
+        expect("}");
+        expect("from");
+        Tok s = next();
+        if (s.kind() != K.STRING) throw s.pos().error("JSC0701", "expected a module string such as \"std/crypto\"");
+        if (spans != null) for (Tok nt : nameToks) spans.importNames.add(new Object[]{nt, s.text(), contract});
+        if (contract && names.size() != 1) {
+            throw p.error("JSC0740", "import contract names one contract, the one its file declares: import contract { Oracle } from \"./Oracle.jsc\"");
+        }
+        return new Import(names, s.text(), p, contract);
+    }
+
+    private TypeDecl typeDecl() {
+        openDecl("type");
+        Pos p = next().pos();
+        Tok nt = peek();
+        String name = ident("a type name");
+        named(nt);
+        expect("=");
+        var t = new TypeDecl(name, fieldBlock("field"), p);
+        closeDecl();
+        return t;
+    }
+
+    /** {@code enum E { A, B { x: Int } }}: variants separated by commas (or semicolons); fields as in a type. */
+    private EnumDecl enumDecl() {
+        openDecl("enum");
+        Pos p = next().pos();
+        Tok nt = peek();
+        String name = ident("an enum name");
+        named(nt);
+        if (at("=")) throw peek().pos().error("JSC0901", "an enum is written 'enum " + name + " { A, B { x: Int } }', without '='");
+        Tok lb = expect("{");
+        var variants = new ArrayList<VariantDecl>();
+        while (!at("}")) {
+            openDecl("variant");
+            Pos vp = peek().pos();
+            Tok vt = peek();
+            String v = ident("a variant name");
+            named(vt);
+            List<FieldDecl> fields = at("{") ? fieldBlock("field") : List.of();
+            variants.add(new VariantDecl(v, fields, vp));
+            closeDecl();
+            if (!eat(",")) eat(";");
+        }
+        expect("}");
+        braces(lb);
+        closeDecl();
+        return new EnumDecl(name, variants, p);
+    }
+
+    /** {@code { f: T, … }}; {@code kind} names its fields for the language core's spans ({@code field}, {@code stateField}). */
+    private List<FieldDecl> fieldBlock(String kind) {
+        Tok lb = expect("{");
+        var fields = new ArrayList<FieldDecl>();
+        while (!at("}")) {
+            openDecl(kind);
+            Pos p = peek().pos();
+            Tok nt = peek();
+            String n = ident("a field name");
+            named(nt);
+            expect(":");
+            fields.add(new FieldDecl(n, type(), p));
+            closeDecl();
+            if (!eat(",")) eat(";");
+        }
+        expect("}");
+        braces(lb);
+        return fields;
+    }
+
+    private TypeRef type() {
+        Pos p = peek().pos();
+        enter(p);
+        TypeRef t = typeRef(p);
+        leave();
+        return t;
+    }
+
+    private TypeRef typeRef(Pos p) {
+        Tok first = peek();
+        String n = ident("a type");
+        // M2c: a type of an imported contract, qualified by the contract: Oracle.State.
+        if (at(".") && peek(1).kind() == K.IDENT && peek(1).line() == peek().line()) {
+            next();
+            n = n + "." + ident("a type of " + n);
+        }
+        Tok last = toks.get(i - 1);
+        var args = new ArrayList<TypeRef>();
+        if (eat("<")) {
+            do {
+                args.add(type());
+            } while (eat(","));
+            expect(">");
+        }
+        var tr = new TypeRef(n, args, p);
+        if (spans != null) spans.typeUse(tr, first, last);
+        return tr;
+    }
+
+    private Fn fn() {
+        openDecl("fn");
+        Pos p = next().pos();
+        Tok nt = peek();
+        String name = ident("a function name");
+        named(nt);
+        var params = params();
+        expect(":");
+        TypeRef ret = type();
+        Block body;
+        if (eat("=")) {
+            Expr e = expr();
+            body = new Block(List.of(), e, e.pos());
+        } else {
+            body = block();
+        }
+        closeDecl();
+        return new Fn(name, params, ret, body, p);
+    }
+
+    private List<Param> params() {
+        expect("(");
+        var ps = new ArrayList<Param>();
+        if (!at(")")) {
+            do {
+                openDecl("param");
+                Pos p = peek().pos();
+                Tok nt = peek();
+                String n = ident("a parameter name");
+                named(nt);
+                expect(":");
+                if (at("reads") && peek(1).is("params")) {
+                    // M2c (ADR-0011 D2): name: reads params.f, the state of the instance params.f names.
+                    next();
+                    next();
+                    expect(".");
+                    late(peek(), "params");
+                    ps.add(new Param(n, null, p, ident("a params field after 'reads params.'")));
+                } else if ((at("shared") || at("into")) && (peek(1).is(",") || peek(1).is(")"))) {
+                    // M3a (ADR-0003 D1, ADR-0012 D3): name: shared, the instance's state read by reference; name: into, a
+                    // move's destination state. Contextual: a type is capitalised, so neither word names one.
+                    ps.add(new Param(n, null, p, null, next().text()));
+                } else {
+                    ps.add(new Param(n, type(), p));
+                }
+                closeDecl();
+            } while (eat(","));
+        }
+        expect(")");
+        return ps;
+    }
+
+    // ------------------------------------------------------------------ contract
+
+    private Contract contract() {
+        openDecl("contract");
+        Pos p = next().pos();
+        Tok cnt = peek();
+        String name = ident("a contract name");
+        named(cnt);
+        var options = new ArrayList<Option>();
+        if (eat("(")) {
+            if (!at(")")) {
+                do {
+                    Pos op = peek().pos();
+                    String on = ident("a contract option");
+                    if (on.equals("stakeSelf") && !at("=")) {
+                        // M3c (ADR-0010 D2): a flag, @StateContract(stakeSelf = true): the state sits at the base address
+                        // staked to the contract's own script.
+                        options.add(new Option(on, BigInteger.ONE, op, true));
+                        continue;
+                    }
+                    expect("=");
+                    Tok v = next();
+                    if (v.kind() != K.INT) throw v.pos().error("JSC0120", "expected an integer");
+                    BigInteger value = new BigInteger(v.text());
+                    if (eat("ada")) value = value.multiply(BigInteger.valueOf(1_000_000));
+                    options.add(new Option(on, value, op));
+                } while (eat(","));
+            }
+            expect(")");
+        }
+        Tok clb = expect("{");
+        List<FieldDecl> state = null;
+        List<FieldDecl> params = null;
+        Pos paramsPos = null;
+        var events = new ArrayList<VariantDecl>();
+        var invariants = new ArrayList<InvariantDecl>();
+        var methods = new ArrayList<Method>();
+        var fns = new ArrayList<Fn>();
+        var types = new ArrayList<TypeDecl>();
+        var enums = new ArrayList<EnumDecl>();
+        var owned = new ArrayList<TypeDecl>();
+        int contractErrors = errors();
+        openedAt = clb;
+        while (!at("}") || recover && errors() > contractErrors && strayClose(clb)) {
+            if (at("}")) {
+                i++;
+                continue;
+            }
+            // Recovering: the end of the file after an error inside the contract is that error's consequence, no error
+            // of its own (the build stopped at the first).
+            if (recover && peek().kind() == K.EOF && errors() > contractErrors) break;
+            Tok t = peek();
+            int[] member = startMember();
+            int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth, errs = errors();
+            int declsBefore = spans == null ? 0 : spans.decls.size();
+            memberDecls = declsBefore;
+            int[] sizes = {methods.size(), fns.size(), types.size(), enums.size(), events.size(), invariants.size(), owned.size()};
+            try {
+            if (t.is("owned") && peek(1).kind() == K.IDENT && (peek(2).is("{") || peek(2).is("keyed"))) {
+                // M3a (ADR-0003 D1, ADR-0012 D1): owned T { … }, an owned object's record. M3b (ADR-0016 D1): owned T keyed
+                // by f (…) { … }, a keyed type: one object per key, unique per instance.
+                openDecl("owned");
+                next();
+                Pos tp = peek().pos();
+                Tok nt = peek();
+                String n = ident("an owned type's name");
+                named(nt);
+                Syntax.KeyedDecl keyed = at("keyed") ? keyedDecl(n) : null;
+                if (!at("{")) throw peek().pos().error("JSC1201", "an owned type's fields follow in a block: owned " + n + " { owner: Key }");
+                owned.add(new TypeDecl(n, fieldBlock("field"), tp, keyed));
+                closeDecl();
+            } else if (t.is("owned") && (peek(1).is("init") || peek(1).is("action") || peek(1).is("destroy"))) {
+                // M3a: owned init T.m(…), owned action T.m(…), owned destroy T.m(…): a method of the owned type T. Its
+                // declaration (#101 review F8) is an owned kind named T.m, so the outline says whose method it is.
+                openDecl(peek(1).is("init") ? "ownedInit" : peek(1).is("action") ? "ownedAction" : "ownedDestroy");
+                next();
+                Tok k = next();
+                late(peek(), "type");   // #130 r1 (X2): the qualifier names the owned type
+                String on = ident("the owned type of an owned " + k.text() + " (owned " + k.text() + " Account.name(…))");
+                // #130 r1 (X1): an owned action's or destroy's state is its object (an owned init has no input).
+                if (spans != null && spans.current() != null && !k.is("init")) spans.current().input = on;
+                if (!at(".")) {
+                    throw peek().pos().error("JSC1201", "an owned method names its type and itself: owned " + k.text() + " " + on + ".name(…)");
+                }
+                next();
+                Tok nt = peek();
+                String n = ident("a method name");
+                if (spans != null) spans.name(nt, on + "." + n);
+                var ps = params();
+                var mods = mods();
+                Kind kind = k.is("init") ? Kind.OWNED_INIT : k.is("action") ? Kind.OWNED_ACTION : Kind.OWNED_DESTROY;
+                methods.add(new Method(kind, n, ps, mods, block(), null, t.pos(), on));
+                closeDecl();
+            } else if (t.is("owned")) {
+                throw peek(1).pos().error("JSC1201", "after 'owned' comes an owned type (owned Account { owner: Key }) or an owned method"
+                        + " (owned init Account.open(…), owned action Account.name(…), owned destroy Account.name(…))");
+            } else if (t.is("state")) {
+                if (state != null) throw t.pos().error("JSC0121", "the state is declared once: state { … }");
+                openDecl("state");
+                named(t);
+                next();
+                if (!at("{")) throw peek().pos().error("JSC0122", "the state is a block: state { count: Int, owner: Key }");
+                state = fieldBlock("stateField");
+                closeDecl();
+            } else if (t.is("params") && peek(1).is("{")) {
+                // M2b (ADR-0009 D1): the deploy-time parameters, read as params.f.
+                if (params != null) throw t.pos().error("JSC0431", "the params are declared once: params { … }");
+                openDecl("params");
+                named(t);
+                next();
+                paramsPos = t.pos();
+                params = fieldBlock("field");
+                closeDecl();
+            } else if (t.is("event")) {
+                // M2b (ADR-0009 D5): an event, a variant of the contract's Event.
+                openDecl("event");
+                next();
+                Pos vp = peek().pos();
+                Tok nt = peek();
+                String n = ident("an event name");
+                named(nt);
+                events.add(new VariantDecl(n, at("{") ? fieldBlock("field") : List.of(), vp));
+                closeDecl();
+            } else if (t.is("invariant")) {
+                // M2b (ADR-0009 D4): invariant name = e, or invariant name { … e }.
+                openDecl("invariant");
+                next();
+                Tok nt = peek();
+                String n = ident("an invariant name");
+                String on = null;
+                if (at(".")) {
+                    // M3a (ADR-0012 D1): invariant T.name = e, an invariant of the owned type T.
+                    late(nt, "type");   // #130 r1 (X2): the qualifier names the owned type
+                    next();
+                    on = n;
+                    if (spans != null && spans.current() != null) spans.current().input = on;   // X1: its input is the object
+                    nt = peek();
+                    n = ident("an invariant name after '" + on + ".'");
+                }
+                named(nt);
+                Block body;
+                if (eat("=")) {
+                    Expr e = expr();
+                    body = new Block(List.of(), e, e.pos());
+                } else {
+                    body = block();
+                }
+                invariants.add(new InvariantDecl(n, body, t.pos(), on));
+                closeDecl();
+            } else if (t.is("init") && peek(1).is("migrate") && peek(2).is("from")) {
+                // M3c (ADR-0011 D4): init migrate from params.f(old: C.State, …) { … }, @Migrate(from = "params.f"): the
+                // adoption of an instance of the previous version, whose policy the params field f pins.
+                openDecl("migrate");
+                if (spans != null) spans.name(t, "migrate");   // the Java method's name, as init is init's
+                next();
+                next();
+                next();
+                Pos fp = peek().pos();
+                if (!at("params") || !peek(1).is(".")) {
+                    throw fp.error("JSC1304", "init migrate names the previous version's policy by a params field: init migrate from params.previous(old: V1.State)");
+                }
+                next();
+                next();
+                late(peek(), "params");   // #130 r1 (X2): a reference to the params field
+                String previous = ident("the params field after 'init migrate from params.'");
+                var ps = params();
+                var mods = mods();
+                methods.add(new Method(Kind.MIGRATE, "migrate", ps, mods, block(), null, t.pos(), null, previous, fp));
+                closeDecl();
+            } else if (t.is("init")) {
+                openDecl("init");
+                named(t);
+                next();
+                var ps = params();
+                var mods = mods();
+                methods.add(new Method(Kind.INIT, "init", ps, mods, block(), null, t.pos()));
+                closeDecl();
+            } else if (t.is("withdraw") || t.is("certify") || t.is("vote") || t.is("propose")) {
+                // (A member never starts with another identifier, so a handler word there is a handler: a malformed one is
+                // its own error, at its name, and the recovering parser resumes after it as after an action's.)
+                // M3c (ADR-0010 D1): a script purpose's handler. withdraw m(amount: Int, …) { send(…) } lowers to @Withdraw and
+                // returns its sends; certify, vote and propose are predicates (= expr, or a block with a result). Contextual:
+                // only at a member's start, so actions keep these names (action withdraw(…)).
+                openDecl(t.text());
+                next();
+                Tok nt = peek();
+                String n = ident("a handler name");
+                named(nt);
+                var ps = params();
+                var mods = mods();
+                Kind kind = t.is("withdraw") ? Kind.WITHDRAW : t.is("certify") ? Kind.CERTIFY : t.is("vote") ? Kind.VOTE : Kind.PROPOSE;
+                Block body;
+                if (kind != Kind.WITHDRAW && eat("=")) {
+                    Expr e = expr();
+                    body = new Block(List.of(), e, e.pos());
+                } else {
+                    body = block();
+                }
+                methods.add(new Method(kind, n, ps, mods, body, null, t.pos()));
+                closeDecl();
+            } else if (t.is("action") || t.is("destroy")) {
+                openDecl(t.text());
+                next();
+                Tok nt = peek();
+                String n = ident("a method name");
+                named(nt);
+                var ps = params();
+                var mods = mods();
+                methods.add(new Method(t.is("action") ? Kind.ACTION : Kind.DESTROY, n, ps, mods, block(), null, t.pos()));
+                closeDecl();
+            } else if (t.is("view")) {
+                openDecl("view");
+                next();
+                Tok nt = peek();
+                String n = ident("a view name");
+                named(nt);
+                var ps = params();
+                expect(":");
+                TypeRef vt = type();
+                Block body;
+                if (eat("=")) {
+                    Expr e = expr();
+                    body = new Block(List.of(), e, e.pos());
+                } else {
+                    body = block();
+                }
+                methods.add(new Method(Kind.VIEW, n, ps, List.of(), body, vt, t.pos()));
+                closeDecl();
+            } else if (t.is("fn")) {
+                fns.add(fn());
+            } else if (t.is("type")) {
+                types.add(typeDecl());
+            } else if (t.is("enum")) {
+                enums.add(enumDecl());
+            } else if (t.is("function")) {
+                throw t.pos().error("JSC0115", "functions are written 'fn name(x: Int): Int = …' in .jsc");
+            } else if (t.is("async") || t.is("await")) {
+                throw t.pos().error("JSC0123", "there is no '" + t.text() + "' in .jsc: a call runs in one transaction; write 'action name(…) { … }'");
+            } else if (t.is("let") || t.is("const") || t.is("var")) {
+                throw t.pos().error("JSC0124", "a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10)");
+            } else {
+                throw t.pos().error("JSC0125", "expected state, params, event, invariant, init, action, destroy, view, owned, withdraw, certify,"
+                        + " vote, propose, fn, type or enum but found " + t);
+            }
+            } catch (JscException e) {
+                if (!recover) throw e;
+                recovered(e, from, sd, nesting, MEMBER_SYNC, true, false);
+                if (peek().kind() == K.EOF) break;
+            }
+            if (recover && errors() > errs) {
+                truncate(methods, sizes[0]);
+                truncate(fns, sizes[1]);
+                truncate(types, sizes[2]);
+                truncate(enums, sizes[3]);
+                truncate(events, sizes[4]);
+                truncate(invariants, sizes[5]);
+                truncate(owned, sizes[6]);
+                dropMember(declsBefore);
+            }
+            endMember(member);
+            semis();
+        }
+        if (recover && peek().kind() == K.EOF) {
+            // The contract's '}' is missing: the error at the end of the file is recorded already.
+            spans.incomplete = true;
+        } else {
+            expect("}");
+            braces(clb);
+        }
+        closeDecl();
+        if (state == null) {
+            JscException e = p.error("JSC0126", "the contract declares no state { … }");
+            if (!recover) throw e;
+            if (!spans.incomplete) spans.errors.add(e);
+            state = List.of();
+        }
+        return new Contract(name, options, state, methods, fns, types, enums, p, params, paramsPos, events, invariants, owned);
+    }
+
+    /**
+     * M3b (ADR-0016 D1): {@code keyed by f}, then optionally {@code (signed, maxKeyBytes = n, linkCooldownMs = c,
+     * linkWindowMs = w)} in any order, each at most once (the checker refuses unknown names and values out of range).
+     */
+    private Syntax.KeyedDecl keyedDecl(String type) {
+        Pos kp = next().pos();
+        if (!at("by")) throw peek().pos().error("JSC1240", "a keyed type names its key field: owned " + type + " keyed by name { name: Bytes }");
+        next();
+        Pos fp = peek().pos();
+        late(peek(), "field:" + type);   // #130 r1 (X2): a reference to the owned type's key field
+        String field = ident("the key field after 'keyed by' (owned " + type + " keyed by name)");
+        Pos signed = null;
+        var options = new ArrayList<Option>();
+        var seen = new java.util.HashSet<String>();
+        if (eat("(")) {
+            if (at(")")) throw peek().pos().error("JSC1240", "empty keyed options: drop the parentheses, or write (signed, maxKeyBytes = 28)");
+            do {
+                Pos op = peek().pos();
+                String on = ident("a keyed option (signed, maxKeyBytes, linkCooldownMs, linkWindowMs)");
+                if (!java.util.Set.of("signed", "maxKeyBytes", "linkCooldownMs", "linkWindowMs").contains(on)) {
+                    throw op.error("JSC1240", "unknown keyed option '" + on + "' (signed, maxKeyBytes, linkCooldownMs, linkWindowMs)");
+                }
+                if (!seen.add(on)) throw op.error("JSC1240", "the keyed option " + on + " is written twice");
+                if (on.equals("signed")) {
+                    signed = op;
+                    continue;
+                }
+                if (!at("=")) throw peek().pos().error("JSC1240", "the keyed option " + on + " takes a value: " + on + " = 64");
+                next();
+                Tok v = next();
+                if (v.kind() != K.INT) throw v.pos().error("JSC1240", "the keyed option " + on + " is an integer (milliseconds or bytes)");
+                options.add(new Option(on, new BigInteger(v.text()), op));
+            } while (eat(","));
+            expect(")");
+        }
+        return new Syntax.KeyedDecl(field, fp, signed, List.copyOf(options), kp);
+    }
+
+    private List<Mod> mods() {
+        var mods = new ArrayList<Mod>();
+        while (true) {
+            Tok t = peek();
+            if (t.is("payable") || t.is("open") || t.is("retire")) {
+                // M3b (ADR-0016 D10): retire, on a keyed type's owned destroy: the object stays as a retired node.
+                next();
+                mods.add(new Mod(t.text(), null, t.pos()));
+            } else if (t.is("only") || t.is("after") || t.is("before")) {
+                next();
+                late(peek(), "state");
+                mods.add(new Mod(t.text(), ident("a state field after '" + t.text() + "'"), t.pos()));
+            } else if (t.is("quorum")) {
+                // M2b (ADR-0009 D2): quorum <keys> <threshold>, each a state field or params.f.
+                next();
+                String keys = fieldRef("the keys after 'quorum' (a List<Key> field)");
+                String threshold = fieldRef("the threshold after 'quorum " + keys + "' (an Int field)");
+                mods.add(new Mod("quorum", keys + " " + threshold, t.pos()));
+            } else if (t.is("receives")) {
+                // M2c (ADR-0011 D3): the action takes deposits; receives T: their memos are T (checked inputs).
+                next();
+                TypeRef memo = null;
+                if (peek().kind() == K.IDENT && !MODIFIERS.contains(peek().text()) && Character.isUpperCase(peek().text().charAt(0))) memo = type();
+                mods.add(new Mod("receives", null, t.pos(), memo));
+            } else if (t.is("migrates")) {
+                // M3c (ADR-0011 D4): migrates to f, on an instance destroy: @MigrateTo("f"), the successor's policy in the state
+                // field f (a params field would make the two versions' hashes circular; the checker refuses it).
+                next();
+                if (!at("to")) throw peek().pos().error("JSC1303", "a migrating destroy names its successor's field: migrates to successor");
+                next();
+                mods.add(new Mod("migrates", fieldRef("the state field after 'migrates to' (a Bytes field holding the successor's policy)"), t.pos()));
+            } else if (t.is("admits")) {
+                // M3a (ADR-0012 D3): admits T, an instance action through which objects of the owned type T arrive.
+                next();
+                late(peek(), "type");   // #130 r1 (X2): a reference to the owned type
+                mods.add(new Mod("admits", ident("the owned type after 'admits' (admits Hero)"), t.pos()));
+            } else if (t.is("authorized")) {
+                // M2b (ADR-0009 D3): authorized <credential>, a state field or params.f.
+                next();
+                mods.add(new Mod("authorized", fieldRef("a Credential field after 'authorized'"), t.pos()));
+            } else if (t.is("batched")) {
+                // ADR-0018 D10 (M1c): 'batched' runs the action as an intent too; 'batched only' only as an intent
+                // (@Batched(only = true)). 'only' after 'batched' names a field when an identifier other than a modifier
+                // follows ('batched only owner': batched with 'only owner', which the checker refuses).
+                next();
+                String arg = null;
+                if (at("only")) {
+                    Tok after = peek(1);
+                    boolean namesField = after.kind() == K.IDENT && !MODIFIERS.contains(after.text());
+                    if (!namesField) {
+                        next();
+                        arg = "only";
+                    }
+                }
+                mods.add(new Mod("batched", arg, t.pos()));
+            } else {
+                return mods;
+            }
+        }
+    }
+
+    /** A modifier's field: {@code f} (a state field) or {@code params.f}. */
+    private String fieldRef(String what) {
+        if (at("params") && peek(1).is(".")) {
+            next();
+            next();
+            late(peek(), "params");
+            return "params." + ident(what);
+        }
+        late(peek(), "state");
+        return ident(what);
+    }
+
+    /** ADR-0021 D6: a name read outside an expression (a modifier's field), resolved by the language core by name. */
+    private void late(Tok t, String kind) {
+        if (spans != null && t.kind() == K.IDENT) spans.lateRefs.add(new Object[]{t, kind});
+    }
+
+    // ------------------------------------------------------------------ statements
+
+    /** {@code { stmt* [expr] }}: the last expression, if any, is the block's value. */
+    private Block block() {
+        enter(peek().pos());
+        Block b = blockBody();
+        leave();
+        return b;
+    }
+
+    private Block blockBody() {
+        Tok lb = expect("{");
+        Tok outerOpen = openedAt;
+        openedAt = lb;
+        try {
+            return blockBody(lb);
+        } finally {
+            openedAt = outerOpen;
+        }
+    }
+
+    private Block blockBody(Tok lb) {
+        Pos p = lb.pos();
+        var stmts = new ArrayList<Stmt>();
+        Expr result = null;
+        Pos returnPos = null;
+        var consts = new ArrayList<Spans.Decl>();
+        int blockErrors = errors();
+        while (!at("}") || recover && errors() > blockErrors && strayClose(lb)) {
+            if (at("}")) {
+                // After an error in this block: a '}' deeper than the block's own line closes something the error broke.
+                i++;
+                continue;
+            }
+            if (recover && peek().kind() == K.EOF && (errors() > blockErrors || eofReported)) break;
+            int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth;
+            try {
+            if (result != null) throw result.pos().error("JSC0127", "an expression's value is unused here: only the last one is the block's value");
+            Tok t = peek();
+            if (t.is("const")) {
+                openDecl("const");
+                next();
+                Pos cp = t.pos();
+                Tok nt = peek();
+                String n = ident("a name");
+                named(nt);
+                TypeRef ty = eat(":") ? type() : null;
+                expect("=");
+                stmts.add(new Const(n, ty, expr(), cp));
+                if (spans != null) consts.add(spans.current());
+                closeDecl();
+            } else if (t.is("let") || t.is("var")) {
+                throw t.pos().error("JSC0128", "values are immutable in .jsc: write 'const " + peek(1).text() + " = …'");
+            } else if (t.is("require")) {
+                stmts.add(requireStmt());
+            } else if (t.is("pay")) {
+                stmts.add(payStmt());
+            } else if (isEffect(t)) {
+                stmts.add(effectStmt());
+            } else if (t.is("for")) {
+                next();
+                expect("(");
+                if (!at("const")) throw peek().pos().error("JSC1001", "loops are 'for (const x of xs) { … }'; accumulate with xs.fold(init, (acc, x) => …)");
+                next();
+                openDecl("loopVar", t);
+                Tok vt = peek();
+                String v = ident("a loop variable");
+                named(vt);
+                if (at("in")) throw peek().pos().error("JSC1002", "'for … in' iterates keys in JavaScript; write 'for (const " + v + " of list)'");
+                expect("of");
+                Expr list = expr();
+                expect(")");
+                stmts.add(new For(v, list, block(), t.pos()));
+                closeDecl();
+            } else if (t.is("while") || t.is("do")) {
+                throw t.pos().error("JSC1003", "there are no while loops in .jsc: use xs.fold(init, (acc, x) => …), range(a, b), or a recursive fn");
+            } else if (t.is("if")) {
+                IfStmt s = ifStmt();
+                // An if with an else whose arms both end in values is the block's value when nothing follows it.
+                if (at("}") && isValueIf(s)) {
+                    result = toIfExpr(s);
+                } else {
+                    stmts.add(s);
+                }
+            } else if (t.is("match")) {
+                Match m = match();
+                // A match whose arms all end in values is the block's value when nothing follows it.
+                semis();
+                if (at("}") && isValueMatch(m)) {
+                    result = m;
+                } else {
+                    stmts.add(new MatchStmt(m, m.pos()));
+                }
+            } else if (t.is("return")) {
+                next();
+                returnPos = t.pos();
+                result = expr();
+                semis();
+                if (!at("}")) {
+                    throw t.pos().error("JSC0129", "return is the last statement of a block: a block's value is its last expression, so there is no early return (write if c { … } else { … } as the last expression)");
+                }
+            } else if (t.is("function")) {
+                throw t.pos().error("JSC1004", "functions are written 'fn name(x: Int): Int = …' at the top of the file or in the contract; lambdas 'x => …' are only arguments of list methods");
+            } else {
+                Expr e = expr();
+                if (at("=") || at("+=") || at("-=") || at("++") || at("--")) {
+                    throw peek().pos().error("JSC0130", "values are immutable in .jsc: build a new one, e.g. return { ...state, x: x + 1 }");
+                }
+                result = e;
+            }
+            } catch (JscException e) {
+                if (!recover) throw e;
+                recovered(e, from, sd, nesting, STMT_SYNC, true, true);
+                // The block has lost a statement: its value is unknown (the member is dropped anyway).
+                result = null;
+                if (peek().kind() == K.EOF) break;
+            }
+            semis();
+        }
+        if (recover && peek().kind() == K.EOF) {
+            spans.incomplete = true;
+            return new Block(stmts, result, returnPos, p);
+        }
+        Tok rb = expect("}");
+        braces(lb);
+        // A const is visible from after its statement to its block's end.
+        if (spans != null) for (Spans.Decl d : consts) spans.scopes.put(d, new int[]{d.endLine, d.endCol, rb.line(), rb.end()});
+        return new Block(stmts, result, returnPos, p);
+    }
+
+    private Require requireStmt() {
+        Tok t = next();
+        expect("(");
+        Expr c = expr();
+        expect(",");
+        Tok m = next();
+        if (m.kind() != K.STRING) throw m.pos().error("JSC0131", "require's message is a string: require(cond, \"why\")");
+        expect(")");
+        return new Require(c, m.text(), t.pos());
+    }
+
+    /** An effect statement of M2 (D4): {@code send}, {@code mint}, {@code burn} or {@code accept}, followed by '('. */
+    private boolean isEffect(Tok t) {
+        return (t.is("send") || t.is("mint") || t.is("burn") || t.is("accept") || t.is("emit") || t.is("deposit")) && peek(1).is("(")
+                && peek(1).line() == t.line();
+    }
+
+    private Stmt effectStmt() {
+        Tok t = next();
+        expect("(");
+        Stmt s;
+        switch (t.text()) {
+            case "send" -> {
+                Expr to = expr();
+                expect(",");
+                Expr value = expr();
+                // M2c: send(to, value, datum), the datum an inline datum built by a generated encoder (D5).
+                Expr datum = eat(",") ? expr() : null;
+                s = new Send(to, value, datum, t.pos());
+            }
+            case "deposit" -> {
+                // M2c (ADR-0011 D3): deposit(target, value, memo).
+                Expr target = expr();
+                expect(",");
+                Expr value = expr();
+                if (!at(",")) {
+                    throw peek().pos().error("JSC0442", "a deposit names its memo too: deposit(target, value, memo); the memo is any value the"
+                            + " receiver reads (a beneficiary, an order id)");
+                }
+                next();
+                s = new Deposit(target, value, expr(), t.pos());
+            }
+            case "mint", "burn" -> {
+                Expr name = expr();
+                expect(",");
+                Expr qty = expr();
+                s = new Mint(t.is("burn"), name, qty, t.pos());
+            }
+            case "emit" -> s = new Emit(expr(), t.pos());
+            default -> s = new Accept(expr(), t.pos());
+        }
+        expect(")");
+        return s;
+    }
+
+    private Pay payStmt() {
+        Tok t = next();
+        expect("(");
+        Expr to = expr();
+        expect(",");
+        Expr amount = expr();
+        expect(")");
+        return new Pay(to, amount, t.pos());
+    }
+
+    /** {@code match e { P => e, P => { … } }}; arms separated by optional commas. */
+    private Match match() {
+        Pos p = next().pos();
+        Expr scrutinee = expr();
+        Tok mlb = expect("{");
+        var arms = new ArrayList<Arm>();
+        while (!at("}")) {
+            int armFrom = i;
+            int bindsFrom = spans == null ? 0 : spans.decls.size();
+            Pattern pat = pattern();
+            int bindsTo = spans == null ? 0 : spans.decls.size();
+            Tok arrow = peek();
+            if (arrow.is("-") || arrow.is(":")) throw arrow.pos().error("JSC0902", "a match arm is written 'Pattern => value'");
+            expect("=>");
+            Block body;
+            if (at("{") && peek(1).is("...")) {
+                throw peek().pos().error("JSC0903", "an arm's '{' starts a block: write an object as its value in parentheses, A => ({ ...state, f: e })");
+            }
+            if (at("{")) {
+                body = block();
+            } else if (at("require") || at("pay") || isEffect(peek())) {
+                // A statement arm: A => require(…), A => pay(…), or another effect.
+                Stmt st = at("require") ? requireStmt() : at("pay") ? payStmt() : effectStmt();
+                body = new Block(List.of(st), null, st.pos());
+            } else {
+                Expr e = expr();
+                body = new Block(List.of(), e, e.pos());
+            }
+            arms.add(new Arm(pat, body, pat.pos()));
+            // A pattern's bindings are visible in its arm.
+            if (spans != null) for (int k = bindsFrom; k < bindsTo; k++) spans.scope(spans.decls.get(k), toks.get(armFrom), toks.get(i - 1));
+            if (!eat(",")) eat(";");
+        }
+        expect("}");
+        braces(mlb);
+        if (arms.isEmpty()) throw p.error("JSC0904", "a match needs at least one arm");
+        return new Match(scrutinee, arms, p);
+    }
+
+    private Pattern pattern() {
+        Tok t = peek();
+        if (t.kind() != K.IDENT) throw t.pos().error("JSC0905", "expected a pattern (a variant, Some(x), None or _) but found " + t);
+        next();
+        var binds = new ArrayList<Bind>();
+        if (t.text().equals("Some") && at("(")) {
+            next();
+            Pos bp = peek().pos();
+            if (peek().kind() == K.IDENT && (peek(1).is("{") || peek(1).is("("))) {
+                throw bp.error("JSC0930", "nested patterns are not supported: bind the value, Some(v), and match v again");
+            }
+            Tok bt = peek();
+            binds.add(new Bind(null, ident("a name for the value"), bp));
+            leafDecl("binding", bt);
+            if (spans != null) spans.anchor(spans.last(), bp.line(), bp.col(), bt.text());
+            expect(")");
+        } else if (at("{")) {
+            next();
+            while (!at("}")) {
+                Pos bp = peek().pos();
+                Tok ft = peek();
+                String field = ident("a field name");
+                Tok bt = ft;
+                String name;
+                if (eat(":")) {
+                    bt = peek();
+                    name = ident("a name to bind");
+                } else {
+                    name = field;
+                }
+                binds.add(new Bind(field, name, bp));
+                leafDecl("binding", bt);
+                // The checker records a binding at its pattern field's position.
+                if (spans != null) spans.anchor(spans.last(), bp.line(), bp.col(), name);
+                if (!eat(",")) break;
+            }
+            expect("}");
+        } else if (at("(")) {
+            throw peek().pos().error("JSC0906", "a variant's fields are matched by name: " + t.text() + " { field } or " + t.text() + " { field: name }");
+        }
+        return new Pattern(t.text(), binds, t.pos());
+    }
+
+    private static boolean isValueMatch(Match m) {
+        for (Arm a : m.arms()) if (a.body().result() == null) return false;
+        return true;
+    }
+
+    /**
+     * {@code if c { … } else if d { … } else { … }}: the else-if chain is read in a loop into one node (J18, review S2),
+     * so a chain of any length nests no deeper than one if.
+     */
+    private IfStmt ifStmt() {
+        Pos p = next().pos();
+        var branches = new ArrayList<Branch>();
+        Expr c = expr();
+        branches.add(new Branch(c, block(), p));
+        Block otherwise = null;
+        while (eat("else")) {
+            if (at("if")) {
+                Pos q = next().pos();
+                Expr ci = expr();
+                branches.add(new Branch(ci, block(), q));
+            } else {
+                otherwise = block();
+                break;
+            }
+        }
+        return new IfStmt(List.copyOf(branches), otherwise, p);
+    }
+
+    private static boolean isValueIf(IfStmt s) {
+        if (s.otherwise() == null || s.otherwise().result() == null) return false;
+        for (Branch b : s.branches()) if (b.then().result() == null) return false;
+        return true;
+    }
+
+    private static IfExpr toIfExpr(IfStmt s) {
+        return new IfExpr(s.branches(), s.otherwise(), s.pos());
+    }
+
+    // ------------------------------------------------------------------ expressions
+
+    Expr expr() {
+        enter(peek().pos());
+        Expr e = conditional();
+        leave();
+        return e;
+    }
+
+    /**
+     * Operator chains of {@code +}/{@code -}, {@code *}, {@code &&} and {@code ||} are read in a loop and built as a
+     * balanced tree (J18, review S2): up to {@value #CHAIN} operands left to right as written, longer chains split in the
+     * middle, so a chain of n operands nests about {@code CHAIN + log2(n / CHAIN)} deep and every later pass (the checker,
+     * the emitter, the interpreter, javac and JuLC) recurses only that far. The operands keep their order, so evaluation
+     * order and laziness are unchanged, and the value is the same: integers are exact, {@code &&}/{@code ||} associate,
+     * and a split at a {@code -} flips the signs inside its right part ({@code a - b + c = a - (b - c)}).
+     */
+    static final int CHAIN = 8;
+
+    /** A binary node; its extent (ADR-0021 D6) runs from its left operand's start to its right operand's end. */
+    private Binary bin(String op, Expr l, Expr r, Pos p) {
+        var b = new Binary(op, l, r, p);
+        merge(b, l, r);
+        return b;
+    }
+
+    /** {@code e}'s extent: from {@code first}'s (with its parentheses) to {@code last}'s. */
+    private void merge(Expr e, Expr first, Expr last) {
+        if (spans == null) return;
+        int[] a = spans.outer(first);
+        int[] b = spans.outer(last);
+        if (a != null && b != null) spans.exprs.put(e, new int[]{a[0], a[1], b[2], b[3]});
+    }
+
+    /** Records {@code e}'s extent: from the token at {@code from} to the last token read. */
+    private <E extends Expr> E ext(E e, int from) {
+        if (spans != null && e != null) spans.expr(e, toks.get(from), toks.get(Math.max(i - 1, from)));
+        return e;
+    }
+
+    private Expr chain(List<Expr> ts, List<String> ops, int lo, int hi, boolean flip) {
+        if (hi - lo < CHAIN) {
+            Expr l = ts.get(lo);
+            for (int j = lo + 1; j <= hi; j++) l = bin(flip ? flipped(ops.get(j)) : ops.get(j), l, ts.get(j), startOf(l));
+            return l;
+        }
+        int mid = (lo + hi + 1) / 2;
+        Expr l = chain(ts, ops, lo, mid - 1, flip);
+        String op = flip ? flipped(ops.get(mid)) : ops.get(mid);
+        Expr r = chain(ts, ops, mid, hi, flip ^ op.equals("-"));
+        return bin(op, l, r, startOf(l));
+    }
+
+    private static String flipped(String op) {
+        return switch (op) {
+            case "+" -> "-";
+            case "-" -> "+";
+            default -> op;
+        };
+    }
+
+    private Expr conditional() {
+        Expr c = coalesce();
+        if (at("?")) {
+            Pos p = next().pos();
+            Expr a = expr();
+            expect(":");
+            Expr b = expr();
+            Cond k = new Cond(c, a, b, startOf(c));
+            merge(k, c, b);
+            return k;
+        }
+        return c;
+    }
+
+    private Expr coalesce() {
+        Expr l = or();
+        while (at("??")) {
+            Pos p = next().pos();
+            noMixedLogic(l);
+            Expr r = or();
+            noMixedLogic(r);
+            l = bin("??", l, r, startOf(l));
+        }
+        return l;
+    }
+
+    /** As in JavaScript, {@code ??} is not mixed with {@code &&} or {@code ||} without parentheses (F14). */
+    private void noMixedLogic(Expr e) {
+        if (e instanceof Binary b && (b.op().equals("&&") || b.op().equals("||")) && !parenthesised.contains(e)) {
+            throw b.pos().error("JSC0132", "?? cannot be mixed with " + b.op() + " without parentheses: write (a ?? b) " + b.op() + " c or a ?? (b " + b.op() + " c)");
+        }
+    }
+
+    private Expr or() {
+        var ts = new ArrayList<Expr>(List.of(and()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
+        while (at("||")) {
+            ops.add(next().text());
+            ts.add(and());
+        }
+        return chain(ts, ops, 0, ts.size() - 1, false);
+    }
+
+    private Expr and() {
+        var ts = new ArrayList<Expr>(List.of(equality()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
+        while (at("&&")) {
+            ops.add(next().text());
+            ts.add(equality());
+        }
+        return chain(ts, ops, 0, ts.size() - 1, false);
+    }
+
+    private Expr equality() {
+        Expr l = comparison();
+        while (at("==") || at("!=") || at("===") || at("!==")) {
+            Tok t = next();
+            if (t.text().length() == 3) throw t.pos().error("JSC0133", "write " + t.text().substring(0, 2) + ": .jsc equality is always by value");
+            l = bin(t.text(), l, comparison(), startOf(l));
+        }
+        return l;
+    }
+
+    private Expr comparison() {
+        Expr l = additive();
+        if (at("<") || at("<=") || at(">") || at(">=")) {
+            Tok t = next();
+            l = bin(t.text(), l, additive(), startOf(l));
+            if (at("<") || at("<=") || at(">") || at(">=")) throw peek().pos().error("JSC0134", "comparisons do not chain: use &&");
+        }
+        return l;
+    }
+
+    private Expr additive() {
+        var ts = new ArrayList<Expr>(List.of(multiplicative()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
+        while (at("+") || at("-")) {
+            if (at("-") && startsLine()) leadingMinus.add(peek().pos());
+            ops.add(next().text());
+            ts.add(multiplicative());
+        }
+        return chain(ts, ops, 0, ts.size() - 1, false);
+    }
+
+    /** {@code *} chains are balanced; a chain with {@code /} or {@code %} is not associative and stays as written. */
+    private Expr multiplicative() {
+        var ts = new ArrayList<Expr>(List.of(unary()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
+        while (at("*") || at("/") || at("%")) {
+            ops.add(next().text());
+            ts.add(unary());
+        }
+        if (ops.stream().skip(1).allMatch("*"::equals)) return chain(ts, ops, 0, ts.size() - 1, false);
+        Expr l = ts.get(0);
+        for (int j = 1; j < ts.size(); j++) l = bin(ops.get(j), l, ts.get(j), startOf(l));
+        return l;
+    }
+
+    private Expr unary() {
+        int from = i;
+        if (at("++") || at("--")) {
+            throw peek().pos().error("JSC0135", "values are immutable in .jsc: there is no " + peek().text() + "; build a new value, e.g. return { ...state, x: x + 1 }");
+        }
+        if (at("!") || at("-")) {
+            Tok t = next();
+            enter(t.pos());
+            Expr operand = unary();
+            leave();
+            return ext(new Unary(t.text(), operand, t.pos()), from);
+        }
+        return postfix();
+    }
+
+    private Expr postfix() {
+        int from = i;
+        Expr e = primary();
+        while (true) {
+            if (at(".")) {
+                Pos p = next().pos();
+                Tok nt = peek();
+                String n = ident("a field or method name");
+                // A property (xs.length) and a record field (r.length) are both Field: the checker decides by type (C7).
+                e = at("(") && peek().line() == toks.get(i - 1).line() ? new MethodCall(e, n, args(), startOf(e)) : new Field(e, n, startOf(e));
+                if (spans != null) spans.member(e, nt);
+                ext(e, from);
+            } else if (at("[") && peek().line() == toks.get(i - 1).line()) {
+                // m[k] on the same line (a '[' on the next line starts a new expression).
+                next();
+                Expr k = expr();
+                expect("]");
+                e = ext(new Index(e, k, startOf(e)), from);
+            } else {
+                return e;
+            }
+        }
+    }
+
+    private List<Expr> args() {
+        expect("(");
+        var as = new ArrayList<Expr>();
+        if (!at(")")) {
+            do {
+                as.add(argument());
+            } while (eat(","));
+        }
+        expect(")");
+        return as;
+    }
+
+    /** An argument may be a lambda: {@code x => e} or {@code (acc, x) => e}. */
+    private Expr argument() {
+        if (peek().kind() == K.IDENT && peek(1).is("=>")) {
+            Pos p = peek().pos();
+            Tok lt = peek();
+            String n = next().text();
+            leafDecl("lambdaParam", lt);
+            Spans.Decl d = spans == null ? null : spans.last();
+            int from = i - 1;
+            next();
+            Lambda l = ext(new Lambda(List.of(n), lambdaBody(), p), from);
+            if (spans != null) spans.scope(d, lt, toks.get(i - 1));
+            return l;
+        }
+        if (at("(") && isLambdaParams()) {
+            int from = i;
+            Tok open = peek();
+            Pos p = next().pos();
+            var ps = new ArrayList<String>();
+            var decls = new ArrayList<Spans.Decl>();
+            if (!at(")")) {
+                do {
+                    Tok lt = peek();
+                    ps.add(ident("a lambda parameter"));
+                    leafDecl("lambdaParam", lt);
+                    if (spans != null) {
+                        decls.add(spans.last());
+                        // The checker records a lambda's parameters at the lambda's position (its '(').
+                        spans.anchor(spans.last(), open.line(), open.col(), lt.text());
+                    }
+                } while (eat(","));
+            }
+            expect(")");
+            expect("=>");
+            Lambda l = ext(new Lambda(ps, lambdaBody(), p), from);
+            for (Spans.Decl d : decls) spans.scope(d, open, toks.get(i - 1));
+            return l;
+        }
+        return expr();
+    }
+
+    private Expr lambdaBody() {
+        if (at("{") && peek(1).is("...")) {
+            throw peek().pos().error("JSC1005", "a lambda's '{' starts a block: write an object as its value in parentheses, x => ({ ...x, f: e })");
+        }
+        if (at("{")) {
+            Block b = block();
+            if (b.result() == null) throw b.pos().error("JSC1006", "a lambda's block must end in its value");
+            if (b.stmts().isEmpty()) return b.result();
+            int[] x = spans == null ? null : spans.blocks.isEmpty() ? null : spans.blocks.get(spans.blocks.size() - 1);
+            var be = new BlockExpr(b, b.pos());
+            if (x != null) spans.exprs.put(be, x.clone());
+            return be;
+        }
+        return expr();
+    }
+
+    private boolean isLambdaParams() {
+        int k = 1;
+        if (peek(k).is(")")) return peek(k + 1).is("=>");
+        while (true) {
+            if (peek(k).kind() != K.IDENT) return false;
+            k++;
+            if (peek(k).is(")")) return peek(k + 1).is("=>");
+            if (!peek(k).is(",")) return false;
+            k++;
+        }
+    }
+
+    private Expr primary() {
+        int from = i;
+        Expr e = primary0();
+        // A parenthesised expression keeps its own extent; its parentheses are recorded beside it (merge reads them).
+        if (spans != null && toks.get(from).is("(") && parenthesised.contains(e)) spans.paren(e, toks.get(from), toks.get(i - 1));
+        else ext(e, from);
+        return e;
+    }
+
+    private Expr primary0() {
+        Tok t = peek();
+        switch (t.kind()) {
+            case INT -> {
+                next();
+                BigInteger v = new BigInteger(t.text());
+                if (eat("ada")) v = v.multiply(BigInteger.valueOf(1_000_000));
+                return new IntLit(v, t.pos());
+            }
+            case HEX -> {
+                next();
+                return new BytesLit(t.text(), t.pos());
+            }
+            case STRING -> {
+                next();
+                return new StrLit(t.text(), t.pos());
+            }
+            case EOF -> throw t.pos().error("JSC0136", "unexpected end of file in an expression");
+            default -> { }
+        }
+        if (t.is("(")) {
+            next();
+            Expr e = expr();
+            expect(")");
+            parenthesised.add(e);
+            parenStart.put(e, t.pos());
+            return e;
+        }
+        if (t.is("[")) return listLit();
+        if (t.is("{")) return objLit(null, null);
+        if (t.is("if")) {
+            IfStmt s = ifStmt();
+            if (!isValueIf(s)) throw t.pos().error("JSC0137", "an if used as a value needs an else, and both arms must end in a value");
+            return toIfExpr(s);
+        }
+        if (t.is("match")) {
+            Match m = match();
+            if (!isValueMatch(m)) {
+                for (Arm a : m.arms()) {
+                    if (a.body().result() == null) throw a.pos().error("JSC0907", "a match used as a value needs a value in every arm");
+                }
+            }
+            return m;
+        }
+        if (t.is("switch")) throw t.pos().error("JSC0908", "there is no switch in .jsc: write match e { A => …, B { x } => … }");
+        if (t.kind() == K.IDENT) {
+            switch (t.text()) {
+                case "true", "false" -> {
+                    next();
+                    return new BoolLit(t.text().equals("true"), t.pos());
+                }
+                case "null", "undefined" -> throw t.pos().error("JSC0138", "there is no " + t.text() + " in .jsc: use Option<T> with None and Some(x)");
+                case "this" -> throw t.pos().error("JSC0139", "there is no 'this' in .jsc: a bare field name, or state.field, reads the state");
+                case "class" -> throw t.pos().error("JSC0140", "there are no classes in .jsc: records are 'type Name = { f: T }', built with Name { f: e }");
+                case "async", "await" -> throw t.pos().error("JSC0141", "there is no '" + t.text() + "' in .jsc: everything a call computes happens in its transaction");
+                case "new" -> throw t.pos().error("JSC0142", "there is no 'new' in .jsc: build a record with Name { f: e }");
+                case "function" -> throw t.pos().error("JSC1007", "there are no function values in .jsc: declare 'fn name(x: Int): Int = …', and write lambdas 'x => …' only as list-method arguments");
+                default -> { }
+            }
+            next();
+            // A '(' on a later line never continues a call, as a '[' never continues an index (review r2 F2): it starts a
+            // new expression.
+            if (at("(") && peek().line() == t.line()) return new Call(t.text(), args(), t.pos());
+            if (at("{") && typeNames.contains(t.text()) && looksLikeObject()) return objLit(t.text(), t.pos());
+            return new Name(t.text(), t.pos());
+        }
+        throw t.pos().error("JSC0143", "unexpected " + t + " in an expression");
+    }
+
+    /** After {@code Type}, a '{' starts a constructor if it is followed by '}', 'name:' 'name,' 'name }' or '...'. */
+    private boolean looksLikeObject() {
+        Tok a = peek(1), b = peek(2);
+        if (a.is("}") || a.is("...")) return true;
+        return a.kind() == K.IDENT && (b.is(":") || b.is(",") || b.is("}"));
+    }
+
+    private Expr listLit() {
+        Pos p = expect("[").pos();
+        var items = new ArrayList<Expr>();
+        Expr rest = null;
+        while (!at("]")) {
+            if (eat("...")) {
+                rest = expr();
+                if (!at("]")) throw peek().pos().error("JSC1008", "a spread '...rest' goes last in a list: [x, ...rest]");
+                break;
+            }
+            items.add(expr());
+            if (!eat(",")) break;
+        }
+        expect("]");
+        return new ListLit(items, rest, p);
+    }
+
+    /** {@code { … }} or {@code Type { … }}; the literal's position is where it starts: its type name, if any (J5). */
+    private Expr objLit(String type, Pos start) {
+        Pos p = expect("{").pos();
+        if (start != null) p = start;
+        Expr spread = null;
+        var fields = new ArrayList<FieldInit>();
+        boolean first = true;
+        while (!at("}")) {
+            if (eat("...")) {
+                if (!first) throw peek().pos().error("JSC0144", "a spread goes first: { ...state, f: e }");
+                spread = expr();
+            } else {
+                Pos fp = peek().pos();
+                String n = ident("a field name");
+                Expr v = eat(":") ? expr() : null;
+                fields.add(new FieldInit(n, v, fp));
+            }
+            first = false;
+            if (!eat(",")) break;
+        }
+        expect("}");
+        return new ObjLit(type, spread, fields, p);
+    }
+}
