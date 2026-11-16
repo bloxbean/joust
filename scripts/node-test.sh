@@ -8,5 +8,13 @@ shift
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="${NODE_TEST_RESULTS:-$root/build/npm-test-results}"
 mkdir -p "$out"
+# #130 round r1 (design D3): a named test file that does not exist fails here (Node 22.23 ignores it silently), so a
+# renamed or deleted suite never drops out of CI unseen. The arguments that are not options are the files.
+for a in "$@"; do
+  case "$a" in
+    -*) ;;
+    *) [[ -e "$a" ]] || { echo "node-test.sh: no test file $a (in $(pwd))" >&2; exit 1; } ;;
+  esac
+done
 exec node --test --test-reporter=spec --test-reporter-destination=stdout \
   --test-reporter=junit --test-reporter-destination="$out/$name.xml" "$@"

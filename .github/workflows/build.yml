@@ -394,7 +394,7 @@ jobs:
           cd js/joust
           ../../scripts/node-test.sh joust-lsp --test-concurrency=1 test/lsp/*.test.js
           # ADR-0021 D7a: the ABI diff and the bound acceptance through the CLI, on this engine.
-          node --test test/accept-abi.test.js
+          ../../scripts/node-test.sh joust-accept-abi test/accept-abi.test.js
           node test/lsp/measure-l10.mjs --check
 
       # ADR-0021 r10 §16 (M5e) E4-E6: the tree-sitter package, then the editor configurations in real editors: Neovim
@@ -439,8 +439,10 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/setup-js.sh
+          # #130 r1 (design D3): migrate was removed with .jsc v1 (#111); M5d's fmt and write-regular run here.
           (cd js/joust && ../../scripts/node-test.sh joust --test-concurrency=1 test/abi.test.js test/cold-engine.test.js \
-            test/libraries.test.js test/migrate.test.js test/offline-ledger.test.js test/sources.test.js test/worker-limits.test.js)
+            test/fmt.test.js test/libraries.test.js test/offline-ledger.test.js test/sources.test.js test/worker-limits.test.js \
+            test/write-regular.test.js)
           (cd js/joust-runtime && ../../scripts/node-test.sh joust-runtime --test-concurrency=1 test/compat.test.js \
             test/exnref.test.js test/keyed-window.test.js test/messages.test.js test/mirror.test.js)
 

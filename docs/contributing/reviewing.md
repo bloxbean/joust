@@ -106,12 +106,18 @@ The npm suites CI runs:
 - build job: js/state-client, js/create-joust, tree-sitter-jsc, js/vscode-joust, js/jsc-interpreter, and js/joust's
   `cli` and `deploy`;
 - engines job, on that commit's engines:
-  - js/joust's `abi`, `cold-engine`, `libraries`, `migrate`, `offline-ledger`, `sources`, `worker-limits` and `lsp/*`;
+  - the language core in the engine: `JscLangTest`, `JscLangRecoveryTest` and `JscFormatTest`, then
+    `lang-in-node.mjs` (the JVM and Wasm document models and formatting byte for byte, L1, the nesting cap);
+  - js/joust's `abi`, `accept-abi`, `cold-engine`, `fmt`, `libraries`, `offline-ledger`, `sources`, `worker-limits`,
+    `write-regular` and `lsp/*`, and `measure-l10.mjs --check`;
   - js/joust-runtime's `compat`, `exnref`, `keyed-window`, `messages` and `mirror`;
   - create-joust built with the engine;
+  - the tree-sitter package, and the editor configurations in real Neovim and Helix (`editors.test.mjs` with
+    `JOUST_REQUIRE_EDITORS=1`);
 
-  none of these may skip a case: a skip there is an engine-backed security case that did not run, so the job fails;
-- vscode job: the packaged extension in VS Code.
+  none of these may skip a case: a skip there is an engine-backed security case that did not run, so the job fails.
+  `scripts/node-test.sh` refuses a named test file that does not exist, so a renamed or deleted suite fails the job;
+- vscode job: the packaged extension in VS Code, and the release's editor-asset build as a dry run.
 
 **Not run in CI:**
 
@@ -210,6 +216,12 @@ fails when such programs pass 2% of those built (once there are 100); running th
 3. its transaction shape, and the `FourWay` method that evaluates it, `mutants` included (`FiveWayFuzzTest.run`);
 4. a `JscGenTest` quota;
 5. a tally key in `FiveWayFuzzTest`'s summary.
+
+*(#130 round r1, design D2.)* ADR-0018 M3 (owned and keyed objects, moves, the script purposes, migration) was
+approved on #101 to #113 before this rule existed, and lands with the integration #130 without generator coverage:
+`JscGen` does not generate it yet, which #105's item 7 tracks. Its five-way coverage is the hand-written ports' and
+coverage contracts' (`JscV2M3*FourWayTest`, `JscV2M3MatrixTest`). The integration's own milestone runs (a whole-set
+mutation run and a 60-minute fuzz run on its final head) are linked, with `check-milestone-runs.sh`'s output, on #130.
 
 A milestone that adds language features exits only when they are in `JscGen` with quotas, and a long five-way run
 (at least 60 minutes, `fuzz_minutes=60` above) has passed with them on the milestone's head. **Every milestone** also
