@@ -60,6 +60,14 @@ public final class TxModel {
     }
 
     public TxModel copy() {
+        return copyAs(kind);
+    }
+
+    /**
+     * A copy of another kind: a transaction both halves of which are checked (ADR-0011 D4's migration: a destroy of the
+     * previous version, a creation of the next), as the half {@code kind} names sees it.
+     */
+    public TxModel copyAs(Kind kind) {
         var c = new TxModel(kind);
         c.inputs.addAll(inputs);
         c.referenceInputs.addAll(referenceInputs);

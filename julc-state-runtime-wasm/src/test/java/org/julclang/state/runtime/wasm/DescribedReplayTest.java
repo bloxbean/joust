@@ -97,6 +97,10 @@ class DescribedReplayTest {
         Files.writeString(Path.of("build/prepare-vectors.json"), JSON.writeValueAsString(out));
     }
 
+    static Prepare.Result need(List<Prepare.Contract> contracts, JsonNode fixture) {
+        return Prepare.prepare(new Prepare.Request(fixture.get("call").toString(), "{}", contracts, 0, 1793975371000L, 1000, 20_000, 0, java.util.Map.of()));
+    }
+
     @Test
     void refusalsAndNeeds() throws Exception {
         var contracts = List.of(contract("counter"));
@@ -118,6 +122,9 @@ class DescribedReplayTest {
         var refused = Prepare.prepare(new Prepare.Request(call.toString(), snapshot, contracts, 0, 1793975371000L, 1000, 20_000, 0, java.util.Map.of()));
         assertFalse(refused.ok());
         assertEquals("increment must be positive", refused.error());
+        // ADR-0018 D12 (r12, review r1 C4): the refusal names the contract whose map explains it.
+        assertEquals(call.get("contract").asText(), refused.refusedBy());
+        assertNull(need(contracts, fixture).refusedBy(), "only a refusal names a contract");
         // A read the snapshot lacks: a need, not an error.
         var need = Prepare.prepare(new Prepare.Request(fixture.get("call").toString(), "{}", contracts, 0, 1793975371000L, 1000, 20_000, 0, java.util.Map.of()));
         assertFalse(need.ok());

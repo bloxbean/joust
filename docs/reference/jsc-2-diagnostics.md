@@ -1,0 +1,594 @@
+# `.jsc` diagnostics
+
+Every error and warning of the `.jsc` front end has a stable code (ADR-0018 D12, J5), printed with its
+position on both build paths: `File.jsc:12:5: error[JSC0502]: …`. A code names one rule and is never reused for
+another; a message may change wording, its code does not. `…` marks the parts a message fills in (names, types,
+positions). This catalogue is checked against the front end's sources (`JscV2DiagnosticsTest`).
+
+## Files (ADR-0018 D2, D12)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0001 | error | the file name … (none) … ' … ' … may contain only ASCII letters and digits, '.', '_' and '-', and must start with a letter or digit (it is embedded in the generated Java) | JscV2 |
+| JSC0002 | error | the ABI manifest … differs from the committed one at line …: a datum or redeemer encoding changed, which strands deployed instances; accept it with the acceptJscAbi task (npm: joust build --accept-abi) and commit it | JscMain, joust build |
+| JSC0003 | error | no ABI manifest … beside this file: the encoding of its datum and redeemers must be committed; create it with the acceptJscAbi task (npm: joust build --accept-abi), review it and commit it | JscMain, joust build |
+| JSC0004 | error | the ABI manifest of … disagrees with the processor's encoding: … (an internal error of the .jsc lowering: please report it) | Toolchain |
+| JSC0005 | error | internal error lowering this file: … (an internal error of the .jsc front end: please report it) | JscMain, Toolchain |
+
+## Syntax and JavaScript habits (ADR-0018 D2, D3, D12)
+
+**The nesting cap (J18): 64 levels**, the same on every build path (Gradle, the npm CLI's Web Image engine, editors).
+- **JSC0149:** the parser counts a level for each parenthesis, block, argument, match or if arm, lambda and type
+  argument it enters, and reports the token that would open the 65th.
+- **JSC0150:** the parser then measures the tree it built, and reports the first node past the cap. Each expression
+  and block is a level. Each link of a chain the parser does not balance also counts a level: `/`, `%`, `??`,
+  `==`/`!=`, field reads, method calls, `[ ]`, and each branch of an else-if chain used as a value that stays inline.
+  Such a chain stays inline when it has no statements and either has at most 8 branches or calls its own fn.
+- **JSC0340:** a type nests at most 64 levels. Each `List`, `Option` and `Map` layer counts, and so does each type it
+  contains.
+- **Not limited:** chains of `+`/`-`, `*`, `&&` and `||` are balanced as they are read, and any other else-if chain is
+  one node, so their length is not limited.
+
+Why 64: on Node's ~1 MB main thread, the Web Image holds about 232 nesting levels (ADR-0021 r3 §1). Any stack exhaustion
+that still happens in the front end is JSC0005, never a crash.
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0101 | error | unterminated comment | Lexer |
+| JSC0102 | error | a #hex literal needs an even number of digits | Lexer |
+| JSC0103 | error | unterminated string: a string ends on its line | Lexer |
+| JSC0104 | error | control character U+%04X in a string: write printable text (\n for a new line) | Lexer |
+| JSC0105 | error | unterminated string | Lexer |
+| JSC0106 | error | unknown escape \ | Lexer |
+| JSC0107 | error | unexpected character ' … ': write … for the logical operator | Lexer |
+| JSC0108 | error | unexpected character ' … ' | Lexer |
+| JSC0109 | error | expected ' … ' but found | Parser |
+| JSC0110 | error | expected … but found | Parser |
+| JSC0111 | error | ' … ' is a Java keyword, so it cannot be a package segment | Parser |
+| JSC0113 | error | 'jsc 2' is no longer a header: the language is version 1, so write 'jsc 1' or drop the line (a file with no header is version 1) / this compiler reads .jsc version 1: the header is 'jsc 1', or none (a file with no header is version 1) | Parser |
+| JSC0114 | error | one contract per file | Parser |
+| JSC0115 | error | functions are written 'fn name(x: Int): Int = …' in .jsc | Parser |
+| JSC0116 | error | there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }' | Parser |
+| JSC0117 | error | a file holds imports, types, fns and one contract: put constants in a fn (fn limit(): Int = 10) | Parser |
+| JSC0118 | error | expected import, type, enum, fn or contract but found | Parser |
+| JSC0119 | error | the file declares no contract | Parser |
+| JSC0120 | error | expected an integer | Parser |
+| JSC0121 | error | the state is declared once: state { … } | Parser |
+| JSC0122 | error | the state is a block: state { count: Int, owner: Key } | Parser |
+| JSC0123 | error | there is no ' … ' in .jsc: a call runs in one transaction; write 'action name(…) { … }' | Parser |
+| JSC0124 | error | a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10) | Parser |
+| JSC0125 | error | expected state, params, event, invariant, init, action, destroy, view, fn, type or enum but found | Parser |
+| JSC0126 | error | the contract declares no state { … } | Parser |
+| JSC0127 | error | an expression's value is unused here: only the last one is the block's value | Parser |
+| JSC0128 | error | values are immutable in .jsc: write 'const … = …' | Parser |
+| JSC0129 | error | return is the last statement of a block: a block's value is its last expression, so there is no early return (write if c { … } else { … } as the last expression) | Parser |
+| JSC0130 | error | values are immutable in .jsc: build a new one, e.g. return { ...state, x: x + 1 } | Parser |
+| JSC0131 | error | require's message is a string: require(cond, "why") | Parser |
+| JSC0132 | error | ?? cannot be mixed with … without parentheses: write (a ?? b) … c or a ?? (b … c) | Parser |
+| JSC0133 | error | write … : .jsc equality is always by value | Parser |
+| JSC0134 | error | comparisons do not chain: use && | Parser |
+| JSC0135 | error | values are immutable in .jsc: there is no … ; build a new value, e.g. return { ...state, x: x + 1 } | Parser |
+| JSC0136 | error | unexpected end of file in an expression | Parser |
+| JSC0137 | error | an if used as a value needs an else, and both arms must end in a value | Parser |
+| JSC0138 | error | there is no … in .jsc: use Option<T> with None and Some(x) | Parser |
+| JSC0139 | error | there is no 'this' in .jsc: a bare field name, or state.field, reads the state | Parser |
+| JSC0140 | error | there are no classes in .jsc: records are 'type Name = { f: T }', built with Name { f: e } | Parser |
+| JSC0141 | error | there is no ' … ' in .jsc: everything a call computes happens in its transaction | Parser |
+| JSC0142 | error | there is no 'new' in .jsc: build a record with Name { f: e } | Parser |
+| JSC0143 | error | unexpected … in an expression | Parser |
+| JSC0144 | error | a spread goes first: { ...state, f: e } | Parser |
+| JSC0145 | error | invisible format character U+…: .jsc files may not hold bidirectional controls or other format characters, even in comments and strings, so that the text reads as it compiles | Lexer |
+| JSC0146 | error | ' … ' (U+…) is not an ASCII letter (or digit): names in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike | Lexer |
+| JSC0147 | error | U+… breaks a line for some readers but not for .jsc: end lines with LF (or CRLF), so that a comment cannot hide the code after it | Lexer |
+| JSC0148 | error | control character U+…: .jsc files hold no control characters but TAB and line ends (LF or CRLF), even in comments and strings, so that the text reads as it compiles | Lexer |
+| JSC0149 | error | this nests deeper than … levels (each parenthesis, block, argument, arm, lambda and type argument opens one): name a part with const or move it into a fn (ADR-0018 J18) | Parser |
+| JSC0150 | error | this expression nests deeper than … levels: a chain of /, %, ??, ==, field reads, method calls or [ ] counts a level per link, as does each branch of an else-if chain used as a value that stays inline (at most 8 branches, or one that calls its own fn); name a part with const or move it into a fn (ADR-0018 J18) | Depth |
+
+## Names and declarations (ADR-0018 D3, J10)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0201 | error | the function … is declared twice or shadows a built-in | Checker |
+| JSC0202 | error | the fn … has the name of a method of the contract; rename one (both become methods of one Java class) | Checker |
+| JSC0203 | error | the method name … would clash with the generated name … (a declared type or variant: a method's redeemer is a Java class named after it, beside the contract's types and variants); rename it | Checker |
+| JSC0204 | error | the method … is declared twice | Checker |
+| JSC0205 | error | names start with a capital: | Checker |
+| JSC0206 | error | names are written without '_' (e.g. … _ … ) | Checker |
+| JSC0207 | error | the … has the contract's name; rename one (it is generated inside the contract's class) | Checker |
+| JSC0208 | error | ' … ' is a built-in name, so it cannot be a state field: choose another name | Checker |
+| JSC0209 | error | declares … twice | Checker |
+| JSC0210 | error | names cannot contain '__' (reserved for generated code): | Checker |
+| JSC0211 | error | ' … ' is reserved and cannot be a … name (a method modifier word, M1c: payable, open, only, after, before, batched, as a field or binding) | Checker |
+| JSC0212 | error | ' … ' is already declared; names are never redeclared or shadowed | Checker |
+| JSC0213 | error | ' … ' would hide the state field or built-in of the same name; choose another name (e.g. new … ) | Checker |
+| JSC0214 | error | ' … ' is a built-in name | Checker |
+| JSC0215 | error | ' … ' is never used (a const that is not a check must be used; use require(…) for checks) | Checker |
+| JSC0216 | error | ' … ' is a name the generated client uses for its own values; rename the parameter | Checker |
+| JSC0217 | error | unknown name ' … ' | Checker |
+| JSC0218 | error | spread a named value: { ...state, … } or { ...r, … } | Checker |
+| JSC0219 | error | is given twice | Checker |
+| JSC0220 | error | ' … ' is a name the generated validator or client uses for its own types; choose another … name | Checker |
+| JSC0221 | error | the fn … has the name of a declared type or variant; rename one | Checker |
+| JSC0222 | error | ' … ' would hide the type / enum / variant / fn …; a name is bound once and never replaces a declaration | Checker |
+| JSC0223 | error | the batched action … has an intent form named …Intent (the client's method) and …Intent (the validator's record); a method or type of that name would clash with it: rename one of them | Checker |
+| JSC0224 | error | the invariant … has the name of a method, fn or other invariant; rename it (each becomes a method of one Java class) / … has the name of a declared type, variant or built-in; rename it | Checker (M2b) |
+| JSC0225 | error | 'Config' is the name of the params record (ADR-0009 D1): a contract with params cannot declare a type, enum, variant or event named Config / 'Event' is the type of the contract's events (each 'event X { … }' is one of its variants, ADR-0009 D5): … cannot declare … named Event; rename it / '…' is the record generated for the owned type …'s results (ADR-0018 D10, M3a): a contract with that owned type cannot declare … named …; rename it | Checker (M2b, M3a) |
+
+### Names M2a reserves: a source change for preview users (ADR-0018 D16; M2a review F9)
+
+M2a reserves names **in every contract**, whether it uses values and assets or not, so some sources that M1 accepted are
+now refused. Rename the declaration; nothing else changes (no script of a contract that does not use these names
+changes).
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Received`, `Settled` (the generated result records), `ValueAdapter`, `AddressAdapter`, `Assets`, `Funds`, `Send`, `Sends`, `Datum`, `PubKeyHash`, `ScriptHash`, `KeyCred`, `ScriptCred` (the API classes and ledger constructors the lowering names) | a type, enum or variant name (`type Send = { … }`, `enum E { Received }`) | JSC0211 |
+| `Received`, `Settled`, `ByAction` (the mint redeemer) | a method whose capitalised name is one of them (`action received()`, `action byAction()`) | JSC0203 |
+| `wallet`, `script`, `keyCred`, `scriptCred` (the prelude's constructors, D8) | a state field (`state { wallet: Key }`) | JSC0208 |
+| the same four | a `fn` name | JSC0201 |
+| `pay`, `send`, `mint`, `burn`, `accept`, `deposit`, `emit` (the effect statements, D4) | a `fn` name (`fn send(…)` would read like the statement) | JSC0201 |
+
+`Value`, `Address` and `Credential` were reserved type names in M1 already.
+
+### Names M2b reserves (ADR-0018 D16; #84 review F12)
+
+As M2a's, these are refused **in every contract**, whether it uses params, events, invariants, quorum or authorized or not.
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Stepped` (a batched action's result record, beside a direct action's that holds events), `Invariant`, `Params`, `Quorum`, `AuthorizedBy` (the annotations the lowering imports) | a type, enum, variant or event name (`type Params = { … }`, `event Quorum`) | JSC0211 |
+| `Stepped` | a method whose capitalised name is it (`action stepped()`) | JSC0203 |
+| `params` | a state field, a parameter or a binding (it was a built-in name in M1 already; M2b gives it its meaning, `params.f`) | JSC0208, JSC0213 |
+| `Config` and `Event` | a type, enum, variant or event name, only in a contract that declares params (`Config`) or events (`Event`) | JSC0225 |
+
+`quorum`, `authorized`, `event`, `invariant` and `emit` are not reserved: they are words only where they start a
+modifier, a member or a statement, so a field may be called `quorum` (treasury's is).
+
+### Names M2c reserves (ADR-0018 D16)
+
+As M2a's and M2b's, these are refused **in every contract**, whether it composes with others or not.
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `ForeignInstance`, `Deposit`, `Deposits`, `Reads`, `Receives`, `Instance` (the API names composition lowers to, and the type `Instance<C>`) | a type, enum, variant, field, binding or method name | JSC0211 |
+| `receives` (a method modifier, like `payable` and `only`) | a field or binding name | JSC0211 |
+| an imported contract's name (`Oracle` after `import contract { Oracle }`) | a type, enum, variant or binding name in the importing file | JSC0744, JSC0222 |
+
+`reads` and `deposit` are not reserved: `reads` is a word only after a parameter's `:`, and `deposit` was an effect
+word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a datum, deferred) is retired: M2c's
+`send(to, value, datum)` takes it, and the code is not reused. `JSC1215` (M3a1 and M3a2: the parts of M3a not built yet) is retired in M3a3, which builds the last of them (moves and invariants by type), and the code is not reused.
+
+### Names M3a reserves (ADR-0018 D16)
+
+`admits` is refused in every contract, as the earlier parts' names are. The annotation names are refused only **in a
+contract with owned types**, the only kind that imports them (#101 review F10).
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Owned`, `OwnedInit`, `OwnedAction`, `OwnedDestroy`, `Shared`, `Into`, `Admits` (the annotations owned objects and moves lower to), in a contract with owned types | a type, enum, variant or event name | JSC0211 |
+| `admits` (a method modifier) | a field or binding name | JSC0211 |
+| `Holding`, `Created`, `Exchanged` and, for an owned type `T`, `TOutcome`, `TReceived`, `TCreated` (the owned datum and the result records) | a method name whose redeemer would take it (`holding`, `created`, …) | JSC0203 |
+| the client's lookup of an owned type `T` (`t`, its name with a lower-case first letter: `account` for `Account`) | a method name | JSC1204 |
+
+`owned`, `shared` and `into` are not reserved: `owned` is a word only where a contract member starts, and `shared` and
+`into` only as a parameter's type (a type is capitalised). `Account` is no longer refused as a type name (JSC0220): the
+generated client names a contract's types by their qualified names, so examples/bank's owned `Account` does not meet
+cardano-client-lib's `Account` there.
+
+### Names M3b reserves (ADR-0018 D16)
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `retire` (a method modifier) | a field or binding name, in every contract | JSC0211 |
+| `Link`, and for a keyed type `T` `Head_T`, `Keyed_T`, `Retired_T`, `Remove_T`, and for its initializer `m` `Insert_m` (the keyed list's redeemers and datums) | a method name whose redeemer would take it (`link`, …), in a contract with keyed types | JSC1249 |
+| for a keyed type `T`: the client's `tList`, `tExists`, `tKeys`; the handle's `key`, `value`, `retired`, `lovelace`, `object`, `read`, `o`, `constructor`; the redeemer fields `anchor`, `removed`, `instance` | a method or view name; an action or destroy of `T`; a parameter of a method of `T` | JSC1249 |
+
+`keyed` and `by` are not reserved: they are words only after `owned T`.
+
+## Types and values (ADR-0018 D5, D6)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0301 | error | the type … contains itself; recursive types are not supported | Checker |
+| JSC0302 | error | the enum … contains itself; recursive types are not supported | Checker |
+| JSC0303 | error | the state needs at least one field | Checker |
+| JSC0305 | error | Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None | Checker |
+| JSC0307 | error | unknown type ' … ' (Int, Bool, Bytes, Key, Hash, Value, Address, Credential, List<T>, … Option<T>, Map<K, V>, BigMap<K, V>, or a declared type or enum) | Checker |
+| JSC0308 | error | a … 's keys are Bytes, Key or Hash (at most 64 bytes, canonical order: ADR-0018 D5), not | Checker |
+| JSC0309 | error | duplicate parameter | Checker |
+| JSC0310 | error | ' … ': no state field | Checker |
+| JSC0311 | error | ' … ' needs a … field; … is | Checker |
+| JSC0312 | error | a fn ends in its value | Checker |
+| JSC0313 | error | there is no early return in .jsc: a block's value is its last expression; make this if … the block's last expression, with an else (if c { … } else { … }) | Checker |
+| JSC0314 | error | this if is a statement (it is not the block's last expression, or it has no else), … so its arms end in statements, not a value | Checker |
+| JSC0315 | error | a block used as a value holds only const and require statements | Checker |
+| JSC0316 | error | takes one argument | Checker |
+| JSC0317 | error | strings are only require messages and utf8("…") arguments | Checker |
+| JSC0318 | error | the type of None is unknown here: give it one (const o: Option<Int> = None) | Checker |
+| JSC0319 | error | params is read by its fields: params.f (ADR-0009 D1) | Checker |
+| JSC0320 | error | has no field | Checker |
+| JSC0321 | error | . … needs a record, a List or a Map, not | Checker |
+| JSC0322 | error | Some(None) is not allowed: an Option holds a value, and JavaScript cannot tell Some(None) from None (ADR-0018 D5) | Checker |
+| JSC0323 | error | : this literal has … bytes; … has 28 | Checker |
+| JSC0324 | error | unknown function ' … ' | Checker |
+| JSC0325 | error | takes … argument … s | Checker |
+| JSC0326 | error | takes … arguments | Checker |
+| JSC0327 | error | . … (…) needs a List or a Map; … has no methods | Checker |
+| JSC0328 | error | … on a List (or Map) of Options would be an Option<Option<…>>, which .jsc does not have (JavaScript cannot tell Some(None) from None): use xs.isEmpty or a fold (a Map: test m.has(k)) | Checker |
+| JSC0329 | error | unknown type | Checker |
+| JSC0330 | error | this object's type is unknown here: write Type { … }, or give the const a type | Checker |
+| JSC0331 | error | needs … (or start with ...state) | Checker |
+| JSC0332 | error | needs | Checker |
+| JSC0333 | error | the type of this comparison is unknown: give one side a type (const none: Option<Int> = None) | Checker |
+| JSC0334 | error | compares two Ints or two Bytes, not … and | Checker |
+| JSC0335 | error | unknown operator | Checker |
+| JSC0336 | error | cannot compare … with | Checker |
+| JSC0337 | error | None ?? d is always d: write d | Checker |
+| JSC0338 | error | ?? needs an Option on its left, not | Checker |
+| JSC0339 | error | expected … but this is | Checker |
+| JSC0340 | error | the type … this type … nests more than … levels deep, counting each List, Option and Map layer and each type it contains (ADR-0018 J18): flatten it | Checker |
+| JSC0341 | error | a Value cannot be … : it is a local's, a fn parameter's or a fn result's type, and reaches the chain only through send, mint, burn and accept (ADR-0018 D5, M2) | Checker |
+| JSC0342 | error | … has no property … / has no methods / has no method … (Value: v.lovelace, v.of(policy, name), v.covers(w); Address: a.payment; Credential: match it) | Checker |
+| JSC0343 | error | funds is read by its fields: funds.received, funds.held (Values), funds.policy (a Hash) and funds.self (Bytes) / funds.deposits comes with deposits (receives) in a later part of M2 / funds has no field … | Checker |
+| JSC0344 | error | a Value is built with Value.none(), Value.lovelace(n) or Value.asset(policy, name, n) / … takes … | Checker |
+
+## Methods, effects and audiences (ADR-0018 D4, D10)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0401 | error | the contract needs an init(…) | Checker |
+| JSC0402 | error | is out of range | Checker |
+| JSC0403 | error | unknown contract option ' … ' (minAda, maxDatumBytes, maxValidityMs, assetSlots) | Checker |
+| JSC0404 | error | an init … a view … cannot pay, send, mint or burn (ADR-0018 D4, ADR-0007 D1) | Checker |
+| JSC0405 | error | an init takes only 'payable' | Checker |
+| JSC0406 | error | a destroy cannot be payable | Checker |
+| JSC0407 | error | unknown modifier | Checker |
+| JSC0408 | error | can pay out, send, mint or burn, so it must say who may call it: add 'only <field>' or 'open' (ADR-0018 D4) | Checker |
+| JSC0409 | error | a destroy ends the instance, so it must pay out what it holds: pay(…), send(…), mint(…) or burn(…) at least once (ADR-0018 D4) | Checker |
+| JSC0410 | error | an init returns the first state: return { … } … an action evaluates to the next state: return { ...state, … } | Checker |
+| JSC0411 | error | a destroy ends the instance: it has no next state | Checker |
+| JSC0412 | error | a view evaluates to its value | Checker |
+| JSC0413 | error | pay(…) / send(…) / mint(…) / burn(…) / accept(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4) | Checker |
+| JSC0414 | error | 'state' is the input state of an action, destroy or view | Checker |
+| JSC0415 | error | is part of the transaction: it is not available in a view or fn (pass it as an argument) | Checker |
+| JSC0416 | error | the modifier ' … ' is given twice | Checker |
+| JSC0417 | error | a batched action cannot use ' … ': the batcher, not the caller, signs a batch: check the caller in the body with require(caller == …, …) / the batcher sets a batch's window: check time in the body with require(after(…), …) or require(before(…), …) (ADR-0004 D1) / (quorum, authorized, M2b) an intent's owner is its caller, and the batcher, not the caller, signs a batch (ADR-0009, ADR-0004 D1). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
+| JSC0418 | error | only an action can be batched (ADR-0004 D1) | Checker |
+| JSC0419 | error | a contract with BigMap state cannot have batched actions: each step of a batch would need its own map proofs (ADR-0004 D1, ADR-0018 D7) | Checker |
+| JSC0420 | error | … can pay out, so it must say who may call it; a batched action cannot use 'only' (any intent's owner is its caller), so write 'open' and check the caller in the body (ADR-0018 D4). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
+| JSC0422 | error | accept states the native assets a method takes in, so the method must be payable (ADR-0007 D1) | Checker |
+| JSC0423 | error | … is payable and uses funds, send, mint or burn, so it can take native assets: state exactly which with accept(…), or accept(Value.none()) for none (ADR-0007 r2, ADR-0018 D4) | Checker |
+| JSC0424 | error | a contract with native assets (a method uses funds, send, mint, burn or accept) cannot have batched actions: intents carry only lovelace (ADR-0007 r2, ADR-0018 D4) | Checker |
+| JSC0425 | error | a batched action cannot emit events: an intent's owner is its caller, not an authenticated signer of the batch (ADR-0009 D5) | Checker (M2b) |
+| JSC0426 | error | accept in an init is not supported yet: the processor reads the state's type from what @Init returns … / a payable init that uses funds would take native assets, which needs accept in an init: not supported yet … Both: `accept` in an init, and any payable init that reads `funds`. An owned init may accept since M3a2 (issue [#81](https://github.com/bloxbean/joust/issues/81) is fixed for `@OwnedInit`); an `@Init` cannot return `(state, accepted)` | Checker |
+| JSC0427 | error | funds is part of the transaction: it is not available in a view or fn (pass what you need as an argument) | Checker |
+| JSC0430 | error | a require message may not contain '#word:', the form of the checks the lowering generates (ADR-0018 D12): reword it | Checker |
+| JSC0431 | error | the params are declared once: params { … } | Parser (M2b) |
+| JSC0432 | error | the params need at least one field: params { fee: Int } | Checker (M2b) |
+| JSC0433 | error | params is not available in a fn: pass params.… as an argument | Checker (M2b) |
+| JSC0434 | error | the contract declares no params { … }, so there is no params.… / ' … params.…': the contract declares no params { … } | Checker (M2b) |
+| JSC0435 | error | a contract with BigMap state cannot have invariants: on chain only the opened reads are visible, so the JVM and the chain would disagree (ADR-0009 D4) | Checker (M2b) |
+| JSC0436 | error | a contract with invariants cannot have batched actions: a batch passes through intermediate states the validator does not check (ADR-0009 D4) | Checker (M2b) |
+| JSC0437 | error | a batched action cannot read params yet (ADR-0009 D1): pass the value as an argument | Checker (M2b) |
+| JSC0438 | error | the contract declares no events: declare one with event Name { field: Type } (ADR-0009 D5) | Checker (M2b) |
+| JSC0439 | error | 'quorum … ': the keys and the threshold are both state fields or both params fields (ADR-0009 D2) | Checker (M2b) |
+| JSC0440 | error | a contract with a quorum over state fields (' … ' in … ) cannot have batched actions: a batch's states are not checked, so a batched action could make the quorum unreachable (ADR-0009 r3); use a params quorum, or no batched actions | Checker (M2b) |
+| JSC0441 | error | an invariant is a Bool, so it holds no require (ADR-0009 D4): write the condition into its value (invariant ok = a && b) | Checker (M2b) |
+| JSC0442 | error | a deposit names its memo too: deposit(target, value, memo); the memo is any value the receiver reads (a beneficiary, an order id) | Parser (M2c) |
+| JSC0443 | error | reads is for an action or destroy of the instance: an init, an owned method, a view or a fn reads no other contract (ADR-0011 D2) / a batched action cannot read another contract yet | Checker (M2c) |
+| JSC0444 | error | reads params. … : the contract declares no params { … } / … ; reads names a params field Instance<C> | Checker (M2c) |
+| JSC0445 | error | Instance<C> names an imported contract C … / an Instance<C> is a params field only … / an Instance<C> is used whole, as a deposit's target or by reads, and has no field ' … ' | Checker (M2c) |
+| JSC0446 | error | … is another contract's type: it can be read (from reads) and passed to fns, but not be … / … is another contract's enum: compare it with == … matching on it is not supported yet | Checker (M2c) |
+| JSC0447 | error | only an action receives deposits: it continues, and its output takes them (ADR-0011 D3) / a batched action cannot receive deposits … / an owned action receives no deposits: a deposit's target is an instance (Instance<C>), never an object (ADR-0018 D10, M3a) | Checker (M2c) |
+| JSC0448 | error | funds.deposits is read in a receiving action … / this action reads no memos: say which type they are, action name(…) receives T … / a deposit has value and memo, not ' … ' | Checker (M2c) |
+| JSC0449 | error | a deposit's target is another contract's instance: a params field Instance<C> … / the contract … has no receiving action (receives), so nothing could take this deposit … | Checker (M2c) |
+| JSC0450 | error | the memo is … , but … 's receiving actions read memos of … : no receiver could decode it, so the transaction would always fail | Checker (M2c) |
+| JSC0451 | error | the contract … keeps BigMap state, which cannot be read (no proof path for its maps: ADR-0011 r2) | Checker (M2c) |
+| JSC0452 | error | … cannot be … : it is encoded as data, and only this contract's own values without BigMaps are (ADR-0018 D5) | Checker (M2c) |
+
+## Time (ADR-0018 D11, J6)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0501 | error | a time value sets this payout: write pay(to, max(0, …)) so its sign cannot … make the call fail (ADR-0018 D11) | Checker |
+| JSC0502 | error | a time value cannot decide here: compare times only with after(t) or before(t) in a require (ADR-0018 D11) | Checker |
+| JSC0503 | error | (t) needs the transaction: not in a view or fn | Checker |
+| JSC0504 | error | (t) is not used inside a lambda (ADR-0018 D11): require it outside the list method | Checker |
+| JSC0505 | error | this threshold depends on the current call's validity window, which can invert … (t): use a stored or given time (ADR-0018 D11) | Checker |
+| JSC0506 | error | (t) holds for the whole validity window: use it only at the top of a require, under && or \|\| | Checker |
+| JSC0507 | error | can fail, so a time value cannot become … asKey … a key … a hash … (ADR-0018 D11) | Checker |
+| JSC0508 | error | reads the validity window: it is not available in a view or fn (pass it as an argument) | Checker |
+| JSC0509 | error | can fail for some arguments, so a time value cannot reach it (ADR-0018 D11) | Checker |
+| JSC0510 | error | nth fails for a negative index, so a time value cannot be its index (ADR-0018 D11) | Checker |
+| JSC0511 | error | a time value cannot decide here: indexOf compares it (ADR-0018 D11) | Checker |
+| JSC0512 | error | fails for a negative count, so a time value cannot be its count (ADR-0018 D11) | Checker |
+| JSC0513 | error | a time value cannot decide here: contains compares it (ADR-0018 D11) | Checker |
+| JSC0514 | error | a time value cannot decide … 's predicate (ADR-0018 D11) | Checker |
+| JSC0515 | error | a time value cannot be a divisor: it could make the call fail (ADR-0018 D11) | Checker |
+| JSC0516 | error | a time value cannot be a bound of range: the number of steps, and so the budget, would … depend on the window (ADR-0018 D11) | Checker |
+| JSC0517 | error | a time value cannot be a map key: … would depend on the validity window (ADR-0018 D11) | Checker |
+| JSC0518 | error | a time value cannot be stored in a BigMap<…, Int>: storing it can fail (a negative value, or … one too large to encode), so the window would decide whether the call fails (ADR-0018 D11) | Checker |
+| JSC0519 | error | a time value cannot be a Value's quantity: building a value fails outside the 128-bit range, so the window would decide whether the call fails (ADR-0018 D11) | Checker |
+| JSC0520 | error | a time value cannot be any part of a send's value: a send must hold a non-negative value, so its sign would decide whether the call fails (ADR-0018 D11) | Checker |
+| JSC0521 | error | a time value cannot be a … mint / burn quantity: it must be positive, so its sign would decide whether the call fails (ADR-0018 D11) / a time value cannot decide a mint's / burn's token name: a name over 32 bytes or of a reserved kind fails the call (M2a review S5) | Checker |
+| JSC0522 | error | a time value cannot be any part of an accepted value: it must equal exactly the native assets the call receives (ADR-0018 D11) | Checker |
+| JSC0523 | error | a time value cannot decide whether … is Some or None (ADR-0018 D11) | Checker |
+| JSC0524 | error | ' … ': … holds a time value, so who may call would depend on a validity window; a quorum or authorized field is never a time value (ADR-0018 D11) | Checker (M2b) |
+| JSC0525 | error | an invariant cannot depend on a time value: whether a state is accepted would then move with a validity window (ADR-0018 D11) | Checker (M2b) |
+| JSC0526 | error | a time value cannot be any part of a deposit's value: a deposit must be non-empty and strictly positive, so even a clamped 0 would fail (ADR-0018 D11) | Checker (M2c) |
+
+## Functions and recursion (ADR-0018 D7, J9)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0601 | error | … calls itself from inside a lambda, an if or match arm, a value block or a ?? default: the generated helper would join a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out (an else-if chain with statements in an arm lowers each branch, its condition included, to a helper) | Checker |
+| JSC0602 | error | is part of a mutual recursion: only direct self-recursion is allowed (ADR-0018 D7) | Checker |
+
+## Imports and the standard library (ADR-0018 D8, D9, J7)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0701 | error | expected a module string such as "std/crypto" | Parser |
+| JSC0702 | error | ' … ' is not in … (it is in … ) | Checker |
+| JSC0703 | error | ' … ' is imported and also declared as a fn; rename the fn | Checker |
+| JSC0704 | error | is in … : import { … } from " … " | Checker |
+| JSC0705 | error | a library's file name is its Java class (fees.jsc is the class Fees of its package): ' … ' gives ' … ', which is not a class name the generated code can use; name the file with letters and digits only | Checker |
+| JSC0706 | error | ' … ' is not a module: a .jsc library is imported by its path relative to this file, ending in .jsc; or: no .jsc library … beside … under the sources | Checker |
+| JSC0707 | error | these libraries import each other: … -> …; a library's imports form no cycle (move what both need into a third library) | Checker |
+| JSC0708 | error | ' … ' is not declared in … : a library exports its types, enums and fns; or: … is a contract, not a library | Checker |
+| JSC0709 | error | the … is also declared in …: the declarations of a build (a contract and the libraries it imports) share one namespace; rename one (also: two libraries with one class or one class name, a declaration or binding taking a library's class name) | Checker |
+| JSC0710 | error | ' … ' is declared in … : import { … } from it to use it here (a library's declarations are seen only where they are imported) | Checker |
+| JSC0711 | error | a library holds imports, types, enums and fns, not a contract: write the contract in its own file and import the library there | Parser |
+| JSC0712 | error | in the imported library …: error[…]: … (an error in a library, reported at the import that brings it into this build) | Checker |
+| JSC0720 | error | no on-chain sources of the Java library … are on the library path (Gradle: the joustLibrary configuration; npm: a package's joust-lib/); or: ' … ' does not name a class | Checker |
+| JSC0721 | error | the Java library … is not certified, so it cannot be imported (ADR-0018 D9): … (each problem, with its file and line) | Checker |
+| JSC0722 | error | java: … . … cannot be imported: its parameter … is … : … (or its result) | Checker |
+| JSC0723 | error | java: … . … is overloaded: .jsc calls a library fn by name, so an overloaded method cannot be imported | Checker |
+| JSC0724 | error | … is a record of java: … : read-only in .jsc (ADR-0018 D9); build it with the library's fns | Checker |
+| JSC0725 | error | … is an opaque record of java: … : never written as a type, stored, compared or read (or: an opaque Java library record is not comparable) | Checker |
+| JSC0726 | error | … is a Java library's (java: … ): a time value never reaches one, since its body is not checked for the time rule (ADR-0018 D11) | Checker |
+| JSC0731 | error | the library … (sha256 …) is not pinned in joust.lock: a library from outside the sources is pinned by the hash of its on-chain sources (ADR-0018 J12) | JscMain, joust build |
+| JSC0732 | error | the library … has other on-chain sources than joust.lock pins (sha256 …, pinned …): its code changed | JscMain, joust build |
+| JSC0727 | error | … is on the class path here, and is also compiled from the java: library's sources (ADR-0018 D9); also: a listed library class was not compiled (recordJoustLibraries) | JscMain (checkJoustLibraries, recordJoustLibraries) |
+| JSC0740 | error | import contract names one contract, the one its file declares: import contract { Oracle } from "./Oracle.jsc" | Parser (M2c) |
+| JSC0741 | error | import contract from a Java contract ( … ) is not supported yet: it needs the attribution of its source that java: library imports bring (ADR-0018 M4b) … | Checker (M2c) |
+| JSC0742 | error | ' … ' is not a contract file … / no contract … beside … under the sources / … declares the contract … , not … / … is a library, not a contract / a library imports no contracts … | Checker (M2c; the last two from the M2/M4 integration) |
+| JSC0743 | error | the contract imports form a cycle ( … ): a contract may read or deposit into another only one way | Checker (M2c) |
+| JSC0744 | error | the contract … is imported twice / the imported contract … has this contract's name … / the … has the name of an imported contract; rename it … / the imported contract … has the name of a library's class in this build | Checker (M2c) |
+| JSC0745 | error | the contract … does not check: … | Checker (M2c) |
+| JSC0746 | error | the contract … uses the type … of a library it imports in its state, its declared types, its events or its memos: importing such a contract is not supported yet … (a library type only in its methods' parameters and results is fine; tracked in the issue linked from ADR-0018 r22) | Checker (M2/M4 integration) |
+
+## Map and BigMap (ADR-0018 D5, D7, J14)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0801 | error | a Map has a key and a value type: Map<Key, Int> | Checker |
+| JSC0802 | error | a BigMap has a key and a value type: BigMap<Key, Int> | Checker |
+| JSC0803 | error | a BigMap is a state field only: it cannot be a parameter, a record or enum field, an element … or a const (ADR-0018 D7) | Checker |
+| JSC0804 | error | a BigMap holds Int or Bytes values (ADR-0018 D5), not | Checker |
+| JSC0805 | error | an empty map is … .empty() | Checker |
+| JSC0806 | error | a Map's size is m.size | Checker |
+| JSC0807 | error | Map has no property ' … ' (size, isEmpty, keys, values) | Checker |
+| JSC0808 | error | a BigMap's isEmpty means "empty before this call", so it is read only in a destroy (ADR-0018 D7) | Checker |
+| JSC0809 | error | a BigMap has no property ' … ': read it with get(k), has(k) or m[k] (ADR-0018 D7) | Checker |
+| JSC0810 | error | BigMap.empty() starts a map in an init; elsewhere a BigMap field keeps its own entries | Checker |
+| JSC0811 | error | the new value of the BigMap field … must be … itself, changed by set/delete … , or BigMap.empty() in an init … (ADR-0018 D7) | Checker |
+| JSC0812 | error | a BigMap is not comparable: it is a witness of a Merkle root, not its contents (ADR-0018 D6) | Checker |
+| JSC0813 | error | a BigMap cannot be … (a value holding one, the state's type included, when its BigMap is written): it is read and changed only as its state field (ADR-0018 D7) | Checker |
+| JSC0814 | error | a BigMap cannot be captured by a lambda: read the keys you need before the list method (ADR-0018 D7) | Checker |
+| JSC0815 | error | has one function: … .empty() | Checker |
+| JSC0816 | error | the type of this map is unknown here: give it one (const m: Map<Key, Int> = Map.empty()) | Checker |
+| JSC0817 | error | BigMap.empty() is only the value of a BigMap state field in an init (ADR-0018 D7) | Checker |
+| JSC0818 | error | get takes one key: m.get(k) | Checker |
+| JSC0819 | error | has takes one key: m.has(k) | Checker |
+| JSC0820 | error | set takes a key and a value: m.set(k, v) | Checker |
+| JSC0821 | error | delete takes one key: m.delete(k) | Checker |
+| JSC0822 | error | on a Map takes a two-parameter lambda: m. … ((k, v) => …) | Checker |
+| JSC0823 | error | fold on a Map takes an initial value and a three-parameter lambda: m.fold(0, (acc, k, v) => acc + v) | Checker |
+| JSC0824 | error | a Map fold does not accumulate the state: fold the values you need, then build the state | Checker |
+| JSC0825 | error | a Map's membership test is m.has(k) | Checker |
+| JSC0826 | error | Map has no method ' … ' (get, has, set, delete, any, all, fold) | Checker |
+| JSC0827 | error | a BigMap is changed only in the value of its own field in the next state, { ...state, f: f.set(k, v) }, not in a require, a condition or a view (ADR-0018 D7) | Checker |
+| JSC0828 | error | BigMap has no method ' … ' (get, has, set, delete; m[k] on BigMap<K, Int>) | Checker |
+| JSC0829 | error | m[k] reads a BigMap<K, Int>; … a Map is read with m.get(k) … a List has no index: use xs.head, find or fold … has no index | Checker |
+| JSC0830 | error | m[k] reads a BigMap<K, Int>; a BigMap<K, Bytes> is read with m.get(k) | Checker |
+
+## Enums and match (ADR-0018 D5, D6)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC0901 | error | an enum is written 'enum … { A, B { x: Int } }', without '=' | Parser |
+| JSC0902 | error | a match arm is written 'Pattern => value' | Parser |
+| JSC0903 | error | an arm's '{' starts a block: write an object as its value in parentheses, A => ({ ...state, f: e }) | Parser |
+| JSC0904 | error | a match needs at least one arm | Parser |
+| JSC0905 | error | expected a pattern (a variant, Some(x), None or _) but found | Parser |
+| JSC0906 | error | a variant's fields are matched by name: … { field } or … { field: name } | Parser |
+| JSC0907 | error | a match used as a value needs a value in every arm | Parser |
+| JSC0908 | error | there is no switch in .jsc: write match e { A => …, B { x } => … } | Parser |
+| JSC0909 | error | the enum … needs at least one variant | Checker |
+| JSC0910 | error | the name … is declared twice: types, enums and variants share one namespace (each becomes a Java class) | Checker |
+| JSC0911 | error | is a variant of … , not a type: write | Checker |
+| JSC0912 | error | has fields: write … { … , … } | Checker |
+| JSC0913 | error | is an enum: read its fields with match (match v { A { … } => … }) | Checker |
+| JSC0914 | error | an … is one of its variants: write … { … }, … { … } | Checker |
+| JSC0915 | error | a variant is built from its fields: … { … } takes no spread | Checker |
+| JSC0916 | error | match needs an enum or an Option, not … (M3c: or a sealed ledger type of the script purposes: TxCert, Voter, Vote, GovernanceAction, Delegatee, DRep) | Checker |
+| JSC0917 | error | this arm is unreachable: the arms before it cover every case | Checker |
+| JSC0918 | error | _ binds nothing | Checker |
+| JSC0919 | error | is not a case of … (it is a variant of … ) … : the cases are … , | Checker |
+| JSC0920 | error | is matched twice | Checker |
+| JSC0921 | error | Some binds its value: Some(x) => … | Checker |
+| JSC0922 | error | an Option's value is bound as Some(x) | Checker |
+| JSC0923 | error | is bound twice | Checker |
+| JSC0924 | error | this match is not exhaustive: add an arm for … , … (or _ => …) | Checker |
+| JSC0925 | error | ' … ' is bound but never used: leave the field out of the pattern | Checker |
+| JSC0926 | error | the type of this match is unknown here: give it one (const o: Option<Int> = match …) | Checker |
+| JSC0927 | error | this match is a statement (it is not the block's last expression, or an arm has no … value), so its arms end in statements, not a value | Checker |
+| JSC0930 | error | nested patterns are not supported: bind the value, Some(v), and match v again | Parser, Checker |
+
+## Lists, lambdas and ranges (ADR-0018 D7)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1001 | error | loops are 'for (const x of xs) { … }'; accumulate with xs.fold(init, (acc, x) => …) | Parser |
+| JSC1002 | error | 'for … in' iterates keys in JavaScript; write 'for (const … of list)' | Parser |
+| JSC1003 | error | there are no while loops in .jsc: use xs.fold(init, (acc, x) => …), range(a, b), or a recursive fn | Parser |
+| JSC1004 | error | functions are written 'fn name(x: Int): Int = …' at the top of the file or in the contract; lambdas 'x => …' are only arguments of list methods | Parser |
+| JSC1005 | error | a lambda's '{' starts a block: write an object as its value in parentheses, x => ({ ...x, f: e }) | Parser |
+| JSC1006 | error | a lambda's block must end in its value | Parser |
+| JSC1007 | error | there are no function values in .jsc: declare 'fn name(x: Int): Int = …', and write lambdas 'x => …' only as list-method arguments | Parser |
+| JSC1008 | error | a spread '...rest' goes last in a list: [x, ...rest] | Parser |
+| JSC1009 | error | range(a, b) is only the receiver of any, all, fold, filter or map, or the list of a for loop (no list is built: ADR-0018 D7) | Checker |
+| JSC1010 | error | for (const x of …) needs a List, not | Checker |
+| JSC1011 | error | a for loop's body has no value; accumulate with fold | Checker |
+| JSC1012 | error | a lambda is only an argument of a list method (fold, any, all, find, filter, map) | Checker |
+| JSC1013 | error | a List's size is xs.length | Checker |
+| JSC1014 | error | List has no property ' … ' (length, isEmpty, head) | Checker |
+| JSC1015 | error | utf8 takes a string literal | Checker |
+| JSC1016 | error | takes a List, not | Checker |
+| JSC1017 | error | takes one Int: xs. … (n) | Checker |
+| JSC1018 | error | xs. … is a property: write it without parentheses | Checker |
+| JSC1019 | error | sum() takes no arguments | Checker |
+| JSC1020 | error | sum() needs a List<Int> | Checker |
+| JSC1021 | error | reverse() takes no arguments | Checker |
+| JSC1022 | error | contains takes one value | Checker |
+| JSC1023 | error | concat takes one list | Checker |
+| JSC1024 | error | takes a one-parameter lambda: xs. … (x => …) | Checker |
+| JSC1025 | error | fold takes an initial value and a two-parameter lambda: xs.fold(0, (acc, x) => acc + x) | Checker |
+| JSC1026 | error | List has no method ' … ' | Checker |
+| JSC1027 | error | ...rest needs a List | Checker |
+| JSC1028 | error | the type of this list is unknown here: give it one (const xs: List<Int> = []) | Checker |
+
+## Owned objects (ADR-0018 D10, M3a; ADR-0003, ADR-0012)
+
+An owned type is declared `owned T { … }`; its methods are `owned init T.m(…)`, `owned action T.m(…)` and
+`owned destroy T.m(…)`; `name: shared` reads the instance's state by reference, `name: into` is a move's destination,
+`admits T` an instance action through which objects arrive, and `invariant T.name = …` an owned type's invariant. Each
+rule is the processor's (ContractReader), refused at the `.jsc` position.
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1201 | error | an owned method names its type and itself: owned … ….name(…) / after 'owned' comes an owned type (owned Account { owner: Key }) or an owned method (owned init Account.open(…), owned action Account.name(…), owned destroy Account.name(…)) | Parser (M3a) |
+| JSC1202 | error | the owned type … needs at least one field: owned … { owner: Key } | Checker (M3a) |
+| JSC1203 | error | owned … ….…: … is not an owned type of this contract (…) / invariant ….…: … is not an owned type of this contract | Checker (M3a) |
+| JSC1204 | error | the method … has the name of the generated client's lookup of the owned type … (…(objectId)); rename it | Checker (M3a) |
+| JSC1205 | error | a shared parameter is for owned methods: an instance method has the state already (ADR-0003 D1) / an into parameter is for an owned action, which moves its object to that instance (ADR-0012 D3) / a move cannot read another contract yet | Checker (M3a) |
+| JSC1206 | error | a method has at most one … parameter / the … parameter comes first(, after shared if there is one) (ADR-0003 D1, ADR-0012 D3) | Checker (M3a) |
+| JSC1207 | error | a method parameter cannot be (or hold) an owned type: an object is its own UTxO, read by its methods, never passed as an argument … / an owned type is no field of another value: an object is its own UTxO (ADR-0003 D2) | Checker (M3a) |
+| JSC1208 | error | the owned type … needs an owned init to create its objects: owned init ….open(…) { … } | Checker (M3a) |
+| JSC1209 | error | objects of the owned type … need an escape hatch: an owned destroy on … without a shared parameter, before or after, so an owner can always close their object whatever the instance's state and the time (ADR-0003 r2, ADR-0012 D1). Syntactic: that the hatch's body can succeed is the author's (but see JSC1216). Its audience is the author's too: a hatch may say who closes the object (only, quorum, authorized), and when every hatch needs the deployment's parties (authorized or quorum over params) JSC9016 warns; a keyed type's hatch is stricter, it needs nobody else (JSC1245) | Checker (M3a; the audience note: M3 final pass, design MD5) |
+| JSC1210 | error | a contract with owned objects cannot destroy its instance: objects that read it (shared) would be locked forever (ADR-0003 r2); end the objects with their owned destroys | Checker (M3a) |
+| JSC1211 | error | a contract with owned objects keeps no BigMap state: a shared read has no proof path for its maps (ADR-0003 r2); a BigMap may be a field of an owned type instead (ADR-0012 D2) | Checker (M3a) |
+| JSC1212 | error | admits goes on an instance action: objects arrive at an instance (ADR-0012 D3) / an admits action cannot be batched … / admits …: … is not an owned type of this contract / an admits action's first parameter is the arriving object's id, a Bytes … / an admits action cannot read another contract yet / the arriving … keeps a BigMap, so an admits action cannot take it as a parameter: admit it by its id alone (#107 review C3) / … keeps a BigMap, so it cannot move yet (#107 round-r2 review F6) | Checker (M3a) |
+| JSC1213 | error | the owned type … holds a BigMap, so it cannot have invariants: on chain only the opened reads are visible, so the JVM and the chain would disagree (ADR-0009 r2, ADR-0012 D2) | Checker (M3a) |
+| JSC1214 | error | … moves a … to another instance, which must consent: declare an action admits … (ADR-0012 D3) / … admits …, but no owned action moves a … (an into parameter): no object could ever arrive through it (ADR-0012 D3) | Checker (M3a) |
+| JSC1216 | error | … is its type's escape hatch but never reads balance: an owned destroy pays out everything the object holds (the validator refuses any other allocation), so no object could ever be closed | Checker (M3a1, #101 review S3) |
+| JSC1217 | error | … is not supported beside an owned type that keeps a BigMap (…) yet: beside one, M3 covers plain owned types, shared reads and native assets (Armory, Safes), and the map claims composed with the other parts are not covered (ADR-0012 D2, ADR-0018 §2.12). The parts: a move or an admits action, a batched action, taking deposits (receives), a read of another contract, a certify, vote or propose handler, an invariant by type (a withdraw handler and stakeSelf are JSC1305) | Checker, both IR readers (M3 final pass, design MD2) |
+
+JSC1215 (the parts of M3a not built yet) is retired in M3a3.
+
+M3a also changes rules of earlier sections where they meet owned methods. An owned init takes only `payable`
+(JSC0405); an owned destroy may be payable from M3a2 (examples/market's `buy`; the instance's destroy may not, JSC0406);
+and from M3a2 an owned init's `accept` is allowed (issue #81 is fixed for `@OwnedInit`); an init's is still refused
+(JSC0426). The rules on bindings (JSC0213), the client's names (JSC0216: an owned method's lambdas
+bind `o`, `sh`, `seed`, `inst`; a move's redeemer `into`) and effects (JSC0404, JSC0409, JSC0410, JSC0411) read an owned
+method's object as an instance method reads the state.
+
+## Keyed objects (ADR-0018 D10, M3b; ADR-0016)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1240 | error | a keyed type names its key field: owned … keyed by name { name: Bytes } / empty keyed options … / the keyed option … is written twice / the keyed option … takes a value … / the keyed option … is an integer (milliseconds or bytes) / unknown keyed option '…' (signed, maxKeyBytes, linkCooldownMs, linkWindowMs) | Parser (M3b) |
+| JSC1241 | error | keyed by …: … has no field … / the key field … is …: a key is Bytes (or a Key or Hash), ordered byte by byte in the instance's list (ADR-0016 D1, D2) / a keyed type's name is at most 255 bytes … | Checker (M3b) |
+| JSC1242 | error | maxKeyBytes is 1 to 64: Plutus serialiseData encodes longer byte strings in chunks … / a signed key is a 28-byte key hash: maxKeyBytes must be at least 28 (ADR-0016 I53) / a signed key is a key hash that signs the insert: type … Key or Bytes, not Hash | Checker (M3b) |
+| JSC1243 | error | linkCooldownMs is 0, or 60000 to 3600000 milliseconds (ADR-0016 D1, D9) / linkWindowMs is 20000 to min(900000, maxValidityMs) = … milliseconds / the default link window … is under 20000 ms: raise maxValidityMs | Checker (M3b) |
+| JSC1244 | error | keyed types cannot be combined with native assets yet … / with batched actions yet / BigMaps cannot be combined with keyed types … / at most 16 keyed types per contract … / maxDatumBytes is at most 2048 in a contract with keyed types … (ADR-0016 D1, D4c) | Checker (M3b) |
+| JSC1245 | error | retire goes on an owned destroy of a keyed type … / objects of the keyed type … need an escape hatch that needs nobody else: an owned destroy on … with 'retire' … / the retiring exit … needs 'only <field>' … / a retiring exit takes no '…' / a retiring exit reads no shared state / no other contract (ADR-0016 D1, D10) | Checker (M3b) |
+| JSC1246 | error | the keyed action … must name who may call it ('only <field>', 'quorum' or 'authorized'; 'open' is not enough) … (ADR-0016 D1, §2) | Checker (M3b) |
+| JSC1247 | error | … is a keyed type, and keyed objects do not move between instances … / admits …: … is a keyed type … (ADR-0016 D1, Q4) | Checker (M3b) |
+| JSC1248 | error | the key … of a keyed … is fixed for its life (ADR-0016 I50): return { ...state, … } without …, or with …: …; to change a key, retire or remove the object and insert another | Checker (M3b) |
+| JSC1249 | error | the method name … would be the redeemer …, a name the validator generates for keyed types … / the method / view … has the name of a member the generated client has for the keyed type … / the method … has the name of a member of the generated …Object handle … / '…' is a field name of the keyed type …'s generated redeemers … / the keyed types … and … both give the generated client's constant … | Checker (M3b) |
+| JSC1250 | error | a retired … may need … datum bytes, over maxDatumBytes = …: raise maxDatumBytes or lower maxKeyBytes (ADR-0016 D2) | Checker (M3b) |
+| JSC1251 | error | the key … of … is set from a time value somewhere: a key decides the list's order and whether an insert succeeds … (ADR-0018 D11). If a fn or another expression the checker follows as a whole builds the object, build it as a record literal ({ …, …, t: … }) so its fields are followed one by one | Checker (M3b) |
+
+M3b also reads earlier rules at keyed positions: a keyed type's escape hatch is its retiring exit (JSC1245 in place of
+JSC1209), an initializer takes only `payable` (JSC0405, as every owned init), and the instance is never destroyed
+(JSC1210).
+
+## Script purposes and migration (ADR-0018 D10, M3c; ADR-0010, ADR-0011 D4)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1301 | error | stakeSelf is a flag: contract Name(stakeSelf), without a value / stakeSelf is written twice | Checker (M3c) |
+| JSC1302 | error | stakeSelf stakes the funds to the contract's own script, so it needs a withdraw handler (its rewards) and a certify handler (its registration and delegation); without them they are unreachable (ADR-0010 D2, I38) | Checker (M3c) |
+| JSC1303 | error | a migrating destroy names its successor's field: migrates to successor | Parser (M3c) |
+| JSC1304 | error | init migrate names the previous version's policy by a params field: init migrate from params.previous(old: V1.State) | Parser (M3c) |
+| JSC1305 | error | stakeSelf is not supported beside owned objects yet (…): their outputs' stake part is not covered (ADR-0010 D2, A40) / a withdraw handler is not supported beside owned objects yet (…): reward sends composed with objects' payouts are not covered (ADR-0010, K42) / a withdraw handler is not supported beside BigMap state yet: reward sends composed with map claims are not covered (ADR-0010, M3 final pass) | Checker (M3c r2, M3 final pass) |
+| JSC1312 | error | … needs quorum or authorized over params.*: an open handler would let anyone … (ADR-0010 r2) / …'s audience names params fields (…): no instance is spent for a script purpose, so there is no state to read it from (ADR-0010 D1) | Checker (M3c) |
+| JSC1313 | error | a propose handler is a guardrail: the ledger runs it for a proposal and its validator checks no audience, so it takes no modifiers (ADR-0010 D1); drop '…' / … takes only quorum or authorized over params.* (ADR-0010 D1), not '…' | Checker (M3c) |
+| JSC1314 | error | … takes … (the processor's shape, ADR-0010 D1) / … takes …: its parameter … is a …, not … / its first parameter is the amount withdrawn, an Int / … reads no instance and no other contract: no input is spent for a script purpose (ADR-0010 D1) | Checker (M3c) |
+| JSC1315 | error | … is not available in …: it takes the params and the purpose's data only (ADR-0010 D1) / a withdraw handler's transaction has no input of the contract: received is 0 and balance the amount, so read the amount parameter (ADR-0010 r2) / funds is not available in …: no input of the contract is spent for a script purpose, so there are no funds to read; it takes the params and the purpose's data only (ADR-0010 D1) | Checker (M3c) |
+| JSC1316 | error | at most one … handler per contract (ADR-0010 D1): … is one (line …) | Checker (M3c) |
+| JSC1317 | error | … is governed by the params, since no instance is spent for a script purpose (ADR-0010 D1): declare params { … } and name them in its quorum or authorized | Checker (M3c) |
+| JSC1318 | error | … sees no instance: no input is spent for a script purpose, so '…' is not available; it reads the params (params.f) and its parameters (ADR-0010 D1) | Checker (M3c) |
+| JSC1319 | error | a withdraw handler's only effect is send(…): its sends allocate the rewards withdrawn, exactly (ADR-0010 D1, I37) / … decides, by its Bool: it has no effects (ADR-0010 D1) | Checker (M3c) |
+| JSC1320 | error | ….… is PlutusData in the ledger, which .jsc does not read: a guardrail that inspects proposed parameter changes stays in Java until a typed protocol-parameter view exists (ADR-0018 D5) | Checker (M3c) |
+| JSC1321 | error | … is a ledger type of the script purposes: it comes from the script context, so it is a handler's parameter, a fn's parameter or result, or a const's type, never a field … nor a method's parameter (a redeemer field) or a view's result (ADR-0018 D5, M3c) / a LedgerMap has a key and a value type … / … cannot be …: a ledger type of the script purposes is read from the script context, never encoded into an output | Checker (M3c) |
+| JSC1322 | error | … is not comparable: a ledger type of the script purposes is matched (its constructors) or read by its fields, which are (ADR-0018 D5, M3c) | Checker (M3c) |
+| JSC1323 | error | … is a sealed ledger type: read its fields with match (…'s cases: …) / … has no methods: match it / read its fields | Checker (M3c) |
+| JSC1324 | error | a LedgerMap is read-only: it is ledger data, never stored, so it has no … (ADR-0018 D5) / LedgerMap has no property '…' … / LedgerMap has no method '…' (get, has, any, all, fold) | Checker (M3c) |
+| JSC1325 | error | … is a ledger type of the script purposes (or one of its constructors): its values come from the script context and are not built in .jsc; match them, or read their fields (ADR-0018 D5, M3c) | Checker (M3c) |
+| JSC1330 | error | migrates to goes on an instance destroy … (ADR-0011 D4) / migrates to …: … is …; the successor's policy is a Bytes or Hash state field / … holds a time value, so where the funds go would depend on a validity window (ADR-0018 D11) | Checker (M3c) |
+| JSC1331 | error | migrates to names a state field, not …: the successor's params pin this version's policy, so pinning the successor in this version's params would make each script's hash depend on the other's (ADR-0011 D4); keep the successor's policy in a state field its admin sets (setSuccessor) | Checker (M3c) |
+| JSC1332 | error | a migrating destroy moves the instance's whole value into its successor, which adopts exactly its lovelace (ADR-0011 D4): it pays, sends, mints, deposits and emits nothing | Checker (M3c) |
+| JSC1333 | error | … migrates the instance: say who may, with only, quorum or authorized ('open' would let anyone move every instance into the successor whenever it is named) | Checker (M3c) |
+| JSC1334 | error | init migrate / migrates to is not supported in a contract with owned objects (…) …, BigMap state … or native assets … (ADR-0011 r2) / the previous version … keeps BigMap state, whose maps cannot move into a new instance … | Checker (M3c) |
+| JSC1335 | error | init migrate from params.…: …; the previous version's policy is a Hash (or Bytes) params field: params { previous: Hash } | Checker (M3c) |
+| JSC1336 | error | init migrate's first parameter is the previous version's state: init migrate from params.…(old: V1.State), with import contract { V1 } from "./V1.jsc" (ADR-0011 D4) / … declares no migrating destroy (destroy … migrates to f): an adoption pairs only with the previous version's consent (ADR-0011 D4, I41) | Checker (M3c) |
+| JSC1337 | error | a contract adopts from one previous version: at most one init migrate (line …) / migrate is the Java name of this contract's init migrate (@Migrate migrate(…)); rename this method | Checker (M3c) |
+| JSC1338 | error | init migrate adopts the previous instance's value exactly (ADR-0011 D4): it pays, sends, mints, accepts, deposits and emits nothing / init migrate adopts exactly the previous instance's lovelace: nothing is received, and the balance is the old instance's (ADR-0011 D4) / funds is not available in init migrate: it adopts exactly the previous instance's lovelace and no assets (ADR-0011 D4) | Checker (M3c) |
+| JSC1339 | error | init migrate takes no modifiers: the new instance holds exactly the previous one's lovelace, so it is not payable, and the previous version's migrating destroy says who may migrate (ADR-0011 D4) | Checker (M3c) |
+| JSC1340 | error | a withdraw handler's result is its sends: send(to, Value.lovelace(n)), totalling the amount (ADR-0010 D1); it has no value / a withdraw handler sends lovelace only: send(to, Value.lovelace(n)), as written; a native asset can never allocate a withdrawal (ADR-0010 D1, I37) | Checker (M3c) |
+| JSC1341 | error | … decides: it evaluates to a Bool (= expr, or a block ending in one) | Checker (M3c) |
+
+M3c also reads earlier rules at the new positions: a handler's audience is checked by JSC0439 and JSC0311 (quorum's and
+authorized's field types), a withdrawal's arguments are checked inputs (D5), and JSC1244 (keyed types) now also refuses
+a withdraw handler beside keyed types, as the processor does.
+
+### Names M3c reserves (ADR-0018 D16)
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Withdraw`, `Certify`, `Votes`, `Propose`, `Migrate`, `MigrateTo` (the annotations purposes and migration lower to), `Certs` (std/certs' class), `Rewards` (the withdraw redeemer), the ledger types `TxCert`, `Voter`, `Vote`, `GovernanceActionId`, `ProposalProcedure`, `GovernanceAction`, `Delegatee`, `DRep`, `ProtocolVersion`, `Rational`, `Constitution`, `LedgerMap`, `Data` | a type, enum, variant, event, field or binding name, in every contract | JSC0211 |
+| `migrates` (a method modifier) | a field or binding name, in every contract | JSC0211 |
+| `marker`, `amount`, `handle`, `sends`, `cosigners`, `runtime`, `callerAccount` (the Rewards redeemer's and the client's names) | a withdraw handler's argument after the amount | JSC0216 |
+| `prior`, `priorState`, `result`, `seed` (the adoption's client) | a parameter of init migrate | JSC0216 |
+| `migrate` (init migrate's Java method) | a method name, in a contract with init migrate | JSC1337 |
+
+`withdraw`, `certify`, `vote`, `propose` and `migrate` are not reserved: each is a word only where a member starts (an
+action may be called `withdraw`), and `from` and `to` only after `init migrate` and `migrates`.
+
+## Retired codes (ADR-0018 r26)
+
+JSC1101 to JSC1110 (`joust migrate`'s refusals) and JSC9006 (the v1 deprecation warning) went with `.jsc` v1 and its
+migration; JSC0112 (a file without the header) went when the header became optional. They are not reused.
+
+## Warnings (ADR-0018 D11, D12)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC9001 | warning | never reads balance; a destroy must pay out everything the instance holds | Checker |
+| JSC9002 | warning | builds its next state from a time value with an expression the checker follows as a … whole, not field by field, so every state field becomes a time field; build it as … { ...state, f: … } to keep the others ordinary (ADR-0018 D11) | Checker |
+| JSC9003 | warning | stores a value of the validity window in … : whoever submits the transaction … chooses the window, so validFrom can be up to maxValidityMs early and validTo that much late … (ADR-0018 D11) | Checker |
+| JSC9004 | warning | stores a value derived from a stored time in … : that time came from an earlier … call's validity window, so its bias (up to maxValidityMs) carries into … (ADR-0018 D11) | Checker |
+| JSC9005 | warning | a time value sets this payout: whoever submits the transaction chooses the … window, so validFrom can be up to maxValidityMs early and validTo that much late, and the … amount moves with it (ADR-0018 D11) | Checker |
+| JSC9007 | warning | this line starts with '-', which continues the expression on the line above (a subtraction): newlines do not end statements in .jsc; if that is meant, join the lines or put the expression in parentheses; if the line is meant to stand alone, end the line above with ';' | Checker |
+| JSC9008 | warning | this event carries a time value: whoever submits the transaction chooses the window, so a value of it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2b) |
+| JSC9009 | warning | … carries a time value: whoever submits the transaction chooses the window, so it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2c) |
+| JSC9010 | warning | … has no audience: anyone can call it on anyone's … (and keep its owner's own calls failing); add 'only <field>', or 'open' if that is meant (ADR-0003 r2) | Checker (M3a) |
+| JSC9011 | warning | … lets anyone take a free … key first (squatting, ADR-0016 §2): to silence this, declare the key signed (keyed by … (signed)), or set …: caller in every result | Checker (M3b) |
+| JSC9012 | warning | linkCooldownMs = 0 on …: without a link cooldown anyone can keep a node in flight by relinking it every block, so its retiring exit is no longer guaranteed against churn (ADR-0016 §2, D9) | Checker (M3b) |
+| JSC9013 | warning | the keyed action … is authorized by someone other than the retiring exit's signer: that party can spend the … every block and delay its owner's exit (ADR-0016 §2) | Checker (M3b) |
+| JSC9014 | warning | … sets …, the successor a migration moves the instance into: whoever may call it can change the successor until the migration, after users relied on it (ADR-0011 D4); to fix it once, require it unset: require(… == #, "the successor is set once"); and check the new successor is a 28-byte policy (require(length(next) == 28, …)), or a set-once successor of another length can never migrate | Checker (M3c) |
+| JSC9016 | warning | every escape hatch of … (…) needs the deployment's parties (authorized or quorum over params): they can keep every object closed, as a deadline could (#101 S3); give the owner a hatch of their own (owned destroy ….m() only owner { … }), or accept that the deployment's parties hold the objects. A plain type's hatch (JSC1209) needs no instance and no deadline but may name who closes it; a keyed type's needs nobody else (JSC1245) | Checker (M3 final pass, design MD5) |
+| JSC9015 | warning | …: the script is … bytes (before its params are applied), over the runtime's 15000-byte reference-script limit: it builds, but it can never be deployed (a reference script must fit a 16 KB transaction); split the contract or drop a feature | JscMain --check-abi (Gradle's checkJscAbi), the toolchain (M3 final pass) |

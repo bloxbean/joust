@@ -45,18 +45,22 @@ class ReadDiscoveryTest {
         java.util.Arrays.fill(ROOT, (byte) 0x11);
     }
 
-    /** One evaluation: "ok:<hex>" or "refused", and the keys it asked for (hex), in order. */
-    record Run(String result, List<String> reads) {}
+    /** One evaluation: "ok:<hex>" or "refused", and the keys it asked for (hex), in order, with their maps' roots. */
+    record Run(String result, List<String> reads, List<String[]> rootedReads) {}
 
     static Run run(String program, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
+        return run(program, target, shared, args, ctx, false);
+    }
+
+    /** {@code anyRoot}: reads of any map are reported (the .jsc 2 four-way harness), not only of {@link #ROOT}'s. */
+    static Run run(String program, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx, boolean anyRoot) {
         var in = new ArrayList<org.julclang.core.PlutusData>();
-        for (PlutusData d : List.of(target, shared, args, ctx)) {
-            try {
-                in.add(PlutusDataCborDecoder.decode(d.serializeToBytes()));
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
-            }
-        }
+        for (PlutusData d : List.of(target, shared, args, ctx)) in.add(TransitionParityTest.julc(d));
+        return run(program, in, anyRoot);
+    }
+
+    /** As {@link #run}, with the arguments as JuLC data, unchanged. */
+    static Run run(String program, List<org.julclang.core.PlutusData> in, boolean anyRoot) {
         EvalResult r = VM.evaluateWithArgs(JulcScriptAdapter.toProgram(program),
                 org.julclang.vm.LedgerEvaluationTarget.pv11(org.julclang.vm.PlutusLanguage.PLUTUS_V3), in,
                 new org.julclang.vm.ExBudget(10_000_000_000L, 14_000_000L), org.julclang.vm.EvalOptions.DEFAULT);
@@ -66,17 +70,19 @@ class ReadDiscoveryTest {
             case EvalResult.BudgetExhausted b -> b.traces();
         };
         var reads = new ArrayList<String>();
+        var rooted = new ArrayList<String[]>();
         for (String t : traces) {
             if (t.startsWith("joust:read ")) {
                 String[] p = t.split(" ");
-                assertEquals(HEX.formatHex(ROOT), p[1], "the map's root in the trace");
+                if (!anyRoot) assertEquals(HEX.formatHex(ROOT), p[1], "the map's root in the trace");
                 reads.add(p.length > 2 ? p[2] : "");
+                rooted.add(new String[]{p[1], p.length > 2 ? p[2] : ""});
             }
         }
         String result = r instanceof EvalResult.Success s
                 ? "ok:" + HEX.formatHex(PlutusDataCborEncoder.encode(org.julclang.vm.TermExtractor.extractData(s.resultTerm())))
                 : "refused";
-        return new Run(result, reads);
+        return new Run(result, reads, rooted);
     }
 
     /** The driver's outcome: the final result, the proven reads in discovery order, and the rounds it took. */

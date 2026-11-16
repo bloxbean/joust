@@ -35,6 +35,11 @@ public final class JoustRuntimeWasm {
         api.add("joust.info", InfoRequest.class, r -> ServiceResult.ok(new Info(VERSION,
                 org.julclang.state.runtime.described.JulcVersion.VERSION,
                 org.julclang.state.runtime.described.ProgramManifest.VERSION)));
+        api.add("joust.validatorScript", Scripts.Request.class, r -> ServiceResult.ok(Scripts.load(r)));
+        // ADR-0018 D14 (M4c): offline tests' ledger: a transaction's scripts evaluated against a snapshot, and the attack
+        // suite on a prepared transaction.
+        api.add("joust.evaluate", Offline.EvaluateRequest.class, r -> ServiceResult.ok(Offline.evaluate(r)));
+        api.add("joust.attacks", Offline.EvaluateRequest.class, r -> ServiceResult.ok(Offline.attacks(r, 0)));
         JsApi.install(api, new EngineInfo("joustRuntime", "joust-runtime", VERSION, List.of("vm", "debug", "joust")));
     }
 }

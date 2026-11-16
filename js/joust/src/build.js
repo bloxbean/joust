@@ -7,21 +7,39 @@
 //   validators.json       the plain JuLC validators (governors, ...): [{ name, purpose, script, params }]
 //   <Validator>.plutus    each one's compiled script (CBOR hex; parameters not applied)
 //   joust.lock.json       the versions that built it (I7)
+//   generated/            the Java each .jsc file lowered to, with its source map (ADR-0018 D12) and its checked IR
+//                         (<Contract>.ir.json, D15: what the JavaScript reference interpreter evaluates)
+// Beside each .jsc 2 file, <Contract>.abi.json: its ABI manifest, which the project commits; a build whose manifest
+// differs, or is missing, fails unless accepted (--accept-abi: src/abi.js), so an encoding change cannot strand
+// deployed instances.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
-import { generate } from '@julclang/state-client/codegen';
-import { loadToolchain } from './toolchain.js';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, lstatSync, existsSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import { buildInWorker, engineLimits } from './toolchain.js';
+import { abiGate } from './abi.js';
+import { libraryPackages, lockGate } from './libraries.js';
+import { deploymentsShape, scriptDigest } from './deploy.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-function sources(dir, keep = () => true) {
+/**
+ * The project's contract sources under `dir`: every .java and .jsc file, by path relative to it. Issue #92 (S12, review
+ * of #82): a package's code is never project code, so the walk skips node_modules and dot-directories (.git, .joust, an
+ * editor's) at any depth, and follows no link (a link to a file or a directory is skipped, as libraries.js skips them
+ * under joust-lib/): with `contracts: "."`, or a package installed under contracts/, a package's sources would otherwise
+ * escape the split-package rule and joust.lock, and could replace the project's own Require.
+ */
+export function sources(dir, keep = () => true) {
   const out = {};
   const walk = (d) => {
     for (const n of readdirSync(d)) {
       const p = join(d, n);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith('.java') || p.endsWith('.jsc')) {
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        if (n === 'node_modules' || n.startsWith('.')) continue;
+        walk(p);
+      } else if (st.isFile() && (p.endsWith('.java') || p.endsWith('.jsc'))) {
         const text = readFileSync(p, 'utf8');
         if (keep(relative(dir, p), text)) out[relative(dir, p)] = text;
       }
@@ -31,21 +49,98 @@ function sources(dir, keep = () => true) {
   return out;
 }
 
+/**
+ * One diagnostic as both build paths print it (ADR-0021 D9; the catalogue's shape, as Gradle's JscMain prints it):
+ * `app/Counter.jsc:12:5: error[JSC0502]: message`, the file relative to the contracts directory; `error: message` when
+ * there is no file. The `$joust` problem matcher of the VS Code extension reads this shape.
+ */
+export function diagnosticLine(d) {
+  const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
+  // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
+  return `${where}${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${d.message}`;
+}
+
+/**
+ * ADR-0021 D7a: the build's lowering only, in memory (`joust abi diff`): the engine's { ok, diagnostics, generated }, nothing
+ * written.
+ */
+export async function compile({ root = process.cwd(), src = 'contracts', options = {} } = {}) {
+  const files = sources(resolve(root, src));
+  if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
+  const { packages, javaLibraries } = libraryPackages(root);
+  return buildInWorker({ files, options, limits: engineLimits(), packages, javaLibraries });
+}
+
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
-export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep } = {}) {
+export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep,
+  acceptAbi = false, acceptLock = false, traces = false } = {}) {
   const files = sources(resolve(root, src), keep);
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
-  const t = Date.now();
-  const engine = await loadToolchain();
-  const r = engine.joust.build({ files, options });
-  for (const d of r.diagnostics) {
-    const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}: ` : '';
-    (d.severity === 'error' ? console.error : log)(`${d.severity}: ${where}${d.message}`);
+  // ADR-0018 D14 (M4c): the libraries the project's npm packages ship under joust-lib/ (.jsc, and Java on-chain sources).
+  let packages;
+  let javaLibraries;
+  try {
+    ({ packages, javaLibraries } = libraryPackages(root));
+  } catch (e) {
+    return { ok: false, contracts: [], diagnostics: [{ severity: 'error', message: e.message }] };
   }
-  if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics };
+  // ADR-0018 D12: joust build --traces keeps the contracts' traces in the scripts (Gradle: -Pjoust.traces).
+  if (traces) options = { ...options, 'joust.traces': 'true' };
+  const t = Date.now();
+  // The worker's limits (issue #74): an invalid JOUST_ENGINE_* setting is the user's error, said before anything runs.
+  const limits = engineLimits();
+  let r;
+  try {
+    // On a worker with a set stack (ENGINE_STACK_MB), so a cold engine builds what the JVM builds (ADR-0018 J18, r12),
+    // a heap limit and a time limit; with the npm packages' libraries (M4c).
+    r = await buildInWorker({ files, options, limits, packages, javaLibraries });
+  } catch (e) {
+    // The engine's stack ran out past the front end (whose nesting cap keeps it within the stack, ADR-0018 J18): in
+    // JuLC's passes, on a contract far larger than a script can be. Web Image surfaces that as a TypeError; the build
+    // reports it and fails.
+    r = { ok: false, contracts: [], diagnostics: [{ severity: 'error', source: 'toolchain', message: 'internal error: the'
+      + ` toolchain engine failed (${e?.message ?? e}); a contract this large may exhaust the engine's stack`
+      + ` (JOUST_ENGINE_STACK_MB=${limits.stackMb}, JOUST_ENGINE_MEMORY_MB=${limits.memoryMb}, JOUST_ENGINE_TIMEOUT_S=${limits.timeoutS}):`
+      + ' build it on Gradle, or split it (please report it, with the file)' }],
+      generated: [] };
+  }
+  for (const d of r.diagnostics) (d.severity === 'error' ? console.error : log)(diagnosticLine(d));
   const dir = resolve(root, out);
+  // ADR-0018 D12: the ABI gate first. Accepting is for a build that succeeded only.
+  const refused = new Set();
+  const abiErrors = abiGate({ generated: r.generated ?? [], srcDir: src, root, acceptAbi: r.ok && acceptAbi, log, refused });
+  for (const e of abiErrors) console.error(e);
+  // Then the generated Java and its source map, on disk as on the Gradle path (also when the build failed), from a
+  // clean directory. Java whose manifest was refused is not written, so nothing can compile it (security S9).
+  rmSync(join(dir, 'generated'), { recursive: true, force: true });
+  for (const g of r.generated ?? []) {
+    if (refused.has(g.javaFile)) continue;
+    const target = join(dir, 'generated', g.javaFile);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, g.java);
+    if (g.sourceMap) writeFileSync(target.replace(/\.java$/, '.jscmap.json'), g.sourceMap);
+    // ADR-0018 D15 (M1b): the checked IR, which the JavaScript reference interpreter evaluates.
+    if (g.ir) writeFileSync(target.replace(/\.java$/, '.ir.json'), g.ir);
+  }
+  if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics, ...(abiErrors.length ? { abiErrors } : {}) };
+  if (abiErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, abiErrors };
+  // ADR-0018 J12: the build names every library it used with its hash; joust.lock pins those from outside the sources.
+  const lockErrors = lockGate({ generated: r.generated ?? [], libraries: r.libraries ?? [], root, acceptLock, log });
+  for (const e of lockErrors) console.error(e);
+  if (lockErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, lockErrors };
   mkdirSync(dir, { recursive: true });
   const bundle = [];
+  // ADR-0018 D12 (r12): each .jsc 2 contract's message map (the source map's `messages`): what every message its script
+  // can trace means, at which File.jsc:line:col. The runtime names the position when it shows a refusal.
+  const messagesOf = {};
+  for (const g of r.generated ?? []) {
+    if (!g.sourceMap) continue;
+    const m = JSON.parse(g.sourceMap);
+    if (m.messages) messagesOf[g.javaFile] = { source: g.jscFile, messages: m.messages };
+  }
+  // The client generator is loaded when there is a client to write, so the command line's checks before a build (no
+  // contracts, a refused project) need no package (CI runs cli.test.js with Node built-ins only).
+  const { generate } = r.contracts.length ? await import('@julclang/state-client/codegen') : {};
   for (const c of r.contracts) {
     const description = JSON.parse(c.descriptionJson);
     writeFileSync(join(dir, c.name + '.json'), JSON.stringify(description, null, 2) + '\n');
@@ -55,7 +150,13 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     writeFileSync(join(dir, c.name + '.d.ts'), dts);
     // The programs' manifest (ADR-0020 D8): the engine checks it before it runs any of them.
     const manifest = c.manifestJson ? JSON.parse(c.manifestJson) : null;
-    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, manifest, built: { joust: VERSION } });
+    const map = messagesOf[`${c.packageName.replaceAll('.', '/')}/${c.name}.java`];
+    // The script it explains: a map read from an audit file names its script (review r1 S1).
+    const messages = map ? { ...map, scriptHash: c.scriptHash } : undefined;
+    // Review r3 F9: the compiler that built each script (this package's version, the engine's JOUST and JuLC versions),
+    // carried into each deployment record.
+    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, manifest,
+      built: { joust: VERSION, engine: r.joust ?? null, julc: r.julc ?? null }, ...(messages ? { messages } : {}) });
     log(`${c.packageName}.${c.name}: ${c.scriptSizeBytes} bytes, hash ${c.scriptHash || '(parameterised)'}, `
       + `${Object.keys(c.transitions).length} transitions`);
   }
@@ -70,10 +171,56 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   }
   if (validators.length) writeFileSync(join(dir, 'validators.json'), JSON.stringify(validators) + '\n');
   writeFileSync(join(dir, 'joust.lock.json'), JSON.stringify({
-    joust: VERSION, descriptionVersion: 2,
+    joust: VERSION, engine: { joust: r.joust ?? null, julc: r.julc ?? null }, descriptionVersion: 2,
     contracts: Object.fromEntries(r.contracts.map((c) => [`${c.packageName}.${c.name}`, { scriptHash: c.scriptHash }])),
     ...(validators.length ? { validators: Object.fromEntries(validators.map((v) => [`${v.package}.${v.name}`, { purpose: v.purpose, scriptHash: v.scriptHash }])) } : {}),
   }, null, 2) + '\n');
+  for (const w of staleDeployments(dir, r.contracts)) log(w);
   log(`built ${r.contracts.length} contract(s) into ${relative(root, dir)} in ${Date.now() - t} ms`);
   return { ok: true, contracts: r.contracts, validators, diagnostics: r.diagnostics };
+}
+
+/**
+ * Review r2 S1 (ADR-0018): recorded deployments (deployments.<network>.json) this build no longer produces, as
+ * warnings: a contract built to another script (a changed contract; by the digest of its script
+ * before parameters, so @Params contracts too, else by its policy), a contract no longer built (renamed or removed), and
+ * a file that cannot be read. Instances deployed earlier stay on the recorded script.
+ */
+export function staleDeployments(dir, contracts) {
+  const out = [];
+  const built = new Map(contracts.map((c) => [`${c.packageName}.${c.name}`, c]));
+  const files = existsSync(dir) ? readdirSync(dir).filter((f) => /^deployments\..+\.json$/.test(f)).sort() : [];
+  const tail = 'instances deployed earlier stay on that script; to call them, keep the build that made it (joust deploy keeps'
+    + ' superseded records)';
+  for (const f of files) {
+    let recorded;
+    try {
+      recorded = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+      const problem = deploymentsShape(recorded);
+      if (problem) throw new Error(problem);
+    } catch (e) {
+      out.push(`warning: ${f} cannot be read (${e.message}): its deployments are not checked against this build; joust deploy keeps it`
+        + ' beside the new file');
+      continue;
+    }
+    for (const [title, d] of Object.entries(recorded.contracts ?? {})) {
+      const c = built.get(title);
+      if (!c) {
+        out.push(`warning: ${f} records ${title}, which this build does not produce (renamed or removed): ${tail}`);
+        continue;
+      }
+      const digest = scriptDigest(c.scriptCborHex);
+      if (d.scriptDigest) {
+        if (d.scriptDigest !== digest) out.push(`warning: ${f} records ${title} with another script than this build's: ${tail}`);
+      } else if (d.params !== undefined) {
+        out.push(`warning: ${f} records ${title} with params but no script digest (deployed by an earlier JOUST): it cannot be`
+          + ' checked against this build; deploy again to record one');
+      } else if (d.policy && c.scriptHash) {
+        if (d.policy !== c.scriptHash) out.push(`warning: ${f} records ${title} at script ${d.policy}, which this build does not produce (it builds ${c.scriptHash}): ${tail}`);
+      } else {
+        out.push(`warning: ${f} records ${title} with neither a script digest nor a policy: it cannot be checked against this build`);
+      }
+    }
+  }
+  return out;
 }

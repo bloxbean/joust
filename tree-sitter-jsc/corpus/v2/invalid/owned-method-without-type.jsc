@@ -1,0 +1,7 @@
+jsc 1
+package t
+contract C {
+  state { a: Int }
+  owned Hero { owner: Key }
+  owned action levelUp() only owner { return state }
+}

@@ -3,6 +3,8 @@ plugins {
     // Central Portal publisher (as JuLC): nmcp per published module, aggregated here into one deployment.
     id 'com.gradleup.nmcp' version '1.6.2' apply false
     id 'com.gradleup.nmcp.aggregation' version '1.6.2'
+    // Mutation testing (gradle/pitest.gradle), applied by the modules with security-relevant Java.
+    id 'info.solidsoft.pitest' version '1.19.0' apply false
 }
 
 // The root publishes nothing, but nmcp resolves its tasks from here.
@@ -50,12 +52,40 @@ nmcpAggregation {
     }
 }
 
+// The script-resource check (ext.plutusScriptProblems): checkPlutusResources and the images' checkImageScripts.
+apply from: 'gradle/plutus-scripts.gradle'
+
 // The modules published to Maven Central and the BloxBean Maven repository; examples are never published.
 def publishedModules = ['julc-state-api', 'julc-state-processor', 'julc-state-runtime', 'julc-state-testkit',
                         'julc-state-verifier', 'julc-state-dsl', 'julc-state-server', 'julc-state-gradle-plugin']
 
 subprojects {
     apply plugin: 'java-library'
+
+    // ADR-0018 M1c review S8: JuLC keys a validator's script by its simple name (bloxbean/julc#326). Two locations on
+    // one runtime class path that ship META-INF/plutus/<Name>.plutus.json share that resource, and a fat or shaded jar
+    // built from the class path keeps one of them silently (a resource-only plant could replace a contract's script).
+    // checkPlutusResources (part of check) fails when a project's runtime class path holds such a pair.
+    plugins.withType(JavaPlugin) {
+        def runtime = configurations.named('runtimeClasspath')
+        def classes = sourceSets.main.output
+        def check = tasks.register('checkPlutusResources') {
+            description = 'Fails when two locations on the runtime class path ship the same META-INF/plutus/<Name>.plutus.json,' +
+                    ' or a validator\'s own location lacks the script another location ships'
+            group = 'verification'
+            inputs.files(runtime)
+            inputs.files(classes)
+            inputs.file(rootProject.file('gradle/plutus-scripts.gradle'))
+            doLast {
+                def problems = rootProject.ext.plutusScriptProblems(classes.files + runtime.get().files)
+                if (!problems.isEmpty()) {
+                    throw new GradleException("validators with one simple name share a script resource on ${project.path}'s runtime"
+                            + " class path (JuLC, bloxbean/julc#326); a jar built from it would keep one silently:\n  " + problems.join('\n  '))
+                }
+            }
+        }
+        tasks.named('check') { dependsOn check }
+    }
 
     // -PjoustFixtures: the examples' tests record ADR-0015 M0 fixtures (every built transaction with the chain reads
     // behind it) into fixtures/m0/<module>; DevKit must be running. See examples/devkit FixtureRecorder.

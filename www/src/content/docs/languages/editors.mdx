@@ -1,0 +1,184 @@
+---
+title: "Editors"
+description: "Edit .jsc with diagnostics and navigation in VS Code, Neovim, Helix and any LSP client, plus completion, quick fixes, rename and formatting in VS Code; joust fmt formats everywhere, and the tree-sitter grammar highlights."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`.jsc` has a language server, `joust-lsp`. It ships in the `@julclang/joust` npm package and analyses each file with
+the same front end the build uses, so its errors are the build's ([ADR-0021](https://github.com/bloxbean/joust/blob/main/docs/adr/0021-jsc-language-server-and-vscode-extension.md)).
+What each editor gets:
+
+| | VS Code | Neovim, Helix, other LSP clients |
+|---|---|---|
+| Diagnostics as you type, with stable `JSC` codes | ✓ | ✓ |
+| Hover, go to definition, references (across files and into `java:` libraries), symbols, folding, selection ranges, semantic tokens | ✓ | ✓ |
+| Completion, quick fixes, rename, Format Document | ✓ | — |
+| The build on save (in memory: the processor's and JuLC's errors, the ABI comparison, the `joust.lock` check) | ✓, in a trusted project | — |
+| `joust fmt` from the command line | ✓ | ✓ |
+
+The editing features are VS Code's only. The server offers an edit only to a client known to reject one when the text
+changed after the answer was computed (ADR-0021 D4a), and the extension is that client. Other editors get the
+read-only features. There, format with `joust fmt <file>` from the shell, or from an editor hook that runs it on save.
+
+The server never writes into your project. It runs advisory, with its own bundled compiler, unless the project's own
+compiler matches it.
+
+## VS Code
+
+Install the JOUST extension (`vscode-joust`). It bundles the server and its compiler, and it honours Workspace Trust:
+- In Restricted Mode, it analyses with the bundled compiler and runs nothing from the workspace.
+- In a trusted folder, it may use the project's own compiler: only that compiler's two engine files, after checking them.
+
+Rename goes through **JOUST: Rename Symbol**. It renames locals, parameters, `fn`s, types, enums, variants, fields, state
+fields, actions, destroys, views, events and owned types. Renaming an owned type also renames its methods' and invariants' qualifiers and its `admits`. A
+field renamed in an owned type is renamed where the object is read: in its methods' bodies and modifiers, and in
+`keyed by` for a keyed type's key. A params field is also renamed in `init migrate from params.f`. Owned methods, the
+purposes' handlers and `init migrate` cannot be renamed: the rename refuses them. **JOUST: Show generated Java** opens the lowered class, and **Accept ABI…**
+reviews a changed ABI manifest before accepting it. Format Document, and format on save if you turn it on, use the same
+formatter as `joust fmt`. The formatting style belongs to the compiler's version (version 1 today). When the extension
+analyses with its bundled compiler (advisory), it formats with that one too, so a project pinned to another JOUST version
+may format differently in CI.
+
+<Aside type="note" title="Publishing">
+Maintainers attach the extension's `.vsix` to each GitHub release, with its SHA-256 and a provenance attestation.
+Marketplace and Open VSX listings follow once the publisher is decided. Until then, install the `.vsix` from the release
+(it is named `vscode-joust-<ext>.vsix`). Check it first, then install it:
+
+```sh
+gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust \
+  --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml --source-ref refs/heads/main
+code --install-extension vscode-joust-<ext>.vsix
+```
+</Aside>
+
+## Other editors: a server you installed
+
+Editors other than VS Code have no workspace trust, so JOUST's configurations start **a `joust-lsp` you installed
+yourself, by absolute path**. A repository you open never chooses the program that runs. Install a pinned version
+globally and note the path:
+
+```sh
+npm install -g @julclang/joust@<version>
+echo "$(npm prefix -g)/bin/joust-lsp"
+```
+
+`npx joust` is never used for an editor: it would run whatever version a project or the registry resolves.
+
+### Neovim (0.11 or later)
+
+Put JOUST's module, [`editors/neovim/lua/joust.lua`](https://github.com/bloxbean/joust/blob/main/editors/neovim/lua/joust.lua),
+on your `runtimepath` (for example in `~/.config/nvim/lua/`), then in your `init.lua`:
+
+```lua
+require('joust').setup({ path = '/absolute/path/to/joust-lsp' })
+```
+
+The module checks the path, sets the `jsc` filetype and configures the server through `vim.lsp.config`. It refuses:
+- a bare name or a relative path;
+- `npx`;
+- a project's `node_modules/.bin`;
+- a server, or `node`, inside the project of the buffer you open. The project is the one JOUST's markers find:
+  `joust.config.json`, `package.json` or `settings.gradle`, never your home directory itself. An install under your
+  home directory (nvm, volta, asdf, an npm prefix of `~/.npm-global`) is your own, wherever Neovim is started.
+
+The server runs on an absolute `node`. By default that is the first `node` on an absolute `PATH` entry; a relative entry
+such as `./node_modules/.bin` is never used, since it would let a project choose the interpreter. On Windows, give
+`node` explicitly; the module does not search `PATH` there. Elsewhere you can give it too:
+
+```lua
+require('joust').setup({ path = '/absolute/path/to/joust-lsp', node = '/absolute/path/to/node' })
+```
+
+With the tree-sitter package installed (below), it also starts tree-sitter highlighting and folding for `.jsc` buffers.
+
+### Helix
+
+Add JOUST's [`editors/helix/languages.toml`](https://github.com/bloxbean/joust/blob/main/editors/helix/languages.toml)
+to `~/.config/helix/languages.toml` and replace its placeholders. The command is `node` itself, by absolute path. Helix
+starts servers from the project, so a bare name could find a project's `node` through a relative `PATH` entry:
+
+```toml
+[language-server.joust]
+command = "/ABSOLUTE/PATH/TO/node"
+args = ["/ABSOLUTE/PATH/TO/joust-lsp", "--stdio"]
+
+[[language]]
+name = "jsc"
+scope = "source.jsc"
+file-types = ["jsc"]
+roots = ["joust.config.json", "package.json", "settings.gradle", "settings.gradle.kts"]
+comment-token = "//"
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 2, unit = "  " }
+language-servers = ["joust"]
+grammar = "jsc"
+
+[[grammar]]
+name = "jsc"
+source = { path = "/ABSOLUTE/PATH/TO/tree-sitter-jsc" }
+```
+
+Then build the grammar, copy its queries and check the setup:
+
+```sh
+mkdir -p ~/.config/helix/runtime/grammars ~/.config/helix/runtime/queries
+hx --grammar build
+cp -R /ABSOLUTE/PATH/TO/tree-sitter-jsc/helix/queries/jsc ~/.config/helix/runtime/queries/
+hx --health jsc
+```
+
+:::caution[A project's Helix configuration]
+Helix also reads a project's own `.helix/languages.toml`, and that file can redefine any language server's command.
+JOUST cannot restrict that. Before you open a repository you do not trust in Helix, look for a `.helix/` directory.
+:::
+
+### Any other LSP client
+
+Start `/absolute/path/to/node /absolute/path/to/joust-lsp --stdio` for files ending in `.jsc`. Use the project root, the directory holding
+`joust.config.json` or `package.json`, as its workspace folder.
+
+### The project's own server and compiler
+
+Two variants run code from the repository you open. Use them only for repositories you trust:
+
+:::caution[Runs the repository's code]
+A project-local server runs the repository's whole `@julclang/joust` package:
+
+```sh
+./node_modules/.bin/joust-lsp --stdio
+```
+
+`--project-engine` makes a user-installed server load each project's own compiler engine. It reads only the engine's
+two files, confined to the workspace folder, but it runs that engine's JavaScript for **every** repository you open,
+because these editors have no workspace trust:
+
+```sh
+/absolute/path/to/joust-lsp --stdio --project-engine
+```
+:::
+
+## The tree-sitter grammar
+
+Highlighting and folding in Neovim and Helix come from `tree-sitter-jsc`. Each JOUST release attaches it as
+`tree-sitter-jsc-<version>.tar.gz`, with its SHA-256 in the release's sums file. The archive holds:
+- the grammar and the generated parser (`src/`);
+- the queries (`queries/`, and `neovim/queries/jsc/`);
+- Helix's highlights, with Helix's capture names (`helix/queries/jsc/`);
+- `EDITORS.md`, the steps above in short.
+
+For Neovim, build the parser into your runtimepath:
+
+```sh
+mkdir -p ~/.local/share/nvim/site/parser ~/.local/share/nvim/site/queries
+cc -O2 -shared -fPIC -Isrc src/parser.c src/scanner.c -o ~/.local/share/nvim/site/parser/jsc.so
+cp -R neovim/queries/jsc ~/.local/share/nvim/site/queries/
+```
+
+To build the package from a checkout instead:
+
+```sh
+cd tree-sitter-jsc
+npm ci
+npm run package     # dist/tree-sitter-jsc-<version>.tar.gz
+```

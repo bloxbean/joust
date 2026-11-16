@@ -1,0 +1,31 @@
+# JOUST's .jsc language server and tree-sitter grammar in Helix (ADR-0021 D3b, D9, §16 E4).
+# Add this to ~/.config/helix/languages.toml and replace the /ABSOLUTE/PATH/TO/ placeholders:
+#   - command: the absolute path of `node` (#121 S2: Helix starts servers from the project, so a bare name could find a
+#     project's node through a relative PATH entry such as ./node_modules/.bin);
+#   - args: the joust-lsp of a @julclang/joust YOU installed (npm install -g @julclang/joust@<version>; then
+#     "$(npm prefix -g)/bin/joust-lsp"), by absolute path. Never a bare name (looked up on PATH), never a project's
+#     node_modules/.bin, never npx: a repository you open must not choose the program that runs.
+#   - the grammar: the extracted tree-sitter-jsc-<version> package from a JOUST release (its EDITORS.md); then run
+#     `mkdir -p ~/.config/helix/runtime/grammars` and `hx --grammar build`, copy its helix/queries/jsc into
+#     ~/.config/helix/runtime/queries/, and check `hx --health jsc`.
+# Helix also reads a project's .helix/languages.toml, which can redefine any server's command: open untrusted
+# repositories with that in mind (the docs' editors page).
+
+[language-server.joust]
+command = "/ABSOLUTE/PATH/TO/node"
+args = ["/ABSOLUTE/PATH/TO/joust-lsp", "--stdio"]
+
+[[language]]
+name = "jsc"
+scope = "source.jsc"
+file-types = ["jsc"]
+roots = ["joust.config.json", "package.json", "settings.gradle", "settings.gradle.kts"]
+comment-token = "//"
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 2, unit = "  " }
+language-servers = ["joust"]
+grammar = "jsc"
+
+[[grammar]]
+name = "jsc"
+source = { path = "/ABSOLUTE/PATH/TO/tree-sitter-jsc" }

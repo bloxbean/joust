@@ -2,10 +2,19 @@ description = 'JOUST example: contracts written in .jsc (ADR-0005)'
 
 configurations {
     jsc
+    // ADR-0018 D9 (M4b): Java (JuLC) libraries .jsc imports with java:, taken as on-chain sources only (as the plugin's
+    // joustLibrary configuration does): their META-INF/plutus-sources are compiled into this project, on both sides.
+    joustLibrary {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
 }
 
 dependencies {
     jsc project(':julc-state-dsl')
+    jsc project(':julc-state-toolchain')   // the java: library certifier (javac attribution needs JuLC's compiler)
+    joustLibrary project(':examples:compliance')
 
     implementation project(':julc-state-runtime')
     implementation project(':examples:devkit')
@@ -17,6 +26,23 @@ dependencies {
     testImplementation project(':julc-state-testkit')
 }
 
+// ADR-0018 D9 (M4b): the java: libraries' on-chain sources, extracted from their jars. generateJsc certifies them before
+// any import, and writes the certified sources of the libraries the contracts use (each library's closure, no other file
+// of its jar; review r2 S3) beside the generated Java, which compiles them into this project: the JVM side runs these
+// sources, never a jar's classes. checkJoustLibraries (before compileJava) refuses them reaching the class path from
+// elsewhere.
+def librarySources = layout.buildDirectory.dir('joust/library-sources')
+def extractJoustLibraries = tasks.register('extractJoustLibraries', Sync) {
+    description = 'Extracts the on-chain sources (META-INF/plutus-sources) of the joustLibrary dependencies'
+    dependsOn configurations.joustLibrary
+    from({ configurations.joustLibrary.collect { zipTree(it) } }) {
+        include 'META-INF/plutus-sources/**/*.java'
+        eachFile { f -> f.relativePath = new RelativePath(true, f.relativePath.segments.drop(2)) }
+        includeEmptyDirs = false
+    }
+    into librarySources
+}
+
 // .jsc -> Java @StateContract, before compileJava (ADR-0005 D5). The generated Java is ordinary source: the JOUST
 // processor turns it into a validator and a client like hand-written contracts.
 def jscSrc = file('src/main/jsc')
@@ -25,8 +51,245 @@ def generateJsc = tasks.register('generateJsc', JavaExec) {
     description = 'Lowers src/main/jsc/**/*.jsc to Java'
     classpath = configurations.jsc
     mainClass = 'org.julclang.state.dsl.JscMain'
+    dependsOn extractJoustLibraries
     inputs.dir(jscSrc)
+    inputs.dir(librarySources)
     outputs.dir(jscOut)
-    args jscSrc.path, jscOut.get().asFile.path
+    inputs.file(file('joust.lock')).optional()
+    args jscSrc.path, jscOut.get().asFile.path, '--java-libraries', librarySources.get().asFile.path, '--lock', file('joust.lock').path
 }
+// ADR-0018 J12: joust.lock pins every library from outside the sources (the java: ones here) by its sources' hash; only
+// this task writes it, to be reviewed and committed.
+tasks.register('acceptJoustLock', JavaExec) {
+    description = 'Writes joust.lock: the SHA-256 of every library from outside the sources this build uses'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    dependsOn extractJoustLibraries
+    args jscSrc.path, layout.buildDirectory.dir('tmp/acceptJoustLock').get().asFile.path, '--java-libraries', librarySources.get().asFile.path,
+            '--lock', file('joust.lock').path, '--accept-lock'
+}
+// ADR-0018 D12 (review F1): generateJsc never accepts an ABI manifest; a new or changed one is accepted only by running
+// this task, which writes the manifests beside the .jsc files to be reviewed and committed.
+tasks.register('acceptJscAbi', JavaExec) {
+    description = 'Writes the ABI manifests (Name.abi.json) of src/main/jsc/**/*.jsc, accepting new and changed ones'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    dependsOn extractJoustLibraries
+    args jscSrc.path, layout.buildDirectory.dir('tmp/acceptJscAbi').get().asFile.path, '--accept-abi', '--java-libraries',
+            librarySources.get().asFile.path
+}
+// Review F12, S10: after compileJava, every manifest is checked against the processor's description (JSC0004).
+def checkJscAbi = tasks.register('checkJscAbi', JavaExec) {
+    description = 'Checks the ABI manifests of src/main/jsc/**/*.jsc against the processor\'s descriptions'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    dependsOn 'compileJava'
+    def described = layout.buildDirectory.dir('classes/java/main/META-INF/joust')
+    inputs.dir(jscSrc)
+    inputs.dir(described)
+    args '--check-abi', jscSrc.path, described.get().asFile.path, '--java-libraries', librarySources.get().asFile.path
+}
+tasks.named('check') { dependsOn checkJscAbi }
+// ADR-0018 D9 (M4b): no class compiled from a java: library's sources also reaches the compile or runtime class path from
+// a jar or directory. It runs before compileJava (review r2 F5, S3), so test, jar and run never build a shadowed class.
+// The classes are the ones generateJsc listed per contract: javac's binary names, nested classes too (S2).
+def checkJoustLibraries = tasks.register('checkJoustLibraries', JavaExec) {
+    description = 'Fails when a class of a java: library also reaches the class path from a jar or directory'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    dependsOn generateJsc
+    def classPath = configurations.compileClasspath + configurations.runtimeClasspath
+    inputs.files(classPath)
+    inputs.dir(jscOut)
+    argumentProviders.add({ ['--check-library-classes', jscOut.get().asFile.path,
+                             classPath.files.collect { it.absolutePath }.join(File.pathSeparator)] } as CommandLineArgumentProvider)
+}
+tasks.named('compileJava') { dependsOn checkJoustLibraries }
+tasks.named('check') { dependsOn checkJoustLibraries }
+// ...and the bytes of each such class are recorded per contract, for its client to check when it loads (JavaLibraryCheck).
+def recordJoustLibraries = tasks.register('recordJoustLibraries', JavaExec) {
+    description = 'Records the SHA-256 of each class compiled from a java: library\'s sources (META-INF/joust/java-libraries/<contract>.json)'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    def classesDir = sourceSets.main.java.destinationDirectory
+    args '--library-manifest', jscOut.get().asFile.path, classesDir.get().asFile.path
+}
+tasks.named('compileJava') { finalizedBy recordJoustLibraries }
+tasks.named('classes') { dependsOn recordJoustLibraries }
 sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
+// ADR-0018 D12 (r12): each contract's message map is a resource beside its classes (the runtime explains refusals with it).
+tasks.named('processResources') { from(files(jscOut).builtBy(generateJsc)) { include '**/*.jscmap.json' } }
+
+// ADR-0018 M1c (J11): the Java examples' own tests, run against their .jsc 2 ports (src/main/jsc/.../{Vault,Escrow,
+// Crowdfund,Token,Pool,Dex}.jsc). copyPortTests copies each example's test sources with three textual changes: the package
+// becomes the ports' package, each class gets a Port suffix, and the init is called by its .jsc 2 name (init). Nothing
+// else changes, so a port passes exactly the scenarios (unit, attack suite, description, DevKit) its Java example passes,
+// and the two cannot drift apart. :examples:dsl:test runs them (this task only copies). It fails closed (review F7):
+// an example's src/test holding anything the rule does not copy (a subpackage, a helper class, resources) stops the build.
+// ADR-0018 M2: dex too. A .jsc 2 contract's records have fixed names where the Java example chose its own: dex's state
+// record Pool is State, its result records Moved and Closed are Received and Settled (the port's ABI is the same).
+// ADR-0018 M2c: oracle and fees too, two contracts each (DescriptionTest becomes <first contract>DescriptionPortTest).
+// ADR-0018 M2b: treasury too; its tests use the governor script Guardian, which src/main/java copies as TreasuryGuardian (the
+// fourth element renames words; #84 review F7: the example itself stays off this class path, since its TreasuryValidator
+// shares its script's resource name with the port's).
+def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['Crowdfund', 'launch'],
+             token: ['Token', 'create'], pool: ['Pool', null],
+             dex: ['Dex', 'open', [Pool: 'State', Moved: 'Received', Closed: 'Settled']],
+             treasury: ['Treasury', 'open', [:], [Guardian: 'TreasuryGuardian']],
+             // ADR-0018 M2c: oracle (Oracle and Shop; the port names the shop Kiosk, since examples/dsl's Shop.jsc is M4a's and
+             // JuLC writes a script by its validator's simple name) and fees (Pot and Stall).
+             oracle: ['Oracle', 'open', [:], [Shop: 'Kiosk', ShopClient: 'KioskClient', ShopValidator: 'KioskValidator']],
+             fees: ['Pot', null],
+             // ADR-0018 M3a1: the owned-object port of examples/bank; its Account field balance is the port's saved (balance is
+             // a built-in name).
+             bank: ['Bank', null, [:], ['(?<=\\.)balance(?=\\(\\))': 'saved']],
+             // ADR-0018 M3a2: examples/locker (Locker and Safes). locker's unlock sends, so the port takes Funds (a send is checked
+             // against the own policy, ADR-0018 D4): its direct calls in LockerTest pass the funds the instance holds.
+             locker: ['Locker', null, [:], ['(Locker\\.unlock\\(s, BigInteger\\.valueOf\\(\\d+\\), ctx)': '$1, h.funds(held, Assets.none())']],
+             // ADR-0018 M3a3: examples/guild (Guild and Armory; guild's open state field is isOpen, a modifier word) and
+             // examples/market (its state record Config is State, Config being the params record's name; buy's result
+             // record Sold is Exchanged). market's offer with a junk token alongside: the port's method refuses it itself
+             // (what it accepts is not what the caller offers, #funds:, D4), where examples/market's method returns and only
+             // its validator refuses; the copied test expects that refusal, then builds its transaction from the honest offer.
+             guild: ['Guild', null, [:], ['destination\\.open': 'destination.isOpen']],
+             market: ['Market', 'open', [Config: 'State', Sold: 'Exchanged'],
+                      ['var r = (Market\\.offer\\(config, NFT_POLICY, NFT, PRICE, ctx, h\\.createFunds\\(true, )junk':
+                               'assertThrows(RequireException.class, () -> $1junk))); var r = $1nft']],
+             // ADR-0018 M3c: examples/staking (StakedVault: purposes, stakeSelf) and examples/upgrade (CounterV1 and CounterV2, a
+             // migration). The port's init migrate is the Java method migrate (as its init is init), so CounterV2's adopt is
+             // called by that name, and so is the client's.
+             staking: ['StakedVault', 'open'],
+             upgrade: ['CounterV1', null, [:], ['CounterV2\\.adopt\\(': 'CounterV2.migrate(', 'CounterV2Client\\.adopt\\(': 'CounterV2Client.migrate(']]]
+// ADR-0018 M3b: examples/registry's tests, run against the Registry port. Its test tree has helpers (RegistryWorld, Tamper,
+// M2Kit), DevKit tests in devnet/ and tests in the runtime's package, so it has its own list: every file of
+// examples/registry/src/test is copied or left out here with the reason, and any other file stops the build (fail closed).
+// The copy moves the registry's packages into the port's (org.julclang.state.examples.registry -> ...dsl; the runtime's
+// package stays), gives each test class a Port suffix, and states the port's differences: withdraw reads nothing of the
+// transaction, so neither the method nor its redeemer takes a Ctx; the Withdrawal record is the port's EntryOutcome; the
+// page verifier's description copy (js/state-client) is examples/registry's, not the port's; an Entry's owner is a Key, so
+// RegistryAttacksTest's size-rule case (recover with an owner of 100+ bytes) cannot be built against the port and is
+// skipped there (JscV2M3bAttackTest makes the size rule's case on the port).
+def registryCopied = ['org/julclang/state/examples/registry/KeyedRuntimeChecksTest.java', 'org/julclang/state/examples/registry/KeyedVectorsTest.java',
+                      'org/julclang/state/examples/registry/LedgerModelTest.java', 'org/julclang/state/examples/registry/ListIntegrityTest.java',
+                      'org/julclang/state/examples/registry/RegistryAttacksTest.java', 'org/julclang/state/examples/registry/RegistryDescriptionTest.java',
+                      'org/julclang/state/examples/registry/RegistryFlowTest.java', 'org/julclang/state/examples/registry/RegistryWorld.java',
+                      'org/julclang/state/examples/registry/Tamper.java',
+                      'org/julclang/state/examples/registry/devnet/ConcurrencyDevnetTest.java', 'org/julclang/state/examples/registry/devnet/ContestedGapDevnetTest.java',
+                      'org/julclang/state/examples/registry/devnet/HostilityDevnetTest.java', 'org/julclang/state/examples/registry/devnet/M2Kit.java',
+                      'org/julclang/state/examples/registry/devnet/RegistrySmokeDevnetTest.java',
+                      'org/julclang/state/runtime/DuplicateKeyDevnetTest.java', 'org/julclang/state/runtime/UntimedKeyedPendingDevnetTest.java']
+def registryLeftOut = [
+        'org/julclang/state/examples/registry/SizeAndBudgetTest.java': 'the Java example\'s size and budget gate over its own test contract (Widest); JscV2M3bGateTest measures the port',
+        'org/julclang/state/examples/registry/widest/Widest.java': 'a test contract of the processor (the widest keyed record), not the port',
+        'org/julclang/state/examples/registry/widest/WidestTest.java': 'tests the Widest test contract, not the port',
+        'org/julclang/state/examples/registry/m2/Capacity.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/m2/Eleven.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/m2/Odd.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/m2/Sixteen.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/m2/Stamps.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/devnet/CapacityDevnetTest.java': 'drives the m2/ test contracts (Capacity, Eleven, Sixteen), not the port',
+        'org/julclang/state/examples/registry/devnet/ComposeDevnetTest.java': 'drives the m2/ Stamps contract and examples/fees, not the port',
+        'org/julclang/state/examples/registry/devnet/CooldownDevnetTest.java': 'mostly the m2/ test contracts; its Registry case is RegistryCooldownDevnetPortTest\'s',
+        'org/julclang/state/examples/registry/devnet/SubmissionDevnetTest.java': 'drives the m2/ Stamps contract, not the port']
+def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
+def copyPortTests = tasks.register('copyPortTests', Sync) {
+    description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'
+    // The rewrite below is code, not a file: state it as an input, so a changed rule re-runs the copy.
+    inputs.property('ports', ports.collect { k, v -> "${k}=${v}" }.join(','))
+    inputs.property('rules', 'package; class <X>Test -> <X>PortTest; DescriptionTest -> <Contract>DescriptionPortTest; <Contract>.<init>( -> <Contract>.init(; <Contract>.<Record> -> <Contract>.<renamed>; words renamed')
+    ports.keySet().each { example -> inputs.dir(rootProject.file("examples/${example}/src/test")) }
+    inputs.dir(rootProject.file('examples/registry/src/test'))
+    inputs.property('registry', registryCopied.join(',') + ';' + registryLeftOut.keySet().join(','))
+    into portTestsOut
+    doFirst {
+        def registryRoot = rootProject.file('examples/registry/src/test/java')
+        rootProject.file('examples/registry/src/test').eachFileRecurse(groovy.io.FileType.FILES) { f ->
+            String rel = registryRoot.toPath().relativize(f.toPath()).toString().replace(File.separator, '/')
+            if (!registryCopied.contains(rel) && !registryLeftOut.containsKey(rel)) {
+                throw new GradleException("copyPortTests cannot run ${rootProject.relativePath(f)} against the registry port: list it as copied or left out (with the reason) in examples/dsl/build.gradle")
+            }
+        }
+        ports.keySet().each { example ->
+            def root = rootProject.file("examples/${example}/src/test")
+            def pkg = new File(root, "java/org/julclang/state/examples/${example}")
+            root.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+                if (f.parentFile != pkg || !f.name.endsWith('Test.java')) {
+                    throw new GradleException("copyPortTests cannot run ${rootProject.relativePath(f)} against the ${example} port: only " +
+                            "*Test.java directly in ${rootProject.relativePath(pkg)} are copied; extend the copy rule (examples/dsl/build.gradle)")
+                }
+            }
+        }
+    }
+    ports.each { example, port ->
+        String contract = port[0]
+        String init = port[1]
+        Map<String, String> records = port.size() > 2 ? port[2] : [:]
+        Map<String, String> words = port.size() > 3 ? port[3] : [:]
+        from(rootProject.file("examples/${example}/src/test/java/org/julclang/state/examples/${example}")) {
+            include '*Test.java'
+            into 'org/julclang/state/examples/dsl'
+            rename { String f -> f == 'DescriptionTest.java' ? "${contract}DescriptionPortTest.java" : f.replace('Test.java', 'PortTest.java') }
+            filter { String line ->
+                String out = line.replace("package org.julclang.state.examples.${example};", 'package org.julclang.state.examples.dsl;')
+                        .replaceAll(/\bclass (\w+)Test\b/, 'class $1PortTest')
+                        .replace('class DescriptionPortTest', "class ${contract}DescriptionPortTest")
+                if (init != null) out = out.replace("${contract}.${init}(", "${contract}.init(")
+                records.each { from, to -> out = out.replaceAll(/\b${contract}\.${from}\b/, "${contract}.${to}") }
+                words.each { from, to -> out = out.replaceAll(/\b${from}\b/, to) }
+                return out
+            }
+        }
+    }
+}
+copyPortTests.configure {
+    from(rootProject.file('examples/registry/src/test/java')) {
+        include registryCopied
+        eachFile { f ->
+            String to = f.relativePath.pathString.replace('org/julclang/state/examples/registry/', 'org/julclang/state/examples/dsl/')
+            if (to.endsWith('Test.java')) to = to.substring(0, to.length() - 'Test.java'.length()) + 'PortTest.java'
+            f.relativePath = RelativePath.parse(true, to)
+        }
+        filter { String line ->
+            line.replace('org.julclang.state.examples.registry', 'org.julclang.state.examples.dsl')
+                    .replaceAll(/\bclass (\w+)Test\b/, 'class $1PortTest')
+                    .replaceAll(/\b(\w+)Test\.class\b/, '$1PortTest.class')
+                    .replaceAll(/\bRegistry\.Withdrawal\b/, 'Registry.EntryOutcome')
+                    .replaceAll('(Registry\\.withdraw\\(.*), \\(Ctx\\) c\\[1\\]\\)', '$1)')
+                    .replaceAll('(new RegistryValidator\\.Withdraw\\([^,()]+(?:\\([^()]*\\))?), (?:\\(Ctx\\) c\\[1\\]|ctx)\\)', '$1)')
+                    .replace('            // recover sets an arbitrary owner. The size rule (I13 amended) measures the datum with next padded to',
+                            '            if (true) return;   // the port: an Entry\'s owner is a Key (28 bytes, a checked input), so recover cannot grow the datum; JscV2M3bAttackTest tests the size rule on the port\n            // recover sets an arbitrary owner. The size rule (I13 amended) measures the datum with next padded to')
+                    .replace('    void theJavaScriptTestsCopyIsCurrent() throws Exception {',
+                            '    @org.junit.jupiter.api.Disabled("the port: js/state-client\'s copy is examples/registry\'s description, not the port\'s")\n    void theJavaScriptTestsCopyIsCurrent() throws Exception {')
+        }
+    }
+}
+sourceSets.test.java.srcDir(files(portTestsOut).builtBy(copyPortTests))
+
+// ADR-0018 M3c (ADR-0010 §6): JuLC's pinned CIP-57 revision has no vocabulary for the VOTE/PROPOSE purposes, which the
+// staking port (StakedVault.jsc) handles, so this project compiles without a blueprint, as examples/staking does. Only the
+// aggregate META-INF/plutus/plutus.json is not written: every validator's own script (<Name>Validator.plutus.json), which
+// the runtime and the tests read, is unchanged.
+tasks.named('compileJava') { options.compilerArgs += ['-Ajulc.blueprint=false'] }
+
+// ADR-0018 D12: javac's diagnostics on the generated Java, reported again at their .jsc positions (as the plugin does).
+def javacLog = layout.buildDirectory.file('jsc/javac.log').get().asFile
+def remapJsc = tasks.register('remapJscDiagnostics', JavaExec) {
+    description = 'Reports compileJava\'s diagnostics on Java generated from .jsc at their .jsc positions'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    def log = javacLog
+    onlyIf { log.length() > 0 }
+    args '--remap', log.path, jscOut.get().asFile.path, jscSrc.path
+    doLast { log.delete() }
+}
+tasks.named('compileJava') {
+    def log = javacLog
+    doFirst {
+        log.parentFile.mkdirs()
+        log.text = ''
+        def append = { log.append(it.toString()) } as StandardOutputListener
+        logging.addStandardOutputListener(append)
+        logging.addStandardErrorListener(append)
+    }
+    finalizedBy remapJsc
+}

@@ -1,0 +1,9 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    state b: Bytes
+    init(b0: Bytes) { owner = caller
+      b = b0 }
+    destroy close() only owner { pay 1 ada to owner }
+}

@@ -1,6 +1,5 @@
 package org.julclang.state.testkit;
 
-import org.julclang.clientlib.JulcScriptLoader;
 import org.julclang.clientlib.PlutusDataAdapter;
 import org.julclang.core.PlutusData;
 import org.julclang.core.Program;
@@ -86,14 +85,14 @@ public final class StateHarness<S> {
             throw new IllegalStateException(e);
         }
         this.seed = new TxOutRef(new TxId(fill(32, 0x5E)), BigInteger.ZERO);
-        var ov = JulcScriptLoader.load(org.julclang.state.verifier.OutputVerifier.class);
+        var ov = org.julclang.state.runtime.ValidatorScripts.load(org.julclang.state.verifier.OutputVerifier.class);
         this.outputVerifier = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(ov.getCborHex())));
         try {
             this.outputVerifierHash = ov.getScriptHash();
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
-        var v = JulcScriptLoader.load(org.julclang.state.verifier.MapVerifier.class);
+        var v = org.julclang.state.runtime.ValidatorScripts.load(org.julclang.state.verifier.MapVerifier.class);
         this.verifier = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(v.getCborHex())));
         try {
             this.verifierHash = v.getScriptHash();
@@ -188,22 +187,47 @@ public final class StateHarness<S> {
     }
 
     public Verdict evaluateCertify(TxModel tx, org.julclang.ledger.TxCert cert) {
+        return evaluateContext("CERTIFY", certifyContext(tx, cert));
+    }
+
+    /** The CERTIFY purpose's script context for {@code cert} in the transaction (ADR-0018 M3c: to tamper with as data). */
+    public PlutusData certifyContext(TxModel tx, org.julclang.ledger.TxCert cert) {
         var b = ScriptContextTestBuilder.certifying(BigInteger.ZERO, cert).redeemer(PlutusData.integer(0));
         b.certificate(cert);
+        return fill(b, tx).buildPlutusData();
+    }
+
+    /** Evaluates the contract's script on a script context given as data (ADR-0018 M3c: a context no ledger type can build). */
+    public Verdict evaluateContext(String label, PlutusData ctx) {
         var results = new LinkedHashMap<String, EvalResult>();
-        results.put("CERTIFY", ValidatorTest.evaluate(program, fill(b, tx).buildPlutusData()));
+        results.put(label, ValidatorTest.evaluate(program, ctx));
         return new Verdict(results);
     }
 
     /** Evaluates the VOTE purpose for {@code voter} casting {@code votes} (action id -> vote) in the transaction. */
     public Verdict evaluateVote(TxModel tx, org.julclang.ledger.Voter voter,
                                 java.util.Map<org.julclang.ledger.GovernanceActionId, org.julclang.ledger.Vote> votes) {
+        var all = new LinkedHashMap<org.julclang.ledger.Voter, java.util.Map<org.julclang.ledger.GovernanceActionId, org.julclang.ledger.Vote>>();
+        all.put(voter, votes);
+        return evaluateVotes(tx, voter, all);
+    }
+
+    /**
+     * ADR-0018 M3c (K44): evaluates the VOTE purpose for {@code voter}, the transaction holding {@code votes}: every voter's
+     * votes in the given order (another voter's too, or none of {@code voter}'s).
+     */
+    public Verdict evaluateVotes(TxModel tx, org.julclang.ledger.Voter voter,
+                                 java.util.Map<org.julclang.ledger.Voter, java.util.Map<org.julclang.ledger.GovernanceActionId, org.julclang.ledger.Vote>> votes) {
         var b = ScriptContextTestBuilder.voting(voter).redeemer(PlutusData.integer(0));
         PlutusData ctx = fill(b, tx).buildPlutusData();
         // The builder has no votes: put them in TxInfo field 12 (votes: Map Voter (Map GovernanceActionId Vote)).
-        var inner = new ArrayList<PlutusData.Pair>();
-        votes.forEach((id, v) -> inner.add(new PlutusData.Pair(data(id), data(v))));
-        var votesMap = new PlutusData.MapData(List.of(new PlutusData.Pair(data(voter), new PlutusData.MapData(inner))));
+        var outer = new ArrayList<PlutusData.Pair>();
+        votes.forEach((who, vs) -> {
+            var inner = new ArrayList<PlutusData.Pair>();
+            vs.forEach((id, v) -> inner.add(new PlutusData.Pair(data(id), data(v))));
+            outer.add(new PlutusData.Pair(data(who), new PlutusData.MapData(inner)));
+        });
+        var votesMap = new PlutusData.MapData(outer);
         var sc = (PlutusData.ConstrData) ctx;
         var info = (PlutusData.ConstrData) sc.fields().get(0);
         var fields = new ArrayList<>(info.fields());
@@ -333,8 +357,57 @@ public final class StateHarness<S> {
         }
     }
 
+    /** The largest quantity a transaction output may hold (the ledger's Word64). */
+    public static final BigInteger MAX_OUTPUT_QUANTITY = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+    /** The range of a mint entry (the ledger's Int64). */
+    public static final BigInteger MIN_MINT = BigInteger.ONE.shiftLeft(63).negate(), MAX_MINT = BigInteger.ONE.shiftLeft(63).subtract(BigInteger.ONE);
+
+    /**
+     * What the ledger refuses in a transaction's values before any script runs (implementation review r1, S2 and F1): an
+     * output holding a negative quantity or one above 2^64 - 1, a mint entry of zero or outside Int64. A script sees such
+     * a transaction (its value equation may even balance: a send of more than the instance holds leaves a negative
+     * continuing output), but no such transaction exists, so the harness refuses it as the ledger would. Null when the
+     * values are well formed. The ledger's other rules (the minimum lovelace of an output, fees, balance) are not modelled.
+     */
+    public static String ledgerProblem(TxModel tx) {
+        for (int i = 0; i < tx.outputs.size(); i++) {
+            for (var p : org.julclang.state.api.Assets.read(tx.outputs.get(i).value()).entrySet()) {
+                for (var t : p.getValue().entrySet()) {
+                    BigInteger q = t.getValue();
+                    if (q.signum() < 0) return "output " + i + " holds a negative quantity of " + p.getKey() + "." + t.getKey() + ": " + q;
+                    if (q.compareTo(MAX_OUTPUT_QUANTITY) > 0) {
+                        return "output " + i + " holds more than 2^64 - 1 of " + p.getKey() + "." + t.getKey() + ": " + q;
+                    }
+                }
+            }
+        }
+        for (var e : tx.mint.toPlutusData().entries()) {
+            for (var t : ((PlutusData.MapData) e.value()).entries()) {
+                BigInteger q = ((PlutusData.IntData) t.value()).value();
+                if (q.signum() == 0 || q.compareTo(MIN_MINT) < 0 || q.compareTo(MAX_MINT) > 0) return "a mint entry of zero or outside Int64: " + q;
+            }
+        }
+        return null;
+    }
+
+    private boolean ledgerRules = true;
+
+    /**
+     * Whether {@link #evaluate} refuses what {@link #ledgerProblem} names (on by default). A budget measurement at quantities
+     * no ledger holds (the worst case of the scripts' integer costs) turns it off; nothing else should.
+     */
+    public StateHarness<S> ledgerRules(boolean on) {
+        this.ledgerRules = on;
+        return this;
+    }
+
     public Verdict evaluate(TxModel tx) {
         var results = new LinkedHashMap<String, EvalResult>();
+        String ledger = ledgerRules ? ledgerProblem(tx) : null;
+        if (ledger != null) {
+            results.put("LEDGER", new EvalResult.Failure("the ledger refuses this transaction: " + ledger, new org.julclang.vm.ExBudget(0, 0), List.of()));
+            return new Verdict(results);
+        }
         for (var e : tx.spendRedeemers.entrySet()) {
             TxInInfo in = tx.inputs.stream().filter(i -> i.outRef().equals(e.getKey())).findFirst()
                     .orElseThrow(() -> new IllegalStateException("spend redeemer for a missing input"));
@@ -749,6 +822,17 @@ public final class StateHarness<S> {
         BigInteger to = T0.add(WINDOW_MS);
         var plan = org.julclang.state.runtime.Batcher.fold(codec, live.state(),
                 live.lovelace().subtract(BigInteger.valueOf(spec.minAda())), pending, T0, to, Integer.MAX_VALUE);
+        return batch(live, codec, intents, plan);
+    }
+
+    /**
+     * A batch transaction for a given {@code plan} rather than the JVM's fold: the plan's applied intents (each one of
+     * {@code intents}), their payouts, and its final state and balance. A test states the outcome it expects (from an
+     * independent oracle, ADR-0018 J3) or a wrong one, and the validator judges it.
+     */
+    public Batch<S> batch(Live<S> live, org.julclang.state.runtime.IntentCodec<S> codec, List<LiveIntent> intents,
+                          org.julclang.state.runtime.Batcher.Plan<S> plan) {
+        BigInteger to = T0.add(WINDOW_MS);
         var tx = new TxModel(TxModel.Kind.ACTION);
         var inputs = new ArrayList<TxInInfo>();
         inputs.add(new TxInInfo(live.ref(), stateOut(live.state(), live.lovelace())));

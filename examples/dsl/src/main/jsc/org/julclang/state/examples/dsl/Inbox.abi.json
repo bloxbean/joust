@@ -1,0 +1,102 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Inbox",
+  "source": "Inbox.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "owner", "type": "Key", "data": "bytes28" },
+      { "name": "urgent", "type": "Int", "data": "int" },
+      { "name": "refs", "type": "Int", "data": "int" },
+      { "name": "bonus", "type": "Int", "data": "int" },
+      { "name": "tags", "type": "Int", "data": "int" },
+      { "name": "shares", "type": "Int", "data": "int" },
+      { "name": "extra", "type": "Int", "data": "int" },
+      { "name": "reply", "type": "Option<Address>", "data": "option<Address>" },
+      { "name": "keys", "type": "Int", "data": "int" },
+      { "name": "names", "type": "Int", "data": "int" },
+      { "name": "flag", "type": "Bool", "data": "bool" },
+      { "name": "pick", "type": "Option<Int>", "data": "option<int>" },
+      { "name": "kind", "type": "Kind", "data": "Kind" }
+    ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Post", "constr": 0, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Keyed", "constr": 1, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Named", "constr": 2, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Valued", "constr": 3, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Set", "constr": 4, "fields": [
+          { "name": "newFlag", "type": "Bool", "data": "bool" },
+          { "name": "newPick", "type": "Option<Int>", "data": "option<int>" },
+          { "name": "newKind", "type": "Kind", "data": "Kind" }
+        ] },
+      { "name": "Close", "constr": 5, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "Slip": { "kind": "record", "constructors": [{ "name": "Slip", "constr": 0, "fields": [
+        { "name": "urgent", "type": "Bool", "data": "bool" },
+        { "name": "ref", "type": "Option<Int>", "data": "option<int>" },
+        { "name": "kind", "type": "Kind", "data": "Kind" },
+        { "name": "tags", "type": "List<Bytes>", "data": "list<bytes>" },
+        { "name": "shares", "type": "Map<Key, Int>", "data": "map<bytes28, int>" },
+        { "name": "extra", "type": "Value", "data": "map<bytes, map<bytes, int>>" },
+        { "name": "reply", "type": "Address", "data": "Address" }
+      ] }] },
+    "Kind": { "kind": "enum", "constructors": [
+      { "name": "Plain", "constr": 0, "fields": [] },
+      { "name": "Bonus", "constr": 1, "fields": [
+          { "name": "factor", "type": "Int", "data": "int" }
+        ] }
+    ] },
+    "Address": { "kind": "ledger", "constructors": [{ "name": "Address", "constr": 0, "fields": [
+        { "name": "credential", "type": "Credential", "data": "Credential" },
+        { "name": "stakingCredential", "type": "Option<StakingCredential>", "data": "option<StakingCredential>" }
+      ] }] },
+    "Credential": { "kind": "ledger", "constructors": [
+      { "name": "PubKeyCredential", "constr": 0, "fields": [
+          { "name": "hash", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "ScriptCredential", "constr": 1, "fields": [
+          { "name": "hash", "type": "Bytes", "data": "bytes" }
+        ] }
+    ] },
+    "StakingCredential": { "kind": "ledger", "constructors": [
+      { "name": "StakingHash", "constr": 0, "fields": [
+          { "name": "credential", "type": "Credential", "data": "Credential" }
+        ] },
+      { "name": "StakingPtr", "constr": 1, "fields": [
+          { "name": "slot", "type": "Int", "data": "int" },
+          { "name": "txIndex", "type": "Int", "data": "int" },
+          { "name": "certIndex", "type": "Int", "data": "int" }
+        ] }
+    ] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

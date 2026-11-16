@@ -1,0 +1,33 @@
+package ports
+// Port of examples/vault Vault.java
+contract Vault(maxDatumBytes = 128) {
+    state owner: Key
+    state unlockAt: Int
+    state total: Int
+
+    init(unlockAt: Int) payable {
+        require before(unlockAt) "unlockAt must be in the future"
+        owner = caller
+        this.unlockAt = unlockAt
+        total = received
+    }
+
+    action deposit() payable {
+        require received > 0 "deposit must be positive"
+        total += received
+    }
+
+    action withdraw(amount: Int) only owner after unlockAt {
+        require amount > 0 "amount must be positive"
+        require amount <= total "insufficient funds"
+        total -= amount
+        pay amount to owner
+    }
+
+    destroy close() only owner after unlockAt {
+        pay balance to owner
+    }
+
+    view total(): Int = total
+    view unlockAt(): Int = unlockAt
+}

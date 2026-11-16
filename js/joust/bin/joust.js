@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // joust: JOUST contracts with npm only (ADR-0015 D9), the npm side of ADR-0017's one `joust` command.
 //   joust build                 compile contracts/ (.java, .jsc) into build/joust/
+//   joust fmt [--check] [paths] format the .jsc files (contracts/ by default) in place
 //   joust deploy [--network n]  publish the reference scripts; write build/joust/deployments.<n>.json
 //   joust dev [--network n] [--port p]  attach to the chain (DevKit/Yaci Store, or Blockfrost), build, deploy, rebuild
 //                               on save, serve the page with the chain API proxied at /chain
@@ -11,11 +12,13 @@
 // ADR-0017 D5/D9: version, help (also `<cmd> --help`) and new are answered here and never run project code. Project
 // commands run at the npm project's root, and by the project's own @julclang/joust: a global or other copy hands over.
 import { spawnSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { constants } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { locate, resolveJoust } from '../src/project.js';
 
+// The directory joust was started in: a project command runs at the project's root, and the paths it is given are this one's.
+const INVOKED = process.cwd();
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const SELF = realpathSync(fileURLToPath(import.meta.url));
 
@@ -25,9 +28,12 @@ delete process.env.JOUST_DEFERRED;
 const handedOver = deferredTo === SELF;
 
 const COMMANDS = {
-  build: 'build                       compile contracts/ (.java, .jsc) into build/joust/',
+  build: 'build [--accept-abi[=<Contract>@<committed>..<new>]] [--accept-lock] [--traces]   compile contracts/ (.java, .jsc) into build/joust/',
+  abi: 'abi diff <Contract> [--out <file>]   (<Contract>: package.Name, or a Name only one contract has) the committed ABI manifest and the one the build computes now, with their SHA-256',
+  fmt: 'fmt [--check] [<file or dir>...]   format the .jsc files (contracts/ by default) in place; --check lists those that are not (exit 0 formatted, 1 not formatted, 2 refused, 3 usage)',
+  test: 'test [-- <node --test args>]   build, then run test/*.test.js offline (an in-memory ledger: @julclang/joust/test)',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
-  dev: 'dev [--network <name>] [--port <port>]   build, deploy, rebuild on save, serve the page',
+  dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
   serve: 'serve [--network <name>] [--dir <dir>] [--port <port>]   serve a built page with the chain API proxied',
   version: 'version                     this joust\'s version',
   help: 'help [<command>]            this help',
@@ -112,8 +118,75 @@ async function project() {
   switch (cmd) {
     case 'build': {
       const { build } = await import('../src/build.js');
-      const r = await build({ src: flag('src') ?? config.contracts, out: flag('out') ?? config.out });
+      // ADR-0021 D7a (ADR-0018 D12 amended): --accept-abi=<Contract>@<committed-sha256|none>..<new-sha256> accepts that one
+      // contract, bound to the two manifests reviewed; a bare --accept-abi accepts every changed manifest, as before.
+      const bound = args.find((a) => a.startsWith('--accept-abi='));
+      let acceptAbi = args.includes('--accept-abi');
+      if (bound) {
+        const { parseBoundAcceptance } = await import('../src/abi.js');
+        acceptAbi = parseBoundAcceptance(bound.slice('--accept-abi='.length));
+        if (!acceptAbi) {
+          console.error('joust build: --accept-abi=<Contract>@<committed-sha256 or none>..<new-sha256> (from joust abi diff <Contract>)');
+          return 2;
+        }
+      }
+      const r = await build({ src: flag('src') ?? config.contracts, out: flag('out') ?? config.out, acceptAbi,
+        acceptLock: args.includes('--accept-lock'), traces: args.includes('--traces') });
       return r.ok ? 0 : 1;
+    }
+    case 'abi': {
+      // ADR-0021 D7a: `joust abi diff <Contract>`, what Accept ABI… shows before anything is accepted. Writes nothing into
+      // the project (the build runs in memory); --out writes the diff as JSON (the extension's own storage).
+      if (args[1] !== 'diff' || !args[2] || args[2].startsWith('-')) {
+        console.error(`usage: joust ${COMMANDS.abi}`);
+        return 2;
+      }
+      const { compile } = await import('../src/build.js');
+      const { abiDiff } = await import('../src/abi.js');
+      const r = await compile({ src: flag('src') ?? config.contracts });
+      if (!r.generated?.length) {
+        for (const d of r.diagnostics ?? []) console.error(`${d.severity}${d.code ? `[${d.code}]` : ''}: ${d.message}`);
+        return 1;
+      }
+      const d = abiDiff({ generated: r.generated, srcDir: flag('src') ?? config.contracts, contract: args[2] });
+      if (d.error) {
+        console.error(`joust abi diff: ${d.error}`);
+        return 1;
+      }
+      console.log(`${d.contract} (${d.file})`);
+      console.log(`--- committed ${d.path} sha256 ${d.committed.sha256}`);
+      console.log(d.committed.text ?? '(none)');
+      console.log(`+++ now sha256 ${d.now.sha256}`);
+      console.log(d.now.text);
+      console.log(d.committed.sha256 === d.now.sha256 ? 'unchanged' : `accept it with: joust build --accept-abi=${d.contract}@${d.committed.sha256}..${d.now.sha256}`);
+      const out = flag('out');
+      if (out) {
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync(out, JSON.stringify(d, null, 2) + '\n');
+      }
+      return 0;
+    }
+    case 'fmt': {
+      // ADR-0021 r9 §15: the engine's lang.format; a file that does not parse is reported and left as it was (F4).
+      // #120 F5: exit 0 formatted, 1 not formatted (--check), 2 refused, 3 usage. S3: the default target only inside the project.
+      const { fmt, defaultTarget, FMT_USAGE } = await import('../src/fmt.js');
+      const paths = args.slice(1).filter((a) => a !== '--check');
+      if (paths.some((a) => a.startsWith('-'))) {
+        console.error(`usage: joust ${COMMANDS.fmt}`);
+        return FMT_USAGE;
+      }
+      // #120 F10: named paths are the invoking directory's (the command itself runs at the project's root).
+      const { resolve: resolvePath } = await import('node:path');
+      let targets = paths.map((p) => resolvePath(INVOKED, p));
+      if (!targets.length) {
+        const t = defaultTarget(process.cwd(), config.contracts);
+        if (t.error) {
+          console.error(`joust fmt: ${t.error}`);
+          return FMT_USAGE;
+        }
+        targets = [t.path];
+      }
+      return fmt({ paths: targets, check: args.includes('--check'), root: process.cwd(), contracts: defaultTarget(process.cwd(), config.contracts).path ?? null });
     }
     case 'deploy': {
       const { deploy } = await import('../src/deploy.js');
@@ -124,15 +197,29 @@ async function project() {
     case 'serve': {
       const run = cmd === 'dev' ? (await import('../src/dev.js')).dev : (await import('../src/serve.js')).serve;
       const d = await run({ config, networkName: flag('network'), dir: flag('dir'),
-        port: flag('port') ? Number(flag('port')) : undefined });
+        port: flag('port') ? Number(flag('port')) : undefined, acceptAbi: args.includes('--accept-abi') });
       const stop = async () => { await d.close(); process.exit(0); };
       process.on('SIGINT', stop);
       process.on('SIGTERM', stop);
       return undefined;   // keeps running
     }
-    case 'test':
-      console.error('joust: the npm joust has no test command; run npm test');
-      return 2;
+    case 'test': {
+      // ADR-0018 D14 (M4c): build, then the project's tests (test/*.test.js) with Node's runner. They run offline when
+      // they use @julclang/joust/test (an in-memory ledger, the validators evaluated by the runtime engine); nothing here
+      // needs a chain.
+      const { build } = await import('../src/build.js');
+      const r = await build({ src: config.contracts, out: config.out, traces: args.includes('--traces') });
+      if (!r.ok) return 1;
+      const { readdirSync } = await import('node:fs');
+      const tests = existsSync('test') ? readdirSync('test').filter((f) => f.endsWith('.test.js')).sort().map((f) => `test/${f}`) : [];
+      if (!tests.length) {
+        console.error('joust test: no test/*.test.js');
+        return 1;
+      }
+      const t = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...(end >= 0 ? args.slice(end + 1) : []), ...tests],
+        { stdio: 'inherit', env: { ...process.env, JOUST_OFFLINE: '1' } });
+      return t.status ?? 1;
+    }
     default:
       console.error(`joust: unknown command '${cmd}' (this is the npm joust, @julclang/joust ${VERSION})\n\n${usage()}`);
       return 2;

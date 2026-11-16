@@ -1,0 +1,32 @@
+description = 'JOUST example: a Java (JuLC) on-chain library imported by .jsc contracts with java: (ADR-0018 D9, M4b)'
+
+dependencies {
+    implementation project(':julc-state-api')
+}
+
+// The jar ships the library's on-chain sources under META-INF/plutus-sources (with index.txt), as an on-chain library
+// does: a .jsc build that imports it compiles these sources on both sides, and certifies them first (ADR-0018 D9).
+def plutusSources = layout.buildDirectory.dir('generated/plutus-sources')
+def bundle = tasks.register('bundlePlutusSources') {
+    def src = file('src/main/java')
+    inputs.dir(src)
+    outputs.dir(plutusSources)
+    doLast {
+        def root = new File(plutusSources.get().asFile, 'META-INF/plutus-sources')
+        project.delete(plutusSources.get().asFile)
+        def paths = []
+        fileTree(src).matching { include '**/*.java' }.visit { d ->
+            if (!d.directory) {
+                def out = new File(root, d.relativePath.pathString)
+                out.parentFile.mkdirs()
+                out.text = d.file.getText('UTF-8')
+                paths << d.relativePath.pathString
+            }
+        }
+        new File(root, 'index.txt').text = paths.sort().join('\n') + '\n'
+    }
+}
+tasks.named('jar') {
+    dependsOn bundle
+    from(plutusSources)
+}

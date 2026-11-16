@@ -2,11 +2,11 @@
 
 A Cardano state contract written in {{language}} (`contracts/app/{{contract}}`), and a Node script (`index.js`) that
 deploys and calls it. Built and used with npm only: no JDK or GraalVM.
-
+{{jscNote}}
 ```sh
 npm install
 npm start          # build, deploy and run index.js on a local Yaci DevKit
-npm test           # the same calls, as a test (node --test)
+npm test           # joust test: the same calls, offline (an in-memory ledger; no DevKit)
 ```
 
 You need a DevKit: `yaci-devkit up --enable-yaci-store` (Yaci Store on `:8080`, admin API on `:10000`), the network

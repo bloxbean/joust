@@ -196,6 +196,12 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
+      # ./gradlew build runs the .jsc 2 differential tests' JavaScript leg (ADR-0018 D15), which needs Node.js 22.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 

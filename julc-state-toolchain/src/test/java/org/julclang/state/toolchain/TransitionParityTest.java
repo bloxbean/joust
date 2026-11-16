@@ -95,16 +95,34 @@ class TransitionParityTest {
         return jvmView;
     }
 
-    static String evaluateHere(String programHex, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
-        var program = JulcScriptAdapter.toProgram(programHex);
-        var in = new ArrayList<org.julclang.core.PlutusData>();
-        for (PlutusData d : List.of(target, shared, args, ctx)) {
-            try {
-                in.add(PlutusDataCborDecoder.decode(d.serializeToBytes()));
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
-            }
+    static org.julclang.core.PlutusData julc(PlutusData d) {
+        try {
+            return PlutusDataCborDecoder.decode(d.serializeToBytes());
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
         }
+    }
+
+    static String evaluateHere(String programHex, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
+        return vm(programHex, List.of(julc(target), julc(shared), julc(args), julc(ctx)));
+    }
+
+    /**
+     * As {@link #evaluate}, with the arguments as JuLC data, unchanged (a map keeps its order and duplicates); recorded
+     * for the Wasm check too.
+     */
+    static String evaluateRaw(String programHex, List<org.julclang.core.PlutusData> in) {
+        String jvmView = vm(programHex, in);
+        var v = new LinkedHashMap<String, Object>();
+        v.put("program", programHex);
+        v.put("args", in.stream().map(d -> HexFormat.of().formatHex(PlutusDataCborEncoder.encode(d))).toList());
+        v.put("expected", jvmView);
+        VECTORS.add(v);
+        return jvmView;
+    }
+
+    private static String vm(String programHex, List<org.julclang.core.PlutusData> in) {
+        var program = JulcScriptAdapter.toProgram(programHex);
         // The ledger's semantics (PV11), as the validator runs: case on builtin constants needs it.
         EvalResult r = VM.evaluateWithArgs(program, org.julclang.vm.LedgerEvaluationTarget.pv11(org.julclang.vm.PlutusLanguage.PLUTUS_V3), in, new org.julclang.vm.ExBudget(10_000_000_000L, 14_000_000L), org.julclang.vm.EvalOptions.DEFAULT);
         if (r instanceof EvalResult.Success s) {

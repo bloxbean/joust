@@ -1,0 +1,53 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.TallyV2",
+  "source": "TallyV2.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "admin", "type": "Key", "data": "bytes28" },
+      { "name": "voters", "type": "List<Key>", "data": "list<bytes28>" },
+      { "name": "count", "type": "Int", "data": "int" },
+      { "name": "bonus", "type": "Int", "data": "int" },
+      { "name": "live", "type": "Bool", "data": "bool" }
+    ] },
+  "params": { "name": "Config", "constr": 0, "fields": [
+      { "name": "previous", "type": "Hash", "data": "bytes28" },
+      { "name": "council", "type": "List<Key>", "data": "list<bytes28>" },
+      { "name": "needed", "type": "Int", "data": "int" },
+      { "name": "until", "type": "Int", "data": "int" }
+    ] },
+  "migrate": { "from": "previous", "previous": "TallyV1.State" },
+  "redeemers": {
+    "spend": [
+      { "name": "Count", "constr": 0, "fields": [] },
+      { "name": "Close", "constr": 1, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] },
+      { "name": "Adopt", "constr": 2, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "bonus", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ]
+  },
+  "types": {
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

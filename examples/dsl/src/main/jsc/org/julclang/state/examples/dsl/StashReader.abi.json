@@ -1,0 +1,33 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.StashReader",
+  "source": "StashReader.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "n", "type": "Int", "data": "int" }
+    ] },
+  "params": { "name": "Config", "constr": 0, "fields": [
+      { "name": "stash", "type": "Instance<Stash>", "data": "ForeignInstance" }
+    ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Peek", "constr": 0, "fields": [] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "ForeignInstance": { "kind": "api", "constructors": [{ "name": "ForeignInstance", "constr": 0, "fields": [
+        { "name": "policy", "type": "Bytes", "data": "bytes" },
+        { "name": "instance", "type": "Bytes", "data": "bytes" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

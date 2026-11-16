@@ -1,0 +1,57 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.StakedCounterV1",
+  "source": "StakedCounterV1.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "admin", "type": "Key", "data": "bytes28" },
+      { "name": "successor", "type": "Bytes", "data": "bytes" },
+      { "name": "count", "type": "Int", "data": "int" }
+    ] },
+  "params": { "name": "Config", "constr": 0, "fields": [
+      { "name": "council", "type": "List<Key>", "data": "list<bytes28>" },
+      { "name": "quorum", "type": "Int", "data": "int" },
+      { "name": "pool", "type": "Bytes", "data": "bytes" },
+      { "name": "payee", "type": "Key", "data": "bytes28" }
+    ] },
+  "migratesTo": { "upgrade": "successor" },
+  "stakeSelf": true,
+  "purposes": [
+    { "purpose": "withdraw", "name": "collect", "marker": 74, "redeemer": { "name": "Rewards", "constr": 0, "fields": [
+          { "name": "marker", "type": "Int", "data": "int" },
+          { "name": "amount", "type": "Int", "data": "int" }
+      ] } },
+    { "purpose": "certify", "name": "certificate" }
+  ],
+  "redeemers": {
+    "spend": [
+      { "name": "Increment", "constr": 0, "fields": [] },
+      { "name": "SetSuccessor", "constr": 1, "fields": [
+          { "name": "next", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Upgrade", "constr": 2, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

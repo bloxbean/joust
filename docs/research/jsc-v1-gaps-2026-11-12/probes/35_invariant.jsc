@@ -1,0 +1,7 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    init() { owner = caller }
+    invariant nonneg = n >= 0
+}

@@ -5,6 +5,7 @@
 import { loadEngine } from '#engine';
 import { emptySnapshot, fetchNeed, utxoJson } from './snapshot.js';
 import { mapMirror } from './mirror.js';
+import { explainRefusal, refusingContract } from './messages.js';
 import pkg from '../package.json' with { type: 'json' };
 
 /** This runtime's version: contracts built by an incompatible toolchain are refused (ADR-0015 I7). */
@@ -129,7 +130,10 @@ export function engineService(o) {
         return r;
       }
       if (!r.needKind) {
-        const e = new Error(r.error);
+        // Only the refusing contract's map explains the message (D12): the engine names it in a composition, a single
+        // call names it itself.
+        const by = r.refusedBy ?? (call.calls ? null : call.contract);
+        const e = new Error(explainRefusal(r.error, refusingContract(o.contracts, { title: by })));
         // A keyed call to prepare again later (ADR-0016 D9): the slot is a field of the result, never read from text.
         if (r.retryAtSlot != null && Number(r.retryAtSlot) >= 0) e.retryAtSlot = Number(r.retryAtSlot);
         throw e;
