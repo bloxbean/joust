@@ -1,0 +1,68 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Bank",
+  "source": "Bank.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "admin", "type": "Key", "data": "bytes28" },
+      { "name": "paused", "type": "Bool", "data": "bool" },
+      { "name": "withdrawLimit", "type": "Int", "data": "int" }
+    ] },
+  "owned": ["Account"],
+  "holdings": [
+      { "name": "Holding", "constr": 0, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "value", "type": "Account", "data": "Account" }
+        ] }
+  ],
+  "redeemers": {
+    "spend": [
+      { "name": "SetPaused", "constr": 0, "fields": [
+          { "name": "pause", "type": "Bool", "data": "bool" }
+        ] },
+      { "name": "SetLimit", "constr": 1, "fields": [
+          { "name": "limit", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Deposit", "constr": 2, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Withdraw", "constr": 3, "fields": [
+          { "name": "amount", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Close", "constr": 4, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "withdrawLimit", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] },
+      { "name": "Open", "constr": 2, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ]
+  },
+  "types": {
+    "Account": { "kind": "record", "constructors": [{ "name": "Account", "constr": 0, "fields": [
+        { "name": "owner", "type": "Key", "data": "bytes28" },
+        { "name": "saved", "type": "Int", "data": "int" }
+      ] }] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

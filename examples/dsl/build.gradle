@@ -139,7 +139,59 @@ def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['
              // ADR-0018 M2c: oracle (Oracle and Shop; the port names the shop Kiosk, since examples/dsl's Shop.jsc is M4a's and
              // JuLC writes a script by its validator's simple name) and fees (Pot and Stall).
              oracle: ['Oracle', 'open', [:], [Shop: 'Kiosk', ShopClient: 'KioskClient', ShopValidator: 'KioskValidator']],
-             fees: ['Pot', null]]
+             fees: ['Pot', null],
+             // ADR-0018 M3a1: the owned-object port of examples/bank; its Account field balance is the port's saved (balance is
+             // a built-in name).
+             bank: ['Bank', null, [:], ['(?<=\\.)balance(?=\\(\\))': 'saved']],
+             // ADR-0018 M3a2: examples/locker (Locker and Safes). locker's unlock sends, so the port takes Funds (a send is checked
+             // against the own policy, ADR-0018 D4): its direct calls in LockerTest pass the funds the instance holds.
+             locker: ['Locker', null, [:], ['(Locker\\.unlock\\(s, BigInteger\\.valueOf\\(\\d+\\), ctx)': '$1, h.funds(held, Assets.none())']],
+             // ADR-0018 M3a3: examples/guild (Guild and Armory; guild's open state field is isOpen, a modifier word) and
+             // examples/market (its state record Config is State, Config being the params record's name; buy's result
+             // record Sold is Exchanged). market's offer with a junk token alongside: the port's method refuses it itself
+             // (what it accepts is not what the caller offers, #funds:, D4), where examples/market's method returns and only
+             // its validator refuses; the copied test expects that refusal, then builds its transaction from the honest offer.
+             guild: ['Guild', null, [:], ['destination\\.open': 'destination.isOpen']],
+             market: ['Market', 'open', [Config: 'State', Sold: 'Exchanged'],
+                      ['var r = (Market\\.offer\\(config, NFT_POLICY, NFT, PRICE, ctx, h\\.createFunds\\(true, )junk':
+                               'assertThrows(RequireException.class, () -> $1junk))); var r = $1nft']],
+             // ADR-0018 M3c: examples/staking (StakedVault: purposes, stakeSelf) and examples/upgrade (CounterV1 and CounterV2, a
+             // migration). The port's init migrate is the Java method migrate (as its init is init), so CounterV2's adopt is
+             // called by that name, and so is the client's.
+             staking: ['StakedVault', 'open'],
+             upgrade: ['CounterV1', null, [:], ['CounterV2\\.adopt\\(': 'CounterV2.migrate(', 'CounterV2Client\\.adopt\\(': 'CounterV2Client.migrate(']]]
+// ADR-0018 M3b: examples/registry's tests, run against the Registry port. Its test tree has helpers (RegistryWorld, Tamper,
+// M2Kit), DevKit tests in devnet/ and tests in the runtime's package, so it has its own list: every file of
+// examples/registry/src/test is copied or left out here with the reason, and any other file stops the build (fail closed).
+// The copy moves the registry's packages into the port's (org.julclang.state.examples.registry -> ...dsl; the runtime's
+// package stays), gives each test class a Port suffix, and states the port's differences: withdraw reads nothing of the
+// transaction, so neither the method nor its redeemer takes a Ctx; the Withdrawal record is the port's EntryOutcome; the
+// page verifier's description copy (js/state-client) is examples/registry's, not the port's; an Entry's owner is a Key, so
+// RegistryAttacksTest's size-rule case (recover with an owner of 100+ bytes) cannot be built against the port and is
+// skipped there (JscV2M3bAttackTest makes the size rule's case on the port).
+def registryCopied = ['org/julclang/state/examples/registry/KeyedRuntimeChecksTest.java', 'org/julclang/state/examples/registry/KeyedVectorsTest.java',
+                      'org/julclang/state/examples/registry/LedgerModelTest.java', 'org/julclang/state/examples/registry/ListIntegrityTest.java',
+                      'org/julclang/state/examples/registry/RegistryAttacksTest.java', 'org/julclang/state/examples/registry/RegistryDescriptionTest.java',
+                      'org/julclang/state/examples/registry/RegistryFlowTest.java', 'org/julclang/state/examples/registry/RegistryWorld.java',
+                      'org/julclang/state/examples/registry/Tamper.java',
+                      'org/julclang/state/examples/registry/devnet/ConcurrencyDevnetTest.java', 'org/julclang/state/examples/registry/devnet/ContestedGapDevnetTest.java',
+                      'org/julclang/state/examples/registry/devnet/HostilityDevnetTest.java', 'org/julclang/state/examples/registry/devnet/M2Kit.java',
+                      'org/julclang/state/examples/registry/devnet/RegistrySmokeDevnetTest.java',
+                      'org/julclang/state/runtime/DuplicateKeyDevnetTest.java', 'org/julclang/state/runtime/UntimedKeyedPendingDevnetTest.java']
+def registryLeftOut = [
+        'org/julclang/state/examples/registry/SizeAndBudgetTest.java': 'the Java example\'s size and budget gate over its own test contract (Widest); JscV2M3bGateTest measures the port',
+        'org/julclang/state/examples/registry/RegistryPortableTest.java': 'the Java example\'s portable steps (-Ajoust.portable), which examples/dsl does not generate',
+        'org/julclang/state/examples/registry/widest/Widest.java': 'a test contract of the processor (the widest keyed record), not the port',
+        'org/julclang/state/examples/registry/widest/WidestTest.java': 'tests the Widest test contract, not the port',
+        'org/julclang/state/examples/registry/m2/Capacity.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/m2/Eleven.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/m2/Odd.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/m2/Sixteen.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/m2/Stamps.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
+        'org/julclang/state/examples/registry/devnet/CapacityDevnetTest.java': 'drives the m2/ test contracts (Capacity, Eleven, Sixteen), not the port',
+        'org/julclang/state/examples/registry/devnet/ComposeDevnetTest.java': 'drives the m2/ Stamps contract and examples/fees, not the port',
+        'org/julclang/state/examples/registry/devnet/CooldownDevnetTest.java': 'mostly the m2/ test contracts; its Registry case is RegistryCooldownDevnetPortTest\'s',
+        'org/julclang/state/examples/registry/devnet/SubmissionDevnetTest.java': 'drives the m2/ Stamps contract, not the port']
 def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
 def copyPortTests = tasks.register('copyPortTests', Sync) {
     description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'
@@ -147,8 +199,17 @@ def copyPortTests = tasks.register('copyPortTests', Sync) {
     inputs.property('ports', ports.collect { k, v -> "${k}=${v}" }.join(','))
     inputs.property('rules', 'package; class <X>Test -> <X>PortTest; DescriptionTest -> <Contract>DescriptionPortTest; <Contract>.<init>( -> <Contract>.init(; <Contract>.<Record> -> <Contract>.<renamed>; words renamed')
     ports.keySet().each { example -> inputs.dir(rootProject.file("examples/${example}/src/test")) }
+    inputs.dir(rootProject.file('examples/registry/src/test'))
+    inputs.property('registry', registryCopied.join(',') + ';' + registryLeftOut.keySet().join(','))
     into portTestsOut
     doFirst {
+        def registryRoot = rootProject.file('examples/registry/src/test/java')
+        rootProject.file('examples/registry/src/test').eachFileRecurse(groovy.io.FileType.FILES) { f ->
+            String rel = registryRoot.toPath().relativize(f.toPath()).toString().replace(File.separator, '/')
+            if (!registryCopied.contains(rel) && !registryLeftOut.containsKey(rel)) {
+                throw new GradleException("copyPortTests cannot run ${rootProject.relativePath(f)} against the registry port: list it as copied or left out (with the reason) in examples/dsl/build.gradle")
+            }
+        }
         ports.keySet().each { example ->
             def root = rootProject.file("examples/${example}/src/test")
             def pkg = new File(root, "java/org/julclang/state/examples/${example}")
@@ -181,7 +242,35 @@ def copyPortTests = tasks.register('copyPortTests', Sync) {
         }
     }
 }
+copyPortTests.configure {
+    from(rootProject.file('examples/registry/src/test/java')) {
+        include registryCopied
+        eachFile { f ->
+            String to = f.relativePath.pathString.replace('org/julclang/state/examples/registry/', 'org/julclang/state/examples/dsl/')
+            if (to.endsWith('Test.java')) to = to.substring(0, to.length() - 'Test.java'.length()) + 'PortTest.java'
+            f.relativePath = RelativePath.parse(true, to)
+        }
+        filter { String line ->
+            line.replace('org.julclang.state.examples.registry', 'org.julclang.state.examples.dsl')
+                    .replaceAll(/\bclass (\w+)Test\b/, 'class $1PortTest')
+                    .replaceAll(/\b(\w+)Test\.class\b/, '$1PortTest.class')
+                    .replaceAll(/\bRegistry\.Withdrawal\b/, 'Registry.EntryOutcome')
+                    .replaceAll('(Registry\\.withdraw\\(.*), \\(Ctx\\) c\\[1\\]\\)', '$1)')
+                    .replaceAll('(new RegistryValidator\\.Withdraw\\([^,()]+(?:\\([^()]*\\))?), (?:\\(Ctx\\) c\\[1\\]|ctx)\\)', '$1)')
+                    .replace('            // recover sets an arbitrary owner. The size rule (I13 amended) measures the datum with next padded to',
+                            '            if (true) return;   // the port: an Entry\'s owner is a Key (28 bytes, a checked input), so recover cannot grow the datum; JscV2M3bAttackTest tests the size rule on the port\n            // recover sets an arbitrary owner. The size rule (I13 amended) measures the datum with next padded to')
+                    .replace('    void theJavaScriptTestsCopyIsCurrent() throws Exception {',
+                            '    @org.junit.jupiter.api.Disabled("the port: js/state-client\'s copy is examples/registry\'s description, not the port\'s")\n    void theJavaScriptTestsCopyIsCurrent() throws Exception {')
+        }
+    }
+}
 sourceSets.test.java.srcDir(files(portTestsOut).builtBy(copyPortTests))
+
+// ADR-0018 M3c (ADR-0010 §6): JuLC's pinned CIP-57 revision has no vocabulary for the VOTE/PROPOSE purposes, which the
+// staking port (StakedVault.jsc) handles, so this project compiles without a blueprint, as examples/staking does. Only the
+// aggregate META-INF/plutus/plutus.json is not written: every validator's own script (<Name>Validator.plutus.json), which
+// the runtime and the tests read, is unchanged.
+tasks.named('compileJava') { options.compilerArgs += ['-Ajulc.blueprint=false'] }
 
 // ADR-0018 D12: javac's diagnostics on the generated Java, reported again at their .jsc positions (as the plugin does).
 def javacLog = layout.buildDirectory.file('jsc/javac.log').get().asFile

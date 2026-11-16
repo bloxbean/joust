@@ -98,7 +98,8 @@ public final class TransitionsGenerator {
             if (unsupported(t)) continue;
             ExecutableElement m = method(t.method());
             if (m == null || methods.contains(t.method())) continue;
-            String made = render(m.getReturnType());
+            // A creation that returns a result record (state, accepted): its step is the state's (issue #81).
+            String made = render(createdType(t, m.getReturnType()));
             String step = stepTypes.computeIfAbsent(made, k -> "Step" + (stepTypes.size() + 1));
             String code = creation(t, m, step);
             if (code == null) continue;
@@ -169,7 +170,8 @@ public final class TransitionsGenerator {
             if (first) {
                 call.add("target");
                 first = false;
-            } else if (t.takesParams() && !paramsTaken) {
+            } else if (t.takesParams() && !paramsTaken && render(p.asType()).equals(c.paramsType())) {
+                // The params by their type: an owned method's @Shared (and @Into) come before them (M3a).
                 call.add("args.joustParams()");
                 paramsTaken = true;
             } else if (readNames.contains(name)) {
@@ -277,7 +279,8 @@ public final class TransitionsGenerator {
         boolean paramsTaken = false;
         for (VariableElement p : m.getParameters()) {
             String name = p.getSimpleName().toString();
-            if (t.takesParams() && !paramsTaken) {
+            if (t.takesParams() && !paramsTaken && render(p.asType()).equals(c.paramsType())) {
+                // The params by their type: an owned init's @Shared comes before them (M3a).
                 call.add("args.joustParams()");
                 paramsTaken = true;
             } else if (named(p.asType(), API + "Funds")) {
@@ -300,11 +303,45 @@ public final class TransitionsGenerator {
         sb.append("    /** Runs {@link ").append(c.name()).append("#").append(t.method()).append("} (a creation: no target). */\n");
         sb.append("    public static ").append(step).append(" ").append(t.method()).append("(PlutusData target, ").append(sharedType)
                 .append(" shared, ").append(argsRecord).append(" args, Ctx ctx) {\n");
-        sb.append("        return new ").append(step).append("(Optional.of(").append(c.name()).append(".").append(t.method())
-                .append("(").append(String.join(", ", call)).append(")), Payouts.none()")
+        String invoke = c.name() + "." + t.method() + "(" + String.join(", ", call) + ")";
+        TypeMirror r = m.getReturnType();
+        if (r != createdType(t, r)) {
+            // Issue #81: a result record (state, accepted), as the validator reads it (result.state(), and
+            // result.accepted() against the offered assets, I31). A creation pays, sends, mints and deposits nothing.
+            boolean accepted = false;
+            for (RecordComponentElement rc : Records.components((TypeElement) ((DeclaredType) r).asElement())) {
+                accepted |= rc.getSimpleName().contentEquals("accepted");
+            }
+            // #104 review F2: never a silent skip. 'accepted' needs @Payable and a Funds parameter (ContractReader refuses it
+            // otherwise), and a Funds parameter makes the contract asset-aware, so this cannot happen.
+            if (accepted && !c.assetAware()) {
+                throw new IllegalStateException(c.name() + "." + t.method() + " returns 'accepted' in a contract that is not asset-aware");
+            }
+            sb.append("        ").append(render(r)).append(" r = ").append(invoke).append(";\n");
+            sb.append("        return new ").append(step).append("(Optional.of(r.state()), Payouts.none()")
+                    .append(c.assetAware() ? ", Sends.none(), Assets.none(), " + (accepted ? "r.accepted()" : "Assets.none()") + ", JulcList.empty()" : "")
+                    .append(eventsType() != null ? ", JulcList.empty()" : "").append(");\n    }\n");
+            return sb.toString();
+        }
+        sb.append("        return new ").append(step).append("(Optional.of(").append(invoke).append("), Payouts.none()")
                 .append(c.assetAware() ? ", Sends.none(), Assets.none(), Assets.none(), JulcList.empty()" : "")
                 .append(eventsType() != null ? ", JulcList.empty()" : "").append(");\n    }\n");
         return sb.toString();
+    }
+
+    /**
+     * What a creation makes: its result, or the {@code state} of a result record (issue #81: an {@code @Init} or
+     * {@code @OwnedInit} returning {@code (state, accepted)}). Only a transition ContractReader classified as returning a
+     * result record ({@link TransitionIR.Returns#RESULT}) is unwrapped: a state or an owned record may itself have a
+     * component named {@code state} (#104 review C1).
+     */
+    private TypeMirror createdType(TransitionIR t, TypeMirror r) {
+        if (t.returns() == TransitionIR.Returns.RESULT && r instanceof DeclaredType d && d.asElement().getKind() == ElementKind.RECORD) {
+            for (RecordComponentElement rc : Records.components((TypeElement) d.asElement())) {
+                if (rc.getSimpleName().contentEquals("state")) return rc.asType();
+            }
+        }
+        return r;
     }
 
     /** The args record's leading fields: the {@code @Params} record and the {@code @Reads} states, before the arguments. */

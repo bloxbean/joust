@@ -43,6 +43,108 @@ public final class AbiCheck {
         } else if (describedParams != null) {
             problems.add("the description has params that the manifest does not state");
         }
+        // M3a (ADR-0003 D2, ADR-0012 D1): an object's datum, the validator's Holding (or one Holding_T per owned type).
+        if (abi.get("holdings") instanceof List<?> hs) {
+            for (Object h : hs) {
+                String hn = (String) ((Map<String, Object>) h).get("name");
+                c.constructors("the owned datum " + hn, List.of(h), validator + hn);
+            }
+        } else if (defs.keySet().stream().anyMatch(k -> k.equals(validator + "Holding") || k.startsWith(validator + "Holding_"))) {
+            problems.add("the description has owned objects (Holding) that the manifest does not state");
+        }
+        // M3b (ADR-0016 D1, D11): each keyed type as x-joust.keyed describes it, field by field, in its order.
+        List<?> describedKeyed = xj != null && xj.get("keyed") instanceof List<?> dk ? dk : List.of();
+        List<?> statedKeyed = abi.get("keyed") instanceof List<?> sk ? sk : List.of();
+        if (describedKeyed.size() != statedKeyed.size()) {
+            problems.add("keyed types: " + statedKeyed.size() + " stated, " + describedKeyed.size() + " described");
+        } else {
+            for (int i = 0; i < statedKeyed.size(); i++) {
+                var st = (Map<String, Object>) statedKeyed.get(i);
+                var d = (Map<String, Object>) describedKeyed.get(i);
+                String t = String.valueOf(st.get("type"));
+                var want = new java.util.LinkedHashMap<String, Object>();
+                want.put("simple", t);
+                want.put("type", pkg + "." + name + "." + t);
+                for (String f : List.of("key", "keyIndex", "maxKeyBytes", "signedKey", "linkCooldownMs", "linkWindowMs", "typeId", "headTag",
+                        "nodeTag", "retiredTag", "inserts", "actions", "removes", "retires")) {
+                    want.put(f, st.get(f));
+                }
+                for (var e : want.entrySet()) {
+                    if (!same(e.getValue(), d.get(e.getKey()))) {
+                        problems.add("keyed type " + t + ": " + e.getKey() + " is " + e.getValue() + " here, " + d.get(e.getKey()) + " described");
+                    }
+                }
+                // #112 review C4: the operational descriptors clients read, exactly: the lookup, the three datums' schemas,
+                // Link's and Remove_T's purpose, constructor and index (Remove_T null without a removing exit).
+                want = new java.util.LinkedHashMap<String, Object>();
+                want.put("lookup", Character.toLowerCase(t.charAt(0)) + t.substring(1));
+                want.put("head", Map.of("$ref", "#/definitions/" + validator + "Head_" + t));
+                want.put("node", Map.of("$ref", "#/definitions/" + validator + "Keyed_" + t));
+                want.put("retired", Map.of("$ref", "#/definitions/" + validator + "Retired_" + t));
+                want.put("link", Map.of("purpose", "spend", "constructor", "Link", "index", st.get("link")));
+                want.put("remove", st.get("remove") == null ? null : Map.of("purpose", "mint", "constructor", "Remove_" + t, "index", st.get("remove")));
+                for (var e : want.entrySet()) {
+                    if (!d.containsKey(e.getKey()) || !same(e.getValue(), d.get(e.getKey()))) {
+                        problems.add("keyed type " + t + ": " + e.getKey() + " is " + e.getValue() + " here, " + d.get(e.getKey()) + " described");
+                    }
+                }
+            }
+        }
+        // M3c (ADR-0010 D2): the state's address staked to the own script, as x-joust.stakeSelf says.
+        boolean statedStake = Boolean.TRUE.equals(abi.get("stakeSelf")), describedStake = xj != null && Boolean.TRUE.equals(xj.get("stakeSelf"));
+        if (statedStake != describedStake) problems.add("stakeSelf is " + statedStake + " here, " + describedStake + " described");
+        // M3c (ADR-0010 D1): the purposes' handlers in order (purpose and name), and the withdraw handler's Rewards redeemer
+        // field by field, as x-joust.purposes describes them.
+        List<?> statedPurposes = abi.get("purposes") instanceof List<?> sp ? sp : List.of();
+        List<?> describedPurposes = xj != null && xj.get("purposes") instanceof List<?> dp ? dp : List.of();
+        if (statedPurposes.size() != describedPurposes.size()) {
+            problems.add("purposes: " + statedPurposes.size() + " stated, " + describedPurposes.size() + " described");
+        } else {
+            for (int i = 0; i < statedPurposes.size(); i++) {
+                var st = (Map<String, Object>) statedPurposes.get(i);
+                var d = (Map<String, Object>) describedPurposes.get(i);
+                if (!same(st.get("purpose"), d.get("purpose")) || !same(st.get("name"), d.get("name"))) {
+                    problems.add("purpose " + i + " is " + st.get("purpose") + " " + st.get("name") + " here, " + d.get("purpose") + " " + d.get("name")
+                            + " described");
+                    continue;
+                }
+                var dr = d.get("redeemer") instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.<String, Object>of();
+                if ("withdraw".equals(st.get("purpose"))) {
+                    if (!same(st.get("marker"), dr.get("marker"))) problems.add("the withdraw marker is " + st.get("marker") + " here, " + dr.get("marker") + " described");
+                    var describedCtor = new java.util.LinkedHashMap<String, Object>();
+                    describedCtor.put("title", dr.get("constructor"));
+                    describedCtor.put("index", dr.get("index"));
+                    describedCtor.put("fields", dr.get("fields"));
+                    c.alternatives("the withdraw redeemer", List.of(st.get("redeemer")), List.of(describedCtor));
+                } else if (st.containsKey("redeemer")) {
+                    problems.add("the " + st.get("purpose") + " handler's redeemer carries nothing, but the manifest states one");
+                }
+            }
+        }
+        // M3c (ADR-0011 D4): each migrating destroy's successor field, as its action's policies.migrateTo; init migrate's params
+        // field, as its creation's read (Adopt itself is in the mint redeemer, compared below).
+        var statedTo = abi.get("migratesTo") instanceof Map<?, ?> mt ? (Map<String, Object>) mt : Map.<String, Object>of();
+        var describedTo = new java.util.LinkedHashMap<String, Object>();
+        if (xj != null && xj.get("actions") instanceof List<?> as) {
+            for (Object a : as) {
+                var am = (Map<String, Object>) a;
+                if (am.get("policies") instanceof Map<?, ?> pm && pm.get("migrateTo") != null) describedTo.put((String) am.get("name"), pm.get("migrateTo"));
+            }
+        }
+        if (!same(new java.util.TreeMap<>(statedTo).toString(), new java.util.TreeMap<>(describedTo).toString())) {
+            problems.add("migrating destroys: " + statedTo + " here, " + describedTo + " described");
+        }
+        Object statedFrom = abi.get("migrate") instanceof Map<?, ?> mg ? mg.get("from") : null;
+        Object describedFrom = null;
+        if (xj != null && xj.get("creations") instanceof List<?> cs) {
+            for (Object o : cs) {
+                var cm = (Map<String, Object>) o;
+                if (!"migrate".equals(cm.get("kind"))) continue;
+                describedFrom = cm.get("recipe") instanceof Map<?, ?> rm && rm.get("reads") instanceof List<?> rd && !rd.isEmpty()
+                        && rd.get(0) instanceof Map<?, ?> r0 ? r0.get("params") : "?";
+            }
+        }
+        if (!same(statedFrom, describedFrom)) problems.add("init migrate's from is params." + statedFrom + " here, params." + describedFrom + " described");
         var redeemers = (Map<String, Object>) abi.get("redeemers");
         c.constructors("the spend redeemer", (List<Object>) redeemers.get("spend"), validator + "Calls");
         c.constructors("the mint redeemer", (List<Object>) redeemers.get("mint"), validator + "Lifecycle");
@@ -107,6 +209,22 @@ public final class AbiCheck {
             c.constructors("the type " + t, (List<Object>) m.get("constructors"), c.ref(t));
         }
         return problems;
+    }
+
+    /** Two JSON values alike (numbers by value, whatever their Java type). */
+    private static boolean same(Object a, Object b) {
+        if (a instanceof Number x && b instanceof Number y) return x.longValue() == y.longValue();
+        if (a instanceof Map<?, ?> x && b instanceof Map<?, ?> y) {
+            if (!x.keySet().equals(y.keySet())) return false;
+            for (var k : x.keySet()) if (!same(x.get(k), y.get(k))) return false;
+            return true;
+        }
+        if (a instanceof List<?> x && b instanceof List<?> y) {
+            if (x.size() != y.size()) return false;
+            for (int i = 0; i < x.size(); i++) if (!same(x.get(i), y.get(i))) return false;
+            return true;
+        }
+        return java.util.Objects.equals(a, b);
     }
 
     /** A manifest shape, parsed: a name with arguments ({@code map<bytes28, Item>}). */

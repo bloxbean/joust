@@ -1,6 +1,6 @@
 # ADR-0018: The `.jsc` language — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r26)
+**Status:** Proposed (r29)
 **Naming (r26):** the language is `.jsc`, and this is its first version: a file may start with the header `jsc 1`, and a
 file with no header is version 1 (D2). What the revisions before r26 call `.jsc` 2 is this language; `.jsc` v1 (ADR-0005)
 and its migration are removed (D16). Internal names keep the 2 (`JscV2…` classes, the `jsc-2-*` documents, IR format 2).
@@ -13,7 +13,8 @@ javac attribution and ADR-050 (library source type descriptions) for library imp
 **Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76),
 M2a, M2b and M2c, and M4a (`.jsc` libraries, r16), M4b (`java:` imports, r19) and M4c (packages, `joust.lock`, offline
 tests, r20) implement it, joined with the M1 hardening (r17) and ADR-0021's M5a language server in the `.jsc` 2
-integration (r22), and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+integration (r22), M3a1 (owned objects, r23), M3a2 (several owned types, owned BigMaps, r24), M3a3 (moves, invariants by type, r25), M3b (keyed objects, r27) and M3c (script purposes, migration, r28), M3's final pass (how the parts combine, r29), and their reports (`docs/research/jsc-2-m*-report.md`) record what was
+built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -701,6 +702,228 @@ The exact grammar for each row, including the full parameter and result types of
 the milestone that implements it, reviewed against the processor's rules, and documented in `jsc-reference.mdx`. The
 "every feature" claim holds row by row, as each port passes (J11).
 
+**As built in M3a1 (r23): owned objects, one type, with shared reads** (ADR-0003; gated by bank). `owned T { … }` declares
+an owned type, a record of the contract lowered with `@Owned`; its methods name it, `owned init T.m(…)`, `owned action
+T.m(…)` and `owned destroy T.m(…)` (`@OwnedInit`, `@OwnedAction`, `@OwnedDestroy`), one spelling (the type is always
+written). In an owned action or destroy the input is the object: bare field names and `state` read it, and so do `only`,
+`after`, `before`, `quorum` and `authorized`; `received` and `balance` are the object's. The instance's state reaches an
+owned method only through a parameter `name: shared` (`@Shared State name`, a reference input), first in the list, read
+by projection; an owned init's parameters may share the object's field names, never the shared state's (D3). The
+processor's rules are refused at `.jsc` positions (JSC1201–JSC1211): an owned init and an escape hatch (an owned destroy
+without `shared`) per type; no instance `destroy` and no `BigMap` state in a contract with owned types; owned types in no
+other value or parameter. Lowering choices: an owned method's records are `TOutcome` and `TReceived`; a method with a
+`shared` parameter takes `Ctx`, as the Java examples' owned methods do, so the ports keep their redeemers; an owned
+action or destroy without an audience warns (JSC9010, the processor's warning; `open` says it is meant); the generated
+check keys of owned spends follow the manifest's constructor order (instance actions, instance destroys, owned actions,
+owned destroys) and an owned init's key names its mint constructor (`mint2`, …). D11 at the new positions: an owned
+type's field set from a time value is a time field of that type (`T.f` in the manifest's `timeFields`), and the
+instance's time fields are time values through a shared read. The ABI manifest states the owned types and the owned
+datum (`owned`, `holdings`: `Holding(instance, value)`), checked against the processor's description. Several owned
+types, `BigMap`s in owned types and creations that take native assets (with issue #81's fix) are M3a2's; moves
+(`into`, `admits`) and invariants by type are M3a3's; until then they are refused (JSC1215), so every earlier `.jsc` file
+lowers to byte-identical output.
+
+Two decisions the security review asked for (M3a1, r23):
+
+- **An instance action and an owned action that reads the instance in one transaction (review A5).** A shared read is
+  a reference input, so an owned method reads the instance's state as the transaction's inputs hold it, never an
+  instance action's output in the same transaction. The language and the runtime do not compose the two: the runtime
+  builds each call as its own transaction, and today's ledger refuses a transaction that spends and references one
+  UTxO (cardano-ledger's `disjointRefInputs`, enforced at protocol versions 9 and 10 only). The validators themselves
+  accept such a pair, each reading the inputs' state
+  (`JscV2M3a1AttackTest.aPauseComposedWithAWithdrawal_readsTheInputsState` records it), and that is the defined outcome
+  once a protocol version lifts the ledger rule: a pause takes effect for owned methods from the next transaction on,
+  whoever builds the transaction. No later milestone plans a composition that reads the instance's next state.
+- **A deposit's target (review A18).** A deposit names its target by `Instance<C>`, an instance; no deposit names an
+  object. So an owned action receives no deposits (`receives` on one is JSC0447), and an object's value changes only
+  through its own calls (`received`, `pay`). The processor allows `@Receives` on an owned action; `.jsc` does not
+  expose it, as no deposit could reach it.
+
+After #101's review (round r1), M3a1 also settles these:
+
+- **`shared` takes `Ctx`** (decision 3 of the report) is a port-fidelity choice: the processor does not tie `@Shared`
+  to `Ctx`, and examples/bank's owned methods take `Ctx` without needing it, so the ports keep their redeemers. A later
+  milestone may make it conditional on the method reading the transaction.
+- **An escape hatch** (JSC1209) is an owned destroy without `shared`, `before` or `after`: neither the instance's state
+  nor a deadline can trap an object. One that never reads `balance` could pay out nothing the validator accepts, so it is
+  an error (JSC1216). That its body can succeed is otherwise the author's: the rule is syntactic. *(r29, design review
+  MD5)* Its audience is the author's too, so "escape hatch" means two things in M3: a plain type's needs no instance and
+  no deadline, and may name who closes the object (`only`, `quorum`, `authorized`); a keyed type's needs nobody else
+  (JSC1245, M3b: no `shared`, reads, `payable`, `quorum`, `authorized`, `after` or `before`). When every hatch of a plain
+  type needs the deployment's parties (`authorized params.f`, or a quorum over params), they can keep every object closed,
+  as a deadline could, so the checker warns (JSC9016); a quorum or credential over the object's own fields is the owner's
+  choice and silent.
+- **Params quorums are the deployment's**: every `quorum params.k params.t`, an owned method's too, is checked at the
+  instance's init and at no owned init, as the validator's `paramsQuorumChecks` does (semantics §2.7).
+- **Native assets in owned actions and destroys** (`accept`, `send`, `mint`, `burn`, `deposit`, `funds`) come with
+  M3a2, which specifies `funds` for an object; M3a1 refuses them (JSC1215). Both IR readers are as strict, staged by part.
+- **An owned init's parameters** may take the shared state's field names (it is read only by projection), and the
+  owned annotations' names are reserved only in contracts with owned types. *(r29, design review MD7, Codex M2)* This is
+  M3's one rule for reserved names: a name the generated Java imports or generates only for a part (M3a's owned
+  annotations, M3b's keyed names, M3c's `Withdraw`, `Certify`, `Votes`, `Propose`, `Migrate`, `MigrateTo` and `Rewards`)
+  is reserved (JSC0211) only in a contract that has that part; the language's own type names (M3c's ledger types,
+  `LedgerMap`, `Data`, resolved as built-in types as `Int` is) and API classes (`Certs`) in every contract, and a Java
+  library's class or record never takes any of them (JSC0709). A declared variant may reuse a ledger constructor's
+  spelling (`enum Decision { VoteYes, VoteNo }` beside a vote handler). In a contract with handlers, a method whose
+  redeemer record would take a ledger type's name (`action vote`, record `Vote`) is JSC0203 (MD1). M2's names keep
+  M2's rule (reserved in every contract).
+
+**As built in M3a2 (r24): several owned types, BigMaps in owned types, creations that accept** (ADR-0012 D1, D2;
+ADR-0014; gated by locker's Locker and Safes). A contract may declare several owned types; each type's objects are a
+constructor of the sealed `Holding_T` datum (in declaration order), so a method runs only on its own type's objects
+however alike their fields are, and the processor's rules hold per type, refused at the type that breaks them. An owned
+type may keep `BigMap`s, whose claims are owned by the object's input or, at creation, its seed; the instance keeps
+none while there are owned types (JSC1211). Issue #81 is fixed for `@OwnedInit`: a creation returning `(state,
+accepted)` has a transition program that reports what it accepted, so an owned init may `accept` native assets. An
+instance's `init` still may not (JSC0426): the processor reads the state's type from what `@Init` returns. An owned
+destroy may be `payable` (its payouts allocate `balance + received`). The Safes port's zero note is a stated difference
+(#104 review C2): a `BigMap<K, Int>`'s set of 0 removes the key (D7), where examples/locker's `putInt` stores a present
+zero. Market's port moves to M3a3, since it moves
+listings between markets (`relist`, `enlist`). The lowering drops checks that hold for every value (a list made once is
+not reversed; a send of `funds.held` or to `wallet(k)`, `accept(Value.none())`, a `Key` or `Hash` key's length; an
+`Int` map's `set` is one write), which keeps the locker ports under the runtime's 15,000-byte reference-script limit.
+Twenty-six earlier `.jsc` 2 scripts get 47 to 453 bytes smaller (the M3a2 report lists them); `pay`'s sign check stays.
+
+**As built in M3a3 (r25): moves and invariants by type** (ADR-0012 D1, D3; gated by guild's Guild and Armory and by
+market). An owned action with a parameter `to: into` moves its object to another instance; the destination consents
+with an instance action `admits T`, whose first parameter is the object's id and whose optional second is the arriving
+object as its input holds it. Both halves are in one transaction, and each reads the other's input, never its outcome
+(the processor's `@Into` and `@Admits`). `invariant T.name` is checked on every continuing object of type `T`. JSC1215
+is retired. One more decision the security review asked for:
+
+- **The order of a move's two halves (review A24; narrowed after #107 review C1).** Each half is its own call: it reads
+  its own input and the other half's input, never the other's outcome (the admit reads the arriving object's input;
+  the move reads the destination's input), and a refusal's class is its own half's. The transaction is accepted only
+  if both halves are. No transaction-wide order is defined beyond that: the interpreters, the JVM and the transition
+  program run the half they are given, and the runtime's `Compose` reports the first refusal in the order its calls
+  were added. (`JscV2M3a3FourWayTest` checks each half's class from that half; `JscV2M3a3FourWayTest.ferry` shows the
+  admit reading the input, not the move's result.)
+  An arriving object comes only from an instance of the same policy, so its datum is the contract's own output, not a
+  checked input.
+
+**As built in M3b (r27): keyed objects** (ADR-0016; gated by registry's Registry, Ballot and Entry). `owned T keyed by f
+(signed, maxKeyBytes = n, linkCooldownMs = c, linkWindowMs = w) { … }` declares a keyed type (`@Owned(key = "f", …)`):
+its objects are unique by the bytes of `f` within an instance, each a node of a sorted on-chain list whose head the
+instance's creation makes. `f` is a `Bytes`, `Key` or `Hash` field; the options keep the processor's ranges and defaults
+(`JSC1240`–`JSC1243`), and the cooldown and window are durations in milliseconds, as `maxValidityMs` is. A keyed type's
+owned inits insert (`Insert_m`), its owned actions keep the node's place, and `owned destroy T.m() only f retire`
+(`@OwnedDestroy(retire = true)`) retires the node: the owner leaves with all but the deposit and the key stays taken for
+good. The processor's keyed rules are refused at `.jsc` positions (`JSC1244`–`JSC1250`): every keyed type has a retiring
+exit, signed by its owner, that needs nobody else (it is the escape hatch: a removal needs its predecessor); every keyed
+action has an audience (`only`, `quorum` or `authorized`; `open` is not one); no moves of keyed objects; the key is
+fixed for the object's life (checked on every action's result, conservatively: `{ ...state, … }` without it, or with it
+as written in the input); no native assets, batched actions or `BigMap`s beside keyed types; at most 16 keyed types,
+maxDatumBytes at most 2048, a retired node's worst case within it; the validator's and the client's generated names
+reserved (`JSC1249`). The processor's warnings are mirrored: squatting (`JSC9011`), `linkCooldownMs = 0` (`JSC9012`),
+an action authorized by someone other than the retire's signer (`JSC9013`). **D11 at the new positions:** a keyed
+type's time fields are its own (`T.f`), and **the key is never a time value** (`JSC1251`): a key decides the list's
+order and whether an insert succeeds, as a map key does, so a window-dependent key would let the submitter's window
+choose. **Both interpreters model the list's rules as transaction preconditions** (semantics §2.9): τ carries an
+insert's or removal's instance and the node it relinks (its anchor or predecessor); after the body (as the validator's
+policy, which runs the initializer first) they check that node (`keyed:anchor`), the window (`keyed:window`) and the
+cooldown (`keyed:cooldown`), then an insert's key length (`keyed:length`), its signer with `signed` (`keyed:signed`) and
+its place in the anchor's gap (`keyed:order`: the key's uniqueness), and an action's fixed key (`keyed:fixed`). The
+five-way compares each keyed refusal with the validator's (the failing purpose, and a require's or checked input's
+trace; #112 round r1). The size rule (the envelope with `next` padded to
+maxKeyBytes), the relink, the token's name and a retire's continuing value are transaction-level, the validator's.
+
+Decisions M3b asks the maintainers to confirm (r27):
+
+- **The order of a keyed call's checks.** The list's rules (the anchor, the window, the cooldown, then the key's length,
+  signer and place) come after the body and before the output checks, as the validator checks them: its policy runs the
+  initializer first, so a failing require or checked input is the refusal (#112 review C3; r1 had the list's
+  preconditions before the body, which the validator does not do). An engine still learns a cooldown from the runtime's
+  planner (`KeyedObjects.plan`, "prepare again at slot N"), not from the refusal's class.
+- **No time-derived key** (`JSC1251`), stricter than the processor, which allows one (ADR-0016 D7's retry case). A key is
+  in the list's order, and a time value decides nothing (D11).
+- **`open` is no audience of a keyed action** (`JSC1246`), as the processor requires `@SignedBy`, `@Quorum` or
+  `@AuthorizedBy`; and the client's keyed members (`tList`, `tExists`, `tKeys`) are refused as method names too, where the
+  processor refuses only views (calls overload them): one name, one meaning, in the JavaScript wrapper as in Java.
+
+**As built in M3c (r28): script purposes and migration** (ADR-0010, ADR-0011 D4; gated by staking's StakedVault and
+upgrade's CounterV1 and CounterV2). The handlers `withdraw m(amount: Int, args…)`, `certify m(cert: TxCert)`,
+`vote m(voter: Voter, action: GovernanceActionId, vote: Vote)` and `propose m(p: ProposalProcedure)` lower to
+`@Withdraw`, `@Certify`, `@Votes` and `@Propose`; the option `stakeSelf` to `@StateContract(stakeSelf = true)`. The
+handler words are words only where a member starts, so an action, a field or a local may still be called `withdraw`
+or `vote` (*r29, MD1:* except, in a contract with handlers, a method whose redeemer record would take a ledger type's
+name, `vote`'s `Vote`: JSC0203). A handler sees no instance (JSC1318), reads its parameters and the params, and names its audience with
+`quorum` or `authorized` over `params.*` (JSC1312, JSC1313); propose takes none, since its validator checks none. A
+withdraw handler's only effect is `send`, its sends allocating the amount exactly (I37); the others decide by a Bool. Neither `stakeSelf` nor a withdraw handler is accepted beside owned types yet (JSC1305, round r2): the first because
+no contract covers the objects' outputs under the stake part (A40, K47), the second, conservatively, because reward sends
+composed with objects' payouts are not covered either (K42); a withdraw handler beside keyed types is JSC1244's, as the
+processor's.
+The purposes' **ledger types** are JuLC's (D5; semantics §1.5): read by projection or an exhaustive `match`, never
+stored, passed by a caller, encoded or compared (JSC1320–JSC1325), with a read-only `LedgerMap` and `std/certs`.
+Migration is two halves of one transaction: `destroy m() <audience> migrates to f { }` (`@MigrateTo("f")`, `f` a
+`Bytes` or `Hash` state field: never a params field, JSC1331, which would make each version's hash depend on the
+other's) and `init migrate from params.p(old: V.State, args…)` (`@Migrate(from = "params.p")`, Java name `migrate`).
+The adopted state is a checked input (`#old:`, `input:old`, A44), the params and the invariants are checked as at any
+creation, and the new instance takes exactly the old one's lovelace (no modifiers, no effects: JSC1338, JSC1339).
+**Both interpreters model the purposes' filters and the migration's halves as transaction preconditions** (semantics
+§2.10, §2.11): τ carries a migrating destroy's successor and an init migrate's prior instance; the classes are
+`purpose:<certificate|voter|votes|withdraw|certify|vote|propose>` and `migrate:<to|from>`.
+
+Decisions M3c asks the maintainers to confirm (r28):
+
+- **The successor can change until the migration (review A43).** As examples/upgrade's `setSuccessor` does, whoever may
+  write the field `migrates to` names can rename the successor. `.jsc` warns (JSC9014) on an action that writes it
+  without `require(f == #, …)`, which fixes it once (the coverage contract TallyV1 does); it does not refuse, so the
+  port keeps the example's behaviour.
+- **No migration beside owned or keyed objects, BigMap state or native assets** (JSC1334, A45), on either side. They
+  would stay under the old policy (objects, BigMap claims) or not move (assets: the successor adopts exactly the
+  lovelace). This also keeps M3a3's premise (the design review's note): an arriving object is always the contract's own
+  output, never another policy's, so it stays no checked input.
+- **The adopted state is checked as a read state is.** Keys, hashes, maps and addresses at the previous version's state;
+  its nested tags as its writer wrote them, and a field's kind as its type (a field the adoption reads is decoded when
+  read; one it never reads is not looked at). The writer is a `.jsc` contract with a migrating destroy (JSC1336), whose
+  outputs are its typed states, so an instance holding its token holds a well-formed datum (review F3 measured the
+  malformed ones: semantics §4). A full decode of the adopted datum is the alternative, at the adoption's cost.
+- **Only the adoption consumes the previous version** (security S1, I41). A successor's ordinary creation seeded by the
+  old instance would carry the token the old side's `@MigrateTo` expects; the processor's `CreateInstance` now refuses a
+  seed at the previous policy's address or holding its token, so a migration always runs the adoption's rules.
+- **A purpose handler's arguments.** A certificate's handler runs after the processor's filter (a script credential's
+  registration, delegation or DRep registration or update), which no handler can widen; a vote handler runs once per
+  vote of its voter, the call being the conjunction; a propose handler takes no modifiers.
+
+**M3 as a whole (r29, the final pass over #101, #104, #112 and #113).** Each part stated its own refusals; the semantics
+now states how they combine (§2.12, design review MD2): every pair of M3's parts and M2's (owned, keyed, BigMap state, a
+BigMap in an object, native assets, batched, moves, invariants by type, deposits, reads, each purpose, stakeSelf,
+migration on either side) is refused with its code or run on all five legs by a named port or coverage contract
+(Mixed, OwnedIntents, Mix, Desk, StakedDesk, MapVotes, MapInbox, RelayV1, RelayV2, StakedQueue, StakedCounterV1 and
+StakedCounterV2, the last two also on the asset-aware migration path security MS1 found unbuilt), and
+`JscV2M3MatrixCheckerTest` lowers each of the 136 cells. Two cells are newly refused under the "not covered yet" rule:
+a withdraw handler beside BigMap state (JSC1305), and, beside an owned type that keeps a BigMap, a move, a batched
+action, deposits, a read of another contract, a certify, vote or propose handler or an invariant by type (JSC1217;
+Armory and Safes keep what they cover). A script over the runtime's 15,000-byte limit is warned at build time (JSC9015,
+security MS3), and both IR readers refuse what the checker refuses for objects (JSC1210, JSC1211, JSC1217, JSC1244,
+JSC1305; security MS2).
+
+Decisions M3 asks the maintainers to confirm (r29: the five reports' lists in one place, each with its report):
+
+- **The syntax** of each part: `owned T { … }` and `owned init|action|destroy T.m` (M3a1 1); `owned T keyed by f (…)`,
+  `retire` (M3b 1); the handler words, `stakeSelf`, `migrates to f`, `init migrate from params.p(…)` (M3c 1).
+- **In an owned method `state` is the object** and the instance is read only through `shared` (M3a1 2); a method with a
+  `shared` or `into` parameter takes `Ctx` (M3a1 3); `Account` is a type name again (M3a1 4); JSC9010 mirrors the
+  processor's warning for an owned method without `only` (M3a1 5); owned types are no field or parameter of another value
+  (JSC1207, M3a1 6).
+- **A5: a shared read is the transaction's input state** (M3a1 7, D10 r23); **A18: a deposit targets an instance**
+  (JSC0447, M3a1 8); **A24: each half of a move is its own call**, with no transaction-wide order (M3a3 1); **the
+  arriving object is not a checked input** (M3a3 2); **the adopted state is checked as a read state** (M3c 4).
+- **J11's 14 KB bound**: the exceptions Locker and Safes (M3a2 2), Market (M3a3 3) and Registry (M3b 6), each pinned at
+  its recorded size plus 100 B and under the runtime's 15,000-byte limit; the size work that changed 26 earlier scripts
+  (M3a2 3).
+- **Saturation of map-holding ports is not measured** (M3a2 5, and #107 for Guild and Armory): Locker, Safes, Guild and
+  Armory were not measured with their maps at depth: stated as an exception of M1's saturation gate, not as a
+  measurement.
+- **JSC0426 stays for an instance's init** (M3a2 4); **Market's payouts and sends in source order** (M3a3 4).
+- **The keyed rules**: the order of a keyed call's checks (M3b 2), no time-derived key (JSC1251, M3b 3), `open` no keyed
+  audience (JSC1246, M3b 4), the fixed key checked syntactically (JSC1248, M3b 5), a withdraw without `Ctx` (M3b 7).
+- **The purposes and migration**: the successor can change until the migration (JSC9014, M3c 2), no migration beside
+  objects, BigMaps or assets (JSC1334, M3c 3), the order of a handler's checks (M3c 5), the examples without a CIP-57
+  blueprint until JuLC's vocabulary covers the purposes (M3c 6).
+- **This pass's own** (r29): the "not covered yet" refusals above (JSC1217, JSC1305 beside BigMap state); the escape
+  hatch's two meanings with the JSC9016 warning (MD5); M3's reserved-names rule (MD7).
+
 **The method modifiers** (r11, fixed in M1c; gated by vault, escrow and pool, which pass): an `init`, `action` or
 `destroy` header is followed by modifiers, in any order, each at most once (JSC0416): `payable` (not on a destroy),
 `open`, `only f` (`@SignedBy("f")`, `f` a `Key` state field), `after f` and `before f` (`@ValidAfter`/`@ValidBefore`,
@@ -1274,9 +1497,19 @@ migrated contracts are new scripts *(both superseded by r26: v1 and the migratio
 | M0 | Spike: version line, `const`, spread updates, shadowing rule, `fn` with direct recursion and the after-lowering recursion check (nested folds), a `fold`/`find`/`contains` helper and both `filter` lowerings, `Option` as `Optional` end to end (datum, redeemer, portable codec, JS; `Some(None)` rejected), one generated equality helper over a record with bytes, one checked input, one `std/crypto` and one `std/bytes` binding with domains, the binding test via javac attribution, positions on the npm path, the time dataflow pass | ADR accepted | builds on both paths; four-way agreement (J3) on hand vectors; size, budget and check-cost numbers recorded; javac attribution of library sources works inside the Web Image toolchain |
 | M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; five-way differential tests (four-way to M1a) and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten. M1c's thresholds (r11): "below 14 KB" is below 14,000 bytes; "the protocol maximum" is 10,000,000,000 CPU steps and 14,000,000 memory units (the pre-Plomin memory limit, the stricter one), summed over every script of the transaction, with a warning above 80%; the saturated state is the largest one the Java example accepts (its stored datum within `maxDatumBytes`), which the port must then accept; a batched action is measured at `Batcher.DEFAULT_MAX` intents too |
 | M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green. Split (r15) into stacked parts: **M2a** values and assets (`Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `std/value`, `std/address`; gated by dex), **M2b** params, invariants, events, quorum, authorized (gated by treasury), **M2c** composition (deposits and `receives`, `reads`, `Instance<C>`, `import contract`, send datums and memo encoders, stored `Value`s with the wire conversion; gated by oracle and fees). M2c as built (r21): the oracle (Oracle, Shop as Kiosk) and fees (Pot, Stall) ports within +4% of the Java examples' sizes and budgets, every transaction at most 11.6% of the CPU and 26.2% of the memory maximum (a pot collecting 8 deposits); report `jsc-2-m2c-report.md`. **Exited (r22)**, on the integration branch: treasury 9,910 B (+6.6%), oracle 5,843 B (+0.9%; Kiosk 6,450 B, +2.1%), fees (Pot 9,439 B, +1.1%; Stall 9,846 B, +3.9%) and dex 13,492 B (+10.3%), all within J11; five-way M2a 136, M2b 56, M2c 81 calls |
-| M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green |
+| M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green. Split (r23) into stacked parts: **M3a1** owned objects, one type, shared reads (bank; r23); **M3a2** several owned types, `BigMap`s in owned types, creations that take native assets with #81's fix (locker's Locker and Safes; r24); **M3a3** moves (`into`, `admits`) and invariants by type (guild's Guild and Armory, and market, moved from M3a2 in r24; r25); **M3b** keyed objects (registry); **M3c** script purposes, staking and migration (staking, upgrade); Beside keyed types (M3 final pass MD6): a withdraw handler is refused (JSC1244, as the processor's keyed rule, and both IR readers with the same code), `stakeSelf` with it (JSC1305), migration on either side (JSC1334, the owned-objects rule); certify, vote and propose handlers are accepted, and covered by the Mixed coverage contract. M3a1 as built (r23): the bank port within +2.3% of the Java example's size (8,012 B against 7,928 B, +1.1%, since #104's size work, r24) and +2.5% of its budget, every transaction at most 1.75% of the CPU and 3.98% of the memory maximum; report `jsc-2-m3a1-report.md`. M3a2 as built (r24): the locker ports (Locker, Safes) within +2.5% of the Java examples' sizes and +3.4% of their budgets, under the runtime's 15,000-byte limit; J11's 14 KB is exceeded by the Java examples (14,499 and 14,564 B) and the ports (14,812 and 14,935 B) alike, recorded as an exception; market moves to M3a3; report `jsc-2-m3a2-report.md`. M3a3 as built (r25): the guild ports within -1.2% to -0.4% of the Java examples' sizes (below 14 KB) and +0.9% of their budgets; the market port +6.3% (14,372 B: over J11's 14 KB, under the runtime's 15,000-byte limit, stated as an exception with the numbers) and -7.9% to +6.5% of its budgets; report `jsc-2-m3a3-report.md`. M3b as built (r27): the registry port +0.5% of the Java example's size (14,789 B against 14,711 B: both over J11's 14 KB, the port 211 B under the runtime's 15,000-byte limit, stated as an exception with the numbers) and -12.6% to +2.0% of its budgets, saturated at the key bounds (a 64-byte key after a 64-byte next, an entry at maxDatumBytes); report `jsc-2-m3b-report.md`. M3c as built (r28): the staking port +1.6% of the Java example's size (12,312 B against 12,121 B), the upgrade ports +0.8% and +3.0% (5,785 B and 6,942 B: r2's S1 check on both sides, CounterV2's Java 6,738 B), all below 14 KB; their budgets -91.3% to +6.6% CPU and -83.5% to +8.0% memory of the Java examples' (the guardrail's entry-wise sum against the example's keys-then-get loop: -91.3%), saturated (a council of seven all signing, eight votes, a certificate reaching the policy's last test, twenty treasury withdrawals, the migration evaluated whole), every transaction at most 2.45% of the CPU and 5.59% of the memory maximum; the coverage contracts (Steward, Guardrail, TallyV1, TallyV2) under the runtime's 15,000-byte limit; report `jsc-2-m3c-report.md`. **M3 exit (r29, the final pass, on `feat/jsc-2-m3c` with #101, #104, #112 and #113 stacked):** every port within the bounds, sizes as the gates measure them: Bank 8,012 B (+1.1%), Locker 14,812 B (+2.2%), Safes 14,935 B (+2.5%), Guild 11,453 B (-0.4%), Armory 12,380 B (-1.2%), Market 14,372 B (+6.3%), Registry 14,789 B (+0.5%), StakedVault 12,312 B (+1.6%), CounterV1 5,785 B (+0.8%), CounterV2 6,942 B (+3.0%); no port's script changed in the final pass (the recorded fixtures and engine scripts pass unchanged), so their budgets are the parts' as recorded above. J11's 14 KB exceptions: Locker, Safes, Market and Registry, each pinned at its recorded size plus 100 B and under the runtime's 15,000-byte limit. Saturation at map depth is not measured for the map-holding ports (Locker, Safes, Guild, Armory): an exception for the maintainers to confirm, not a measurement. The combinations are the semantics' §2.12 (136 cells: 49 refused with their codes, 87 run by ports or coverage contracts, each coverage contract pinned at its recorded size plus 100 B); the build (`./gradlew build -PnoDevnet`) passes 1,154 tests with no failure, and the DevKit port tests (21 port classes and DslDevnetTest, 27 tests) pass on Yaci DevKit; the decisions to confirm are D10's one list (r29) |
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12 (libraries from outside the sources pinned); a `.jsc` library called from Java and a Java library from `.jsc` (in `examples/dsl`; the plugin path waits for the toolchain's publication, D9 r19 amended); the template's tests run offline. **Exited (r22)**, on the integration branch: Shop with `fees.jsc` on five legs (285 calls), `Guarded` on three legs for its `java:` calls (129 of 133), `JavaShop` calling `fees.jsc`, `joust.lock` on npm and Gradle, the template's offline tests |
 | M5 | Language server | ADR-0021 §8's gates (M5a: M1e's exit; M5b and M5c: their own); the language server merges to `main` only after this ADR's acceptance (#83). The `.jsc` 2 integration branch (#98) carries M5a before M3: these gates apply to `main`, not to that branch | — |
+
+**J11's 14 KB bound when the Java example is over it** (r24, after #104's review F1). A port meets J11's size bound
+when it is below 14,000 bytes, or, when its Java example is itself 14,000 bytes or more, when it is within +15% of the
+example and at most the runtime's 15,000-byte reference-script limit (`StateContractHandle.scriptFor`). Such a port's
+gate test pins its recorded size with a stated slack (100 bytes), so any growth has to be justified again. Locker
+(14,812 B) and Safes (14,935 B) are the first ports under this rule. A port whose Java example is below 14,000 bytes
+but whose own checks (ones the example does not make) take it over may also be accepted, as a maintainers' decision,
+on the same terms (+15%, at most 15,000 bytes, pinned) and with each group of those checks measured in bytes (r25,
+after #107's review F3): Market (14,372 B against 13,514 B; its `#input:`, `#pay:`, `#send:` and `#funds:` checks
+cost 804 B, `JscV2M3a3GateTest.marketsChecks_theirBytes`).
 
 **Recommendation gate.** `.jsc` 2 becomes the recommended language for JS developers when M2 and M4 have exited (the
 features most dApps need, and offline tests) **and** an independent security review of the lowering, the generated
@@ -1669,7 +1902,23 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   keeps the build's Java libraries in an imported library's checks (C1) and names library types in memo decoders and
   datum encoders (S4); an imported contract's class is held in the Java import names (C2); §8's M2 and M4 rows record
   their exits, and the M5 row its gates.
-- **r26** (2026-11-14, the `.jsc` v1 removal, on `feat/jsc-v1-removal`; r23 to r25 are M3a1 to M3a3's and r27 is M3c's,
+- **r23** (2026-11-14, M3a1: owned objects, one type, with shared reads; r22 is the integration's): D10 records what
+  M3a1 built (the syntax `owned T { … }` and `owned init/action/destroy T.m`, `name: shared`, the object as an owned
+  method's input, the processor's owned-object rules at `.jsc` positions, the lowering's records and `Ctx` choice, the
+  keys of owned spends and creations, D11 at the new positions, the ABI's owned datum, JSC1215 for the later parts) and
+  two decisions from the security review: an owned method's shared read is the transaction's input state and is never
+  composed with an instance action (A5); a deposit targets an instance, so an owned action receives none (A18).
+  §8 splits M3 into M3a1, M3a2, M3a3, M3b and M3c, and records M3a1's gates.
+- **r24** (2026-11-14, M3a2: several owned types, BigMaps in owned types, owned inits that accept, payable owned
+  destroys): D10 records what M3a2 built and the size work of the lowering; §8 records M3a2's gates (the locker ports;
+  J11's 14 KB bound exceeded by the Java examples and the ports alike, stated as an exception with the numbers) and moves
+  market's port to M3a3, which builds the moves it needs. JSC0426 stays for an instance's init (the processor reads the
+  state's type from `@Init`'s return), with that reason.
+- **r25** (2026-11-14, M3a3: moves and invariants by type): D10 records what M3a3 built and the decision on the order
+  of a move's halves (A24: each half its own call, reading the other's input; narrowed after #107's review); §8 records
+  M3a3's gates (the guild and
+  market ports; market over J11's 14 KB, stated as an exception with the numbers). JSC1215 is retired.
+- **r26** (2026-11-14, the `.jsc` v1 removal, on `feat/jsc-v1-removal`; r23 to r25 are M3a1 to M3a3's, r27 M3b's and r28 M3c's,
   in other PRs): the language is `.jsc` (the title; the naming note under the status). D2: the header is `jsc 1` and
   optional, `jsc 2` is refused with a pointer to it (JSC0113; JSC0112, a missing header, is retired), and every
   `jsc 2` header in the repository is rewritten in place, so no script hash changes. D16 is superseded: `.jsc` v1
@@ -1685,3 +1934,39 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   Gradle: `jscAbiDiff`, `acceptJscAbi --contract --committed-sha256 --sha256`); the contract is named by package and
   name (a simple name only when one contract has it; an ambiguous one accepts nothing); a partial set of the Gradle
   options accepts nothing; the bare `--accept-abi` stays for terminals. Recorded in D12 *(ADR-0021 r7, §3a item 5)*.
+- **r27** (2026-11-14, M3b: keyed objects; r26 is the `.jsc` v1 removal's, #111): D10 records what M3b built (`owned T keyed by f (…)`, `retire`, the
+  processor's keyed rules at `.jsc` positions, JSC1240–JSC1251 and JSC9011–JSC9013, the interpreters' list rules as
+  transaction preconditions) and the decisions it asks to confirm (the order of a keyed call's checks; no time-derived
+  key; `open` is no keyed audience, the client's keyed members reserved for methods too); §8 records M3b's gates (the
+  registry port, over J11's 14 KB as its Java example is, stated as an exception with the numbers). `retire` joins the
+  modifier words (JSC0211). M3c takes r28.
+- **r28** (2026-11-15, M3c: script purposes and migration): D10 records what M3c built (the handlers `withdraw`,
+  `certify`, `vote`, `propose` and the option `stakeSelf`; the purposes' ledger types and `LedgerMap`, read-only;
+  `std/certs`; `destroy … migrates to f` and `init migrate from params.p(old: V.State)`; JSC1301–JSC1341 and JSC9014;
+  the interpreters' purpose filters and migration halves as transaction preconditions) and the decisions it asks to
+  confirm (a successor that can change until the migration, with a warning and its lock; no migration beside objects,
+  BigMaps or assets, which keeps the arriving-object premise; the adopted state checked as a read state; the handlers'
+  arguments and order); §8 records M3c's gates (the staking and upgrade ports, within the bounds). Round r2 (#113):
+  in a contract with `@Migrate` an ordinary creation never consumes the previous version's instance (security S1, I41:
+  the processor's `CreateInstance`, so examples/upgrade's CounterV2 changes hash and its fixtures are recorded again;
+  both interpreters refuse it as `migrate:from`); a withdrawal's sends are each positive (Codex C1); both IR readers
+  refuse equality on ledger values, a set on a LedgerMap and an opaque bind (C2); `funds` is no name in a handler or an
+  init migrate (C3); `stakeSelf` and a withdraw handler are refused beside owned types (JSC1305; design F1, security S3);
+  an init migrate imports a version with a migrating destroy (S2, F4); a withdraw send is `Value.lovelace(n)` (S4);
+  `std/certs` drops `delegatesVoteTo` (F5). **Compatibility (F9):** the names M3c reserves (the annotations `Withdraw`,
+  `Certify`, `Votes`, `Propose`, `Migrate`, `MigrateTo`, the class `Certs`, the record `Rewards`, the ledger types' names,
+  `LedgerMap`) are reserved in every contract, as M2c's `Deposit` is, so that a name means one thing in
+  every file and in the generated Java beside the API's imports: an `enum Op { Pay, Withdraw }` now needs other names.
+  *(Corrected in r29, Codex M2: the ledger types' constructors were never reserved; a declared variant may reuse their
+  spellings. Narrowed in r29, design review MD7: the annotations and `Rewards` are reserved only in a contract with a
+  handler or a migration, D10's M3a bullet, so `enum Op { Pay, Withdraw }` builds again elsewhere.)*
+- **r29** (2026-11-15, the M3 final pass over #101, #104, #112 and #113, on `feat/jsc-2-m3c`): a migrating destroy in an
+  asset-aware contract (one with a withdraw handler, so every stakeSelf contract) builds the I41 migration branch the
+  lovelace-only one has (security MS1: before, such an instance could never migrate); in a contract with handlers a
+  method whose redeemer record would take a ledger type's name is JSC0203 (MD1); the semantics states how the parts
+  combine (§2.12, MD2, with Codex M1's and security MS3's probes promoted to coverage contracts), with two new "not
+  covered yet" refusals (JSC1217; JSC1305 beside BigMap state) and the build-time size warning (JSC9015); Registry's
+  J11 exception is pinned (MD3); `funds` in an owned method is the object's (semantics §2.8, MD4); the escape hatch's two
+  meanings are stated, with JSC9016 (MD5); keyed × withdraw is JSC1244 everywhere (MD6); M3's one reserved-names rule
+  (MD7, Codex M2); the reference grammar, modifier table and IR shape cover M3b and M3c (MD8); §8 records M3's exit and
+  D10 the maintainers' decisions in one list (MD9); both IR readers refuse the mixed-stage mutants (MS2).

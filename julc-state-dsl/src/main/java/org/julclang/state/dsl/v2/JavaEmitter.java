@@ -82,6 +82,10 @@ final class JavaEmitter {
     private int counter;
     /** The method or fn being emitted: helper names start with it. */
     private String owner;
+    /** M3a: the type of {@code s__}, the input of the method being emitted: State, or an owned method's object type. */
+    private String stateType = "State";
+    /** M3c: the kind of the method being emitted (null in a fn): a withdraw handler's sends take no Funds. */
+    private Ir.Kind kind;
 
     private JavaEmitter(Ir.Program p) {
         this.p = p;
@@ -129,11 +133,16 @@ final class JavaEmitter {
         List<Ir.Method> spend = Abi.spendOrder(p), intents = Abi.intentOrder(p);
         for (int i = 0; i < spend.size(); i++) redeemers.put(spend.get(i).name(), "spend" + i);
         for (int k = 0; k < intents.size(); k++) redeemers.putIfAbsent(intents.get(k).name(), "intent" + k);
+        // M3a: an owned init's key names its mint redeemer constructor, after CreateInstance and BurnInstance (D12).
+        List<Ir.Method> creations = Abi.ownedInits(p);
+        for (int k = 0; k < creations.size(); k++) redeemers.put(creations.get(k).name(), "mint" + (2 + k));
         var body = new StringBuilder();
         var results = new TreeSet<String>();
         for (Ir.Method m : p.methods()) {
             body.append(method(m));
             if (m.kind() == Ir.Kind.ACTION && Effects.actionRecord(p, m) != null) results.add(Effects.actionRecord(p, m));
+            // M3a: the records of owned methods, of creations that accept, and of owned destroys that take assets.
+            if ((m.kind().owned() || m.kind() == Ir.Kind.INIT) && Effects.record(p, m) != null) results.add(Effects.record(p, m));
         }
         if (Effects.settled(p)) results.add("Settled");
         for (Ir.Fn f : p.fns()) body.append(fn(f));
@@ -150,10 +159,14 @@ final class JavaEmitter {
         records.append(typeDecls());
         // The result records (D4; Effects): Outcome and Received hold the next state, then each kind of effect their actions
         // produce; Settled a destroy's. A contract that only pays keeps M1's Outcome(state, payouts).
-        for (String r : List.of("Outcome", "Stepped", "Received", "Settled")) {
+        // M2's records first, in their order, then (M3a) the others by name: an earlier contract's Java is unchanged.
+        var recordOrder = new ArrayList<String>(List.of("Outcome", "Stepped", "Received", "Settled"));
+        for (String r : results) if (!recordOrder.contains(r)) recordOrder.add(r);
+        for (String r : recordOrder) {
             if (!results.contains(r)) continue;
             var comps = new ArrayList<String>();
-            if (!r.equals("Settled")) comps.add("State state");
+            String st = Effects.stateOf(p, r);
+            if (st != null) comps.add(st + " state");
             for (String k : Effects.recordKinds(p, r)) comps.add(kindType(k) + " " + Effects.component(k));
             records.append("    // (generated)\n    public record ").append(r).append("(").append(String.join(", ", comps)).append(") {}\n\n");
         }
@@ -200,11 +213,33 @@ final class JavaEmitter {
         return out.toString();
     }
 
+    /**
+     * M3b (ADR-0016 D1): a keyed type's {@code @Owned} attributes: its key and maxKeyBytes, then signedKey, the cooldown and
+     * the window where they differ from the processor's defaults (the values are the same either way).
+     */
+    private String keyedAttributes(Ir.Keyed k) {
+        if (k == null) return "";
+        var a = new ArrayList<String>();
+        a.add("key = \"" + k.key() + "\"");
+        a.add("maxKeyBytes = " + k.maxKeyBytes());
+        if (k.signed()) a.add("signedKey = true");
+        if (k.cooldownMs() != 60_000L) a.add("linkCooldownMs = " + k.cooldownMs() + "L");
+        long maxValidity = 3_600_000L;
+        for (Ir.ContractOption o : p.options()) if (o.name().equals("maxValidityMs")) maxValidity = o.value().longValueExact();
+        if (k.windowMs() != Math.min(120_000L, maxValidity)) a.add("linkWindowMs = " + k.windowMs() + "L");
+        return "(" + String.join(", ", a) + ")";
+    }
+
     /** The program's own records and enums (a library's are declared in its class). */
     private String typeDecls() {
         var records = new StringBuilder();
         for (Ir.RecordType r : p.records().values()) {
             records.append("    // ").append(mark(r.pos())).append("\n");
+            // M3a (ADR-0003 D1, ADR-0012 D1): an owned type, each object its own UTxO.
+            if (p.isOwned(r.name())) {
+                imports.add("org.julclang.state.api.Owned");
+                records.append("    @Owned").append(keyedAttributes(p.keyedOf(r.name()))).append("\n");
+            }
             records.append("    public record ").append(r.name()).append("(").append(components(r)).append(") {}\n\n");
         }
         // An enum: a sealed interface whose permits clause lists the variants in declaration order, which is their
@@ -261,6 +296,11 @@ final class JavaEmitter {
         if (p.options().isEmpty()) return "";
         var parts = new ArrayList<String>();
         for (Ir.ContractOption o : p.options()) {
+            // M3c (ADR-0010 D2): the flag stakeSelf is the boolean @StateContract(stakeSelf = true).
+            if (o.name().equals("stakeSelf")) {
+                parts.add("stakeSelf = true");
+                continue;
+            }
             parts.add(o.name() + " = " + o.value() + (o.name().equals("maxDatumBytes") || o.name().equals("assetSlots") ? "" : "L"));
         }
         return "(" + String.join(", ", parts) + ")";
@@ -305,6 +345,16 @@ final class JavaEmitter {
                 yield "MerkleMap";
             }
             case Ty.Ledger l -> l.name();
+            // M3c (ADR-0010): JuLC's ledger types, read from the script context.
+            case Ty.Gov g -> {
+                if (g.equals(Gov.DATA)) throw new IllegalStateException("a PlutusData field is never bound (JSC1320)");
+                imports.add("org.julclang.ledger." + g.name());
+                yield g.name();
+            }
+            case Ty.LedgerMapT m -> {
+                imports.add("org.julclang.core.types.JulcMap");
+                yield "JulcMap<" + jt(m.key(), true) + ", " + jt(m.val(), true) + ">";
+            }
         };
     }
 
@@ -422,12 +472,66 @@ final class JavaEmitter {
 
     // ------------------------------------------------------------------ methods and fns
 
+    /** M3a (size): the effect kinds the method being emitted makes at most once: one statement of the kind, in no loop. */
+    private Set<String> once = Set.of();
+
+    // #104 review F3: exhaustive over Ir.Stmt (no default), so a new statement kind, compound or not, must say here what
+    // it makes and what it nests: a kind made twice and counted once would lose its .reverse() and its source order.
+    private static void countEffects(List<Ir.Stmt> ss, Map<String, Integer> n, boolean loop) {
+        for (Ir.Stmt s : ss) {
+            String k = switch (s) {
+                case Ir.Pay x -> "pay";
+                case Ir.Send x -> "send";
+                case Ir.Emit x -> "emit";
+                case Ir.Deposit x -> "deposit";
+                case Ir.Let x -> null;
+                case Ir.Require x -> null;
+                case Ir.Mint x -> null;
+                case Ir.Accept x -> null;
+                case Ir.If x -> null;
+                case Ir.For x -> null;
+                case Ir.MatchStmt x -> null;
+            };
+            if (k != null) n.merge(k, loop ? 2 : 1, Integer::sum);
+            switch (s) {
+                case Ir.If i -> {
+                    for (Ir.Branch b : i.branches()) countEffects(b.then().stmts(), n, loop);
+                    if (i.otherwise() != null) countEffects(i.otherwise().stmts(), n, loop);
+                }
+                case Ir.MatchStmt ms -> ms.arms().forEach(a -> countEffects(a.body().stmts(), n, loop));
+                case Ir.For f -> countEffects(f.body().stmts(), n, true);
+                case Ir.Let x -> { }
+                case Ir.Require x -> { }
+                case Ir.Pay x -> { }
+                case Ir.Send x -> { }
+                case Ir.Mint x -> { }
+                case Ir.Accept x -> { }
+                case Ir.Emit x -> { }
+                case Ir.Deposit x -> { }
+            }
+        }
+    }
+
     private String method(Ir.Method m) {
+        var counts = new HashMap<String, Integer>();
+        countEffects(m.body().stmts(), counts, false);
+        var single = new HashSet<String>();
+        counts.forEach((k, c) -> {
+            if (c == 1) single.add(k);
+        });
+        once = single;
         owner = m.name();
+        kind = m.kind();
+        stateType = m.on() != null ? m.on() : "State";
         redeemer = switch (m.kind()) {
             case INIT -> "mint0";
-            case ACTION, DESTROY -> redeemers.get(m.name());
+            case ACTION, DESTROY, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY -> redeemers.get(m.name());
             case VIEW -> null;
+            // M3c: a withdraw handler's redeemer is Rewards (the only constructor of its purpose); the others carry nothing;
+            // the adoption's is the mint redeemer's Adopt, last in the Lifecycle.
+            case WITHDRAW -> "withdraw0";
+            case CERTIFY, VOTE, PROPOSE -> m.kind().name().toLowerCase() + "0";
+            case MIGRATE -> "mint" + Abi.adoptIndex(p);
         };
         ordinals = ordinals(m.body());
         String ann = switch (m.kind()) {
@@ -435,11 +539,24 @@ final class JavaEmitter {
             case ACTION -> "Action";
             case DESTROY -> "Destroy";
             case VIEW -> "View";
+            // M3a (ADR-0003 D1)
+            case OWNED_INIT -> "OwnedInit";
+            case OWNED_ACTION -> "OwnedAction";
+            case OWNED_DESTROY -> "OwnedDestroy";
+            // M3c (ADR-0010 D1, ADR-0011 D4)
+            case WITHDRAW -> "Withdraw";
+            case CERTIFY -> "Certify";
+            case VOTE -> "Votes";
+            case PROPOSE -> "Propose";
+            case MIGRATE -> "Migrate";
         };
         imports.add("org.julclang.state.api." + ann);
         var code = new StringBuilder();
         code.append("    // ").append(mark(m.pos())).append("\n");
-        code.append("    @").append(ann).append("\n");
+        // M3b (ADR-0016 D10): a retiring exit keeps its node, retired, with its key.
+        boolean retire = m.mods().stream().anyMatch(x -> x.name().equals("retire"));
+        String arg = retire ? "(retire = true)" : m.kind() == Ir.Kind.MIGRATE ? "(from = \"params." + m.migration().from() + "\")" : "";
+        code.append("    @").append(ann).append(arg).append("\n");
         for (Ir.Mod mod : m.mods()) {
             switch (mod.name()) {
                 case "payable" -> {
@@ -474,13 +591,34 @@ final class JavaEmitter {
                     imports.add("org.julclang.state.api.Receives");
                     code.append("    @Receives\n");
                 }
+                case "admits" -> {
+                    // M3a (ADR-0012 D3): objects of this owned type arrive through the action, bound to their move.
+                    imports.add("org.julclang.state.api.Admits");
+                    code.append("    @Admits(\"").append(mod.field()).append("\")\n");
+                }
+                case "migrates" -> {
+                    // M3c (ADR-0011 D4): the instance ends by moving into an instance of the policy the state field names.
+                    imports.add("org.julclang.state.api.MigrateTo");
+                    code.append("    @MigrateTo(\"").append(mod.field()).append("\")\n");
+                }
                 default -> {
                 }
             }
         }
         boolean funds = Effects.takesFunds(m);
         var params = new ArrayList<String>();
-        if (m.kind() != Ir.Kind.INIT) params.add("State s__");
+        // M3a: an owned action's or destroy's first parameter is its object.
+        if (m.kind() == Ir.Kind.OWNED_ACTION || m.kind() == Ir.Kind.OWNED_DESTROY) params.add(m.on() + " s__");
+        else if (!m.kind().creates() && !m.kind().purpose()) params.add("State s__");
+        // M3a (ADR-0003 D1, ADR-0012 D3): the instance's state by reference, then a move's destination, right after it.
+        if (m.owned() != null && m.owned().shared() != null) {
+            imports.add("org.julclang.state.api.Shared");
+            params.add("@Shared State " + m.owned().shared().name);
+        }
+        if (m.owned() != null && m.owned().into() != null) {
+            imports.add("org.julclang.state.api.Into");
+            params.add("@Into State " + m.owned().into().name);
+        }
         // M2b (ADR-0009 D1): an init, and a method that reads params, takes them directly after the state (first in an init).
         if (Effects.takesParams(p, m)) params.add(Ir.PARAMS + " params__");
         // M2c (ADR-0011 D2): each read state right after the params, as the processor requires.
@@ -488,7 +626,16 @@ final class JavaEmitter {
             imports.add("org.julclang.state.api.Reads");
             params.add("@Reads(\"params." + r.field() + "\") " + jt(r.local().type) + " " + r.local().name);
         }
-        for (Ir.Local l : m.params()) params.add(jt(l.type) + " " + l.name);
+        // M3c (ADR-0011 D4): the adopted instance's state, right after the params (@Migrate's shape).
+        if (m.migration() != null) params.add(jt(m.migration().old().type) + " " + m.migration().old().name);
+        for (int i = 0; i < m.params().size(); i++) {
+            Ir.Local l = m.params().get(i);
+            params.add(jt(l.type) + " " + l.name);
+            // M3a (ADR-0012 r4): an admits action's arriving object right after the object's id; not a redeemer field.
+            if (i == 0 && m.owned() != null && m.owned().arriving() != null) {
+                params.add(m.owned().arriving().type instanceof Ty.Rec r ? r.name() + " " + m.owned().arriving().name : null);
+            }
+        }
         if (m.usesCtx()) {
             imports.add("org.julclang.state.api.Ctx");
             params.add("Ctx ctx");
@@ -502,7 +649,11 @@ final class JavaEmitter {
         var stmts = new StringBuilder();
         for (Ir.Local l : m.checked()) {
             // The redeemer field the parameter is: a CreateInstance's fields start with the seed (ABI manifest).
-            int field = m.params().indexOf(l) + (m.kind() == Ir.Kind.INIT ? 1 : 0);
+            // M3a: an owned init's fields start with the seed and the instance; a move's with its destination.
+            // M3c: a withdrawal's arguments follow Rewards' marker (its amount is the handler's first parameter); an adoption's
+            // follow Adopt's seed.
+            int field = m.params().indexOf(l) + (m.kind() == Ir.Kind.INIT || m.kind() == Ir.Kind.WITHDRAW || m.kind() == Ir.Kind.MIGRATE ? 1
+                    : m.kind() == Ir.Kind.OWNED_INIT ? 2 : m.owned() != null && m.owned().into() != null ? 1 : 0);
             imports.add("org.julclang.state.api.Require");
             stmts.append("        Require.that(").append(checkCall(l.type, l.name)).append(", ")
                     .append(str(key("input", field, l.pos, l.name))).append(");\n");
@@ -511,7 +662,7 @@ final class JavaEmitter {
         // value outside the domain a reader checks (a Value of other policies than lovelace's and 28-byte ones), or a Hash
         // that Value.asset would make one of (a Key or Hash not 28 bytes, a map out of order, an address not the ledger's).
         // Fixed for the deployment, they are then trusted by every other method.
-        if (m.kind() == Ir.Kind.INIT && p.params() != null && Ty.needsCheck(new Ty.Rec(Ir.PARAMS), this::components)) {
+        if (m.kind().createsInstance() && p.params() != null && Ty.needsCheck(new Ty.Rec(Ir.PARAMS), this::components)) {
             imports.add("org.julclang.state.api.Require");
             stmts.append("        Require.that(").append(checkCall(new Ty.Rec(Ir.PARAMS), "params__")).append(", ")
                     .append(str(key("params", 0, m.pos(), "params"))).append(");\n");
@@ -526,6 +677,12 @@ final class JavaEmitter {
             stmts.append("        Require.that(").append(checkCall(r.local().type, r.local().name)).append(", ")
                     .append(str(key("read", readNo, r.local().pos, r.local().name))).append(");\n");
         }
+        // M3c (ADR-0011 D4, review A44): the adopted state is a checked input too, as a read state is.
+        if (m.migration() != null && Ty.needsCheck(m.migration().old().type, this::components)) {
+            Ir.Local o = m.migration().old();
+            imports.add("org.julclang.state.api.Require");
+            stmts.append("        Require.that(").append(checkCall(o.type, o.name)).append(", ").append(str(key("old", 1, o.pos, o.name))).append(");\n");
+        }
         // M2c (ADR-0011 D3): receives T: every deposit's memo is a checked input of type T, decoded before the body runs.
         Ir.Mod rv = m.receives();
         if (rv != null && rv.type() != null) {
@@ -537,20 +694,48 @@ final class JavaEmitter {
         // The effects this method threads (D4): each kind it reaches, plus payouts for any destroy (M1's layout).
         var kinds = new ArrayList<String>();
         var reached = Effects.kinds(m);
-        for (String k : Effects.ORDER) if (reached.contains(k) || (k.equals("pay") && m.kind() == Ir.Kind.DESTROY)) kinds.add(k);
-        Acc acc = new Acc(m.kind() == Ir.Kind.VIEW || m.kind() == Ir.Kind.INIT ? List.of() : kinds);
+        for (String k : Effects.ORDER) if (reached.contains(k) || (k.equals("pay") && m.kind().ends())) kinds.add(k);
+        // M3a: a creation threads what it accepts (issue #81 fixed), nothing else.
+        Acc acc = new Acc(m.kind() == Ir.Kind.VIEW ? List.of() : m.kind().creates() ? (kinds.contains("accept") ? List.of("accept") : List.of()) : kinds);
         for (String k : acc.kinds) acc.cur.put(k, empty(k));
         stmts(m.body().stmts(), stmts, "        ", acc);
         String ret;
         switch (m.kind()) {
-            case INIT -> {
-                ret = "State";
+            case WITHDRAW -> {
+                // M3c (ADR-0010 D1): the reward sends, in source order.
+                imports.add("org.julclang.state.api.Send");
+                ret = "JulcList<Send>";
+                String sends = acc.cur.containsKey("send") ? acc.cur.get("send") + (once.contains("send") ? "" : ".reverse()") : empty("send");
+                stmts.append("        return ").append(sends).append(";\n");
+            }
+            case CERTIFY, VOTE, PROPOSE -> {
+                ret = "boolean";
                 stmts.append("        return ").append(ex(m.body().result())).append(";\n");
             }
-            case ACTION -> {
-                String record = Effects.actionRecord(p, m);
+            case INIT, OWNED_INIT, MIGRATE -> {
+                String made = m.kind() == Ir.Kind.OWNED_INIT ? m.on() : "State";
+                String record = Effects.record(p, m);
                 if (record == null) {
-                    ret = "State";
+                    ret = made;
+                    stmts.append("        return ").append(ex(m.body().result())).append(";\n");
+                } else {
+                    // M3a (issue #81 fixed): the first state or object, then the check that what it accepted is what the
+                    // caller offers (ADR-0007 r2), then the record (state, accepted).
+                    ret = record;
+                    imports.add("org.julclang.state.api.Require");
+                    String next = fresh("next");
+                    stmts.append("        ").append(made).append(" ").append(next).append(" = ").append(ex(m.body().result())).append(";\n");
+                    stmts.append("        Require.that(ValueAdapter.same(").append(acc.cur.get("accept")).append(", funds.received()), ")
+                            .append(str(key("funds", 1, m.pos(), null))).append(");\n");
+                    stmts.append("        return new ").append(record).append("(").append(next).append(", ").append(acc.cur.get("accept"))
+                            .append(");\n");
+                }
+            }
+            case ACTION, OWNED_ACTION -> {
+                String made = m.kind() == Ir.Kind.ACTION ? "State" : m.on();
+                String record = m.kind() == Ir.Kind.ACTION ? Effects.actionRecord(p, m) : Effects.record(p, m);
+                if (record == null) {
+                    ret = made;
                     stmts.append("        return ").append(ex(m.body().result())).append(";\n");
                 } else if (!acc.kinds.contains("accept")) {
                     ret = record;
@@ -562,20 +747,28 @@ final class JavaEmitter {
                     ret = record;
                     imports.add("org.julclang.state.api.Require");
                     String next = fresh("next");
-                    stmts.append("        State ").append(next).append(" = ").append(ex(m.body().result())).append(";\n");
+                    stmts.append("        ").append(made).append(" ").append(next).append(" = ").append(ex(m.body().result())).append(";\n");
                     stmts.append("        Require.that(ValueAdapter.same(").append(acc.cur.get("accept")).append(", funds.received()), ")
                             .append(str(key("funds", 1, m.pos(), null))).append(");\n");
                     stmts.append("        return new ").append(record).append("(").append(next).append(", ").append(result(record, acc))
                             .append(");\n");
                 }
             }
-            case DESTROY -> {
-                if (Effects.settled(p)) {
+            case DESTROY, OWNED_DESTROY -> {
+                if (Effects.exchanges(m)) {
+                    // M3a: an owned destroy that takes native assets (examples/market's buy): its effects, then what it
+                    // accepted, checked last against what the caller offers.
+                    ret = "Exchanged";
+                    imports.add("org.julclang.state.api.Require");
+                    stmts.append("        Require.that(ValueAdapter.same(").append(acc.cur.get("accept")).append(", funds.received()), ")
+                            .append(str(key("funds", 1, m.pos(), null))).append(");\n");
+                    stmts.append("        return new Exchanged(").append(result("Exchanged", acc)).append(");\n");
+                } else if (Effects.settled(p)) {
                     ret = "Settled";
                     stmts.append("        return new Settled(").append(result("Settled", acc)).append(");\n");
                 } else {
                     ret = "JulcList<Payout>";
-                    stmts.append("        return ").append(acc.cur.get("pay")).append(".reverse();\n");
+                    stmts.append("        return ").append(acc.cur.get("pay")).append(once.contains("pay") ? ";\n" : ".reverse();\n");
                 }
             }
             case VIEW -> {
@@ -595,7 +788,9 @@ final class JavaEmitter {
         for (String k : Effects.recordKinds(p, record)) {
             String v = acc.cur.containsKey(k) ? acc.cur.get(k) : empty(k);
             // Lists accumulate by prepending: reversed into source order, unless still empty.
-            parts.add((k.equals("pay") || k.equals("send") || k.equals("emit") || k.equals("deposit")) && !v.equals(empty(k)) ? v + ".reverse()" : v);
+            // M3a (size): a kind made at most once (one statement, in no loop) needs no reverse.
+            parts.add((k.equals("pay") || k.equals("send") || k.equals("emit") || k.equals("deposit")) && !v.equals(empty(k)) && !once.contains(k)
+                    ? v + ".reverse()" : v);
         }
         return String.join(", ", parts);
     }
@@ -746,11 +941,13 @@ final class JavaEmitter {
      */
     private String invariant(Ir.Invariant inv) {
         owner = inv.name();
+        stateType = inv.on() != null ? inv.on() : "State";
         redeemer = null;
         ordinals = Map.of();
         imports.add("org.julclang.state.api.Invariant");
         var u = new Free().block(inv.body());
-        String params = "State s__" + (u.params ? ", " + Ir.PARAMS + " params__" : "");
+        // M3a (ADR-0012 D1): an owned type's invariant takes the object.
+        String params = (inv.on() == null ? "State" : inv.on()) + " s__" + (u.params ? ", " + Ir.PARAMS + " params__" : "");
         var stmts = new StringBuilder();
         stmts(inv.body().stmts(), stmts, "        ", none());
         return "    // " + mark(inv.pos()) + "\n    @Invariant\n    public static boolean " + inv.name() + "(" + params + ") {\n" + stmts
@@ -759,6 +956,7 @@ final class JavaEmitter {
 
     private String fn(Ir.Fn f) {
         owner = f.name();
+        kind = null;
         redeemer = null;
         ordinals = Map.of();
         var params = new ArrayList<String>();
@@ -1018,26 +1216,27 @@ final class JavaEmitter {
 
     private String capParams(Free f) {
         var ps = new ArrayList<String>();
-        if (f.state) ps.add("State s__");
+        if (f.state) ps.add(stateType + " s__");
         if (f.params) ps.add(Ir.PARAMS + " params__");
         for (Ir.Local l : f.locals()) ps.add(jt(l.type) + " " + l.name);
         if (f.deposits != null) ps.add(jt(f.deposits) + " deposits__");
         if (f.ctx) ps.add("Ctx ctx");
-        if (f.funds) {
+        // M3c: a withdraw handler's sends take no Funds (its purpose spends nothing of the contract).
+        if (f.funds && kind != Ir.Kind.WITHDRAW) {
             imports.add("org.julclang.state.api.Funds");
             ps.add("Funds funds");
         }
         return String.join(", ", ps);
     }
 
-    private static String capArgs(Free f) {
+    private String capArgs(Free f) {
         var as = new ArrayList<String>();
         if (f.state) as.add("s__");
         if (f.params) as.add("params__");
         for (Ir.Local l : f.locals()) as.add(l.name);
         if (f.deposits != null) as.add("deposits__");
         if (f.ctx) as.add("ctx");
-        if (f.funds) as.add("funds");
+        if (f.funds && kind != Ir.Kind.WITHDRAW) as.add("funds");
         return String.join(", ", as);
     }
 
@@ -1094,10 +1293,25 @@ final class JavaEmitter {
                     String v = fresh("value"), ns = fresh("sends");
                     imports.add("org.julclang.state.api.Require");
                     out.append(ind).append("Value ").append(v).append(" = ").append(ex(y.value())).append(";\n");
-                    imports.add("org.julclang.state.api.AddressAdapter");
-                    out.append(ind).append("Require.that(ValueAdapter.sendable(").append(v).append(", funds.policy()) && AddressAdapter.notOwnScript(")
-                            .append(to).append(", funds.policy()), ")
-                            .append(str(key("send", ordinals.get("send").get(y.pos()), y.pos(), null))).append(");\n");
+                    // M3a (size): a part that holds for every value is not checked. funds.held is always sendable (the
+                    // instance's own native assets: positive, and never a reserved name of the own policy, which no output
+                    // of the contract holds but its own token, I30, I31); a key's address (wallet) is never a script's.
+                    var conds = new ArrayList<String>();
+                    // M3c (ADR-0010 D1): a withdraw handler has no Funds (its purpose spends nothing of the contract): its
+                    // sends are checked by its validator, lovelace only and totalling the amount, each claimed by RewardRef(own).
+                    if (kind == Ir.Kind.WITHDRAW) {
+                        // none here
+                    } else if (!(y.value() instanceof Ir.FundsRef held && held.field().equals("held"))) {
+                        conds.add("ValueAdapter.sendable(" + v + ", funds.policy())");
+                    }
+                    if (kind != Ir.Kind.WITHDRAW && !(y.to() instanceof Ir.LedgerOp w && (w.op().equals("wallet") || w.op().equals("walletStaked")))) {
+                        imports.add("org.julclang.state.api.AddressAdapter");
+                        conds.add("AddressAdapter.notOwnScript(" + to + ", funds.policy())");
+                    }
+                    if (!conds.isEmpty()) {
+                        out.append(ind).append("Require.that(").append(String.join(" && ", conds)).append(", ")
+                                .append(str(key("send", ordinals.get("send").get(y.pos()), y.pos(), null))).append(");\n");
+                    }
                     // M2c: with a datum, an inline datum built by the generated encoder (D5, J17); evaluated after the value.
                     String datum = "Datum.none()";
                     if (y.datum() != null) {
@@ -1142,9 +1356,33 @@ final class JavaEmitter {
                     // accept(value) (M2): native assets only, every quantity positive (§5.3), summed.
                     String v = fresh("value"), na = fresh("accepted");
                     imports.add("org.julclang.state.api.Require");
-                    out.append(ind).append("Value ").append(v).append(" = ").append(ex(y.value())).append(";\n");
-                    out.append(ind).append("Require.that(ValueAdapter.acceptable(").append(v).append(", funds.policy()), ")
-                            .append(str(key("accept", ordinals.get("accept").get(y.pos()), y.pos(), null))).append(");\n");
+                    String check;
+                    if (y.value() instanceof Ir.LedgerOp lo && lo.op().equals("asset")) {
+                        // M3a (size): one token's value is checked by its parts (acceptableAsset is acceptable(asset(…))),
+                        // each argument evaluated once, left to right, then the value built (its domain checks first).
+                        var parts = new ArrayList<String>();
+                        String[] types = {"byte[]", "byte[]", "BigInteger"};
+                        for (int i = 0; i < 3; i++) {
+                            String x = ex(lo.args().get(i));
+                            if (!simple(x)) {
+                                String l = fresh("part");
+                                out.append(ind).append(types[i]).append(" ").append(l).append(" = ").append(x).append(";\n");
+                                x = l;
+                            }
+                            parts.add(x);
+                        }
+                        out.append(ind).append("Value ").append(v).append(" = ValueAdapter.asset(").append(String.join(", ", parts)).append(");\n");
+                        check = "ValueAdapter.acceptableAsset(" + String.join(", ", parts) + ", funds.policy())";
+                    } else {
+                        out.append(ind).append("Value ").append(v).append(" = ").append(ex(y.value())).append(";\n");
+                        // M3a (size): Value.none() is always acceptable.
+                        check = y.value() instanceof Ir.LedgerOp lo && lo.op().equals("none") ? null
+                                : "ValueAdapter.acceptable(" + v + ", funds.policy())";
+                    }
+                    if (check != null) {
+                        out.append(ind).append("Require.that(").append(check).append(", ")
+                                .append(str(key("accept", ordinals.get("accept").get(y.pos()), y.pos(), null))).append(");\n");
+                    }
                     String prior = acc.cur.get("accept");
                     out.append(ind).append("Value ").append(na).append(" = ").append(prior.equals(empty("accept")) ? v
                             : "ValueAdapter.add(" + prior + ", " + v + ")").append(";\n");
@@ -1314,6 +1552,15 @@ final class JavaEmitter {
                 imports.add("java.util.Optional");
                 yield "Optional.of(" + ex(s.value()) + ")";
             }
+            case Ir.GetField g when g.target().type() instanceof Ty.Gov gt -> {
+                // M3c (D5): a ledger record's field, in its .jsc type (a hash newtype's bytes).
+                String t = ex(g.target());
+                Gov.Field fd = Gov.RECORDS.get(gt.name()).field(g.field());
+                if (simple(t)) yield govRead(t, fd);
+                String h = "get__" + gt.name() + "_" + g.field();
+                addHelper(h, "    static " + jt(g.type()) + " " + h + "(" + jt(gt) + " r__) {\n        return " + govRead("r__", fd) + ";\n    }\n\n");
+                yield h + "(" + t + ")";
+            }
             case Ir.GetField g -> {
                 String t = ex(g.target());
                 if (simple(t)) yield fromWire(g.type(), t + "." + g.field() + "()");
@@ -1388,6 +1635,23 @@ final class JavaEmitter {
                 String h = "get__" + rec + "_" + d.field();
                 addHelper(h, "    static " + jt(d.type()) + " " + h + "(" + rec + " r__) {\n        return r__." + acc + ";\n    }\n\n");
                 yield h + "(" + t + ")";
+            }
+        };
+    }
+
+    /** M3c (D5): a ledger field read from {@code target} as its .jsc type: a hash newtype's bytes, an Optional of one. */
+    private String govRead(String target, Gov.Field fd) {
+        String read = target + "." + fd.name() + "()";
+        return switch (fd.wire()) {
+            case DIRECT -> read;
+            case HASH -> read + ".hash()";
+            case OPT_HASH -> {
+                imports.add("java.util.Optional");
+                imports.add("org.julclang.ledger.ScriptHash");
+                addHelper("optHash__", "    static Optional<byte[]> optHash__(Optional<ScriptHash> o__) {\n        if (o__.isPresent()) {\n"
+                        + "            ScriptHash h__ = o__.get();\n            return Optional.of(h__.hash());\n        } else {\n"
+                        + "            return Optional.empty();\n        }\n    }\n\n");
+                yield "optHash__(" + read + ")";
             }
         };
     }
@@ -1735,6 +1999,7 @@ final class JavaEmitter {
             String f = a.fields().get(i);
             if (scrutinee instanceof Ty.OptT) out.add("v__.get()");
             else if (scrutinee.equals(Ty.CREDENTIAL)) out.add("AddressAdapter." + (f.equals("key") ? "keyOf" : "scriptOf") + "(x__)");
+            else if (scrutinee instanceof Ty.Gov g) out.add(govRead("x__", Gov.ctor(g.name(), a.ctors().get(0)).field(f)));
             else out.add(fromWire(a.binds().get(i).type, "x__." + f + "()"));
         }
         return out;
@@ -1782,6 +2047,13 @@ final class JavaEmitter {
         } else if (scrutinee.type().equals(Ty.CREDENTIAL)) {
             body = "        return switch (v__) {\n            case Credential.PubKeyCredential x__ -> " + calls.get("KeyCred")
                     + ";\n            case Credential.ScriptCredential x__ -> " + calls.get("ScriptCred") + ";\n        };\n";
+        } else if (scrutinee.type() instanceof Ty.Gov g) {
+            // M3c (D5): a sealed ledger type, every constructor in the ledger's tag order (no default arm).
+            var cases = new StringBuilder();
+            for (Gov.Ctor c : Gov.SUMS.get(g.name())) {
+                cases.append("            case ").append(c.javaClass()).append(" x__ -> ").append(calls.get(c.name())).append(";\n");
+            }
+            body = "        return switch (v__) {\n" + cases + "        };\n";
         } else {
             var cases = new StringBuilder();
             for (String v : p.enumType(((Ty.EnumT) scrutinee.type()).name()).variantNames()) {
@@ -1858,7 +2130,8 @@ final class JavaEmitter {
     }
 
     private String mapOp(Ir.MapOp o) {
-        Ty.MapT mt = (Ty.MapT) o.map().type();
+        // M3c: a LedgerMap's read-only operations are an inline map's (JuLC's map, its entries in the ledger's order).
+        Ty.MapT mt = o.map().type() instanceof Ty.LedgerMapT lm ? new Ty.MapT(lm.key(), lm.val()) : (Ty.MapT) o.map().type();
         String m = ex(o.map());
         return switch (o.op()) {
             // A key is a top-level byte string: JuLC's JVM map compares it by content (ContentEquality), on-chain by
@@ -1886,7 +2159,9 @@ final class JavaEmitter {
 
     /** {@code m.any/all((k, v) => …)}: an entry helper takes the map once, a recursive one walks its keys and values. */
     private String mapHof(Ir.MapHof h) {
-        Ty.MapT mt = (Ty.MapT) h.map().type();
+        Ty mapTy = h.map().type();
+        Ty.MapT mt = mapTy instanceof Ty.LedgerMapT lm ? new Ty.MapT(lm.key(), lm.val()) : (Ty.MapT) mapTy;
+        String kj = jt(mt.key(), true), kt = jt(mt.key()), whole = mapTy instanceof Ty.LedgerMapT ? jt(mapTy) : mapType(mt.val());
         Free f = new Free().declare(h.k(), h.v()).block(h.body());
         String name = owner + "__" + h.kind() + (++counter), vj = jt(mt.val(), true);
         var stmts = new StringBuilder();
@@ -1894,34 +2169,41 @@ final class JavaEmitter {
         String rec = name + "(" + join("ks__.tail(), vs__.tail()", capArgs(f)) + ")";
         boolean any = h.kind().equals("any");
         imports.add("org.julclang.core.types.JulcList");
-        addHelper(name, "    static boolean " + name + "(" + join("JulcList<byte[]> ks__, JulcList<" + vj + "> vs__", capParams(f)) + ") {\n"
-                + "        if (ks__.isEmpty()) {\n            return " + !any + ";\n        } else {\n            byte[] " + h.k().name
+        addHelper(name, "    static boolean " + name + "(" + join("JulcList<" + kj + "> ks__, JulcList<" + vj + "> vs__", capParams(f)) + ") {\n"
+                + "        if (ks__.isEmpty()) {\n            return " + !any + ";\n        } else {\n            " + kt + " " + h.k().name
                 + " = ks__.head();\n            " + jt(mt.val()) + " " + h.v().name + " = vs__.head();\n" + stmts + "            return "
                 + ex(h.body().result()) + (any ? " || " : " && ") + rec + ";\n        }\n    }\n\n");
         String entry = name + "_map";
-        addHelper(entry, "    static boolean " + entry + "(" + join(mapType(mt.val()) + " m__", capParams(f)) + ") {\n        return "
+        addHelper(entry, "    static boolean " + entry + "(" + join(whole + " m__", capParams(f)) + ") {\n        return "
                 + name + "(" + join("m__.keys(), m__.values()", capArgs(f)) + ");\n    }\n\n");
         return entry + "(" + join(ex(h.map()), capArgs(f)) + ")";
     }
 
     private String mapFold(Ir.MapFold fo) {
-        Ty.MapT mt = (Ty.MapT) fo.map().type();
+        Ty mapTy = fo.map().type();
+        Ty.MapT mt = mapTy instanceof Ty.LedgerMapT lm ? new Ty.MapT(lm.key(), lm.val()) : (Ty.MapT) mapTy;
+        String kj = jt(mt.key(), true), kt = jt(mt.key()), whole = mapTy instanceof Ty.LedgerMapT ? jt(mapTy) : mapType(mt.val());
         Free f = new Free().declare(fo.acc(), fo.k(), fo.v()).block(fo.body());
         String name = owner + "__fold" + (++counter), vj = jt(mt.val(), true), acc = jt(fo.type());
         var stmts = new StringBuilder();
         stmts(fo.body().stmts(), stmts, "            ", none());
         imports.add("org.julclang.core.types.JulcList");
-        addHelper(name, "    static " + acc + " " + name + "(" + join("JulcList<byte[]> ks__, JulcList<" + vj + "> vs__", acc + " " + fo.acc().name,
-                capParams(f)) + ") {\n        if (ks__.isEmpty()) {\n            return " + fo.acc().name + ";\n        } else {\n            byte[] "
+        addHelper(name, "    static " + acc + " " + name + "(" + join("JulcList<" + kj + "> ks__, JulcList<" + vj + "> vs__", acc + " " + fo.acc().name,
+                capParams(f)) + ") {\n        if (ks__.isEmpty()) {\n            return " + fo.acc().name + ";\n        } else {\n            " + kt + " "
                 + fo.k().name + " = ks__.head();\n            " + jt(mt.val()) + " " + fo.v().name + " = vs__.head();\n" + stmts
                 + "            return " + name + "(" + join("ks__.tail(), vs__.tail()", ex(fo.body().result()), capArgs(f)) + ");\n        }\n    }\n\n");
         String entry = name + "_map";
-        addHelper(entry, "    static " + acc + " " + entry + "(" + join(mapType(mt.val()) + " m__", acc + " a__", capParams(f)) + ") {\n"
+        addHelper(entry, "    static " + acc + " " + entry + "(" + join(whole + " m__", acc + " a__", capParams(f)) + ") {\n"
                 + "        return " + name + "(" + join("m__.keys(), m__.values(), a__", capArgs(f)) + ");\n    }\n\n");
         return entry + "(" + join(ex(fo.map()), ex(fo.init()), capArgs(f)) + ")";
     }
 
     // ------------------------------------------------------------------ BigMap (ADR-0002/0014, D7)
+
+    /** A key type whose values have 28 bytes (D5: a Key or a Hash, checked where it enters), so never over 64. */
+    private static boolean sized(Ty key) {
+        return key.equals(Ty.KEY) || key.equals(Ty.HASH);
+    }
 
     private String bigOp(Ir.BigOp o) {
         imports.add("org.julclang.state.api.MerkleMaps");
@@ -1939,6 +2221,8 @@ final class JavaEmitter {
                 return "MerkleMaps.isEmpty(" + m + ")";
             }
             case "delete" -> {
+                // M3a (size): a Key or Hash key has 28 bytes (D5), so its length is not checked.
+                if (sized(bt.key())) return "MerkleMaps.remove(" + m + ", " + ex(o.args().get(0)) + ")";
                 // The key's length is checked as set checks it (security S4).
                 operation("BigMap.delete: a key has at most 64 bytes", o.pos());
                 imports.add("org.julclang.state.api.MerkleMap");
@@ -1965,18 +2249,19 @@ final class JavaEmitter {
                 imports.add("org.julclang.state.api.MerkleMap");
                 imports.add("org.julclang.state.api.Require");
                 imports.add("org.julclang.stdlib.lib.ByteStringLib");
+                // M3a (size): a Key or Hash key has 28 bytes (D5), so its length is not checked; an Int value is written by
+                // MerkleMaps.setInt (non-negative, 0 removes the entry: v1's rule, D7), one write without a branch.
+                boolean sized = sized(bt.key());
+                if (ints) operation("BigMap.set: a value cannot be negative", o.pos());
+                if (sized) {
+                    return ints ? "MerkleMaps.setInt(" + m + ", " + ex(o.args().get(0)) + ", " + ex(o.args().get(1)) + ")"
+                            : "MerkleMaps.put(" + m + ", " + ex(o.args().get(0)) + ", " + ex(o.args().get(1)) + ")";
+                }
                 String h = ints ? "bigSet__Int" : "bigSet__Bytes";
                 operation("BigMap.set: a key has at most 64 bytes", o.pos());
-                if (ints) {
-                    operation("BigMap.set: a value cannot be negative", o.pos());
-                    operation(Std.PUT_INT, o.pos());   // MerkleMaps.putInt's own check, in the script though set checks first
-                }
                 String keyCheck = "        Require.that(ByteStringLib.length(k__) <= 64, \"BigMap.set: a key has at most 64 bytes\");\n";
                 String body = ints
-                        // Int values are non-negative and 0 removes the entry (v1's rule, D7).
-                        ? keyCheck + "        Require.that(v__.compareTo(BigInteger.ZERO) >= 0, \"BigMap.set: a value cannot be negative\");\n"
-                          + "        if (v__.compareTo(BigInteger.ZERO) == 0) {\n            return MerkleMaps.remove(m__, k__);\n        } else {\n"
-                          + "            return MerkleMaps.putInt(m__, k__, v__);\n        }\n"
+                        ? keyCheck + "        return MerkleMaps.setInt(m__, k__, v__);\n"
                         : keyCheck + "        return MerkleMaps.put(m__, k__, v__);\n";
                 addHelper(h, "    static MerkleMap " + h + "(MerkleMap m__, byte[] k__, " + (ints ? "BigInteger" : "byte[]") + " v__) {\n" + body + "    }\n\n");
                 return h + "(" + m + ", " + ex(o.args().get(0)) + ", " + ex(o.args().get(1)) + ")";
@@ -2038,6 +2323,8 @@ final class JavaEmitter {
             case Ty.BigMapT b -> throw new IllegalStateException("a BigMap is not comparable (the checker refuses it)");
             case Ty.Instance i -> throw new IllegalStateException("an instance is not comparable (the checker refuses it)");
             case Ty.DepositT d -> throw new IllegalStateException("a deposit is not comparable (the checker refuses it)");
+            case Ty.Gov g -> throw new IllegalStateException("a ledger type of the purposes is not comparable (JSC1322)");
+            case Ty.LedgerMapT g -> throw new IllegalStateException("a LedgerMap is not comparable (JSC1322)");
             // M2: canonical values by their entries, credentials and addresses structurally (the API's adapters).
             case Ty.Ledger l -> {
                 return switch (l.name()) {
@@ -2143,6 +2430,8 @@ final class JavaEmitter {
             case Ty.Ledger l -> throw new IllegalStateException("handled above");
             case Ty.Instance i -> throw new IllegalStateException("an instance is never a checked input");
             case Ty.DepositT d -> throw new IllegalStateException("a deposit is checked where the action starts");
+            case Ty.Gov g -> throw new IllegalStateException("a ledger type of the purposes is never a checked input");
+            case Ty.LedgerMapT g -> throw new IllegalStateException("a LedgerMap is never a checked input");
         };
         addHelper(h, "    static boolean " + h + "(" + jt + " v__) {\n        " + body + "\n    }\n\n");
         return h + "(" + v + ")";

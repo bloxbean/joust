@@ -120,7 +120,7 @@ class JscV2M1eR2BuildTest {
         assertTrue(mapMessages("StdMath").containsAll(List.of("div: division by zero", "mod: division by zero",
                 "expMod: the modulus must be positive")), "the reviewer's StdMath messages");
         assertTrue(mapMessages("StdBytes").contains("verifyEd25519: the key must be 32 bytes"));
-        assertTrue(mapMessages("Ledger").contains("MerkleMaps.putInt: value must not be negative"));
+        assertTrue(mapMessages("Ledger").contains("BigMap.set: a value cannot be negative"));   // M3a2: MerkleMaps.setInt, one write
     }
 
     /** The transition program's actual refusal traces, explained at their .jsc sites: an adapter's and an author's. */

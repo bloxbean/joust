@@ -112,7 +112,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0222 | error | ' … ' would hide the type / enum / variant / fn …; a name is bound once and never replaces a declaration | Checker |
 | JSC0223 | error | the batched action … has an intent form named …Intent (the client's method) and …Intent (the validator's record); a method or type of that name would clash with it: rename one of them | Checker |
 | JSC0224 | error | the invariant … has the name of a method, fn or other invariant; rename it (each becomes a method of one Java class) / … has the name of a declared type, variant or built-in; rename it | Checker (M2b) |
-| JSC0225 | error | 'Config' is the name of the params record (ADR-0009 D1): a contract with params cannot declare a type, enum, variant or event named Config / 'Event' is the type of the contract's events (each 'event X { … }' is one of its variants, ADR-0009 D5): … cannot declare … named Event; rename it | Checker (M2b) |
+| JSC0225 | error | 'Config' is the name of the params record (ADR-0009 D1): a contract with params cannot declare a type, enum, variant or event named Config / 'Event' is the type of the contract's events (each 'event X { … }' is one of its variants, ADR-0009 D5): … cannot declare … named Event; rename it / '…' is the record generated for the owned type …'s results (ADR-0018 D10, M3a): a contract with that owned type cannot declare … named …; rename it | Checker (M2b, M3a) |
 
 ### Names M2a reserves: a source change for preview users (ADR-0018 D16; M2a review F9)
 
@@ -156,7 +156,34 @@ As M2a's and M2b's, these are refused **in every contract**, whether it composes
 
 `reads` and `deposit` are not reserved: `reads` is a word only after a parameter's `:`, and `deposit` was an effect
 word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a datum, deferred) is retired: M2c's
-`send(to, value, datum)` takes it, and the code is not reused.
+`send(to, value, datum)` takes it, and the code is not reused. `JSC1215` (M3a1 and M3a2: the parts of M3a not built yet) is retired in M3a3, which builds the last of them (moves and invariants by type), and the code is not reused.
+
+### Names M3a reserves (ADR-0018 D16)
+
+`admits` is refused in every contract, as the earlier parts' names are. The annotation names are refused only **in a
+contract with owned types**, the only kind that imports them (#101 review F10).
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Owned`, `OwnedInit`, `OwnedAction`, `OwnedDestroy`, `Shared`, `Into`, `Admits` (the annotations owned objects and moves lower to), in a contract with owned types | a type, enum, variant or event name | JSC0211 |
+| `admits` (a method modifier) | a field or binding name | JSC0211 |
+| `Holding`, `Created`, `Exchanged` and, for an owned type `T`, `TOutcome`, `TReceived`, `TCreated` (the owned datum and the result records) | a method name whose redeemer would take it (`holding`, `created`, …) | JSC0203 |
+| the client's lookup of an owned type `T` (`t`, its name with a lower-case first letter: `account` for `Account`) | a method name | JSC1204 |
+
+`owned`, `shared` and `into` are not reserved: `owned` is a word only where a contract member starts, and `shared` and
+`into` only as a parameter's type (a type is capitalised). `Account` is no longer refused as a type name (JSC0220): the
+generated client names a contract's types by their qualified names, so examples/bank's owned `Account` does not meet
+cardano-client-lib's `Account` there.
+
+### Names M3b reserves (ADR-0018 D16)
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `retire` (a method modifier) | a field or binding name, in every contract | JSC0211 |
+| `Link`, and for a keyed type `T` `Head_T`, `Keyed_T`, `Retired_T`, `Remove_T`, and for its initializer `m` `Insert_m` (the keyed list's redeemers and datums) | a method name whose redeemer would take it (`link`, …), in a contract with keyed types | JSC1249 |
+| for a keyed type `T`: the client's `tList`, `tExists`, `tKeys`; the handle's `key`, `value`, `retired`, `lovelace`, `object`, `read`, `o`, `constructor`; the redeemer fields `anchor`, `removed`, `instance` | a method or view name; an action or destroy of `T`; a parameter of a method of `T` | JSC1249 |
+
+`keyed` and `by` are not reserved: they are words only after `owned T`.
 
 ## Types and values (ADR-0018 D5, D6)
 
@@ -233,7 +260,7 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 | JSC0423 | error | … is payable and uses funds, send, mint or burn, so it can take native assets: state exactly which with accept(…), or accept(Value.none()) for none (ADR-0007 r2, ADR-0018 D4) | Checker |
 | JSC0424 | error | a contract with native assets (a method uses funds, send, mint, burn or accept) cannot have batched actions: intents carry only lovelace (ADR-0007 r2, ADR-0018 D4) | Checker |
 | JSC0425 | error | a batched action cannot emit events: an intent's owner is its caller, not an authenticated signer of the batch (ADR-0009 D5) | Checker (M2b) |
-| JSC0426 | error | accept in an init is not supported yet … / a payable init that uses funds would take native assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred). Both: `accept` in an init, and any payable init that reads `funds`. The processor's creation transition program is wrong for an init returning `(state, accepted)`, Java contracts included: [#81](https://github.com/bloxbean/joust/issues/81); lifted in M2b or M2c once it is fixed | Checker |
+| JSC0426 | error | accept in an init is not supported yet: the processor reads the state's type from what @Init returns … / a payable init that uses funds would take native assets, which needs accept in an init: not supported yet … Both: `accept` in an init, and any payable init that reads `funds`. An owned init may accept since M3a2 (issue [#81](https://github.com/bloxbean/joust/issues/81) is fixed for `@OwnedInit`); an `@Init` cannot return `(state, accepted)` | Checker |
 | JSC0427 | error | funds is part of the transaction: it is not available in a view or fn (pass what you need as an argument) | Checker |
 | JSC0430 | error | a require message may not contain '#word:', the form of the checks the lowering generates (ADR-0018 D12): reword it | Checker |
 | JSC0431 | error | the params are declared once: params { … } | Parser (M2b) |
@@ -248,11 +275,11 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 | JSC0440 | error | a contract with a quorum over state fields (' … ' in … ) cannot have batched actions: a batch's states are not checked, so a batched action could make the quorum unreachable (ADR-0009 r3); use a params quorum, or no batched actions | Checker (M2b) |
 | JSC0441 | error | an invariant is a Bool, so it holds no require (ADR-0009 D4): write the condition into its value (invariant ok = a && b) | Checker (M2b) |
 | JSC0442 | error | a deposit names its memo too: deposit(target, value, memo); the memo is any value the receiver reads (a beneficiary, an order id) | Parser (M2c) |
-| JSC0443 | error | reads is for an action or destroy: an init, a view or a fn reads no other contract (ADR-0011 D2) / a batched action cannot read another contract yet | Checker (M2c) |
+| JSC0443 | error | reads is for an action or destroy of the instance: an init, an owned method, a view or a fn reads no other contract (ADR-0011 D2) / a batched action cannot read another contract yet | Checker (M2c) |
 | JSC0444 | error | reads params. … : the contract declares no params { … } / … ; reads names a params field Instance<C> | Checker (M2c) |
 | JSC0445 | error | Instance<C> names an imported contract C … / an Instance<C> is a params field only … / an Instance<C> is used whole, as a deposit's target or by reads, and has no field ' … ' | Checker (M2c) |
 | JSC0446 | error | … is another contract's type: it can be read (from reads) and passed to fns, but not be … / … is another contract's enum: compare it with == … matching on it is not supported yet | Checker (M2c) |
-| JSC0447 | error | only an action receives deposits: it continues, and its output takes them (ADR-0011 D3) / a batched action cannot receive deposits … | Checker (M2c) |
+| JSC0447 | error | only an action receives deposits: it continues, and its output takes them (ADR-0011 D3) / a batched action cannot receive deposits … / an owned action receives no deposits: a deposit's target is an instance (Instance<C>), never an object (ADR-0018 D10, M3a) | Checker (M2c) |
 | JSC0448 | error | funds.deposits is read in a receiving action … / this action reads no memos: say which type they are, action name(…) receives T … / a deposit has value and memo, not ' … ' | Checker (M2c) |
 | JSC0449 | error | a deposit's target is another contract's instance: a params field Instance<C> … / the contract … has no receiving action (receives), so nothing could take this deposit … | Checker (M2c) |
 | JSC0450 | error | the memo is … , but … 's receiving actions read memos of … : no receiver could decode it, so the transaction would always fail | Checker (M2c) |
@@ -385,7 +412,7 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 | JSC0913 | error | is an enum: read its fields with match (match v { A { … } => … }) | Checker |
 | JSC0914 | error | an … is one of its variants: write … { … }, … { … } | Checker |
 | JSC0915 | error | a variant is built from its fields: … { … } takes no spread | Checker |
-| JSC0916 | error | match needs an enum or an Option, not | Checker |
+| JSC0916 | error | match needs an enum or an Option, not … (M3c: or a sealed ledger type of the script purposes: TxCert, Voter, Vote, GovernanceAction, Delegatee, DRep) | Checker |
 | JSC0917 | error | this arm is unreachable: the arms before it cover every case | Checker |
 | JSC0918 | error | _ binds nothing | Checker |
 | JSC0919 | error | is not a case of … (it is a variant of … ) … : the cases are … , | Checker |
@@ -432,6 +459,115 @@ word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a dat
 | JSC1027 | error | ...rest needs a List | Checker |
 | JSC1028 | error | the type of this list is unknown here: give it one (const xs: List<Int> = []) | Checker |
 
+## Owned objects (ADR-0018 D10, M3a; ADR-0003, ADR-0012)
+
+An owned type is declared `owned T { … }`; its methods are `owned init T.m(…)`, `owned action T.m(…)` and
+`owned destroy T.m(…)`; `name: shared` reads the instance's state by reference, `name: into` is a move's destination,
+`admits T` an instance action through which objects arrive, and `invariant T.name = …` an owned type's invariant. Each
+rule is the processor's (ContractReader), refused at the `.jsc` position.
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1201 | error | an owned method names its type and itself: owned … ….name(…) / after 'owned' comes an owned type (owned Account { owner: Key }) or an owned method (owned init Account.open(…), owned action Account.name(…), owned destroy Account.name(…)) | Parser (M3a) |
+| JSC1202 | error | the owned type … needs at least one field: owned … { owner: Key } | Checker (M3a) |
+| JSC1203 | error | owned … ….…: … is not an owned type of this contract (…) / invariant ….…: … is not an owned type of this contract | Checker (M3a) |
+| JSC1204 | error | the method … has the name of the generated client's lookup of the owned type … (…(objectId)); rename it | Checker (M3a) |
+| JSC1205 | error | a shared parameter is for owned methods: an instance method has the state already (ADR-0003 D1) / an into parameter is for an owned action, which moves its object to that instance (ADR-0012 D3) / a move cannot read another contract yet | Checker (M3a) |
+| JSC1206 | error | a method has at most one … parameter / the … parameter comes first(, after shared if there is one) (ADR-0003 D1, ADR-0012 D3) | Checker (M3a) |
+| JSC1207 | error | a method parameter cannot be (or hold) an owned type: an object is its own UTxO, read by its methods, never passed as an argument … / an owned type is no field of another value: an object is its own UTxO (ADR-0003 D2) | Checker (M3a) |
+| JSC1208 | error | the owned type … needs an owned init to create its objects: owned init ….open(…) { … } | Checker (M3a) |
+| JSC1209 | error | objects of the owned type … need an escape hatch: an owned destroy on … without a shared parameter, before or after, so an owner can always close their object whatever the instance's state and the time (ADR-0003 r2, ADR-0012 D1). Syntactic: that the hatch's body can succeed is the author's (but see JSC1216). Its audience is the author's too: a hatch may say who closes the object (only, quorum, authorized), and when every hatch needs the deployment's parties (authorized or quorum over params) JSC9016 warns; a keyed type's hatch is stricter, it needs nobody else (JSC1245) | Checker (M3a; the audience note: M3 final pass, design MD5) |
+| JSC1210 | error | a contract with owned objects cannot destroy its instance: objects that read it (shared) would be locked forever (ADR-0003 r2); end the objects with their owned destroys | Checker (M3a) |
+| JSC1211 | error | a contract with owned objects keeps no BigMap state: a shared read has no proof path for its maps (ADR-0003 r2); a BigMap may be a field of an owned type instead (ADR-0012 D2) | Checker (M3a) |
+| JSC1212 | error | admits goes on an instance action: objects arrive at an instance (ADR-0012 D3) / an admits action cannot be batched … / admits …: … is not an owned type of this contract / an admits action's first parameter is the arriving object's id, a Bytes … / an admits action cannot read another contract yet / the arriving … keeps a BigMap, so an admits action cannot take it as a parameter: admit it by its id alone (#107 review C3) / … keeps a BigMap, so it cannot move yet (#107 round-r2 review F6) | Checker (M3a) |
+| JSC1213 | error | the owned type … holds a BigMap, so it cannot have invariants: on chain only the opened reads are visible, so the JVM and the chain would disagree (ADR-0009 r2, ADR-0012 D2) | Checker (M3a) |
+| JSC1214 | error | … moves a … to another instance, which must consent: declare an action admits … (ADR-0012 D3) / … admits …, but no owned action moves a … (an into parameter): no object could ever arrive through it (ADR-0012 D3) | Checker (M3a) |
+| JSC1216 | error | … is its type's escape hatch but never reads balance: an owned destroy pays out everything the object holds (the validator refuses any other allocation), so no object could ever be closed | Checker (M3a1, #101 review S3) |
+| JSC1217 | error | … is not supported beside an owned type that keeps a BigMap (…) yet: beside one, M3 covers plain owned types, shared reads and native assets (Armory, Safes), and the map claims composed with the other parts are not covered (ADR-0012 D2, ADR-0018 §2.12). The parts: a move or an admits action, a batched action, taking deposits (receives), a read of another contract, a certify, vote or propose handler, an invariant by type (a withdraw handler and stakeSelf are JSC1305) | Checker, both IR readers (M3 final pass, design MD2) |
+
+JSC1215 (the parts of M3a not built yet) is retired in M3a3.
+
+M3a also changes rules of earlier sections where they meet owned methods. An owned init takes only `payable`
+(JSC0405); an owned destroy may be payable from M3a2 (examples/market's `buy`; the instance's destroy may not, JSC0406);
+and from M3a2 an owned init's `accept` is allowed (issue #81 is fixed for `@OwnedInit`); an init's is still refused
+(JSC0426). The rules on bindings (JSC0213), the client's names (JSC0216: an owned method's lambdas
+bind `o`, `sh`, `seed`, `inst`; a move's redeemer `into`) and effects (JSC0404, JSC0409, JSC0410, JSC0411) read an owned
+method's object as an instance method reads the state.
+
+## Keyed objects (ADR-0018 D10, M3b; ADR-0016)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1240 | error | a keyed type names its key field: owned … keyed by name { name: Bytes } / empty keyed options … / the keyed option … is written twice / the keyed option … takes a value … / the keyed option … is an integer (milliseconds or bytes) / unknown keyed option '…' (signed, maxKeyBytes, linkCooldownMs, linkWindowMs) | Parser (M3b) |
+| JSC1241 | error | keyed by …: … has no field … / the key field … is …: a key is Bytes (or a Key or Hash), ordered byte by byte in the instance's list (ADR-0016 D1, D2) / a keyed type's name is at most 255 bytes … | Checker (M3b) |
+| JSC1242 | error | maxKeyBytes is 1 to 64: Plutus serialiseData encodes longer byte strings in chunks … / a signed key is a 28-byte key hash: maxKeyBytes must be at least 28 (ADR-0016 I53) / a signed key is a key hash that signs the insert: type … Key or Bytes, not Hash | Checker (M3b) |
+| JSC1243 | error | linkCooldownMs is 0, or 60000 to 3600000 milliseconds (ADR-0016 D1, D9) / linkWindowMs is 20000 to min(900000, maxValidityMs) = … milliseconds / the default link window … is under 20000 ms: raise maxValidityMs | Checker (M3b) |
+| JSC1244 | error | keyed types cannot be combined with native assets yet … / with batched actions yet / BigMaps cannot be combined with keyed types … / at most 16 keyed types per contract … / maxDatumBytes is at most 2048 in a contract with keyed types … (ADR-0016 D1, D4c) | Checker (M3b) |
+| JSC1245 | error | retire goes on an owned destroy of a keyed type … / objects of the keyed type … need an escape hatch that needs nobody else: an owned destroy on … with 'retire' … / the retiring exit … needs 'only <field>' … / a retiring exit takes no '…' / a retiring exit reads no shared state / no other contract (ADR-0016 D1, D10) | Checker (M3b) |
+| JSC1246 | error | the keyed action … must name who may call it ('only <field>', 'quorum' or 'authorized'; 'open' is not enough) … (ADR-0016 D1, §2) | Checker (M3b) |
+| JSC1247 | error | … is a keyed type, and keyed objects do not move between instances … / admits …: … is a keyed type … (ADR-0016 D1, Q4) | Checker (M3b) |
+| JSC1248 | error | the key … of a keyed … is fixed for its life (ADR-0016 I50): return { ...state, … } without …, or with …: …; to change a key, retire or remove the object and insert another | Checker (M3b) |
+| JSC1249 | error | the method name … would be the redeemer …, a name the validator generates for keyed types … / the method / view … has the name of a member the generated client has for the keyed type … / the method … has the name of a member of the generated …Object handle … / '…' is a field name of the keyed type …'s generated redeemers … / the keyed types … and … both give the generated client's constant … | Checker (M3b) |
+| JSC1250 | error | a retired … may need … datum bytes, over maxDatumBytes = …: raise maxDatumBytes or lower maxKeyBytes (ADR-0016 D2) | Checker (M3b) |
+| JSC1251 | error | the key … of … is set from a time value somewhere: a key decides the list's order and whether an insert succeeds … (ADR-0018 D11). If a fn or another expression the checker follows as a whole builds the object, build it as a record literal ({ …, …, t: … }) so its fields are followed one by one | Checker (M3b) |
+
+M3b also reads earlier rules at keyed positions: a keyed type's escape hatch is its retiring exit (JSC1245 in place of
+JSC1209), an initializer takes only `payable` (JSC0405, as every owned init), and the instance is never destroyed
+(JSC1210).
+
+## Script purposes and migration (ADR-0018 D10, M3c; ADR-0010, ADR-0011 D4)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1301 | error | stakeSelf is a flag: contract Name(stakeSelf), without a value / stakeSelf is written twice | Checker (M3c) |
+| JSC1302 | error | stakeSelf stakes the funds to the contract's own script, so it needs a withdraw handler (its rewards) and a certify handler (its registration and delegation); without them they are unreachable (ADR-0010 D2, I38) | Checker (M3c) |
+| JSC1303 | error | a migrating destroy names its successor's field: migrates to successor | Parser (M3c) |
+| JSC1304 | error | init migrate names the previous version's policy by a params field: init migrate from params.previous(old: V1.State) | Parser (M3c) |
+| JSC1305 | error | stakeSelf is not supported beside owned objects yet (…): their outputs' stake part is not covered (ADR-0010 D2, A40) / a withdraw handler is not supported beside owned objects yet (…): reward sends composed with objects' payouts are not covered (ADR-0010, K42) / a withdraw handler is not supported beside BigMap state yet: reward sends composed with map claims are not covered (ADR-0010, M3 final pass) | Checker (M3c r2, M3 final pass) |
+| JSC1312 | error | … needs quorum or authorized over params.*: an open handler would let anyone … (ADR-0010 r2) / …'s audience names params fields (…): no instance is spent for a script purpose, so there is no state to read it from (ADR-0010 D1) | Checker (M3c) |
+| JSC1313 | error | a propose handler is a guardrail: the ledger runs it for a proposal and its validator checks no audience, so it takes no modifiers (ADR-0010 D1); drop '…' / … takes only quorum or authorized over params.* (ADR-0010 D1), not '…' | Checker (M3c) |
+| JSC1314 | error | … takes … (the processor's shape, ADR-0010 D1) / … takes …: its parameter … is a …, not … / its first parameter is the amount withdrawn, an Int / … reads no instance and no other contract: no input is spent for a script purpose (ADR-0010 D1) | Checker (M3c) |
+| JSC1315 | error | … is not available in …: it takes the params and the purpose's data only (ADR-0010 D1) / a withdraw handler's transaction has no input of the contract: received is 0 and balance the amount, so read the amount parameter (ADR-0010 r2) / funds is not available in …: no input of the contract is spent for a script purpose, so there are no funds to read; it takes the params and the purpose's data only (ADR-0010 D1) | Checker (M3c) |
+| JSC1316 | error | at most one … handler per contract (ADR-0010 D1): … is one (line …) | Checker (M3c) |
+| JSC1317 | error | … is governed by the params, since no instance is spent for a script purpose (ADR-0010 D1): declare params { … } and name them in its quorum or authorized | Checker (M3c) |
+| JSC1318 | error | … sees no instance: no input is spent for a script purpose, so '…' is not available; it reads the params (params.f) and its parameters (ADR-0010 D1) | Checker (M3c) |
+| JSC1319 | error | a withdraw handler's only effect is send(…): its sends allocate the rewards withdrawn, exactly (ADR-0010 D1, I37) / … decides, by its Bool: it has no effects (ADR-0010 D1) | Checker (M3c) |
+| JSC1320 | error | ….… is PlutusData in the ledger, which .jsc does not read: a guardrail that inspects proposed parameter changes stays in Java until a typed protocol-parameter view exists (ADR-0018 D5) | Checker (M3c) |
+| JSC1321 | error | … is a ledger type of the script purposes: it comes from the script context, so it is a handler's parameter, a fn's parameter or result, or a const's type, never a field … nor a method's parameter (a redeemer field) or a view's result (ADR-0018 D5, M3c) / a LedgerMap has a key and a value type … / … cannot be …: a ledger type of the script purposes is read from the script context, never encoded into an output | Checker (M3c) |
+| JSC1322 | error | … is not comparable: a ledger type of the script purposes is matched (its constructors) or read by its fields, which are (ADR-0018 D5, M3c) | Checker (M3c) |
+| JSC1323 | error | … is a sealed ledger type: read its fields with match (…'s cases: …) / … has no methods: match it / read its fields | Checker (M3c) |
+| JSC1324 | error | a LedgerMap is read-only: it is ledger data, never stored, so it has no … (ADR-0018 D5) / LedgerMap has no property '…' … / LedgerMap has no method '…' (get, has, any, all, fold) | Checker (M3c) |
+| JSC1325 | error | … is a ledger type of the script purposes (or one of its constructors): its values come from the script context and are not built in .jsc; match them, or read their fields (ADR-0018 D5, M3c) | Checker (M3c) |
+| JSC1330 | error | migrates to goes on an instance destroy … (ADR-0011 D4) / migrates to …: … is …; the successor's policy is a Bytes or Hash state field / … holds a time value, so where the funds go would depend on a validity window (ADR-0018 D11) | Checker (M3c) |
+| JSC1331 | error | migrates to names a state field, not …: the successor's params pin this version's policy, so pinning the successor in this version's params would make each script's hash depend on the other's (ADR-0011 D4); keep the successor's policy in a state field its admin sets (setSuccessor) | Checker (M3c) |
+| JSC1332 | error | a migrating destroy moves the instance's whole value into its successor, which adopts exactly its lovelace (ADR-0011 D4): it pays, sends, mints, deposits and emits nothing | Checker (M3c) |
+| JSC1333 | error | … migrates the instance: say who may, with only, quorum or authorized ('open' would let anyone move every instance into the successor whenever it is named) | Checker (M3c) |
+| JSC1334 | error | init migrate / migrates to is not supported in a contract with owned objects (…) …, BigMap state … or native assets … (ADR-0011 r2) / the previous version … keeps BigMap state, whose maps cannot move into a new instance … | Checker (M3c) |
+| JSC1335 | error | init migrate from params.…: …; the previous version's policy is a Hash (or Bytes) params field: params { previous: Hash } | Checker (M3c) |
+| JSC1336 | error | init migrate's first parameter is the previous version's state: init migrate from params.…(old: V1.State), with import contract { V1 } from "./V1.jsc" (ADR-0011 D4) / … declares no migrating destroy (destroy … migrates to f): an adoption pairs only with the previous version's consent (ADR-0011 D4, I41) | Checker (M3c) |
+| JSC1337 | error | a contract adopts from one previous version: at most one init migrate (line …) / migrate is the Java name of this contract's init migrate (@Migrate migrate(…)); rename this method | Checker (M3c) |
+| JSC1338 | error | init migrate adopts the previous instance's value exactly (ADR-0011 D4): it pays, sends, mints, accepts, deposits and emits nothing / init migrate adopts exactly the previous instance's lovelace: nothing is received, and the balance is the old instance's (ADR-0011 D4) / funds is not available in init migrate: it adopts exactly the previous instance's lovelace and no assets (ADR-0011 D4) | Checker (M3c) |
+| JSC1339 | error | init migrate takes no modifiers: the new instance holds exactly the previous one's lovelace, so it is not payable, and the previous version's migrating destroy says who may migrate (ADR-0011 D4) | Checker (M3c) |
+| JSC1340 | error | a withdraw handler's result is its sends: send(to, Value.lovelace(n)), totalling the amount (ADR-0010 D1); it has no value / a withdraw handler sends lovelace only: send(to, Value.lovelace(n)), as written; a native asset can never allocate a withdrawal (ADR-0010 D1, I37) | Checker (M3c) |
+| JSC1341 | error | … decides: it evaluates to a Bool (= expr, or a block ending in one) | Checker (M3c) |
+
+M3c also reads earlier rules at the new positions: a handler's audience is checked by JSC0439 and JSC0311 (quorum's and
+authorized's field types), a withdrawal's arguments are checked inputs (D5), and JSC1244 (keyed types) now also refuses
+a withdraw handler beside keyed types, as the processor does.
+
+### Names M3c reserves (ADR-0018 D16)
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Withdraw`, `Certify`, `Votes`, `Propose`, `Migrate`, `MigrateTo` (the annotations purposes and migration lower to), `Certs` (std/certs' class), `Rewards` (the withdraw redeemer), the ledger types `TxCert`, `Voter`, `Vote`, `GovernanceActionId`, `ProposalProcedure`, `GovernanceAction`, `Delegatee`, `DRep`, `ProtocolVersion`, `Rational`, `Constitution`, `LedgerMap`, `Data` | a type, enum, variant, event, field or binding name, in every contract | JSC0211 |
+| `migrates` (a method modifier) | a field or binding name, in every contract | JSC0211 |
+| `marker`, `amount`, `handle`, `sends`, `cosigners`, `runtime`, `callerAccount` (the Rewards redeemer's and the client's names) | a withdraw handler's argument after the amount | JSC0216 |
+| `prior`, `priorState`, `result`, `seed` (the adoption's client) | a parameter of init migrate | JSC0216 |
+| `migrate` (init migrate's Java method) | a method name, in a contract with init migrate | JSC1337 |
+
+`withdraw`, `certify`, `vote`, `propose` and `migrate` are not reserved: each is a word only where a member starts (an
+action may be called `withdraw`), and `from` and `to` only after `init migrate` and `migrates`.
+
 ## Retired codes (ADR-0018 r26)
 
 JSC1101 to JSC1110 (`joust migrate`'s refusals) and JSC9006 (the v1 deprecation warning) went with `.jsc` v1 and its
@@ -449,3 +585,10 @@ migration; JSC0112 (a file without the header) went when the header became optio
 | JSC9007 | warning | this line starts with '-', which continues the expression on the line above (a subtraction): newlines do not end statements in .jsc; if that is meant, join the lines or put the expression in parentheses; if the line is meant to stand alone, end the line above with ';' | Checker |
 | JSC9008 | warning | this event carries a time value: whoever submits the transaction chooses the window, so a value of it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2b) |
 | JSC9009 | warning | … carries a time value: whoever submits the transaction chooses the window, so it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2c) |
+| JSC9010 | warning | … has no audience: anyone can call it on anyone's … (and keep its owner's own calls failing); add 'only <field>', or 'open' if that is meant (ADR-0003 r2) | Checker (M3a) |
+| JSC9011 | warning | … lets anyone take a free … key first (squatting, ADR-0016 §2): to silence this, declare the key signed (keyed by … (signed)), or set …: caller in every result | Checker (M3b) |
+| JSC9012 | warning | linkCooldownMs = 0 on …: without a link cooldown anyone can keep a node in flight by relinking it every block, so its retiring exit is no longer guaranteed against churn (ADR-0016 §2, D9) | Checker (M3b) |
+| JSC9013 | warning | the keyed action … is authorized by someone other than the retiring exit's signer: that party can spend the … every block and delay its owner's exit (ADR-0016 §2) | Checker (M3b) |
+| JSC9014 | warning | … sets …, the successor a migration moves the instance into: whoever may call it can change the successor until the migration, after users relied on it (ADR-0011 D4); to fix it once, require it unset: require(… == #, "the successor is set once"); and check the new successor is a 28-byte policy (require(length(next) == 28, …)), or a set-once successor of another length can never migrate | Checker (M3c) |
+| JSC9016 | warning | every escape hatch of … (…) needs the deployment's parties (authorized or quorum over params): they can keep every object closed, as a deadline could (#101 S3); give the owner a hatch of their own (owned destroy ….m() only owner { … }), or accept that the deployment's parties hold the objects. A plain type's hatch (JSC1209) needs no instance and no deadline but may name who closes it; a keyed type's needs nobody else (JSC1245) | Checker (M3 final pass, design MD5) |
+| JSC9015 | warning | …: the script is … bytes (before its params are applied), over the runtime's 15000-byte reference-script limit: it builds, but it can never be deployed (a reference script must fit a 16 KB transaction); split the contract or drop a feature | JscMain --check-abi (Gradle's checkJscAbi), the toolchain (M3 final pass) |

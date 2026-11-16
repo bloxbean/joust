@@ -51,7 +51,18 @@ final class Abi {
             // M2c: an instance of another contract (a params field), the API's ForeignInstance.
             case Ty.Instance i -> "ForeignInstance";
             case Ty.DepositT d -> throw new IllegalStateException("a deposit is never encoded by this contract");
+            // M3c: the purposes' ledger types come from the script context and are in no redeemer or datum (JSC1321).
+            case Ty.Gov g -> throw new IllegalStateException("a ledger type of the script purposes is never encoded by this contract");
+            case Ty.LedgerMapT m -> throw new IllegalStateException("a LedgerMap is never encoded by this contract");
         };
+    }
+
+    /**
+     * M3c: whether a method's parameters are a redeemer's fields: every method's but a view's and a certify, vote or
+     * propose handler's (their parameters are the purpose's data, from the script context; their redeemers carry nothing).
+     */
+    static boolean encodesParams(Ir.Method m) {
+        return m.kind() != Ir.Kind.VIEW && m.kind() != Ir.Kind.CERTIFY && m.kind() != Ir.Kind.VOTE && m.kind() != Ir.Kind.PROPOSE;
     }
 
     /** A value as data: policy → token name → quantity (ADR-0007; the redeemer's {@code assetsIn}). */
@@ -72,7 +83,7 @@ final class Abi {
         var all = new ArrayList<Ty>(p.state().fields().values());
         p.records().values().forEach(r -> all.addAll(r.fields().values()));
         p.enums().values().forEach(e -> e.variants().values().forEach(v -> all.addAll(v.fields().values())));
-        for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) all.add(l.type);
+        for (Ir.Method m : p.methods()) if (encodesParams(m)) for (Ir.Local l : m.params()) all.add(l.type);
         if (p.params() != null) all.addAll(p.params().fields().values());
         return all.stream().anyMatch(Abi::ledger);
     }
@@ -108,6 +119,8 @@ final class Abi {
         var spend = new ArrayList<String>();
         for (Ir.Method m : spendOrder(p)) {
             var fs = new ArrayList<String>();
+            // M3a (ADR-0012 D3): a move's redeemer carries its destination instance's id first.
+            if (m.owned() != null && m.owned().into() != null) fs.add(field("into", "Bytes", "bytes", ind));
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
             // M2: a payable method with Funds carries the native assets the caller offers (ADR-0007 r2).
@@ -117,6 +130,8 @@ final class Abi {
             ctx |= m.usesCtx();
             spend.add("      " + ctor(Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1), spend.size(), fs, "        "));
         }
+        // M3b (ADR-0016 D4): a keyed contract's anchors and predecessors are spent with Link, after every method's redeemer.
+        if (p.anyKeyed()) spend.add("      " + ctor("Link", spend.size(), List.of(), "        "));
         // Batched actions (ADR-0004, M1c): the batch's redeemers follow, and intents have their own datum and mint.
         List<Ir.Method> batched = intentOrder(p);
         if (!batched.isEmpty()) {
@@ -136,13 +151,103 @@ final class Abi {
             mint.add("      " + ctor("CreateInstance", 0, fs, "        "));
         }
         mint.add("      " + ctor("BurnInstance", 1, List.of(), "        "));
+        // M3a (ADR-0003 D3): each owned init creates an object, after BurnInstance in source order: its seed, the
+        // instance it is created under, its arguments.
+        // M3b (ADR-0016 D4, F11): a keyed type's initializer inserts instead, Insert_m: the instance, the anchor it is
+        // linked after, its arguments.
+        for (Ir.Method m : ownedInits(p)) {
+            boolean keyed = p.keyedOf(m.on()) != null;
+            var fs = new ArrayList<String>();
+            if (keyed) {
+                fs.add(field("instance", "Bytes", "bytes", ind));
+                fs.add(field("anchor", "TxOutRef", "TxOutRef", ind));
+            } else {
+                fs.add(field("seed", "TxOutRef", "TxOutRef", ind));
+                fs.add(field("instance", "Bytes", "bytes", ind));
+            }
+            for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
+            if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            if (Effects.takesAssets(m)) fs.add(field("assetsIn", "Value", VALUE_SHAPE, ind));
+            ctx |= m.usesCtx();
+            mint.add("      " + ctor(mintName(p, m), mint.size(), fs, "        "));
+        }
+        // M3b (ADR-0016 D5): a keyed type with a removing exit burns its node with Remove_T(anchor, removed), the
+        // predecessor relinked past it; in declaration order.
+        for (String o : removable(p)) {
+            mint.add("      " + ctor("Remove_" + o, mint.size(), List.of(field("anchor", "TxOutRef", "TxOutRef", ind),
+                    field("removed", "TxOutRef", "TxOutRef", ind)), "        "));
+        }
         // M2: methods that mint user tokens; the mint validator's ByAction names the input whose spend checks it (ADR-0007 D4).
-        if (Effects.mints(p)) mint.add("      " + ctor("ByAction", 2, List.of(field("by", "TxOutRef", "TxOutRef", ind)), "        "));
+        // (Its index follows the processor's Lifecycle order: after the creations and CreateIntent, which a contract with
+        // mints never has.)
+        if (Effects.mints(p)) mint.add("      " + ctor("ByAction", mint.size(), List.of(field("by", "TxOutRef", "TxOutRef", ind)), "        "));
         if (!batched.isEmpty()) {
-            mint.add("      " + ctor("CreateIntent", 2, List.of(field("seed", "TxOutRef", "TxOutRef", ind), field("intent", "Intent", "Intent", ind)),
+            mint.add("      " + ctor("CreateIntent", mint.size(), List.of(field("seed", "TxOutRef", "TxOutRef", ind), field("intent", "Intent", "Intent", ind)),
                     "        "));
             // An intent's datum, and the tag of its refund output, beside the state's (their schemas are in "types").
             w.append("  \"intent\": { \"datum\": \"Intent\", \"refund\": \"IntentRefund\" },\n");
+        }
+        // M3c (ADR-0011 D4): init migrate adopts an instance of the previous version, Adopt(seed, args…, [ctx]), last in the
+        // processor's Lifecycle. The previous state is read from the seed, not carried in the redeemer.
+        Ir.Method adopt = p.migrate();
+        if (adopt != null) {
+            var fs = new ArrayList<String>();
+            fs.add(field("seed", "TxOutRef", "TxOutRef", ind));
+            for (Ir.Local l : adopt.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
+            if (adopt.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            ctx |= adopt.usesCtx();
+            mint.add("      " + ctor("Adopt", mint.size(), fs, "        "));
+            w.append("  \"migrate\": { \"from\": ").append(str(adopt.migration().from())).append(", \"previous\": ")
+                    .append(str(Ty.show(adopt.migration().old().type))).append(" },\n");
+        }
+        // M3c (ADR-0011 D4): each destroy that migrates, and the state field naming its successor's policy.
+        var migrating = new ArrayList<String>();
+        for (Ir.Method m : p.methods()) if (m.migratesTo() != null) migrating.add(str(m.name()) + ": " + str(m.migratesTo()));
+        if (!migrating.isEmpty()) w.append("  \"migratesTo\": { ").append(String.join(", ", migrating)).append(" },\n");
+        // M3c (ADR-0010 D2): the state's address is staked to the own script.
+        if (p.stakeSelf()) w.append("  \"stakeSelf\": true,\n");
+        // M3c (ADR-0010 D1): the script purposes' handlers, in source order; a withdraw handler's redeemer is
+        // Rewards(marker = 74, amount, args…, [ctx]), the others' carry nothing.
+        var purposes = new ArrayList<String>();
+        for (Ir.Method m : p.methods()) {
+            if (!m.kind().purpose()) continue;
+            String kind = m.kind().name().toLowerCase();
+            String entry = "    { \"purpose\": " + str(kind) + ", \"name\": " + str(m.name());
+            if (m.kind() == Ir.Kind.WITHDRAW) {
+                var fs = new ArrayList<String>(List.of(field("marker", "Int", "int", ind), field("amount", "Int", "int", ind)));
+                for (Ir.Local l : m.params().subList(1, m.params().size())) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
+                if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+                ctx |= m.usesCtx();
+                entry += ", \"marker\": 74, \"redeemer\": " + ctor("Rewards", 0, fs, "      ");
+            }
+            purposes.add(entry + " }");
+        }
+        if (!purposes.isEmpty()) w.append("  \"purposes\": [\n").append(String.join(",\n", purposes)).append("\n  ],\n");
+        // M3a (ADR-0003 D2, ADR-0012 D1): an object's datum, Holding(instance, value), one constructor per owned type when
+        // there are several (Holding_T, their tags in declaration order).
+        // M3b (ADR-0016 D2): a keyed type's objects are a list's nodes: its head, its live nodes and its retired nodes,
+        // three constructors in its place among the owned types (a plain type is then always Holding_T).
+        if (!p.owned().isEmpty()) {
+            var hs = new ArrayList<String>();
+            for (String o : p.owned()) {
+                Ir.Keyed k = p.keyedOf(o);
+                if (k != null) {
+                    var link = List.of(field("instance", "Bytes", "bytes", ind), field("next", "Bytes", "bytes", ind), field("linkedAt", "Int", "int", ind));
+                    hs.add("      " + ctor("Head_" + o, hs.size(), link, "        "));
+                    var node = new ArrayList<>(link);
+                    node.add(field("value", o, o, ind));
+                    hs.add("      " + ctor("Keyed_" + o, hs.size(), node, "        "));
+                    var retired = new ArrayList<>(link);
+                    retired.add(field("key", "Bytes", "bytes", ind));
+                    hs.add("      " + ctor("Retired_" + o, hs.size(), retired, "        "));
+                    continue;
+                }
+                String hn = p.owned().size() == 1 && !p.anyKeyed() ? "Holding" : "Holding_" + o;
+                hs.add("      " + ctor(hn, hs.size(), List.of(field("instance", "Bytes", "bytes", ind), field("value", o, o, ind)), "        "));
+            }
+            w.append("  \"owned\": [").append(String.join(", ", p.owned().stream().map(Abi::str).toList())).append("],\n");
+            w.append("  \"holdings\": [\n").append(String.join(",\n", hs)).append("\n  ],\n");
+            if (p.anyKeyed()) w.append("  \"keyed\": [\n").append(String.join(",\n", keyed(p))).append("\n  ],\n");
         }
         w.append("  \"redeemers\": {\n    \"spend\": [").append(spend.isEmpty() ? "" : "\n" + String.join(",\n", spend) + "\n    ").append("],\n");
         w.append("    \"mint\": [\n").append(String.join(",\n", mint)).append("\n    ]\n  },\n");
@@ -206,7 +311,9 @@ final class Abi {
                     + "      " + ctor("StakingPtr", 1, List.of(field("slot", "Int", "int", ind), field("txIndex", "Int", "int", ind),
                     field("certIndex", "Int", "int", ind)), "        ") + "\n    ] }");
         }
-        boolean merkle = p.state().fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT);
+        boolean merkle = p.state().fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)
+                // M3a (ADR-0012 D2): an owned type's maps
+                || p.owned().stream().anyMatch(o -> p.records().get(o).fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT));
         if (ctx) {
             types.add("    \"Ctx\": { \"kind\": \"api\", \"constructors\": [" + ctor("Ctx", 0, List.of(field("caller", "Key", "bytes28", "        "),
                     field("received", "Int", "int", "        "), field("balance", "Int", "int", "        "), field("validFrom", "Int", "int", "        "),
@@ -250,7 +357,7 @@ final class Abi {
         var work = new java.util.ArrayDeque<Ty>();
         work.addAll(p.state().fields().values());
         if (p.params() != null) work.addAll(p.params().fields().values());   // M2b: the params are encoded too
-        for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) work.add(l.type);
+        for (Ir.Method m : p.methods()) if (encodesParams(m)) for (Ir.Local l : m.params()) work.add(l.type);
         while (!work.isEmpty()) {
             Ty t = work.removeFirst();
             switch (t) {
@@ -265,6 +372,8 @@ final class Abi {
                 case Ty.DepositT d -> {
                     if (d.memo() != null) work.addFirst(d.memo());
                 }
+                case Ty.Gov g -> { }
+                case Ty.LedgerMapT m -> { }
                 case Ty.Rec r -> {
                     if (!seen.add(r.name())) continue;
                     if (p.libraryOf(r.name()) != null || p.javaRecord(r.name()) != null) out.add(r.name());
@@ -288,6 +397,94 @@ final class Abi {
         var order = new ArrayList<Ir.Method>();
         for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION && !batchedOnly(m)) order.add(m);
         for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.DESTROY) order.add(m);
+        // M3a (ADR-0003 D3): the owned spends follow, owned actions then owned destroys, each in source order
+        // (ContractIR.ownedSpendTransitions).
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.OWNED_ACTION) order.add(m);
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.OWNED_DESTROY) order.add(m);
+        return order;
+    }
+
+    /** M3a: an owned init's mint constructor: named after it, or (M3b) {@code Insert_m} for a keyed type's. */
+    static String mintName(Ir.Program p, Ir.Method m) {
+        return p.keyedOf(m.on()) != null ? "Insert_" + m.name() : Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1);
+    }
+
+    /** M3b (ADR-0016 D5): the keyed types with a removing exit (an owned destroy without retire), in declaration order. */
+    static List<String> removable(Ir.Program p) {
+        var out = new ArrayList<String>();
+        for (String o : p.keyed().keySet()) {
+            for (Ir.Method m : p.methods()) {
+                if (m.kind() == Ir.Kind.OWNED_DESTROY && o.equals(m.on()) && !retires(m)) {
+                    out.add(o);
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
+    static boolean retires(Ir.Method m) {
+        return m.mods().stream().anyMatch(x -> x.name().equals("retire"));
+    }
+
+    /**
+     * M3b (ADR-0016 D1, D2, D11): each keyed type as the description's {@code x-joust.keyed} states it: its key and its
+     * index, the options, the typeId (the name, length-prefixed), its three datum tags, the Link and Remove_T redeemers'
+     * indexes, and its methods by role.
+     */
+    private static List<String> keyed(Ir.Program p) {
+        var out = new ArrayList<String>();
+        int tag = 0;
+        var spendNames = new ArrayList<String>();
+        for (Ir.Method m : spendOrder(p)) spendNames.add(m.name());
+        int link = spendNames.size();
+        int mintBase = 2 + ownedInits(p).size();
+        var removable = removable(p);
+        for (String o : p.owned()) {
+            Ir.Keyed k = p.keyedOf(o);
+            if (k == null) {
+                tag++;
+                continue;
+            }
+            byte[] name = o.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            var typeId = new StringBuilder(String.format("%02x", name.length));
+            for (byte b : name) typeId.append(String.format("%02x", b & 0xff));
+            var inserts = new ArrayList<String>();
+            var actions = new ArrayList<String>();
+            var removes = new ArrayList<String>();
+            var retires = new ArrayList<String>();
+            for (Ir.Method m : p.methods()) {
+                if (!o.equals(m.on())) continue;
+                switch (m.kind()) {
+                    case OWNED_INIT -> inserts.add(str(m.name()));
+                    case OWNED_ACTION -> actions.add(str(m.name()));
+                    default -> (retires(m) ? retires : removes).add(str(m.name()));
+                }
+            }
+            int keyIndex = new ArrayList<>(p.records().get(o).fields().keySet()).indexOf(k.key());
+            out.add("    { \"type\": " + str(o) + ", \"key\": " + str(k.key()) + ", \"keyIndex\": " + keyIndex + ", \"maxKeyBytes\": " + k.maxKeyBytes()
+                    + ", \"signedKey\": " + k.signed() + ", \"linkCooldownMs\": " + k.cooldownMs() + ", \"linkWindowMs\": " + k.windowMs()
+                    + ",\n      \"typeId\": " + str(typeId.toString()) + ", \"headTag\": " + tag + ", \"nodeTag\": " + (tag + 1) + ", \"retiredTag\": " + (tag + 2)
+                    + ", \"link\": " + link + ", \"remove\": " + (removable.contains(o) ? String.valueOf(mintBase + removable.indexOf(o)) : "null")
+                    + ",\n      \"inserts\": [" + String.join(", ", inserts) + "], \"actions\": [" + String.join(", ", actions)
+                    + "], \"removes\": [" + String.join(", ", removes) + "], \"retires\": [" + String.join(", ", retires) + "] }");
+            tag += 3;
+        }
+        return out;
+    }
+
+    /**
+     * M3c (ADR-0011 D4): the mint redeemer's constructor of init migrate's Adopt, last in the processor's Lifecycle: after
+     * CreateInstance, BurnInstance, the owned inits, Remove_T, ByAction and CreateIntent.
+     */
+    static int adoptIndex(Ir.Program p) {
+        return 2 + ownedInits(p).size() + removable(p).size() + (Effects.mints(p) ? 1 : 0) + (intentOrder(p).isEmpty() ? 0 : 1);
+    }
+
+    /** M3a: the owned inits in source order; the k-th is the mint redeemer's constructor 2 + k (after BurnInstance). */
+    static List<Ir.Method> ownedInits(Ir.Program p) {
+        var order = new ArrayList<Ir.Method>();
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.OWNED_INIT) order.add(m);
         return order;
     }
 

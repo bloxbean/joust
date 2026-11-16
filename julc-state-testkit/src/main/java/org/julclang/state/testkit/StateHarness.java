@@ -187,22 +187,47 @@ public final class StateHarness<S> {
     }
 
     public Verdict evaluateCertify(TxModel tx, org.julclang.ledger.TxCert cert) {
+        return evaluateContext("CERTIFY", certifyContext(tx, cert));
+    }
+
+    /** The CERTIFY purpose's script context for {@code cert} in the transaction (ADR-0018 M3c: to tamper with as data). */
+    public PlutusData certifyContext(TxModel tx, org.julclang.ledger.TxCert cert) {
         var b = ScriptContextTestBuilder.certifying(BigInteger.ZERO, cert).redeemer(PlutusData.integer(0));
         b.certificate(cert);
+        return fill(b, tx).buildPlutusData();
+    }
+
+    /** Evaluates the contract's script on a script context given as data (ADR-0018 M3c: a context no ledger type can build). */
+    public Verdict evaluateContext(String label, PlutusData ctx) {
         var results = new LinkedHashMap<String, EvalResult>();
-        results.put("CERTIFY", ValidatorTest.evaluate(program, fill(b, tx).buildPlutusData()));
+        results.put(label, ValidatorTest.evaluate(program, ctx));
         return new Verdict(results);
     }
 
     /** Evaluates the VOTE purpose for {@code voter} casting {@code votes} (action id -> vote) in the transaction. */
     public Verdict evaluateVote(TxModel tx, org.julclang.ledger.Voter voter,
                                 java.util.Map<org.julclang.ledger.GovernanceActionId, org.julclang.ledger.Vote> votes) {
+        var all = new LinkedHashMap<org.julclang.ledger.Voter, java.util.Map<org.julclang.ledger.GovernanceActionId, org.julclang.ledger.Vote>>();
+        all.put(voter, votes);
+        return evaluateVotes(tx, voter, all);
+    }
+
+    /**
+     * ADR-0018 M3c (K44): evaluates the VOTE purpose for {@code voter}, the transaction holding {@code votes}: every voter's
+     * votes in the given order (another voter's too, or none of {@code voter}'s).
+     */
+    public Verdict evaluateVotes(TxModel tx, org.julclang.ledger.Voter voter,
+                                 java.util.Map<org.julclang.ledger.Voter, java.util.Map<org.julclang.ledger.GovernanceActionId, org.julclang.ledger.Vote>> votes) {
         var b = ScriptContextTestBuilder.voting(voter).redeemer(PlutusData.integer(0));
         PlutusData ctx = fill(b, tx).buildPlutusData();
         // The builder has no votes: put them in TxInfo field 12 (votes: Map Voter (Map GovernanceActionId Vote)).
-        var inner = new ArrayList<PlutusData.Pair>();
-        votes.forEach((id, v) -> inner.add(new PlutusData.Pair(data(id), data(v))));
-        var votesMap = new PlutusData.MapData(List.of(new PlutusData.Pair(data(voter), new PlutusData.MapData(inner))));
+        var outer = new ArrayList<PlutusData.Pair>();
+        votes.forEach((who, vs) -> {
+            var inner = new ArrayList<PlutusData.Pair>();
+            vs.forEach((id, v) -> inner.add(new PlutusData.Pair(data(id), data(v))));
+            outer.add(new PlutusData.Pair(data(who), new PlutusData.MapData(inner)));
+        });
+        var votesMap = new PlutusData.MapData(outer);
         var sc = (PlutusData.ConstrData) ctx;
         var info = (PlutusData.ConstrData) sc.fields().get(0);
         var fields = new ArrayList<>(info.fields());

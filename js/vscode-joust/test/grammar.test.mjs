@@ -106,3 +106,14 @@ test('Jar and Points: modifiers, views and map updates', () => {
   const points = tokens(example('Points.jsc'));
   assert.equal(scopeOf(points, 'const'), 'storage.type.jsc');
 });
+
+test('.jsc keyed types (M3b): keyed and by after owned T only, retire a modifier (#112 design F2)', () => {
+  const t = tokens(example('Keys.jsc'));
+  assert.equal(scopeOf(t, 'keyed'), 'storage.modifier.jsc');
+  assert.equal(scopeOf(t, 'by'), 'storage.modifier.jsc');
+  assert.equal(scopeOf(t, 'retire'), 'storage.modifier.jsc');
+  // Only the two clauses' by is the word: Keys' event field by (Noted { by: Key }, Noted { by: holder }) is not.
+  const asWord = t.filter((x) => x.text === 'by' && x.scopes.at(-1) === 'storage.modifier.jsc');
+  assert.equal(asWord.length, 2, JSON.stringify(t.filter((x) => /\bby\b/.test(x.text)).map((x) => [x.text, x.scopes.at(-1)])));
+  assert.ok(t.some((x) => /\bby\b/.test(x.text) && x.scopes.at(-1) !== 'storage.modifier.jsc'), 'the field by is a name');
+});

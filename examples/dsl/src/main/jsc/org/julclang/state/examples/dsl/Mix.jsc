@@ -1,0 +1,72 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+import { length } from "std/bytes"
+
+// ADR-0018 M3 final pass (security MS3, design MD2): a coverage contract with a part of every M3 milestone: an instance, a
+// plain owned type that moves (M3a3), a keyed type with a retiring exit (M3b), a certify handler governed by a params
+// quorum (M3c), invariants by type (JscV2M3MatrixTest). With a vote handler too it is over the runtime's script limit
+// (MixFull, JSC9015).
+contract Mix(maxDatumBytes = 512, maxValidityMs = 600000) {
+  params { council: List<Key>, quorum: Int, pool: Bytes }
+  state { master: Key, isOpen: Bool, arrivals: Int }
+
+  owned Hero { owner: Key, level: Int }
+  owned Seat keyed by code (linkCooldownMs = 0, linkWindowMs = 30000) { holder: Key, code: Bytes, note: Bytes }
+
+  init() {
+    return { master: caller, isOpen: true, arrivals: 0 }
+  }
+
+  action setOpen(nowOpen: Bool) only master {
+    return { ...state, isOpen: nowOpen }
+  }
+
+  action admit(heroId: Bytes, hero: Hero) admits Hero {
+    require(isOpen, "closed")
+    return { ...state, arrivals: arrivals + 1 }
+  }
+
+  owned init Hero.recruit(guild: shared) {
+    require(guild.isOpen, "closed")
+    return { owner: caller, level: 1 }
+  }
+
+  owned action Hero.levelUp() only owner {
+    return { ...state, level: level + 1 }
+  }
+
+  owned action Hero.transfer(destination: into) only owner {
+    return state
+  }
+
+  owned destroy Hero.retire() only owner {
+    pay(owner, balance)
+  }
+
+  owned init Seat.take(mix: shared, code: Bytes) {
+    require(mix.isOpen, "closed")
+    return { holder: caller, code, note: utf8("") }
+  }
+
+  owned action Seat.write(text: Bytes) only holder {
+    return { ...state, note: text }
+  }
+
+  owned destroy Seat.free() only holder {
+    pay(holder, balance)
+  }
+
+  owned destroy Seat.leave() only holder retire {
+    pay(holder, balance)
+  }
+
+  certify reg(cert: TxCert) quorum params.council params.quorum = match cert {
+    RegStaking => true,
+    DelegStaking => true,
+    _ => false
+  }
+
+  invariant Hero.heroLevel = level > 0
+  invariant Seat.shortNote = length(note) <= 64
+}

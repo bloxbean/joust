@@ -120,6 +120,10 @@ class ValueAdapterDifferentialTest {
                 public static PlutusData acceptable(PlutusData v, PlutusData p) {
                     return ValueAdapter.acceptable((Value) (Object) v, Builtins.unBData(p)) ? Builtins.iData(1L) : Builtins.iData(0L);
                 }
+                public static PlutusData acceptableAsset(PlutusData p, PlutusData n, PlutusData q, PlutusData own) {
+                    return ValueAdapter.acceptableAsset(Builtins.unBData(p), Builtins.unBData(n), Builtins.unIData(q), Builtins.unBData(own))
+                            ? Builtins.iData(1L) : Builtins.iData(0L);
+                }
                 public static PlutusData mintable(PlutusData n) {
                     return ValueAdapter.mintable(Builtins.unBData(n)) ? Builtins.iData(1L) : Builtins.iData(0L);
                 }
@@ -181,6 +185,7 @@ class ValueAdapterDifferentialTest {
         JVM.put("sendable", a -> ValueAdapter.sendable(v(a.get(0)), b(a.get(1))));
         JVM.put("acceptable", a -> ValueAdapter.acceptable(v(a.get(0)), b(a.get(1))));
         JVM.put("mintable", a -> ValueAdapter.mintable(b(a.get(0))));
+        JVM.put("acceptableAsset", a -> ValueAdapter.acceptableAsset(b(a.get(0)), b(a.get(1)), i(a.get(2)), b(a.get(3))));
         JVM.put("mintAdd", a -> ValueAdapter.mintAdd(v(a.get(0)), b(a.get(1)), b(a.get(2)), i(a.get(3))));
         JVM.put("fromWire", a -> ValueAdapter.fromWire(v(a.get(0))));
         // M2c (review r1, F3): the stored-value, memo and deposit functions.
@@ -400,6 +405,17 @@ class ValueAdapterDifferentialTest {
             }
         }
         for (byte[] n : NAMES) check("mintable", bd(n));
+        // M3a: acceptableAsset agrees with acceptable(asset(…)) on every leg (the generated code calls it after asset).
+        for (byte[] p : List.of(ADA, P, OWN)) {
+            for (byte[] n : NAMES) {
+                for (BigInteger q : List.of(BigInteger.ZERO, BigInteger.ONE, BigInteger.valueOf(-1), MAX)) {
+                    check("acceptableAsset", bd(p), bd(n), in(q), bd(OWN));
+                    if (n.length > 32 && q.signum() != 0) continue;   // asset refuses it first
+                    assertEquals(ValueAdapter.acceptable(ValueAdapter.asset(p, n, q), OWN), ValueAdapter.acceptableAsset(p, n, q, OWN),
+                            "acceptableAsset is acceptable(asset(…))");
+                }
+            }
+        }
         // mintAdd: the net mint of a name, at the range's edges; names mintable allows, and 32/33-byte ones (the generated
         // code calls mintable first, but the bodies agree without it too: insertCoin refuses a key over 32 bytes).
         for (var acc : List.<Supplier<Value>>of(Assets::none, () -> Assets.of(OWN, "HOSKY".getBytes(), MAX),

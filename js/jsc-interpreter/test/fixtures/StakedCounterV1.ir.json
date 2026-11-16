@@ -1,0 +1,289 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "fb58e743ba08ca3bc3841e0493c3c26abeafb466e1d8ae2c476784c0c5258154",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "StakedCounterV1",
+  "source": "StakedCounterV1.jsc",
+  "options": [{ "name": "stakeSelf", "value": "1" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "admin", "type": "Key" }, { "name": "successor", "type": "Bytes" }, { "name": "count", "type": "Int" }],
+    "at": [10, 1]
+  },
+  "params": {
+    "name": "Config",
+    "fields": [
+      { "name": "council", "type": { "list": "Key" } },
+      { "name": "quorum", "type": "Int" },
+      { "name": "pool", "type": "Bytes" },
+      { "name": "payee", "type": "Key" }
+    ],
+    "at": [11, 3]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [{ "name": "payable" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [15, 21] },
+            { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [15, 40] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 50] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [15, 12]
+        },
+        "at": [14, 18]
+      },
+      "at": [14, 3]
+    },
+    {
+      "kind": "action",
+      "name": "increment",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [19, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [19, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [19, 17] },
+              "record": "State",
+              "field": "successor",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [19, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [19, 31] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [19, 39] },
+              "type": "Int",
+              "taint": 0,
+              "at": [19, 31]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [19, 12]
+        },
+        "at": [18, 22]
+      },
+      "at": [18, 3]
+    },
+    {
+      "kind": "action",
+      "name": "setSuccessor",
+      "params": [{ "id": 1, "name": "next", "type": "Bytes", "taint": 0, "at": [22, 23] }],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "StateField", "field": "successor", "type": "Bytes", "taint": 0, "at": [23, 13] },
+              "right": { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [23, 26] },
+              "operand": "Bytes",
+              "type": "Bool",
+              "taint": 0,
+              "at": [23, 13]
+            },
+            "message": "the successor is set once",
+            "at": [23, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [24, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [24, 12]
+            },
+            { "node": "LocalRef", "local": 1, "type": "Bytes", "taint": 0, "at": [24, 35] },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [24, 17] },
+              "record": "State",
+              "field": "count",
+              "type": "Int",
+              "taint": 0,
+              "at": [24, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [24, 12]
+        },
+        "at": [22, 47]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "upgrade",
+      "params": [],
+      "mods": [{ "name": "only", "field": "admin" }, { "name": "migrates", "field": "successor" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": null,
+      "body": { "stmts": [], "result": null, "at": [27, 54] },
+      "at": [27, 3]
+    },
+    {
+      "kind": "withdraw",
+      "name": "collect",
+      "params": [{ "id": 2, "name": "amount", "type": "Int", "taint": 0, "at": [29, 20] }],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.quorum" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Compare",
+                  "op": ">",
+                  "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [30, 8] },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [30, 17] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [30, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Send",
+                      "to": {
+                        "node": "LedgerOp",
+                        "op": "wallet",
+                        "args": [{ "node": "ParamsRef", "field": "payee", "type": "Key", "taint": 0, "at": [31, 19] }],
+                        "type": "Address",
+                        "taint": 0,
+                        "at": [31, 12]
+                      },
+                      "value": {
+                        "node": "LedgerOp",
+                        "op": "lovelace",
+                        "args": [{ "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [31, 49] }],
+                        "type": "Value",
+                        "taint": 0,
+                        "at": [31, 34]
+                      },
+                      "at": [31, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [30, 19]
+                },
+                "at": [30, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": false,
+            "at": [30, 5]
+          }
+        ],
+        "result": null,
+        "at": [29, 69]
+      },
+      "at": [29, 3]
+    },
+    {
+      "kind": "certify",
+      "name": "certificate",
+      "params": [{ "id": 3, "name": "cert", "type": "TxCert", "taint": 0, "at": [35, 23] }],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.quorum" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Logic",
+          "op": "||",
+          "left": {
+            "node": "CallStd",
+            "module": "std/certs",
+            "name": "isRegistration",
+            "args": [{ "node": "LocalRef", "local": 3, "type": "TxCert", "taint": 0, "at": [36, 20] }],
+            "type": "Bool",
+            "taint": 0,
+            "at": [36, 5]
+          },
+          "right": {
+            "node": "CallStd",
+            "module": "std/certs",
+            "name": "delegatesOnlyTo",
+            "args": [
+              { "node": "LocalRef", "local": 3, "type": "TxCert", "taint": 0, "at": [36, 45] },
+              { "node": "ParamsRef", "field": "pool", "type": "Bytes", "taint": 0, "at": [36, 51] }
+            ],
+            "type": "Bool",
+            "taint": 0,
+            "at": [36, 29]
+          },
+          "type": "Bool",
+          "taint": 0,
+          "at": [36, 5]
+        },
+        "at": [36, 5]
+      },
+      "at": [35, 3]
+    }
+  ],
+  "warnings": []
+}

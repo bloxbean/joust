@@ -319,6 +319,21 @@ final class JsLeg {
                     new BigInteger((String) ((List<Object>) st.get("stakePtr")).get(1)), new BigInteger((String) ((List<Object>) st.get("stakePtr")).get(2))));
             return new AddrV((CredV) value(a.get(0), canonical), stake);
         }
+        // M3c: a purposes' ledger value, a PlutusData field's CBOR, a LedgerMap (in its order).
+        if (m.containsKey("gov")) {
+            return new Interpreter.GovV((String) m.get("gov"), (String) m.get("ctor"),
+                    ((List<Object>) m.get("fields")).stream().map(x -> value(x, canonical)).toList());
+        }
+        if (m.containsKey("data")) return new Interpreter.DataV((String) m.get("data"));
+        if (m.containsKey("ledgerMap")) {
+            var ks = new ArrayList<Object>();
+            var vs = new ArrayList<Object>();
+            for (Object e : (List<Object>) m.get("ledgerMap")) {
+                ks.add(value(((List<Object>) e).get(0), canonical));
+                vs.add(value(((List<Object>) e).get(1), canonical));
+            }
+            return new Interpreter.LedgerMapV(ks, vs);
+        }
         if (m.containsKey("bigmap")) {
             var contents = new LinkedHashMap<Bytes, Object>();
             for (Object e : (List<Object>) m.get("bigmap")) {
@@ -366,6 +381,14 @@ final class JsLeg {
                 yield "{\"value\": [" + String.join(", ", parts) + "]}";
             }
             case InstV x -> "{\"instance\": [\"" + HEX.formatHex(x.policy().bytes()) + "\", \"" + HEX.formatHex(x.id().bytes()) + "\"]}";
+            // M3c: the purposes' ledger values.
+            case Interpreter.GovV g -> "{\"gov\": \"" + g.type() + "\", \"ctor\": \"" + g.ctor() + "\", \"fields\": " + json(g.fields()) + "}";
+            case Interpreter.DataV d -> "{\"data\": \"" + d.cborHex() + "\"}";
+            case Interpreter.LedgerMapV lm -> {
+                var parts = new ArrayList<String>();
+                for (int i = 0; i < lm.keys().size(); i++) parts.add("[" + json(lm.keys().get(i)) + ", " + json(lm.values().get(i)) + "]");
+                yield "{\"ledgerMap\": [" + String.join(", ", parts) + "]}";
+            }
             case CredV x -> "{\"" + (x.script() ? "scriptCred" : "keyCred") + "\": \"" + HEX.formatHex(x.hash().bytes()) + "\"}";
             case AddrV x -> {
                 String stake = !x.stake().present() ? "null" : x.stake().value() instanceof StakeHash h ? "{\"stakeHash\": " + json(h.credential()) + "}"
@@ -398,6 +421,19 @@ final class JsLeg {
                 + (t.reads().isEmpty() ? "" : ", \"reads\": {" + String.join(", ", new TreeMap<>(t.reads()).entrySet().stream()
                         .map(e -> "\"" + e.getKey() + "\": " + json(e.getValue())).toList()) + "}")
                 + (t.approvers().isEmpty() ? "" : ", \"approvers\": [" + String.join(", ", t.approvers().stream().map(k -> "\"" + HEX.formatHex(k.bytes()) + "\"").toList()) + "]")
+                // M3a: the instance's state an owned method reads, a move's destination, an admits action's arriving object.
+                + (t.shared() == null ? "" : ", \"shared\": " + json(t.shared()))
+                + (t.into() == null ? "" : ", \"into\": " + json(t.into()))
+                + (t.arriving() == null ? "" : ", \"arriving\": " + json(t.arriving()))
+                // M3b: a keyed insert's or removal's instance and the node it relinks.
+                + (t.instance() == null ? "" : ", \"instance\": \"" + HEX.formatHex(t.instance().bytes()) + "\"")
+                + (t.anchor() == null ? "" : ", \"anchor\": { \"instance\": \"" + HEX.formatHex(t.anchor().instance().bytes()) + "\", \"type\": \""
+                        + t.anchor().type() + "\", \"key\": \"" + HEX.formatHex(t.anchor().key().bytes()) + "\", \"next\": \""
+                        + HEX.formatHex(t.anchor().next().bytes()) + "\", \"linkedAt\": \"" + t.anchor().linkedAt() + "\" }")
+                // M3c: a migrating destroy's successor policy, an init migrate's prior instance.
+                + (t.successor() == null ? "" : ", \"successor\": \"" + HEX.formatHex(t.successor().bytes()) + "\"")
+                + (t.prior() == null ? "" : ", \"prior\": { \"policy\": \"" + HEX.formatHex(t.prior().policy().bytes()) + "\", \"state\": "
+                        + json(t.prior().state()) + " }")
                 + "}";
         return "{\"method\": \"" + method + "\", \"state\": " + json(state) + ", \"args\": [" + String.join(", ", parts) + "], \"tx\": " + tx
                 + (params == null ? "" : ", \"params\": " + json(params)) + "}";

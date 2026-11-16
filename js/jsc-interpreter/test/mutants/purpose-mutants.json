@@ -1,0 +1,242 @@
+[
+ {
+  "file": "purpose-stakeself-2.json",
+  "message": "(JSC1301)"
+ },
+ {
+  "file": "purpose-stakeself-twice.json",
+  "message": "(JSC1301)"
+ },
+ {
+  "file": "purpose-stakeself-no-certify.json",
+  "message": "(JSC1302)"
+ },
+ {
+  "file": "purpose-stakeself-no-withdraw.json",
+  "message": "(JSC1302)"
+ },
+ {
+  "file": "purpose-withdraw-twice.json",
+  "message": "(JSC1316)"
+ },
+ {
+  "file": "purpose-certify-twice.json",
+  "message": "(JSC1316)"
+ },
+ {
+  "file": "purpose-certify-voter.json",
+  "message": "(JSC1314)"
+ },
+ {
+  "file": "purpose-vote-two-params.json",
+  "message": "(JSC1314)"
+ },
+ {
+  "file": "purpose-withdraw-no-amount.json",
+  "message": "(JSC1314)"
+ },
+ {
+  "file": "purpose-withdraw-result.json",
+  "message": "(JSC1340)"
+ },
+ {
+  "file": "purpose-certify-no-result.json",
+  "message": "(JSC1341)"
+ },
+ {
+  "file": "purpose-certify-ctx.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-propose-ctx.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-certify-state.json",
+  "message": "(JSC1318)"
+ },
+ {
+  "file": "purpose-withdraw-state.json",
+  "message": "(JSC1318)"
+ },
+ {
+  "file": "purpose-withdraw-pay.json",
+  "message": "(JSC1319)"
+ },
+ {
+  "file": "purpose-propose-quorum.json",
+  "message": "(JSC1313)"
+ },
+ {
+  "file": "purpose-vote-open.json",
+  "message": "(JSC1312)"
+ },
+ {
+  "file": "purpose-certify-open.json",
+  "message": "(JSC1312)"
+ },
+ {
+  "file": "purpose-state-txcert.json",
+  "message": "(JSC1321)"
+ },
+ {
+  "file": "purpose-params-ledgermap.json",
+  "message": "(JSC1321)"
+ },
+ {
+  "file": "purpose-action-vote-param.json",
+  "message": "(JSC1321)"
+ },
+ {
+  "file": "purpose-withdraw-txcert-arg.json",
+  "message": "(JSC1321)"
+ },
+ {
+  "file": "purpose-migrate-from-missing.json",
+  "message": "(JSC1335)"
+ },
+ {
+  "file": "purpose-migrate-from-int.json",
+  "message": "(JSC1335)"
+ },
+ {
+  "file": "purpose-migrate-own-state.json",
+  "message": "(JSC1336)"
+ },
+ {
+  "file": "purpose-migrate-big-maps.json",
+  "message": "(JSC1334)"
+ },
+ {
+  "file": "purpose-migrate-twice.json",
+  "message": "(JSC1337)"
+ },
+ {
+  "file": "purpose-migrate-with-send.json",
+  "message": "(JSC1334)"
+ },
+ {
+  "file": "purpose-migrates-open.json",
+  "message": "(JSC1333)"
+ },
+ {
+  "file": "purpose-migrates-pay.json",
+  "message": "(JSC1332)"
+ },
+ {
+  "file": "purpose-migrates-int-field.json",
+  "message": "migrates to names a Bytes or Hash state field"
+ },
+ {
+  "file": "purpose-migrates-on-action.json",
+  "message": "only an instance destroy migrates"
+ },
+ {
+  "file": "purpose-migrates-with-send.json",
+  "message": "(JSC1334)"
+ },
+ {
+  "file": "purpose-ledger-equality.json",
+  "message": "(JSC1322)"
+ },
+ {
+  "file": "purpose-ledger-map-set.json",
+  "message": "(JSC1324)"
+ },
+ {
+  "file": "purpose-opaque-bind.json",
+  "message": "(JSC1320)"
+ },
+ {
+  "file": "purpose-withdraw-funds.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-certify-funds.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-vote-funds.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-propose-funds.json",
+  "message": "(JSC1315)"
+ },
+ {
+  "file": "purpose-migrate-funds.json",
+  "message": "(JSC1338)"
+ },
+ {
+  "file": "purpose-stakeself-owned.json",
+  "message": "(JSC1305)"
+ },
+ {
+  "file": "purpose-ledger-contains.json",
+  "message": "(JSC1322)"
+ },
+ {
+  "file": "purpose-ledger-contains-nested.json",
+  "message": "(JSC1322)"
+ },
+ {
+  "file": "purpose-library-equality.json",
+  "message": "(JSC1322)"
+ },
+ {
+  "file": "purpose-library-map-set.json",
+  "message": "(JSC1324)"
+ },
+ {
+  "file": "purpose-withdraw-owned.json",
+  "message": "(JSC1305)"
+ },
+ {
+  "file": "purpose-withdraw-keyed.json",
+  "message": "(JSC1244)"
+ },
+ {
+  "file": "purpose-withdraw-bigmap.json",
+  "message": "(JSC1305)"
+ },
+ {
+  "file": "purpose-owned-instance-destroy.json",
+  "message": "(JSC1210)"
+ },
+ {
+  "file": "purpose-keyed-instance-destroy.json",
+  "message": "(JSC1210)"
+ },
+ {
+  "file": "purpose-moves-instance-destroy.json",
+  "message": "(JSC1210)"
+ },
+ {
+  "file": "purpose-owned-bigmap-state.json",
+  "message": "(JSC1211)"
+ },
+ {
+  "file": "purpose-keyed-bigmap-state.json",
+  "message": "(JSC1211)"
+ },
+ {
+  "file": "purpose-mapobj-batched.json",
+  "message": "(JSC1217)"
+ },
+ {
+  "file": "purpose-mapobj-receives.json",
+  "message": "(JSC1217)"
+ },
+ {
+  "file": "purpose-mapobj-moves.json",
+  "message": "(JSC1217)"
+ },
+ {
+  "file": "purpose-mapobj-handler.json",
+  "message": "(JSC1217)"
+ },
+ {
+  "file": "purpose-mapobj-invariant.json",
+  "message": "(JSC1217)"
+ }
+]

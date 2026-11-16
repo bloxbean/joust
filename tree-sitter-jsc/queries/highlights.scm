@@ -58,7 +58,7 @@
 (version) @keyword.directive
 
 [
-  "package" "library" "import" "from" "type" "enum" "fn" "contract" "state" "init" "action" "destroy" "view" "params" "event" "invariant"
+  "package" "library" "import" "from" "type" "enum" "fn" "contract" "state" "init" "action" "destroy" "view" "params" "event" "invariant" "owned"
 ] @keyword
 
 [
@@ -67,7 +67,12 @@
 
 [ "if" "else" ] @keyword.conditional
 
-[ "payable" "open" "only" "after" "before" "batched" "quorum" "authorized" "receives" "ada" ] @keyword.modifier
+[ "payable" "open" "only" "after" "before" "batched" "quorum" "authorized" "receives" "admits" "shared" "into" "ada" "retire" ] @keyword.modifier
+
+; M3b (#112 design F1): a keyed type's clause and its signed option; the words are contextual (a field may be called by).
+(keyed_clause [ "keyed" "by" ] @keyword)
+(keyed_option "signed" @keyword.modifier)
+(keyed_option name: (identifier) @property)
 
 ; Operators and punctuation
 

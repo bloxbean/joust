@@ -137,7 +137,9 @@ module.exports = grammar({
 
     parameters: $ => seq('(', optional(sep1($.parameter, ',')), ')'),
 
-    parameter: $ => seq(field('name', $.identifier), ':', choice(field('type', $.type), field('reads', $.reads_clause))),
+    parameter: $ => seq(field('name', $.identifier), ':', choice(field('type', $.type), field('reads', $.reads_clause),
+      // M3a (ADR-0003 D1, ADR-0012 D3): the instance's state by reference, a move's destination.
+      field('role', choice('shared', 'into')))),
 
     // M2c (ADR-0011 D2): a parameter that reads another contract's state, through an Instance<C> of the params.
     reads_clause: $ => seq('reads', $.params_field),
@@ -150,7 +152,8 @@ module.exports = grammar({
 
     contract_options: $ => seq('(', optional(sep1($.contract_option, ',')), ')'),
 
-    contract_option: $ => seq(field('name', $.identifier), '=', field('value', $.number)),
+    // M3c (ADR-0010 D2): a flag, `stakeSelf`, is an option without a value (the checker refuses other flags: JSC0403).
+    contract_option: $ => choice(seq(field('name', $.identifier), '=', field('value', $.number)), field('name', $.identifier)),
 
     // Exactly one state block (v2 Parser.contract: JSC0121, JSC0126).
     contract_body: $ => seq(
@@ -173,6 +176,68 @@ module.exports = grammar({
       $.params_declaration,
       $.event_declaration,
       $.invariant_declaration,
+      // M3a (ADR-0003, ADR-0012): owned types and their methods.
+      $.owned_declaration,
+      $.owned_init_declaration,
+      $.owned_action_declaration,
+      $.owned_destroy_declaration,
+      // M3c (ADR-0010 D1, ADR-0011 D4): the script purposes' handlers and the adoption of a previous version's instance.
+      $.withdraw_declaration,
+      $.certify_declaration,
+      $.vote_declaration,
+      $.propose_declaration,
+      $.migrate_declaration,
+    ),
+
+    // withdraw m(amount: Int, …) { send(…) }: the rewards' sends. Contextual words, as in the v2 parser (only at a member's
+    // start: an action may still be called withdraw).
+    withdraw_declaration: $ => seq(
+      'withdraw', field('name', $.identifier), field('parameters', $.parameters), repeat($.modifier), field('body', $.block),
+    ),
+
+    certify_declaration: $ => seq(
+      'certify', field('name', $.identifier), field('parameters', $.parameters), repeat($.modifier),
+      choice(seq('=', field('value', $._expression)), field('body', $.block)),
+    ),
+
+    vote_declaration: $ => seq(
+      'vote', field('name', $.identifier), field('parameters', $.parameters), repeat($.modifier),
+      choice(seq('=', field('value', $._expression)), field('body', $.block)),
+    ),
+
+    propose_declaration: $ => seq(
+      'propose', field('name', $.identifier), field('parameters', $.parameters), repeat($.modifier),
+      choice(seq('=', field('value', $._expression)), field('body', $.block)),
+    ),
+
+    // init migrate from params.f(old: V1.State, …) { … }: @Migrate(from = "params.f").
+    migrate_declaration: $ => seq(
+      'init', 'migrate', 'from', field('from', $.params_field), field('parameters', $.parameters), repeat($.modifier), field('body', $.block),
+    ),
+
+    owned_declaration: $ => seq('owned', field('name', $.identifier), optional(field('keyed', $.keyed_clause)), field('fields', $.field_list)),
+
+    // M3b (ADR-0016 D1): keyed by f (signed, maxKeyBytes = n, linkCooldownMs = c, linkWindowMs = w).
+    keyed_clause: $ => seq('keyed', 'by', field('key', $.identifier), optional(field('options', $.keyed_options))),
+
+    keyed_options: $ => seq('(', sep1($.keyed_option, ','), ')'),
+
+    keyed_option: $ => choice('signed', seq(field('name', $.identifier), '=', field('value', $.integer))),
+
+    // owned init T.m(…): a method of the owned type T (named, always).
+    owned_init_declaration: $ => seq(
+      'owned', 'init', field('type', $.identifier), '.', field('name', $.identifier), field('parameters', $.parameters),
+      repeat($.modifier), field('body', $.block),
+    ),
+
+    owned_action_declaration: $ => seq(
+      'owned', 'action', field('type', $.identifier), '.', field('name', $.identifier), field('parameters', $.parameters),
+      repeat($.modifier), field('body', $.block),
+    ),
+
+    owned_destroy_declaration: $ => seq(
+      'owned', 'destroy', field('type', $.identifier), '.', field('name', $.identifier), field('parameters', $.parameters),
+      repeat($.modifier), field('body', $.block),
     ),
 
     state_declaration: $ => seq('state', field('fields', $.field_list)),
@@ -184,7 +249,8 @@ module.exports = grammar({
     event_declaration: $ => seq('event', field('name', $.identifier), optional(field('fields', $.field_list))),
 
     invariant_declaration: $ => seq(
-      'invariant', field('name', $.identifier),
+      // M3a (ADR-0012 D1): invariant T.name, an owned type's.
+      'invariant', optional(seq(field('type', $.identifier), '.')), field('name', $.identifier),
       choice(seq('=', field('value', $._expression)), field('body', $.block)),
     ),
 
@@ -218,6 +284,12 @@ module.exports = grammar({
       seq('authorized', field('field', $._field_ref)),
       // M2c (ADR-0011 D3): the action takes deposits; the type, when given, is the memos'.
       seq('receives', optional(field('memo', $.type))),
+      // M3a (ADR-0012 D3): objects of the owned type arrive through the action.
+      seq('admits', field('type', $.identifier)),
+      // M3b (ADR-0016 D10): a keyed type's retiring exit.
+      'retire',
+      // M3c (ADR-0011 D4): an instance destroy that moves the instance into its successor, named by a state field.
+      seq('migrates', 'to', field('field', $._field_ref)),
     ),
 
     _field_ref: $ => choice($.identifier, $.params_field),

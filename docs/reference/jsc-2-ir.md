@@ -132,6 +132,8 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   "records": [Record…],
   "enums": [{ "name": "Phase", "variants": [Record…], "at": [3, 1] }],
   "state": Record,
+  "owned": [name…],
+  "keyed": [{ "type", "key", "maxKeyBytes", "signed", "linkCooldownMs", "linkWindowMs" }],
   "params": Record,
   "contracts": [{ "name", "package", "state": Record, "records": [Record…], "enums": [Enum…], "timeFields": [name…],
                   "receives": [Type|null…], "bigMaps" }],
@@ -143,9 +145,11 @@ the program read back to the same Java and the same ABI manifest, and checks tha
                       "records": [Record + { "owner", "import", "javaName", "verified" }…],
                       "fns": [{ "name", "params": [Type…], "result": Type }…] }],
   "fns": [{ "name", "params": [Local…], "result": Type, "body": Block, "at" }],
-  "methods": [{ "kind": "init|action|destroy|view", "name", "params": [Local…], "mods": [{ "name", "field"? }],
-                "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at", "reads"? }],
-  "invariants": [{ "name", "body": Block, "at" }],
+  "methods": [{ "kind": "init|action|destroy|view|ownedInit|ownedAction|ownedDestroy|withdraw|certify|vote|propose|migrate",
+                "name", "on"?, "shared"?, "into"?, "from"?, "old"?, "params": [Local…], "arriving"?,
+                "mods": [{ "name", "field"? }], "checked": [localId…], "usesCtx", "pays",
+                "result": Type|null, "body": Block, "at", "reads"? }],
+  "invariants": [{ "name", "on"?, "body": Block, "at" }],
   "warnings": [{ "line", "col", "code", "message" }]
 }
 ```
@@ -177,6 +181,68 @@ ADR-0018 D2, r26), and the tag stays as long as the format does.
   BigMap. A method's `reads` (present only when it reads another contract) lists `{ "local": Local, "field" }`: the
   local holding the state the params field `field` (an `Instance<C>`) names, declared before the body. The modifier
   `receives` is `{ "name": "receives" }`, or `{ "name": "receives", "type": T }` for `receives T`.
+- **M3a** (additive within format 2). `owned` (present only when the contract declares owned types) lists them in
+  declaration order; each is a record of `records`. An owned method's `kind` is `ownedInit`, `ownedAction` or
+  `ownedDestroy` and its `on` names its type; its `StateRef` and `StateField` read its object, and its result type is the
+  type's record. `shared` (present only for a method with a `shared` parameter) is the Local holding the instance's state
+  (`{ "record": "State" }`), `into` (a move, M3a3) the destination's, both declared before the parameters; `arriving`
+  (an `admits T` action's arriving object, M3a3) is declared after the first parameter. The modifier `admits` is
+  `{ "name": "admits", "field": T }`. An owned type's invariant names it in `on` (M3a3). A time field of an owned type is
+  `T.f` in `timeFields`. Both readers refuse an owned kind without `on`, an `on` that is not an owned type, `shared` outside
+  an owned method or of another type than `State`, `into` outside an owned action, `arriving` without `admits`, modifiers
+  naming fields the object does not have, `receives` on an owned method, an owned type without an owned init or an
+  escape hatch (an owned destroy without `shared`, `before` or `after`), an escape hatch that never reads `balance`
+  (JSC1216), and a present `null` for `on`, `shared`, `into`, `arriving` or `reads` (an absent field is not written; #101
+  round-r2 review C4, C5). From M3a3 (#107 round-r2 review C5, F7) they also refuse a move whose `into` is not a
+  `State` or whose object keeps a `BigMap`, an `admits` action whose first parameter is not a `Bytes` id or that is
+  `batched`, an `arriving` object that keeps a `BigMap` (JSC1212), and an invariant of a type that keeps one (JSC1213). **Not produced until their part** (#101 review F2, F9, round-r2 C3; refused by both readers until
+  then): `into`, `arriving`, `admits` and an invariant's `on` (M3a3); a payable owned destroy, native assets in an owned
+  method, a second owned type and a BigMap in an owned type (M3a2).
+- **M3b** (additive within format 2, ADR-0016). `keyed` (present only when the contract declares keyed types) lists each
+  keyed type, in declaration order, with its options as the checker resolved them (the processor's defaults applied):
+  `type` (an owned type), `key` (its key field), `maxKeyBytes`, `signed` (a boolean), `linkCooldownMs` and `linkWindowMs`
+  (JSON integers, milliseconds). The modifier `retire` is `{ "name": "retire" }`, on an owned destroy of a keyed type.
+  Both readers refuse a keyed program outside the checker's shapes: an entry that is no owned type or names one twice, a
+  key that is no `Bytes`, `Key` or `Hash` field, options out of their ranges (maxKeyBytes 1 to 64, at least 28 and no
+  `Hash` when signed; the cooldown 0 or 60,000 to 3,600,000; the window 20,000 to min(900,000, maxValidityMs)), more than
+  16 keyed types, maxDatumBytes over 2048, a batched action, a `BigMap` in any owned type, a native-asset statement or
+  `funds` read, `receives`, a keyed type that moves (`into`, `admits`), a key that is a time field, a keyed type without a
+  retiring exit signed by its owner (`only f`) that needs nobody else (no `shared`, reads, `payable`, `quorum`,
+  `authorized`, `after` or `before`, and no `TimePred` in its body: #112 round r2, Codex C6), a keyed action without an audience (`only`, `quorum` or `authorized`), and `retire`
+  anywhere else (`js/jsc-interpreter/test/mutants/keyed-*.json`, shared by both readers' tests). A keyed action that
+  changes its key is well-formed IR (the checker refuses it, JSC1248): the interpreters refuse its call (`keyed:fixed`).
+- **Vectors (M3b):** a keyed insert's or removal's transaction carries `"instance"` (hex: the instance it acts under) and
+  `"anchor"`: `{ "instance", "type", "key", "next", "linkedAt" }`, the node it relinks (an insert's anchor, a removal's
+  predecessor; `key` empty for a head).
+- **M3c** (additive within format 2, ADR-0010, ADR-0011 D4). Method kinds `"withdraw"`, `"certify"`, `"vote"`,
+  `"propose"` (the script purposes' handlers, no input state; a withdraw handler's `result` is null, the others'
+  `"Bool"`) and `"migrate"` (`init migrate`, a creation), which names `"from"` (the params field pinning the previous
+  version) and `"old"` (the local of the adopted state, declared before the parameters; both or neither). The modifier
+  `migrates` is `{ "name": "migrates", "field": f }`, on an instance destroy. The option `stakeSelf` is
+  `{ "name": "stakeSelf", "value": "1" }`. Types gain the ledger types by name (`"TxCert"`, `"Voter"`, `"Vote"`,
+  `"GovernanceActionId"`, `"ProposalProcedure"`, `"GovernanceAction"`, `"Delegatee"`, `"DRep"`, `"ProtocolVersion"`,
+  `"Rational"`, `"Constitution"`, and `"Data"` for a field carried and never read) and `{ "ledgerMap": [K, V] }`; a
+  `GetField` may read a ledger record's field, a `Match` may match a sealed ledger type's constructors, and a `CallStd`
+  may call `std/certs`. Both readers refuse a program with purposes or migration outside the checker's shapes (semantics
+  §2.10, §2.11): stakeSelf not the flag `"1"` once, or without a withdraw and a certify handler; a ledger type in a field
+  of the state, the params, a record, an enum or an imported contract, in a parameter of any method but a handler's
+  purpose data, or as a view's result; two handlers of one purpose, a handler in a contract without params, parameters
+  outside the processor's shapes, a withdraw handler with a result or another effect than `Send`, a certify, vote or
+  propose handler with effects, a transaction (`usesCtx`) or a result other than `Bool`, a handler reading the state
+  (`StateRef`, `StateField`), modifiers other than `quorum` or `authorized` over `params.*` (none on propose, at least
+  one on the others); two init migrates, an init migrate with modifiers or effects, a `from` that is no `Hash` or `Bytes`
+  params field, an `old` that is no imported contract's state or one with BigMaps; a migrating destroy with effects,
+  without an audience, or naming a time field or a field that is no `Bytes` or `Hash`; and either side in a contract
+  with owned types, BigMap state or native assets (`js/jsc-interpreter/test/mutants/purpose-*.json`, shared by both
+  readers' tests, each with the checker's code in the fragment both messages share).
+- **M3 final pass** (r29; the combinations, semantics §2.12). Both readers also refuse what the checker refuses for the
+  parts together: an instance destroy (JSC1210) or BigMap state (JSC1211) beside owned or keyed types; a withdraw handler
+  beside keyed types (JSC1244) or beside BigMap state (JSC1305); and, beside an owned type that keeps a `BigMap`, a move,
+  an `admits` action, a batched action, `receives`, `reads`, a certify, vote or propose handler, or an invariant by type
+  (JSC1217; `purpose-mapobj-*.json`, `purpose-*-instance-destroy.json`, `purpose-*-bigmap-state.json`).
+- **Vectors (M3c):** a vote's call takes two arguments, the voter and its votes `[[actionId, vote]…]`. A migrating
+  destroy's transaction carries `"successor"` (hex: the policy whose instance it mints); an init migrate's carries
+  `"prior"`: `{ "policy": hex, "state": v }` (the spent instance's policy and state).
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),
   `{ "instance": C }` (M2c, `Instance<C>`), `{ "deposit": T|null }` (M2c, an element of `funds.deposits`: its memo type,
   or null),
@@ -263,6 +329,9 @@ The differential tests pass calls to the JavaScript interpreter as JSON, in a ta
 | `Value` (M2) | `{ "value": [[policy, name, "q"]…] }`: policy and name as hex, the quantity as a decimal string, in the ledger's order (semantics §1.3) |
 | `Credential` (M2) | `{ "keyCred": hex }`, `{ "scriptCred": hex }` |
 | `Instance<C>` (M2c) | `{ "instance": [policy, id] }`, both hex |
+| a ledger type (M3c) | `{ "gov": "Type", "ctor": "Ctor", "fields": [v…] }`: a sealed type's constructor (a record's `ctor` is its type) and its fields in the table's order (semantics §1.5) |
+| `Data` (M3c) | `{ "data": hex }`: a `PlutusData` field's CBOR, carried and never read |
+| `LedgerMap` (M3c) | `{ "ledgerMap": [[k, v]…] }`, the ledger's entries in their order (a key may repeat) |
 | `Address` (M2) | `{ "address": [credential, stake] }`, `stake` `null`, `{ "stakeHash": credential }` or `{ "stakePtr": ["slot", "tx", "cert"] }`. A pointer can be written (a vector may offer one) but is never a checked input's (semantics §4, r15) |
 
 A call is `{ "method", "state": v|null, "args": [v…], "tx": { "caller", "received", "balance", "validFrom",

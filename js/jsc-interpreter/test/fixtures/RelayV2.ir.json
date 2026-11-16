@@ -1,0 +1,332 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "5defb515e2de6416acb20acb7ba8b0fcce87119693d7e63d6ec9e4874fee399b",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "RelayV2",
+  "source": "RelayV2.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "256" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "admin", "type": "Key" }, { "name": "successor", "type": "Bytes" }, { "name": "count", "type": "Int" }],
+    "at": [10, 1]
+  },
+  "params": {
+    "name": "Config",
+    "fields": [{ "name": "previous", "type": "Hash" }, { "name": "feed", "type": { "instance": "Oracle" } }],
+    "at": [11, 3]
+  },
+  "contracts": [
+    {
+      "name": "Oracle",
+      "package": "org.julclang.state.examples.dsl",
+      "state": {
+        "name": "Oracle.State",
+        "fields": [
+          { "name": "publisher", "type": "Key" },
+          { "name": "price", "type": "Int" },
+          { "name": "updatedAt", "type": "Int" }
+        ],
+        "at": [7, 1]
+      },
+      "records": [],
+      "enums": [],
+      "timeFields": ["updatedAt"],
+      "receives": [],
+      "bigMaps": false
+    },
+    {
+      "name": "RelayV1",
+      "package": "org.julclang.state.examples.dsl",
+      "state": {
+        "name": "RelayV1.State",
+        "fields": [
+          { "name": "admin", "type": "Key" },
+          { "name": "successor", "type": "Bytes" },
+          { "name": "count", "type": "Int" }
+        ],
+        "at": [8, 1]
+      },
+      "records": [],
+      "enums": [],
+      "timeFields": [],
+      "receives": [],
+      "bigMaps": false
+    }
+  ],
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [15, 21] },
+            { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [15, 40] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 50] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [15, 12]
+        },
+        "at": [14, 10]
+      },
+      "at": [14, 3]
+    },
+    {
+      "kind": "migrate",
+      "name": "migrate",
+      "from": "previous",
+      "old": {
+        "id": 1,
+        "name": "old",
+        "type": { "record": "RelayV1.State" },
+        "taint": 0,
+        "at": [18, 37],
+        "fieldTaints": { "admin": 0, "count": 0, "successor": 0 }
+      },
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 1, "type": { "record": "RelayV1.State" }, "taint": 0, "at": [19, 21] },
+              "record": "RelayV1.State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [19, 21]
+            },
+            { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [19, 43] },
+            {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 1, "type": { "record": "RelayV1.State" }, "taint": 0, "at": [19, 53] },
+              "record": "RelayV1.State",
+              "field": "count",
+              "type": "Int",
+              "taint": 0,
+              "at": [19, 53]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [19, 12]
+        },
+        "at": [18, 57]
+      },
+      "at": [18, 3]
+    },
+    {
+      "kind": "action",
+      "name": "tick",
+      "params": [],
+      "mods": [{ "name": "batched" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [23, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "successor",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [23, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [23, 31] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [23, 39] },
+              "type": "Int",
+              "taint": 0,
+              "at": [23, 31]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [23, 12]
+        },
+        "at": [22, 25]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "action",
+      "name": "peek",
+      "params": [],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "reads": [
+        {
+          "local": {
+            "id": 2,
+            "name": "latest",
+            "type": { "record": "Oracle.State" },
+            "taint": 1,
+            "at": [26, 15],
+            "fieldTaints": { "price": 0, "publisher": 0, "updatedAt": 1 }
+          },
+          "field": "feed"
+        }
+      ],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [27, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [27, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [27, 17] },
+              "record": "State",
+              "field": "successor",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [27, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 2, "type": { "record": "Oracle.State" }, "taint": 1, "at": [27, 31] },
+              "record": "Oracle.State",
+              "field": "price",
+              "type": "Int",
+              "taint": 0,
+              "at": [27, 31]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [27, 12]
+        },
+        "at": [26, 47]
+      },
+      "at": [26, 3]
+    },
+    {
+      "kind": "action",
+      "name": "setSuccessor",
+      "params": [{ "id": 3, "name": "next", "type": "Bytes", "taint": 0, "at": [30, 23] }],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "StateField", "field": "successor", "type": "Bytes", "taint": 0, "at": [31, 13] },
+              "right": { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [31, 26] },
+              "operand": "Bytes",
+              "type": "Bool",
+              "taint": 0,
+              "at": [31, 13]
+            },
+            "message": "the successor is set once",
+            "at": [31, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [32, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [32, 12]
+            },
+            { "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [32, 35] },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [32, 17] },
+              "record": "State",
+              "field": "count",
+              "type": "Int",
+              "taint": 0,
+              "at": [32, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [32, 12]
+        },
+        "at": [30, 47]
+      },
+      "at": [30, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "upgrade",
+      "params": [],
+      "mods": [{ "name": "only", "field": "admin" }, { "name": "migrates", "field": "successor" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": null,
+      "body": { "stmts": [], "result": null, "at": [35, 54] },
+      "at": [35, 3]
+    }
+  ],
+  "warnings": []
+}

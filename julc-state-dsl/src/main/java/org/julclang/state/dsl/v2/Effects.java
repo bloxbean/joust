@@ -50,7 +50,9 @@ final class Effects {
 
     /** Whether the method is lowered with {@code Funds} (D4). Views never are. */
     static boolean takesFunds(Ir.Method m) {
-        if (m.kind() == Ir.Kind.VIEW) return false;
+        // M3c: a script purpose's handler spends nothing of the contract (a withdraw handler's sends are lovelace from the
+        // reward account), and an adoption is in no asset-aware contract (JSC1334).
+        if (m.kind() == Ir.Kind.VIEW || m.kind().purpose() || m.kind() == Ir.Kind.MIGRATE) return false;
         var u = usage(m);
         // M2c: a receiving action takes Funds (its deposits are funds.deposits; ADR-0011 D3), a depositing one does not.
         return u.funds || u.kinds.contains("send") || u.kinds.contains("mint") || u.kinds.contains("accept") || m.receives() != null;
@@ -85,23 +87,61 @@ final class Effects {
         return false;
     }
 
+    /**
+     * The record a method returns, or null when it returns its plain result (the state, the object, its payouts). M3a
+     * (ADR-0003, ADR-0012): an owned action's are {@code <T>Outcome} and {@code <T>Received}, with the object of type
+     * {@code T} as their state; a creation that accepts (issue #81 fixed) returns {@code Created} or {@code <T>Created}
+     * (its state, then what it accepted); an owned destroy that takes native assets (payable with Funds: examples/market's
+     * buy) returns {@code Exchanged}; the other destroys, instance or owned, share {@code Settled} as in M2.
+     */
+    static String record(Ir.Program p, Ir.Method m) {
+        return switch (m.kind()) {
+            case ACTION -> actionRecord(p, m);
+            case OWNED_ACTION -> kinds(m).isEmpty() ? null : m.on() + (takesAssets(m) ? "Received" : "Outcome");
+            case INIT -> kinds(m).contains("accept") ? "Created" : null;
+            case OWNED_INIT -> kinds(m).contains("accept") ? m.on() + "Created" : null;
+            case DESTROY, OWNED_DESTROY -> exchanges(m) ? "Exchanged" : settled(p) ? "Settled" : null;
+            // M3c: a handler returns its sends or its Bool; an adoption its first state.
+            case VIEW, WITHDRAW, CERTIFY, VOTE, PROPOSE, MIGRATE -> null;
+        };
+    }
+
+    /** M3a: an owned destroy that takes native assets (payable with Funds) returns {@code Exchanged}. */
+    static boolean exchanges(Ir.Method m) {
+        return m.kind() == Ir.Kind.OWNED_DESTROY && takesAssets(m);
+    }
+
+    /** The type of a record's {@code state} component ({@code State}, or an owned type), or null for a destroy's record. */
+    static String stateOf(Ir.Program p, String record) {
+        if (record.equals("Settled") || record.equals("Exchanged")) return null;
+        for (String o : p.owned()) {
+            if (record.equals(o + "Outcome") || record.equals(o + "Received") || record.equals(o + "Created")) return o;
+        }
+        return "State";
+    }
+
     /** The kinds a record holds: every kind any of its methods produces, in {@link #ORDER}. */
     static List<String> recordKinds(Ir.Program p, String record) {
         var all = new TreeSet<String>();
         for (Ir.Method m : p.methods()) {
             if (m.kind() == Ir.Kind.ACTION && record.equals(actionRecord(p, m))) all.addAll(kinds(m));
             if (m.kind() == Ir.Kind.DESTROY && record.equals("Settled")) all.addAll(kinds(m));
+            // M3a: owned actions, owned destroys, creations that accept.
+            if ((m.kind().owned() || m.kind() == Ir.Kind.INIT) && record.equals(record(p, m))) all.addAll(kinds(m));
         }
-        if (record.equals("Received")) all.add("accept");
+        if (record.equals("Received") || record.endsWith("Received") || record.equals("Exchanged") || record.endsWith("Created")) all.add("accept");
         var out = new ArrayList<String>();
         for (String k : ORDER) if (all.contains(k)) out.add(k);
         return out;
     }
 
-    /** Whether the destroys return {@code Settled} (some destroy sends, mints or burns), else their payouts. */
+    /**
+     * Whether the destroys return {@code Settled} (some destroy sends, mints or burns), else their payouts. M3a: an owned
+     * destroy counts as a destroy here unless it returns {@code Exchanged}.
+     */
     static boolean settled(Ir.Program p) {
         for (Ir.Method m : p.methods()) {
-            if (m.kind() != Ir.Kind.DESTROY) continue;
+            if (m.kind() != Ir.Kind.DESTROY && !(m.kind() == Ir.Kind.OWNED_DESTROY && !exchanges(m))) continue;
             var k = kinds(m);
             if (k.contains("send") || k.contains("mint") || k.contains("emit") || k.contains("deposit")) return true;
         }
@@ -116,7 +156,8 @@ final class Effects {
     static boolean takesParams(Ir.Program p, Ir.Method m) {
         if (p.params() == null) return false;
         // M2c: a method that reads another contract takes the params (its reads name a params field, ADR-0011 D2).
-        return m.kind() == Ir.Kind.INIT || usage(m).params || !m.reads().isEmpty();
+        // M3c (ADR-0010 D1, ADR-0011 D4): a handler and an adoption always take them first (the processor's shapes).
+        return m.kind() == Ir.Kind.INIT || m.kind().purpose() || m.kind() == Ir.Kind.MIGRATE || usage(m).params || !m.reads().isEmpty();
     }
 
     /** Whether the method's result carries events (M2b): its redeemer then carries them last (ADR-0009 D5). */
@@ -124,6 +165,8 @@ final class Effects {
         return switch (m.kind()) {
             case ACTION -> actionRecord(p, m) != null && recordKinds(p, actionRecord(p, m)).contains("emit");
             case DESTROY -> settled(p) && recordKinds(p, "Settled").contains("emit");
+            // M3a: an owned method's record, as an action's or a destroy's.
+            case OWNED_ACTION, OWNED_DESTROY -> record(p, m) != null && recordKinds(p, record(p, m)).contains("emit");
             default -> false;
         };
     }
@@ -131,6 +174,9 @@ final class Effects {
     /** Whether some result record has a {@code mint} component: the mint validator then has {@code ByAction} (ADR-0007 D4). */
     static boolean mints(Ir.Program p) {
         for (String r : List.of("Outcome", "Received")) if (recordKinds(p, r).contains("mint")) return true;
-        return settled(p) && recordKinds(p, "Settled").contains("mint");
+        if (settled(p) && recordKinds(p, "Settled").contains("mint")) return true;
+        // M3a: an owned action's or destroy's record.
+        for (Ir.Method m : p.methods()) if (m.kind().owned() && record(p, m) != null && recordKinds(p, record(p, m)).contains("mint")) return true;
+        return false;
     }
 }

@@ -67,6 +67,14 @@ final class Parser {
             if (toks.get(k).is("type") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
             // M2b: an event is a variant of the contract's Event, so it starts a constructor too: Paid { to, amount }.
             if (toks.get(k).is("event") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
+            // M3a: an owned type is a record too: Account { owner, saved }.
+            if (toks.get(k).is("owned") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
+                typeNames.add(toks.get(k + 1).text());
+            }
+            // M3b: a keyed owned type too: owned Entry keyed by name (…) { … }.
+            if (toks.get(k).is("owned") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("keyed")) {
+                typeNames.add(toks.get(k + 1).text());
+            }
             // An enum's variants start constructors too: Closed { at: t } (D5).
             if (toks.get(k).is("enum") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
                 int depth = 0;
@@ -154,7 +162,7 @@ final class Parser {
     /** Where the recovering parser resumes at a file's top level, and among a contract's members. */
     private static final Set<String> FILE_SYNC = Set.of("import", "type", "enum", "fn", "contract", "function", "class");
     private static final Set<String> MEMBER_SYNC = Set.of("state", "params", "event", "invariant", "init", "action", "destroy", "view",
-            "fn", "type", "enum", "function");
+            "fn", "type", "enum", "function", "owned", "withdraw", "certify", "vote", "propose");
     /** Where it resumes among a block's statements (a keyword that starts a statement, at the start of its line). */
     private static final Set<String> STMT_SYNC = Set.of("const", "let", "var", "require", "pay", "for", "if", "match", "return", "send",
             "mint", "burn", "accept", "emit", "deposit", "while", "do", "function");
@@ -542,7 +550,8 @@ final class Parser {
     }
 
     /** The method modifiers (D4, D10); none is a field or binding name (M1c review F4). */
-    static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched", "receives");
+    static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched", "receives",
+            "admits", "retire", "migrates");
 
     /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
     private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
@@ -603,6 +612,13 @@ final class Parser {
         Contract contract = null;
         while (peek().kind() != K.EOF) {
             Tok t = peek();
+            // Recovering: a '}' at the top level after an error is that error's consequence (a contract whose '{' was lost, or
+            // closed early, leaves its last members, such as a fn, at the top level and its '}' behind them), no error of its
+            // own (ADR-0021 L13; met with M3's contracts, whose last member is often a fn).
+            if (recover && t.is("}") && errors() > 0) {
+                i++;
+                continue;
+            }
             int[] member = startMember();
             int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth, errs = errors();
             int declsBefore = spans == null ? 0 : spans.decls.size();
@@ -797,6 +813,10 @@ final class Parser {
                     expect(".");
                     late(peek(), "params");
                     ps.add(new Param(n, null, p, ident("a params field after 'reads params.'")));
+                } else if ((at("shared") || at("into")) && (peek(1).is(",") || peek(1).is(")"))) {
+                    // M3a (ADR-0003 D1, ADR-0012 D3): name: shared, the instance's state read by reference; name: into, a
+                    // move's destination state. Contextual: a type is capitalised, so neither word names one.
+                    ps.add(new Param(n, null, p, null, next().text()));
                 } else {
                     ps.add(new Param(n, type(), p));
                 }
@@ -821,6 +841,12 @@ final class Parser {
                 do {
                     Pos op = peek().pos();
                     String on = ident("a contract option");
+                    if (on.equals("stakeSelf") && !at("=")) {
+                        // M3c (ADR-0010 D2): a flag, @StateContract(stakeSelf = true): the state sits at the base address
+                        // staked to the contract's own script.
+                        options.add(new Option(on, BigInteger.ONE, op, true));
+                        continue;
+                    }
                     expect("=");
                     Tok v = next();
                     if (v.kind() != K.INT) throw v.pos().error("JSC0120", "expected an integer");
@@ -841,6 +867,7 @@ final class Parser {
         var fns = new ArrayList<Fn>();
         var types = new ArrayList<TypeDecl>();
         var enums = new ArrayList<EnumDecl>();
+        var owned = new ArrayList<TypeDecl>();
         int contractErrors = errors();
         openedAt = clb;
         while (!at("}") || recover && errors() > contractErrors && strayClose(clb)) {
@@ -856,9 +883,44 @@ final class Parser {
             int from = i, sd = spans == null ? 0 : spans.depth(), nesting = depth, errs = errors();
             int declsBefore = spans == null ? 0 : spans.decls.size();
             memberDecls = declsBefore;
-            int[] sizes = {methods.size(), fns.size(), types.size(), enums.size(), events.size(), invariants.size()};
+            int[] sizes = {methods.size(), fns.size(), types.size(), enums.size(), events.size(), invariants.size(), owned.size()};
             try {
-            if (t.is("state")) {
+            if (t.is("owned") && peek(1).kind() == K.IDENT && (peek(2).is("{") || peek(2).is("keyed"))) {
+                // M3a (ADR-0003 D1, ADR-0012 D1): owned T { … }, an owned object's record. M3b (ADR-0016 D1): owned T keyed
+                // by f (…) { … }, a keyed type: one object per key, unique per instance.
+                openDecl("owned");
+                next();
+                Pos tp = peek().pos();
+                Tok nt = peek();
+                String n = ident("an owned type's name");
+                named(nt);
+                Syntax.KeyedDecl keyed = at("keyed") ? keyedDecl(n) : null;
+                if (!at("{")) throw peek().pos().error("JSC1201", "an owned type's fields follow in a block: owned " + n + " { owner: Key }");
+                owned.add(new TypeDecl(n, fieldBlock("field"), tp, keyed));
+                closeDecl();
+            } else if (t.is("owned") && (peek(1).is("init") || peek(1).is("action") || peek(1).is("destroy"))) {
+                // M3a: owned init T.m(…), owned action T.m(…), owned destroy T.m(…): a method of the owned type T. Its
+                // declaration (#101 review F8) is an owned kind named T.m, so the outline says whose method it is.
+                openDecl(peek(1).is("init") ? "ownedInit" : peek(1).is("action") ? "ownedAction" : "ownedDestroy");
+                next();
+                Tok k = next();
+                String on = ident("the owned type of an owned " + k.text() + " (owned " + k.text() + " Account.name(…))");
+                if (!at(".")) {
+                    throw peek().pos().error("JSC1201", "an owned method names its type and itself: owned " + k.text() + " " + on + ".name(…)");
+                }
+                next();
+                Tok nt = peek();
+                String n = ident("a method name");
+                if (spans != null) spans.name(nt, on + "." + n);
+                var ps = params();
+                var mods = mods();
+                Kind kind = k.is("init") ? Kind.OWNED_INIT : k.is("action") ? Kind.OWNED_ACTION : Kind.OWNED_DESTROY;
+                methods.add(new Method(kind, n, ps, mods, block(), null, t.pos(), on));
+                closeDecl();
+            } else if (t.is("owned")) {
+                throw peek(1).pos().error("JSC1201", "after 'owned' comes an owned type (owned Account { owner: Key }) or an owned method"
+                        + " (owned init Account.open(…), owned action Account.name(…), owned destroy Account.name(…))");
+            } else if (t.is("state")) {
                 if (state != null) throw t.pos().error("JSC0121", "the state is declared once: state { … }");
                 openDecl("state");
                 named(t);
@@ -891,6 +953,14 @@ final class Parser {
                 next();
                 Tok nt = peek();
                 String n = ident("an invariant name");
+                String on = null;
+                if (at(".")) {
+                    // M3a (ADR-0012 D1): invariant T.name = e, an invariant of the owned type T.
+                    next();
+                    on = n;
+                    nt = peek();
+                    n = ident("an invariant name after '" + on + ".'");
+                }
                 named(nt);
                 Block body;
                 if (eat("=")) {
@@ -899,7 +969,26 @@ final class Parser {
                 } else {
                     body = block();
                 }
-                invariants.add(new InvariantDecl(n, body, t.pos()));
+                invariants.add(new InvariantDecl(n, body, t.pos(), on));
+                closeDecl();
+            } else if (t.is("init") && peek(1).is("migrate") && peek(2).is("from")) {
+                // M3c (ADR-0011 D4): init migrate from params.f(old: C.State, …) { … }, @Migrate(from = "params.f"): the
+                // adoption of an instance of the previous version, whose policy the params field f pins.
+                openDecl("migrate");
+                if (spans != null) spans.name(t, "migrate");   // the Java method's name, as init is init's
+                next();
+                next();
+                next();
+                Pos fp = peek().pos();
+                if (!at("params") || !peek(1).is(".")) {
+                    throw fp.error("JSC1304", "init migrate names the previous version's policy by a params field: init migrate from params.previous(old: V1.State)");
+                }
+                next();
+                next();
+                String previous = ident("the params field after 'init migrate from params.'");
+                var ps = params();
+                var mods = mods();
+                methods.add(new Method(Kind.MIGRATE, "migrate", ps, mods, block(), null, t.pos(), null, previous, fp));
                 closeDecl();
             } else if (t.is("init")) {
                 openDecl("init");
@@ -908,6 +997,29 @@ final class Parser {
                 var ps = params();
                 var mods = mods();
                 methods.add(new Method(Kind.INIT, "init", ps, mods, block(), null, t.pos()));
+                closeDecl();
+            } else if (t.is("withdraw") || t.is("certify") || t.is("vote") || t.is("propose")) {
+                // (A member never starts with another identifier, so a handler word there is a handler: a malformed one is
+                // its own error, at its name, and the recovering parser resumes after it as after an action's.)
+                // M3c (ADR-0010 D1): a script purpose's handler. withdraw m(amount: Int, …) { send(…) } lowers to @Withdraw and
+                // returns its sends; certify, vote and propose are predicates (= expr, or a block with a result). Contextual:
+                // only at a member's start, so actions keep these names (action withdraw(…)).
+                openDecl(t.text());
+                next();
+                Tok nt = peek();
+                String n = ident("a handler name");
+                named(nt);
+                var ps = params();
+                var mods = mods();
+                Kind kind = t.is("withdraw") ? Kind.WITHDRAW : t.is("certify") ? Kind.CERTIFY : t.is("vote") ? Kind.VOTE : Kind.PROPOSE;
+                Block body;
+                if (kind != Kind.WITHDRAW && eat("=")) {
+                    Expr e = expr();
+                    body = new Block(List.of(), e, e.pos());
+                } else {
+                    body = block();
+                }
+                methods.add(new Method(kind, n, ps, mods, body, null, t.pos()));
                 closeDecl();
             } else if (t.is("action") || t.is("destroy")) {
                 openDecl(t.text());
@@ -950,7 +1062,8 @@ final class Parser {
             } else if (t.is("let") || t.is("const") || t.is("var")) {
                 throw t.pos().error("JSC0124", "a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10)");
             } else {
-                throw t.pos().error("JSC0125", "expected state, params, event, invariant, init, action, destroy, view, fn, type or enum but found " + t);
+                throw t.pos().error("JSC0125", "expected state, params, event, invariant, init, action, destroy, view, owned, withdraw, certify,"
+                        + " vote, propose, fn, type or enum but found " + t);
             }
             } catch (JscException e) {
                 if (!recover) throw e;
@@ -964,6 +1077,7 @@ final class Parser {
                 truncate(enums, sizes[3]);
                 truncate(events, sizes[4]);
                 truncate(invariants, sizes[5]);
+                truncate(owned, sizes[6]);
                 dropMember(declsBefore);
             }
             endMember(member);
@@ -983,14 +1097,52 @@ final class Parser {
             if (!spans.incomplete) spans.errors.add(e);
             state = List.of();
         }
-        return new Contract(name, options, state, methods, fns, types, enums, p, params, paramsPos, events, invariants);
+        return new Contract(name, options, state, methods, fns, types, enums, p, params, paramsPos, events, invariants, owned);
+    }
+
+    /**
+     * M3b (ADR-0016 D1): {@code keyed by f}, then optionally {@code (signed, maxKeyBytes = n, linkCooldownMs = c,
+     * linkWindowMs = w)} in any order, each at most once (the checker refuses unknown names and values out of range).
+     */
+    private Syntax.KeyedDecl keyedDecl(String type) {
+        Pos kp = next().pos();
+        if (!at("by")) throw peek().pos().error("JSC1240", "a keyed type names its key field: owned " + type + " keyed by name { name: Bytes }");
+        next();
+        Pos fp = peek().pos();
+        String field = ident("the key field after 'keyed by' (owned " + type + " keyed by name)");
+        Pos signed = null;
+        var options = new ArrayList<Option>();
+        var seen = new java.util.HashSet<String>();
+        if (eat("(")) {
+            if (at(")")) throw peek().pos().error("JSC1240", "empty keyed options: drop the parentheses, or write (signed, maxKeyBytes = 28)");
+            do {
+                Pos op = peek().pos();
+                String on = ident("a keyed option (signed, maxKeyBytes, linkCooldownMs, linkWindowMs)");
+                if (!java.util.Set.of("signed", "maxKeyBytes", "linkCooldownMs", "linkWindowMs").contains(on)) {
+                    throw op.error("JSC1240", "unknown keyed option '" + on + "' (signed, maxKeyBytes, linkCooldownMs, linkWindowMs)");
+                }
+                if (!seen.add(on)) throw op.error("JSC1240", "the keyed option " + on + " is written twice");
+                if (on.equals("signed")) {
+                    signed = op;
+                    continue;
+                }
+                if (!at("=")) throw peek().pos().error("JSC1240", "the keyed option " + on + " takes a value: " + on + " = 64");
+                next();
+                Tok v = next();
+                if (v.kind() != K.INT) throw v.pos().error("JSC1240", "the keyed option " + on + " is an integer (milliseconds or bytes)");
+                options.add(new Option(on, new BigInteger(v.text()), op));
+            } while (eat(","));
+            expect(")");
+        }
+        return new Syntax.KeyedDecl(field, fp, signed, List.copyOf(options), kp);
     }
 
     private List<Mod> mods() {
         var mods = new ArrayList<Mod>();
         while (true) {
             Tok t = peek();
-            if (t.is("payable") || t.is("open")) {
+            if (t.is("payable") || t.is("open") || t.is("retire")) {
+                // M3b (ADR-0016 D10): retire, on a keyed type's owned destroy: the object stays as a retired node.
                 next();
                 mods.add(new Mod(t.text(), null, t.pos()));
             } else if (t.is("only") || t.is("after") || t.is("before")) {
@@ -1009,6 +1161,17 @@ final class Parser {
                 TypeRef memo = null;
                 if (peek().kind() == K.IDENT && !MODIFIERS.contains(peek().text()) && Character.isUpperCase(peek().text().charAt(0))) memo = type();
                 mods.add(new Mod("receives", null, t.pos(), memo));
+            } else if (t.is("migrates")) {
+                // M3c (ADR-0011 D4): migrates to f, on an instance destroy: @MigrateTo("f"), the successor's policy in the state
+                // field f (a params field would make the two versions' hashes circular; the checker refuses it).
+                next();
+                if (!at("to")) throw peek().pos().error("JSC1303", "a migrating destroy names its successor's field: migrates to successor");
+                next();
+                mods.add(new Mod("migrates", fieldRef("the state field after 'migrates to' (a Bytes field holding the successor's policy)"), t.pos()));
+            } else if (t.is("admits")) {
+                // M3a (ADR-0012 D3): admits T, an instance action through which objects of the owned type T arrive.
+                next();
+                mods.add(new Mod("admits", ident("the owned type after 'admits' (admits Hero)"), t.pos()));
             } else if (t.is("authorized")) {
                 // M2b (ADR-0009 D3): authorized <credential>, a state field or params.f.
                 next();

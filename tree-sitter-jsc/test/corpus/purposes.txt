@@ -1,0 +1,148 @@
+================================================================================
+Script purposes, a staked contract, migration (M3c)
+================================================================================
+
+jsc 1
+package t
+contract C(stakeSelf) {
+  params { gov: Credential, previous: Hash }
+  state { admin: Key, successor: Bytes }
+  withdraw collect(amount: Int) authorized params.gov { send(wallet(admin), Value.lovelace(amount)) }
+  certify cert(c: TxCert) authorized params.gov = true
+  vote vote(voter: Voter, action: GovernanceActionId, vote: Vote) authorized params.gov { action.govActionIx == 0 }
+  propose rail(p: ProposalProcedure) = p.deposit > 0
+  init migrate from params.previous(old: Old.State) { return { admin: old.admin, successor: # } }
+  destroy upgrade() only admin migrates to successor { }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (contract_declaration
+    (identifier)
+    (contract_options
+      (contract_option
+        (identifier)))
+    (contract_body
+      (params_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (withdraw_declaration
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (type
+              (identifier))))
+        (modifier
+          (params_field
+            (identifier)))
+        (block
+          (send_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier)))
+            (method_call
+              (identifier)
+              (identifier)
+              (arguments
+                (identifier))))))
+      (certify_declaration
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (type
+              (identifier))))
+        (modifier
+          (params_field
+            (identifier)))
+        (boolean))
+      (vote_declaration
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (type
+              (identifier)))
+          (parameter
+            (identifier)
+            (type
+              (identifier)))
+          (parameter
+            (identifier)
+            (type
+              (identifier))))
+        (modifier
+          (params_field
+            (identifier)))
+        (block
+          (binary_expression
+            (field_expression
+              (identifier)
+              (identifier))
+            (number
+              (integer)))))
+      (propose_declaration
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (type
+              (identifier))))
+        (binary_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (number
+            (integer))))
+      (migrate_declaration
+        (params_field
+          (identifier))
+        (parameters
+          (parameter
+            (identifier)
+            (type
+              (identifier)
+              (identifier))))
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (field_expression
+                  (identifier)
+                  (identifier)))
+              (field_initializer
+                (identifier)
+                (bytes))))))
+      (destroy_declaration
+        (identifier)
+        (parameters)
+        (modifier
+          (identifier))
+        (modifier
+          (identifier))
+        (block)))))

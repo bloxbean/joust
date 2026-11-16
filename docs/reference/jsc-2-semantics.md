@@ -87,6 +87,29 @@ certificate index). `wallet(k)` is *(KeyCred k, none)*, `wallet(k, s)` is *(KeyC
 equal when they are of the same kind with equal bytes; two addresses when their payment credentials and staking parts are
 equal (a pointer's three integers by value).
 
+### 1.5 The purposes' ledger types (M3c)
+
+The script purposes' data (§2.10) is JuLC's ledger types, with the ledger's constructors in its tag order and their
+fields under JuLC's names (`julc-state-dsl`'s `Gov`, the JavaScript interpreter's `gov.js`: one table, checked against
+JuLC's records by `JscV2M3cGovTableTest`): the sealed `TxCert` (11 constructors, Conway's), `Delegatee`, `DRep`, `Voter`,
+`Vote`, `GovernanceAction` (7), and the records `GovernanceActionId`, `ProposalProcedure`, `ProtocolVersion`,
+`Rational`, `Constitution`. A `PubKeyHash` field is a `Key`, a `ScriptHash` a `Hash`, a `TxId` `Bytes`, and a ledger map
+(`TreasuryWithdrawals.withdrawals`, `UpdateCommittee.addedMembers`) a **`LedgerMap<Credential, Int>`**.
+
+These values come only from the script context: they are read (a record's fields by projection, a sealed type's by an
+exhaustive `match`), never built, stored, passed by a caller, encoded into an output or compared (JSC1321, JSC1322,
+JSC1325). So they are trusted ledger data, not checked inputs. `ParameterChange.parameters` is `PlutusData` in the ledger:
+it is carried (so its constructor's arity and tag are the ledger's) and never read (JSC1320). A `LedgerMap` is the
+ledger's association list as it is: `size`, `isEmpty`, `keys` and `values` are entry-wise (a key twice counts twice),
+`get(k)` and `has(k)` take the first entry whose key equals `k` (§3.4), and `any`, `all` and `fold` run over the entries in
+order. It has no `set` or `delete` (JSC1324), and a ledger value is no `contains` or `indexOf` element (JSC1322). `std/certs`
+holds the API's certificate tests, each exact about the delegatee: `isRegistration` (a `RegStaking`, with or without a
+deposit), `delegatesOnlyTo` (a `DelegStaking` or `RegDeleg` whose delegatee is exactly `Stake` of the pool: a `StakeVote` is
+false) and `isDRepLifecycle` (a `RegDRep` or `UpdateDRep`). A vote delegation to a given DRep is a `match` over the
+certificate's delegatee (`Vote { dRep } => match dRep { DRepCredential { credential } => credential == params.drep, … }`):
+r2 drops `delegatesVoteTo`, whose DRep argument no handler could name (review F5). A guardrail over
+`ParameterChange.parameters` (a constitution script's main job) is not expressible: that field is never read.
+
 ## 2. Calls
 
 A call evaluates one method. Its inputs are the method's name, the input state σ (a `State` record, absent for an
@@ -103,8 +126,10 @@ these values:
 | `validTo` | `Int` | its end |
 | `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, `quorum` and `authorized`, §2.6; the caller alone when a vector does not say) |
 | `approvers` (M2b) | `List<Hash>` | the scripts that approve this call: each has a zero withdrawal in the transaction whose approval names this contract, instance and action (ADR-0009 D3; a native script, which has no redeemer, approves through its withdrawal alone), and is neither this contract's script nor a JOUST verifier (read only by `authorized`, §2.6; none when a vector does not say) |
-| `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns, accepts or receives: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token), `policy` (a `Hash`: the contract's policy), `self` (`Bytes`: the instance's token name) and (M2c) `deposits`: for a receiving action, the deposits claimed on its continuing output in the registry's order, each a value and, for `receives T`, a memo (a value of `T`); empty otherwise |
+| `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns, accepts or receives: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token; in an owned method, the object's, §2.8), `policy` (a `Hash`: the contract's policy), `self` (`Bytes`: the instance's token name; in an owned method, the object's, §2.8) and (M2c) `deposits`: for a receiving action, the deposits claimed on its continuing output in the registry's order, each a value and, for `receives T`, a memo (a value of `T`); empty otherwise |
 | `reads` (M2c) | | for a method with `reads` parameters: the state of each instance a params field names, by that field, as the transaction's reference inputs hold it (ADR-0011 D2) |
+| `shared` (M3a) | | for an owned method with a `shared` parameter: the instance's state, as the transaction's reference input holds it (§2.8) |
+| `instance`, `anchor` (M3b) | | for a keyed insert or removal: the instance it acts under, and the node of its list it relinks, with its key, `next` and `linkedAt` (§2.9) |
 
 **The params** (M2b, ADR-0009 D1). A contract that declares `params { … }` is called as deployed with them: a `Config`
 record, fixed for every call of the deployment (the script is applied to them), read as `params.f`. A call of a method
@@ -259,9 +284,12 @@ A refusal's class names the rule that refused the call, as `kind:detail`:
 | Class | When |
 |---|---|
 | `require:<line>:<col>:<message>` | a `require` did not hold; the detail is its position in the `.jsc` file (the IR's `at`) and its message, as written, so two `require`s with one message are told apart (review S6) |
-| `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name; M2c: a read state's (a `reads` parameter's name), or `input:deposits` for a deposit's memo |
+| `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name; M2c: a read state's (a `reads` parameter's name), or `input:deposits` for a deposit's memo; M3c: `input:<old>` for an init migrate's adopted state, `input:params` for its params |
 | `modifier:<word> <field>` | a modifier did not hold (§2.6): `only owner`, `after deadline`, `before deadline`; M2b: `quorum council quorum` (the keys, then the threshold), `authorized params.guardian` |
 | `invariant:<name>` | M2b (§2.7): the next state broke the invariant `<name>`; `invariant:quorum <keys> <threshold>`: a quorum's shape |
+| `keyed:<rule>` | M3b (§2.9): a keyed call broke a rule of its list: `keyed:anchor` (the anchor is not a node of the instance's list of the type, or a removal's predecessor does not point at the node), `keyed:window` (the window is longer than W or ends outside [2^32, 2^64)), `keyed:cooldown` (it starts less than C after the anchor's last relink), `keyed:length` (the key is not 1 to maxKeyBytes long), `keyed:signed` (a signed key is not a 28-byte key among the signers), `keyed:order` (the key is not in the anchor's gap: taken, or out of order), `keyed:fixed` (a keyed action changed its key) |
+| `purpose:<rule>` | M3c (§2.10): a handler's purpose refused the call: `purpose:certificate` (not a certificate a handler may allow), `purpose:voter` (not a script DRep or committee voter), `purpose:votes` (the voter casts no votes), `purpose:withdraw` (the sends do not allocate exactly the amount, in lovelace), `purpose:certify`, `purpose:vote`, `purpose:propose` (the handler is false) |
+| `migrate:<side>` | M3c (§2.11): `migrate:to` (the successor field is unset or names another policy than the one minted), `migrate:from` (the adopted instance is not of the policy the params pin, or an ordinary init consumes an instance of it) |
 | `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`, `scale`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; `pay` (a negative amount); M2's `Value.lovelace`, `Value.asset`, `Value +`, `Value -`, `covers` (§3.12), `send`, `mint`, `accept` (§5.1–5.3), or `accepted` (§5.4); M2c's `deposit` (§5.7) |
 
 The two interpreters must give the same class for every refused call (review S4), so a vector meant to reach one rule
@@ -295,7 +323,8 @@ modifier is dropped on the way (#76 review S5).
 The validator checks every state it accepts as an output (ADR-0009 D2, D4); the interpreters make the same checks after
 the body, in this order, so a call refused there has the class the rule names:
 
-1. At a creation (an init): each quorum that names params fields (`quorum params.k params.t`) is *well formed*.
+1. At the instance's creation (its `init`, not an owned init): each quorum that names params fields (`quorum params.k
+   params.t`) that any method names, an owned method's too, is *well formed*: the params are the deployment's.
 2. For an init's or an action's next state: each pair of state fields any method's `quorum` names (once each, in source
    order) is well formed. A destroy has no output and makes no output check.
 3. Each invariant holds of the next state (with the params), in declaration order (class `invariant:<name>`). An
@@ -309,6 +338,273 @@ and the transition program compute the transition without these checks, which ar
 before it submits): on such a call both interpreters refuse, the validator refuses, and the JVM and transition legs
 agree with the interpreters' transition. An invariant is evaluated like a view's body: the state, the params and its
 own consts; no transaction, no effects.
+
+### 2.8 Owned objects (M3a)
+
+An *owned object* (ADR-0003) is a value of an `owned T { … }` record held in its own UTxO under an instance. Its value is
+a record (§1), compared and encoded as one. Owned methods name their type: `owned init T.m`, `owned action T.m`,
+`owned destroy T.m`. A call of one is evaluated as in §2, with these differences:
+
+| Kind | Input σ | Outcome |
+|---|---|---|
+| `owned init T.m` | none | the new object (a `T`) |
+| `owned action T.m` | the object, a `T` | the next object and the effects |
+| `owned destroy T.m` | the object, a `T` | the effects |
+
+- **The input.** In an owned action or destroy, `state` is the object, and a bare field name reads the object's field;
+  the modifiers `only f`, `after f`, `before f`, `quorum k t` and `authorized c` read the object's fields (or `params.f`).
+  τ.`received` is what the call pays into the object, and τ.`balance` the lovelace the object holds: for an action
+  without its deposit, for a destroy everything (as an instance's, §2).
+- **`funds` in an owned method** (M3a2, #104 design review MD4): τ.`funds` describes the object, not the instance.
+  `funds.held` is what the object's UTxO holds besides lovelace and its own token (empty at an owned init, which has no
+  input); `funds.self` is the object's token name, its id (29 bytes, `0x4F…`); `funds.policy` is the contract's policy, the
+  instance's and its objects' one policy; `funds.received` is what the caller offers into the object; `funds.deposits`
+  is empty (an owned action receives none, below). So Safes' `empty` and Market's `buy` and `cancel`, which
+  `send(…, funds.held)` in owned destroys, send the object's assets. A contract with keyed types uses no native assets (JSC1244).
+- **The instance's state** reaches an owned method only through a parameter `s: shared`, bound to τ.`shared`: the
+  instance's state as the transaction's reference input holds it (ADR-0003 D1), never spent, so an owned call does not
+  contend with others. A call of a method with a `shared` parameter needs τ.`shared`; without it it is the caller's error,
+  not a refusal. It is not a checked input: it is this contract's own instance datum, which its validator accepted.
+  In a transaction that also spends the instance, τ.`shared` is still the input's state, never the instance call's
+  outcome (ADR-0018 D10, r23; today's ledger refuses such a transaction, and the runtime never builds one).
+- **No deposits.** An owned action receives none (`receives` is JSC0447): a deposit's target is an instance.
+- **Output checks** (§2.7): for an owned init's and an owned action's object, each quorum over fields that the owned
+  type's methods name (over the object's fields) is well formed. A params quorum is checked at the instance's init only
+  (§2.7 item 1), whichever method names it, never at an owned init. An owned destroy makes no output check.
+- **Kinds.** A method of type `T` called on an object of another type is the caller's error, not a refusal: the
+  validator refuses it (ADR-0003 I21, ADR-0012 I42) and the attack suite covers it.
+- **Transaction-level rules** (§2): a shared read of another instance than the object's, an object spent with an
+  instance's redeemer or an instance with an object's, and a creation without its seed are the validator's to refuse.
+
+- **Several owned types** (M3a2, ADR-0012 D1). Each type's objects are a datum constructor of their own (`Holding_T`,
+  in declaration order), so a method of type `T` runs only on an object of type `T`, whatever their fields' shapes. Each
+  type has its own owned init and escape hatch.
+- **BigMaps in owned types** (M3a2, ADR-0012 D2, ADR-0014): an owned record's `BigMap` field is read and written as the
+  state's is (§1), its claims owned by the object's input (or, at creation, the seed): one object's claims are never
+  another's or the instance's. An owned init may write the object's maps (`BigMap.empty().set(…)`). The instance itself
+  keeps no `BigMap` while the contract has owned types (JSC1211).
+- **What a creation takes** (M3a2, issue #81): an owned init may `accept` native assets (it is then payable), and its
+  outcome's accepted value is the object's, as an action's is. An instance's `init` still accepts none (JSC0426).
+- **A payable owned destroy** (M3a2): τ.`received` is paid in with the call, so its payouts may allocate `balance +
+  received`. The instance's destroy is never payable.
+
+- **Moves** (M3a3, ADR-0012 D3). An owned action with a parameter `to: into` moves its object to another instance
+  of the contract: its outcome is the object's next value, held under that instance. τ.`into` is the destination's
+  state as the transaction's input holds it. The destination consents with an instance action `admits T`, whose first
+  parameter is the arriving object's id and whose optional second parameter (`obj: T`) is the arriving object as its
+  input holds it, before the move (not for a type that keeps a `BigMap`: its map reads would be unproven, so it is
+  admitted by its id alone, JSC1212). Both halves are in one transaction, and each reads the other's input, never its
+  outcome. **Each half is its own call** (ADR-0018 D10, r25, after #107 review C1): it is evaluated on its own input and
+  the other half's input, and a refusal's class is its own half's. The transaction is accepted only if both halves are:
+  the validator refuses it when either half refuses. No order between the halves is defined beyond that: a tool that
+  runs both reports the first refusal it meets (the runtime's `Compose`, in the order calls were added). An object
+  arrives only from an instance of the same policy, so its datum is this contract's own output and not a checked input.
+  **What an admission holds for** (#107 round-r2 review S3): the admits action's conditions hold for the object as it
+  arrives, its input, not for the object that lands: the move's half may change it (Ferry's `lower` of a level-3 pass
+  boards it although the ferry then holds a level-1 pass, whose admission requires level 3). Both halves are the
+  contract's own code, so this is not a bypass, but an author who wants "every object here satisfies P" checks P on the
+  move's side too (or with an invariant by type). **One move per destination per transaction** (ADR-0012 D3): the
+  destination has one redeemer, so one admits action, which names one object; a second object moving into the same
+  instance in that transaction is refused.
+- **Moves of objects that keep a `BigMap`** are refused (JSC1212 at the `into` parameter, #107 round-r2 review F6) until
+  a test runs one: such an object's map claims are keyed to its input while it continues under another instance.
+- **Invariants by type** (M3a3, ADR-0012 D1): `invariant T.name = …` reads an object of type `T` (its fields as bare
+  names) and is checked on every continuing object of that type (an owned init's, an owned action's, a move's), never
+  on another type's objects or on the state. A type that keeps a `BigMap` has none (JSC1213).
+
+### 2.9 Keyed objects (M3b)
+
+A *keyed type* (ADR-0016), `owned T keyed by f (…) { … }`, is an owned type whose objects are unique by the bytes of
+their field `f` within an instance: each key is its own UTxO, a node of a sorted list per (instance, type) whose head
+the instance's creation makes. A keyed type's methods are evaluated as an owned type's (§2.8), with these additions,
+which are **transaction preconditions** like the modifiers: checked by both interpreters at the same points, never by
+the JVM method or the transition program (they compute the transition alone, §2.6), and by the validator on the
+transaction.
+
+| Kind | τ | Checked |
+|---|---|---|
+| `owned init T.m` (an insert) | τ.`instance`, τ.`anchor` (the node it is linked after: a head, a live node or a retired node, with its key, `next` and `linkedAt`) | after the body: the anchor, the window, the cooldown, then the key's length, signer and place |
+| `owned action T.m` | | after the body: the key is kept |
+| `owned destroy T.m … retire` (a retire) | τ.`received` is 0; τ.`balance` is what the node holds less its deposit (I55) | the modifiers only |
+| `owned destroy T.m` (a removal) | τ.`instance`, τ.`anchor` (the node's predecessor) | after the body: the anchor, the window, the cooldown |
+
+After the body (its checked inputs, statements and result) and before the output checks (§2.7), in this order, which
+is the validator's: its policy runs the initializer (and a removal's spend runs the destroy) before it checks the list,
+so a require or a checked input that fails is the refusal whatever the list says (#112 review C3). A τ without its
+instance and anchor is the caller's error, never a refusal.
+
+
+1. **The anchor** (`keyed:anchor`): τ.`anchor` is a node of τ.`instance`'s list of `T` (its instance and type); for a
+   removal, its `next` is the removed node's key.
+2. **The window** (`keyed:window`): τ.`validTo` − τ.`validFrom` ≤ W (`linkWindowMs`), and 2^32 ≤ τ.`validTo` < 2^64. The
+   window is closed below and open above, as every transaction the runtime builds; an infinite or otherwise-shaped bound is
+   the validator's to refuse (vectors cannot express one).
+3. **The cooldown** (`keyed:cooldown`): when C (`linkCooldownMs`) > 0, τ.`validFrom` ≥ anchor.`linkedAt` + C. C = 0
+   removes this rule, never the window's.
+
+Then, for an insert of key `k` (the new object's key field):
+
+4. **The length** (`keyed:length`): 1 ≤ |k| ≤ maxKeyBytes.
+5. **The signer** (`keyed:signed`), with `signed`: |k| = 28 and `k` is one of τ.`signers` (not necessarily the caller).
+6. **The place** (`keyed:order`): anchor.`key` < `k`, and anchor.`next` is empty or `k` < anchor.`next`, by the order
+   of §3.3 (unsigned, a proper prefix first). With the anchor the true predecessor, this is the key's uniqueness: a key
+   that is taken (live or retired) has no gap.
+
+For a keyed action: **the key is fixed** (`keyed:fixed`): its result's key field equals its input's. The checker refuses
+any action that could change it (JSC1248), so only a hand-made IR reaches this rule.
+
+**What the validator tells.** The validator has no classes: what the five-way compares with it (`FourWay.keyedParity`)
+is where and how it refuses. A `require:` class is the failing purpose's traced message, an `input:` class a traced
+checked-input key (`#input:`), a `keyed:` class a failure of the policy (an insert's or a removal's) or of the node's
+spend (`keyed:fixed`) with neither traced. The rules checked together after the body (the key's length, signer and place,
+and the output checks) are told apart by the interpreters only; the JVM method and the transition program agree on the
+transition (#112 security S3).
+
+**Not evaluated by a call** (§2's transaction-level rules): the size rule (a node's datum, with `next` padded to
+maxKeyBytes and `linkedAt` to 9 bytes, fits maxDatumBytes, ADR-0016 D2: the validator refuses an insert or an action
+whose envelope does not fit, `JscV2M3bAttackTest`), the anchor's relink (its datum with only `next` and `linkedAt`
+replaced, its lovelace not lowered), the token's name (`0x4B ‖ blake2b_224(instance ‖ typeId ‖ key)`), the mint, a
+retire's continuing output (Retired_T, the deposit plus a builder's top-up) and its payouts' total, and which UTxO
+τ.`anchor` is: the validator binds it to its token. The keyed limits are the checker's (JSC1240–JSC1251): no native
+assets, no batched actions, no BigMaps, no moves, no withdraw handler (JSC1244; a contract with one is asset-aware),
+no migration (JSC1334, the owned-objects rule), at most 16 keyed types, maxDatumBytes at most 2048, a retiring exit
+signed by its owner and needing nobody else, every keyed action with an audience, and a key that is never a time value
+(D11: a key decides the list's order and whether an insert succeeds, as a map key does).
+
+### 2.10 Script purposes (M3c)
+
+A *handler* (ADR-0010) is the contract's script run for a purpose other than spending or minting: `withdraw m(amount:
+Int, args…)` (the contract's own staking credential's rewards), `certify m(cert: TxCert)`, `vote m(voter: Voter, action:
+GovernanceActionId, vote: Vote)` and `propose m(p: ProposalProcedure)`, at most one of each. No instance is spent, so a
+handler has **no state** (`state` and the state's fields are no names in it: JSC1318) and reads the params, its
+parameters and, in a withdraw handler, τ (its caller, signers and window; τ.`received` is 0 and τ.`balance` the amount,
+so neither is a name: JSC1315). certify, vote and propose take no τ. Each handler but propose names its audience with
+`quorum` or `authorized` over `params.*` (JSC1312, JSC1313): the modifiers of §2.6, read from the params. propose takes
+none: its validator checks no audience, so it is a guardrail on the proposal alone.
+
+The purpose's data is the ledger's (§1.5). A call's arguments are, for a withdrawal, the amount and its arguments (the
+Rewards redeemer's fields after the marker: checked inputs, §4); for a certificate, the certificate; for a proposal, the
+procedure; for a vote, **the voter and its votes in the transaction**, `[(action id, vote)…]` in the ledger's order: the
+handler runs once per vote, each with the voter, the action and the vote, and the call is the conjunction.
+
+In this order, with the modifiers (transaction preconditions, §2.6: the JVM method and the transition program compute
+the transition alone):
+
+1. **The purpose's own filter**, before the audience: a certificate is a `RegStaking`, `DelegStaking`, `RegDeleg`,
+   `RegDRep` or `UpdateDRep` of a script credential (`purpose:certificate`: the processor's filter, which no handler can
+   widen); a voter is a `DRepVoter` or `CommitteeVoter` of a script credential (`purpose:voter`) and casts at least one
+   vote (`purpose:votes`).
+2. **The modifiers** (`modifier:quorum params.k params.t`, `modifier:authorized params.c`), as §2.6.
+3. **The checked inputs** (§4): a withdrawal's arguments.
+4. **The body.** A withdraw handler's only effect is `send` (JSC1319) and it has no value (JSC1340); the others evaluate
+   to a Bool and have no effects (JSC1341).
+5. **The decision**: a withdrawal's sends each hold a positive quantity of lovelace only, and they total exactly the amount
+   (`purpose:withdraw`, I37: the rewards allocated entirely, each send claimed by the contract's reward reference
+   on-chain; review C1: no send may cancel another's excess); a certify or propose
+   handler that is false refuses (`purpose:certify`, `purpose:propose`); a vote handler refuses at the first vote it does
+   not allow (`purpose:vote`). A vote's transition (without the modifiers) is whether it allows every vote.
+
+**Not evaluated by a call:** the marker (a Rewards redeemer's leading 74, so it never decodes as a governor's
+Approvals), the claims binding each send to the reward reference, the withdrawal's amount as the ledger states it, and
+which of the transaction's votes are the voter's: the validator's. `stakeSelf` (a contract option) puts the state's
+address under the contract's own staking credential; it needs a withdraw and a certify handler (JSC1302), or the
+rewards and the registration would be unreachable (I38), and every state output keeps that stake part. A handler reads
+no `funds` (no input of the contract is spent: JSC1315), a withdraw handler's send is `Value.lovelace(n)` written as
+such (JSC1340: a native asset could never allocate a withdrawal, review S4), and neither `stakeSelf` nor a withdraw
+handler is accepted beside plain owned types yet (JSC1305: their objects' stake part and composed payouts are not
+covered, review F1, S3); a withdraw handler beside keyed types is JSC1244 (the processor's keyed rule, §2.9).
+
+### 2.11 Migration (M3c)
+
+An instance moves into a successor version (ADR-0011 D4) by two halves of one transaction, each its own call (as a
+move's halves, §2.8):
+
+- **The old version's** `destroy m() <audience> migrates to f { }`: `f` a `Bytes` or `Hash` state field naming the
+  successor's policy (never a params field: JSC1331; never a time field: JSC1330), and an audience (`only`, `quorum` or
+  `authorized`: JSC1333). It has no effects (JSC1332): the instance's whole value moves.
+- **The new version's** `init migrate from params.p(old: V.State, args…) { … }`: `p` a `Hash` or `Bytes` params field
+  pinning the previous version's policy (JSC1335), `old` that version's state (an imported contract's that declares a
+  migrating destroy, JSC1336: review S2, F4). It takes no modifiers (JSC1339), receives nothing, reads no `funds` and has
+  no effects (JSC1338): the new instance holds exactly the old instance's lovelace.
+
+τ carries the other half: for the destroy, τ.`successor` (the policy whose instance the transaction mints); for the
+init, τ.`prior` (the spent instance: its policy and its state). After the modifiers:
+
+1. **The successor** (`migrate:to`): the destroy's field is set (not empty) and equals τ.`successor`.
+2. **The previous version** (`migrate:from`): τ.`prior`'s policy equals `params.p`.
+3. **Only the adoption consumes the previous version** (`migrate:from`, review S1, I41): an ordinary `init` of a contract
+   with an `init migrate` whose τ.`prior` is an instance of `params.p` (its seed is that instance) refuses. Its token
+   would be the one the old version's migrating destroy expects, so without this rule the old half would accept an
+   ordinary creation in place of the adoption and every rule of the adoption would be skipped. The validator's
+   `CreateInstance` refuses a seed at the previous policy's script address or holding a token of it.
+
+**Two premises** (review F12). (1) `params.p` is trusted as the deployed policy of the imported version `V`: the
+deployer applies it, and nothing on chain ties that hash to `V`'s source, so a successor deployed with another policy in
+`params.p` adopts that policy's instances (the deployment's choice, as every params value is). (2) Rule 3 protects a
+successor that declares `init migrate`: the old version's `migrates to f` accepts any instance of the policy in `f`
+whose token is named for the spent instance, so a successor *without* `init migrate`, if `f` names it, takes the
+instance through its ordinary creation. Who sets `f` is the old version's audience (A43): name only a successor that
+adopts (JSC9014 warns on every writer of `f` without the set-once lock).
+
+Then, for the init, its checked inputs: the params (`input:params`, as every creation's), **the old state**
+(`input:old`, §4: it arrives as data from another script, as a read state does), and its arguments; its result is
+checked as every creation's (§2.7: the invariants, the params' quorum shape). **Not evaluated by a call:** the old
+token burned, the new one minted for the spent instance (the seed), one old instance into one new, the value moved
+exactly, the successor's output at its address: the two validators'. Neither half exists in a contract with owned or
+keyed objects, `BigMap` state or native assets (JSC1334): they would stay behind, and an arriving object (§2.8) is then
+always the contract's own output, never another policy's. **The successor can change** (review A43): whoever may write
+`f` can rename the successor until the migration; the checker warns (JSC9014) unless the writer requires it unset
+(`require(f == #, …)`), which fixes it once.
+
+### 2.12 Combinations of the parts (M3 final pass)
+
+Each M3 part is specified on its own in §2.8 to §2.11 and §5. This table is how they combine in one contract
+(design review MD2): each pair of parts is either refused, with its code (in bold), or accepted and run on all five legs
+by the contracts named, in their gates' five-way tests (the M3 ports' and the coverage contracts': `JscV2M3MatrixTest`,
+`JscV2M3cFourWayTest`; the M1 and M2 examples' in theirs). `JscV2M3MatrixCheckerTest` lowers every cell: 136 pairs, 49
+refused with these codes and 87 accepted. A refusal under the "not covered yet" rule (JSC1217, JSC1244, JSC1305,
+JSC1334) is lifted when a coverage contract runs the cell.
+
+| Part | In the contract |
+|---|---|
+| owned | a plain owned type, its owned init, an action and its escape hatch (§2.8) |
+| keyed | an `owned T keyed by f` type, with its insert, an action and its retiring exit (§2.9) |
+| BigMap state | a `BigMap` field of the instance's state (§1.2) |
+| BigMap in an object | an owned type with a `BigMap` field (§2.8) |
+| native assets | a method that uses `funds`, `send`, `mint`, `burn` or `accept` (§5) |
+| batched | a `batched` instance action (an intent, ADR-0004) |
+| moves | an owned action with an `into` parameter and the `admits` action for its type (§2.8) |
+| invariants by type | `invariant T.name = …` on an owned type (§2.8) |
+| deposits (receives) | an instance action that `receives` deposits (§5.8) |
+| reads | an instance action that reads another contract's state (`reads params.f`, §5.9) |
+| withdraw, certify, vote, propose | a handler of that purpose (§2.10) |
+| stakeSelf | the option, with the withdraw and certify handlers it needs (§2.10) |
+| migration (old side), (new side) | `destroy … migrates to f`; `init migrate from params.p(…)` (§2.11) |
+
+- **owned** × keyed: Keys, Mix, Mixed; × BigMap state: **JSC1211**; × BigMap in an object: Armory, Safes; × native assets: Desk, Market, Safes; × batched: OwnedIntents; × moves: Desk, Ferry, Guild, Market, Mix, Mixed, OwnedIntents; × invariants by type: Desk, Ferry, Guild, Keys, Mix, Mixed; × deposits (receives): Desk; × reads: Desk, Mixed; × withdraw: **JSC1305**; × certify: Mix, Mixed, OwnedIntents; × vote: Mixed, OwnedIntents; × propose: Mixed, OwnedIntents; × stakeSelf: **JSC1305**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **keyed** × BigMap state: **JSC1211**; × BigMap in an object: **JSC1244**; × native assets: **JSC1244**; × batched: **JSC1244**; × moves: Mix, Mixed; × invariants by type: Keys, Mix, Mixed, Registry; × deposits (receives): **JSC1244**; × reads: Mixed; × withdraw: **JSC1244**; × certify: Mix, Mixed; × vote: Mixed; × propose: Mixed; × stakeSelf: **JSC1244**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **BigMap state** × BigMap in an object: **JSC1211**; × native assets: Ledger, Locker, MapInbox, Token; × batched: **JSC0419**; × moves: **JSC1211**; × invariants by type: **JSC1211**; × deposits (receives): MapInbox; × reads: MapInbox; × withdraw: **JSC1305**; × certify: MapVotes; × vote: MapVotes; × propose: MapVotes; × stakeSelf: **JSC1305**; × migration (old side): **JSC1334**; × migration (new side): **JSC1334**.
+- **BigMap in an object** × native assets: Safes; × batched: **JSC1217**; × moves: **JSC1217**; × invariants by type: **JSC1217**; × deposits (receives): **JSC1217**; × reads: **JSC1217**; × withdraw: **JSC1305**; × certify: **JSC1217**; × vote: **JSC1217**; × propose: **JSC1217**; × stakeSelf: **JSC1217**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **native assets** × batched: **JSC0424**; × moves: Desk, Market; × invariants by type: Desk; × deposits (receives): Desk, Inbox, MapInbox, StakedDesk, Tips; × reads: Desk, MapInbox, StakedDesk, Tipper; × withdraw: StakedDesk; × certify: StakedDesk; × vote: StakedDesk; × propose: StakedDesk; × stakeSelf: StakedDesk; × migration (old side): **JSC1334**; × migration (new side): **JSC1334**.
+- **batched** × moves: OwnedIntents; × invariants by type: **JSC0436**; × deposits (receives): **JSC0424**; × reads: RelayV1, RelayV2; × withdraw: StakedQueue; × certify: OwnedIntents, StakedQueue; × vote: OwnedIntents, RelayV1; × propose: OwnedIntents, RelayV1; × stakeSelf: StakedQueue; × migration (old side): RelayV1, RelayV2; × migration (new side): RelayV2.
+- **moves** × invariants by type: Desk, Ferry, Guild, Mix, Mixed; × deposits (receives): Desk; × reads: Desk, Mixed; × withdraw: **JSC1305**; × certify: Mix, Mixed, OwnedIntents; × vote: Mixed, OwnedIntents; × propose: Mixed, OwnedIntents; × stakeSelf: **JSC1305**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **invariants by type** × deposits (receives): Desk; × reads: Desk, Mixed; × withdraw: **JSC1305**; × certify: Mix, Mixed; × vote: Mixed; × propose: Mixed; × stakeSelf: **JSC1305**; × migration (old side): **JSC1210**; × migration (new side): **JSC1334**.
+- **deposits (receives)** × reads: Desk, MapInbox, StakedDesk; × withdraw: StakedDesk; × certify: StakedDesk; × vote: StakedDesk; × propose: StakedDesk; × stakeSelf: StakedDesk; × migration (old side): **JSC1334**; × migration (new side): **JSC1334**.
+- **reads** × withdraw: StakedDesk; × certify: Mixed, StakedDesk; × vote: Mixed, RelayV1, StakedDesk; × propose: Mixed, RelayV1, StakedDesk; × stakeSelf: StakedDesk; × migration (old side): RelayV1, RelayV2; × migration (new side): RelayV2.
+- **withdraw** × certify: StakedCounterV1, StakedCounterV2, StakedDesk, StakedQueue, StakedVault, Steward; × vote: StakedCounterV2, StakedDesk, StakedVault, Steward; × propose: StakedCounterV2, StakedDesk, StakedVault; × stakeSelf: StakedCounterV1, StakedCounterV2, StakedDesk, StakedQueue, StakedVault; × migration (old side): StakedCounterV1; × migration (new side): StakedCounterV2.
+- **certify** × vote: MapVotes, Mixed, OwnedIntents, StakedCounterV2, StakedDesk, StakedVault, Steward; × propose: MapVotes, Mixed, OwnedIntents, StakedCounterV2, StakedDesk, StakedVault; × stakeSelf: StakedCounterV1, StakedCounterV2, StakedDesk, StakedQueue, StakedVault; × migration (old side): StakedCounterV1; × migration (new side): StakedCounterV2.
+- **vote** × propose: MapVotes, Mixed, OwnedIntents, RelayV1, StakedCounterV2, StakedDesk, StakedVault; × stakeSelf: StakedCounterV2, StakedDesk, StakedVault; × migration (old side): RelayV1; × migration (new side): StakedCounterV2.
+- **propose** × stakeSelf: StakedCounterV2, StakedDesk, StakedVault; × migration (old side): RelayV1; × migration (new side): StakedCounterV2.
+- **stakeSelf** × migration (old side): StakedCounterV1; × migration (new side): StakedCounterV2.
+- **migration (old side)** × migration (new side): RelayV2.
+
+Notes. A cell is about two parts in one contract, not about one type having both: a keyed type never moves (JSC1247) and
+a type that keeps a `BigMap` is never admitted (JSC1212) nor has invariants (JSC1213), whatever else the contract holds.
+"invariants by type" beside batched is M2b's rule (JSC0436: any invariant). An accepted cell says that the two parts work
+together, not that every contract holding many of them fits a transaction: the toolchain and `checkJscAbi` warn when a
+script is over the runtime's 15,000-byte limit (JSC9015; MixFull, Mix with a vote handler too, is 15,138 B). The
+coverage contracts are split by that limit: RelayV2 with stakeSelf and its handlers as well was 16,947 B with its params
+applied, so StakedQueue runs batched × stakeSelf and StakedCounterV2 the handlers beside an adopting side.
 
 ## 3. Expressions
 
@@ -595,6 +891,18 @@ r2, C6).
 
 A map that is out of order or has a duplicate key cannot be a map value (§1). Such an argument is refused here, so the
 body never sees one.
+
+**M3c: the adopted state** (§2.11, review A44). An init migrate's `old` is another script's datum, so it is a checked
+input, by the read states' rules at the previous version's state: every `Key` and `Hash` 28 bytes, every map's keys
+canonical and unique, addresses the ledger's (`input:<old>`). Its nested constructor tags are taken as its version wrote
+them, as a read state's are, and a field's kind is its writer's type: a field the adoption reads is decoded when read (a
+malformed one may fail then), one it never reads is not looked at. Measured on the TallyV1/TallyV2 pair
+(`JscV2M3cAttackTest.theAdoptedState_isCheckedAsData`, review F3): a Bool of tag 2 that the adoption stores is refused;
+a Bool with a field is stored as written, and an enum of tag 2, or a variant with too few or too many fields, that the
+adoption never reads is accepted. The premise is the writer: the previous version is a `.jsc` contract (init migrate
+imports one, with a migrating destroy), whose validator accepts an instance's output only when its datum equals the
+typed state the method computed, so an instance holding the previous version's token never carries such a datum. The
+adoption's params are checked as every creation's (`input:params`).
 
 **Views are not checked**: their arguments come from the caller's own query, and nothing on-chain depends on them. A
 view given a non-canonical map (out of order, or with a duplicate key) has **no defined outcome**: the map operations of

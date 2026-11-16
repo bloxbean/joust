@@ -5,13 +5,17 @@
 
 import {
   NONE, Some, some, Rec, MapV, BigMapV, Range, Refused, Limit, bytesEqual, bytesCompare, keyCompare, hex, unsignedBytes,
-  ValueV, CredV, AddrV, StakeHash, StakePtr, inRange, reserved,
+  ValueV, CredV, AddrV, StakeHash, StakePtr, inRange, reserved, GovV, LedgerMapV,
 } from './values.js';
+import { govFields } from './gov.js';
 import { parseStrict } from './strict-json.js';
 import { validate } from './validate.js';
 import { applyStd } from './std.js';
 
 export const IR_VERSION = 2;
+
+/** M3c: the script purposes' handlers (ADR-0010 D1): no input state, governed by the params. */
+const PURPOSE_KINDS = new Set(['withdraw', 'certify', 'vote', 'propose']);
 
 /**
  * Reads an IR export from its JSON text and returns the program, ready to call. The text is read strictly (no
@@ -71,6 +75,8 @@ class Program {
     for (const c of p.contracts ?? []) for (const e of c.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
     this.fns = new Map([...p.libraries.flatMap((l) => l.fns), ...p.fns].map((f) => [f.name, f]));
     this.methods = new Map(p.methods.map((m) => [m.name, m]));
+    // M3b (ADR-0016 D1): the keyed types' options, by type.
+    this.keyed = new Map((p.keyed ?? []).map((k) => [k.type, k]));
   }
 
   get name() {
@@ -141,18 +147,141 @@ class Program {
 
   #call(name, state, args, tx, modifiers) {
     const m = this.#method(name);
-    if (args.length !== m.params.length) throw new Error(`${name} takes ${m.params.length} arguments`);
-    if ((m.kind === 'init') !== (state === null || state === undefined)) throw new Error('an init has no input state; others do');
+    // M3c (§2.10): a vote handler's call takes the voter and its votes, [[action id, vote]…], and runs once per vote.
+    const arity = m.kind === 'vote' ? 2 : m.params.length;
+    if (args.length !== arity) throw new Error(`${name} takes ${arity} arguments`);
+    const creates = m.kind === 'init' || m.kind === 'ownedInit' || m.kind === 'migrate' || PURPOSE_KINDS.has(m.kind);
+    if (creates !== (state === null || state === undefined)) throw new Error('an init and a purpose\'s handler have no input state; others do');
+    // M3a (§2.8): an owned method runs on an object of its type; another type is the caller's error.
+    if (m.on && state && state.type !== m.on) throw new Error(`${name} runs on a ${m.on}, not a ${state.type}`);
     // §2: τ.signers holds the caller (review S6 on #76). A τ whose caller did not sign is the caller's error, like a
     // missing τ: no answer, never an agreement with a validator that requires the caller's signature.
     if (tx && tx.signers != null && !tx.signers.some((k) => bytesEqual(k, tx.caller))) {
       throw new Error(`${name}: the transaction's caller is not among its signers (semantics §2: the caller signs)`);
     }
     return depthGuard(() => {
-      if (modifiers) this.#modifiers(m, state, tx);
-      const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [], deposits: [] };
+      if (modifiers) {
+        this.#purposeBefore(m, args);
+        this.#modifiers(m, state, tx);
+        this.#keyedBefore(m, state, tx);
+        this.#migrateBefore(m, state, tx);
+      }
+      let out;
+      if (m.kind === 'vote') {
+        // §2.10: once per vote, each with the voter; the first it does not allow refuses (with the preconditions).
+        let all = true;
+        for (const [id, vote] of args[1]) {
+          if (this.#run(m, null, [args[0], id, vote], tx).value !== true) {
+            if (modifiers) throw new Refused('the vote handler refuses a vote', 'purpose', 'vote');
+            all = false;
+          }
+        }
+        out = { value: all, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [], deposits: [] };
+      } else {
+        out = this.#run(m, state, args, tx);
+      }
+      if (modifiers) {
+        this.#purposeAfter(m, args, out);
+        this.#keyedAfter(m, state, out.value, tx);
+        this.#outputs(m, out.value);
+      }
+      return out;
+    });
+  }
+
+  /**
+   * §2.10 (M3c, ADR-0010 D1): a purpose's built-in checks, before its handler's audience. A certificate is one of
+   * RegStaking, DelegStaking, RegDeleg, RegDRep and UpdateDRep, of a script credential (purpose:certificate); a voter is a
+   * DRep or a committee member with a script credential (purpose:voter), and it casts votes (purpose:votes).
+   */
+  #purposeBefore(m, args) {
+    if (m.kind === 'certify') {
+      const c = args[0];
+      const kinds = ['RegStaking', 'DelegStaking', 'RegDeleg', 'RegDRep', 'UpdateDRep'];
+      if (!kinds.includes(c.ctor) || !c.fields[0].script) {
+        throw new Refused('the certificate is not one a handler may allow (a script credential\'s registration, delegation or DRep'
+          + ' registration or update)', 'purpose', 'certificate');
+      }
+    }
+    if (m.kind === 'vote') {
+      const v = args[0];
+      if (v.ctor === 'StakePoolVoter' || !v.fields[0].script) throw new Refused('the voter is not a script\'s DRep or committee credential', 'purpose', 'voter');
+      if (args[1].length === 0) throw new Refused('the voter casts no votes in the transaction', 'purpose', 'votes');
+    }
+  }
+
+  /**
+   * §2.10, after the body: a withdrawal's sends hold lovelace only and total exactly the amount withdrawn
+   * (purpose:withdraw, I37); a certify or propose handler that evaluates to false refuses (purpose:certify, purpose:propose).
+   */
+  #purposeAfter(m, args, out) {
+    if (m.kind === 'withdraw') {
+      let total = 0n;
+      let lovelace = true;
+      for (const x of out.sends) {
+        for (const [policy] of x.value.entries) if (policy !== '') lovelace = false;
+        // Review C1: each send's own domain, as every send's (§5.1): no quantity zero or negative, so one send cannot
+        // cancel another's excess.
+        for (const [, , q] of x.value.entries) if (q <= 0n) lovelace = false;
+        total += x.value.quantity(new Uint8Array(0), new Uint8Array(0));
+      }
+      if (!lovelace || total !== args[0]) throw new Refused('the reward sends do not allocate exactly the amount withdrawn, in lovelace', 'purpose', 'withdraw');
+    }
+    if ((m.kind === 'certify' || m.kind === 'propose') && out.value !== true) throw new Refused(`the ${m.kind} handler refuses`, 'purpose', m.kind);
+  }
+
+  /**
+   * §2.11 (M3c, ADR-0011 D4, I41): a migration's two halves, after the modifiers. A migrating destroy's transaction mints
+   * the instance of the successor its field names (tx.successor; an unset or other successor refuses: migrate:to); an init
+   * migrate's spends an instance of the policy its params field pins (tx.prior: migrate:from).
+   */
+  #migrateBefore(m, state, tx) {
+    const to = m.mods.find((x) => x.name === 'migrates');
+    if (to) {
+      if (!tx || !tx.successor) throw new Error(`${m.name} migrates: its transaction needs the successor's policy`);
+      const named = this.#field(state, to.field);
+      if (named.length === 0 || !bytesEqual(named, tx.successor)) throw new Refused(`the instance migrates only into the successor ${to.field} names`, 'migrate', 'to');
+    }
+    // Review S1 (I41): an ordinary creation whose seed is an instance of the previous version (tx.prior, of the policy the
+    // init migrate's params field pins) would satisfy that version's migrating destroy without the adoption's rules.
+    const adoption = this.ir.methods.find((x) => x.kind === 'migrate');
+    if (m.kind === 'init' && adoption && tx && tx.prior && bytesEqual(tx.prior.policy, this.#paramsField(adoption.from))) {
+      throw new Refused('an ordinary creation consumes no instance of the previous version: only init migrate adopts one', 'migrate', 'from');
+    }
+    if (m.kind === 'migrate') {
+      if (!tx || !tx.prior) throw new Error(`${m.name} adopts an instance: its transaction needs it`);
+      if (!bytesEqual(tx.prior.policy, this.#paramsField(m.from))) throw new Refused(`the adopted instance is not of the policy params.${m.from} pins`, 'migrate', 'from');
+    }
+  }
+
+  /** A method's body on its bindings, after its checked inputs (§2, §4): its value and effects. */
+  #run(m, state, args, tx) {
+    {
+      const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [], deposits: [], rewards: m.kind === 'withdraw' };
       let env = null;
-      m.params.forEach((l, i) => (env = bind(env, l, args[i])));
+      // M3c (§2.11): an init migrate's adopted state, from the instance its transaction spends, before the parameters.
+      if (m.old) {
+        if (!tx || !tx.prior) throw new Error(`${m.name} adopts an instance: its transaction needs it`);
+        env = bind(env, m.old, tx.prior.state);
+      }
+      // M3a (§2.8): an owned method's shared state and a move's destination first, from the transaction; an admits
+      // action's arriving object after its first argument.
+      if (m.shared) {
+        if (!tx || !tx.shared) throw new Error(`${m.name} reads the instance (shared): its transaction needs it`);
+        env = bind(env, m.shared, tx.shared);
+      }
+      if (m.into) {
+        // τ.into and τ.arriving (M3a3, semantics §2.8 then): bound only for programs the reader admits, none before M3a3.
+        if (!tx || !tx.into) throw new Error(`${m.name} moves its object (into): its transaction needs the destination`);
+        env = bind(env, m.into, tx.into);
+      }
+      m.params.forEach((l, i) => {
+        env = bind(env, l, args[i]);
+        if (i === 0 && m.arriving) {
+          if (!tx || !tx.arriving) throw new Error(`${m.name} reads the arriving object: its transaction needs it`);
+          env = bind(env, m.arriving, tx.arriving);
+        }
+      });
       // M2c (ADR-0011 D2): each read state, from the transaction's reference inputs by the params field naming it.
       const reads = m.reads ?? [];
       for (const r of reads) {
@@ -164,9 +293,13 @@ class Program {
         const l = m.params.find((x) => x.id === id);
         if (!this.wellFormed(lookup(env, id), l.type)) throw new Refused(`${l.name} is not a well-formed input`, 'input', l.name);
       }
-      // §4 (M2c, review r3 C7): an init checks the params it is made under (the deployment's).
-      if (m.kind === 'init' && this.params && !this.#fieldsWellFormed(this.params, 'Config')) {
+      // §4 (M2c, review r3 C7): an init checks the params it is made under (the deployment's); M3c: an init migrate too.
+      if ((m.kind === 'init' || m.kind === 'migrate') && this.params && !this.#fieldsWellFormed(this.params, 'Config')) {
         throw new Refused('the params are not well formed', 'input', 'params');
+      }
+      // §4 (M3c, review A44): the adopted state is a checked input, as a read state is.
+      if (m.old && !this.wellFormed(lookup(env, m.old.id), m.old.type)) {
+        throw new Refused(`${m.old.name} is not a well-formed state of the previous version`, 'input', m.old.name);
       }
       // §4 (M2c): then each read state, a checked input too.
       for (const r of reads) {
@@ -189,38 +322,98 @@ class Program {
       if (accepts(m.body) && !frame.accepted.equals(funds(frame).received)) {
         throw new Refused('the method accepts other native assets than the caller offers', 'domain', 'accepted');
       }
-      const out = {
+      return {
         value, payouts: frame.payouts, sends: frame.sends, mint: frame.mint, accepted: frame.accepted, events: frame.events, deposits: frame.deposits,
       };
-      if (modifiers) this.#outputs(m, value);
-      return out;
-    });
+    }
   }
 
   /**
-   * §2.7 (M2b): what the validator checks of every state it accepts as an output, after the body. At a creation, each
-   * quorum naming params is well formed; then for an init's or action's next state each quorum naming state fields
+   * §2.9 (M3b, ADR-0016 D4, D5, D9): what a keyed call's transaction must carry, before anything is evaluated: an
+   * insert's or a removal's instance and anchor; a retiring exit receives nothing (I55). Caller's errors, not refusals.
+   * The list's rules are checked after the body (#keyedAfter), as the validator's policy runs the initializer first.
+   */
+  #keyedBefore(m, state, tx) {
+    const k = m.on ? this.keyed.get(m.on) : undefined;
+    if (!k) return;
+    const retire = m.mods.some((x) => x.name === 'retire');
+    if (retire && tx && tx.received !== 0n) throw new Error(`${m.name} retires its object: its transaction pays nothing into it (ADR-0016 I55)`);
+    const insert = m.kind === 'ownedInit', remove = m.kind === 'ownedDestroy' && !retire;
+    if ((insert || remove) && (!tx || !tx.anchor || !tx.instance)) {
+      throw new Error(`${m.name} relinks a node of its list: its transaction needs the instance and the anchor`);
+    }
+  }
+
+  /**
+   * §2.9 (M3b), after the body, in this order: an insert's or a removal's anchor (keyed:anchor), window (keyed:window)
+   * and cooldown (keyed:cooldown); an insert's key length (keyed:length), signer (keyed:signed) and place (keyed:order);
+   * a keyed action's fixed key (keyed:fixed).
+   */
+  #keyedAfter(m, state, value, tx) {
+    const k = m.on ? this.keyed.get(m.on) : undefined;
+    if (!k) return;
+    const retire = m.mods.some((x) => x.name === 'retire');
+    const insert = m.kind === 'ownedInit', remove = m.kind === 'ownedDestroy' && !retire;
+    if (insert || remove) {
+      const a = tx.anchor;
+      if (!bytesEqual(a.instance, tx.instance) || a.type !== m.on) {
+        throw new Refused(`the anchor is not a node of this instance's list of ${m.on}`, 'keyed', 'anchor');
+      }
+      if (remove && !bytesEqual(a.next, this.#field(state, k.key))) throw new Refused(`the predecessor does not point at the removed ${m.on}`, 'keyed', 'anchor');
+      const lower = tx.validFrom, upper = tx.validTo;
+      if (upper - lower > BigInt(k.linkWindowMs) || upper < 1n << 32n || upper >= 1n << 64n) {
+        throw new Refused(`the validity window is longer than ${k.linkWindowMs} ms or ends outside [2^32, 2^64)`, 'keyed', 'window');
+      }
+      if (k.linkCooldownMs > 0 && lower < a.linkedAt + BigInt(k.linkCooldownMs)) {
+        throw new Refused(`the anchor was relinked less than ${k.linkCooldownMs} ms before the window starts`, 'keyed', 'cooldown');
+      }
+    }
+    if (insert) {
+      const key = this.#field(value, k.key);
+      if (key.length < 1 || key.length > k.maxKeyBytes) throw new Refused(`the key is ${key.length} bytes: 1 to ${k.maxKeyBytes}`, 'keyed', 'length');
+      const signers = tx.signers ?? [tx.caller];
+      if (k.signed && (key.length !== 28 || !signers.some((x) => bytesEqual(x, key)))) {
+        throw new Refused('the key is not a 28-byte key hash that signed the transaction', 'keyed', 'signed');
+      }
+      const a = tx.anchor;
+      const placed = bytesCompare(a.key, key) < 0 && (a.next.length === 0 || bytesCompare(key, a.next) < 0);
+      if (!placed) throw new Refused('the key is taken, or not in the anchor\'s gap', 'keyed', 'order');
+    } else if (m.kind === 'ownedAction' && !bytesEqual(this.#field(value, k.key), this.#field(state, k.key))) {
+      throw new Refused('a keyed object\'s key is fixed', 'keyed', 'fixed');
+    }
+  }
+
+  /**
+   * §2.7 (M2b): what the validator checks of every state it accepts as an output, after the body. At the instance's init,
+   * each quorum naming params (any method's, an owned one's too) is well formed; then for an init's or action's next state
+   * (or object) each quorum naming its fields
    * (every pair any method's quorum names, once, in source order) is well formed, class invariant:quorum <keys>
    * <threshold>; then each invariant holds, in declaration order, class invariant:<name>.
    */
   #outputs(m, next) {
-    if (m.kind !== 'init' && m.kind !== 'action') return;
+    if (!['init', 'action', 'ownedInit', 'ownedAction', 'migrate'].includes(m.kind)) return;
+    // M3a (§2.8): an object's output checks are its type's: the quorums over fields its type's methods name, its type's
+    // invariants. The params are the deployment's (#101 review S1, C1): every params quorum any method names, an owned
+    // one's too, is checked at the instance's init, and at no other creation, as the validator checks them.
+    const on = m.on ?? null;
     const pairs = [];
     for (const x of this.ir.methods) {
       for (const mod of x.mods) {
         if (mod.name !== 'quorum') continue;
+        const ofParams = mod.keys.startsWith('params.');
+        if (ofParams ? m.kind !== 'init' && m.kind !== 'migrate' : (x.on ?? null) !== on) continue;
         const pair = `${mod.keys} ${mod.threshold}`;
         if (!pairs.includes(pair)) pairs.push(pair);
       }
     }
     for (const pair of pairs) {
       const [k, t] = pair.split(' ');
-      if (k.startsWith('params.') && m.kind !== 'init') continue;
       if (!wellFormedQuorum(this.#modField(next, k), this.#modField(next, t))) {
         throw new Refused(`the quorum ${pair} is not well formed`, 'invariant', `quorum ${pair}`);
       }
     }
     for (const inv of this.invariants) {
+      if ((inv.on ?? null) !== on) continue;
       const frame = { state: next, tx: null, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [] };
       let holds;
       try {
@@ -307,8 +500,9 @@ class Program {
           // contract's own script (I30).
           const to = this.#eval(s.to, env, f);
           const value = this.#eval(s.value, env, f);
-          if (!sendable(value, funds(f).policy, false)) throw new Refused('this value cannot be sent', 'domain', 'send');
-          if (to.payment.script && bytesEqual(to.payment.hash, funds(f).policy)) {
+          // M3c (§2.10): a withdraw handler's sends are checked as its transaction's (purpose:withdraw), after the body.
+          if (!f.rewards && !sendable(value, funds(f).policy, false)) throw new Refused('this value cannot be sent', 'domain', 'send');
+          if (!f.rewards && to.payment.script && bytesEqual(to.payment.hash, funds(f).policy)) {
             throw new Refused("a send cannot go to the contract's own script", 'domain', 'send');
           }
           // M2c: the datum, evaluated after the value's checks (§5.1).
@@ -475,7 +669,7 @@ class Program {
       case 'MapEmpty': return MapV.EMPTY;
       case 'MapOp': return this.#mapOp(e, env, f);
       case 'MapHof': {
-        const m = this.#eval(e.map, env, f);
+        const m = this.#eval(e.map, env, f);   // an inline map or (M3c) a LedgerMap: keys and values in their order
         const any = e.kind === 'any';
         for (let i = 0; i < m.keys.length; i++) {
           const hit = this.#block(e.body, bind(bind(env, e.k, m.keys[i]), e.v, m.values[i]), f);
@@ -538,7 +732,7 @@ class Program {
 
   /** §3.5: the first arm whose constructors include the value's. */
   #arm(arms, v) {
-    const ctor = v === NONE ? 'None' : v instanceof Some ? 'Some' : v instanceof CredV ? (v.script ? 'ScriptCred' : 'KeyCred') : v.type;
+    const ctor = v === NONE ? 'None' : v instanceof Some ? 'Some' : v instanceof CredV ? (v.script ? 'ScriptCred' : 'KeyCred') : v instanceof GovV ? v.ctor : v.type;
     for (const a of arms) if (a.ctors.includes(ctor)) return a;
     throw new Error(`no arm for ${ctor}`);
   }
@@ -551,6 +745,12 @@ class Program {
   }
 
   #field(rec, name) {
+    // M3c: a ledger record's or constructor's field, by its name (gov.js).
+    if (rec instanceof GovV) {
+      const i = govFields(rec.type, rec.ctor).findIndex((x) => x.name === name);
+      if (i < 0) throw new Error(`${rec.ctor} has no field ${name}`);
+      return rec.fields[i];
+    }
     const shape = this.shapes.get(rec.type);
     const i = shape.names.indexOf(name);
     if (i < 0) throw new Error(`${rec.type} has no field ${name}`);
@@ -586,6 +786,20 @@ class Program {
   #mapOp(e, env, f) {
     const m = this.#eval(e.map, env, f);
     const args = e.args.map((x) => this.#eval(x, env, f));
+    // M3c (§3.7): a LedgerMap's reads over its entries in the ledger's order: get is the first entry with the key.
+    if (m instanceof LedgerMapV) {
+      const key = e.map.type.ledgerMap[0];
+      const at = e.op === 'get' || e.op === 'has' ? m.keys.findIndex((k) => this.same(k, args[0], key)) : -1;
+      switch (e.op) {
+        case 'get': return at < 0 ? NONE : some(m.values[at]);
+        case 'has': return at >= 0;
+        case 'size': return BigInt(m.keys.length);
+        case 'isEmpty': return m.keys.length === 0;
+        case 'keys': return m.keys;
+        case 'values': return m.values;
+        default: throw new Error(`a LedgerMap has no ${e.op}`);
+      }
+    }
     switch (e.op) {
       case 'get': {
         const i = m.indexOf(args[0]);
@@ -663,7 +877,8 @@ class Program {
         case 'Address':
           return sameCred(a.payment, b.payment) && sameStake(a.stake, b.stake);
         default:
-          throw new Error(`unknown type ${t}`);
+          // M3c: a purposes' ledger type is matched or read by its fields, never compared (JSC1322).
+          throw new Error(`not comparable: ${t}`);
       }
     }
     if ('list' in t) return a.length === b.length && a.every((x, i) => this.same(x, b[i], t.list));
@@ -717,6 +932,7 @@ class Program {
     }
     if ('bigmap' in t) return true;
     if ('instance' in t || 'deposit' in t) return true;   // M2c: never a checked input (§4)
+    if ('ledgerMap' in t) return true;   // M3c: from the script context, never a checked input
     throw new Error(`unknown type ${JSON.stringify(t)}`);
   }
 

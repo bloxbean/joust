@@ -350,6 +350,12 @@ final class ContractReader {
         }
         reserved.add(type.getSimpleName() + "Validator");
         reserved.add(type.getSimpleName() + "Client");
+        // ADR-0018 M3 final pass MD1: a validator with purpose handlers imports the ledger types; a method's redeemer record
+        // of the same name (an action vote: record Vote) would shadow them.
+        if (!purposeMethods.isEmpty()) {
+            reserved.addAll(List.of("TxCert", "Voter", "Vote", "GovernanceActionId", "ProposalProcedure", "GovernanceAction", "Delegatee",
+                    "DRep", "ProtocolVersion", "Rational", "Constitution"));
+        }
         if (anyKeyed) {
             // ADR-0016 D1: names the validator generates for keyed types.
             var keyedNames = new HashSet<String>(List.of("Link"));

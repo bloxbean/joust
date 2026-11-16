@@ -41,7 +41,25 @@ final class Syntax {
         }
     }
 
-    record TypeDecl(String name, List<FieldDecl> fields, Pos pos) {}
+    /**
+     * A record declaration; M3b (ADR-0016 D1): {@code keyed}, for an owned type declared {@code owned T keyed by f (…)},
+     * its key and options, else null.
+     */
+    record TypeDecl(String name, List<FieldDecl> fields, Pos pos, KeyedDecl keyed) {
+        TypeDecl(String name, List<FieldDecl> fields, Pos pos) {
+            this(name, fields, pos, null);
+        }
+    }
+
+    /**
+     * M3b (ADR-0016 D1): {@code keyed by field (signed, maxKeyBytes = n, linkCooldownMs = c, linkWindowMs = w)}: the key
+     * field and its position, whether the key is a signer's ({@code signed}, and where), and the written options.
+     */
+    record KeyedDecl(String field, Pos fieldPos, Pos signed, List<Option> options, Pos pos) {
+        boolean isSigned() {
+            return signed != null;
+        }
+    }
 
     record FieldDecl(String name, TypeRef type, Pos pos) {}
 
@@ -53,7 +71,12 @@ final class Syntax {
     /** A written type: {@code Int}, {@code List<Key>}, {@code Share}. */
     record TypeRef(String name, List<TypeRef> args, Pos pos) {}
 
-    record Option(String name, BigInteger value, Pos pos) {}
+    /** A contract or keyed option; M3c: {@code stakeSelf}, a flag, has the value 1 and {@code flag} true. */
+    record Option(String name, BigInteger value, Pos pos, boolean flag) {
+        Option(String name, BigInteger value, Pos pos) {
+            this(name, value, pos, false);
+        }
+    }
 
     /**
      * A contract. M2b: {@code params} (the deploy-time parameters' fields, null when none: ADR-0009 D1), {@code events}
@@ -62,17 +85,50 @@ final class Syntax {
      */
     record Contract(String name, List<Option> options, List<FieldDecl> state, List<Method> methods, List<Fn> fns,
                     List<TypeDecl> types, List<EnumDecl> enums, Pos pos, List<FieldDecl> params, Pos paramsPos,
-                    List<VariantDecl> events, List<InvariantDecl> invariants) {}
+                    List<VariantDecl> events, List<InvariantDecl> invariants, List<TypeDecl> owned) {
+        Contract(String name, List<Option> options, List<FieldDecl> state, List<Method> methods, List<Fn> fns,
+                 List<TypeDecl> types, List<EnumDecl> enums, Pos pos, List<FieldDecl> params, Pos paramsPos,
+                 List<VariantDecl> events, List<InvariantDecl> invariants) {
+            this(name, options, state, methods, fns, types, enums, pos, params, paramsPos, events, invariants, List.of());
+        }
+    }
 
-    /** {@code invariant name = e} (ADR-0009 D4): a Bool over the state and the params, checked on every new state. */
-    record InvariantDecl(String name, Block body, Pos pos) {}
+    /**
+     * {@code invariant name = e} (ADR-0009 D4): a Bool over the state and the params, checked on every new state. M3a
+     * (ADR-0012 D1): {@code invariant T.name = e} ({@code on} the owned type T), over the object's fields, checked on every
+     * object of that type a call makes or continues; {@code on} is null for the state's.
+     */
+    record InvariantDecl(String name, Block body, Pos pos, String on) {
+        InvariantDecl(String name, Block body, Pos pos) {
+            this(name, body, pos, null);
+        }
+    }
 
-    enum Kind { INIT, ACTION, DESTROY, VIEW }
+    /**
+     * M3a (ADR-0003, ADR-0012): {@code owned init T.m}, {@code owned action T.m}, {@code owned destroy T.m}. M3c (ADR-0010,
+     * ADR-0011 D4): the script purposes' handlers {@code withdraw m}, {@code certify m}, {@code vote m}, {@code propose m},
+     * and {@code init migrate from params.f}, the adoption of an instance of the previous version.
+     */
+    enum Kind { INIT, ACTION, DESTROY, VIEW, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY, WITHDRAW, CERTIFY, VOTE, PROPOSE, MIGRATE;
 
-    /** A parameter; {@code reads} (M2c): {@code name: reads params.f}, the params field it reads (its type is then null). */
-    record Param(String name, TypeRef type, Pos pos, String reads) {
+        /** M3c: a script purpose's handler (ADR-0010 D1): no instance, governed by the params. */
+        boolean purpose() {
+            return this == WITHDRAW || this == CERTIFY || this == VOTE || this == PROPOSE;
+        }
+    }
+
+    /**
+     * A parameter; {@code reads} (M2c): {@code name: reads params.f}, the params field it reads (its type is then null).
+     * M3a: {@code role} {@code shared} ({@code name: shared}, the instance's state read by reference, ADR-0003) or
+     * {@code into} ({@code name: into}, a move's destination state, ADR-0012 D3), its type then null; else null.
+     */
+    record Param(String name, TypeRef type, Pos pos, String reads, String role) {
+        Param(String name, TypeRef type, Pos pos, String reads) {
+            this(name, type, pos, reads, null);
+        }
+
         Param(String name, TypeRef type, Pos pos) {
-            this(name, type, pos, null);
+            this(name, type, pos, null, null);
         }
     }
 
@@ -83,7 +139,24 @@ final class Syntax {
         }
     }
 
-    record Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos) {}
+    /**
+     * A method; {@code on} (M3a): an owned method's type, {@code T} of {@code owned action T.m}, else null. {@code from}
+     * (M3c): an {@code init migrate from params.f}'s params field {@code f}, and where it is written; else null.
+     */
+    record Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos, String on,
+                  String from, Pos fromPos) {
+        Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos, String on) {
+            this(kind, name, params, mods, body, viewType, pos, on, null, null);
+        }
+
+        Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos) {
+            this(kind, name, params, mods, body, viewType, pos, null, null, null);
+        }
+
+        boolean owned() {
+            return on != null;
+        }
+    }
 
     record Fn(String name, List<Param> params, TypeRef ret, Block body, Pos pos) {}
 

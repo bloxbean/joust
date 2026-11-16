@@ -138,6 +138,14 @@ structural equality of `==`.
 | `paymentKey` | `paymentKey(Address): Option<Key>` | any address; the key it is paid to, or None for a script's | no | `AddressAdapter.paymentKey` (direct) |
 | `paymentScript` | `paymentScript(Address): Option<Hash>` | any address; the script it is paid to, or None for a key's | no | `AddressAdapter.paymentScript` (direct) |
 
+### `std/certs`
+
+| Function | Signature | Domain | A time value as an argument | Target (policy) |
+|---|---|---|---|---|
+| `isRegistration` | `isRegistration(TxCert): Bool` | any certificate; true for RegStaking (with or without a deposit), else false | yes | `Certs.isRegistration` (direct) |
+| `delegatesOnlyTo` | `delegatesOnlyTo(TxCert, Bytes): Bool` | any certificate and pool; true for DelegStaking or RegDeleg whose delegatee is exactly Stake of that pool (a StakeVote delegation is false), else false | yes | `Certs.delegatesOnlyTo` (direct) |
+| `isDRepLifecycle` | `isDRepLifecycle(TxCert): Bool` | any certificate; true for RegDRep or UpdateDRep, else false | yes | `Certs.isDRepLifecycle` (direct) |
+
 ### `std/time`
 
 | Function | Signature | Domain | A time value as an argument | Target (policy) |

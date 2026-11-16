@@ -400,9 +400,14 @@ final class JscLangIndex {
             }
         }
         for (Ir.Method m : program.methods()) {
-            Spans.Decl d = decl(kindOf(m.kind()), m.kind() == Ir.Kind.INIT ? "init" : m.name());
+            // M3: an owned method's declaration is named T.m (the outline says whose method it is); init migrate's is migrate.
+            String declName = m.kind() == Ir.Kind.INIT ? "init" : m.on() != null && m.kind().owned() ? m.on() + "." + m.name() : m.name();
+            Spans.Decl d = decl(kindOf(m.kind()), declName);
             if (d == null) continue;
-            var sb = new StringBuilder(kindOf(m.kind())).append(m.kind() == Ir.Kind.INIT ? "" : " " + m.name()).append('(');
+            var sb = new StringBuilder(wordsOf(m.kind()));
+            if (m.kind() != Ir.Kind.INIT && m.kind() != Ir.Kind.MIGRATE) sb.append(' ').append(declName);
+            if (m.kind() == Ir.Kind.MIGRATE && m.migration() != null) sb.append(" from params.").append(m.migration().from());
+            sb.append('(');
             for (int k = 0; k < m.params().size(); k++) {
                 if (k > 0) sb.append(", ");
                 sb.append(m.params().get(k).name).append(": ").append(Ty.show(m.params().get(k).type));
@@ -411,7 +416,8 @@ final class JscLangIndex {
             if (m.kind() == Ir.Kind.VIEW && m.resultType() != null) sb.append(": ").append(Ty.show(m.resultType()));
             for (Ir.Mod mod : m.mods()) sb.append(' ').append(mod.name()).append(mod.field() == null ? "" : " " + mod.field());
             meta(d).detail = sb.toString();
-            boolean state = m.kind() != Ir.Kind.INIT;
+            // A creation (init, owned init, init migrate) and a purpose's handler have no input state (M3).
+            boolean state = !m.kind().creates() && !m.kind().purpose();
             boolean tx = m.kind() != Ir.Kind.VIEW;
             meta(d).context = (state ? "state," : "") + (tx ? "tx," : "") + (program.params() != null ? "params," : "") + (m.receives() != null ? "funds," : "");
         }
@@ -434,12 +440,32 @@ final class JscLangIndex {
         if (t != null) meta(d).type = Ty.show(t);
     }
 
+    /** The parser's declaration kind of a method (Spans): M3's owned methods, handlers and init migrate included. */
     static String kindOf(Ir.Kind k) {
         return switch (k) {
             case INIT -> "init";
             case ACTION -> "action";
             case DESTROY -> "destroy";
             case VIEW -> "view";
+            case OWNED_INIT -> "ownedInit";
+            case OWNED_ACTION -> "ownedAction";
+            case OWNED_DESTROY -> "ownedDestroy";
+            case WITHDRAW -> "withdraw";
+            case CERTIFY -> "certify";
+            case VOTE -> "vote";
+            case PROPOSE -> "propose";
+            case MIGRATE -> "migrate";
+        };
+    }
+
+    /** How a method's kind is written in the source (hover's signature): {@code owned action}, {@code init migrate}, … */
+    static String wordsOf(Ir.Kind k) {
+        return switch (k) {
+            case OWNED_INIT -> "owned init";
+            case OWNED_ACTION -> "owned action";
+            case OWNED_DESTROY -> "owned destroy";
+            case MIGRATE -> "init migrate";
+            default -> kindOf(k);
         };
     }
 
@@ -457,9 +483,15 @@ final class JscLangIndex {
             String pk = d.parent == null ? null : d.parent.kind;
             boolean abi = switch (d.kind) {
                 case "stateField", "action", "destroy", "event", "type", "enum", "variant" -> true;
-                case "param" -> pk != null && (pk.equals("action") || pk.equals("destroy") || pk.equals("init"));
+                // ADR-0018 M3: an owned type (its holding's name), its methods (redeemer constructors), the handlers (the
+                // manifest's purposes).
+                case "owned", "ownedInit", "ownedAction", "ownedDestroy", "withdraw", "certify", "vote", "propose" -> true;
+                case "param" -> pk != null && (pk.equals("action") || pk.equals("destroy") || pk.equals("init") || pk.equals("withdraw")
+                        || pk.equals("migrate") || (pk.equals("ownedInit") || pk.equals("ownedAction") || pk.equals("ownedDestroy"))
+                        // a shared or into parameter (the instance's state) is no redeemer field
+                        && !"State".equals(meta(d).type));
                 case "field" -> pk != null && (pk.equals("type") || pk.equals("variant") || pk.equals("params") || pk.equals("event")
-                        || pk.equals("state"));
+                        || pk.equals("state") || pk.equals("owned"));
                 default -> false;
             };
             if (abi) meta(d).abi = true;

@@ -96,7 +96,8 @@ final class FourWay {
     final Class<?> stateClass;
     final Interpreter interp;
     final Map<String, String> transitions;
-    final StateHarness<Object> harness;
+    /** The validator's harness; {@link #useScript} replaces it with another build of the contract (a mutant). */
+    StateHarness<Object> harness;
     final LinkedHashMap<String, Boolean> bigMaps;
     final InMemoryNodeStore store = new InMemoryNodeStore();
     /** Each root this harness built, with its contents (key hex → stored bytes), for the transition leg's reads. */
@@ -106,6 +107,8 @@ final class FourWay {
     /** Every call {@link #check} made, with the outcome the four legs agreed on, for the JavaScript leg. */
     final List<JsLeg.Call> jsCalls = new ArrayList<>();
     int calls, refusals, validatorRuns, rounds, batchRuns, mutantsRejected, attacksRejected, modifierRefusals;
+    /** M3c: refusals of a migration's half (migrate:to, migrate:from) and of its adopted state (input:old). */
+    int migrateRefusals;
     StateHarness.Verdict lastVerdict;
 
     /** The {@code .jsc} libraries' classes the program imports (ADR-0018 D9, M4): their records and variants are theirs. */
@@ -167,6 +170,7 @@ final class FourWay {
         while (lm.find()) libraries.add(lm.group(1));
         this.transitions = transitions;
         var spec = (org.julclang.state.runtime.ContractSpec) Class.forName(PKG + "." + name + "Client").getField("SPEC").get(null);
+        this.spec = spec;
         this.harness = (StateHarness<Object>) (params == null ? StateHarness.of(spec) : StateHarness.of(spec, java(params)));
         this.events = interp.methods().keySet().stream().anyMatch(interp::carriesEvents);
         this.bigMaps = interp.bigMaps();
@@ -181,11 +185,35 @@ final class FourWay {
         for (Class<?> nested : cls.getDeclaredClasses()) {
             if (nested.isRecord()) for (var rc : nested.getRecordComponents()) a |= rc.getName().equals("deposits");
         }
+        // M3c: a contract with a withdraw handler is asset-aware too (ContractIR.assetAware: its steps carry sends).
+        a |= interp.methods().containsValue("withdraw");
         this.assets = a;
     }
 
     /** Whether a method takes Funds (M2): an asset-aware contract's legs carry its native assets. */
     final boolean assets;
+
+    /** The contract's spec, as generated. */
+    @SuppressWarnings("rawtypes")
+    final org.julclang.state.runtime.ContractSpec spec;
+
+    /**
+     * #107 round-r2 review C4: this leg's validator becomes {@code cborHex}, another build of the contract (a mutant with
+     * a defence removed). The policy is that script's, and every transaction is built for it; the other legs are unchanged,
+     * so a vector whose defence is gone fails on "validator vs interpreter".
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void useScript(String cborHex) throws Exception {
+        var comps = org.julclang.state.runtime.ContractSpec.class.getRecordComponents();
+        var types = new Class<?>[comps.length];
+        var vals = new Object[comps.length];
+        for (int i = 0; i < comps.length; i++) {
+            types[i] = comps[i].getType();
+            vals[i] = comps[i].getName().equals("scriptCborHex") ? cborHex : comps[i].getAccessor().invoke(spec);
+        }
+        var mutant = (org.julclang.state.runtime.ContractSpec) org.julclang.state.runtime.ContractSpec.class.getDeclaredConstructor(types).newInstance(vals);
+        harness = (StateHarness<Object>) (params == null ? StateHarness.of(mutant) : StateHarness.of(mutant, java(params)));
+    }
 
     /** The deploy-time params (M2b), or null. */
     final Rec params;
@@ -230,7 +258,531 @@ final class FourWay {
         interp.methods().forEach((m, k) -> {
             if (k.equals("destroy")) order.add(m);
         });
+        // M3a: the owned spends follow, owned actions then owned destroys (ADR-0003 D3).
+        interp.methods().forEach((m, k) -> {
+            if (k.equals("ownedAction")) order.add(m);
+        });
+        interp.methods().forEach((m, k) -> {
+            if (k.equals("ownedDestroy")) order.add(m);
+        });
         return order.indexOf(method);
+    }
+
+    /**
+     * A method's kind as an instance method's ({@code init}, {@code action}, {@code destroy}, {@code view}): M3a's owned
+     * kinds read as the instance kind they create, continue or end (their own legs are {@link #owned}'s branches).
+     */
+    String kindOf(String method) {
+        return switch (interp.kind(method)) {
+            case "ownedInit" -> "init";
+            case "ownedAction" -> "action";
+            case "ownedDestroy" -> "destroy";
+            default -> interp.kind(method);
+        };
+    }
+
+    /** M3a: whether the method is an owned type's (ADR-0003). */
+    boolean owned(String method) {
+        return interp.ownedType(method) != null;
+    }
+
+    /** Whether a JVM result is a plain value of the state or of an owned type (no effects record). */
+    boolean plainValue(Object r) {
+        if (stateClass.isInstance(r)) return true;
+        for (String o : interp.ownedTypes()) if (r.getClass().getSimpleName().equals(o) && r.getClass().getEnclosingClass() == cls) return true;
+        return false;
+    }
+
+    /**
+     * M3a: an object's datum, the validator's Holding(instance, value); with several owned types (M3a2, ADR-0012 D1) the
+     * sealed Holding_T of the value's type.
+     */
+    Object holding(Object value) throws Exception {
+        return holding(value, harness.instanceId());
+    }
+
+    /** The same, under {@code instance} (a move's destination, M3a3). */
+    Object holding(Object value, byte[] instance) throws Exception {
+        String typed = "Holding_" + value.getClass().getSimpleName();
+        return construct(exists(PKG + "." + name + "Validator$" + typed) ? typed : "Holding", List.of(instance, value));
+    }
+
+    // ------------------------------------------------------------------ keyed objects (M3b, ADR-0016)
+
+    /**
+     * M3b: a node of a keyed list as the transaction spends it: its type, its kind ({@code head}, {@code node} or
+     * {@code retired}), its key (empty for a head), the next key, its linkedAt, a live node's value and its instance.
+     */
+    record Node(String type, String kind, Bytes key, Bytes next, BigInteger linkedAt, Rec value, byte[] instance) {
+        static Node head(String type, byte[] instance, Bytes next, BigInteger linkedAt) {
+            return new Node(type, "head", Bytes.of(new byte[0]), next, linkedAt, null, instance);
+        }
+
+        Node withNext(Bytes n) {
+            return new Node(type, kind, key, n, linkedAt, value, instance);
+        }
+
+        Interpreter.AnchorV anchorV() {
+            return new Interpreter.AnchorV(Bytes.of(instance), type, key, next, linkedAt);
+        }
+    }
+
+    /** M3b: where a keyed call's anchor (an insert's) or predecessor (a removal's) sits; the node itself sits at OBJECT_REF. */
+    static final org.julclang.ledger.TxOutRef ANCHOR_REF = new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x0E)),
+            BigInteger.ZERO);
+
+    /** The node the next checks relink (an insert's anchor, a removal's predecessor); null: none. */
+    Node anchor;
+    /** The next key and linkedAt of the node a keyed action, retire or removal spends. */
+    Bytes nodeNext = Bytes.of(new byte[0]);
+    BigInteger nodeLinkedAt = BigInteger.valueOf(1_799_000_000_000L);
+    /** Extra lovelace the anchor holds above the deposit (a builder's earlier top-up, ADR-0016 D4b). */
+    BigInteger anchorExtra = BigInteger.ZERO;
+
+    /** M3b: the method's keyed type, or null (an instance method, or a plain owned type's). */
+    String keyedType(String method) {
+        String o = interp.ownedType(method);
+        return o != null && interp.keyField(o) != null ? o : null;
+    }
+
+    /** M3b: an insert (a keyed type's owned init) or a removal (its owned destroy without retire): a call that relinks. */
+    boolean relinks(String method) {
+        if (keyedType(method) == null) return false;
+        return interp.kind(method).equals("ownedInit") || interp.kind(method).equals("ownedDestroy") && !interp.retires(method);
+    }
+
+    /** M3b: the transaction the interpreters see for a relinking call: τ with the instance and the anchor (semantics §2.9). */
+    Tx keyedTi(String method, Tx ti) {
+        if (ti == null || !relinks(method) || anchor == null) return ti;
+        return ti.withAnchor(Bytes.of(harness.instanceId()), anchor.anchorV());
+    }
+
+    /** typeId = I2OSP(len(name), 1) ++ utf8(name) (ADR-0016 D2). */
+    static byte[] typeId(String type) {
+        byte[] n = type.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] t = new byte[n.length + 1];
+        t[0] = (byte) n.length;
+        System.arraycopy(n, 0, t, 1, n.length);
+        return t;
+    }
+
+    /** keyId = 0x4B ++ blake2b_224(instance ++ typeId ++ key) (ADR-0016 D2), computed here from the ADR's definition. */
+    static byte[] keyId(byte[] instance, String type, byte[] key) {
+        byte[] t = typeId(type);
+        byte[] pre = new byte[instance.length + t.length + key.length];
+        System.arraycopy(instance, 0, pre, 0, instance.length);
+        System.arraycopy(t, 0, pre, instance.length, t.length);
+        System.arraycopy(key, 0, pre, instance.length + t.length, key.length);
+        byte[] id = new byte[29];
+        id[0] = 0x4B;
+        System.arraycopy(Blake2bUtil.blake2bHash224(pre), 0, id, 1, 28);
+        return id;
+    }
+
+    /** A keyed object's key: its key field. */
+    Bytes keyOf(String type, Rec value) {
+        return (Bytes) value.fields().get(interp.fields(type).indexOf(interp.keyField(type)));
+    }
+
+    /** A node's key: empty for a head, a live node's key field, a retired node's key. */
+    Bytes keyOf(Node n) {
+        return n.kind().equals("node") ? keyOf(n.type(), n.value()) : n.key();
+    }
+
+    /** A node's datum, the validator's Head_T, Keyed_T or Retired_T. */
+    Object nodeDatum(Node n) throws Exception {
+        String T = n.type();
+        return switch (n.kind()) {
+            case "head" -> construct("Head_" + T, List.of(n.instance(), n.next().bytes(), n.linkedAt()));
+            case "node" -> construct("Keyed_" + T, List.of(n.instance(), n.next().bytes(), n.linkedAt(), java(n.value())));
+            default -> construct("Retired_" + T, List.of(n.instance(), n.next().bytes(), n.linkedAt(), n.key().bytes()));
+        };
+    }
+
+    /** A node's output: at the state address, its datum inline, {@code lovelace} and its one token. */
+    TxOut nodeOut(Object datum, BigInteger lovelace, byte[] token) {
+        return new TxOut(harness.stateAddress(), Value.lovelace(lovelace).merge(Value.singleton(new org.julclang.ledger.PolicyId(harness.policy()),
+                new org.julclang.ledger.TokenName(token), BigInteger.ONE)), new OutputDatum.OutputDatumInline(StateHarness.data(datum)), Optional.empty());
+    }
+
+    /** The datum {@code d} with {@code next} and {@code linkedAt} replaced (relinked, D4b). */
+    static org.julclang.core.PlutusData relinkedDatum(org.julclang.core.PlutusData d, byte[] next, BigInteger upper) {
+        var c = (org.julclang.core.PlutusData.ConstrData) d;
+        var fs = new ArrayList<>(c.fields());
+        fs.set(1, org.julclang.core.PlutusData.bytes(next));
+        fs.set(2, org.julclang.core.PlutusData.integer(upper));
+        return new org.julclang.core.PlutusData.ConstrData(c.tag(), fs);
+    }
+
+    /** Payout outputs, tagged with the input they pay for (I7). */
+    static void payoutsFor(org.julclang.state.testkit.TxModel tx, org.julclang.ledger.TxOutRef ref, JulcList<Payout> payouts) {
+        var owed = new LinkedHashMap<String, BigInteger>();
+        for (Payout p : payouts) owed.merge(HEX.formatHex(p.to()), p.lovelace(), BigInteger::add);
+        var tag = StateHarness.data(ref);
+        for (var e : owed.entrySet()) {
+            tx.outputs.add(new TxOut(StateHarness.pkhAddress(HEX.parseHex(e.getKey())), Value.lovelace(e.getValue()),
+                    new OutputDatum.OutputDatumInline(tag), Optional.empty()));
+            tx.payoutOutputs.add(tx.outputs.size() - 1);
+        }
+    }
+
+    /**
+     * M3b: a keyed call's transaction, as the runtime builds it (ADR-0016 D4-D6, D10). An insert spends its anchor with Link,
+     * mints the new key's token with Insert_m(instance, anchor, args, ctx), relinks the anchor to the key and outputs the new
+     * node Keyed_T(instance, anchor.next, upper, value); a keyed action spends and continues its node (next and linkedAt
+     * kept); a retire continues it as Retired_T(instance, next, linkedAt, key) holding the deposit; a removal spends the node
+     * and its predecessor (Link), burns the node's token with Remove_T(predecessor, node) and relinks the predecessor past it.
+     * A refused call proposes what {@link #ownedTx} does (the object unchanged, everything to the signer, or a candidate).
+     */
+    org.julclang.state.testkit.TxModel keyedTx(String method, Rec state, List<Object> args, Tx t, byte[] signer, boolean ok, Object next,
+                                               JulcList<Payout> pays, Interpreter.Outcome o, Rec candidate) throws Exception {
+        String T = keyedType(method);
+        String k = interp.kind(method);
+        boolean insert = k.equals("ownedInit"), retire = interp.retires(method), remove = relinks(method) && !insert;
+        byte[] inst = harness.instanceId();
+        var redeemerArgs = new ArrayList<Object>();
+        if (insert) {
+            redeemerArgs.add(inst);
+            redeemerArgs.add(ANCHOR_REF);
+        }
+        for (Object a : args) redeemerArgs.add(java(a));
+        if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
+        // #112 review C2: a refused keyed action proposes what its body would make without the defence (FourWay.unguarded),
+        // so the validator must refuse that outcome itself; a refused insert proposes its candidate, the same.
+        Rec unNext = ok ? null : unguardedNext;
+        List<Object> unEvents = ok ? null : unguardedEvents;
+        List<Interpreter.Payment> unPays = ok ? null : unguardedPays;
+        unguardedNext = null;
+        unguardedEvents = null;
+        unguardedPays = null;
+        if (unPays != null) pays = payouts(unPays);
+        if (interp.carriesEvents(method)) redeemerArgs.add(unEvents != null ? java(unEvents) : events(o));
+        Object redeemer = construct(insert ? "Insert_" + method : cap(method), redeemerArgs);
+        var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
+        var fields = new ArrayList<>(encoded.fields());
+        int offset = insert ? 2 : 0;
+        for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
+        redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
+        BigInteger minAda = BigInteger.valueOf(harness.minAda());
+        BigInteger upper = t == null ? BigInteger.ZERO : t.validTo();
+        var tx = new org.julclang.state.testkit.TxModel(remove ? org.julclang.state.testkit.TxModel.Kind.DESTROY : org.julclang.state.testkit.TxModel.Kind.ACTION);
+        if (insert || remove) {
+            assertNotNull(anchor, name + "." + method + " relinks a node: set anchor");
+            byte[] at = keyId(anchor.instance(), anchor.type(), keyOf(anchor).bytes());
+            Object ad = nodeDatum(anchor);
+            tx.inputs.add(new TxInInfo(ANCHOR_REF, nodeOut(ad, minAda.add(anchorExtra), at)));
+            tx.spendRedeemers.put(ANCHOR_REF, StateHarness.data(construct("Link", List.of())));
+        }
+        tx.inputs.add(new TxInInfo(new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x33)), BigInteger.ZERO),
+                StateHarness.walletOut(signer == null ? StateHarness.fill(28, 0xFE) : signer, BigInteger.valueOf(50_000_000))));
+        if (signer != null && keyedSigns(method)) tx.signers.add(signer);
+        if (t != null && (interp.usesTx(method) || insert || remove)) tx.range = StateHarness.window(t.validFrom(), t.validTo());
+        if (interp.takesShared(method)) tx.referenceInputs.add(harness.instanceReference(java(t.shared())));
+        if (insert) {
+            if (!ok && candidate == null) return null;
+            Rec first = ok ? null : candidate;
+            byte[] key = ok ? keyOfJava(T, next) : keyOf(T, first).bytes();
+            byte[] id = keyId(inst, T, key);
+            tx.token = id;
+            var a = tx.inputs.get(0).resolved();
+            tx.outputs.add(new TxOut(a.address(), a.value(), new OutputDatum.OutputDatumInline(relinkedDatum(
+                    ((OutputDatum.OutputDatumInline) a.datum()).datum(), key, upper)), Optional.empty()));
+            BigInteger received = t == null ? BigInteger.ZERO : t.received();
+            tx.outputs.add(nodeOut(construct("Keyed_" + T, List.of(inst, anchor.next().bytes(), upper, next == null || !ok ? java(first) : next)),
+                    minAda.add(received), id));
+            tx.stateOutput = 1;
+            tx.mint = Value.singleton(new org.julclang.ledger.PolicyId(harness.policy()), new org.julclang.ledger.TokenName(id), BigInteger.ONE);
+            tx.mintRedeemer = StateHarness.data(redeemer);
+            return tx;
+        }
+        Bytes key = keyOf(T, state);
+        byte[] id = keyId(inst, T, key.bytes());
+        tx.token = id;
+        BigInteger in = k.equals("ownedAction") ? minAda.add(t == null ? BigInteger.ZERO : t.balance())
+                : retire ? minAda.add(t.balance()) : t.balance();
+        Node self = new Node(T, "node", key, nodeNext, nodeLinkedAt, state, inst);
+        tx.inputs.add(0, new TxInInfo(StateHarness.OBJECT_REF, nodeOut(nodeDatum(self), in, id)));
+        tx.spendRedeemers.put(StateHarness.OBJECT_REF, StateHarness.data(redeemer));
+        BigInteger received = t == null ? BigInteger.ZERO : t.received();
+        if (k.equals("ownedAction")) {
+            Object after = ok ? next : unNext != null ? java(unNext) : java(state);
+            tx.outputs.add(nodeOut(construct("Keyed_" + T, List.of(inst, nodeNext.bytes(), nodeLinkedAt, after)),
+                    in.add(received).subtract(StateHarness.total(pays)), id));
+            tx.stateOutput = 0;
+            payoutsFor(tx, StateHarness.OBJECT_REF, pays);
+        } else if (retire) {
+            JulcList<Payout> out = ok || unPays != null ? pays : Payouts.of(signer, t.balance());
+            tx.outputs.add(nodeOut(nodeDatum(new Node(T, "retired", key, nodeNext, nodeLinkedAt, null, inst)), minAda, id));
+            tx.stateOutput = 0;
+            payoutsFor(tx, StateHarness.OBJECT_REF, out);
+        } else {
+            JulcList<Payout> out = ok || unPays != null ? pays : Payouts.of(signer, in);
+            var a = tx.inputs.get(1).resolved();
+            tx.outputs.add(new TxOut(a.address(), a.value(), new OutputDatum.OutputDatumInline(relinkedDatum(
+                    ((OutputDatum.OutputDatumInline) a.datum()).datum(), nodeNext.bytes(), upper)), Optional.empty()));
+            tx.mint = Value.singleton(new org.julclang.ledger.PolicyId(harness.policy()), new org.julclang.ledger.TokenName(id), BigInteger.ONE.negate());
+            tx.mintRedeemer = StateHarness.data(construct("Remove_" + T, List.of(ANCHOR_REF, StateHarness.OBJECT_REF)));
+            payoutsFor(tx, StateHarness.OBJECT_REF, out);
+        }
+        return tx;
+    }
+
+    /** The messages of the program's requires (and its warnings', which no validator traces), read from the exported IR. */
+    java.util.Set<String> requireMessages() {
+        var out = new java.util.HashSet<String>();
+        var mm = java.util.regex.Pattern.compile("\"message\": \"((?:[^\"\\\\]|\\\\.)*)\"").matcher(irJson);
+        while (mm.find()) out.add(mm.group(1).replace("\\\"", "\""));
+        return out;
+    }
+
+    /** Keyed refusals asserted against the validator's own refusal (#112 review C3). */
+    int keyedParityChecks;
+
+    /**
+     * #112 review C3: a keyed call refused by both interpreters is refused by the validator in the same place and for the
+     * same reason, as far as the validator tells it. A require's message is traced by the failing purpose; a checked input's
+     * key (#input:) too; a rule of the list (keyed:anchor, window, cooldown, length, signed, order) fails the policy (MINT)
+     * of an insert or a removal with neither, since the validator checks the list after the initializer's requires and
+     * inputs; keyed:fixed fails the node's spend with neither. The validator gives no finer class: rules that fail together
+     * after the body (the key's length, signer and place, the output checks) are told apart by the interpreters only.
+     * Modifier and output-check classes are not compared here (the validator does not trace them).
+     */
+    void keyedParity(String method, String cls, StateHarness.Verdict v, String what) {
+        if (keyedType(method) == null || v == null) return;
+        var failing = v.results().entrySet().stream().filter(e -> !e.getValue().isSuccess()).toList();
+        var traces = new ArrayList<String>();
+        for (var e : failing) traces.addAll(e.getValue().traces());
+        var requires = requireMessages();
+        boolean requireTraced = traces.stream().anyMatch(requires::contains);
+        boolean inputTraced = traces.stream().anyMatch(x -> x.startsWith("#input:"));
+        String where = what + ": the interpreters' " + cls + " against the validator's\n" + v;
+        if (cls.startsWith("require:")) {
+            String msg = cls.split(":", 4)[3];
+            assertTrue(traces.contains(msg), "a require's refusal is the validator's require: " + where);
+        } else if (cls.startsWith("input:")) {
+            assertTrue(inputTraced, "a checked input's refusal is the validator's input check: " + where);
+        } else if (cls.startsWith("keyed:")) {
+            assertFalse(requireTraced || inputTraced, "a list rule's refusal: the validator refused for a require or an input first: " + where);
+            String purpose = cls.equals("keyed:fixed") ? "SPEND" : "MINT";
+            assertTrue(failing.stream().anyMatch(e -> e.getKey().startsWith(purpose)), "the list rule fails " + purpose + ": " + where);
+        } else {
+            return;
+        }
+        keyedParityChecks++;
+    }
+
+    /** M3b: whether a keyed call needs a signer (Ctx, an audience, a signed key), as the runtime builds it. */
+    boolean keyedSigns(String method) {
+        String T = keyedType(method);
+        return interp.usesTx(method) || interp.modifiers(method).stream().anyMatch(x -> x.startsWith("only ") || x.startsWith("quorum ")
+                || x.startsWith("authorized ")) || interp.kind(method).equals("ownedInit") && interp.keyedOptions(T)[1] == 1;
+    }
+
+    /** A generated record's key (its key field's bytes). */
+    byte[] keyOfJava(String type, Object v) throws Exception {
+        return (byte[]) v.getClass().getMethod(interp.keyField(type)).invoke(v);
+    }
+
+    /**
+     * M3b (ADR-0016 D3): a keyed contract's instance is created with one head per keyed type, Head_T(instance, "", 0) at the
+     * state address with the deposit and its token, all minted with the instance token.
+     */
+    org.julclang.state.testkit.TxModel withHeads(org.julclang.state.testkit.TxModel tx) throws Exception {
+        if (tx == null || interp.keyedTypes().isEmpty()) return tx;
+        byte[] inst = harness.instanceId();
+        for (String T : interp.keyedTypes()) {
+            byte[] id = keyId(inst, T, new byte[0]);
+            tx.outputs.add(nodeOut(nodeDatum(Node.head(T, inst, Bytes.of(new byte[0]), BigInteger.ZERO)), BigInteger.valueOf(harness.minAda()), id));
+            tx.mint = tx.mint.merge(Value.singleton(new org.julclang.ledger.PolicyId(harness.policy()), new org.julclang.ledger.TokenName(id), BigInteger.ONE));
+        }
+        return tx;
+    }
+
+    /**
+     * M3b: the mutants of a keyed call, each rejected by the validator: the next object and the payouts one step away (as an
+     * owned call's), and the list's structure one step away: the new node's or the continuing node's next, linkedAt and
+     * instance; the relinked anchor's next and linkedAt, a lovelace skimmed from it; the minted quantity; the anchor the
+     * mint redeemer names; a retired node's key; a removal that keeps the token or names another node. Then the attack
+     * suite on the accepted transaction (a retire's "one lovelace added" left out: a builder may top a retired node up, D10).
+     */
+    private int mutantsKeyed(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        String k = interp.kind(method);
+        boolean insert = k.equals("ownedInit"), retire = interp.retires(method), remove = relinks(method) && !insert;
+        if (!keyedSigns(method)) signer = null;   // a call that needs no signature: the attack suite sees none
+        var o = interp.transition(method, state, args, t);
+        Object next = k.equals("ownedDestroy") ? null : java(o.value());
+        JulcList<Payout> pays = payouts(o.payouts());
+        var accepted = keyedTx(method, state, args, t, signer, true, next, pays, o, null);
+        byte[] caller = t == null ? signer : t.caller().bytes();
+        var txs = new ArrayList<org.julclang.state.testkit.TxModel>();
+        if (next != null) for (Object m : nearbyRecords(next)) txs.add(keyedTx(method, state, args, t, signer, true, m, pays, o, null));
+        if (!insert) for (var q : nearbyPayouts(pays, caller, k.equals("ownedAction"))) txs.add(keyedTx(method, state, args, t, signer, true, next, q, o, null));
+        java.util.function.BiFunction<Integer, java.util.function.UnaryOperator<org.julclang.core.PlutusData.ConstrData>, org.julclang.state.testkit.TxModel> datum =
+                (i, f) -> {
+                    var c = accepted.copy();
+                    var out = c.outputs.get(i);
+                    var d = (org.julclang.core.PlutusData.ConstrData) ((OutputDatum.OutputDatumInline) out.datum()).datum();
+                    c.outputs.set(i, new TxOut(out.address(), out.value(), new OutputDatum.OutputDatumInline(f.apply(d)), out.referenceScript()));
+                    return c;
+                };
+        java.util.function.BiFunction<Integer, org.julclang.core.PlutusData, java.util.function.UnaryOperator<org.julclang.core.PlutusData.ConstrData>> set =
+                (i, v) -> d -> {
+                    var fs = new ArrayList<>(d.fields());
+                    fs.set(i, v);
+                    return new org.julclang.core.PlutusData.ConstrData(d.tag(), fs);
+                };
+        byte[] longer = new byte[nodeNext.bytes().length + 1];
+        System.arraycopy(nodeNext.bytes(), 0, longer, 0, nodeNext.bytes().length);
+        longer[longer.length - 1] = 0x01;
+        if (accepted.stateOutput >= 0) {
+            int s = accepted.stateOutput;
+            txs.add(datum.apply(s, set.apply(1, org.julclang.core.PlutusData.bytes(longer))));                       // next
+            var d = (org.julclang.core.PlutusData.ConstrData) ((OutputDatum.OutputDatumInline) accepted.outputs.get(s).datum()).datum();
+            BigInteger la = ((org.julclang.core.PlutusData.IntData) d.fields().get(2)).value();
+            txs.add(datum.apply(s, set.apply(2, org.julclang.core.PlutusData.integer(la.add(BigInteger.ONE)))));   // linkedAt
+            txs.add(datum.apply(s, set.apply(0, org.julclang.core.PlutusData.bytes(OTHER))));                      // instance
+            if (retire) txs.add(datum.apply(s, set.apply(3, org.julclang.core.PlutusData.bytes(longer))));         // the retired key
+        }
+        if (insert || remove) {
+            int r = insert ? 0 : 0;   // the relinked anchor is the first output of an insert and of a removal
+            var rd = (org.julclang.core.PlutusData.ConstrData) ((OutputDatum.OutputDatumInline) accepted.outputs.get(r).datum()).datum();
+            BigInteger up = ((org.julclang.core.PlutusData.IntData) rd.fields().get(2)).value();
+            txs.add(datum.apply(r, set.apply(2, org.julclang.core.PlutusData.integer(up.subtract(BigInteger.ONE)))));   // linkedAt not the upper bound
+            txs.add(datum.apply(r, set.apply(1, org.julclang.core.PlutusData.bytes(anchor.next().bytes().length == 0 && insert
+                    ? longer : anchor.next().bytes()))));                                                                 // not relinked
+            var skim = accepted.copy();
+            var ao = skim.outputs.get(r);
+            skim.outputs.set(r, new TxOut(ao.address(), ao.value().merge(Value.lovelace(BigInteger.ONE.negate())), ao.datum(), ao.referenceScript()));
+            txs.add(skim);                                                                                              // a lovelace skimmed
+            var wrongRef = accepted.copy();
+            var mr = (org.julclang.core.PlutusData.ConstrData) wrongRef.mintRedeemer;
+            var mfs = new ArrayList<>(mr.fields());
+            mfs.set(insert ? 1 : 0, StateHarness.data(OTHER_REF));
+            wrongRef.mintRedeemer = new org.julclang.core.PlutusData.ConstrData(mr.tag(), mfs);
+            txs.add(wrongRef);                                                                                          // another anchor named
+            var twice = accepted.copy();
+            twice.mint = twice.mint.merge(twice.mint);
+            txs.add(twice);                                                                                             // two units minted or burned
+        }
+        if (remove) {
+            var kept = accepted.copy();
+            kept.mint = Value.zero();
+            kept.outputs.add(nodeOut(construct("Keyed_" + keyedType(method), List.of(harness.instanceId(), nodeNext.bytes(), nodeLinkedAt, java(state))),
+                    BigInteger.valueOf(harness.minAda()), accepted.token));
+            txs.add(kept);                                                                                              // the token kept
+        }
+        var ok = evaluate(method, t, signer, accepted);
+        assertTrue(ok.accepted(), name + "." + method + ": the unmutated transaction must be accepted\n" + ok);
+        int attacks = 0;
+        for (var a : org.julclang.state.testkit.Attacks.applicable(harness, accepted)) {
+            if (retire && a.name().equals("one lovelace added to the state output")) continue;
+            var v = harness.evaluate(a.mutate().apply(accepted));
+            assertFalse(v.accepted(), name + "." + method + ": attack '" + a.name() + "' accepted\n" + v);
+            attacks++;
+        }
+        attacksRejected += attacks;
+        int n = 0;
+        for (var tx : txs) {
+            var v = evaluate(method, t, signer, tx);
+            assertFalse(v.accepted(), name + "." + method + ": keyed mutant #" + n + " accepted\n" + v);
+            n++;
+        }
+        mutantsRejected += n;
+        return n;
+    }
+
+    // ------------------------------------------------------------------ moves (M3a3, ADR-0012 D3)
+
+    /** The other instance of a move: a move's destination, or an arriving object's source. */
+    static final byte[] OTHER = StateHarness.fill(32, 0xB2);
+    static final org.julclang.ledger.TxOutRef OTHER_REF = new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x0C)),
+            BigInteger.ZERO);
+    static final org.julclang.ledger.TxOutRef SOURCE_REF = new org.julclang.ledger.TxOutRef(new org.julclang.ledger.TxId(StateHarness.fill(32, 0x0D)),
+            BigInteger.ZERO);
+
+    /**
+     * M3a3: a move's other half, which every transaction of the half under test carries. For a move (an owned action with
+     * into): the destination's admits action ({@code method}, its extra {@code args} after the object's id) on the
+     * destination instance's state {@code state}. For an admits action: the arriving object's move ({@code method},
+     * {@code args}) on the object {@code state}, its source instance's state {@code shared} and this destination's state
+     * {@code destination}.
+     */
+    record Partner(String method, Rec state, List<Object> args, Rec shared, Rec destination) {}
+
+    /** The partner the next checks build their transactions with (null: none). */
+    Partner partner;
+
+    /** A move's half, the object continuing under the destination: adds the destination spent with its admits action. */
+    org.julclang.state.testkit.TxModel withDestination(org.julclang.state.testkit.TxModel tx, Rec object, Tx t) throws Exception {
+        assertNotNull(partner, "a move's transaction needs the destination's half: set partner");
+        // #107 round-r2 review F1: the legs see the destination the validator's transaction spends, never another state.
+        assertEquals(partner.state(), t.into(), "the move's into (what the legs read) is the destination the validator spends");
+        var admitArgs = new ArrayList<Object>();
+        admitArgs.add(Bytes.of(harness.objectId()));
+        admitArgs.addAll(partner.args());
+        Ctx c = new Ctx(t.caller().bytes(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo());
+        Tx at = new Tx(t.caller(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo(), t.signers(), null, List.of(), Map.of(), null, null, object);
+        Rec next;
+        try {
+            next = (Rec) interp.transition(partner.method(), partner.state(), admitArgs, at).value();
+        } catch (Interpreter.Refused e) {
+            next = partner.state();
+        }
+        var redeemerArgs = new ArrayList<Object>();
+        for (Object a : admitArgs) redeemerArgs.add(java(a));
+        if (interp.usesTx(partner.method())) redeemerArgs.add(c);
+        return harness.withInstance(tx, OTHER, OTHER_REF, java(partner.state()), construct(cap(partner.method()), redeemerArgs), java(next),
+                BigInteger.valueOf(harness.minAda()));
+    }
+
+    /**
+     * An admits action's transaction: adds the arriving object, spent from the other instance with its move (into this
+     * instance) and continuing under this one, with the source instance by reference when the move reads it.
+     */
+    org.julclang.state.testkit.TxModel withArrival(org.julclang.state.testkit.TxModel tx, Tx t) throws Exception {
+        assertNotNull(partner, "an admits action's transaction needs the arriving object's move: set partner");
+        // #107 round-r2 review F1: the legs see the arriving object the validator's transaction spends, never another one.
+        assertEquals(partner.state(), t.arriving(), "the arriving object (what the legs read) is the input the validator spends");
+        Ctx c = new Ctx(t.caller().bytes(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo());
+        Tx mt = new Tx(t.caller(), BigInteger.ZERO, BigInteger.ZERO, t.validFrom(), t.validTo(), t.signers(), null, List.of(), Map.of(),
+                partner.shared(), partner.destination(), null);
+        Rec moved;
+        try {
+            moved = (Rec) interp.transition(partner.method(), partner.state(), partner.args(), mt).value();
+        } catch (Interpreter.Refused e) {
+            moved = partner.state();
+        }
+        var redeemerArgs = new ArrayList<Object>();
+        redeemerArgs.add(harness.instanceId());
+        for (Object a : partner.args()) redeemerArgs.add(java(a));
+        if (interp.usesTx(partner.method())) redeemerArgs.add(c);
+        var c2 = tx;   // in place, as withReads adds its reference inputs
+        Value value = Assets.add(Assets.lovelace(BigInteger.valueOf(harness.minAda())), Assets.of(harness.policy(), harness.objectId(), BigInteger.ONE));
+        c2.inputs.add(new TxInInfo(StateHarness.OBJECT_REF, new TxOut(harness.stateAddress(), value,
+                new OutputDatum.OutputDatumInline(StateHarness.data(holding(java(partner.state()), OTHER))), Optional.empty())));
+        c2.spendRedeemers.put(StateHarness.OBJECT_REF, StateHarness.data(construct(cap(partner.method()), redeemerArgs)));
+        c2.outputs.add(new TxOut(harness.stateAddress(), value, new OutputDatum.OutputDatumInline(StateHarness.data(holding(java(moved)))),
+                Optional.empty()));
+        if (interp.takesShared(partner.method())) {
+            c2.referenceInputs.add(new TxInInfo(SOURCE_REF, harness.instanceOut(OTHER, java(partner.shared()), BigInteger.valueOf(harness.minAda()))));
+        }
+        return c2;
+    }
+
+    /** M3a2: the generated record of the method's owned type. */
+    Class<?> ownedClass(String method) throws Exception {
+        return Class.forName(cls.getName() + "$" + interp.ownedType(method));
+    }
+
+    /** M3a2: whether a record keeps BigMaps (MerkleMap components): its calls carry map claims (ADR-0014). */
+    static boolean keepsMaps(Class<?> record) {
+        for (var rc : record.getRecordComponents()) if (rc.getType() == MerkleMap.class) return true;
+        return false;
+    }
+
+    /** M3a2: the transaction with the native assets an owned call sees: under this harness's policy and the object's token. */
+    Tx objectFunds(Tx t, ValueV received, ValueV held) {
+        return t.withFunds(new FundsV(received, held, Bytes.of(harness.policy()), Bytes.of(harness.objectId())));
     }
 
     /**
@@ -248,8 +800,10 @@ final class FourWay {
             tx.signers.clear();
             for (byte[] k : signers) tx.signers.add(k);
         }
-        if (approvers != null && !interp.kind(method).equals("init")) {
-            var a = new org.julclang.state.api.Approval(harness.policy(), harness.instanceId(), BigInteger.valueOf(spendTag(method)));
+        if (approvers != null && !kindOf(method).equals("init")) {
+            // The approval names what the call spends: the instance, or (an owned or keyed object) the object's token.
+            byte[] target = tx.token != null ? tx.token : harness.instanceId();
+            var a = new org.julclang.state.api.Approval(harness.policy(), target, BigInteger.valueOf(spendTag(method)));
             var data = StateHarness.data(new org.julclang.state.api.Approvals(JulcList.<org.julclang.state.api.Approval>empty().prepend(a)));
             for (byte[] h : approvers) tx.withdrawals.put(new Credential.ScriptCredential(new ScriptHash(h)), data);
         }
@@ -266,6 +820,28 @@ final class FourWay {
     @SuppressWarnings("unchecked")
     JulcList<Object> events(Interpreter.Outcome o) {
         return o == null ? JulcList.empty() : (JulcList<Object>) java(o.events());
+    }
+
+    /**
+     * #101 review C2: what a refused owned action's body would produce without the defence a vector targets (its next
+     * object and events). Set, the validator's transaction for the refusal proposes it, so the validator must refuse the
+     * outcome itself (an unchanged object could be refused for another reason); the next check consumes it.
+     */
+    Rec unguardedNext;
+    List<Object> unguardedEvents;
+
+    FourWay unguarded(Rec next, List<Object> events) {
+        this.unguardedNext = next;
+        this.unguardedEvents = events;
+        return this;
+    }
+
+    /** #112 review C2: the payouts a refused keyed call's body would make without the defence (null: none). */
+    List<Interpreter.Payment> unguardedPays;
+
+    FourWay unguarded(Rec next, List<Object> events, List<Interpreter.Payment> pays) {
+        this.unguardedPays = pays;
+        return unguarded(next, events);
     }
 
     /**
@@ -623,11 +1199,22 @@ final class FourWay {
 
     /** An interpreter's outcome (either interpreter's: {@link JsLeg}) encoded as the runtime encodes a transition's result. */
     String encode(String method, Interpreter.Outcome o) {
-        if (assets && !interp.kind(method).equals("view")) {
-            return "ok:" + step(interp.kind(method).equals("destroy") ? null : java(o.value()), payouts(o.payouts()), sends(o.sends()),
+        // M3c (ADR-0010 D1): a withdraw handler's result is its sends; certify's, vote's and propose's their Bool.
+        switch (interp.kind(method)) {
+            case "withdraw" -> {
+                return "ok:" + PurposeLegs.sendsHex(sends(o.sends()));
+            }
+            case "certify", "vote", "propose" -> {
+                return "ok:" + o.value();
+            }
+            default -> {
+            }
+        }
+        if (assets && !kindOf(method).equals("view")) {
+            return "ok:" + step(kindOf(method).equals("destroy") ? null : java(o.value()), payouts(o.payouts()), sends(o.sends()),
                     value(o.mint()), value(o.accepted()), events ? events(o) : null, deposits(o.deposits()));
         }
-        return switch (interp.kind(method)) {
+        return switch (kindOf(method)) {
             case "view" -> "ok:" + data(java(o.value())).serializeToHex();
             case "destroy" -> "ok:" + encoded(null, payouts(o.payouts()), events(o));
             default -> "ok:" + encoded(java(o.value()), payouts(o.payouts()), events(o));
@@ -645,11 +1232,20 @@ final class FourWay {
     private Object invoke(String method, Object state, List<Object> args, Tx t) throws Exception {
         var call = new ArrayList<Object>();
         if (state != null) call.add(state);
+        // M3a: an owned method's shared state and a move's destination right after its object (ADR-0003 D1, ADR-0012 D3).
+        if (interp.takesShared(method)) call.add(java(t.shared()));
+        if (interp.takesInto(method)) call.add(java(t.into()));
         // M2b: the params directly after the state (first in an init).
         if (takesParams(method)) call.add(java(params));
         // M2c: the read states directly after the params (ADR-0011 D2), as the transaction's reference inputs give them.
         for (String f : interp.reads(method)) call.add(java(t.reads().get(f)));
-        for (Object a : args) call.add(java(a));
+        // M3c (ADR-0011 D4): an init migrate's adopted state, after the params, as the spent instance holds it.
+        if (interp.adoptsFrom(method) != null) call.add(java(t.prior().state()));
+        for (int i = 0; i < args.size(); i++) {
+            call.add(java(args.get(i)));
+            // M3a3: an admits action's arriving object, after its first argument (the object's id).
+            if (i == 0 && interp.readsArriving(method)) call.add(java(t.arriving()));
+        }
         if (interp.usesTx(method)) call.add(ctx(t));
         if (takesFunds(method)) call.add(javaFunds(t));
         try {
@@ -680,41 +1276,56 @@ final class FourWay {
     }
 
     private static Object nextState(Object r) throws Exception {
-        if (r.getClass().getSimpleName().equals("Outcome")) return r.getClass().getMethod("state").invoke(r);
+        // M3a: an owned action's record is <T>Outcome; a creation that accepts returns Created or <T>Created (M3a2), an
+        // action that takes assets Received or <T>Received: each holds the next value as its state.
+        String n = r.getClass().getSimpleName();
+        if (r.getClass().isRecord() && (n.endsWith("Outcome") || n.endsWith("Created") || n.endsWith("Received"))) {
+            return r.getClass().getMethod("state").invoke(r);
+        }
         return r;
     }
 
     @SuppressWarnings("unchecked")
     private JulcList<Payout> outcomePayouts(Object r) {
         if (r instanceof JulcList<?> l) return (JulcList<Payout>) l;
-        if (stateClass.isInstance(r)) return null;
+        if (plainValue(r)) return null;
         return (JulcList<Payout>) component(r, "payouts");
     }
 
     /** A JVM result's events (M2b), or null when it has none. */
     private JulcList<?> outcomeEvents(Object r) {
-        if (r instanceof JulcList<?> || stateClass.isInstance(r)) return null;
+        if (r instanceof JulcList<?> || plainValue(r)) return null;
         return (JulcList<?>) component(r, "events");
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     String jvm(String method, Rec state, List<Object> args, Tx t) throws Exception {
-        String kind = interp.kind(method);
+        String kind = kindOf(method);
         Object before = state == null ? null : java(state);
         var ms = new MerkleSupport(store);
         Object r = run(ms, method, before, args, t);
         if (r == null) return "refused";
         if (kind.equals("view")) return "ok:" + data(r).serializeToHex();
-        if (assets) return "ok:" + jvmStep(r, kind, stateClass, events);
+        // M3a2: the subject is the state or the method's owned type; its maps are stored as the runtime stores them.
+        Class<?> subject = owned(method) ? ownedClass(method) : stateClass;
+        if (assets) {
+            if (kind.equals("destroy") || !keepsMaps(subject)) return "ok:" + jvmStep(r, kind, subject, events);
+            Object next = subject.isInstance(r) ? r : component(r, "state");
+            return "ok:" + jvmStep(r, kind, subject, events, stored(ms, method, subject, kind, before, next));
+        }
         if (r instanceof JulcList<?> l) return "ok:" + encoded(null, (JulcList<Payout>) l, null);
         if (kind.equals("destroy")) return "ok:" + encoded(null, outcomePayouts(r), outcomeEvents(r));
         Object next = nextState(r);
-        if (hasMaps()) {
-            // The state the runtime stores: each map's new root, its witnesses dropped.
-            next = kind.equals("init") ? ms.prepareCreation(harness.policy(), (Class) stateClass, next, harness.seed()).stored()
-                    : ms.prepare(harness.policy(), (Class) stateClass, before, next, StateHarness.LIVE_REF).stored();
-        }
+        // The state the runtime stores: each map's new root, its witnesses dropped.
+        if (keepsMaps(subject)) next = stored(ms, method, subject, kind, before, next);
         return "ok:" + encoded(next, outcomePayouts(r), outcomeEvents(r));
+    }
+
+    /** M3a2: {@code next} as the runtime stores it (each map's new root, its witnesses dropped), for the state or an object. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Object stored(MerkleSupport ms, String method, Class<?> subject, String kind, Object before, Object next) {
+        return kind.equals("init") ? ms.prepareCreation(harness.policy(), (Class) subject, next, harness.seed()).stored()
+                : ms.prepare(harness.policy(), (Class) subject, before, next, owned(method) ? StateHarness.OBJECT_REF : StateHarness.LIVE_REF).stored();
     }
 
     /** An asset-aware method's JVM result as a step (M2): the next state, payouts, sends, mint and accepted, read by name. */
@@ -723,11 +1334,16 @@ final class FourWay {
     }
 
     /** The same; with {@code events} (M2b), the step's events last. */
-    @SuppressWarnings("unchecked")
     static String jvmStep(Object r, String kind, Class<?> stateClass, boolean events) {
+        return jvmStep(r, kind, stateClass, events, kind.equals("destroy") || r instanceof JulcList<?> ? null
+                : stateClass.isInstance(r) ? r : component(r, "state"));
+    }
+
+    /** The same, with the step's next value given (M3a2: as the runtime stores its maps). */
+    @SuppressWarnings("unchecked")
+    static String jvmStep(Object r, String kind, Class<?> stateClass, boolean events, Object next) {
         JulcList<?> none = events ? JulcList.empty() : null;
         if (r instanceof JulcList<?> l) return step(null, (JulcList<Payout>) l, null, null, null, none);
-        Object next = kind.equals("destroy") ? null : stateClass.isInstance(r) ? r : component(r, "state");
         if (stateClass.isInstance(r)) return step(next, null, null, null, null, none);
         JulcList<?> evs = events ? (JulcList<?>) component(r, "events") : null;
         return step(next, (JulcList<Payout>) component(r, "payouts"), (JulcList<Send>) component(r, "sends"), (Value) component(r, "mint"),
@@ -745,9 +1361,18 @@ final class FourWay {
         assertNotNull(program, name + " has no transition program " + method);
         var javaArgs = args.stream().map(this::java).toArray();
         PlutusData ctxData = interp.usesTx(method) ? data(ctx(t)) : NONE;
-        if (!hasMaps() || state == null) {
+        Class<?> subject = owned(method) ? ownedClass(method) : stateClass;
+        {
             // M2: a method with Funds takes them first in its arguments' record (the transition generator's leading fields).
             var in = rawArgs(args);
+            // M3a3: a move's destination state and an admits action's arriving object lead the arguments, after the Funds.
+            if (interp.takesInto(method) || interp.readsArriving(method)) {
+                var fs = new ArrayList<org.julclang.core.PlutusData>();
+                if (interp.takesInto(method)) fs.add(raw(t.into()));
+                if (interp.readsArriving(method)) fs.add(raw(t.arriving()));
+                fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
+                in = new org.julclang.core.PlutusData.ConstrData(0, fs);
+            }
             if (takesFunds(method)) {
                 var fs = new ArrayList<org.julclang.core.PlutusData>(List.of(fundsData(t)));
                 fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
@@ -761,20 +1386,41 @@ final class FourWay {
                 fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
                 in = new org.julclang.core.PlutusData.ConstrData(0, fs);
             }
+            // M3c (ADR-0011 D4): an init migrate's adopted state is its creation's read: after the params, before the arguments.
+            if (interp.adoptsFrom(method) != null) {
+                var fs = new ArrayList<org.julclang.core.PlutusData>(List.of(raw(t.prior().state())));
+                fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
+                in = new org.julclang.core.PlutusData.ConstrData(0, fs);
+            }
             // M2b: the params lead the arguments' record (the transition generator's joustParams), before the Funds.
             if (takesParams(method)) {
                 var fs = new ArrayList<org.julclang.core.PlutusData>(List.of(raw(params)));
                 fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
                 in = new org.julclang.core.PlutusData.ConstrData(0, fs);
             }
-            return evaluateRaw(program, List.of(julc(state == null ? NONE : data(java(state))), julc(NONE), in, julc(ctxData)));
+            // M3a: an owned method's shared state is the program's second argument (the transition generator's "shared").
+            PlutusData shared = interp.takesShared(method) ? data(java(t.shared())) : NONE;
+            if (!keepsMaps(subject) || state == null) {
+                String res = evaluateRaw(program, List.of(julc(state == null ? NONE : data(java(state))), julc(shared), in, julc(ctxData)));
+                if (!keepsMaps(subject) || res.equals("refused")) return res;
+                // M3a2: a creation that writes its maps (Safes' openSafe): the program's step holds the writes as the JVM's
+                // result does; what the runtime stores is the new roots.
+                Object out = run(new MerkleSupport(store), method, null, args, t);
+                assertNotNull(out, name + "." + method + ": the transition program accepts what the JVM refuses");
+                String jvmSame = assets ? "ok:" + jvmStep(out, kindOf(method), subject, events)
+                        : "ok:" + encoded(nextState(out), outcomePayouts(out), outcomeEvents(out));
+                assertEquals(jvmSame, res, name + "." + method + ": transition program vs the JVM (a creation's map writes)");
+                return jvm(method, state, args, t);
+            }
+            programIn = in;
+            programShared = shared;
         }
         Object before = java(state);
         var proven = new LinkedHashMap<String, List<MapEntry>>();   // root hex -> proven entries, in discovery order
         ReadDiscoveryTest.Run r = null;
         int round = 1;
         for (; round <= ROUND_LIMIT; round++) {
-            r = ReadDiscoveryTest.run(program, List.of(julc(data(opened(before, proven))), julc(NONE), rawArgs(args), julc(ctxData)), true);
+            r = ReadDiscoveryTest.run(program, List.of(julc(data(opened(before, proven))), julc(programShared), programIn, julc(ctxData)), true);
             boolean fresh = false;
             for (String[] read : r.rootedReads()) {
                 var entries = proven.computeIfAbsent(read[0], k -> new ArrayList<>());
@@ -800,15 +1446,21 @@ final class FourWay {
                 throw new IllegalStateException(e);
             }
         });
-        String jvmSame = out == null ? "refused" : interp.kind(method).equals("destroy") ? "ok:" + encoded(null, outcomePayouts(out), outcomeEvents(out))
+        String jvmSame = out == null ? "refused" : assets ? "ok:" + jvmStep(out, kindOf(method), subject, events)
+                : kindOf(method).equals("destroy") ? "ok:" + encoded(null, outcomePayouts(out), outcomeEvents(out))
                 : "ok:" + encoded(nextState(out), outcomePayouts(out), outcomeEvents(out));
         assertEquals(jvmSame, r.result(), name + "." + method + ": transition program vs the JVM on the same reads");
         return r.result().equals("refused") ? "refused" : jvm(method, state, args, t);
     }
 
+    /** M3a2: the transition program's arguments' record and shared state, for the map discovery rounds. */
+    private PlutusData programShared = NONE;
+    private org.julclang.core.PlutusData programIn;
+
     /** {@code state} with each map opened with the reads proven for its root (as the engine opens it). */
     private Object opened(Object state, Map<String, List<MapEntry>> proven) throws Exception {
-        var comps = stateClass.getRecordComponents();
+        Class<?> rc = state.getClass();   // the state, or an object (M3a2)
+        var comps = rc.getRecordComponents();
         var types = new Class<?>[comps.length];
         var vals = new Object[comps.length];
         for (int i = 0; i < comps.length; i++) {
@@ -821,7 +1473,7 @@ final class FourWay {
                 vals[i] = new MerkleMap(m.root(), reads, JulcList.empty());
             }
         }
-        return stateClass.getDeclaredConstructor(types).newInstance(vals);
+        return rc.getDeclaredConstructor(types).newInstance(vals);
     }
 
     /**
@@ -831,7 +1483,7 @@ final class FourWay {
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     Boolean validator(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate) throws Exception {
-        String kind = interp.kind(method);
+        String kind = kindOf(method);
         // The transition's outcome builds the transaction; a broken modifier leaves it honest, for the validator to refuse.
         // The transition's outcome as the generated Java's values: the interpreter's, or (three legs, M4b: a Java library
         // call has no answer there) the JVM method's.
@@ -857,7 +1509,28 @@ final class FourWay {
                 paysJ = outcomePayouts(r) == null ? JulcList.empty() : outcomePayouts(r);
             }
         }
-        if (assets) return validatorAssets(method, state, args, t, signer, candidate, o);
+        // M3 final pass (MD2): an init migrate's transaction is the test's adoption on either path (its Adopt carries no Funds).
+        if (assets && !kind.equals("migrate")) return validatorAssets(method, state, args, t, signer, candidate, o);
+        if (keyedType(method) != null) {
+            var tx = keyedTx(method, state, args, t, signer, ok, ok ? nextJ : null, ok ? paysJ : JulcList.empty(), o, candidate);
+            if (tx == null) return null;
+            var v = evaluate(method, t, signer, tx);
+            validatorRuns++;
+            lastVerdict = v;
+            return v.accepted();
+        }
+        if (owned(method)) {
+            var tx = ownedTx(method, state, args, t, signer, ok, ok ? nextJ : null, ok ? paysJ : JulcList.empty(), o, candidate);
+            if (tx == null) return null;
+            var v = evaluate(method, t, signer, tx);
+            validatorRuns++;
+            lastVerdict = v;
+            return v.accepted();
+        }
+        // #107 round-r2 review C4: a refused instance action may propose its unguarded outcome too (FourWay.unguarded).
+        Rec unNext = ok ? null : unguardedNext;
+        unguardedNext = null;
+        unguardedEvents = null;
         var redeemerArgs = new ArrayList<Object>();
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
         for (Object a : args) redeemerArgs.add(java(a));
@@ -875,13 +1548,17 @@ final class FourWay {
             lastVerdict = v;
             return v.accepted();
         }
-        Object redeemer = construct(variant, redeemerArgs);
-        // The arguments as an attacker may send them (raw, not re-encoded canonically): the redeemer's fields replaced.
-        var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
-        var fields = new ArrayList<>(encoded.fields());
-        int offset = kind.equals("init") ? 1 : 0;
-        for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
-        redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
+        // M3c: an init migrate's redeemer is Adopt, built with its transaction below.
+        Object redeemer = null;
+        if (!kind.equals("migrate")) {
+            redeemer = construct(variant, redeemerArgs);
+            // The arguments as an attacker may send them (raw, not re-encoded canonically): the redeemer's fields replaced.
+            var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
+            var fields = new ArrayList<>(encoded.fields());
+            int offset = kind.equals("init") ? 1 : 0;
+            for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
+            redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
+        }
         Ctx c = interp.usesTx(method) ? ctx(t) : null;
         var ms = new MerkleSupport(store);
         StateHarness.Verdict v;
@@ -889,7 +1566,23 @@ final class FourWay {
             case "init" -> {
                 Object first = ok ? nextJ : candidate == null ? null : java(candidate);
                 if (first == null) return null;
-                var tx = harness.create(redeemer, first, c);
+                if (t != null && t.prior() != null && adoption != null) {
+                    // M3c review S1: an ordinary creation seeded by the previous version's instance (τ.prior): the whole
+                    // migration as this contract's mint sees it, under CreateInstance(seed = the spent instance, …).
+                    var whole = adoption.apply(first);
+                    var mine = whole.copy();
+                    mine.spendRedeemers.clear();
+                    var cr = (org.julclang.core.PlutusData.ConstrData) redeemer;
+                    var crf = new ArrayList<>(cr.fields());
+                    crf.set(0, StateHarness.data(StateHarness.LIVE_REF));
+                    mine.mintRedeemer = new org.julclang.core.PlutusData.ConstrData(cr.constructorTag(), crf);
+                    if (c != null) mine.range = StateHarness.window(c.validFrom(), c.validTo());
+                    v = evaluate(method, t, signer, mine);
+                    validatorRuns++;
+                    lastVerdict = v;
+                    return v.accepted();
+                }
+                var tx = withHeads(harness.create(redeemer, first, c));   // M3b: a keyed contract's heads
                 if (hasMaps()) {
                     var p = ms.prepareCreation(harness.policy(), (Class) stateClass, first, harness.seed());
                     tx = harness.withClaims(harness.create(redeemer, p.stored(), c), p.claims());
@@ -915,7 +1608,7 @@ final class FourWay {
                     batchRuns++;
                 } else if (!hasMaps()) {
                     v = evaluate(method, t, signer, withReads(method, ok ? harness.act(live, redeemer, nextJ, paysJ, signer, c)
-                            : harness.act(live, redeemer, before, JulcList.empty(), signer, c), t));
+                            : harness.act(live, redeemer, unNext != null ? java(unNext) : before, JulcList.empty(), signer, c), t));
                 } else {
                     Object after = ok ? nextState(run(ms, method, before, args, t)) : before;
                     var p = ms.prepare(harness.policy(), (Class) stateClass, before, after, StateHarness.LIVE_REF);
@@ -929,11 +1622,32 @@ final class FourWay {
                 var live = harness.live(before, t.balance().subtract(BigInteger.valueOf(harness.minAda())));
                 var tx = withReads(method, harness.destroy(live, redeemer, construct("BurnInstance", List.of()),
                         ok ? paysJ : Payouts.of(signer, live.lovelace()), signer, c), t);
+                // M3c (ADR-0011 D4): a migrating destroy's transaction mints its successor's instance and pays it the value.
+                if (interp.migratesTo(method) != null && successor != null) tx = successor.apply(tx, live);
                 if (hasMaps()) {
                     if (ok) run(ms, method, before, args, t);
                     tx = harness.withClaims(tx, ms.prepare(harness.policy(), (Class) stateClass, before, null, StateHarness.LIVE_REF).claims());
                 }
                 v = evaluate(method, t, signer, tx);
+            }
+            case "migrate" -> {
+                // M3c (ADR-0011 D4): the whole migration as this contract's mint sees it: the previous instance spent and
+                // burned, this instance minted with Adopt(seed = the spent instance, args…, [ctx]).
+                Object first = ok ? nextJ : candidate == null ? null : java(candidate);
+                if (first == null || adoption == null) return null;
+                var whole = adoption.apply(first);
+                var mine = whole.copy();
+                mine.spendRedeemers.clear();
+                var fs = new ArrayList<Object>(List.of(StateHarness.LIVE_REF));
+                for (Object a : args) fs.add(java(a));
+                if (c != null) fs.add(c);
+                var adopt = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(construct("Adopt", fs));
+                var rf = new ArrayList<>(adopt.fields());
+                for (int i = 0; i < args.size(); i++) rf.set(1 + i, raw(args.get(i)));
+                mine.mintRedeemer = new org.julclang.core.PlutusData.ConstrData(adopt.constructorTag(), rf);
+                // The adopting transaction's window is the one its Ctx states (the previous version's destroy set its own).
+                if (c != null) mine.range = StateHarness.window(c.validFrom(), c.validTo());
+                v = evaluate(method, t, signer, mine);
             }
             default -> {
                 return null;
@@ -944,6 +1658,18 @@ final class FourWay {
         return v.accepted();
     }
 
+    /**
+     * M3c (ADR-0011 D4): for this contract's migrating destroy, what its transaction adds beside the destroy: the successor's
+     * instance minted and its output holding the value (set by the test, with the successor's harness; null: none).
+     */
+    java.util.function.BiFunction<org.julclang.state.testkit.TxModel, StateHarness.Live<Object>, org.julclang.state.testkit.TxModel> successor;
+
+    /**
+     * M3c: for this contract's init migrate, the whole migration transaction from the adopted first state (the previous
+     * version's destroy, built with its harness, and this instance's output and mint); null: none.
+     */
+    java.util.function.Function<Object, org.julclang.state.testkit.TxModel> adoption;
+
     // ------------------------------------------------------------------ asset-aware contracts (M2)
 
     /**
@@ -951,10 +1677,15 @@ final class FourWay {
      * native assets offered ({@code assetsIn}, a payable method with Funds) in ledger order.
      */
     private Object assetRedeemer(String method, List<Object> args, Tx t, JulcList<Object> evs) throws Exception {
-        String kind = interp.kind(method);
-        String variant = kind.equals("init") ? "CreateInstance" : cap(method);
+        String kind = kindOf(method);
+        boolean object = owned(method);
+        String variant = kind.equals("init") && !object ? "CreateInstance" : cap(method);
         var redeemerArgs = new ArrayList<Object>();
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
+        // M3a2: an owned init's redeemer names the instance after the seed (ADR-0003).
+        if (kind.equals("init") && object) redeemerArgs.add(harness.instanceId());
+        boolean move = interp.takesInto(method);
+        if (move) redeemerArgs.add(OTHER);   // M3a3: a move's destination, first
         for (Object a : args) redeemerArgs.add(java(a));
         if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
         Class<?> rc = Class.forName(PKG + "." + name + "Validator$" + variant);
@@ -964,7 +1695,7 @@ final class FourWay {
         if (interp.carriesEvents(method)) redeemerArgs.add(evs == null ? JulcList.empty() : evs);
         var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(construct(variant, redeemerArgs));
         var fields = new ArrayList<>(encoded.fields());
-        int offset = kind.equals("init") ? 1 : 0;
+        int offset = kind.equals("init") ? object ? 2 : 1 : move ? 1 : 0;
         for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
         return new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
     }
@@ -990,12 +1721,68 @@ final class FourWay {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private org.julclang.state.testkit.TxModel assetTx(String method, Object redeemer, Rec state, Tx t, byte[] signer, Transition tr)
             throws Exception {
-        String kind = interp.kind(method);
+        if (owned(method)) return ownedAssetTx(method, redeemer, state, t, signer, tr);
+        String kind = kindOf(method);
         Ctx c = interp.usesTx(method) ? ctx(t) : null;
-        if (kind.equals("init")) return harness.createWith(redeemer, tr.next(), c, tr.accepted(), false, null);
+        if (kind.equals("init")) {
+            var tx = harness.createWith(redeemer, tr.next(), c, tr.accepted(), false, null);
+            return hasMaps() ? harness.withClaims(tx, mapClaims(method, stateClass, null, kind, t, harness.seed())) : tx;
+        }
         var h = held(kind, java(state), t);
         var tx = harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null : tr.next(), signer, c, null);
-        return composed(method, tx, t, tr, h);
+        tx = composed(method, tx, t, tr, h);
+        // M3 final pass MS1: an asset-aware contract's migrating destroy (one with a withdraw handler) mints its successor too.
+        if (kind.equals("destroy") && interp.migratesTo(method) != null && successor != null) {
+            tx = successor.apply(tx, harness.live(java(state), t.balance().subtract(BigInteger.valueOf(harness.minAda()))));
+        }
+        // M3a2: an instance's BigMaps with native assets (examples/locker's Locker): the honest call's claims.
+        return hasMaps() ? harness.withClaims(tx, mapClaims(method, stateClass, java(state), kind, t, StateHarness.LIVE_REF)) : tx;
+    }
+
+    /**
+     * M3a2: the arguments of the call whose transactions {@link #assetTx} builds: its maps' claims are the honest JVM run's
+     * (the witnesses the runtime would supply, whatever next value a mutant proposes).
+     */
+    private List<Object> assetArgs = List.of();
+
+    /** M3a2: the map claims of the honest JVM run of a call on {@code before} (null for a creation), owned by {@code ref}. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private List<org.julclang.state.api.mpf.MapClaim> mapClaims(String method, Class<?> type, Object before, String kind, Tx t,
+                                                               org.julclang.ledger.TxOutRef ref) throws Exception {
+        var ms = new MerkleSupport(store);
+        Object r = run(ms, method, before, assetArgs, t);
+        if (kind.equals("init")) {
+            return r == null ? List.of() : ms.prepareCreation(harness.policy(), (Class) type, nextState(r), ref).claims();
+        }
+        Object after = kind.equals("destroy") ? null : r == null ? before : nextState(r);
+        return ms.prepare(harness.policy(), (Class) type, before, after, ref).claims();
+    }
+
+    /**
+     * M3a2: an owned call in an asset-aware contract, as the runtime builds it (OwnedObject's asset paths): a creation mints
+     * the object's token from the seed with the instance as a reference input and holds what it accepted; an action or
+     * destroy spends the object (its native assets held), with the instance by reference when it reads it; an object's
+     * BigMaps carry the honest call's claims, owned by the seed or the object's input.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private org.julclang.state.testkit.TxModel ownedAssetTx(String method, Object redeemer, Rec state, Tx t, byte[] signer, Transition tr)
+            throws Exception {
+        String kind = kindOf(method);
+        Ctx c = interp.usesTx(method) ? ctx(t) : null;
+        Object shared = interp.takesShared(method) ? java(t.shared()) : null;
+        boolean maps = keepsMaps(ownedClass(method));
+        if (kind.equals("init")) {
+            var tx = harness.createWith(redeemer, holding(tr.next()), c, tr.accepted(), true, shared == null ? java(defaultShared) : shared);
+            return maps ? harness.withClaims(tx, mapClaims(method, ownedClass(method), null, kind, t, harness.seed())) : tx;
+        }
+        Object before = java(state);
+        BigInteger funds = t.balance().subtract(kind.equals("destroy") ? BigInteger.valueOf(harness.minAda()) : BigInteger.ZERO);
+        var h = harness.heldObject(holding(before), funds, heldOf(t));
+        boolean move = interp.takesInto(method);
+        var tx = harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null
+                : holding(tr.next(), move ? OTHER : harness.instanceId()), signer, c, shared);
+        if (move) tx = withDestination(tx, state, t);   // M3a3
+        return maps ? harness.withClaims(tx, mapClaims(method, ownedClass(method), before, kind, t, StateHarness.OBJECT_REF)) : tx;
     }
 
     /** M2c: an output holding {@code inst}'s token (and {@code extra}) at its script's address, as another JOUST instance sits. */
@@ -1026,6 +1813,14 @@ final class FourWay {
 
     /** M2c: each read state a reference input holding its instance's token at its script's address (ADR-0011 D2). */
     org.julclang.state.testkit.TxModel withReads(String method, org.julclang.state.testkit.TxModel tx, Tx t) {
+        // M3a3: an admits action's transaction carries the arriving object's move.
+        if (interp.admitsType(method) != null) {
+            try {
+                tx = withArrival(tx, t);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }
         for (String f : interp.reads(method)) {
             InstV inst = (InstV) params.fields().get(interp.paramsFields().indexOf(f));
             var out = instanceAt(inst, Assets.none());
@@ -1077,7 +1872,8 @@ final class FourWay {
      * no effects (an action), everything to the caller (a destroy) or {@code candidate} (an init).
      */
     Boolean validatorAssets(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate, Interpreter.Outcome o) throws Exception {
-        String kind = interp.kind(method);
+        String kind = kindOf(method);
+        assetArgs = args;
         Object redeemer = assetRedeemer(method, args, t, o == null ? null : events(o));
         Transition<Object> tr;
         if (o != null) {
@@ -1123,10 +1919,11 @@ final class FourWay {
      */
     boolean validatorRaw(String method, Rec state, List<Object> honest, List<org.julclang.core.PlutusData> raw, Tx t, byte[] signer,
             org.julclang.core.PlutusData next) throws Exception {
-        String kind = interp.kind(method);
+        String kind = kindOf(method);
+        assetArgs = honest;
         var encoded = (org.julclang.core.PlutusData.ConstrData) assetRedeemer(method, honest, t, null);
         var fields = new ArrayList<>(encoded.fields());
-        int offset = kind.equals("init") ? 1 : 0;
+        int offset = kind.equals("init") ? owned(method) ? 2 : 1 : interp.takesInto(method) ? 1 : 0;
         for (int i = 0; i < raw.size(); i++) fields.set(offset + i, raw.get(i));
         var redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
         Transition<Object> tr = next != null ? Transition.full(next, JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none())
@@ -1159,7 +1956,7 @@ final class FourWay {
         String tp = evaluateRaw(program, List.of(julc(data(java(state))), julc(NONE), in, julc(ctxData)));
         Object redeemer = assetRedeemer(method, List.of(), t, null);
         Object nx = next == null ? java(state) : java(next);
-        var h = held(interp.kind(method), java(state), t);
+        var h = held(kindOf(method), java(state), t);
         var tx = harness.stepWith(h, redeemer, null, Transition.full(nx, JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none()), nx,
                 signer, interp.usesTx(method) ? ctx(t) : null, null);
         Value total = Assets.none();
@@ -1187,7 +1984,7 @@ final class FourWay {
     boolean readerRaw(String method, Rec state, List<Object> args, Tx t, String field, org.julclang.core.PlutusData datum, byte[] signer)
             throws Exception {
         var o = interp.transition(method, state, args, t);
-        String kind = interp.kind(method);
+        String kind = kindOf(method);
         if (takesFunds(method)) {
             // An asset-aware reader (review r1, C4): the call's composed transaction, its read state's datum replaced.
             var tx = assetTx(method, assetRedeemer(method, args, t, null), state, t, signer, transitionOf(kind, o));
@@ -1324,7 +2121,8 @@ final class FourWay {
      * accepted value one step away from the interpreter's is rejected, and the accepted one passes the attack suite.
      */
     int mutantsAssets(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
-        String kind = interp.kind(method);
+        String kind = kindOf(method);
+        assetArgs = args;
         var o = interp.transition(method, state, args, t);
         Object redeemer = assetRedeemer(method, args, t, events(o));
         var tr = transitionOf(kind, o);
@@ -1332,7 +2130,7 @@ final class FourWay {
         var txs = new ArrayList<org.julclang.state.testkit.TxModel>();
         var accepted = assetTx(method, redeemer, state, t, signer, tr);
         if (!kind.equals("destroy")) {
-            for (Object m : nearbyStates(tr.next())) txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(m, tr.payouts(), tr.sends(), tr.mint(), tr.accepted())));
+            for (Object m : nearbyRecords(tr.next())) txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(m, tr.payouts(), tr.sends(), tr.mint(), tr.accepted())));
         }
         if (!kind.equals("init")) {
             for (var q : nearbyPayouts(tr.payouts(), caller, kind.equals("action"))) {
@@ -1546,9 +2344,137 @@ final class FourWay {
         }
     }
 
+    /**
+     * M3a (ADR-0003 D3): the transaction of an owned call, as the runtime builds it: a creation mints the object's token
+     * from the seed, with the instance as a reference input when the method reads it (shared); an owned action spends and
+     * continues the object, its Holding naming its instance; an owned destroy spends it and burns its token. A refused call
+     * proposes the object unchanged (an action), everything to the signer (a destroy) or {@code candidate} (a creation;
+     * null: no transaction).
+     */
+    org.julclang.state.testkit.TxModel ownedTx(String method, Rec state, List<Object> args, Tx t, byte[] signer, boolean ok, Object next,
+                                               JulcList<Payout> pays, Interpreter.Outcome o, Rec candidate) throws Exception {
+        String kind = kindOf(method);
+        var redeemerArgs = new ArrayList<Object>();
+        if (kind.equals("init")) {
+            redeemerArgs.add(harness.seed());
+            redeemerArgs.add(harness.instanceId());
+        }
+        boolean move = interp.takesInto(method);
+        if (move) redeemerArgs.add(OTHER);   // M3a3: a move's redeemer names its destination first (ADR-0012 D3)
+        for (Object a : args) redeemerArgs.add(java(a));
+        if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
+        // #101 review C2: a refusal's unguarded outcome proposes the events the body would emit.
+        Rec unNext = ok ? null : unguardedNext;
+        List<Object> unEvents = ok ? null : unguardedEvents;
+        unguardedNext = null;
+        unguardedEvents = null;
+        if (interp.carriesEvents(method)) redeemerArgs.add(unEvents != null ? java(unEvents) : events(o));
+        Object redeemer = construct(cap(method), redeemerArgs);
+        // The arguments as an attacker may send them (raw, not re-encoded canonically).
+        var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
+        var fields = new ArrayList<>(encoded.fields());
+        int offset = kind.equals("init") ? 2 : move ? 1 : 0;
+        for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
+        redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
+        Ctx c = interp.usesTx(method) ? ctx(t) : null;
+        Object shared = interp.takesShared(method) ? java(t.shared()) : null;
+        var tx = switch (kind) {
+            case "init" -> {
+                Object first = ok ? next : candidate == null ? null : java(candidate);
+                yield first == null ? null : harness.createObject(redeemer, holding(first), shared == null ? java(defaultShared) : shared, c);
+            }
+            case "action" -> {
+                Object before = java(state);
+                var live = harness.liveObject(holding(before), t == null ? BigInteger.ZERO : t.balance());
+                Object proposed = ok ? next : unNext != null ? java(unNext) : before;
+                if (!move) yield harness.actObject(live, redeemer, holding(proposed), pays, signer, c, shared);
+                // M3a3: a move continues its object under the destination, which admits it in the same transaction.
+                yield withDestination(harness.actObject(live, redeemer, holding(proposed, OTHER), pays, signer, c, shared), state, t);
+            }
+            default -> {
+                // An owned destroy's balance is everything the object holds, deposit included.
+                Object before = java(state);
+                var live = harness.liveObject(holding(before), t.balance().subtract(BigInteger.valueOf(harness.minAda())));
+                var d = harness.destroyObject(live, redeemer, construct("BurnInstance", List.of()), ok ? pays : Payouts.of(signer, live.lovelace()),
+                        signer, c);
+                // M3a2: an owned destroy that reads the instance (examples/market's buy; Studio's release) has it by reference.
+                if (shared != null) d.referenceInputs.add(harness.instanceReference(shared));
+                yield d;
+            }
+        };
+        // M3a2: an object's BigMaps (without native assets) carry the honest call's claims.
+        if (tx == null || !keepsMaps(ownedClass(method))) return tx;
+        assetArgs = args;
+        return harness.withClaims(tx, mapClaims(method, ownedClass(method), kind.equals("init") ? null : java(state), kind, t,
+                kind.equals("init") ? harness.seed() : StateHarness.OBJECT_REF));
+    }
+
+    /** M3a: the instance state a creation that reads none still finds as its reference input (the runtime always adds it). */
+    Rec defaultShared;
+
+    /** M3a: the mutants of an owned call (its next object, payouts and events one step away), each rejected by the validator. */
+    private int mutantsOwned(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        String kind = kindOf(method);
+        var o = interp.transition(method, state, args, t);
+        Object next = kind.equals("destroy") ? null : java(o.value());
+        JulcList<Payout> pays = payouts(o.payouts());
+        var accepted = ownedTx(method, state, args, t, signer, true, next, pays, o, null);
+        byte[] caller = t == null ? signer : t.caller().bytes();
+        var txs = new ArrayList<org.julclang.state.testkit.TxModel>();
+        if (next != null) for (Object m : nearbyRecords(next)) txs.add(ownedTx(method, state, args, t, signer, true, m, pays, o, null));
+        // Security review A3 (I19): a creation's object pinned to another instance of the policy than the redeemer's, its
+        // value unchanged (Attacks' "object's instance changed" covers the spends).
+        if (kind.equals("init")) {
+            var pinned = accepted.copy();
+            var out = pinned.outputs.get(pinned.stateOutput);
+            var datum = (org.julclang.core.PlutusData.ConstrData) ((org.julclang.ledger.OutputDatum.OutputDatumInline) out.datum()).datum();
+            var fs = new ArrayList<>(datum.fields());
+            fs.set(0, org.julclang.core.PlutusData.bytes(StateHarness.fill(32, 0x77)));
+            pinned.outputs.set(pinned.stateOutput, new org.julclang.ledger.TxOut(out.address(), out.value(),
+                    new org.julclang.ledger.OutputDatum.OutputDatumInline(new org.julclang.core.PlutusData.ConstrData(datum.tag(), fs)),
+                    out.referenceScript()));
+            txs.add(pinned);
+        }
+        if (!kind.equals("init")) {
+            for (var q : nearbyPayouts(pays, caller, kind.equals("action"))) txs.add(ownedTx(method, state, args, t, signer, true, next, q, o, null));
+        }
+        var ok = evaluate(method, t, signer, accepted);
+        assertTrue(ok.accepted(), name + "." + method + ": the unmutated transaction must be accepted\n" + ok);
+        attacksRejected += org.julclang.state.testkit.Attacks.assertAllRejected(harness, accepted);
+        int n = 0;
+        for (var tx : txs) {
+            var v = evaluate(method, t, signer, tx);
+            assertFalse(v.accepted(), name + "." + method + ": mutant #" + n + " accepted\n" + v);
+            n++;
+        }
+        assertTrue(n > 0, name + "." + method + ": no mutants");
+        mutantsRejected += n;
+        return n;
+    }
+
+    /** {@link #nearbyStates} for any record of the contract (an owned object's value, M3a). */
+    List<Object> nearbyRecords(Object s) throws Exception {
+        var rc = s.getClass();
+        var comps = rc.getRecordComponents();
+        var types = new Class<?>[comps.length];
+        for (int i = 0; i < comps.length; i++) types[i] = comps[i].getType();
+        var out = new ArrayList<Object>();
+        for (int i = 0; i < comps.length; i++) {
+            Object v = comps[i].getAccessor().invoke(s);
+            for (Object w : nearby(v)) {
+                var vals = new Object[comps.length];
+                for (int j = 0; j < comps.length; j++) vals[j] = j == i ? w : comps[j].getAccessor().invoke(s);
+                out.add(rc.getDeclaredConstructor(types).newInstance(vals));
+            }
+        }
+        return out;
+    }
+
     @SuppressWarnings({"unchecked", "rawtypes"})
     private int mutantsPlain(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
-        String kind = interp.kind(method);
+        if (keyedType(method) != null) return mutantsKeyed(method, state, args, t, signer);
+        if (owned(method)) return mutantsOwned(method, state, args, t, signer);
+        String kind = kindOf(method);
         var o = interp.transition(method, state, args, t);
         var redeemerArgs = new ArrayList<Object>();
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
@@ -1571,8 +2497,8 @@ final class FourWay {
                     accepted = harness.withClaims(harness.create(redeemer, p.stored(), c), p.claims());
                     for (Object m : nearbyStates(p.stored())) txs.add(harness.withClaims(harness.create(redeemer, m, c), p.claims()));
                 } else {
-                    accepted = harness.create(redeemer, first, c);
-                    for (Object m : nearbyStates(first)) txs.add(harness.create(redeemer, m, c));
+                    accepted = withHeads(harness.create(redeemer, first, c));   // M3b: a keyed contract's heads
+                    for (Object m : nearbyStates(first)) txs.add(withHeads(harness.create(redeemer, m, c)));
                 }
             }
             case "action" -> {
@@ -1714,7 +2640,7 @@ final class FourWay {
         return stateClass.getDeclaredConstructor(types).newInstance(vals);
     }
 
-    private Object construct(String variant, List<Object> values) throws Exception {
+    Object construct(String variant, List<Object> values) throws Exception {
         return construct(variant, values, "Validator$");
     }
 
@@ -1735,6 +2661,8 @@ final class FourWay {
 
     /** The Java example's state record (dex's is Pool; M2). */
     String referenceState = "State";
+    /** M3c: the Java example's @Migrate method (examples/upgrade's CounterV2.adopt). */
+    String referenceMigrate = "adopt";
 
     /** Also runs every vector on the Java example {@code pkg.<name>}, whose init is {@code init}, and records differences. */
     FourWay reference(String pkg, String init) throws Exception {
@@ -1759,21 +2687,27 @@ final class FourWay {
     /** The Java example's JVM outcome, encoded as {@link #jvm} encodes the port's ("refused" when it fails). */
     @SuppressWarnings({"unchecked", "rawtypes"})
     String javaReference(String method, Rec state, List<Object> args, Tx t) throws Exception {
-        String kind = interp.kind(method);
+        String kind = kindOf(method);
         Class<?> rs = Class.forName(reference.getName() + "$" + referenceState);
         Object before = state == null ? null : java(state, reference);
-        String m = kind.equals("init") ? referenceInit : method;
+        // M3a: an owned init keeps its name; M3c: an init migrate is the Java example's @Migrate method (examples/upgrade's adopt).
+        String m = interp.kind(method).equals("init") ? referenceInit : interp.kind(method).equals("migrate") ? referenceMigrate : method;
         Method found = null;
         for (Method x : reference.getDeclaredMethods()) if (x.getName().equals(m) && java.lang.reflect.Modifier.isStatic(x.getModifiers())) found = x;
         assertNotNull(found, reference.getName() + "." + m);
         var call = new ArrayList<Object>();
         if (before != null) call.add(before);
+        // M3a: the shared state and a move's destination, right after the object.
+        if (interp.takesShared(method)) call.add(java(t.shared(), reference));
+        if (interp.takesInto(method)) call.add(java(t.into(), reference));
         // M2b: the Java example's params record, where its method takes it (directly after the state, first in an init).
         if (params != null && call.size() < found.getParameterCount() && found.getParameterTypes()[call.size()].getSimpleName().equals("Config")) {
             call.add(java(params, reference));
         }
         // M2c: the read states, right after the params.
         for (String f : interp.reads(method)) call.add(java(t.reads().get(f), reference));
+        // M3c: an init migrate's adopted state, right after the params.
+        if (interp.adoptsFrom(method) != null) call.add(java(t.prior().state(), reference));
         for (Object a : args) call.add(java(a, reference));
         // The Ctx and the Funds (M2) the Java method takes after its arguments, by type.
         for (int i = call.size(); i < found.getParameterCount(); i++) call.add(found.getParameterTypes()[i] == Funds.class ? javaFunds(t) : ctx(t));
@@ -1799,9 +2733,12 @@ final class FourWay {
         if (kind.equals("view")) return "ok:" + data(r).serializeToHex();
         if (assets) return "ok:" + jvmStep(r, kind, rs, events);
         if (r instanceof JulcList<?> l) return "ok:" + encoded(null, (JulcList<Payout>) l, null);
-        Object next = kind.equals("destroy") ? null : rs.isInstance(r) ? r : r.getClass().getMethod("state").invoke(r);
-        JulcList<Payout> pays = rs.isInstance(r) ? null : (JulcList<Payout>) component(r, "payouts");
-        JulcList<?> evs = rs.isInstance(r) ? null : (JulcList<?>) component(r, "events");
+        // M3a: an owned method's plain result is an object of an owned type of the example.
+        boolean plain = rs.isInstance(r) || owned(method) && r.getClass().getEnclosingClass() == reference
+                && r.getClass().getSimpleName().equals(interp.ownedType(method));
+        Object next = kind.equals("destroy") ? null : plain ? r : r.getClass().getMethod("state").invoke(r);
+        JulcList<Payout> pays = plain ? null : (JulcList<Payout>) component(r, "payouts");
+        JulcList<?> evs = plain ? null : (JulcList<?>) component(r, "events");
         if (hasMaps()) {
             next = kind.equals("init") ? ms.prepareCreation(harness.policy(), (Class) rs, next, harness.seed()).stored()
                     : ms.prepare(harness.policy(), (Class) rs, before, next, StateHarness.LIVE_REF).stored();
@@ -1830,7 +2767,7 @@ final class FourWay {
         // method that reads nothing else of the transaction is called without one on the other legs (usesCtx: false).
         // A batched action's step in a batch is signed by the batcher, its caller being the intent's owner, who signed the
         // intent (ADR-0004; semantics §2, #80 review S5): its τ.signers are the intent's, the caller alone.
-        Tx ti = t != null && interp.kind(method).equals("action") && batched(method) ? t.signedBy(List.of(t.caller())) : itx(t, signer);
+        Tx ti = t != null && kindOf(method).equals("action") && batched(method) ? t.signedBy(List.of(t.caller())) : keyedTi(method, itx(t, signer));
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
         // The Java interpreter's outcome; a Limit (its stack ran out) propagates and fails the test (semantics §2, the transaction-level rules).
         Interpreter.Outcome o = null;
@@ -1844,7 +2781,7 @@ final class FourWay {
             if (!threeLegs || !e.getMessage().contains("has no reference semantics")) throw e;
             noAnswers++;
             String jv = jvm(method, state, args, t);
-            if (!interp.kind(method).equals("view")) {
+            if (!kindOf(method).equals("view")) {
                 assertEquals(jv, transition(method, state, args, t), "transition program vs JVM: " + what);
                 Boolean accepted = validator(method, state, args, t, signer, candidate);
                 if (accepted != null) assertEquals(!jv.equals("refused"), accepted, "validator vs JVM: " + what + " " + lastVerdict);
@@ -1860,7 +2797,11 @@ final class FourWay {
         // The JVM method and the transition program compute the transition alone: a broken modifier (§2.6) is the
         // validator's to refuse, so they are compared with the interpreter's transition, which then succeeds.
         // M2b: so are the output checks (an invariant, a quorum's shape: semantics §2.7), which only the validator makes.
-        boolean modifier = refused != null && (refused.refusal().startsWith("modifier:") || refused.refusal().startsWith("invariant:"));
+        // M3b: so are a keyed call's list rules (semantics §2.9: the anchor, the window, the cooldown, the key's length, signer,
+        // place and fixity), which the validator's policy and node arms check.
+        // M3c: so are a migration's halves (semantics §2.11: the successor minted, the instance adopted), the validators'.
+        boolean modifier = refused != null && (refused.refusal().startsWith("modifier:") || refused.refusal().startsWith("invariant:")
+                || refused.refusal().startsWith("keyed:") || refused.refusal().startsWith("migrate:"));
         String body = modifier ? interpreted(method, state, args, ti) : want;
         if (o != null) JsLeg.canonical(o.value(), what);
         assertEquals(body, jvm(method, state, args, t), "JVM vs interpreter: " + what);
@@ -1870,13 +2811,14 @@ final class FourWay {
             if (!ref.equals(body)) javaDiffs.add(what + ": the Java example " + (ref.equals("refused") ? "refuses" : "accepts") + ", the port "
                     + (body.equals("refused") ? "refuses" : "accepts") + (ref.startsWith("ok:") && body.startsWith("ok:") ? " (different results)" : ""));
         }
-        if (!interp.kind(method).equals("view")) {
+        if (!kindOf(method).equals("view")) {
             assertEquals(body, transition(method, state, args, t), "transition program vs interpreter: " + what);
             Boolean accepted = validator(method, state, args, t, signer, candidate);
             if (transactionLevel) {
                 assertEquals(Boolean.FALSE, accepted, "a transaction-level failure: the validator (or the ledger) refuses " + what + " " + lastVerdict);
             } else if (accepted != null) {
                 assertEquals(!want.equals("refused"), accepted, "validator vs interpreter: " + what + " " + lastVerdict);
+                if (refused != null) keyedParity(method, refused.refusal(), lastVerdict, what);
             }
         }
         calls++;
@@ -1967,6 +2909,22 @@ final class FourWay {
     }
 
     int invariantRefusals;
+
+    /**
+     * M3b (semantics §2.9): a keyed call refused by a rule of its list, on all five legs: both interpreters refuse it with
+     * {@code cls} ({@code keyed:anchor}, {@code keyed:window}, {@code keyed:cooldown}, {@code keyed:length},
+     * {@code keyed:signed}, {@code keyed:order}, {@code keyed:fixed}), the JVM method and the transition program compute the
+     * transition (the validator checks the list), and the validator refuses the transaction built from it.
+     */
+    void keyedRefused(String cls, String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
+        assertTrue(interpreted(method, state, args, keyedTi(method, itx(t, signer))).startsWith("ok:"), "the transition accepts it (stated): " + what);
+        assertEquals("refused", check(method, state, args, t, signer), what);
+        assertEquals(cls, lastRefusal, what);
+        keyedRefusals++;
+    }
+
+    int keyedRefusals;
 
     /** The interpreter's next state of a successful transition (to chain calls; modifiers are not checked). */
     Rec next(String method, Rec state, List<Object> args, Tx t) {

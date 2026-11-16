@@ -156,6 +156,20 @@ public final class JscV2 {
      * Checks and lowers a {@code .jsc} 2 source to a Java {@code @StateContract}, on its own: it imports no libraries and
      * no other contract.
      */
+    /** The runtime's reference-script limit (StateContractHandle): a larger applied script never deploys. */
+    public static final int RUNTIME_SCRIPT_LIMIT = 15_000;
+
+    /**
+     * M3 final pass (design MD2, security MS3): the build-time warning for a script over the runtime's limit (JSC9015), or
+     * null. The size is the script before its params are applied; applying them only adds to it.
+     */
+    public static String scriptSizeWarning(int bytes) {
+        if (bytes <= RUNTIME_SCRIPT_LIMIT) return null;
+        return "the script is " + bytes + " bytes (before its params are applied), over the runtime's " + RUNTIME_SCRIPT_LIMIT
+                + "-byte reference-script limit: it builds, but it can never be deployed (a reference script must fit a 16 KB"
+                + " transaction); split the contract or drop a feature";
+    }
+
     public static Lowered lower(String source, String fileName) {
         return lower(source, fileName, null);
     }

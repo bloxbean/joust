@@ -198,15 +198,16 @@ class JscV2HashStabilityTest {
             while (f.find()) fields.add(f.group(1));
         }
         Set<String> declared = new java.util.TreeSet<>();
-        for (String re : List.of("\\bconst\\s+([a-z][A-Za-z0-9_]*)", "\\bfn\\s+([a-z][A-Za-z0-9_]*)", "\\b(?:action|destroy|view)\\s+([a-z][A-Za-z0-9_]*)",
+        for (String re : List.of("\\bconst\\s+([a-z][A-Za-z0-9_]*)", "\\bfn\\s+([a-z][A-Za-z0-9_]*)", "\\b(?:action|destroy|view)\\s+(?:[A-Z][A-Za-z0-9_]*\\s*\\.\\s*)?([a-z][A-Za-z0-9_]*)",
+                "\\binit\\s+[A-Z][A-Za-z0-9_]*\\s*\\.\\s*([a-z][A-Za-z0-9_]*)",
                 "\\bfor\\s*\\(\\s*const\\s+([a-z][A-Za-z0-9_]*)", "\\b([a-z][A-Za-z0-9_]*)\\s*=>", "Some\\(([a-z][A-Za-z0-9_]*)\\)")) {
             Matcher m = Pattern.compile(re).matcher(code);
             while (m.find()) declared.add(m.group(1));
         }
         Matcher lambdas = Pattern.compile("\\(([a-z][A-Za-z0-9_]*(?:\\s*,\\s*[a-z][A-Za-z0-9_]*)+)\\)\\s*=>").matcher(code);
         while (lambdas.find()) for (String p : lambdas.group(1).split("\\s*,\\s*")) declared.add(p);
-        // parameters: name(p: T, q: T) after fn/action/destroy/view/init
-        Matcher sig = Pattern.compile("\\b(?:fn|action|destroy|view|init)\\s*[a-zA-Z0-9_]*\\s*\\(([^()]*)\\)").matcher(code);
+        // parameters: name(p: T, q: T) after fn/action/destroy/view/init (and an owned method's T.name, M3a)
+        Matcher sig = Pattern.compile("\\b(?:fn|action|destroy|view|init|withdraw|certify|vote|propose)\\s*(?:[A-Z][A-Za-z0-9_]*\\s*\\.\\s*)?[a-zA-Z0-9_]*\\s*\\(([^()]*)\\)").matcher(code);
         while (sig.find()) {
             Matcher p = Pattern.compile("([a-z][A-Za-z0-9_]*)\\s*:").matcher(sig.group(1));
             while (p.find()) declared.add(p.group(1));
@@ -228,7 +229,7 @@ class JscV2HashStabilityTest {
             "ada", "Int", "Bool", "Bytes", "Key", "Hash", "List", "Option", "Map", "BigMap", "State", "maxDatumBytes", "minAda",
             "maxValidityMs", "min", "max", "abs", "asKey", "asHash", "range", "length", "isEmpty", "head", "sum", "reverse", "contains",
             "any", "all", "find", "filter", "map", "fold", "concat", "take", "drop", "get", "has", "set", "delete", "size", "keys",
-            "values", "empty", "_", "utf8",
+            "values", "empty", "_", "utf8", "owned", "shared", "into", "admits",
             // M2: funds' fields, the members of Value and Address, a credential's patterns and their fields, the effects,
             // the prelude's constructors and the option assetSlots. A parameter may share a member's name (a Coins
             // parameter is called policy, as funds.policy is): such a name is not renamed, since a member is not.
@@ -239,7 +240,15 @@ class JscV2HashStabilityTest {
             // quorum (treasury's is): such a name is not renamed, since the modifier word beside it is not.
             "params", "event", "invariant", "emit", "quorum", "authorized", "Config", "Event",
             // M2c: composition's words, funds.deposits and a deposit's members.
-            "deposit", "receives", "reads", "Instance", "deposits", "memo", "value"));
+            "deposit", "receives", "reads", "Instance", "deposits", "memo", "value",
+            // M3b: a keyed type's clause, its options and the retiring modifier (a field may be called by: Keys' event's is).
+            "keyed", "by", "signed", "maxKeyBytes", "linkCooldownMs", "linkWindowMs", "retire",
+            // M3c: the purposes' handler words, migration's, the option stakeSelf, and the ledger types' fields (read by
+            // projection or bound in a match: a member, so never renamed, as a Value's are not).
+            "withdraw", "certify", "vote", "propose", "migrate", "migrates", "to", "stakeSelf", "LedgerMap",
+            "credential", "deposit", "refund", "delegatee", "poolId", "poolVfr", "pubKeyHash", "epoch", "cold", "hot", "dRep", "id",
+            "parameters", "constitutionScript", "protocolVersion", "withdrawals", "removedMembers", "addedMembers", "newQuorum",
+            "constitution", "txId", "govActionIx", "returnAddress", "governanceAction", "major", "minor", "numerator", "denominator"));
 
     static {
         for (var b : org.julclang.state.dsl.v2.JscV2.bindings()) LANGUAGE.add(b.name());
@@ -286,7 +295,7 @@ class JscV2HashStabilityTest {
     static java.util.TreeSet<String> renameAllOf(String s) {
         String code = stripComments(s).replaceAll("\"(?:[^\"\\\\]|\\\\.)*\"", "\"\"");
         var declared = new java.util.TreeSet<String>();
-        for (String re : List.of("\\b(?:type|enum|contract)\\s+([A-Z]\\w*)", "\\b(?:fn|action|destroy|view|const)\\s+([a-z]\\w*)",
+        for (String re : List.of("\\b(?:type|enum|contract)\\s+([A-Z]\\w*)", "\\b(?:fn|action|destroy|view|const|withdraw|certify|vote|propose)\\s+([a-z]\\w*)",
                 "\\bfor\\s*\\(\\s*const\\s+([a-z]\\w*)", "\\b([a-z]\\w*)\\s*=>", "Some\\(([a-z]\\w*)\\)", "\\b([a-z]\\w*)\\s*:")) {
             Matcher m = Pattern.compile(re).matcher(code);
             while (m.find()) declared.add(m.group(1));

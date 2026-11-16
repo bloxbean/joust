@@ -233,6 +233,15 @@ public final class JscMain {
                         + " encoding: " + p + " (an internal error of the .jsc lowering: please report it)");
             }
             if (!problems.isEmpty()) errors++;
+            // M3 final pass MD2, MS3: a script over the runtime's 15,000-byte reference-script limit builds but never deploys
+            // (StateContractHandle refuses it): warned here, at build time (JSC9015), from the validator's own script.
+            Path script = descriptions.getParent() == null ? null : descriptions.getParent().resolve("plutus").resolve(contract + "Validator.plutus.json");
+            if (script != null && Files.exists(script)) {
+                var m = java.util.regex.Pattern.compile("\"cborHex\"\\s*:\\s*\"([0-9a-fA-F]+)\"").matcher(Files.readString(script));
+                int bytes = m.find() ? m.group(1).length() / 2 : 0;
+                String warning = org.julclang.state.dsl.v2.JscV2.scriptSizeWarning(bytes);
+                if (warning != null) System.err.println(name + ":1:1: warning[JSC9015]: " + contract + ": " + warning);
+            }
             checked++;
         }
         if (errors > 0) return 1;

@@ -68,14 +68,27 @@ public final class CorpusParse {
         if (!c.events().isEmpty()) {
             out.add("events: " + join(c.events().stream().map(e -> e.name() + "(" + join(e.fields().stream().map(Syntax.FieldDecl::name).toList()) + ")").toList()));
         }
-        if (!c.invariants().isEmpty()) out.add("invariants: " + join(c.invariants().stream().map(Syntax.InvariantDecl::name).toList()));
+        // M3a: the owned types, and an owned type's invariant as T.name, only when the contract declares some.
+        if (!c.owned().isEmpty()) {
+            // M3b: a keyed type with its key and options, as written: Ballot(voter,choice) keyed by voter(signed,maxKeyBytes=28).
+            out.add("owned: " + join(c.owned().stream().map(t -> t.name() + "(" + join(t.fields().stream().map(Syntax.FieldDecl::name).toList()) + ")"
+                    + (t.keyed() == null ? "" : " keyed by " + t.keyed().field() + "(" + join(keyedOptions(t.keyed())) + ")")).toList()));
+        }
+        if (!c.invariants().isEmpty()) {
+            out.add("invariants: " + join(c.invariants().stream().map(i -> i.on() == null ? i.name() : i.on() + "." + i.name()).toList()));
+        }
         out.add("methods: " + String.join("; ", c.methods().stream().map(m -> {
-            String kind = m.kind().name().toLowerCase();
+            // M3a: owned init T.m, owned action T.m, owned destroy T.m.
+            String kind = m.owned() ? "owned " + m.kind().name().toLowerCase().substring(6) + " " + m.on() + "."
+                    : m.kind().name().toLowerCase();
             // M2c: receives T names its memo type, written without spaces.
+            // M3c: migrates to f, as written.
             String mods = String.join(" ", m.mods().stream().map(x -> x.type() != null ? x.name() + " " + type(x.type())
-                    : x.arg() == null ? x.name() : x.name() + " " + x.arg()).toList());
-            return kind + (m.kind() == Syntax.Kind.INIT ? "" : " " + m.name()) + "(" + join(m.params().stream().map(Syntax.Param::name).toList())
-                    + ")" + (mods.isEmpty() ? "" : " " + mods);
+                    : x.arg() == null ? x.name() : x.name().equals("migrates") ? "migrates to " + x.arg() : x.name() + " " + x.arg()).toList());
+            // M3c: init migrate from params.f(…), and the purposes' handlers by their words (withdraw m(…), …).
+            String head = m.kind() == Syntax.Kind.MIGRATE ? "init migrate from params." + m.from()
+                    : kind + (m.kind() == Syntax.Kind.INIT ? "" : (m.owned() ? "" : " ") + m.name());
+            return head + "(" + join(m.params().stream().map(Syntax.Param::name).toList()) + ")" + (mods.isEmpty() ? "" : " " + mods);
         }).toList()));
         types(out, "contract ", c.types(), c.enums(), c.fns());
         return String.join(" | ", out);
@@ -93,5 +106,14 @@ public final class CorpusParse {
 
     private static String join(List<String> xs) {
         return String.join(",", xs);
+    }
+
+    /** M3b: a keyed type's options in source order, signed by its name and the others as name=value. */
+    private static java.util.List<String> keyedOptions(Syntax.KeyedDecl k) {
+        var all = new java.util.ArrayList<java.util.Map.Entry<Syntax.Pos, String>>();
+        if (k.signed() != null) all.add(java.util.Map.entry(k.signed(), "signed"));
+        for (Syntax.Option o : k.options()) all.add(java.util.Map.entry(o.pos(), o.name() + "=" + o.value()));
+        all.sort(java.util.Comparator.comparing((java.util.Map.Entry<Syntax.Pos, String> e) -> e.getKey().line()).thenComparing(e -> e.getKey().col()));
+        return all.stream().map(java.util.Map.Entry::getValue).toList();
     }
 }
