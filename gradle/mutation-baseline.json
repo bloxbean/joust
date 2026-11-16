@@ -13,8 +13,23 @@
     },
     "org.julclang.state.dsl.JscMain": {
       "module": "julc-state-dsl",
-      "mutants": 343,
-      "score": 44.9
+      "mutants": 376,
+      "score": 41.0
+    },
+    "org.julclang.state.dsl.JscMain$1": {
+      "module": "julc-state-dsl",
+      "mutants": 6,
+      "score": 83.3
+    },
+    "org.julclang.state.dsl.JscMain$2": {
+      "module": "julc-state-dsl",
+      "mutants": 17,
+      "score": 35.3
+    },
+    "org.julclang.state.dsl.JscMain$Bound": {
+      "module": "julc-state-dsl",
+      "mutants": 1,
+      "score": 100.0
     },
     "org.julclang.state.dsl.JscMain$Lowered": {
       "module": "julc-state-dsl",
@@ -38,8 +53,8 @@
     },
     "org.julclang.state.dsl.v2.Checker$Loader": {
       "module": "julc-state-dsl",
-      "mutants": 29,
-      "score": 44.8
+      "mutants": 36,
+      "score": 38.9
     },
     "org.julclang.state.dsl.v2.Checker$Module": {
       "module": "julc-state-dsl",
@@ -58,8 +73,8 @@
     },
     "org.julclang.state.toolchain.JavaLibraryCertifier$Certification": {
       "module": "julc-state-toolchain",
-      "mutants": 182,
-      "score": 67.0
+      "mutants": 255,
+      "score": 60.0
     },
     "org.julclang.state.toolchain.JavaLibraryCertifier$Certification$1": {
       "module": "julc-state-toolchain",

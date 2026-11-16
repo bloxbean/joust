@@ -43,5 +43,8 @@ ext.pitTargets = ['org.julclang.state.dsl.v2.Checker*', 'org.julclang.state.dsl.
 ext.pitTests = ['org.julclang.state.dsl.v2.*CheckerTest', 'org.julclang.state.dsl.v2.JscV2PackageLockTest',
                 'org.julclang.state.dsl.v2.JscV2IrTest', 'org.julclang.state.dsl.v2.JscV2LibraryTest',
                 'org.julclang.state.dsl.v2.JscV2AbiTest', 'org.julclang.state.dsl.v2.JscV2DiagnosticsTest',
-                'org.julclang.state.dsl.JscCheckerTest', 'org.julclang.state.dsl.MigrateTest']
+                // #130 round r1 (design D1): JscMain's CLI after #111 removed v1 and migrate (JscCheckerTest, MigrateTest):
+                // its ABI acceptance and its formatter, ADR-0021 M5b and M5d.
+                'org.julclang.state.dsl.JscMainAcceptTest', 'org.julclang.state.dsl.JscMainFmtTest',
+                'org.julclang.state.dsl.v2.JscAcceptAbiTest']
 apply from: rootProject.file('gradle/pitest.gradle')

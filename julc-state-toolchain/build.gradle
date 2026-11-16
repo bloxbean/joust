@@ -53,7 +53,9 @@ ext.pitTests = ['org.julclang.state.toolchain.ValueAdapterDifferentialTest', 'or
                 'org.julclang.state.toolchain.AddressAdapterFuzzTest', 'org.julclang.state.toolchain.JscV2M2FourWayTest',
                 'org.julclang.state.toolchain.JscV2M2HostileInputTest',
                 'org.julclang.state.toolchain.JscV2M2cHostileInputTest', 'org.julclang.state.toolchain.JscV2JavaLibraryTest',
-                'org.julclang.state.toolchain.JscV2JavaLibraryR2Test']
+                'org.julclang.state.toolchain.JscV2JavaLibraryR2Test',
+                // #130 round r1 (design D1): the certifier's places of methods and records (ADR-0021 M5c).
+                'org.julclang.state.toolchain.JscLangJavaLibrariesTest']
 ext.pitMutableCodePaths = [project(':julc-state-api')]
 apply from: rootProject.file('gradle/pitest.gradle')
 
