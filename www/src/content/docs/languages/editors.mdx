@@ -30,7 +30,11 @@ Install the JOUST extension (`vscode-joust`). It bundles the server and its comp
 - In Restricted Mode, it analyses with the bundled compiler and runs nothing from the workspace.
 - In a trusted folder, it may use the project's own compiler: only that compiler's two engine files, after checking them.
 
-Rename goes through **JOUST: Rename Symbol**. **JOUST: Show generated Java** opens the lowered class, and **Accept ABI…**
+Rename goes through **JOUST: Rename Symbol**. It renames locals, parameters, `fn`s, types, enums, variants, fields, state
+fields and owned types. Renaming an owned type also renames its methods' and invariants' qualifiers and its `admits`. A
+field renamed in an owned type is renamed where the object is read: in its methods' bodies and modifiers, and in
+`keyed by` for a keyed type's key. A params field is also renamed in `init migrate from params.f`. Owned methods, the
+purposes' handlers and `init migrate` cannot be renamed: the rename refuses them. **JOUST: Show generated Java** opens the lowered class, and **Accept ABI…**
 reviews a changed ABI manifest before accepting it. Format Document, and format on save if you turn it on, use the same
 formatter as `joust fmt`. The formatting style belongs to the compiler's version (version 1 today). When the extension
 analyses with its bundled compiler (advisory), it formats with that one too, so a project pinned to another JOUST version

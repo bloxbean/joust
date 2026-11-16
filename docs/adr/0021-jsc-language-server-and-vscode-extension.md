@@ -1661,6 +1661,12 @@ later decision, like D11's automation.
   - the M5e row's entry and exit describe what was built (F2);
   - the acceptance cleanup (F3): the Status line, the Depends-on line, F15, and §10 (Q1 and Q2 resolved; Q3 and Q5–Q9
     decided; Q4 left to the maintainers).
+- **r10 note** (2026-11-16; the integration with ADR-0018 M3, #130 round r1, Codex X1–X3; no revision of its own): in an
+  owned action, destroy or invariant by type, a bare name and a modifier's field name the object's field (the checked
+  input's record), never the state's, so a rename of one never edits the other. M3's header references are indexed:
+  `keyed by f` (the type's field), `init migrate from params.f`, owned methods' and invariants' qualifiers, and
+  `admits T`. Owned types are renamable (with the ABI warning); owned methods, handlers and `init migrate` are refused.
+  Completion after `state.` in an owned method, and on an arriving object, offers its owned type's fields.
 - **r10** (2026-11-15; with the M5e implementation): §16 states M5e before its code: the scope (the editor's
   `joust.lock` gate, Neovim and Helix configurations, the tree-sitter package, docs, the release attachment),
   invariants E1–E8 (the lock gate agrees with `joust build` and never accepts; the lock is a confined snapshot input;

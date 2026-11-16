@@ -308,18 +308,27 @@ function nameType(model, name, pos, method) {
   }
   if (best) return best.type;
   if (method?.ctx?.state) {
-    const f = model.declarations.find((d) => d.kind === 'stateField' && d.name === name);
+    // ADR-0018 M3 (#130 round r1, X3): in an owned action or destroy the input is its object, of its owned type.
+    const input = inputOf(model, method);
+    const f = input ? recordFields(model, input).find((d) => d.name === name) : model.declarations.find((d) => d.kind === 'stateField' && d.name === name);
     if (f) return f.type;
-    if (name === 'state') return 'State';
+    if (name === 'state') return input ?? 'State';
   }
   if (name === 'params' && method?.ctx?.params) return 'Params';
   return BUILTIN_DOCS[name]?.[0] ?? null;
 }
 
-/** The fields of a record type named `name` (a `type`, the `State`, an event or `Params`), as declarations. */
+/** The owned type whose object is a method's input (an owned action's or destroy's, named T.m), or null (the state). */
+function inputOf(model, method) {
+  if (!method || !['ownedAction', 'ownedDestroy'].includes(method.kind) || !method.name?.includes('.')) return null;
+  const t = method.name.slice(0, method.name.indexOf('.'));
+  return model.declarations.some((d) => d.kind === 'owned' && d.name === t) ? t : null;
+}
+
+/** The fields of a record type named `name` (a `type`, an owned type, the `State`, an event or `Params`), as declarations. */
 function recordFields(model, name) {
   if (name === 'State') return model.declarations.filter((d) => d.kind === 'stateField');
-  const t = model.declarations.find((d) => (d.kind === 'type' || d.kind === 'event' || d.kind === 'params') && d.name === name);
+  const t = model.declarations.find((d) => (d.kind === 'type' || d.kind === 'owned' || d.kind === 'event' || d.kind === 'params') && d.name === name);
   if (t) return model.declarations.filter((d) => d.parent === t.id && d.kind === 'field');
   if (name === 'Params') {
     const p = model.declarations.find((d) => d.kind === 'params');
@@ -701,7 +710,7 @@ export function completion(text, pos, model, std = {}) {
   }
   if (ctx.state) {
     // M3: in an owned action or destroy, the state is its object: the owned type's fields (the method is named T.m).
-    const ownedType = method && ['ownedAction', 'ownedDestroy'].includes(method.kind) && method.name ? method.name.split('.')[0] : null;
+    const ownedType = inputOf(model, method);
     const owner = ownedType && model.declarations.find((d) => d.kind === 'owned' && d.name === ownedType);
     if (owner) {
       for (const d of model.declarations) if (d.kind === 'field' && d.parent === owner.id) add(d.name, 5, d.type);
@@ -779,7 +788,7 @@ export const STD_MODULE = /^std\/[a-z0-9_]+$/;
 const KEYWORDS = new Set(['jsc', 'package', 'import', 'from', 'contract', 'type', 'enum', 'fn', 'init', 'action', 'destroy', 'view', 'state',
   'const', 'require', 'pay', 'for', 'of', 'if', 'else', 'match', 'return', 'true', 'false', 'event', 'emit', 'params', 'invariant', 'receives',
   'let', 'var', 'function', 'class']);
-const RENAMABLE = new Set(['param', 'const', 'loopVar', 'binding', 'lambdaParam', 'fn', 'type', 'enum', 'variant', 'field', 'stateField',
+const RENAMABLE = new Set(['param', 'const', 'loopVar', 'binding', 'lambdaParam', 'fn', 'type', 'enum', 'variant', 'field', 'stateField', 'owned',
   'action', 'destroy', 'view', 'event']);
 
 /**

@@ -124,8 +124,22 @@ final class JscLangIndex {
     }
 
     /** The declaration a type name names: a type, an enum, an event, or a variant. */
+    /**
+     * #130 round r1 (X1): the owned type whose object is the input at 1-based {@code line:col} (the innermost owned action,
+     * destroy or invariant by type there), or null where the input is the state.
+     */
+    private String inputAt(int line, int col) {
+        Spans.Decl best = null;
+        for (Spans.Decl d : spans.decls) {
+            if (d.input == null || d.endLine < 0) continue;
+            boolean in = (line > d.startLine || line == d.startLine && col >= d.startCol) && (line < d.endLine || line == d.endLine && col <= d.endCol);
+            if (in && (best == null || d.startLine > best.startLine || d.startLine == best.startLine && d.startCol >= best.startCol)) best = d;
+        }
+        return best == null ? null : best.input;
+    }
+
     private Spans.Decl typeDecl(String name) {
-        for (String k : new String[]{"type", "enum", "event", "variant"}) {
+        for (String k : new String[]{"type", "enum", "event", "variant", "owned"}) {   // M3: an owned type too
             Spans.Decl d = decl(k, name);
             if (d != null) return d;
         }
@@ -199,7 +213,13 @@ final class JscLangIndex {
         for (Object[] lr : spans.lateRefs) {
             Tok t = (Tok) lr[0];
             String kind = (String) lr[1];
-            Spans.Decl d = kind.equals("params") ? decl("field", "params." + t.text()) : decl("stateField", t.text());
+            String input = inputAt(t.line(), t.col());
+            Spans.Decl d = kind.equals("params") ? decl("field", "params." + t.text())
+                    // #130 r1 (X2): an owned type's name (a method's or invariant's qualifier, admits T), a keyed type's key
+                    : kind.equals("type") ? typeDecl(t.text())
+                    : kind.startsWith("field:") ? field(kind.substring("field:".length()), t.text())
+                    // X1: in an owned action, destroy or invariant by type, a modifier's field is the object's
+                    : input != null ? field(input, t.text()) : decl("stateField", t.text());
             if (d == null && kind.equals("field")) d = decl("field", "params." + t.text());
             ref(t, d, 0);
         }
@@ -265,7 +285,11 @@ final class JscLangIndex {
                         if (d == null) d = spans.anchored(r.local().pos.line(), r.local().pos.col(), r.local().name);
                         ref(n.pos().line(), n.pos().col(), end, d, 0);
                     }
-                    case Ir.StateField f -> ref(n.pos().line(), n.pos().col(), end, decl("stateField", f.field()), 0);
+                    // #130 r1 (X1): in an owned action, destroy or invariant by type, the input is the object: its field.
+                    case Ir.StateField f -> {
+                        String input = inputAt(n.pos().line(), n.pos().col());
+                        ref(n.pos().line(), n.pos().col(), end, input != null ? field(input, f.field()) : decl("stateField", f.field()), 0);
+                    }
                     case Ir.Variant v -> ref(n.pos().line(), n.pos().col(), end,
                             decl("variant", v.variant()) != null ? decl("variant", v.variant()) : decl("event", v.variant()), 0);
                     case Ir.StateRef s -> builtin(n.pos().line(), n.pos().col(), end, "state");

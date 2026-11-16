@@ -904,7 +904,10 @@ final class Parser {
                 openDecl(peek(1).is("init") ? "ownedInit" : peek(1).is("action") ? "ownedAction" : "ownedDestroy");
                 next();
                 Tok k = next();
+                late(peek(), "type");   // #130 r1 (X2): the qualifier names the owned type
                 String on = ident("the owned type of an owned " + k.text() + " (owned " + k.text() + " Account.name(…))");
+                // #130 r1 (X1): an owned action's or destroy's state is its object (an owned init has no input).
+                if (spans != null && spans.current() != null && !k.is("init")) spans.current().input = on;
                 if (!at(".")) {
                     throw peek().pos().error("JSC1201", "an owned method names its type and itself: owned " + k.text() + " " + on + ".name(…)");
                 }
@@ -956,8 +959,10 @@ final class Parser {
                 String on = null;
                 if (at(".")) {
                     // M3a (ADR-0012 D1): invariant T.name = e, an invariant of the owned type T.
+                    late(nt, "type");   // #130 r1 (X2): the qualifier names the owned type
                     next();
                     on = n;
+                    if (spans != null && spans.current() != null) spans.current().input = on;   // X1: its input is the object
                     nt = peek();
                     n = ident("an invariant name after '" + on + ".'");
                 }
@@ -985,6 +990,7 @@ final class Parser {
                 }
                 next();
                 next();
+                late(peek(), "params");   // #130 r1 (X2): a reference to the params field
                 String previous = ident("the params field after 'init migrate from params.'");
                 var ps = params();
                 var mods = mods();
@@ -1109,6 +1115,7 @@ final class Parser {
         if (!at("by")) throw peek().pos().error("JSC1240", "a keyed type names its key field: owned " + type + " keyed by name { name: Bytes }");
         next();
         Pos fp = peek().pos();
+        late(peek(), "field:" + type);   // #130 r1 (X2): a reference to the owned type's key field
         String field = ident("the key field after 'keyed by' (owned " + type + " keyed by name)");
         Pos signed = null;
         var options = new ArrayList<Option>();
@@ -1171,6 +1178,7 @@ final class Parser {
             } else if (t.is("admits")) {
                 // M3a (ADR-0012 D3): admits T, an instance action through which objects of the owned type T arrive.
                 next();
+                late(peek(), "type");   // #130 r1 (X2): a reference to the owned type
                 mods.add(new Mod("admits", ident("the owned type after 'admits' (admits Hero)"), t.pos()));
             } else if (t.is("authorized")) {
                 // M2b (ADR-0009 D3): authorized <credential>, a state field or params.f.

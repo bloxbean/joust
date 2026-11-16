@@ -37,6 +37,11 @@ final class Spans {
         int endCol = -1;
         /** True when parsing stopped (at the first error) inside it: its extent ends where parsing stopped. */
         boolean partial;
+        /**
+         * ADR-0018 M3 (#130 round r1, X1): the owned type whose object is this member's input (an owned action's or
+         * destroy's, an invariant by type's): its bare names and modifiers read that object's fields, not the state's.
+         */
+        String input;
 
         Decl(int id, String kind, Decl parent, int startLine, int startCol) {
             this.id = id;
