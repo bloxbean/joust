@@ -484,7 +484,7 @@ export function validate(p) {
         if (gov) {
           const gf = govFields(gov, c).find((x) => x.name === f);
           if (!gf) fail(where, `${show(c)} has no field ${show(f)}`, 'field');
-          if (gf.type === 'Data') fail(where, `${show(c)}.${show(f)} is PlutusData, never bound (JSC1320)`);
+          if (gf.type === 'Data') fail(where, `the field ${show(c)}.${show(f)} is PlutusData, never bound (JSC1320)`);
           continue;
         }
         const known = c === 'Some' ? f === 'value' : key(c) in CRED_FIELDS ? f === CRED_FIELDS[key(c)] : (shapes.get(c) ?? []).some((x) => x.name === f);
@@ -510,11 +510,11 @@ export function validate(p) {
   const modField = (ref, want, where, input = 'State') => {
     const params = typeof ref === 'string' && ref.startsWith('params.');
     // #98 review S5: params.f names the program's params, never another record that happens to be named Config.
-    if (params && !('params' in p)) fail(where, `${show(ref)}: the contract has no params`);
+    if (params && !('params' in p)) fail(where, `the modifier's field ${show(ref)}: the contract has no params`);
     const fs = (params ? p.params.fields : shapes.get(input)) ?? [];
     const f = fs.find((x) => x.name === (params ? ref.slice(7) : ref));
     if (!f) fail(where, `no field ${JSON.stringify(ref)}`);
-    if (JSON.stringify(f.type) !== JSON.stringify(want)) fail(where, `${show(ref)} is not ${JSON.stringify(want)}`);
+    if (JSON.stringify(f.type) !== JSON.stringify(want)) fail(where, `the modifier's field ${show(ref)} is not ${JSON.stringify(want)}`);
   };
   /** A condition or a boolean operand is of type Bool (review S3 on #76): the interpreter never tests truthiness. */
   const bool = (e, where, what) => {
@@ -574,7 +574,7 @@ export function validate(p) {
     if (govRecord) {
       const gf = GOV_RECORDS[e.record].find((x) => x.name === e.field);
       if (!gf) fail(where, `${show(e.record)} has no field ${show(e.field)}`, 'field');
-      if (gf.type === 'Data') fail(where, `${show(e.record)}.${show(e.field)} is PlutusData, never read (JSC1320)`);
+      if (gf.type === 'Data') fail(where, `the field ${show(e.record)}.${show(e.field)} is PlutusData, never read (JSC1320)`);
       if (JSON.stringify(e.target.type) !== JSON.stringify(e.record)) fail(where, `a ${show(e.record)} field read from a ${JSON.stringify(e.target.type)}`, 'ledgerType');
     }
     if ((e.node === 'New' || (e.node === 'GetField' && !govRecord)) && !shapes.has(e.record)) fail(where, `no record ${show(e.record)}`);
@@ -636,7 +636,7 @@ export function validate(p) {
   const owned = p.owned ?? [];
   if ('owned' in p) {
     if (!Array.isArray(p.owned) || p.owned.length === 0) fail('owned', 'a non-empty list, absent when there are none');
-    for (const o of p.owned) if (!p.records.some((r) => r.name === o) || p.owned.indexOf(o) !== p.owned.lastIndexOf(o)) fail('owned', `${show(o)} is not one record`);
+    for (const o of p.owned) if (!p.records.some((r) => r.name === o) || p.owned.indexOf(o) !== p.owned.lastIndexOf(o)) fail('owned', `the owned type ${show(o)} is not one record`);
     // #101 review C3 (round r2): M3a2's owned-type forms (several owned types, a BigMap in an owned type) are staged.
     if (OWNED_STAGE < 2 && p.owned.length > 1) fail('owned', `a second owned type (${show(p.owned[1])}) is not produced yet (M3a2; JSC1215)`);
     for (const o of p.owned) {
@@ -681,7 +681,7 @@ export function validate(p) {
     }
     if (OWNED_STAGE < 3 && ('into' in m || 'arriving' in m || admits)) fail(where, 'moves (into, admits) are not produced yet (M3a3; JSC1215)');
     // #107 round-r2 review C5, F7: the shapes stage 3 admits, as the checker produces them (and as the Java reader).
-    if ('into' in m && 'on' in m && keepsBigMap(m.on)) fail(where, `${show(m.on)} keeps a BigMap, so it cannot move yet (JSC1212)`);
+    if ('into' in m && 'on' in m && keepsBigMap(m.on)) fail(where, `the owned type ${show(m.on)} keeps a BigMap, so it cannot move yet (JSC1212)`);
     if (admits) {
       if (!Array.isArray(m.params) || m.params.length === 0 || m.params[0] === null || m.params[0].type !== 'Bytes') {
         fail(where, 'an admits action\'s first parameter is the arriving object\'s id, a Bytes (JSC1212)');
@@ -815,7 +815,7 @@ export function validate(p) {
       const where = `invariant ${show(inv.name)}`;
       keys(inv, ['name', ...('on' in inv ? ['on'] : []), 'body', 'at'], where);
       if (!IDENT.test(str(inv.name, where))) fail(where, `a bad name ${show(inv.name)}`);   // IrReaderFuzzTest: a name [] was accepted
-      if ('on' in inv && !owned.includes(inv.on)) fail(where, `${show(inv.on)} is not an owned type`);
+      if ('on' in inv && !owned.includes(inv.on)) fail(where, `the invariant's type ${show(inv.on)} is not an owned type`);
       // #107 round-r2 review F7: an owned type that keeps a BigMap has no invariants (JSC1213).
       if ('on' in inv && keepsBigMap(inv.on)) fail(where, `the owned type ${show(inv.on)} keeps a BigMap, so it has no invariants (JSC1213)`);
       if ('on' in inv && OWNED_STAGE < 3) fail(where, 'an owned type\'s invariant is not produced yet (M3a3; JSC1215)');

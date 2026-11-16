@@ -516,6 +516,26 @@ class IrReaderFuzzTest {
         }
     }
 
+    /**
+     * #130 round r2 (security Z3): a check's words start with fixed text, never an IR-supplied name, so a name holding a
+     * rule's prefix ("no fn x") cannot have a check registered under that rule. An invariant whose type is "no fn x".
+     */
+    @org.junit.jupiter.api.Test
+    void aNameHoldingARulesPrefix_isNotRegistered() throws IOException {
+        String text = Files.readString(FIXTURES.resolve("Mix.ir.json"));
+        int inv = text.indexOf("\"invariants\"");
+        assertTrue(inv > 0, "Mix's invariants");
+        String mutant = text.substring(0, inv) + text.substring(inv).replaceFirst("\"on\": ?\"Hero\"", "\"on\": \"no fn x\"");
+        assertNotEquals(text, mutant, "the invariant by type's on");
+        String js = js(mutant);
+        @SuppressWarnings("unchecked")
+        var answer = (Map<String, Object>) AbiCheck.Json.parse(js);
+        assertEquals("the invariant's type no fn x is not an owned type", answer.get("irWhat"), js);
+        assertNull(known97(answer), js);
+        assertTrue(java(mutant).startsWith("refused"), java(mutant));
+        assertEquals("agree", verdict(java(mutant), js));
+    }
+
     /** S13: the rules read the check's own words, so a location holding such a phrase cannot classify a new check. */
     @org.junit.jupiter.api.Test
     void aLocationHoldingARulesWords_isNotRegistered() {
