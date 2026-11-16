@@ -281,7 +281,10 @@ class JscLangTest {
         assertEquals(strict.abiJson(), a.lowered().abiJson(), file);
         assertEquals(strict.sourceMapJson(), a.lowered().sourceMapJson(), file);
         assertEquals(strict.irJson(), a.lowered().irJson(), file);
-        assertEquals(strict.diagnostics().stream().map(w -> List.of(w.code(), w.line(), w.col(), w.message())).toList(),
+        // The model lists its diagnostics by position (JscLang); the build in the order its rules run, which since M3 (the
+        // keyed rules' JSC9012 after the methods' JSC9011) is not always the position order: compared by position.
+        assertEquals(strict.diagnostics().stream().sorted(java.util.Comparator.comparingInt((JscV2.Warning w) -> w.line()).thenComparingInt(w -> w.col()))
+                .map(w -> List.of(w.code(), w.line(), w.col(), w.message())).toList(),
                 a.model().diagnostics().stream().map(d -> List.<Object>of(d.code(), d.line(), d.col(), d.message())).toList(), file);
     }
 

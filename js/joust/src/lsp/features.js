@@ -109,6 +109,9 @@ const KIND_LABEL = {
   contract: 'contract', state: 'state', stateField: 'state field', init: 'init', action: 'action', destroy: 'destroy', view: 'view',
   fn: 'fn', param: 'parameter', type: 'type', field: 'field', enum: 'enum', variant: 'variant', const: 'const', loopVar: 'loop variable',
   binding: 'match binding', lambdaParam: 'lambda parameter', import: 'import', event: 'event', param_: 'parameter',
+  // ADR-0018 M3: owned types and their methods, the script purposes' handlers, init migrate.
+  owned: 'owned type', ownedInit: 'owned init', ownedAction: 'owned action', ownedDestroy: 'owned destroy', withdraw: 'withdraw handler',
+  certify: 'certify handler', vote: 'vote handler', propose: 'propose handler', migrate: 'init migrate', params: 'params', invariant: 'invariant',
 };
 
 /** The built-ins' documentation (D7: "built-ins (to their docs)"); std rows come from the engine's catalogue. */
@@ -190,6 +193,9 @@ const TOKEN_OF = {
   contract: 'class', state: 'type', stateField: 'property', init: 'method', action: 'method', destroy: 'method', view: 'method', fn: 'function',
   param: 'parameter', type: 'type', field: 'property', enum: 'enum', variant: 'enumMember', const: 'variable', loopVar: 'variable',
   binding: 'variable', lambdaParam: 'parameter', event: 'type',
+  // ADR-0018 M3 (the integration with M5): an owned type is a type, its methods, the handlers and init migrate are methods.
+  owned: 'type', ownedInit: 'method', ownedAction: 'method', ownedDestroy: 'method', withdraw: 'method', certify: 'method', vote: 'method',
+  propose: 'method', migrate: 'method',
 };
 const BINDINGS = new Set(['param', 'const', 'loopVar', 'binding', 'lambdaParam']);
 
@@ -322,11 +328,15 @@ function recordFields(model, name) {
   return [];
 }
 
+/** The kinds of method (and fn) declarations: M3's owned methods, handlers and init migrate included. */
+const METHOD_KINDS = new Set(['init', 'action', 'destroy', 'view', 'fn', 'ownedInit', 'ownedAction', 'ownedDestroy', 'withdraw', 'certify', 'vote',
+  'propose', 'migrate']);
+
 /** The innermost method or fn declaration containing `pos`. */
 function methodAt(model, pos, text) {
   let best = null;
   for (const d of model.declarations) {
-    if (!['init', 'action', 'destroy', 'view', 'fn'].includes(d.kind) || !contains(d.range, pos)) continue;
+    if (!METHOD_KINDS.has(d.kind) || !contains(d.range, pos)) continue;
     if (!best || size(d.range) < size(best.range)) best = d;
   }
   return best && { ...best, ctx: contextOf(model, best, text) };
@@ -345,14 +355,17 @@ export function contextOf(model, method, text) {
   const params = model.declarations.some((d) => d.kind === 'params');
   if (method.kind === 'fn') return { params };
   let funds = false;
-  if (typeof text === 'string' && method.range && (method.kind === 'action' || method.kind === 'destroy')) {
+  if (typeof text === 'string' && method.range && ['action', 'destroy', 'ownedAction', 'ownedDestroy'].includes(method.kind)) {
     const from = offsetAt(text, { line: method.range[0], character: method.range[1] });
     for (const t of scanTokens(text.slice(from, from + 512))) {
       if (t.t === 'p' && (t.v === '{' || t.v === '=')) break;
       if (t.t === 'id' && t.v === 'receives') funds = true;
     }
   }
-  return { state: method.kind !== 'init', tx: method.kind !== 'view', params, funds };
+  // M3: a creation (init, owned init, init migrate) and a purpose's handler have no input state; an owned method's is its object.
+  const creates = ['init', 'ownedInit', 'migrate'].includes(method.kind);
+  const handler = ['withdraw', 'certify', 'vote', 'propose'].includes(method.kind);
+  return { state: !creates && !handler, tx: method.kind !== 'view', params, funds };
 }
 
 /**
@@ -403,7 +416,8 @@ export function scanTokens(src) {
   return out;
 }
 
-const HEADERS = new Set(['init', 'action', 'destroy', 'view']);
+// M3: an owned method's header starts with 'owned'; the handlers' with their word.
+const HEADERS = new Set(['init', 'action', 'destroy', 'view', 'owned', 'withdraw', 'certify', 'vote', 'propose']);
 
 /**
  * C4, F1 on #99: `model` (of `oldText`) mapped onto `newText`, keeping only what the edit between them did not touch: the
@@ -604,7 +618,8 @@ export function completion(text, pos, model, std = {}) {
     }
     const rest = closed < 0 ? null : toks.slice(closed + 1);
     if (rest && !rest.some((t) => t.v === '{' || t.v === '=' || t.v === ':')) {
-      return (std.modifiers ?? ['only', 'authorized', 'after', 'before', 'payable', 'open']).map((m) => item(m, 14, 'modifier'));
+      return (std.modifiers ?? ['only', 'authorized', 'after', 'before', 'payable', 'open', 'quorum', 'receives', 'batched', 'admits', 'retire',
+        'migrates']).map((m) => item(m, 14, 'modifier'));
     }
   }
 
@@ -683,8 +698,16 @@ export function completion(text, pos, model, std = {}) {
     if (BINDINGS.has(d.kind) && d.scope && contains(d.scope, pos) && d.name) add(d.name, d.kind === 'param' || d.kind === 'lambdaParam' ? 6 : 6, d.type);
   }
   if (ctx.state) {
-    for (const d of model.declarations) if (d.kind === 'stateField') add(d.name, 5, d.type);
-    add('state', 6, 'State');
+    // M3: in an owned action or destroy, the state is its object: the owned type's fields (the method is named T.m).
+    const ownedType = method && ['ownedAction', 'ownedDestroy'].includes(method.kind) && method.name ? method.name.split('.')[0] : null;
+    const owner = ownedType && model.declarations.find((d) => d.kind === 'owned' && d.name === ownedType);
+    if (owner) {
+      for (const d of model.declarations) if (d.kind === 'field' && d.parent === owner.id) add(d.name, 5, d.type);
+      add('state', 6, ownedType);
+    } else {
+      for (const d of model.declarations) if (d.kind === 'stateField') add(d.name, 5, d.type);
+      add('state', 6, 'State');
+    }
   }
   if (ctx.tx) for (const b of ['caller', 'received', 'balance', 'validFrom', 'validTo']) add(b, 6, BUILTIN_DOCS[b][0]);
   if (ctx.params) add('params', 6, 'Params');

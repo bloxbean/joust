@@ -71,6 +71,11 @@
 
 ; M3b (#112 design F1): a keyed type's clause and its signed option; the words are contextual (a field may be called by).
 (keyed_clause [ "keyed" "by" ] @keyword)
+
+; M3c (the integration with M5): the script purposes' handlers, init migrate and the migrating destroy's modifier.
+[ "withdraw" "certify" "vote" "propose" ] @keyword
+(migrate_declaration [ "migrate" "from" ] @keyword)
+(modifier [ "migrates" "to" ] @keyword.modifier)
 (keyed_option "signed" @keyword.modifier)
 (keyed_option name: (identifier) @property)
 

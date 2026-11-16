@@ -91,7 +91,8 @@ final class Spans {
         last = lastTok;
         // M5b: a method's or fn's parameters are visible in it; a loop variable in its loop.
         if (d.kind.equals("loopVar")) scopes.put(d, new int[]{d.startLine, d.startCol, d.endLine, d.endCol});
-        if (Set.of("init", "action", "destroy", "view", "fn", "invariant").contains(d.kind)) {
+        if (Set.of("init", "action", "destroy", "view", "fn", "invariant", "ownedInit", "ownedAction", "ownedDestroy", "withdraw", "certify",
+                "vote", "propose", "migrate").contains(d.kind)) {   // M3's methods too
             for (int k = decls.size() - 1; k > d.id; k--) {
                 Decl p = decls.get(k);
                 if (p.parent == d && p.kind.equals("param")) scopes.put(p, new int[]{d.startLine, d.startCol, d.endLine, d.endCol});

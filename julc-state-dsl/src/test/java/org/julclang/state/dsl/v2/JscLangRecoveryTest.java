@@ -38,7 +38,9 @@ class JscLangRecoveryTest {
     record Member(String kind, String name, JscLang.Range range) {}
 
     static final Set<String> MEMBER_KINDS = Set.of("import", "type", "enum", "fn", "state", "params", "event", "invariant", "init", "action",
-            "destroy", "view", "contract");
+            "destroy", "view", "contract",
+            // ADR-0018 M3: owned types and methods, the purposes' handlers, init migrate
+            "owned", "ownedInit", "ownedAction", "ownedDestroy", "withdraw", "certify", "vote", "propose", "migrate");
 
     static List<Member> members(JscLang.Model m) {
         var byId = new HashMap<Integer, JscLang.Declaration>();

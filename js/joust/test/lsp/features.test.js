@@ -187,3 +187,37 @@ test('S1 on #99: completion reads a bounded window in linear time: hostile lines
     assert.ok(ms < 200, `${line.slice(0, 40)}… (${line.length} chars): ${ms.toFixed(1)} ms`);
   }
 });
+
+// ADR-0018 M3 (the integration with M5): owned types, their methods, the handlers and init migrate in hover, semantic
+// tokens and completion, on the engine's own model of examples/dsl's Armory (the golden model JscLangTest writes).
+test('M3: an owned type and its methods in hover, semantic tokens and completion (Armory)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const dir = new URL('../../../../julc-state-dsl/src/test/resources/lang/', import.meta.url);
+  const m = normalise(JSON.parse(readFileSync(new URL('models/examples_dsl_src_main_jsc_org_julclang_state_examples_dsl_Armory.model.json', dir), 'utf8')));
+  const text = readFileSync(new URL('../../../../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Armory.jsc', import.meta.url), 'utf8');
+  const stash = m.declarations.find((d) => d.kind === 'ownedAction' && d.name === 'Vault.stash');
+  assert.ok(stash, 'the owned action is a declaration');
+  const nameAt = { line: stash.nameRange[0], character: stash.nameRange[1] + 1 };
+  assert.match(hover(m, nameAt, null).contents.value, /owned action/);
+  const { data } = semanticTokens(m);
+  const types = new Map();
+  let line = 0;
+  let col = 0;
+  for (let i = 0; i < data.length; i += 5) {
+    line += data[i];
+    col = data[i] === 0 ? col + data[i + 1] : data[i + 1];
+    types.set(`${line}:${col}`, TOKEN_TYPES[data[i + 3]]);
+  }
+  const vault = m.declarations.find((d) => d.kind === 'owned' && d.name === 'Vault');
+  assert.equal(types.get(`${vault.nameRange[0]}:${vault.nameRange[1]}`), 'type');
+  assert.equal(types.get(`${stash.nameRange[0]}:${stash.nameRange[1]}`), 'method');
+  // In an owned action's body the state is the object: the owned type's fields, not the instance's.
+  const body = { line: stash.range[0] + 2, character: 4 };
+  const labels = completion(text, body, m, {}).map((i) => i.label);
+  for (const l of ['owner', 'kinds', 'inventory', 'state', 'item', 'count']) assert.ok(labels.includes(l), l);
+  for (const l of ['keeper', 'isOpen']) assert.ok(!labels.includes(l), l);
+  // After an owned method's parameters: the modifiers, M3's included.
+  const header = 'jsc 1\npackage t\ncontract C {\n  owned action Vault.go(to: into) \n}\n';
+  const mods = completion(header, { line: 3, character: 34 }, m, {}).map((i) => i.label);
+  for (const l of ['only', 'admits', 'retire', 'migrates']) assert.ok(mods.includes(l), l);
+});

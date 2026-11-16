@@ -673,10 +673,15 @@ public final class JscLang {
 
     /** The types written as types (D7: completion in a type position). */
     static final List<String> TYPES = List.of("Int", "Bool", "Bytes", "Key", "Hash", "Value", "Address", "Credential", "List", "Option", "Map",
-            "BigMap", "Instance");
+            "BigMap", "Instance",
+            // ADR-0018 M3c: the script purposes' ledger types (a handler's, a fn's or a const's) and LedgerMap
+            "TxCert", "Voter", "Vote", "GovernanceActionId", "ProposalProcedure", "GovernanceAction", "Delegatee", "DRep", "ProtocolVersion",
+            "Rational", "Constitution", "LedgerMap");
 
     /** The method modifiers offered after a method's parameters (D7). */
-    static final List<String> MODIFIERS = List.of("only", "authorized", "after", "before", "payable", "open", "quorum", "receives", "batched");
+    static final List<String> MODIFIERS = List.of("only", "authorized", "after", "before", "payable", "open", "quorum", "receives", "batched",
+            // ADR-0018 M3: an admits action, a keyed type's retiring exit, a migrating destroy
+            "admits", "retire", "migrates");
 
     /** What follows a '.' on a value of each container type (D7), as the checker reads it: properties and methods. */
     static final java.util.Map<String, List<String[]>> MEMBERS = java.util.Map.of(
