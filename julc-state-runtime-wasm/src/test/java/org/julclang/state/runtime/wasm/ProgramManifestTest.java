@@ -55,8 +55,12 @@ class ProgramManifestTest {
 
     static final ObjectMapper JSON = new ObjectMapper();
 
-    /** Blake2b-256 of the committed transition-program variants (julc-state-api src/discovery/java). */
-    static final String MERKLE_MAPS_VARIANT = "05e006691972d3138ac5c1a74618c61277ff6e20fcd0c23397e1a4915e2c5e2c";
+    /**
+     * Blake2b-256 of the committed transition-program variants (julc-state-api src/discovery/java). MerkleMaps' changed
+     * with main's ADR-0018 M3a: {@code setInt} (a BigMap's set), added to the variant with the same body as the on-chain
+     * source (a write: no read discovery).
+     */
+    static final String MERKLE_MAPS_VARIANT = "c015838a1ea93d3eb12f212f4222b583b432d821aeaed4a77a8339ef9ec766ce";
     static final String REQUIRE_VARIANT = "5fd2eedc444adf55e25dfc29704d15c59f6bf38e0d5cda65f88c72bdc92c7283";
     static final String REQUIRE = ProgramManifest.REQUIRE;
 
