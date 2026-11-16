@@ -1,0 +1,146 @@
+// ADR-0021 L10, measured as the server runs the engine (EngineHost: a worker, the model's JSON posted back and parsed on
+// the protocol thread, i.e. INCLUDING the model's export across the engine boundary):
+//   - analysis latency, median and p95 over 100 warm calls, for Ledger.jsc and the 509- and 1,889-line files made from it
+//     (L10: p95 at most 50 ms for the 1,889-line file);
+//   - formatting latency for the 1,889-line file, re-indented and as it is (ADR-0021 r9 §15 F6: p95 at most 60 ms);
+//   - the process's RSS with one analysis worker (L10: at most 600 MB), with two analysis workers, and with two analysis
+//     workers and a build worker after three Ledger builds (D4's largest configuration; L10: at most 1.2 GB).
+// Usage: node js/joust/test/lsp/measure-l10.mjs [--check]   (--check: fail past CI's looser bounds, 250 ms p95 (about 3x
+// what CI's runner measured) and the RSS bounds + 50%, since CI hardware differs; the strict figures are what the PR reports).
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { EngineHost } from '../../src/lsp/host.js';
+import { ENGINE, HAS_ENGINE } from './client.js';
+
+if (!HAS_ENGINE) {
+  console.log('skipped: no engine in js/joust/engine');
+  process.exit(0);
+}
+const check = process.argv.includes('--check');
+const repo = fileURLToPath(new URL('../../../../', import.meta.url));
+const ledger = readFileSync(join(repo, 'examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Ledger.jsc'), 'utf8');
+const grow = (n) => {
+  let fns = '';
+  for (let k = 0; k < n; k++) fns += `fn extra${k}(x: Int): Int {\n  const y = x + ${k}\n  const z = y * 2\n  z - x\n}\n\n`;
+  return ledger.replace(/\ncontract /, `\n${fns}contract `);
+};
+const files = [['Ledger.jsc', ledger], ['Ledger509.jsc', grow(70)], ['Ledger1889.jsc', grow(300)]];
+const mb = () => Math.round(process.memoryUsage().rss / 1048576);
+const pct = (xs, p) => [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * p))];
+
+const host = new EngineHost({ workerEntry: new URL('../../src/lsp/worker.js', import.meta.url), analysisMs: 10000 });
+const engine = { file: join(ENGINE, 'joust-toolchain.js'), id: 'measure', source: 'bundled' };
+const out = { latency: {}, rss: {} };
+await host.info('a', engine);
+for (const [name, src] of files) {
+  const lines = src.split('\n').length;
+  const ts = [];
+  // ADR-0021 r8 (M5c): L10's path is the per-edit diagnostics model (index: false); the index, which the server asks
+  // for behind it on the same worker, is measured beside it.
+  const ix = [];
+  for (let k = 0; k < 110; k++) {
+    const t = performance.now();
+    const r = await host.analyze('a', engine, { file: 'Ledger.jsc', source: src + ' '.repeat(k), index: false });
+    JSON.parse(r.model);
+    const t2 = performance.now();
+    const i = await host.analyze('a', engine, { file: 'Ledger.jsc', source: src + ' '.repeat(k), op: 'index' });
+    JSON.parse(i.model);
+    if (k >= 10) {
+      ts.push(t2 - t);
+      ix.push(performance.now() - t2);
+    }
+  }
+  const diagChars = (await host.analyze('a', engine, { file: 'Ledger.jsc', source: src, index: false })).model.length;
+  out.latency[name] = { lines, median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2), diagnosticsChars: diagChars,
+    indexMedian: +pct(ix, 0.5).toFixed(2), indexP95: +pct(ix, 0.95).toFixed(2),
+    modelChars: (await host.analyze('a', engine, { file: 'Ledger.jsc', source: src, op: 'index' })).model.length };
+}
+// F3 on #99: the 1,889-line file's lowering in the same worker (warm), the yardstick of a hardware-independent guard.
+{
+  const src = files[2][1];
+  const ts = [];
+  for (let k = 0; k < 23; k++) {
+    const t = performance.now();
+    const r = await host.request('a', engine, { op: 'lower', file: 'Ledger.jsc', source: src + ' '.repeat(k) }, { input: `lower${k}`, what: 'the lowering', timeoutMs: 30000 });
+    if (!r.model) throw new Error(`lowering failed: ${r.internal?.message}`);
+    if (k >= 3) ts.push(performance.now() - t);
+  }
+  out.latency.lower1889 = { median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2) };
+  out.latency.ratio = +(out.latency['Ledger1889.jsc'].median / out.latency.lower1889.median).toFixed(3);
+}
+// ADR-0021 r9 §15 F6 (M5d): formatting the 1,889-line file in the same worker (warm), as the server asks for it: the file
+// with its indentation stripped (every line re-indented) and as it is (formatted: no change).
+{
+  const src = files[2][1];
+  const messy = src.replace(/^ +/gm, '');
+  for (const [key, text] of [['format1889', messy], ['format1889Formatted', src]]) {
+    const ts = [];
+    for (let k = 0; k < 110; k++) {
+      const t = performance.now();
+      const r = await host.request('a', engine, { op: 'format', source: text + ' '.repeat(k) }, { input: `${key}${k}`, what: 'the formatting', timeoutMs: 30000 });
+      const f = r.model ? JSON.parse(r.model) : null;
+      if (!f?.ok) throw new Error(`formatting failed: ${r.internal?.message ?? f?.error?.message}`);
+      if (k >= 10) ts.push(performance.now() - t);
+    }
+    out.latency[key] = { median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2) };
+  }
+  out.latency.formatRatio = +(out.latency.format1889.median / out.latency.lower1889.median).toFixed(3);
+}
+out.rss.oneAnalysisWorker = mb();
+await host.info('b', { ...engine, id: 'measure-b' });
+await host.analyze('b', { ...engine, id: 'measure-b' }, { file: 'Ledger.jsc', source: ledger });
+out.rss.twoAnalysisWorkers = mb();
+// M5b's build worker, as the server starts it (EngineHost with joust build's 8 MB stack and D2a's 384 MB heap, the
+// worker's build operation): three Ledger builds.
+const buildHost = new EngineHost({ workerEntry: new URL('../../src/lsp/worker.js', import.meta.url), stackSizeMb: 8, maxOldGenerationSizeMb: 384,
+  analysisMs: 120000, maxWorkers: 1 });
+const builds = [];
+for (let k = 0; k < 3; k++) {
+  const t = performance.now();
+  const r = await buildHost.request('build', { ...engine, id: 'measure-build' }, { op: 'build',
+    files: { 'org/julclang/state/examples/dsl/Ledger.jsc': ledger + ' '.repeat(k) }, options: {} }, { input: String(k), what: 'the build', timeoutMs: 120000 });
+  const result = r.model ? JSON.parse(r.model) : null;
+  if (!result?.ok) throw new Error(`build failed: ${r.internal?.message ?? JSON.stringify(result?.diagnostics)}`);
+  builds.push(Math.round(performance.now() - t));
+}
+out.rss.twoAnalysisWorkersAndABuildWorker = mb();
+out.builds = builds;
+buildHost.dispose();
+host.dispose();
+console.log(JSON.stringify(out, null, 2));
+
+const bound = (v, strict, loose) => (check ? v <= loose : true) && { v, strict, withinStrict: v <= strict };
+const results = [
+  // CI's runner measured 86.7 ms (run 43350031856); its bound is set about 3x above that, to catch regressions without
+  // flaking on a noisy runner (#83 review F9). L10's strict bound (60 ms since r7, #99 F3) is for §1's reference machine.
+  ['p95 (1,889 lines)', bound(out.latency['Ledger1889.jsc'].p95, 60, 250)],
+  // F6 (M5d): formatting the 1,889-line file, the same bounds as its analysis.
+  ['formatting p95 (1,889 lines)', bound(out.latency.format1889.p95, 60, 250)],
+  ['RSS, one analysis worker (MB)', bound(out.rss.oneAnalysisWorker, 600, 900)],
+  ['RSS, two analysis workers and a build worker (MB)', bound(out.rss.twoAnalysisWorkersAndABuildWorker, 1229, 1800)],
+];
+// F3 on #99: guards that do not depend on the runner. The model of the 1,889-line file is deterministic (239,874
+// characters at M5b): a budget 5% above it. And the analysis's median against the same worker's warm lowering of the
+// same file, measured in the same job (M5b: about 0.3): at most 0.5.
+results.push(['model of 1,889 lines (characters)', check ? out.latency['Ledger1889.jsc'].modelChars <= 252000 && { v: out.latency['Ledger1889.jsc'].modelChars, strict: 252000, withinStrict: true }
+  : { v: out.latency['Ledger1889.jsc'].modelChars, strict: 252000, withinStrict: out.latency['Ledger1889.jsc'].modelChars <= 252000 }]);
+// ADR-0021 r8 (M5c): the per-edit diagnostics model of the 1,889-line file (49,910 characters at M5c): at most 55,000.
+{
+  const c = out.latency['Ledger1889.jsc'].diagnosticsChars;
+  results.push(['diagnostics model of 1,889 lines (characters)', check ? c <= 55000 && { v: c, strict: 55000, withinStrict: true } : { v: c, strict: 55000, withinStrict: c <= 55000 }]);
+}
+results.push(['analysis / lowering, median (1,889 lines)', check ? out.latency.ratio <= 0.5 && { v: out.latency.ratio, strict: 0.5, withinStrict: true }
+  : { v: out.latency.ratio, strict: 0.5, withinStrict: out.latency.ratio <= 0.5 }]);
+// F6 (M5d): a guard that does not depend on the runner: formatting the re-indented 1,889-line file takes at most half its
+// lowering (0.106 at M5d).
+results.push(['formatting / lowering, median (1,889 lines)', check ? out.latency.formatRatio <= 0.5 && { v: out.latency.formatRatio, strict: 0.5, withinStrict: true }
+  : { v: out.latency.formatRatio, strict: 0.5, withinStrict: out.latency.formatRatio <= 0.5 }]);
+let failed = 0;
+for (const [what, r] of results) {
+  if (!r) {
+    failed++;
+    console.log(`FAIL ${what}: past CI's bound`);
+  } else console.log(`${r.withinStrict ? 'within' : 'OVER'} L10: ${what} ${r.v} (L10 ${r.strict})`);
+}
+process.exitCode = failed ? 1 : 0;   // not process.exit: a piped stdout would be cut short

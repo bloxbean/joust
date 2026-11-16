@@ -1,0 +1,252 @@
+// ADR-0018 D13: the tree-sitter side of the shared parse corpus. The same files as
+// julc-state-dsl/src/test/java/org/julclang/state/dsl/JscCorpusTest.java, with the same expected verdicts:
+//   corpus/v2/valid/*.jsc parse without an ERROR or MISSING node; corpus/v2/invalid/*.jsc have one;
+//   every other .jsc file of the repository parses (found, not listed; the Gradle template's @@package@@ replaced);
+//   docs/research/**/*.jsc have the verdict corpus/research-verdicts.txt states.
+// Run from tree-sitter-jsc/ after `tree-sitter generate` (npm test does both).
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = fileURLToPath(new URL('..', import.meta.url));
+const ROOT = join(HERE, '..');
+const CORPUS = join(HERE, 'corpus');
+const SKIP = new Set(['build', 'node_modules', '.git', '.gradle', 'tree-sitter-jsc', 'dist', '.joust']);
+
+// The known differences (README.md) outside corpus/known: files where tree-sitter's verdict differs from the hand-written
+// parser's on purpose. None at present.
+const KNOWN = new Map();
+
+const jsc = (dir) => readdirSync(dir).filter((f) => f.endsWith('.jsc')).sort().map((f) => join(dir, f));
+
+function walk(dir, out = []) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) {
+      if (!SKIP.has(e.name)) walk(join(dir, e.name), out);
+    } else if (e.name.endsWith('.jsc') && statSync(join(dir, e.name)).isFile()) {
+      out.push(join(dir, e.name));
+    }
+  }
+  return out;
+}
+
+// The files to parse, each with its expected verdict ('valid' or 'invalid') and a name for messages.
+const cases = [];
+for (const version of ['v2']) {
+  for (const verdict of ['valid', 'invalid']) {
+    for (const f of jsc(join(CORPUS, version, verdict))) cases.push({ file: f, name: `${version}/${verdict}/${f.split(sep).pop()}`, verdict });
+  }
+}
+// The README's known differences, pinned (corpus/known.txt): each with tree-sitter's verdict (the third column).
+const knownCases = [];
+for (const line of readFileSync(join(CORPUS, 'known.txt'), 'utf8').split('\n')) {
+  if (!line.trim() || line.startsWith('#')) continue;
+  const [path, java, treeSitter] = line.trim().split(/\s+/);
+  knownCases.push({ file: join(CORPUS, path), name: path, verdict: treeSitter, java });
+}
+cases.push(...knownCases);
+const corpusCount = cases.length;
+
+const tmp = mkdtempSync(join(tmpdir(), 'jsc-corpus-'));
+const repository = walk(ROOT).filter((f) => !relative(ROOT, f).startsWith(`docs${sep}research`)).sort();
+for (const f of repository) {
+  const name = relative(ROOT, f);
+  const text = readFileSync(f, 'utf8');
+  let file = f;
+  if (text.includes('@@package@@')) {
+    file = join(tmp, name.replaceAll(sep, '_'));
+    writeFileSync(file, text.replaceAll('@@package@@', 'app'));
+  }
+  cases.push({ file, name, verdict: 'valid' });
+}
+
+const stated = new Map();
+for (const line of readFileSync(join(CORPUS, 'research-verdicts.txt'), 'utf8').split('\n')) {
+  if (!line.trim() || line.startsWith('#')) continue;
+  const [path, verdict] = line.trim().split(/\s+/);
+  stated.set(path, verdict);
+}
+const research = walk(join(ROOT, 'docs', 'research')).sort();
+const unlisted = research.map((f) => relative(ROOT, f).split(sep).join('/')).filter((p) => !stated.has(p));
+for (const f of research) {
+  const name = relative(ROOT, f).split(sep).join('/');
+  if (stated.has(name)) cases.push({ file: f, name, verdict: stated.get(name) });
+}
+const missing = [...stated.keys()].filter((p) => !research.some((f) => relative(ROOT, f).split(sep).join('/') === p));
+
+// One `tree-sitter parse` over every file: it prints a line for each file with an ERROR or MISSING node.
+const paths = join(tmp, 'paths.txt');
+writeFileSync(paths, cases.map((c) => c.file).join('\n') + '\n');
+let output;
+try {
+  output = execFileSync('npx', ['tree-sitter', 'parse', '--quiet', '--paths', paths], { cwd: HERE, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+} catch (e) {
+  output = e.stdout ?? '';   // exits 1 when a file has an error
+}
+const refused = new Set();
+for (const line of output.split('\n')) {
+  if (/\((ERROR|MISSING)/.test(line)) refused.add(line.split('\t')[0].trim());
+}
+
+const failures = [];
+for (const c of cases) {
+  const got = refused.has(c.file) ? 'invalid' : 'valid';
+  if (KNOWN.has(c.name)) {
+    if (got !== KNOWN.get(c.name)) failures.push(`${c.name}: a known difference no longer differs: update KNOWN and README.md`);
+    continue;
+  }
+  if (got !== c.verdict) failures.push(`${c.name}: expected ${c.verdict}, tree-sitter says ${got}`);
+  if (c.java && c.java === got) failures.push(`${c.name}: a pinned known difference no longer differs: update corpus/known.txt and README.md`);
+}
+for (const p of unlisted) failures.push(`${p}: not in corpus/research-verdicts.txt`);
+for (const p of missing) failures.push(`${p}: listed in corpus/research-verdicts.txt but not found`);
+
+// Review r2 F5: structure too. For the valid corpus files and the repository's files, the declarations tree-sitter
+// reads must be the ones the hand-written parsers read (corpus/shapes.txt, which JscCorpusTest checks for Java).
+const expected = new Map();
+for (const line of readFileSync(join(CORPUS, 'shapes.txt'), 'utf8').split('\n')) {
+  if (!line.trim() || line.startsWith('#')) continue;
+  const tab = line.indexOf('\t');
+  expected.set(line.slice(0, tab), line.slice(tab + 1));
+}
+const shaped = cases.filter((c) => c.verdict === 'valid' && !c.name.startsWith('docs/') && !c.name.startsWith('known/')
+  && !KNOWN.has(c.name));
+let compared = 0;
+for (const c of shaped) {
+  const key = /^v[12]\//.test(c.name) ? `tree-sitter-jsc/corpus/${c.name}` : c.name;
+  const want = expected.get(key.split(sep).join('/'));
+  if (want === undefined) {
+    failures.push(`${key}: not in corpus/shapes.txt (regenerate it: see its header)`);
+    continue;
+  }
+  let got;
+  try {
+    got = shape(c.file);
+  } catch (e) {
+    got = `(no shape: ${e.message})`;
+  }
+  if (got !== want) failures.push(`${key}: tree-sitter reads other declarations\n  java:        ${want}\n  tree-sitter: ${got}`);
+  compared++;
+}
+
+const researchCount = cases.length - corpusCount - repository.length;
+console.log(`shared corpus: ${corpusCount} corpus files, ${repository.length} repository files, ${researchCount} research files`);
+if (failures.length) {
+  console.error(failures.join('\n'));
+  console.error(`${failures.length} disagreement(s) with the hand-written parsers`);
+  process.exit(1);
+}
+console.log(`tree-sitter agrees with the hand-written parsers on every file (${KNOWN.size + knownCases.length} known difference(s),`
+  + ` README.md, pinned in corpus/known.txt), and reads the same declarations in ${compared} files`);
+
+// ------------------------------------------------------------------ declarations, from the tree (review r2 F5)
+
+/** The tree of one file: `tree-sitter parse` prints it with field names and byte ranges. */
+function tree(file) {
+  const out = execFileSync('npx', ['tree-sitter', 'parse', file], { cwd: HERE, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const text = out.slice(out.indexOf('(source_file'));
+  const re = /(\w+):\s*|\(|\)|\[(\d+), (\d+)\] - \[(\d+), (\d+)\]|"(?:[^"\\]|\\.)*"|[A-Za-z_][A-Za-z0-9_]*/g;
+  const root = { children: [] };
+  const stack = [root];
+  let field = null;
+  let pendingOpen = false;
+  for (const m of text.matchAll(re)) {
+    const t = m[0];
+    if (m[1]) { field = m[1]; continue; }
+    if (t === '(') { pendingOpen = true; continue; }
+    if (t === ')') { stack.pop(); continue; }
+    if (m[2] !== undefined) {
+      const node = stack[stack.length - 1];
+      node.start = [+m[2], +m[3]];
+      node.end = [+m[4], +m[5]];
+      continue;
+    }
+    if (pendingOpen) {
+      const node = { kind: t.replace(/^"|"$/g, ''), field, children: [] };
+      stack[stack.length - 1].children.push(node);
+      stack.push(node);
+      field = null;
+      pendingOpen = false;
+    }
+  }
+  return root.children[0];
+}
+
+function shape(file) {
+  const lines = readFileSync(file).toString('latin1').replace(/^\xef\xbb\xbf/, '').split('\n');
+  // Byte ranges, so the file is read as bytes (latin1: one character per byte); names are ASCII.
+  const text = (n) => {
+    if (n.start[0] === n.end[0]) return lines[n.start[0]].slice(n.start[1], n.end[1]);
+    const parts = [lines[n.start[0]].slice(n.start[1])];
+    for (let r = n.start[0] + 1; r < n.end[0]; r++) parts.push(lines[r]);
+    parts.push(lines[n.end[0]].slice(0, n.end[1]));
+    return parts.join('\n');
+  };
+  const kids = (n, kind) => (n ? n.children.filter((c) => c.kind === kind) : []);
+  const fieldOf = (n, f) => (n ? n.children.find((c) => c.field === f) : undefined);
+  const fieldsOf = (n, f) => (n ? n.children.filter((c) => c.field === f) : []);
+  const join = (xs) => xs.join(',');
+  const params = (n) => (n ? join(kids(n, 'parameter').map((p) => text(fieldOf(p, 'name')))) : '');
+  const mods = (n) => kids(n, 'modifier').map((m) => text(m).replace(/\s+/g, ' ')).join(' ');
+  const t = tree(file);
+  const out = [];
+  const lib = kids(t, 'library_declaration')[0];
+  const pkg = fieldOf(t, 'name') ?? fieldOf(lib ?? kids(t, 'package_declaration')[0] ?? { children: [] }, 'name');
+  out.push((lib ? 'library ' : 'package ') + text(pkg).replace(/\s+/g, ''));
+  const decls = (n, where) => {
+    out.push(where + 'types: ' + join(kids(n, 'type_declaration').map((d) => `${text(fieldOf(d, 'name'))}(${join(kids(fieldOf(d, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name'))))})`)));
+    out.push(where + 'enums: ' + join(kids(n, 'enum_declaration').map((d) => `${text(fieldOf(d, 'name'))}(${join(kids(d, 'variant_declaration').map((v) => text(fieldOf(v, 'name'))))})`)));
+    out.push(where + 'fns: ' + join(kids(n, 'function_declaration').map((d) => `${text(fieldOf(d, 'name'))}(${params(fieldOf(d, 'parameters'))})`)));
+  };
+  // M2c: a contract import reads 'contract <source>{<name>}', in source order with the other imports (as CorpusParse.shape).
+  out.push('imports: ' + join(t.children.filter((i) => i.kind === 'import_declaration' || i.kind === 'contract_import')
+    .map((i) => `${i.kind === 'contract_import' ? 'contract ' : ''}${text(fieldOf(i, 'source')).slice(1, -1)}{${join(fieldsOf(i, 'name').map(text))}}`)));
+  decls(t, '');
+  if (lib) return out.join(' | ');   // a library has no contract (ADR-0018 D9, M4)
+  const c = kids(t, 'contract_declaration')[0];
+  const opts = fieldOf(c, 'options');
+  out.push(`contract ${text(fieldOf(c, 'name'))}(${opts ? join(kids(opts, 'contract_option').map((o) => text(fieldOf(o, 'name')))) : ''})`);
+  const body = fieldOf(c, 'body');
+  const state = kids(body, 'state_declaration')[0];
+  out.push('state: ' + join(kids(fieldOf(state, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name')))));
+  // M2b: the params, events and invariants, each only when the contract declares some (as CorpusParse.shape).
+  const paramsDecl = kids(body, 'params_declaration')[0];
+  if (paramsDecl) out.push('params: ' + join(kids(fieldOf(paramsDecl, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name')))));
+  const events = kids(body, 'event_declaration');
+  if (events.length) {
+    out.push('events: ' + join(events.map((e) => `${text(fieldOf(e, 'name'))}(${join(kids(fieldOf(e, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name'))))})`)));
+  }
+  // M3a: the owned types, and an owned type's invariant as T.name (as CorpusParse.shape).
+  const owned = kids(body, 'owned_declaration');
+  if (owned.length) {
+    // M3b: a keyed type with its key and options, as written (as CorpusParse.shape).
+    const keyed = (o) => {
+      const k = fieldOf(o, 'keyed');
+      if (!k) return '';
+      const opts = fieldOf(k, 'options');
+      const os = opts ? kids(opts, 'keyed_option').map((x) => (fieldOf(x, 'name') ? `${text(fieldOf(x, 'name'))}=${BigInt(text(fieldOf(x, 'value')).replaceAll('_', ''))}` : 'signed')) : [];
+      return ` keyed by ${text(fieldOf(k, 'key'))}(${join(os)})`;
+    };
+    out.push('owned: ' + join(owned.map((o) => `${text(fieldOf(o, 'name'))}(${join(kids(fieldOf(o, 'fields'), 'field_declaration').map((f) => text(fieldOf(f, 'name'))))})${keyed(o)}`)));
+  }
+  const invariants = kids(body, 'invariant_declaration');
+  if (invariants.length) {
+    out.push('invariants: ' + join(invariants.map((i) => (fieldOf(i, 'type') ? text(fieldOf(i, 'type')) + '.' : '') + text(fieldOf(i, 'name')))));
+  }
+  const KINDS = { init_declaration: 'init', action_declaration: 'action', destroy_declaration: 'destroy', view_declaration: 'view',
+    owned_init_declaration: 'owned init', owned_action_declaration: 'owned action', owned_destroy_declaration: 'owned destroy',
+    // M3c: the script purposes' handlers and init migrate.
+    withdraw_declaration: 'withdraw', certify_declaration: 'certify', vote_declaration: 'vote', propose_declaration: 'propose',
+    migrate_declaration: 'init migrate' };
+  out.push('methods: ' + body.children.filter((m) => KINDS[m.kind]).map((m) => {
+    const kind = KINDS[m.kind];
+    const md = mods(m);
+    const name = kind === 'init' ? '' : kind === 'init migrate' ? ` from ${text(fieldOf(m, 'from')).replace(/\s+/g, '')}`
+      : kind.startsWith('owned') ? ` ${text(fieldOf(m, 'type'))}.${text(fieldOf(m, 'name'))}` : ' ' + text(fieldOf(m, 'name'));
+    return kind + name + '(' + params(fieldOf(m, 'parameters')) + ')' + (md ? ' ' + md : '');
+  }).join('; '));
+  decls(body, 'contract ');
+  return out.join(' | ');
+}

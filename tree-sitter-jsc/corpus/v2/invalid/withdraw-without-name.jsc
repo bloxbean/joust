@@ -1,0 +1,10 @@
+jsc 1
+package t
+
+contract C {
+  params { q: Int }
+  state { a: Int }
+  init() { return { a: 0 } }
+  // A handler names itself: withdraw name(amount: Int).
+  withdraw (amount: Int) { }
+}

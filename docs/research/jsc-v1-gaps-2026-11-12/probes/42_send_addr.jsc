@@ -1,0 +1,7 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    init() { owner = caller }
+    action a() only owner { send 5 ada to owner }
+}

@@ -1,1 +1,52 @@
 description = 'JOUST .jsc: a state-contract surface syntax that lowers to a Java @StateContract (ADR-0005)'
+
+// ADR-0021 §15 (M5d): the formatter's layout generator, shared with julc-state-toolchain's script-hash test.
+sourceSets.test.java.srcDir 'src/testShared/java'
+
+// -Pjoust.writeIrFixtures: rewrite the JavaScript interpreter's IR fixtures (js/jsc-interpreter/test/fixtures) from the
+// current lowering (JscV2IrTest); without it the test fails when they are stale.
+// -Djsc.writeStdDoc=true: JscV2StdDocTest rewrites the std library tables of www's jsc-std.mdx instead of checking them.
+tasks.named('test') {
+    if (project.hasProperty('joust.writeIrFixtures')) systemProperty 'joust.writeIrFixtures', 'true'
+    systemProperty 'jsc.writeStdDoc', System.getProperty('jsc.writeStdDoc', 'false')
+    systemProperty 'jsc.writeShapes', System.getProperty('jsc.writeShapes', 'false')
+    // -Djsc.writeModels=true: JscLangTest rewrites the language core's golden document models (ADR-0021 D12).
+    systemProperty 'jsc.writeModels', System.getProperty('jsc.writeModels', 'false')
+    systemProperty 'jsc.profileScaling', System.getProperty('jsc.profileScaling', 'false')
+    inputs.dir(rootProject.file('tree-sitter-jsc/corpus')).withPropertyName('jscCorpus').withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.file('js/create-joust/variants/jsc/contracts')).withPropertyName('jscTemplate').withPathSensitivity(PathSensitivity.RELATIVE)
+    // JscLangTest writes build/lang-parity.json for the Wasm engine's parity test (julc-state-toolchain's toolchainWasmTest).
+    outputs.file(layout.buildDirectory.file('lang-parity.json')).withPropertyName('langParity')
+    // JscFormatTest writes build/lang-format-parity.json for the engine's lang.format (ADR-0021 §15 F5).
+    outputs.file(layout.buildDirectory.file('lang-format-parity.json')).withPropertyName('langFormatParity')
+    // JscV2IrTest compares the fixtures with the current exports, and Ed25519Test reads the libsodium vectors (review F9).
+    inputs.dir(rootProject.file('js/jsc-interpreter/test/fixtures')).withPropertyName('jscInterpreterFixtures')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.file('examples/dsl/src/main/jsc')).withPropertyName('dslExamples').withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// Coverage-guided fuzzing (gradle/jazzer-fuzz.gradle): the Java and JavaScript IR readers against each other.
+dependencies {
+    testImplementation libs.jazzer.junit
+}
+apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
+fuzzTargets 'org.julclang.state.dsl.v2.IrReaderFuzzTest.readersAgree'
+// IrReaderFuzzTest runs the JavaScript reader: a change to it reruns the replays too.
+tasks.withType(Test).configureEach {
+    inputs.dir(rootProject.file('js/jsc-interpreter/src')).withPropertyName('jscInterpreterSources').withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// Mutation testing (gradle/pitest.gradle): the .jsc 2 checker (D5's checked inputs, the subset's rules) and joust.lock.
+ext.pitTargets = ['org.julclang.state.dsl.v2.Checker*', 'org.julclang.state.dsl.JscMain*']
+// PIT's * matches dots too: org.julclang.state.dsl.*Test was every test of the module (51 minutes); the checker's and the
+// lock's own tests are the ones that decide these classes' mutants.
+ext.pitTests = ['org.julclang.state.dsl.v2.*CheckerTest', 'org.julclang.state.dsl.v2.JscV2PackageLockTest',
+                'org.julclang.state.dsl.v2.JscV2IrTest', 'org.julclang.state.dsl.v2.JscV2LibraryTest',
+                'org.julclang.state.dsl.v2.JscV2AbiTest', 'org.julclang.state.dsl.v2.JscV2DiagnosticsTest',
+                // #130 round r1 (design D1): JscMain's CLI after #111 removed v1 and migrate (JscCheckerTest, MigrateTest):
+                // its ABI acceptance and its formatter, ADR-0021 M5b and M5d.
+                'org.julclang.state.dsl.JscMainAcceptTest', 'org.julclang.state.dsl.JscMainFmtTest',
+                'org.julclang.state.dsl.v2.JscAcceptAbiTest',
+                // #130 round r3 (Codex X5): its remapping of javac's diagnostics, the source selection and the public lowering.
+                'org.julclang.state.dsl.JscMainRemapTest']
+apply from: rootProject.file('gradle/pitest.gradle')

@@ -1,0 +1,681 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "589ce7f4dd489505bf16701fcd11c307460999ac59aa746db43355395ef12414",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Steward",
+  "source": "Steward.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": { "name": "State", "fields": [{ "name": "owner", "type": "Key" }], "at": [14, 1] },
+  "params": {
+    "name": "Config",
+    "fields": [
+      { "name": "gov", "type": "Credential" },
+      { "name": "council", "type": { "list": "Key" } },
+      { "name": "quorum", "type": "Int" },
+      { "name": "pool", "type": "Bytes" },
+      { "name": "payee", "type": "Key" },
+      { "name": "deadline", "type": "Int" },
+      { "name": "banned", "type": "Bytes" }
+    ],
+    "at": [15, 3]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [
+    {
+      "name": "delegateeOk",
+      "params": [
+        { "id": 14, "name": "d", "type": "Delegatee", "taint": 0, "at": [60, 18] },
+        { "id": 15, "name": "pool", "type": "Bytes", "taint": 0, "at": [60, 32] }
+      ],
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Match",
+          "scrutinee": { "node": "LocalRef", "local": 14, "type": "Delegatee", "taint": 0, "at": [60, 59] },
+          "arms": [
+            {
+              "ctors": ["Stake"],
+              "fields": ["poolId"],
+              "binds": [{ "id": 16, "name": "poolId", "type": "Key", "taint": 0, "at": [61, 13] }],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Equals",
+                  "negate": false,
+                  "left": { "node": "LocalRef", "local": 16, "type": "Key", "taint": 0, "at": [61, 25] },
+                  "right": { "node": "LocalRef", "local": 15, "type": "Bytes", "taint": 0, "at": [61, 35] },
+                  "operand": "Bytes",
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [61, 25]
+                },
+                "at": [61, 25]
+              },
+              "at": [61, 5]
+            },
+            {
+              "ctors": ["Vote"],
+              "fields": ["dRep"],
+              "binds": [{ "id": 17, "name": "dRep", "type": "DRep", "taint": 0, "at": [62, 12] }],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Match",
+                  "scrutinee": { "node": "LocalRef", "local": 17, "type": "DRep", "taint": 0, "at": [62, 28] },
+                  "arms": [
+                    {
+                      "ctors": ["AlwaysAbstain"],
+                      "fields": [],
+                      "binds": [],
+                      "body": {
+                        "stmts": [],
+                        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [62, 52] },
+                        "at": [62, 52]
+                      },
+                      "at": [62, 35]
+                    },
+                    {
+                      "ctors": ["DRepCredential", "AlwaysNoConfidence"],
+                      "fields": [],
+                      "binds": [],
+                      "body": {
+                        "stmts": [],
+                        "result": { "node": "Lit", "value": false, "type": "Bool", "taint": 0, "at": [62, 63] },
+                        "at": [62, 63]
+                      },
+                      "at": [62, 58]
+                    }
+                  ],
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [62, 22]
+                },
+                "at": [62, 22]
+              },
+              "at": [62, 5]
+            },
+            {
+              "ctors": ["StakeVote"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": false, "type": "Bool", "taint": 0, "at": [63, 18] },
+                "at": [63, 18]
+              },
+              "at": [63, 5]
+            }
+          ],
+          "type": "Bool",
+          "taint": 0,
+          "at": [60, 53]
+        },
+        "at": [60, 53]
+      },
+      "at": [60, 3]
+    }
+  ],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [19, 21] }],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [19, 12]
+        },
+        "at": [18, 10]
+      },
+      "at": [18, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [23, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [23, 16] },
+            "at": [23, 5]
+          }
+        ],
+        "result": null,
+        "at": [22, 30]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "withdraw",
+      "name": "take",
+      "params": [
+        { "id": 1, "name": "amount", "type": "Int", "taint": 0, "at": [27, 17] },
+        { "id": 2, "name": "to", "type": "Key", "taint": 0, "at": [27, 30] },
+        { "id": 3, "name": "tip", "type": "Int", "taint": 0, "at": [27, 39] }
+      ],
+      "mods": [{ "name": "authorized", "field": "params.gov" }],
+      "checked": [2],
+      "usesCtx": true,
+      "pays": false,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": false,
+              "threshold": { "node": "ParamsRef", "field": "deadline", "type": "Int", "taint": 0, "at": [28, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [28, 13]
+            },
+            "message": "too late to withdraw",
+            "at": [28, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": "<=",
+              "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [29, 13] },
+              "right": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [29, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [29, 13]
+            },
+            "message": "the tip is within the amount",
+            "at": [29, 5]
+          },
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Compare",
+                  "op": ">",
+                  "left": {
+                    "node": "Arith",
+                    "op": "-",
+                    "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [30, 8] },
+                    "right": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [30, 17] },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [30, 8]
+                  },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [30, 23] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [30, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Send",
+                      "to": {
+                        "node": "LedgerOp",
+                        "op": "wallet",
+                        "args": [{ "node": "LocalRef", "local": 2, "type": "Key", "taint": 0, "at": [31, 19] }],
+                        "type": "Address",
+                        "taint": 0,
+                        "at": [31, 12]
+                      },
+                      "value": {
+                        "node": "LedgerOp",
+                        "op": "lovelace",
+                        "args": [
+                          {
+                            "node": "Arith",
+                            "op": "-",
+                            "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [31, 39] },
+                            "right": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [31, 48] },
+                            "type": "Int",
+                            "taint": 0,
+                            "at": [31, 39]
+                          }
+                        ],
+                        "type": "Value",
+                        "taint": 0,
+                        "at": [31, 24]
+                      },
+                      "at": [31, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [30, 25]
+                },
+                "at": [30, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": false,
+            "at": [30, 5]
+          },
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Logic",
+                  "op": "||",
+                  "left": {
+                    "node": "Compare",
+                    "op": ">",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [35, 8] },
+                    "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [35, 14] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [35, 8]
+                  },
+                  "right": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [35, 19] },
+                    "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [35, 25] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [35, 19]
+                  },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [35, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Send",
+                      "to": {
+                        "node": "LedgerOp",
+                        "op": "wallet",
+                        "args": [{ "node": "ParamsRef", "field": "payee", "type": "Key", "taint": 0, "at": [36, 19] }],
+                        "type": "Address",
+                        "taint": 0,
+                        "at": [36, 12]
+                      },
+                      "value": {
+                        "node": "LedgerOp",
+                        "op": "lovelace",
+                        "args": [{ "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [36, 49] }],
+                        "type": "Value",
+                        "taint": 0,
+                        "at": [36, 34]
+                      },
+                      "at": [36, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [35, 27]
+                },
+                "at": [35, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": false,
+            "at": [35, 5]
+          }
+        ],
+        "result": null,
+        "at": [27, 71]
+      },
+      "at": [27, 3]
+    },
+    {
+      "kind": "certify",
+      "name": "anything",
+      "params": [{ "id": 4, "name": "cert", "type": "TxCert", "taint": 0, "at": [40, 20] }],
+      "mods": [{ "name": "authorized", "field": "params.gov" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Match",
+          "scrutinee": { "node": "LocalRef", "local": 4, "type": "TxCert", "taint": 0, "at": [40, 64] },
+          "arms": [
+            {
+              "ctors": ["RegStaking"],
+              "fields": ["deposit"],
+              "binds": [{ "id": 5, "name": "deposit", "type": { "option": "Int" }, "taint": 0, "at": [41, 18] }],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Compare",
+                  "op": ">=",
+                  "left": {
+                    "node": "Coalesce",
+                    "option": { "node": "LocalRef", "local": 5, "type": { "option": "Int" }, "taint": 0, "at": [41, 32] },
+                    "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [41, 43] },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [41, 32]
+                  },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [41, 49] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [41, 31]
+                },
+                "at": [41, 31]
+              },
+              "at": [41, 5]
+            },
+            {
+              "ctors": ["UnRegStaking"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [42, 21] },
+                "at": [42, 21]
+              },
+              "at": [42, 5]
+            },
+            {
+              "ctors": ["DelegStaking"],
+              "fields": ["delegatee"],
+              "binds": [{ "id": 6, "name": "delegatee", "type": "Delegatee", "taint": 0, "at": [43, 20] }],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Logic",
+                  "op": "||",
+                  "left": {
+                    "node": "CallFn",
+                    "fn": "delegateeOk",
+                    "args": [
+                      { "node": "LocalRef", "local": 6, "type": "Delegatee", "taint": 0, "at": [43, 47] },
+                      { "node": "ParamsRef", "field": "pool", "type": "Bytes", "taint": 0, "at": [43, 58] }
+                    ],
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [43, 35]
+                  },
+                  "right": {
+                    "node": "CallStd",
+                    "module": "std/certs",
+                    "name": "delegatesOnlyTo",
+                    "args": [
+                      { "node": "LocalRef", "local": 4, "type": "TxCert", "taint": 0, "at": [43, 90] },
+                      { "node": "ParamsRef", "field": "pool", "type": "Bytes", "taint": 0, "at": [43, 96] }
+                    ],
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [43, 74]
+                  },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [43, 35]
+                },
+                "at": [43, 35]
+              },
+              "at": [43, 5]
+            },
+            {
+              "ctors": ["RegDeleg"],
+              "fields": ["delegatee", "deposit"],
+              "binds": [
+                { "id": 7, "name": "delegatee", "type": "Delegatee", "taint": 0, "at": [44, 16] },
+                { "id": 8, "name": "deposit", "type": "Int", "taint": 0, "at": [44, 27] }
+              ],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Logic",
+                  "op": "&&",
+                  "left": {
+                    "node": "CallFn",
+                    "fn": "delegateeOk",
+                    "args": [
+                      { "node": "LocalRef", "local": 7, "type": "Delegatee", "taint": 0, "at": [44, 52] },
+                      { "node": "ParamsRef", "field": "pool", "type": "Bytes", "taint": 0, "at": [44, 63] }
+                    ],
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [44, 40]
+                  },
+                  "right": {
+                    "node": "Compare",
+                    "op": ">=",
+                    "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [44, 79] },
+                    "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [44, 90] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [44, 79]
+                  },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [44, 40]
+                },
+                "at": [44, 40]
+              },
+              "at": [44, 5]
+            },
+            {
+              "ctors": ["RegDRep"],
+              "fields": ["deposit"],
+              "binds": [{ "id": 9, "name": "deposit", "type": "Int", "taint": 0, "at": [45, 15] }],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Compare",
+                  "op": ">",
+                  "left": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [45, 28] },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [45, 38] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [45, 28]
+                },
+                "at": [45, 28]
+              },
+              "at": [45, 5]
+            },
+            {
+              "ctors": ["UpdateDRep"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [46, 19] },
+                "at": [46, 19]
+              },
+              "at": [46, 5]
+            },
+            {
+              "ctors": ["UnRegDRep"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [47, 18] },
+                "at": [47, 18]
+              },
+              "at": [47, 5]
+            },
+            {
+              "ctors": ["PoolRegister"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [48, 21] },
+                "at": [48, 21]
+              },
+              "at": [48, 5]
+            },
+            {
+              "ctors": ["PoolRetire"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [49, 19] },
+                "at": [49, 19]
+              },
+              "at": [49, 5]
+            },
+            {
+              "ctors": ["AuthHotCommittee"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [50, 25] },
+                "at": [50, 25]
+              },
+              "at": [50, 5]
+            },
+            {
+              "ctors": ["ResignColdCommittee"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [51, 28] },
+                "at": [51, 28]
+              },
+              "at": [51, 5]
+            }
+          ],
+          "type": "Bool",
+          "taint": 0,
+          "at": [40, 58]
+        },
+        "at": [40, 58]
+      },
+      "at": [40, 3]
+    },
+    {
+      "kind": "vote",
+      "name": "judge",
+      "params": [
+        { "id": 10, "name": "voter", "type": "Voter", "taint": 0, "at": [55, 14] },
+        { "id": 11, "name": "action", "type": "GovernanceActionId", "taint": 0, "at": [55, 28] },
+        { "id": 12, "name": "choice", "type": "Vote", "taint": 0, "at": [55, 56] }
+      ],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.quorum" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 13, "name": "indexZero", "type": "Bool", "taint": 0, "at": [56, 5] },
+            "value": {
+              "node": "Equals",
+              "negate": false,
+              "left": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 11, "type": "GovernanceActionId", "taint": 0, "at": [56, 23] },
+                "record": "GovernanceActionId",
+                "field": "govActionIx",
+                "type": "Int",
+                "taint": 0,
+                "at": [56, 23]
+              },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [56, 45] },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [56, 23]
+            },
+            "at": [56, 5]
+          }
+        ],
+        "result": {
+          "node": "Logic",
+          "op": "&&",
+          "left": {
+            "node": "Equals",
+            "negate": true,
+            "left": {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 11, "type": "GovernanceActionId", "taint": 0, "at": [57, 5] },
+              "record": "GovernanceActionId",
+              "field": "txId",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [57, 5]
+            },
+            "right": { "node": "ParamsRef", "field": "banned", "type": "Bytes", "taint": 0, "at": [57, 20] },
+            "operand": "Bytes",
+            "type": "Bool",
+            "taint": 0,
+            "at": [57, 5]
+          },
+          "right": {
+            "node": "Logic",
+            "op": "||",
+            "left": { "node": "LocalRef", "local": 13, "type": "Bool", "taint": 0, "at": [57, 38] },
+            "right": {
+              "node": "Match",
+              "scrutinee": { "node": "LocalRef", "local": 12, "type": "Vote", "taint": 0, "at": [57, 57] },
+              "arms": [
+                {
+                  "ctors": ["Abstain"],
+                  "fields": [],
+                  "binds": [],
+                  "body": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [57, 77] },
+                    "at": [57, 77]
+                  },
+                  "at": [57, 66]
+                },
+                {
+                  "ctors": ["VoteNo", "VoteYes"],
+                  "fields": [],
+                  "binds": [],
+                  "body": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": false, "type": "Bool", "taint": 0, "at": [57, 88] },
+                    "at": [57, 88]
+                  },
+                  "at": [57, 83]
+                }
+              ],
+              "type": "Bool",
+              "taint": 0,
+              "at": [57, 51]
+            },
+            "type": "Bool",
+            "taint": 0,
+            "at": [57, 38]
+          },
+          "type": "Bool",
+          "taint": 0,
+          "at": [57, 5]
+        },
+        "at": [55, 106]
+      },
+      "at": [55, 3]
+    }
+  ],
+  "warnings": []
+}

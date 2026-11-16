@@ -1,8 +1,11 @@
 // Runs the vectors WasmParityTest wrote (the JVM's results) through the contracts' Wasm image and compares the
-// bytes. Usage: node --experimental-wasm-exnref e2e/parity.mjs <wasm dir> <vectors.json>
+// bytes. Usage: node e2e/parity.mjs <wasm dir> <vectors.json>
 
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { enableExnref } from '../../../../js/joust-runtime/src/exnref.js';
+// Wasm exception references: a flag on Node 22, on by default on newer Node (which only warns about the flag).
+enableExnref();
 
 const [dir, file] = process.argv.slice(2);
 const ready = new Promise((r) => { globalThis.onJoustWasm = r; });

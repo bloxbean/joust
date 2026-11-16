@@ -66,7 +66,7 @@ public final class ValidatorGenerator {
         if (c.hasBatched() || !c.moves().isEmpty()) imports.add("org.julclang.ledger.ScriptPurpose");
         if (c.hasKeyed()) imports.addAll(List.of("org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId"));
         if (c.assetAware()) {
-            imports.addAll(List.of("org.julclang.core.types.JulcValue", "org.julclang.state.api.Funds",
+            imports.addAll(List.of("org.julclang.core.types.JulcValue", "org.julclang.state.api.Funds", "org.julclang.state.api.ValueAdapter",
                     "org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId", "org.julclang.state.api.DepositClaim"));
             if (c.hasDeposits()) imports.add("org.julclang.state.api.Deposit");
         }
@@ -321,6 +321,7 @@ public final class ValidatorGenerator {
         outputChecks(null, "initial", extra);
         paramsQuorumChecks(extra);
         var all = new ArrayList<String>(List.of("seedSpent", "mintOk", "shapeOk", "ctxOk", "datumOk", "valueOk"));
+        notPreviousSeed("cr", all);
         all.addAll(extra);
         all.addAll(heads);
         w.line("return " + conj(all, "create") + ";");
@@ -477,15 +478,7 @@ public final class ValidatorGenerator {
             case PAYOUTS -> {
                 w.line("JulcList<Payout> payouts = " + call + ";");
                 if (t.migrateTo() != null) {
-                    w.line("// I41: the instance migrates: its successor mints blake2b_256(own input) and holds the rest.");
-                    w.line("byte[] successor = " + field(t.migrateTo()) + ";");
-                    w.line("byte[] successorId = ValuesLib.uniqueTokenName(own.outRef());");
-                    w.line("boolean successorMinted = ValuesLib.assetOf(tx.mint(), successor, successorId).compareTo(BigInteger.ONE) == 0;");
-                    w.line("TxOut next = uniqueOutputWith(tx.outputs(), successor, successorId);");
-                    w.line("boolean successorAt = AddressLib.isScriptAddress(next.address())");
-                    w.line("        && ByteStringLib.equals(AddressLib.credentialHash(next.address()), successor);");
-                    w.line("boolean allocated = successorMinted && successorAt && ValuesLib.lovelaceOf(next.value())");
-                    w.line("        .compareTo(inLovelace.add(" + received("r", t) + ").subtract(Payouts.total(payouts))) >= 0;");
+                    migrationAllocated(t);
                 } else {
                     w.line("// The instance ends: everything it holds, deposit included, is allocated (I8).");
                     w.line("boolean allocated = Payouts.total(payouts).compareTo(inLovelace.add(" + received("r", t) + ")) == 0;");
@@ -711,6 +704,19 @@ public final class ValidatorGenerator {
 
 
 
+    /**
+     * I41 (ADR-0018 M3c review S1): in a contract with {@code @Migrate}, an ordinary creation never consumes an instance of
+     * the previous version. Its seed would name the token {@code @MigrateTo} expects (blake2b_256 of the spent instance), so
+     * the old version's migrating destroy would accept it and the successor's adoption rules (its body, its requires, the
+     * adopted state) would be skipped. A seed at the previous policy's script address, or holding a token of it, is only
+     * Adopt's.
+     */
+    private void notPreviousSeed(String r, List<String> checks) {
+        if (c.migrate() == null) return;
+        w.line("boolean seedNotPrior = !seedOfPrevious(tx.inputs(), " + r + ".seed(), " + field(c.migrate().reads().get(0).path()) + ");");
+        checks.add("seedNotPrior");
+    }
+
     /** MINT Adopt: the new version takes over an instance of the previous one, in the same transaction (I41). */
     private void adoptMethod() {
         TransitionIR t = c.migrate();
@@ -766,6 +772,19 @@ public final class ValidatorGenerator {
         w.indent();
         w.line("return hit;");
         w.close("}");
+        w.close("}").blank();
+        w.line("/** Whether the input at {@code seed} is the previous version's: at its script address, or holding a token of it. */");
+        w.open("static boolean seedOfPrevious(JulcList<TxInInfo> inputs, TxOutRef seed, byte[] previous) {");
+        w.line("boolean hit = false;");
+        w.open("for (var in : inputs) {");
+        w.open("if (Builtins.equalsData(in.outRef(), seed)) {");
+        w.line("TxOut o = in.resolved();");
+        w.line("boolean atPrevious = AddressLib.isScriptAddress(o.address()) && ByteStringLib.equals(AddressLib.credentialHash(o.address()), previous);");
+        w.line("boolean holdsPrevious = !Builtins.nullList(Builtins.unMapData(ledgerTokensOf(o.value(), previous)));");
+        w.line("hit = atPrevious || holdsPrevious;");
+        w.close("}");
+        w.close("}");
+        w.line("return hit;");
         w.close("}").blank();
         w.open("static long fieldCount(PlutusData d) {");
         w.line("long n = 0;");
@@ -1235,7 +1254,12 @@ public final class ValidatorGenerator {
     /** Lines declaring {@code Funds funds} for a method that takes it; the redeemer carries only what the caller offers. */
     private void fundsLocal(TransitionIR t, String redeemerVar, String selfExpr, String heldExpr) {
         if (!t.hasFunds()) return;
-        String offered = takesAssets(t) ? "(Value) (Object) " + redeemerVar + ".assetsIn()" : "noAssets()";
+        if (takesAssets(t)) {
+            // What the caller offers, as a canonical value: the redeemer's encoding (cardano-client-lib's canonical CBOR) may
+            // order a policy's token names otherwise than the ledger (implementation review r1, C1).
+            w.line("Value offeredIn = ValueAdapter.fromWire((Value) (Object) " + redeemerVar + ".assetsIn());");
+        }
+        String offered = takesAssets(t) ? "offeredIn" : "noAssets()";
         if (t.receives()) {
             w.line("// The deposits claimed on this call's continuing output, in registry order (ADR-0011 D3).");
             w.line("JulcList<DepositClaim> depositsIn = depositsInto(tx, policy, id);");
@@ -1252,11 +1276,16 @@ public final class ValidatorGenerator {
     private void acceptedLocal(TransitionIR t, String redeemerVar, List<String> checks) {
         if (t.resultAccepted()) {
             w.line("JulcValue acceptedV = methodValue(result.accepted(), policy, 1L);");
-            w.line("boolean acceptedOk = Builtins.equalsData(Builtins.valueData(acceptedV), " + redeemerVar + ".assetsIn());");
+            w.line("boolean acceptedOk = Builtins.equalsData(Builtins.valueData(acceptedV), " + offeredData(t, redeemerVar) + ");");
             checks.add("acceptedOk");
         } else {
             w.line("JulcValue acceptedV = noValue();");
         }
+    }
+
+    /** What the caller offered as data, to compare with the canonical accepted value: canonical too when the method takes it. */
+    private static String offeredData(TransitionIR t, String redeemerVar) {
+        return takesAssets(t) && t.hasFunds() ? "(PlutusData) (Object) offeredIn" : redeemerVar + ".assetsIn()";
     }
 
     /** MINT CreateInstance for an asset-aware contract: as A, with the full value equation (I26). */
@@ -1271,6 +1300,7 @@ public final class ValidatorGenerator {
         w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
         w.line("boolean shapeOk = isStateAddress(out.address(), policy) && out.referenceScript().isEmpty();");
         var checks = new ArrayList<String>(List.of("seedSpent", "mintOk", "shapeOk"));
+        notPreviousSeed("cr", checks);
         if (init.hasCtx()) {
             w.line("boolean ctxOk = ctxValid(tx, cr.ctx(), BigInteger.ZERO, " + init.payable() + ");");
             checks.add("ctxOk");
@@ -1377,6 +1407,24 @@ public final class ValidatorGenerator {
     }
 
     /** SPEND for an asset-aware contract: A's checks with the full value equation, sends and user mints (I26–I31). */
+    /**
+     * I41: a migrating destroy's allocation: its successor (the policy in its state field) mints blake2b_256(own input),
+     * at that script, holding at least the instance's lovelace (less payouts, which a migrating destroy has none of). One
+     * body for the lovelace-only transition and the asset-aware one (ADR-0018 M3 final pass MS1: a contract with a withdraw
+     * handler is asset-aware, and its migrating destroy must migrate too); the burn and the payouts are checked beside it.
+     */
+    private void migrationAllocated(TransitionIR t) {
+        w.line("// I41: the instance migrates: its successor mints blake2b_256(own input) and holds the rest.");
+        w.line("byte[] successor = " + field(t.migrateTo()) + ";");
+        w.line("byte[] successorId = ValuesLib.uniqueTokenName(own.outRef());");
+        w.line("boolean successorMinted = ValuesLib.assetOf(tx.mint(), successor, successorId).compareTo(BigInteger.ONE) == 0;");
+        w.line("TxOut next = uniqueOutputWith(tx.outputs(), successor, successorId);");
+        w.line("boolean successorAt = AddressLib.isScriptAddress(next.address())");
+        w.line("        && ByteStringLib.equals(AddressLib.credentialHash(next.address()), successor);");
+        w.line("boolean allocated = successorMinted && successorAt && ValuesLib.lovelaceOf(next.value())");
+        w.line("        .compareTo(inLovelace.add(" + received("r", t) + ").subtract(Payouts.total(payouts))) >= 0;");
+    }
+
     private void transitionAssets(TransitionIR t) {
         String X = c.name();
         boolean owned = t.owned();
@@ -1441,6 +1489,20 @@ public final class ValidatorGenerator {
             case PAYOUTS -> {
                 w.line("JulcList<Payout> payouts = " + call + ";");
                 payouts = "payouts";
+                if (t.migrateTo() != null) {
+                    // MS1: the instance moves into its successor (I41), as in the lovelace-only transition: no settlement,
+                    // which would require the instance's value to be paid out. Migration holds no native assets (the
+                    // checker's JSC1334, ContractReader's @MigrateTo rule), so the lovelace is the whole value.
+                    migrationAllocated(t);
+                    w.line("boolean burned = ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.valueOf(-1)) == 0;");
+                    w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
+                    checks.add("allocated");
+                    checks.add("burned");
+                    checks.add("paid");
+                    w.line("return " + conj(checks, t.variant()) + ";");
+                    w.close("}").blank();
+                    return;
+                }
             }
             case RESULT, SETTLE -> {
                 w.line(t.resultType() + " result = " + call + ";");
@@ -1470,7 +1532,7 @@ public final class ValidatorGenerator {
         if (anyAccepts()) {
             settleArgs.add(accepted);
             settleArgs.add(String.valueOf(t.resultAccepted()));
-            settleArgs.add(t.resultAccepted() ? "r.assetsIn()" : "Builtins.iData(0L)");
+            settleArgs.add(t.resultAccepted() ? offeredData(t, "r") : "Builtins.iData(0L)");
         }
         if (c.hasDeposits()) {
             if (t.resultDeposits()) {
@@ -1816,7 +1878,9 @@ public final class ValidatorGenerator {
             w.line("ScriptPurpose purpose = new ScriptPurpose.Rewarding(new Credential.ScriptCredential(new ScriptHash(OUTPUT_VERIFIER)));");
             w.open("if (tx.redeemers().containsKey(purpose)) {");
             w.line("OutputClaims oc = outputClaims(tx);");
-            w.line("return keepAt(oc.deposits(), at);");
+            // #85: the method sees each claim's value canonical (the registry carries it in the wire's order), as it sees the
+            // offered assets (C1).
+            w.line("return ValueAdapter.claimsFromWire(keepAt(oc.deposits(), at));");
             w.close("} else {");
             w.indent();
             w.line("JulcList<DepositClaim> none = JulcList.empty();");
@@ -1905,9 +1969,11 @@ public final class ValidatorGenerator {
             w.close("}");
             w.line("BigInteger at = indexWith(tx, d.policy(), d.instance());");
             w.line("PlutusData v = Builtins.valueData(methodValue(d.value(), policy, 0L));");
+            // #85: a claim's value is the registry's, in the wire's order (cardano-client-lib orders a policy's token names by
+            // their encoding): compared as a value, folded the same way, not as data.;
             w.line("boolean claimed = false;");
             w.open("for (var cl : claims) {");
-            w.open("if (Builtins.equalsData(cl.by(), by) && cl.output().compareTo(at) == 0 && Builtins.equalsData((PlutusData) (Object) cl.value(), v)"
+            w.open("if (Builtins.equalsData(cl.by(), by) && cl.output().compareTo(at) == 0 && Builtins.equalsData(Builtins.valueData(methodValue(cl.value(), policy, 0L)), v)"
                     + " && Builtins.equalsData(cl.memo(), d.memo())) {");
             w.line("claimed = true;");
             w.close("}");

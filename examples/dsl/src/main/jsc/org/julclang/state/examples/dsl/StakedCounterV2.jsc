@@ -1,0 +1,41 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+import { isRegistration } from "std/certs"
+import contract { StakedCounterV1 } from "./StakedCounterV1.jsc"
+
+// ADR-0018 M3 final pass (design MD2): the adopting side of a migration in a staked contract with handlers. It adopts
+// StakedCounterV1's instances (params.previous) at its own staked address (stakeSelf), and has a withdraw and a vote
+// handler (and the certify handler stakeSelf needs) and a propose guard, so its adoption is built by the asset-aware transition (JscV2M3cFourWayTest.stakedAdoption).
+contract StakedCounterV2(stakeSelf) {
+  params { previous: Hash, council: List<Key>, quorum: Int, payee: Key }
+  state { admin: Key, count: Int, step: Int }
+
+  init() {
+    return { admin: caller, count: 0, step: 1 }
+  }
+
+  init migrate from params.previous(old: StakedCounterV1.State) {
+    return { admin: old.admin, count: old.count, step: 1 }
+  }
+
+  action increment() {
+    return { ...state, count: count + step }
+  }
+
+  destroy close() only admin {
+    pay(admin, balance)
+  }
+
+  withdraw collect(amount: Int) quorum params.council params.quorum {
+    if amount > 0 {
+      send(wallet(params.payee), Value.lovelace(amount))
+    }
+  }
+
+  certify certificate(cert: TxCert) quorum params.council params.quorum = isRegistration(cert)
+
+  vote decide(voter: Voter, action: GovernanceActionId, choice: Vote) quorum params.council params.quorum = true
+
+  propose guard(p: ProposalProcedure) = true
+}

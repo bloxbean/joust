@@ -47,7 +47,7 @@ class ToolchainParityTest {
         }
         assertFalse(files.isEmpty(), example + ": no contract sources");
 
-        Toolchain.Result r = Toolchain.build(files, Map.of());
+        Toolchain.Result r = Toolchain.build(files, Map.of(), ExampleLibraries.javaSourcesOf(example));
         assertTrue(r.ok(), example + ": " + r.diagnostics());
         assertFalse(r.contracts().isEmpty(), example + ": no contracts built");
 

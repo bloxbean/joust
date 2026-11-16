@@ -1,0 +1,37 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+import { isRegistration, delegatesOnlyTo } from "std/certs"
+
+// ADR-0018 M3 final pass (security MS1): a staked contract that migrates. CounterV1's state and migrating destroy, with
+// stakeSelf and its withdraw and certify handlers, so the contract is asset-aware (a withdrawal sends) and its migrating
+// destroy is built by the asset-aware transition: it must still move the instance into its successor (I41). CounterV2
+// adopts it (its state is CounterV1's shape) when deployed with this contract's policy as params.previous.
+contract StakedCounterV1(stakeSelf) {
+  params { council: List<Key>, quorum: Int, pool: Bytes, payee: Key }
+  state { admin: Key, successor: Bytes, count: Int }
+
+  init() payable {
+    return { admin: caller, successor: #, count: 0 }
+  }
+
+  action increment() {
+    return { ...state, count: count + 1 }
+  }
+
+  action setSuccessor(next: Bytes) only admin {
+    require(successor == #, "the successor is set once")
+    return { ...state, successor: next }
+  }
+
+  destroy upgrade() only admin migrates to successor { }
+
+  withdraw collect(amount: Int) quorum params.council params.quorum {
+    if amount > 0 {
+      send(wallet(params.payee), Value.lovelace(amount))
+    }
+  }
+
+  certify certificate(cert: TxCert) quorum params.council params.quorum =
+    isRegistration(cert) || delegatesOnlyTo(cert, params.pool)
+}

@@ -1,0 +1,658 @@
+{
+ "ir": 2,
+ "language": "jsc 2",
+ "sourceSha256": "4dd5c591b4f910c0ac8a7133a3092579abffc60097a5716aa99cdd165283da11",
+ "package": "org.julclang.state.examples.dsl",
+ "contract": "OwnedIntents",
+ "source": "OwnedIntents.jsc",
+ "options": [
+  {
+   "name": "maxDatumBytes",
+   "value": "512"
+  }
+ ],
+ "records": [
+  {
+   "name": "Badge",
+   "fields": [
+    {
+     "name": "owner",
+     "type": "Key"
+    },
+    {
+     "name": "level",
+     "type": "Int"
+    }
+   ],
+   "at": [
+    9,
+    9
+   ]
+  },
+  {
+   "name": "Vault",
+   "fields": [
+    {
+     "name": "owner",
+     "type": "Key"
+    },
+    {
+     "name": "level",
+     "type": "Int"
+    },
+    {
+     "name": "notes",
+     "type": {
+      "bigmap": [
+       "Bytes",
+       "Int"
+      ]
+     }
+    }
+   ],
+   "at": [
+    9,
+    9
+   ]
+  }
+ ],
+ "enums": [],
+ "state": {
+  "name": "State",
+  "fields": [
+   {
+    "name": "admin",
+    "type": "Key"
+   },
+   {
+    "name": "count",
+    "type": "Int"
+   }
+  ],
+  "at": [
+   6,
+   1
+  ]
+ },
+ "owned": [
+  "Badge",
+  "Vault"
+ ],
+ "params": {
+  "name": "Config",
+  "fields": [
+   {
+    "name": "council",
+    "type": {
+     "list": "Key"
+    }
+   },
+   {
+    "name": "threshold",
+    "type": "Int"
+   }
+  ],
+  "at": [
+   7,
+   3
+  ]
+ },
+ "timeFields": [],
+ "recursiveFns": [],
+ "libraries": [],
+ "javaLibraries": [],
+ "fns": [],
+ "methods": [
+  {
+   "kind": "action",
+   "name": "tick",
+   "params": [],
+   "mods": [
+    {
+     "name": "batched"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         10,
+         39
+        ]
+       },
+       "record": "State",
+       "field": "admin",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        10,
+        34
+       ]
+      },
+      {
+       "node": "Arith",
+       "op": "+",
+       "left": {
+        "node": "StateField",
+        "field": "count",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         10,
+         53
+        ]
+       },
+       "right": {
+        "node": "Lit",
+        "value": "1",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         10,
+         61
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        10,
+        53
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      10,
+      34
+     ]
+    },
+    "at": [
+     10,
+     25
+    ]
+   },
+   "at": [
+    10,
+    3
+   ]
+  },
+  {
+   "kind": "init",
+   "name": "init",
+   "params": [],
+   "mods": [],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "CtxRef",
+       "name": "caller",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        11,
+        28
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "0",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        11,
+        43
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      11,
+      19
+     ]
+    },
+    "at": [
+     11,
+     10
+    ]
+   },
+   "at": [
+    11,
+    3
+   ]
+  },
+  {
+   "kind": "ownedInit",
+   "name": "award",
+   "on": "Badge",
+   "params": [],
+   "mods": [],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "Badge"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "Badge",
+     "values": [
+      {
+       "node": "CtxRef",
+       "name": "caller",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        12,
+        46
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "1",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        12,
+        61
+       ]
+      }
+     ],
+     "type": {
+      "record": "Badge"
+     },
+     "taint": 0,
+     "at": [
+      12,
+      37
+     ]
+    },
+    "at": [
+     12,
+     28
+    ]
+   },
+   "at": [
+    12,
+    3
+   ]
+  },
+  {
+   "kind": "ownedDestroy",
+   "name": "drop",
+   "on": "Badge",
+   "params": [],
+   "mods": [
+    {
+     "name": "only",
+     "field": "owner"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": true,
+   "result": null,
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Pay",
+      "to": {
+       "node": "StateField",
+       "field": "owner",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        14,
+        47
+       ]
+      },
+      "amount": {
+       "node": "CtxRef",
+       "name": "balance",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        14,
+        54
+       ]
+      },
+      "at": [
+       14,
+       43
+      ]
+     }
+    ],
+    "result": null,
+    "at": [
+     14,
+     41
+    ]
+   },
+   "at": [
+    14,
+    3
+   ]
+  },
+  {
+   "kind": "certify",
+   "name": "register",
+   "params": [
+    {
+     "id": 4,
+     "name": "cert",
+     "type": "TxCert",
+     "taint": 0,
+     "at": [
+      16,
+      20
+     ]
+    }
+   ],
+   "mods": [
+    {
+     "name": "quorum",
+     "keys": "params.council",
+     "threshold": "params.threshold"
+    }
+   ],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": "Bool",
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "Lit",
+     "value": true,
+     "type": "Bool",
+     "taint": 0,
+     "at": [
+      16,
+      75
+     ]
+    },
+    "at": [
+     16,
+     75
+    ]
+   },
+   "at": [
+    16,
+    3
+   ]
+  },
+  {
+   "kind": "vote",
+   "name": "choose",
+   "params": [
+    {
+     "id": 5,
+     "name": "voter",
+     "type": "Voter",
+     "taint": 0,
+     "at": [
+      17,
+      15
+     ]
+    },
+    {
+     "id": 6,
+     "name": "action",
+     "type": "GovernanceActionId",
+     "taint": 0,
+     "at": [
+      17,
+      29
+     ]
+    },
+    {
+     "id": 7,
+     "name": "vote",
+     "type": "Vote",
+     "taint": 0,
+     "at": [
+      17,
+      57
+     ]
+    }
+   ],
+   "mods": [
+    {
+     "name": "quorum",
+     "keys": "params.council",
+     "threshold": "params.threshold"
+    }
+   ],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": "Bool",
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "Lit",
+     "value": true,
+     "type": "Bool",
+     "taint": 0,
+     "at": [
+      17,
+      110
+     ]
+    },
+    "at": [
+     17,
+     110
+    ]
+   },
+   "at": [
+    17,
+    3
+   ]
+  },
+  {
+   "kind": "propose",
+   "name": "guard",
+   "params": [
+    {
+     "id": 8,
+     "name": "p",
+     "type": "ProposalProcedure",
+     "taint": 0,
+     "at": [
+      18,
+      17
+     ]
+    }
+   ],
+   "mods": [],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": "Bool",
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "Lit",
+     "value": true,
+     "type": "Bool",
+     "taint": 0,
+     "at": [
+      18,
+      41
+     ]
+    },
+    "at": [
+     18,
+     41
+    ]
+   },
+   "at": [
+    18,
+    3
+   ]
+  },
+  {
+   "kind": "ownedInit",
+   "name": "openVault",
+   "on": "Vault",
+   "params": [],
+   "mods": [],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "Vault"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "Vault",
+     "values": [
+      {
+       "node": "CtxRef",
+       "name": "caller",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        12,
+        46
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "1",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        12,
+        61
+       ]
+      },
+      {
+       "node": "BigEmpty",
+       "type": {
+        "bigmap": [
+         "Bytes",
+         "Int"
+        ]
+       },
+       "taint": 0,
+       "at": [
+        1,
+        1
+       ]
+      }
+     ],
+     "type": {
+      "record": "Vault"
+     },
+     "taint": 0,
+     "at": [
+      12,
+      37
+     ]
+    },
+    "at": [
+     12,
+     28
+    ]
+   },
+   "at": [
+    12,
+    3
+   ]
+  },
+  {
+   "kind": "ownedDestroy",
+   "name": "closeVault",
+   "on": "Vault",
+   "params": [],
+   "mods": [
+    {
+     "name": "only",
+     "field": "owner"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": true,
+   "result": null,
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Pay",
+      "to": {
+       "node": "StateField",
+       "field": "owner",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        14,
+        47
+       ]
+      },
+      "amount": {
+       "node": "CtxRef",
+       "name": "balance",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        14,
+        54
+       ]
+      },
+      "at": [
+       14,
+       43
+      ]
+     }
+    ],
+    "result": null,
+    "at": [
+     14,
+     41
+    ]
+   },
+   "at": [
+    14,
+    3
+   ]
+  }
+ ],
+ "warnings": []
+}

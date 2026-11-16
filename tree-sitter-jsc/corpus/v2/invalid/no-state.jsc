@@ -1,0 +1,4 @@
+jsc 1
+package corpus
+
+contract C { init() { return { } } }

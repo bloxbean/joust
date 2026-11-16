@@ -1,0 +1,9 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    init() { owner = caller }
+    event Bumped(by: Int)
+    action a(k: Int) { n += k
+       emit Bumped(k) }
+}

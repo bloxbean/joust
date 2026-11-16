@@ -1,0 +1,10 @@
+jsc 1
+package t
+
+contract C {
+  params { previous: Hash }
+  state { a: Int }
+  init() { return { a: 0 } }
+  // init migrate names a params field: from params.previous.
+  init migrate from previous(old: Old.State) { return { a: 0 } }
+}

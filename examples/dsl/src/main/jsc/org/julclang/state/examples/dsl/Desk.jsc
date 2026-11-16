@@ -1,0 +1,53 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+import contract { Oracle } from "./Oracle.jsc"
+
+// ADR-0018 M3 final pass (design MD2): a coverage contract for the M3 combination matrix. Plain owned objects that move
+// (into, admits) and have invariants by type, beside an instance that takes deposits (receives) and reads another
+// contract's state (reads). JscV2M3MatrixTest runs it on all five legs.
+contract Desk(maxDatumBytes = 512) {
+  params { feed: Instance<Oracle> }
+  state { clerk: Key, credits: Int, price: Int, filed: Int }
+
+  owned Folder { owner: Key, pages: Int }
+
+  init() {
+    return { clerk: caller, credits: 0, price: 0, filed: 0 }
+  }
+
+  action credit() receives Key {
+    require(!funds.deposits.isEmpty, "nothing deposited")
+    return { ...state, credits: credits + funds.deposits.length }
+  }
+
+  action quote(p: reads params.feed) open {
+    return { ...state, price: p.price }
+  }
+
+  action shelve(id: Bytes, arriving: Folder) only clerk admits Folder {
+    return { ...state, filed: filed + arriving.pages }
+  }
+
+  owned init Folder.start() {
+    return { owner: caller, pages: 1 }
+  }
+
+  owned action Folder.add() only owner {
+    return { ...state, pages: pages + 1 }
+  }
+
+  owned action Folder.tear() only owner {
+    return { ...state, pages: pages - 1 }
+  }
+
+  owned action Folder.pass(to: into) only owner {
+    return state
+  }
+
+  owned destroy Folder.shred() only owner {
+    pay(owner, balance)
+  }
+
+  invariant Folder.somePages = pages >= 1
+}

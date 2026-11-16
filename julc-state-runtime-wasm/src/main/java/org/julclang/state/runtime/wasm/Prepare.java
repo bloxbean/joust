@@ -96,7 +96,26 @@ public final class Prepare {
      * transaction ({@code cbor} null) when the reference script is already on chain.
      */
     public record Result(boolean ok, String cbor, String txHash, String created, long validTo, List<String> signers,
-                         String plan, String needKind, String needKey, String error, Map<String, String> mapNodes) {}
+                         String plan, String needKind, String needKey, String error, Map<String, String> mapNodes, String refusedBy) {
+        /** Every result but a refusal names no refusing contract. */
+        Result(boolean ok, String cbor, String txHash, String created, long validTo, List<String> signers,
+               String plan, String needKind, String needKey, String error, Map<String, String> mapNodes) {
+            this(ok, cbor, txHash, created, validTo, signers, plan, needKind, needKey, error, mapNodes, null);
+        }
+    }
+
+    /**
+     * A refusal raised by one contract of a composition, which the result names ({@code refusedBy}): the message map that
+     * explains it is that contract's (ADR-0018 D12; review r1 C4, S1). Its message is the refusal's own.
+     */
+    static final class RefusedBy extends RuntimeException {
+        final String contract;
+
+        RefusedBy(String contract, RuntimeException cause) {
+            super(cause.getMessage(), cause);
+            this.contract = contract;
+        }
+    }
 
     /**
      * Described contracts, parsed once: by description, script and transition programs together (a rebuild can change
@@ -116,10 +135,12 @@ public final class Prepare {
     }
 
     public static Result prepare(Request r) {
+        String called = null;
         try {
             JsonNode call = JSON.readTree(r.call());
             if (call.has("calls")) return composed(r, call);
             String contract = call.path("contract").asText();
+            called = contract;
             if (contract.equals("joust:mapVerifier") || contract.equals("joust:outputVerifier")) return verifier(r, call, contract);
             if (contract.equals("joust:governor")) return governor(r, call);
             // Only the called contract is loaded: the bundle may hold others this engine cannot serve yet.
@@ -240,7 +261,7 @@ public final class Prepare {
             for (Throwable c = t; c != null; c = c.getCause()) {
                 if (c instanceof Need n) return new Result(false, null, null, null, -1, List.of(), null, n.kind(), n.key(), null, Map.of());
             }
-            return refused(t.getMessage() != null ? t.getMessage() : t.toString());
+            return refused(t.getMessage() != null ? t.getMessage() : t.toString(), called);
         }
     }
 
@@ -361,18 +382,27 @@ public final class Prepare {
                 BigInteger pay = new BigInteger(c.path("pay").path("lovelace").asText("0"));
                 int slot = made.size();
                 made.add(null);
-                compose.add(() -> made.set(slot, dc.call(rt, wallet, c.path("kind").asText(), c.path("method").asText(),
-                        c.path("instance").asText(null), c.path("object").asText(null), c.path("args"), pay, c.get("params"),
-                        c.path("pay").get("assets"), c.path("into").asText(null), cosigners(c, network), governorOf(c, network))));
+                String title = c.path("contract").asText();
+                compose.add(() -> {
+                    try {
+                        made.set(slot, dc.call(rt, wallet, c.path("kind").asText(), c.path("method").asText(),
+                                c.path("instance").asText(null), c.path("object").asText(null), c.path("args"), pay, c.get("params"),
+                                c.path("pay").get("assets"), c.path("into").asText(null), cosigners(c, network), governorOf(c, network)));
+                    } catch (org.julclang.state.api.RequireException e) {
+                        throw new RefusedBy(title, e);
+                    }
+                });
             }
             PreparedTx p = compose.prepare();
             return new Result(true, p.cbor(), p.txHash(), JSON.writeValueAsString(made), p.validTo(), p.requiredSigners(),
                     JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
         } catch (Throwable t) {
+            String by = null;
             for (Throwable c = t; c != null; c = c.getCause()) {
                 if (c instanceof Need n) return new Result(false, null, null, null, -1, List.of(), null, n.kind(), n.key(), null, Map.of());
+                if (c instanceof RefusedBy rb && by == null) by = rb.contract;
             }
-            return refused(t.getMessage() != null ? t.getMessage() : t.toString());
+            return refused(t.getMessage() != null ? t.getMessage() : t.toString(), by);
         }
     }
 
@@ -408,6 +438,11 @@ public final class Prepare {
     }
 
     private static Result refused(String message) {
-        return new Result(false, null, null, null, -1, List.of(), null, null, null, message, Map.of());
+        return refused(message, null);
+    }
+
+    /** A refusal, naming the contract that refused when one did (its message map explains the message: D12). */
+    private static Result refused(String message, String refusedBy) {
+        return new Result(false, null, null, null, -1, List.of(), null, null, null, message, Map.of(), refusedBy);
     }
 }
