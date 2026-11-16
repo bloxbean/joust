@@ -1,0 +1,182 @@
+package org.julclang.state.toolchain;
+
+import org.julclang.state.dsl.v2.JavaLibraries;
+import org.julclang.state.dsl.v2.JscModules;
+import org.julclang.state.processor.JoustProcessor;
+
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaFileObject;
+import javax.tools.SimpleJavaFileObject;
+import javax.tools.ToolProvider;
+import java.net.URI;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+
+/**
+ * Builds a generated {@code .jsc} program ({@link JscGen}) the two ways JOUST builds one, for the five legs of
+ * {@link FourWay}: the npm toolchain's build ({@link Toolchain#build}: the transition programs, the IR, the script) and
+ * Gradle's ({@code generateJsc}, then javac with the JOUST and JuLC annotation processors, as examples/dsl compiles: the
+ * contract's classes, its client and its validator's script), loaded in a class loader of its own. The two builds'
+ * scripts must be the same bytes (ADR-0015 I1). Built programs are kept, the most recent {@link #KEPT}, so the fuzzer's
+ * inputs that differ only in their calls reuse them.
+ */
+final class GeneratedContracts {
+    private GeneratedContracts() {}
+
+    static final int KEPT = 16;
+    static final Path OUT = Path.of("build/fuzz/generated");
+
+    /** A program that does not build: the generator's bug (H6), or the build's, never an input to compare. */
+    static final class BuildFailure extends AssertionError {
+        BuildFailure(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * A program built both ways with the same script (I1) whose script is over what a reference script may be: the
+     * runtime refuses to deploy it (ADR-0009 r2, StateContractHandle), so no on-chain leg can run it. The five-way target
+     * counts and skips it (the long campaign at 0c40f1c3 generated one of 15,664 bytes).
+     */
+    static final class OverScriptLimit extends Exception {
+        OverScriptLimit(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    record Built(JscGen.Plan plan, FourWay legs, long millis) {}
+
+    private static final Map<String, Built> CACHE = new LinkedHashMap<>(KEPT, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Built> eldest) {
+            return size() > KEPT;
+        }
+    };
+
+    /** The programs found over a reference script's size, each counted once (review r3, design F20: the 2% ceiling). */
+    static final java.util.Map<String, OverScriptLimit> OVER = new java.util.HashMap<>();
+
+    /**
+     * The generated programs a run has seen, each counted once by its key, deployable or over a reference script's size,
+     * whether it was built, revisited from the cache, or rebuilt after the cache evicted it (#123, review r4 Codex C15).
+     * It is the one population the over-limit ceiling counts both its share and its threshold in; the "programs built"
+     * and "build ms" tallies stay what they are: cache misses and build time.
+     */
+    static final class Population {
+        private final java.util.Set<String> seen = new java.util.HashSet<>();
+        private final java.util.Set<String> over = new java.util.HashSet<>();
+
+        synchronized void seen(String key) {
+            seen.add(key);
+        }
+
+        synchronized void over(String key) {
+            seen.add(key);
+            over.add(key);
+        }
+
+        synchronized long total() {
+            return seen.size();
+        }
+
+        synchronized long over() {
+            return over.size();
+        }
+
+        /** Null when the share is within the ceiling, else why not: past 2% of the programs, once there are 100 of them. */
+        static String verdict(long total, long over) {
+            if (total >= 100 && over * 50 > total) {
+                return over + " of " + total + " generated programs are over a reference script's size (more than 2%): the"
+                        + " generator's programs have grown past what can be deployed";
+            }
+            return null;
+        }
+    }
+
+    static final Population POPULATION = new Population();
+
+    static synchronized Built built(JscGen.Plan p) throws Exception {
+        String key = String.join("\n", p.files().values()) + p.params();
+        POPULATION.seen(key);
+        if (OVER.containsKey(key)) throw OVER.get(key);
+        Built b = CACHE.get(key);
+        if (b == null) {
+            try {
+                b = build(p);
+            } catch (OverScriptLimit e) {
+                OVER.put(key, e);
+                POPULATION.over(key);
+                FiveWayFuzzTest.TALLY.count(FiveWayFuzzTest.OVER_SCRIPT_LIMIT);
+                throw e;
+            }
+            CACHE.put(key, b);
+            FiveWayFuzzTest.TALLY.count("programs built");
+            FiveWayFuzzTest.TALLY.count("build ms", b.millis());
+        }
+        return b;
+    }
+
+    static Built build(JscGen.Plan p) throws Exception {
+        long t0 = System.nanoTime();
+        var r = Toolchain.build(p.files(), Map.of());
+        if (!r.ok()) throw new BuildFailure("the toolchain refuses a generated program: " + r.diagnostics() + "\n" + p.describe());
+        var contract = r.contracts().stream().filter(c -> c.name().equals(p.name())).findFirst()
+                .orElseThrow(() -> new BuildFailure("the toolchain built no contract " + p.name() + "\n" + p.describe()));
+        for (var m : p.kinds().entrySet()) {
+            if (!m.getValue().equals("view") && !contract.transitions().containsKey(m.getKey())) {
+                throw new BuildFailure("the toolchain compiled no transition program for " + m.getKey() + ": " + r.diagnostics() + "\n" + p.describe());
+            }
+        }
+        // Gradle's path: the generated Java, compiled with the processors (JOUST's writes the validator and the client;
+        // JuLC's compiles the validator's script into META-INF/plutus).
+        Path out = OUT.resolve(p.name());
+        Files.createDirectories(out);
+        var units = new ArrayList<JavaFileObject>();
+        for (var g : r.generated()) {
+            String java = g.java();
+            units.add(new SimpleJavaFileObject(URI.create("string:///" + g.javaFile()), JavaFileObject.Kind.SOURCE) {
+                @Override
+                public CharSequence getCharContent(boolean ignore) {
+                    return java;
+                }
+            });
+        }
+        var compiler = ToolProvider.getSystemJavaCompiler();
+        var diags = new DiagnosticCollector<JavaFileObject>();
+        var task = compiler.getTask(null, null, diags, List.of("-d", out.toString(), "-s", out.toString(), "-implicit:class", "-parameters",
+                "-classpath", System.getProperty("java.class.path")), null, units);
+        task.setProcessors(List.of(new JoustProcessor(), new org.julclang.processor.JulcAnnotationProcessor()));
+        boolean ok = task.call();
+        var errors = diags.getDiagnostics().stream().filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
+                .map(d -> (d.getSource() == null ? "" : d.getSource().getName() + ":" + d.getLineNumber() + ": ") + d.getMessage(null))
+                .collect(Collectors.toList());
+        if (!ok || !errors.isEmpty()) throw new BuildFailure("javac and the processors refuse what the toolchain built: " + errors + "\n" + p.describe());
+        // I1: the script Gradle's path wrote is the toolchain's.
+        Path script = out.resolve("META-INF/plutus/" + p.name() + "Validator.plutus.json");
+        if (!Files.exists(script)) throw new BuildFailure("JuLC's processor wrote no script " + script + "\n" + p.describe());
+        var m = Pattern.compile("\"cborHex\"\\s*:\\s*\"([0-9a-f]+)\"").matcher(Files.readString(script));
+        if (!m.find() || !m.group(1).equals(contract.scriptCborHex())) {
+            throw new BuildFailure("the toolchain's script and Gradle's differ (I1)\n" + p.describe());
+        }
+        var loader = new URLClassLoader(new java.net.URL[]{out.toUri().toURL()}, GeneratedContracts.class.getClassLoader());
+        FourWay legs;
+        try {
+            legs = new FourWay(JscGen.PKG, loader, p.name(), p.source(), p.contractFile(), JscModules.of(p.files()), JavaLibraries.NONE,
+                    contract.transitions(), p.params());
+        } catch (org.julclang.state.runtime.JoustException e) {
+            if (e.getMessage() != null && e.getMessage().contains("a reference script must fit a 16 KB transaction")) {
+                throw new OverScriptLimit(e.getMessage(), e);
+            }
+            throw e;
+        }
+        return new Built(p, legs, (System.nanoTime() - t0) / 1_000_000);
+    }
+}

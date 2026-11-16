@@ -510,12 +510,16 @@ final class IrJson {
     // ------------------------------------------------------------------ reading
 
     /**
-     * Rebuilds the program. Strict, like the JavaScript reader (review S3): another format version, a duplicate key, a
-     * number that is not a plain integer, an unknown node, a reference to an undeclared local are all refused.
+     * Rebuilds the program, for the tests only (nothing in main code calls it). It refuses another format version, a
+     * duplicate key, a number that is not a plain integer, an unknown node and a reference to an undeclared local, but it
+     * is laxer than the JavaScript reader (validate.js): it lacks some of that reader's semantic checks (#97).
+     * IrReaderFuzzTest's {@code KNOWN_97} registers exactly those classes, and holds only while no main code reads IR with
+     * it: a caller that relied on it would need those checks first.
      */
     @SuppressWarnings("unchecked")
     static Ir.Program read(String json) {
-        var raw = (Map<String, Object>) AbiCheck.Json.parseStrict(json);
+        if (!(AbiCheck.Json.parseStrict(json) instanceof Map<?, ?> top)) throw new IllegalArgumentException("an IR export is a JSON object");
+        var raw = (Map<String, Object>) top;
         Reader.READ.set(new java.util.IdentityHashMap<>());
         try {
             var root = Reader.m(raw);
@@ -524,6 +528,10 @@ final class IrJson {
             Ir.Program p = new Reader().program(root);
             Reader.unknownFields();
             return p;
+        } catch (ClassCastException | NullPointerException | IndexOutOfBoundsException | ArithmeticException e) {
+            // A value of another kind than the format's where the reader casts (an object where a number is due, a missing
+            // node): refused as malformed, as the JavaScript reader refuses it (IrReaderFuzzTest found it crashing).
+            throw new IllegalArgumentException("not a well-formed IR export: " + e.getMessage(), e);
         } finally {
             Reader.READ.remove();
         }
@@ -614,8 +622,13 @@ final class IrJson {
             return v;
         }
 
+        /** A position: exactly [line, col], both non-negative, as the JavaScript reader requires (IrReaderFuzzTest). */
         static Pos pos(Object o) {
-            return new Pos(i(l(o).get(0)), i(l(o).get(1)));
+            var p = l(o);
+            if (p.size() != 2) throw new IllegalArgumentException("a bad position: " + p);
+            int line = i(p.get(0)), col = i(p.get(1));
+            if (line < 0 || col < 0) throw new IllegalArgumentException("a bad position: " + p);
+            return new Pos(line, col);
         }
 
         /**
@@ -1671,13 +1684,22 @@ final class IrJson {
                 case "option" -> new Ty.OptT(type(e.getValue()));
                 case "record" -> new Ty.Rec(s(e.getValue()));
                 case "enum" -> new Ty.EnumT(s(e.getValue()));
-                case "map" -> new Ty.MapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
-                case "bigmap" -> new Ty.BigMapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
+                // A key type and a value type, exactly (the long campaign at 9b8caf3f: a third element was ignored here and
+                // refused by the JavaScript reader).
+                case "map" -> new Ty.MapT(type(pair(e.getValue()).get(0)), type(pair(e.getValue()).get(1)));
+                case "bigmap" -> new Ty.BigMapT(type(pair(e.getValue()).get(0)), type(pair(e.getValue()).get(1)));
                 case "instance" -> new Ty.Instance(s(e.getValue()));
                 case "deposit" -> new Ty.DepositT(e.getValue() == null ? null : type(e.getValue()));
                 case "ledgerMap" -> new Ty.LedgerMapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
                 default -> throw new IllegalArgumentException("unknown type " + e.getKey());
             };
+        }
+
+        /** A map type's [key, value]: a list of exactly two types. */
+        static List<Object> pair(Object o) {
+            List<Object> p = l(o);
+            if (p.size() != 2) throw new IllegalArgumentException("a map type is [key, value], not " + p.size() + " types");
+            return p;
         }
 
         Ir.Local decl(Object o) {

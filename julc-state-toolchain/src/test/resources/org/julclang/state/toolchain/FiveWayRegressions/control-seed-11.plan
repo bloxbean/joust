@@ -1,0 +1,97 @@
+{
+  "generator": "JscGen r2",
+  "name": "C7ad7c32177",
+  "contractFile": "org/julclang/state/fuzz/C7ad7c32177.jsc",
+  "files": {
+    "org/julclang/state/fuzz/C7ad7c32177.jsc": "jsc 2\npackage org.julclang.state.fuzz\n\nimport { pow } from \"std/math\"\nimport { concat, slice, take, toInt } from \"std/bytes\"\nimport { blake2b_224 } from \"std/crypto\"\n\nfn g0(a: Int, c: Int): Int = [-1_000_000].length\nfn g1(a: Int, c: Int): Int = [1].fold((false ? (2 - a) : min(-1_000_000, a)), (acc0, x1) => (acc0 + x1 * c))\nfn g2(a: Int): Int {\n  require((asKey(#0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a) == asKey(#0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a)), \"m0 (the library's)\")\n  a\n}\n\ncontract C7ad7c32177(maxDatumBytes = 2048) {\n  state { owner: Key, n: Int, m: Int, b: Bytes, f: Bool, xs: List<Int>, o: Option<Int>, mp: Map<Bytes, Int> }\n\n  init(a: Int, k: Bytes) {\n    for (const v2 of [0].map(x3 => (x3 * a))) {\n      require((v2 <= -1_000_000), \"m1\")\n    }\n    if false {\n      require([10, 256].map(x4 => (x4 * 7)).contains((-1 - a)), \"m2\")\n    } else {\n      require(true, \"m3\")\n    }\n    return { owner: caller, n: (((2 - a) - -170_141_183_460_469_231_731_687_303_715_884_105_728)) % 1_000_003, m: (a) % 1_000_003, b: take(#7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f, 40), f: [1_000_000].contains([7, 18_446_744_073_709_551_616].length), xs: ([7]).take(4).map(x5 => x5 % 1_000_003), o: if [0, 0].reverse().all(x6 => (x6 <= [9_223_372_036_854_775_807, 7].length)) { Some((a) % 1_000_003) } else { None }, mp: Map.empty() }\n  }\n\n  action a0(p0_0: Int) only owner {\n    for (const v7 of xs.take(18_446_744_073_709_551_616)) {\n      require((v7 == 2), \"m4\")\n    }\n    return { ...state, o: if (m == m) { Some((n) % 1_000_003) } else { None }, mp: (if mp.size < 4 { mp } else { mp.delete(#) }).set(take(blake2b_224(#), 16), (2) % 1_000_003) }\n  }\n\n  action a1(p1_0: Map<Bytes, Int>, p1_1: Int) only owner {\n    if ((256 - -1_000_000) != (m % m)) {\n      require(f, \"m5\")\n      pay(caller, 2_000_000 + abs(-1_000_000) % 3_000_000)\n    } else {\n      require(((m * m) == m), \"m6\")\n    }\n    if true {\n      require(xs.concat([7, 0]).contains(p1_1), \"m7\")\n    } else {\n      require(([0].fold(1_000_000, (acc8, x9) => (acc8 + x9 * -170_141_183_460_469_231_731_687_303_715_884_105_728)) == (7 + n)), \"m8\")\n    }\n    pay(owner, 2_000_000 + abs(g0(18_446_744_073_709_551_616, (o ?? -1))) % 3_000_000)\n    return { ...state, owner: caller, n: (toInt(take(blake2b_224(b), 8))) % 1_000_003, f: f, o: if xs.contains(1) { Some(((p1_0.get(if f { #7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f } else { b }) ?? (256 / m))) % 1_000_003) } else { None } }\n  }\n\n  action a2() {\n    require((caller == owner), \"m9\")\n    return { ...state, m: (m) % 1_000_003, xs: (xs.map(x11 => (x11 * -1)).concat([256, 7].filter(x12 => ((x12 < m) && f)))).take(4).map(x10 => x10 % 1_000_003) }\n  }\n\n  view w4(q: Int): Bool = (concat(b, b) != slice(#00ff, pow(q, abs(n) % 9), -1))\n\n  view w5(q: Int): Int = 170_141_183_460_469_231_731_687_303_715_884_105_727\n\n  invariant inv = false\n}\n"
+  },
+  "params": null,
+  "features": ["M2b invariant", "M1 map"],
+  "kinds": {
+    "a0": "action",
+    "a1": "action",
+    "a2": "action",
+    "init": "init",
+    "w4": "view",
+    "w5": "view"
+  },
+  "steps": [{
+    "method": "init",
+    "state": null,
+    "args": [{
+      "int": "517016"
+    }, {
+      "bytes": ""
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": false,
+    "candidate": {
+      "rec": "State",
+      "fields": [{
+        "bytes": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+      }, {
+        "int": "877736"
+      }, {
+        "int": "886740"
+      }, {
+        "bytes": ""
+      }, {
+        "bool": true
+      }, {
+        "list": [{
+          "int": "528693"
+        }, {
+          "int": "-434020"
+        }, {
+          "int": "116411"
+        }]
+      }, {
+        "none": true
+      }, {
+        "map": [["5f5f", {
+          "int": "178791"
+        }]]
+      }]
+    }
+  }, {
+    "method": "a2",
+    "state": {
+      "rec": "State",
+      "fields": [{
+        "bytes": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      }, {
+        "int": "-202884"
+      }, {
+        "int": "115111"
+      }, {
+        "bytes": "48"
+      }, {
+        "bool": false
+      }, {
+        "list": [{
+          "int": "-527893"
+        }, {
+          "int": "-550732"
+        }, {
+          "int": "242206"
+        }, {
+          "int": "689731"
+        }]
+      }, {
+        "some": {
+          "int": "-580736"
+        }
+      }, {
+        "map": []
+      }]
+    },
+    "args": [],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": true,
+    "candidate": null
+  }]
+}

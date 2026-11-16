@@ -1,0 +1,91 @@
+{
+  "generator": "JscGen r2",
+  "name": "C4acb900bff",
+  "contractFile": "org/julclang/state/fuzz/C4acb900bff.jsc",
+  "files": {
+    "org/julclang/state/fuzz/l4acb900bff.jsc": "jsc 2\nlibrary org.julclang.state.fuzz\n\nimport { mod } from \"std/math\"\n\nfn g0(a: Bytes): Int = 0\nfn g1(a: Int): Int {\n  require(((false || true) && true), \"m0 (the library's)\")\n  mod(min(0, a), a)\n}\nfn g2(a: Bytes): Int = if !(false) { -9_223_372_036_854_775_808 } else { (Some(18_446_744_073_709_551_616) ?? -170_141_183_460_469_231_731_687_303_715_884_105_728) }\n",
+    "org/julclang/state/fuzz/C4acb900bff.jsc": "jsc 2\npackage org.julclang.state.fuzz\n\nimport { g0, g1, g2 } from \"./l4acb900bff.jsc\"\nimport { concat, drop, slice, take } from \"std/bytes\"\nimport { blake2b_224 } from \"std/crypto\"\n\ncontract C4acb900bff(maxDatumBytes = 2048) {\n  state { owner: Key, n: Int, m: Int, b: Bytes, f: Bool, xs: List<Int>, o: Option<Int>, mp: Map<Bytes, Int> }\n\n  init(a: Int, k: Bytes) {\n    require(((false || (false || true)) && ((1_000_000 != a) || !(false))), \"m1\")\n    return { owner: caller, n: (match Some(-170_141_183_460_469_231_731_687_303_715_884_105_728) { Some(v0) => (v0 - v0), None => (a) }) % 1_000_003, m: ((if false { Some(-9_223_372_036_854_775_808) } else { None } ?? a)) % 1_000_003, b: take(slice(if false { k } else { k }, [1_000_000].fold(9_223_372_036_854_775_807, (acc1, x2) => (acc1 + x2 * acc1)), a), 40), f: !((false && false)), xs: ([-9_223_372_036_854_775_808, -1]).take(4).map(x3 => x3 % 1_000_003), o: if (true && (256 == 255)) { Some((abs((a % 1))) % 1_000_003) } else { None }, mp: Map.empty() }\n  }\n\n  action a0(p0_0: Int, p0_1: Key, p0_2: Bytes) only owner {\n    require((drop(if f { p0_2 } else { # }, (o ?? p0_0)) >= blake2b_224(concat(p0_2, #a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1))), \"m2\")\n    return { ...state, o: if (concat(#, b) == if f { #00 } else { # }) { Some((if (p0_0 >= 3) { (m / n) } else { 0 }) % 1_000_003) } else { None } }\n  }\n\n  destroy close() only owner {\n    pay(owner, balance)\n  }\n\n}\n"
+  },
+  "params": null,
+  "features": ["M4 library", "M1 map"],
+  "kinds": {
+    "a0": "action",
+    "close": "destroy",
+    "init": "init"
+  },
+  "steps": [{
+    "method": "init",
+    "state": null,
+    "args": [{
+      "int": "155879"
+    }, {
+      "bytes": "9d"
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": true,
+    "candidate": {
+      "rec": "State",
+      "fields": [{
+        "bytes": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+      }, {
+        "int": "536818"
+      }, {
+        "int": "305820"
+      }, {
+        "bytes": "7979797979797979797979797979797979797979797979797979797979797979"
+      }, {
+        "bool": true
+      }, {
+        "list": [{
+          "int": "-961773"
+        }, {
+          "int": "-942206"
+        }, {
+          "int": "-805287"
+        }]
+      }, {
+        "none": true
+      }, {
+        "map": [["", {
+          "int": "-608235"
+        }]]
+      }]
+    }
+  }, {
+    "method": "a0",
+    "state": null,
+    "args": [{
+      "int": "256"
+    }, {
+      "bytes": "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6"
+    }, {
+      "bytes": "f8f8"
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": false,
+    "candidate": null,
+    "window": ["0", "1"]
+  }, {
+    "method": "close",
+    "state": null,
+    "args": [],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": true,
+    "candidate": null
+  }, {
+    "method": "close",
+    "state": null,
+    "args": [],
+    "caller": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": true,
+    "candidate": null
+  }]
+}

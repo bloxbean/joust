@@ -1,0 +1,119 @@
+{
+  "_comment": "Mutation baselines per class (PIT) and per file (Stryker): score in percent, mutant count, and the unit's PIT module or Stryker set (a whole-set run of that module or set must measure every unit named for it). CI's mutation and stryker jobs (scripts/pit-changed.py, scripts/stryker-changed.sh) fail a changed unit that scores more than 5 points below its entry; a unit with no entry needs the job's default floor. Written with scripts/pit-summary.py and scripts/stryker-summary.py --write-baseline from a whole-set CI run (the Build workflow's manual run with mutation_all). js/joust/src/toolchain.js and toolchain-heap.js are \"count\": \"killed\": scored on Killed alone, since whether a mutant stops on a timeout depends on the runner's speed (toolchain.js's timeouts ran from 45 to 89 over six CI runs while its kills stayed at 237-243). Their entries are the lowest Killed score measured: toolchain.js 237 of 382 (mutation_all 43629689255), toolchain-heap.js 31 of 35 (every run). Every other unit scored the same in all of them. A change that means to lower one updates it here, visibly.",
+  "pit": {
+    "org.julclang.state.api.AddressAdapter": {
+      "module": "julc-state-toolchain",
+      "mutants": 72,
+      "score": 63.9
+    },
+    "org.julclang.state.api.ValueAdapter": {
+      "module": "julc-state-toolchain",
+      "mutants": 128,
+      "score": 97.7
+    },
+    "org.julclang.state.dsl.JscMain": {
+      "module": "julc-state-dsl",
+      "mutants": 343,
+      "score": 44.9
+    },
+    "org.julclang.state.dsl.JscMain$Lowered": {
+      "module": "julc-state-dsl",
+      "mutants": 2,
+      "score": 100.0
+    },
+    "org.julclang.state.dsl.JscMain$Warning": {
+      "module": "julc-state-dsl",
+      "mutants": 2,
+      "score": 50.0
+    },
+    "org.julclang.state.dsl.v2.Checker": {
+      "module": "julc-state-dsl",
+      "mutants": 1668,
+      "score": 67.8
+    },
+    "org.julclang.state.dsl.v2.Checker$1": {
+      "module": "julc-state-dsl",
+      "mutants": 2,
+      "score": 50.0
+    },
+    "org.julclang.state.dsl.v2.Checker$Loader": {
+      "module": "julc-state-dsl",
+      "mutants": 29,
+      "score": 44.8
+    },
+    "org.julclang.state.dsl.v2.Checker$Module": {
+      "module": "julc-state-dsl",
+      "mutants": 4,
+      "score": 100.0
+    },
+    "org.julclang.state.dsl.v2.Checker$Sc": {
+      "module": "julc-state-dsl",
+      "mutants": 19,
+      "score": 89.5
+    },
+    "org.julclang.state.toolchain.JavaLibraryCertifier": {
+      "module": "julc-state-toolchain",
+      "mutants": 14,
+      "score": 85.7
+    },
+    "org.julclang.state.toolchain.JavaLibraryCertifier$Certification": {
+      "module": "julc-state-toolchain",
+      "mutants": 182,
+      "score": 67.0
+    },
+    "org.julclang.state.toolchain.JavaLibraryCertifier$Certification$1": {
+      "module": "julc-state-toolchain",
+      "mutants": 8,
+      "score": 62.5
+    },
+    "org.julclang.state.toolchain.JavaLibraryCertifier$Certification$2": {
+      "module": "julc-state-toolchain",
+      "mutants": 8,
+      "score": 50.0
+    },
+    "org.julclang.state.toolchain.JavaLibraryCertifier$Certification$3": {
+      "module": "julc-state-toolchain",
+      "mutants": 48,
+      "score": 43.8
+    },
+    "org.julclang.state.toolchain.JavaLibraryCertifier$Provider": {
+      "module": "julc-state-toolchain",
+      "mutants": 1,
+      "score": 100.0
+    }
+  },
+  "stryker": {
+    "js/joust/src/build.js": {
+      "mutants": 283,
+      "scope": "joust",
+      "score": 27.6
+    },
+    "js/joust/src/lsp/select.js": {
+      "mutants": 698,
+      "scope": "joust",
+      "score": 35.2
+    },
+    "js/joust/src/toolchain-heap.js": {
+      "count": "killed",
+      "mutants": 35,
+      "scope": "joust-heap",
+      "score": 88.6
+    },
+    "js/joust/src/toolchain.js": {
+      "count": "killed",
+      "mutants": 382,
+      "scope": "joust",
+      "score": 62.0
+    },
+    "js/state-client/src/keyed.js": {
+      "mutants": 1542,
+      "scope": "state-client",
+      "score": 61.7
+    },
+    "js/state-client/src/verify.js": {
+      "mutants": 1003,
+      "scope": "state-client",
+      "score": 8.6
+    }
+  }
+}
