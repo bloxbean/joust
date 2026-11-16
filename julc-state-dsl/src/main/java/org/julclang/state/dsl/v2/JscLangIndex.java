@@ -423,6 +423,14 @@ final class JscLangIndex {
                 }
             }
         }
+        // ADR-0018 M3: an owned type's detail says whether it is keyed (#130 r2, security Z4: a keyed type's name is its
+        // keyed type id, hashed into every key token, so the rename's confirmation differs).
+        for (String o : program.owned()) {
+            Spans.Decl d = decl("owned", o);
+            if (d == null) continue;
+            Ir.Keyed k = program.keyed().get(o);
+            meta(d).detail = "owned " + o + (k == null ? "" : " keyed by " + k.key());
+        }
         for (Ir.Method m : program.methods()) {
             // M3: an owned method's declaration is named T.m (the outline says whose method it is); init migrate's is migrate.
             String declName = m.kind() == Ir.Kind.INIT ? "init" : m.on() != null && m.kind().owned() ? m.on() + "." + m.name() : m.name();

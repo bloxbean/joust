@@ -1596,6 +1596,13 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   const abiWarning = (d) => `'${d.name}' is recorded in the ABI manifest: renaming it changes the manifest, the generated client and the`
     + ' description (the script does not change), and the next build\'s ABI gate asks you to accept the new manifest (Accept ABI…).';
+  // #130 round r2 (security Z4): a keyed owned type's name is its keyed type id, hashed into every key token's name
+  // (ADR-0016 D2), so renaming it changes the validator itself: a confirmation of its own, which a plain confirm does not give.
+  const keyedType = (d) => d.kind === 'owned' && / keyed by /.test(d.detail ?? '');
+  const keyedWarning = (d) => `'${d.name}' is a keyed type: its name is the keyed type id, which is hashed into every key token's name.`
+    + ' Renaming it changes the validator (its script, hash, address and policy) and the name of every key token, so instances'
+    + ' deployed before it keep the old name and cannot be read by the new script. It also changes the ABI manifest, the'
+    + ' generated client and the description, and the next build\'s ABI gate asks you to accept the new manifest (Accept ABI…).';
 
   // VS Code: JOUST: Rename Symbol sends this; the server validates and applies through workspace/applyEdit (D4a).
   connection.onRequest('joust/rename', async (p, token) => {
@@ -1603,7 +1610,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (!p || typeof p.uri !== 'string' || typeof p.newName !== 'string' || !p.position) return { applied: false, error: 'refused' };
     const r = await validatedRename(p.uri, p.position, p.newName, token);
     if (r.error) return { applied: false, error: r.error, ...(r.needsOpen ? { needsOpen: r.needsOpen } : {}) };
-    if (r.plan.abi && p.confirm !== true) return { applied: false, needsConfirmation: true, warning: abiWarning(r.plan.decl) };
+    if (keyedType(r.plan.decl) && p.confirm !== 'scriptChange') {
+      return { applied: false, needsConfirmation: true, confirmation: 'scriptChange', warning: keyedWarning(r.plan.decl) };
+    }
+    if (r.plan.abi && p.confirm !== true && p.confirm !== 'scriptChange') return { applied: false, needsConfirmation: true, warning: abiWarning(r.plan.decl) };
     if (r.files) return applyVerifiedMany(r.files, `Rename '${r.plan.decl.name}' to '${p.newName}'`);
     return applyVerified(p.uri, r.version, r.text, r.plan.edits, `Rename '${r.plan.decl.name}' to '${p.newName}'`);
   });

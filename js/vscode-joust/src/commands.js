@@ -136,10 +136,12 @@ function register(vscode, ctx, getClient) {
       r = await c.sendRequest('joust/rename', { uri, position, newName });
     }
     if (r.needsConfirmation) {
+      // #130 r2 (Z4): a rename that changes the script (a keyed type's) names its own confirmation, sent back as given.
       const ok = args && 'confirm' in args ? args.confirm === true
-        : (await vscode.window.showWarningMessage(r.warning, { modal: true }, 'Rename')) === 'Rename';
+        : (await vscode.window.showWarningMessage(r.warning, { modal: true }, r.confirmation === 'scriptChange' ? 'Rename and change the script' : 'Rename'))
+          === (r.confirmation === 'scriptChange' ? 'Rename and change the script' : 'Rename');
       if (!ok) return { applied: false, reason: 'not confirmed', warning: r.warning };
-      r = await c.sendRequest('joust/rename', { uri, position, newName, confirm: true });
+      r = await c.sendRequest('joust/rename', { uri, position, newName, confirm: r.confirmation ?? true });
     }
     if (!r.applied && r.error) vscode.window.showWarningMessage(`JOUST: rename refused: ${r.error}`);
     return r;
