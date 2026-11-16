@@ -28,6 +28,18 @@ class JscLangScalingTest {
         return b.append("}\n").toString();
     }
 
+    /**
+     * #130 r4 (Codex X6): an accepted file whose owned members and bare object-field references both grow: one owned type
+     * and n owned actions, each reading its object's field (each name is looked up among the owned members).
+     */
+    static String owned(int n) {
+        var b = new StringBuilder("jsc 1\npackage app\n\ncontract C {\n  state { k: Int }\n  owned Item { owner: Key, n: Int }\n"
+                + "  init() { return { k: 0 } }\n  owned init Item.open() { return { owner: caller, n: 0 } }\n"
+                + "  owned destroy Item.close() only owner { pay(owner, balance) }\n");
+        for (int i = 0; i < n; i++) b.append("  owned action Item.inc").append(i).append("() only owner {\n    return { ...state, n: n + 1 }\n  }\n");
+        return b.append("}\n").toString();
+    }
+
     static String unclosed(int n) {
         var b = new StringBuilder(HEAD);
         for (int i = 0; i < n; i++) b.append("  action a").append(i).append("( {\n    return state\n  }\n");
@@ -83,6 +95,30 @@ class JscLangScalingTest {
     @Test
     void actionsWithAnUnknownName() {
         scales("actions with an unknown name", JscLangScalingTest::unknown, 2000);
+    }
+
+    /** X6: an accepted file (no errors) with n owned members, each with field references: linear up to a log. */
+    @Test
+    void ownedMembersWithObjectFieldReferences() {
+        // "C.jsc": a file name the build accepts, so the whole file is analysed and indexed (the shapes above are refused
+        // at their name, app/C.jsc, before the index runs).
+        var model = JscLang.analyze(owned(10), "C.jsc");
+        assertTrue(model.accepted(), "the shape is accepted: " + model.diagnostics());
+        java.util.function.IntToLongFunction best = n -> {
+            String src = owned(n);
+            long b = Long.MAX_VALUE;
+            for (int k = 0; k < 5; k++) {
+                long t = System.nanoTime();
+                JscLang.analyze(src, "C.jsc");
+                b = Math.min(b, System.nanoTime() - t);
+            }
+            return b;
+        };
+        best.applyAsLong(500);   // warm-up
+        long one = best.applyAsLong(2000), two = best.applyAsLong(4000);
+        double ratio = (double) two / Math.max(one, 1);
+        System.out.printf("S2 owned members with object-field references: n=2000 %.1f ms, 2n %.1f ms, ratio %.2f%n", one / 1e6, two / 1e6, ratio);
+        assertTrue(ratio <= 2.5 || two < 20_000_000L, "owned members: " + ratio);
     }
 
     @Test

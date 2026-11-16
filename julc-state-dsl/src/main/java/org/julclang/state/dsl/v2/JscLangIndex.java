@@ -129,21 +129,33 @@ final class JscLangIndex {
      * destroy or invariant by type there), or null where the input is the state.
      */
     private String inputAt(int line, int col) {
-        // The members with an object input, collected once (#130 r3: a lookup per name scans only them, never every
-        // declaration, so a file of n names and n declarations stays linear).
+        // #130 r4 (Codex X6): the members with an object input are a contract's members, which never overlap: sorted by
+        // their start once, a lookup is a binary search for the last one starting at or before the position, then its
+        // containment (O(log M) per name, so a file of R names and M owned members costs O(D + M log M + R log M)).
         if (inputs == null) {
-            inputs = new ArrayList<>();
-            for (Spans.Decl d : spans.decls) if (d.input != null && d.endLine >= 0) inputs.add(d);
+            var ds = new ArrayList<Spans.Decl>();
+            for (Spans.Decl d : spans.decls) if (d.input != null && d.endLine >= 0) ds.add(d);
+            ds.sort((a, b) -> a.startLine != b.startLine ? Integer.compare(a.startLine, b.startLine) : Integer.compare(a.startCol, b.startCol));
+            inputs = ds;
         }
-        Spans.Decl best = null;
-        for (Spans.Decl d : inputs) {
-            boolean in = (line > d.startLine || line == d.startLine && col >= d.startCol) && (line < d.endLine || line == d.endLine && col <= d.endCol);
-            if (in && (best == null || d.startLine > best.startLine || d.startLine == best.startLine && d.startCol >= best.startCol)) best = d;
+        int lo = 0, hi = inputs.size() - 1, at = -1;
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            Spans.Decl d = inputs.get(mid);
+            if (d.startLine < line || d.startLine == line && d.startCol <= col) {
+                at = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
         }
-        return best == null ? null : best.input;
+        if (at < 0) return null;
+        Spans.Decl d = inputs.get(at);
+        boolean in = line < d.endLine || line == d.endLine && col <= d.endCol;
+        return in ? d.input : null;
     }
 
-    /** The members whose input is an owned object (inputAt), or null until first asked. */
+    /** The members whose input is an owned object, sorted by their start (inputAt), or null until first asked. */
     private List<Spans.Decl> inputs;
 
     private Spans.Decl typeDecl(String name) {
