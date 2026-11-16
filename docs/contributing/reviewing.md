@@ -66,11 +66,12 @@ that choice explicit.
   finished** (security review r2 and r3, S9). setup-gradle shares its extracted entries (dependencies, transforms,
   instrumented jars, wrapper zips) across jobs by their contents' names, whatever `gradle-home-cache-strict-match`
   says, and entries the devnet job wrote with lifecycle scripts on are still restored by `build` and `cli`.
-  - The timing matters. #95 merges into `feat/jsc-2-int2`, not `main`. Until the change reaches `main` (int2's merge
-    into `main`), `main`'s own `build.yml` still has the unhardened devnet job, which writes those entries again on
-    every push to `main`. Pull-request runs on int2-based branches restore `main`'s entries too, since int2 saves none.
-    A purge while the merge's push run is in flight is also undone: that run restores the old entries and saves new
-    ones that contain them.
+  - The timing matters. #95 reaches `main` through the integration pull request #130 (`feat/jsc-2-final`), not on its
+    own and not through int2. Until #130 is merged into `main`, `main`'s own `build.yml` still has the unhardened devnet
+    job, which writes those entries again on every push to `main`. Pull-request runs on branches based on the
+    integration restore `main`'s entries too, since those branches save none. So the purge is due after #130 merges
+    **and** that merge's push run on `main` has finished (tracked in #128): a purge while that push run is in flight is
+    undone, because the run restores the old entries and saves new ones that contain them.
   - The purge: `gh cache list --repo bloxbean/joust --ref refs/heads/main --key gradle- --limit 1000`, then
     `gh cache delete <key> --repo bloxbean/joust` for each one (or `gh cache delete --all`). Optionally, re-run that
     push run afterwards, so that `main`'s entries are rebuilt clean.
