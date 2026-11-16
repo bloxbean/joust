@@ -590,7 +590,7 @@ jobs:
         working-directory: js/vscode-joust
         run: xvfb-run -a node test/electron/run.mjs --versions 1.109.0,stable
 
-      # ADR-0021 r10 §16 (M5e) E7: the release's asset build (editor-assets.yml) on this commit, nothing attached. The
+      # ADR-0021 r11 §16 (M5e) E7: the release's asset build (editor-assets.yml) on this commit, nothing attached. The
       # engine comes from an npm tarball of this commit's @julclang/joust, as the release takes it from the published one.
       - name: Build the editor assets (dry run)
         shell: bash
@@ -603,6 +603,11 @@ jobs:
           node .github/scripts/editor-assets.mjs --version "$v" --engine-tarball "$RUNNER_TEMP/npm/julclang-joust-$v.tgz" \
             --out "$RUNNER_TEMP/editor-assets"
           (cd "$RUNNER_TEMP/editor-assets" && sha256sum -c "editor-assets-$v-SHA256SUMS.txt") | tee -a "$GITHUB_STEP_SUMMARY"
+          # ADR-0021 D11 r11: publish-vscode.yml's check of the .vsix (publisher, name, version, pre-release), offline.
+          ext=$(node -p "require('./js/vscode-joust/package.json').version")
+          echo '[]' > "$RUNNER_TEMP/marketplace-none.json"
+          node .github/scripts/vscode-marketplace.mjs vsix "$RUNNER_TEMP/editor-assets/vscode-joust-$ext.vsix" --joust "$v" \
+            --published "$RUNNER_TEMP/marketplace-none.json"
 
   # Mutation testing of what a change can weaken (review r1, design F6), in parallel jobs: PIT here, on
   # gradle/pitest.gradle's targets (julc-state-api's ValueAdapter and AddressAdapter, the certifier, the checker, JscMain's

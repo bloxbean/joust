@@ -6,7 +6,7 @@
   "private": true,
   "preview": true,
   "license": "MIT",
-  "publisher": "joust-q4-undecided",
+  "publisher": "julclang",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bloxbean/joust.git",
