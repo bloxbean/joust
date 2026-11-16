@@ -1,0 +1,167 @@
+{
+  "generator": "JscGen r2",
+  "name": "C5687d15672",
+  "contractFile": "org/julclang/state/fuzz/C5687d15672.jsc",
+  "files": {
+    "org/julclang/state/fuzz/l5687d15672.jsc": "jsc 1\nlibrary org.julclang.state.fuzz\n\n\ntype Pt = { x: Int, y: Int }\nfn g0(a: Int, c: Int): Int = (((false ? 0 : 170_141_183_460_469_231_731_687_303_715_884_105_727) != -(1)) ? -(a) : 1_000_000)\n",
+    "org/julclang/state/fuzz/C5687d15672.jsc": "jsc 1\npackage org.julclang.state.fuzz\n\nimport { Pt, g0 } from \"./l5687d15672.jsc\"\nimport { concat, slice, take } from \"std/bytes\"\n\ncontract C5687d15672(maxDatumBytes = 2048) {\n  state { owner: Key, n: Int, m: Int, b: Bytes, f: Bool, xs: List<Int>, o: Option<Int>, p: Pt }\n\n  init(a: Int, k: Bytes) {\n    const c0 = [7, 256].drop(a).all(x0 => ((x0 > (x0 * x0)) && (x0 == 0)))\n    require((c0 != (0 != 0)) || (0 != 256), \"m0\")\n    return { owner: caller, n: (Pt { x: a, y: 9_223_372_036_854_775_807 }.x) % 1_000_003, m: ((-170_141_183_460_469_231_731_687_303_715_884_105_728 * g0(-1, 3))) % 1_000_003, b: take(concat(take(#00ff, a), #00), 40), f: ((false ? 0 : 0) != (false ? 0 : 0)), xs: ([0, 0].concat([0, 0]).concat([0, 1].concat([-170_141_183_460_469_231_731_687_303_715_884_105_728]))).take(4).map(x1 => x1 % 1_000_003), o: if !((1 == 2)) { Some((max(a, (0 / a))) % 1_000_003) } else { None }, p: Pt { x: (if true { abs(a) } else { (a / a) }) % 1_000_003, y: (g0((2 - a), [-1].fold(a, (acc2, x3) => (acc2 + x3 * 7)))) % 1_000_003 } }\n  }\n\n  action a0(p0_0: Key) only owner {\n    for (const v4 of xs.take(1)) {\n      require((v4 <= -1_000_000), \"m1\")\n    }\n    return { ...state, owner: caller }\n  }\n\n  action a1(p1_0: Pt) only owner {\n    return { ...state, b: take(slice(b, (m + n), match Some(256) { Some(v5) => (v5 - -1), None => (18_446_744_073_709_551_616) }), 40), f: xs.filter(x6 => (x6 != -170_141_183_460_469_231_731_687_303_715_884_105_728)).isEmpty, xs: ([3].filter(x8 => ((x8 > 18_446_744_073_709_551_616) || false)).reverse()).take(4).map(x7 => x7 % 1_000_003) }\n  }\n\n  action a2(p2_0: Key, p2_1: Key) open {\n    const c1 = ([-1_000_000].all(x9 => ((x9 <= n) && false)) != (m == n))\n    require((c1 == (b < #7f7f7f7f7f7f7f7f)) || (true || f), \"m2\")\n    pay(owner, 2_000_000 + abs([1].map(x10 => (x10 * -170_141_183_460_469_231_731_687_303_715_884_105_728)).sum()) % 3_000_000)\n    return { ...state, owner: p2_1, n: (1_000_000) % 1_000_003, m: ((m + m)) % 1_000_003 }\n  }\n\n  view w4(q: Int): Bool = f\n\n  view w5(q: Int): Int = (-((m - 256)) - 170_141_183_460_469_231_731_687_303_715_884_105_727)\n\n  destroy close() only owner {\n    require(f, \"m3\")\n    pay(owner, balance)\n  }\n\n}\n"
+  },
+  "params": null,
+  "features": ["M4 library", "M2 values", "record"],
+  "kinds": {
+    "a0": "action",
+    "a1": "action",
+    "a2": "action",
+    "close": "destroy",
+    "init": "init",
+    "w4": "view",
+    "w5": "view"
+  },
+  "steps": [{
+    "method": "init",
+    "state": null,
+    "args": [{
+      "int": "440364"
+    }, {
+      "bytes": "b1"
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": true,
+    "candidate": {
+      "rec": "State",
+      "fields": [{
+        "bytes": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+      }, {
+        "int": "801601"
+      }, {
+        "int": "202247"
+      }, {
+        "bytes": "3d3d"
+      }, {
+        "bool": false
+      }, {
+        "list": [{
+          "int": "874243"
+        }, {
+          "int": "-895551"
+        }]
+      }, {
+        "none": true
+      }, {
+        "rec": "Pt",
+        "fields": [{
+          "int": "734096"
+        }, {
+          "int": "6"
+        }]
+      }]
+    }
+  }, {
+    "method": "close",
+    "state": null,
+    "args": [],
+    "caller": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": false,
+    "candidate": null
+  }, {
+    "method": "a2",
+    "state": null,
+    "args": [{
+      "bytes": "f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6"
+    }, {
+      "bytes": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": false,
+    "candidate": null,
+    "window": ["1800000000000", "1800000000000"]
+  }, {
+    "method": "a1",
+    "state": {
+      "rec": "State",
+      "fields": [{
+        "bytes": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+      }, {
+        "int": "-876718"
+      }, {
+        "int": "726473"
+      }, {
+        "bytes": "d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5"
+      }, {
+        "bool": false
+      }, {
+        "list": []
+      }, {
+        "none": true
+      }, {
+        "rec": "Pt",
+        "fields": [{
+          "int": "808653"
+        }, {
+          "int": "1"
+        }]
+      }]
+    },
+    "args": [{
+      "rec": "Pt",
+      "fields": [{
+        "int": "256"
+      }, {
+        "int": "2"
+      }]
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": false,
+    "candidate": null
+  }, {
+    "method": "a2",
+    "state": null,
+    "args": [{
+      "bytes": "9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e"
+    }, {
+      "bytes": "56565656565656565656565656565656565656565656565656565656"
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": ["5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"],
+    "mutants": true,
+    "candidate": null,
+    "window": ["1800000000000", "1800003600000"]
+  }, {
+    "method": "a1",
+    "state": null,
+    "args": [{
+      "rec": "Pt",
+      "fields": [{
+        "int": "480301"
+      }, {
+        "int": "0"
+      }]
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": false,
+    "candidate": null
+  }, {
+    "method": "w4",
+    "state": null,
+    "args": [{
+      "int": "-170141183460469231731687303715884105729"
+    }],
+    "caller": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+    "received": 0,
+    "cosigners": [],
+    "mutants": true,
+    "candidate": null,
+    "window": ["1799999880000", "1800000000000"]
+  }]
+}

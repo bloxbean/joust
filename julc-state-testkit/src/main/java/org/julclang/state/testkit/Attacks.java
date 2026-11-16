@@ -64,7 +64,7 @@ public final class Attacks {
                                 o.referenceScript()))));
             }
             out.add(new Attack("thread token sent to a key address", "I4/I12", t -> mapState(t, o ->
-                    new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBA)), o.value(), o.datum(),
+                    new TxOut(StateHarness.pkhAddress(outsiderKey(t, 0xBA)), o.value(), o.datum(),
                             o.referenceScript()))));
             out.add(new Attack("stake credential on the state address", "I12", t -> mapState(t, o ->
                     new TxOut(new Address(o.address().credential(), Optional.of(new StakingCredential.StakingHash(
@@ -134,8 +134,7 @@ public final class Attacks {
                     new TxOut(o.address(), o.value().merge(Value.lovelace(BigInteger.ONE.negate())), o.datum(),
                             o.referenceScript()))));
             out.add(new Attack("payout #" + k + " paid to someone else", "I7", t -> mapOutput(t, idx, o ->
-                    new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBB)), o.value(), o.datum(),
-                            o.referenceScript()))));
+                    new TxOut(StateHarness.pkhAddress(outsiderKey(t, 0xBB)), o.value(), o.datum(), o.referenceScript()))));
             out.add(new Attack("payout #" + k + " paid to a script with the same hash", "I7", t -> mapOutput(t, idx, o ->
                     new TxOut(new Address(new Credential.ScriptCredential(new ScriptHash(
                             ((Credential.PubKeyCredential) o.address().credential()).hash().hash())), Optional.empty()),
@@ -154,7 +153,7 @@ public final class Attacks {
                 out.add(new Attack("send #" + k + " under-filled by one unit", "I29", t -> mapOutput(t, idx, o ->
                         new TxOut(o.address(), lessOne(o.value()), o.datum(), o.referenceScript()))));
                 out.add(new Attack("send #" + k + " delivered to another address", "I29", t -> mapOutput(t, idx, o ->
-                        new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBC)), o.value(), o.datum(), o.referenceScript()))));
+                        new TxOut(StateHarness.pkhAddress(outsiderKey(t, 0xBC)), o.value(), o.datum(), o.referenceScript()))));
                 out.add(new Attack("send #" + k + " datum changed", "I29", t -> mapOutput(t, idx, o ->
                         new TxOut(o.address(), o.value(), new OutputDatum.OutputDatumInline(PlutusData.integer(7)),
                                 o.referenceScript()))));
@@ -204,7 +203,7 @@ public final class Attacks {
                 var e = userMint(c, h.policy());
                 Value extra = org.julclang.state.api.Assets.of(h.policy(), e, BigInteger.ONE);
                 c.mint = org.julclang.state.api.Assets.add(c.mint, extra);
-                c.outputs.add(new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBA)),
+                c.outputs.add(new TxOut(StateHarness.pkhAddress(outsiderKey(t, 0xBA)),
                         org.julclang.state.api.Assets.add(Value.lovelace(BigInteger.valueOf(2_000_000)), extra),
                         new OutputDatum.NoOutputDatum(), Optional.empty()));
                 return c;
@@ -231,7 +230,7 @@ public final class Attacks {
                 var c = t.copy();
                 c.mint = Value.zero();
                 c.mintRedeemer = null;
-                c.outputs.add(new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBA)), h.token(t, BigInteger.ONE),
+                c.outputs.add(new TxOut(StateHarness.pkhAddress(outsiderKey(t, 0xBA)), h.token(t, BigInteger.ONE),
                         new OutputDatum.NoOutputDatum(), Optional.empty()));
                 return c;
             }));
@@ -305,6 +304,24 @@ public final class Attacks {
      * and the attack would then sign as that owner and be accepted: a false failure.
      */
     static byte[] outsider(TxModel tx) {
+        return fresh(0xEE, taken(tx));
+    }
+
+    /**
+     * A key for a redirection or an outsider's output (#130: a payout or a send redirected, a token sent away): derived
+     * from {@code seed} as {@link #outsider} is, and none of the transaction's keys, byte strings or output addresses.
+     * The five-way fuzzer's arguments are keys of any fill byte, so a fixed key could be the very recipient a contract
+     * owes: the "attacked" transaction was then the honest one, and its acceptance no finding.
+     */
+    static byte[] outsiderKey(TxModel tx, int seed) {
+        var taken = taken(tx);
+        for (var o : tx.outputs) if (o.address().credential() instanceof Credential.PubKeyCredential pk) taken.add(pk.hash().hash());
+        for (var in : tx.inputs) if (in.resolved().address().credential() instanceof Credential.PubKeyCredential pk) taken.add(pk.hash().hash());
+        return fresh(seed, taken);
+    }
+
+    /** Every signer and every byte string in the inputs' and outputs' inline datums and the redeemers. */
+    private static List<byte[]> taken(TxModel tx) {
         var taken = new ArrayList<byte[]>(tx.signers);
         for (var in : tx.inputs) datumBytes(in.resolved(), taken);
         for (var in : tx.referenceInputs) datumBytes(in.resolved(), taken);
@@ -312,7 +329,7 @@ public final class Attacks {
         tx.spendRedeemers.values().forEach(r -> collectBytes(r, taken));
         tx.withdrawals.values().forEach(r -> collectBytes(r, taken));
         if (tx.mintRedeemer != null) collectBytes(tx.mintRedeemer, taken);
-        return fresh(0xEE, taken);
+        return taken;
     }
 
     private static void datumBytes(TxOut o, List<byte[]> into) {

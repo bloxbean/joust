@@ -2096,8 +2096,15 @@ final class FourWay {
         var ss = new ArrayList<Send>();
         for (Send x : sends) ss.add(x);
         var out = new ArrayList<JulcList<Send>>();
+        // An address that is none of the sends' (#130: a fixed 0xBB key could be a send's own recipient).
         byte[] other = new byte[28];
-        Arrays.fill(other, (byte) 0xBB);
+        for (int b = 0xBB; ; b = (b + 1) & 0xFF) {
+            Arrays.fill(other, (byte) b);
+            Address a = new Address(new Credential.PubKeyCredential(new PubKeyHash(other)), Optional.empty());
+            boolean taken = false;
+            for (Send x : ss) taken |= x.to().equals(a);
+            if (!taken) break;
+        }
         for (int k = 0; k < ss.size(); k++) {
             Send x = ss.get(k);
             var dropped = new ArrayList<>(ss);
@@ -2362,8 +2369,15 @@ final class FourWay {
         var out = new ArrayList<JulcList<Payout>>();
         for (int k = 0; k < ps.size(); k++) {
             Payout p = ps.get(k);
+            // A recipient that is none of the payouts' (#130: the five-way fuzzer's keys are of any fill byte, so a fixed 0xBB
+            // could be the payee itself, and the "redirected" payout the honest one).
             byte[] other = new byte[28];
-            Arrays.fill(other, (byte) 0xBB);
+            for (int b = 0xBB; ; b = (b + 1) & 0xFF) {
+                Arrays.fill(other, (byte) b);
+                boolean taken = false;
+                for (Payout x : ps) taken |= Arrays.equals(x.to(), other);
+                if (!taken) break;
+            }
             for (Payout q : List.of(new Payout(p.to(), p.lovelace().add(BigInteger.ONE)), new Payout(p.to(), p.lovelace().subtract(BigInteger.ONE)),
                     new Payout(other, p.lovelace()))) {
                 if (q.lovelace().signum() <= 0 || !more && q.lovelace().compareTo(p.lovelace()) > 0) continue;
