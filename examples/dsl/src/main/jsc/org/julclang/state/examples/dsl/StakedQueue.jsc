@@ -1,0 +1,28 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+import { isRegistration, delegatesOnlyTo } from "std/certs"
+
+// ADR-0018 M3 final pass (design MD2): a coverage contract for the M3 combination matrix: a batched action beside
+// stakeSelf and its withdraw and certify handlers (JscV2M3MatrixTest).
+contract StakedQueue(maxDatumBytes = 256, stakeSelf) {
+  params { council: List<Key>, quorum: Int, pool: Bytes, payee: Key }
+  state { admin: Key, count: Int }
+
+  init() {
+    return { admin: caller, count: 0 }
+  }
+
+  action tick() batched {
+    return { ...state, count: count + 1 }
+  }
+
+  withdraw collect(amount: Int) quorum params.council params.quorum {
+    if amount > 0 {
+      send(wallet(params.payee), Value.lovelace(amount))
+    }
+  }
+
+  certify certificate(cert: TxCert) quorum params.council params.quorum =
+    isRegistration(cert) || delegatesOnlyTo(cert, params.pool)
+}

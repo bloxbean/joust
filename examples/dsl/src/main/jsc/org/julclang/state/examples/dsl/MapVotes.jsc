@@ -1,0 +1,25 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3 final pass (design MD2): a coverage contract for the M3 combination matrix: BigMap state beside the
+// certify, vote and propose handlers (a withdraw handler beside BigMap state is JSC1305). JscV2M3MatrixTest runs it on
+// all five legs.
+contract MapVotes(maxDatumBytes = 256) {
+  params { council: List<Key>, quorum: Int }
+  state { admin: Key, book: BigMap<Key, Int> }
+
+  init() {
+    return { admin: caller, book: BigMap.empty() }
+  }
+
+  action note(v: Int) {
+    require(v > 0, "note a positive value")
+    return { ...state, book: book.set(caller, v) }
+  }
+
+  certify register(cert: TxCert) quorum params.council params.quorum = true
+
+  vote decide(voter: Voter, action: GovernanceActionId, choice: Vote) quorum params.council params.quorum = true
+
+  propose guard(p: ProposalProcedure) = true
+}

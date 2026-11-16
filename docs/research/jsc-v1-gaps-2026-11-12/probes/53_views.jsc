@@ -1,0 +1,10 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    state b: Bytes
+    init(b0: Bytes) { owner = caller
+      b = b0 }
+    view twice(k: Int): Int = n * 2 + k
+    view isOwner(who: Key): Bool = who == owner
+}

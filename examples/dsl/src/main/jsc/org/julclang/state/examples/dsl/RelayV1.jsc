@@ -1,0 +1,34 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+import contract { Oracle } from "./Oracle.jsc"
+
+// ADR-0018 M3 final pass (design MD2): a coverage contract for the M3 combination matrix: a migrating version with a
+// batched action, a read of another contract, and the vote and propose handlers. RelayV2 adopts it (JscV2M3MatrixTest).
+contract RelayV1(maxDatumBytes = 256) {
+  params { feed: Instance<Oracle>, council: List<Key>, quorum: Int }
+  state { admin: Key, successor: Bytes, count: Int }
+
+  init() {
+    return { admin: caller, successor: #, count: 0 }
+  }
+
+  action tick() batched {
+    return { ...state, count: count + 1 }
+  }
+
+  action quote(p: reads params.feed) open {
+    return { ...state, count: p.price }
+  }
+
+  action setSuccessor(next: Bytes) only admin {
+    require(successor == #, "the successor is set once")
+    return { ...state, successor: next }
+  }
+
+  destroy upgrade() only admin migrates to successor { }
+
+  vote decide(voter: Voter, action: GovernanceActionId, choice: Vote) quorum params.council params.quorum = true
+
+  propose guard(p: ProposalProcedure) = true
+}

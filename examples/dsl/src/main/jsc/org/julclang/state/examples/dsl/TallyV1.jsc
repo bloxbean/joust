@@ -1,0 +1,34 @@
+jsc 1
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3c's coverage contract for migration (ADR-0011 D4), version 1, beside the upgrade port: a state whose checked
+// input reaches every kind (keys, a list of keys, a map, an option, a Bool, an enum: review F3); the successor is set
+// once (the lock the security review asked about, A43: setSuccessor requires it unset); the migrating destroy is by a
+// quorum of the voters.
+enum Mode { Plain, Weighted { factor: Int } }
+
+contract TallyV1(maxDatumBytes = 512) {
+  state { admin: Key, successor: Bytes, voters: List<Key>, needed: Int, tags: Map<Bytes, Int>, note: Option<Bytes>, live: Bool, mode: Mode }
+
+  init(voters: List<Key>, needed: Int) payable {
+    return { admin: caller, successor: #, voters, needed, tags: Map.empty(), note: None, live: true, mode: Plain }
+  }
+
+  action weigh(factor: Int) only admin {
+    return { ...state, live: false, mode: Weighted { factor } }
+  }
+
+  action tag(name: Bytes, n: Int) only admin {
+    return { ...state, tags: tags.set(name, n), note: Some(name) }
+  }
+
+  // The successor is set once: whoever relies on it can.
+  action setSuccessor(next: Bytes) only admin {
+    require(successor == #, "the successor is set once")
+    return { ...state, successor: next }
+  }
+
+  destroy move() quorum voters needed migrates to successor { }
+
+  invariant reachable = needed > 0 && needed <= voters.length
+}

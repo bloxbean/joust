@@ -1,0 +1,1048 @@
+{
+ "ir": 2,
+ "language": "jsc 2",
+ "sourceSha256": "520f2f7692d2c3d9fc1e06021376dcad4d93b98f6a460b5651f8c78c9709b97a",
+ "package": "org.julclang.state.examples.dsl",
+ "contract": "Desk",
+ "source": "Desk.jsc",
+ "options": [
+  {
+   "name": "maxDatumBytes",
+   "value": "512"
+  }
+ ],
+ "records": [
+  {
+   "name": "Folder",
+   "fields": [
+    {
+     "name": "owner",
+     "type": "Key"
+    },
+    {
+     "name": "pages",
+     "type": "Int"
+    }
+   ],
+   "at": [
+    13,
+    9
+   ]
+  },
+  {
+   "name": "Vault",
+   "fields": [
+    {
+     "name": "owner",
+     "type": "Key"
+    },
+    {
+     "name": "pages",
+     "type": "Int"
+    },
+    {
+     "name": "notes",
+     "type": {
+      "bigmap": [
+       "Bytes",
+       "Int"
+      ]
+     }
+    }
+   ],
+   "at": [
+    13,
+    9
+   ]
+  }
+ ],
+ "enums": [],
+ "state": {
+  "name": "State",
+  "fields": [
+   {
+    "name": "clerk",
+    "type": "Key"
+   },
+   {
+    "name": "credits",
+    "type": "Int"
+   },
+   {
+    "name": "price",
+    "type": "Int"
+   },
+   {
+    "name": "filed",
+    "type": "Int"
+   }
+  ],
+  "at": [
+   9,
+   1
+  ]
+ },
+ "owned": [
+  "Folder",
+  "Vault"
+ ],
+ "params": {
+  "name": "Config",
+  "fields": [
+   {
+    "name": "feed",
+    "type": {
+     "instance": "Oracle"
+    }
+   }
+  ],
+  "at": [
+   10,
+   3
+  ]
+ },
+ "contracts": [
+  {
+   "name": "Oracle",
+   "package": "org.julclang.state.examples.dsl",
+   "state": {
+    "name": "Oracle.State",
+    "fields": [
+     {
+      "name": "publisher",
+      "type": "Key"
+     },
+     {
+      "name": "price",
+      "type": "Int"
+     },
+     {
+      "name": "updatedAt",
+      "type": "Int"
+     }
+    ],
+    "at": [
+     7,
+     1
+    ]
+   },
+   "records": [],
+   "enums": [],
+   "timeFields": [
+    "updatedAt"
+   ],
+   "receives": [],
+   "bigMaps": false
+  }
+ ],
+ "timeFields": [],
+ "recursiveFns": [],
+ "libraries": [],
+ "javaLibraries": [],
+ "fns": [],
+ "methods": [
+  {
+   "kind": "init",
+   "name": "init",
+   "params": [],
+   "mods": [],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "CtxRef",
+       "name": "caller",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        16,
+        21
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "0",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        16,
+        38
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "0",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        16,
+        48
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "0",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        16,
+        58
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      16,
+      12
+     ]
+    },
+    "at": [
+     15,
+     10
+    ]
+   },
+   "at": [
+    15,
+    3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "credit",
+   "params": [],
+   "mods": [
+    {
+     "name": "receives",
+     "type": "Key"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Require",
+      "cond": {
+       "node": "Not",
+       "operand": {
+        "node": "ListProp",
+        "op": "isEmpty",
+        "list": {
+         "node": "FundsRef",
+         "field": "deposits",
+         "type": {
+          "list": {
+           "deposit": "Key"
+          }
+         },
+         "taint": 0,
+         "at": [
+          20,
+          14
+         ]
+        },
+        "type": "Bool",
+        "taint": 0,
+        "at": [
+         20,
+         14
+        ]
+       },
+       "type": "Bool",
+       "taint": 0,
+       "at": [
+        20,
+        13
+       ]
+      },
+      "message": "nothing deposited",
+      "at": [
+       20,
+       5
+      ]
+     }
+    ],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         21,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "clerk",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        21,
+        12
+       ]
+      },
+      {
+       "node": "Arith",
+       "op": "+",
+       "left": {
+        "node": "StateField",
+        "field": "credits",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         21,
+         33
+        ]
+       },
+       "right": {
+        "node": "ListProp",
+        "op": "length",
+        "list": {
+         "node": "FundsRef",
+         "field": "deposits",
+         "type": {
+          "list": {
+           "deposit": "Key"
+          }
+         },
+         "taint": 0,
+         "at": [
+          21,
+          43
+         ]
+        },
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         21,
+         43
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        21,
+        33
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         21,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "price",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        21,
+        12
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         21,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "filed",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        21,
+        12
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      21,
+      12
+     ]
+    },
+    "at": [
+     19,
+     32
+    ]
+   },
+   "at": [
+    19,
+    3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "quote",
+   "params": [],
+   "mods": [
+    {
+     "name": "open"
+    }
+   ],
+   "checked": [],
+   "reads": [
+    {
+     "local": {
+      "id": 1,
+      "name": "p",
+      "type": {
+       "record": "Oracle.State"
+      },
+      "taint": 1,
+      "at": [
+       24,
+       16
+      ],
+      "fieldTaints": {
+       "price": 0,
+       "publisher": 0,
+       "updatedAt": 1
+      }
+     },
+     "field": "feed"
+    }
+   ],
+   "usesCtx": false,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         25,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "clerk",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        25,
+        12
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         25,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "credits",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        25,
+        12
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "LocalRef",
+        "local": 1,
+        "type": {
+         "record": "Oracle.State"
+        },
+        "taint": 1,
+        "at": [
+         25,
+         31
+        ]
+       },
+       "record": "Oracle.State",
+       "field": "price",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        25,
+        31
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         25,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "filed",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        25,
+        12
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      25,
+      12
+     ]
+    },
+    "at": [
+     24,
+     43
+    ]
+   },
+   "at": [
+    24,
+    3
+   ]
+  },
+  {
+   "kind": "ownedInit",
+   "name": "start",
+   "on": "Folder",
+   "params": [],
+   "mods": [],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "Folder"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "Folder",
+     "values": [
+      {
+       "node": "CtxRef",
+       "name": "caller",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        33,
+        21
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "1",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        33,
+        36
+       ]
+      }
+     ],
+     "type": {
+      "record": "Folder"
+     },
+     "taint": 0,
+     "at": [
+      33,
+      12
+     ]
+    },
+    "at": [
+     32,
+     29
+    ]
+   },
+   "at": [
+    32,
+    3
+   ]
+  },
+  {
+   "kind": "ownedAction",
+   "name": "add",
+   "on": "Folder",
+   "params": [],
+   "mods": [
+    {
+     "name": "only",
+     "field": "owner"
+    }
+   ],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": {
+    "record": "Folder"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "Folder",
+     "values": [
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "Folder"
+        },
+        "taint": 0,
+        "at": [
+         37,
+         17
+        ]
+       },
+       "record": "Folder",
+       "field": "owner",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        37,
+        12
+       ]
+      },
+      {
+       "node": "Arith",
+       "op": "+",
+       "left": {
+        "node": "StateField",
+        "field": "pages",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         37,
+         31
+        ]
+       },
+       "right": {
+        "node": "Lit",
+        "value": "1",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         37,
+         39
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        37,
+        31
+       ]
+      }
+     ],
+     "type": {
+      "record": "Folder"
+     },
+     "taint": 0,
+     "at": [
+      37,
+      12
+     ]
+    },
+    "at": [
+     36,
+     40
+    ]
+   },
+   "at": [
+    36,
+    3
+   ]
+  },
+  {
+   "kind": "ownedAction",
+   "name": "tear",
+   "on": "Folder",
+   "params": [],
+   "mods": [
+    {
+     "name": "only",
+     "field": "owner"
+    }
+   ],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": {
+    "record": "Folder"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "Folder",
+     "values": [
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "Folder"
+        },
+        "taint": 0,
+        "at": [
+         41,
+         17
+        ]
+       },
+       "record": "Folder",
+       "field": "owner",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        41,
+        12
+       ]
+      },
+      {
+       "node": "Arith",
+       "op": "-",
+       "left": {
+        "node": "StateField",
+        "field": "pages",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         41,
+         31
+        ]
+       },
+       "right": {
+        "node": "Lit",
+        "value": "1",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         41,
+         39
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        41,
+        31
+       ]
+      }
+     ],
+     "type": {
+      "record": "Folder"
+     },
+     "taint": 0,
+     "at": [
+      41,
+      12
+     ]
+    },
+    "at": [
+     40,
+     41
+    ]
+   },
+   "at": [
+    40,
+    3
+   ]
+  },
+  {
+   "kind": "ownedDestroy",
+   "name": "shred",
+   "on": "Folder",
+   "params": [],
+   "mods": [
+    {
+     "name": "only",
+     "field": "owner"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": true,
+   "result": null,
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Pay",
+      "to": {
+       "node": "StateField",
+       "field": "owner",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        49,
+        9
+       ]
+      },
+      "amount": {
+       "node": "CtxRef",
+       "name": "balance",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        49,
+        16
+       ]
+      },
+      "at": [
+       49,
+       5
+      ]
+     }
+    ],
+    "result": null,
+    "at": [
+     48,
+     43
+    ]
+   },
+   "at": [
+    48,
+    3
+   ]
+  },
+  {
+   "kind": "ownedInit",
+   "name": "openVault",
+   "on": "Vault",
+   "params": [],
+   "mods": [],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "Vault"
+   },
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "New",
+     "record": "Vault",
+     "values": [
+      {
+       "node": "CtxRef",
+       "name": "caller",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        33,
+        21
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "1",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        33,
+        36
+       ]
+      },
+      {
+       "node": "BigEmpty",
+       "type": {
+        "bigmap": [
+         "Bytes",
+         "Int"
+        ]
+       },
+       "taint": 0,
+       "at": [
+        1,
+        1
+       ]
+      }
+     ],
+     "type": {
+      "record": "Vault"
+     },
+     "taint": 0,
+     "at": [
+      33,
+      12
+     ]
+    },
+    "at": [
+     32,
+     29
+    ]
+   },
+   "at": [
+    32,
+    3
+   ]
+  },
+  {
+   "kind": "ownedDestroy",
+   "name": "closeVault",
+   "on": "Vault",
+   "params": [],
+   "mods": [
+    {
+     "name": "only",
+     "field": "owner"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": true,
+   "result": null,
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Pay",
+      "to": {
+       "node": "StateField",
+       "field": "owner",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        49,
+        9
+       ]
+      },
+      "amount": {
+       "node": "CtxRef",
+       "name": "balance",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        49,
+        16
+       ]
+      },
+      "at": [
+       49,
+       5
+      ]
+     }
+    ],
+    "result": null,
+    "at": [
+     48,
+     43
+    ]
+   },
+   "at": [
+    48,
+    3
+   ]
+  }
+ ],
+ "invariants": [
+  {
+   "name": "somePages",
+   "on": "Folder",
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "Compare",
+     "op": ">=",
+     "left": {
+      "node": "StateField",
+      "field": "pages",
+      "type": "Int",
+      "taint": 0,
+      "at": [
+       52,
+       32
+      ]
+     },
+     "right": {
+      "node": "Lit",
+      "value": "1",
+      "type": "Int",
+      "taint": 0,
+      "at": [
+       52,
+       41
+      ]
+     },
+     "type": "Bool",
+     "taint": 0,
+     "at": [
+      52,
+      32
+     ]
+    },
+    "at": [
+     52,
+     32
+    ]
+   },
+   "at": [
+    52,
+    3
+   ]
+  }
+ ],
+ "warnings": []
+}

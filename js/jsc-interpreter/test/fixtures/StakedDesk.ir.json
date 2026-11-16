@@ -1,0 +1,433 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "c347cf03fcfccff925965143c1110476d817f7a9c4b5a76c0c44b34b697702bf",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "StakedDesk",
+  "source": "StakedDesk.jsc",
+  "options": [
+    { "name": "maxDatumBytes", "value": "512" },
+    { "name": "assetSlots", "value": "2" },
+    { "name": "stakeSelf", "value": "1" }
+  ],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "clerk", "type": "Key" }, { "name": "credits", "type": "Int" }, { "name": "price", "type": "Int" }],
+    "at": [10, 1]
+  },
+  "params": {
+    "name": "Config",
+    "fields": [
+      { "name": "feed", "type": { "instance": "Oracle" } },
+      { "name": "council", "type": { "list": "Key" } },
+      { "name": "quorum", "type": "Int" },
+      { "name": "pool", "type": "Bytes" },
+      { "name": "payee", "type": "Key" }
+    ],
+    "at": [11, 3]
+  },
+  "contracts": [
+    {
+      "name": "Oracle",
+      "package": "org.julclang.state.examples.dsl",
+      "state": {
+        "name": "Oracle.State",
+        "fields": [
+          { "name": "publisher", "type": "Key" },
+          { "name": "price", "type": "Int" },
+          { "name": "updatedAt", "type": "Int" }
+        ],
+        "at": [7, 1]
+      },
+      "records": [],
+      "enums": [],
+      "timeFields": ["updatedAt"],
+      "receives": [],
+      "bigMaps": false
+    }
+  ],
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [15, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 38] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 48] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [15, 12]
+        },
+        "at": [14, 10]
+      },
+      "at": [14, 3]
+    },
+    {
+      "kind": "action",
+      "name": "credit",
+      "params": [],
+      "mods": [{ "name": "receives", "type": "Key" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Not",
+              "operand": {
+                "node": "ListProp",
+                "op": "isEmpty",
+                "list": {
+                  "node": "FundsRef",
+                  "field": "deposits",
+                  "type": { "list": { "deposit": "Key" } },
+                  "taint": 0,
+                  "at": [19, 14]
+                },
+                "type": "Bool",
+                "taint": 0,
+                "at": [19, 14]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [19, 13]
+            },
+            "message": "nothing deposited",
+            "at": [19, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [20, 17] },
+              "record": "State",
+              "field": "clerk",
+              "type": "Key",
+              "taint": 0,
+              "at": [20, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "credits", "type": "Int", "taint": 0, "at": [20, 33] },
+              "right": {
+                "node": "ListProp",
+                "op": "length",
+                "list": {
+                  "node": "FundsRef",
+                  "field": "deposits",
+                  "type": { "list": { "deposit": "Key" } },
+                  "taint": 0,
+                  "at": [20, 43]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [20, 43]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [20, 33]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [20, 17] },
+              "record": "State",
+              "field": "price",
+              "type": "Int",
+              "taint": 0,
+              "at": [20, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [20, 12]
+        },
+        "at": [18, 32]
+      },
+      "at": [18, 3]
+    },
+    {
+      "kind": "action",
+      "name": "quote",
+      "params": [],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "reads": [
+        {
+          "local": {
+            "id": 1,
+            "name": "p",
+            "type": { "record": "Oracle.State" },
+            "taint": 1,
+            "at": [23, 16],
+            "fieldTaints": { "price": 0, "publisher": 0, "updatedAt": 1 }
+          },
+          "field": "feed"
+        }
+      ],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [24, 17] },
+              "record": "State",
+              "field": "clerk",
+              "type": "Key",
+              "taint": 0,
+              "at": [24, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [24, 17] },
+              "record": "State",
+              "field": "credits",
+              "type": "Int",
+              "taint": 0,
+              "at": [24, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 1, "type": { "record": "Oracle.State" }, "taint": 1, "at": [24, 31] },
+              "record": "Oracle.State",
+              "field": "price",
+              "type": "Int",
+              "taint": 0,
+              "at": [24, 31]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [24, 12]
+        },
+        "at": [23, 43]
+      },
+      "at": [23, 3]
+    },
+    {
+      "kind": "action",
+      "name": "lodge",
+      "params": [
+        { "id": 2, "name": "policy", "type": "Hash", "taint": 0, "at": [27, 16] },
+        { "id": 3, "name": "name", "type": "Bytes", "taint": 0, "at": [27, 30] },
+        { "id": 4, "name": "qty", "type": "Int", "taint": 0, "at": [27, 43] }
+      ],
+      "mods": [{ "name": "payable" }],
+      "checked": [2],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [28, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [28, 19] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [28, 13]
+            },
+            "message": "lodge something",
+            "at": [28, 5]
+          },
+          {
+            "stmt": "Accept",
+            "value": {
+              "node": "LedgerOp",
+              "op": "asset",
+              "args": [
+                { "node": "LocalRef", "local": 2, "type": "Hash", "taint": 0, "at": [29, 24] },
+                { "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [29, 32] },
+                { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [29, 38] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [29, 12]
+            },
+            "at": [29, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [30, 12] },
+        "at": [27, 61]
+      },
+      "at": [27, 3]
+    },
+    {
+      "kind": "withdraw",
+      "name": "collect",
+      "params": [{ "id": 5, "name": "amount", "type": "Int", "taint": 0, "at": [33, 20] }],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.quorum" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Compare",
+                  "op": ">",
+                  "left": { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [34, 8] },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [34, 17] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [34, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Send",
+                      "to": {
+                        "node": "LedgerOp",
+                        "op": "wallet",
+                        "args": [{ "node": "ParamsRef", "field": "payee", "type": "Key", "taint": 0, "at": [35, 19] }],
+                        "type": "Address",
+                        "taint": 0,
+                        "at": [35, 12]
+                      },
+                      "value": {
+                        "node": "LedgerOp",
+                        "op": "lovelace",
+                        "args": [{ "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [35, 49] }],
+                        "type": "Value",
+                        "taint": 0,
+                        "at": [35, 34]
+                      },
+                      "at": [35, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [34, 19]
+                },
+                "at": [34, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": false,
+            "at": [34, 5]
+          }
+        ],
+        "result": null,
+        "at": [33, 69]
+      },
+      "at": [33, 3]
+    },
+    {
+      "kind": "certify",
+      "name": "certificate",
+      "params": [{ "id": 6, "name": "cert", "type": "TxCert", "taint": 0, "at": [39, 23] }],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.quorum" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Logic",
+          "op": "||",
+          "left": {
+            "node": "CallStd",
+            "module": "std/certs",
+            "name": "isRegistration",
+            "args": [{ "node": "LocalRef", "local": 6, "type": "TxCert", "taint": 0, "at": [40, 20] }],
+            "type": "Bool",
+            "taint": 0,
+            "at": [40, 5]
+          },
+          "right": {
+            "node": "CallStd",
+            "module": "std/certs",
+            "name": "delegatesOnlyTo",
+            "args": [
+              { "node": "LocalRef", "local": 6, "type": "TxCert", "taint": 0, "at": [40, 45] },
+              { "node": "ParamsRef", "field": "pool", "type": "Bytes", "taint": 0, "at": [40, 51] }
+            ],
+            "type": "Bool",
+            "taint": 0,
+            "at": [40, 29]
+          },
+          "type": "Bool",
+          "taint": 0,
+          "at": [40, 5]
+        },
+        "at": [40, 5]
+      },
+      "at": [39, 3]
+    },
+    {
+      "kind": "vote",
+      "name": "decide",
+      "params": [
+        { "id": 7, "name": "voter", "type": "Voter", "taint": 0, "at": [42, 15] },
+        { "id": 8, "name": "action", "type": "GovernanceActionId", "taint": 0, "at": [42, 29] },
+        { "id": 9, "name": "choice", "type": "Vote", "taint": 0, "at": [42, 57] }
+      ],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.quorum" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [42, 109] },
+        "at": [42, 109]
+      },
+      "at": [42, 3]
+    },
+    {
+      "kind": "propose",
+      "name": "guard",
+      "params": [{ "id": 10, "name": "p", "type": "ProposalProcedure", "taint": 0, "at": [44, 17] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [44, 41] },
+        "at": [44, 41]
+      },
+      "at": [44, 3]
+    }
+  ],
+  "warnings": []
+}

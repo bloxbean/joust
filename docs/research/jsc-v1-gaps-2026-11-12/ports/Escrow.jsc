@@ -1,0 +1,32 @@
+package ports
+// Port of examples/escrow Escrow.java
+contract Escrow(maxDatumBytes = 192) {
+    state buyer: Key
+    state seller: Key
+    state arbiter: Key
+    state amount: Int
+    state deadline: Int
+
+    init(seller: Key, arbiter: Key, deadline: Int) payable {
+        require received > 0 "the escrow must be funded"
+        require before(deadline) "deadline must be in the future"
+        buyer = caller
+        this.seller = seller
+        this.arbiter = arbiter
+        amount = received
+        this.deadline = deadline
+    }
+
+    destroy release() open {
+        require caller == buyer || caller == arbiter "only the buyer or the arbiter can release"
+        pay balance to seller
+    }
+
+    // after(deadline) is not allowed under ||; validFrom >= deadline is what Clock.after computes.
+    destroy refund() open {
+        require caller == seller || caller == arbiter || validFrom >= deadline "only the seller or the arbiter can refund before the deadline"
+        pay balance to buyer
+    }
+
+    view amount(): Int = amount
+}

@@ -1,0 +1,8 @@
+// The header of the language was `jsc 2` in its previews; it is `jsc 1` now, with no alias.
+jsc 2
+package corpus
+
+contract OldHeader {
+  state { n: Int }
+  init() { return { n: 0 } }
+}

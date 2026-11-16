@@ -19,5 +19,6 @@ Needs **JDK 25**. Gradle comes from the wrapper.
 | `src/main/java/@@path@@/Devnet.java` | The DevKit connection: Yaci Store on `:8080`, the admin API on `:10000` |
 | `build.gradle` | The `org.julclang.joust` plugin does the JOUST setup; see the JOUST docs, "Quick start: Java & Gradle" |
 
+@@jscNote@@
 The build writes `CounterValidator` and `CounterClient` (Java, under `build/generated/sources/annotationProcessor`)
 and the description `META-INF/joust/@@package@@.Counter.json`, from which JavaScript clients are generated.

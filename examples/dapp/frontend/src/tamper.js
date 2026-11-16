@@ -3,7 +3,9 @@
 
 const ATTACKER_KEY = 'ee'.repeat(28);
 
-export function tamperings(CSL, txHex, walletAddresses) {
+// `tip`: the chain's current slot, when the caller knows it. A transaction without a TTL (a governor registration) gets
+// one 500,000 slots past it: a fixed 500,000 lies below a long-running devnet's tip, so no verifier would call it long.
+export function tamperings(CSL, txHex, walletAddresses, { tip } = {}) {
   const base = () => CSL.Transaction.from_hex(txHex);
   const thief = CSL.EnterpriseAddress.new(0, CSL.Credential.from_keyhash(CSL.Ed25519KeyHash.from_hex(ATTACKER_KEY))).to_address();
   const isWallet = (o) => walletAddresses.includes(o.address().to_bech32());
@@ -86,7 +88,8 @@ export function tamperings(CSL, txHex, walletAddresses) {
     rs.add(CSL.Ed25519KeyHash.from_hex('ab'.repeat(28)));
     b.set_required_signers(rs);
   });
-  out['a validity interval of days'] = withBody((b) => b.set_ttl(CSL.BigNum.from_str(String(Number(b.ttl_bignum()?.to_str() ?? '0') + 500_000))));
+  out['a validity interval of days'] = withBody((b) => b.set_ttl(CSL.BigNum.from_str(String(
+    Math.max(Number(b.ttl_bignum()?.to_str() ?? '0'), Number(tip ?? 0)) + 500_000))));
   out['phishing metadata'] = (() => {
     const tx = base();
     const aux = CSL.AuxiliaryData.new();

@@ -1,0 +1,144 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Registry",
+  "source": "Registry.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "admin", "type": "Key", "data": "bytes28" },
+      { "name": "isOpen", "type": "Bool", "data": "bool" }
+    ] },
+  "owned": ["Ballot", "Entry"],
+  "holdings": [
+      { "name": "Head_Ballot", "constr": 0, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Keyed_Ballot", "constr": 1, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "value", "type": "Ballot", "data": "Ballot" }
+        ] },
+      { "name": "Retired_Ballot", "constr": 2, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "key", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Head_Entry", "constr": 3, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Keyed_Entry", "constr": 4, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "value", "type": "Entry", "data": "Entry" }
+        ] },
+      { "name": "Retired_Entry", "constr": 5, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "next", "type": "Bytes", "data": "bytes" },
+          { "name": "linkedAt", "type": "Int", "data": "int" },
+          { "name": "key", "type": "Bytes", "data": "bytes" }
+        ] }
+  ],
+  "keyed": [
+    { "type": "Ballot", "key": "voter", "keyIndex": 0, "maxKeyBytes": 28, "signedKey": true, "linkCooldownMs": 60000, "linkWindowMs": 120000,
+      "typeId": "0642616c6c6f74", "headTag": 0, "nodeTag": 1, "retiredTag": 2, "link": 8, "remove": null,
+      "inserts": ["cast"], "actions": ["change"], "removes": [], "retires": ["leave"] },
+    { "type": "Entry", "key": "name", "keyIndex": 0, "maxKeyBytes": 64, "signedKey": false, "linkCooldownMs": 60000, "linkWindowMs": 120000,
+      "typeId": "05456e747279", "headTag": 3, "nodeTag": 4, "retiredTag": 5, "link": 8, "remove": 5,
+      "inserts": ["claim", "grant"], "actions": ["upgrade", "withdraw", "recover"], "removes": ["release"], "retires": ["retire"] }
+  ],
+  "redeemers": {
+    "spend": [
+      { "name": "SetOpen", "constr": 0, "fields": [
+          { "name": "nowOpen", "type": "Bool", "data": "bool" }
+        ] },
+      { "name": "Change", "constr": 1, "fields": [
+          { "name": "pick", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Upgrade", "constr": 2, "fields": [
+          { "name": "newTier", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Withdraw", "constr": 3, "fields": [
+          { "name": "amount", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Recover", "constr": 4, "fields": [
+          { "name": "newOwner", "type": "Key", "data": "bytes28" }
+        ] },
+      { "name": "Leave", "constr": 5, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Release", "constr": 6, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Retire", "constr": 7, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Link", "constr": 8, "fields": [] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] },
+      { "name": "Insert_cast", "constr": 2, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "voter", "type": "Key", "data": "bytes28" },
+          { "name": "choice", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Insert_claim", "constr": 3, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "name", "type": "Bytes", "data": "bytes" },
+          { "name": "tier", "type": "Int", "data": "int" },
+          { "name": "guardians", "type": "List<Key>", "data": "list<bytes28>" },
+          { "name": "needed", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Insert_grant", "constr": 4, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "name", "type": "Bytes", "data": "bytes" },
+          { "name": "owner", "type": "Key", "data": "bytes28" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Remove_Entry", "constr": 5, "fields": [
+          { "name": "anchor", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "removed", "type": "TxOutRef", "data": "TxOutRef" }
+        ] }
+    ]
+  },
+  "types": {
+    "Ballot": { "kind": "record", "constructors": [{ "name": "Ballot", "constr": 0, "fields": [
+        { "name": "voter", "type": "Key", "data": "bytes28" },
+        { "name": "choice", "type": "Int", "data": "int" }
+      ] }] },
+    "Entry": { "kind": "record", "constructors": [{ "name": "Entry", "constr": 0, "fields": [
+        { "name": "name", "type": "Bytes", "data": "bytes" },
+        { "name": "owner", "type": "Key", "data": "bytes28" },
+        { "name": "stake", "type": "Int", "data": "int" },
+        { "name": "tier", "type": "Int", "data": "int" },
+        { "name": "guardians", "type": "List<Key>", "data": "list<bytes28>" },
+        { "name": "needed", "type": "Int", "data": "int" }
+      ] }] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

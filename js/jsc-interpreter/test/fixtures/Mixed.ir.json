@@ -1,0 +1,500 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "8ac2b1e9fbd60662d11fabdb41184937f19ef4d0825641a0fd825ee7ef6653d3",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Mixed",
+  "source": "Mixed.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "512" }],
+  "records": [
+    { "name": "Slot", "fields": [{ "name": "key", "type": "Key" }, { "name": "count", "type": "Int" }], "at": [13, 9] },
+    {
+      "name": "Badge",
+      "fields": [{ "name": "owner", "type": "Key" }, { "name": "level", "type": "Int" }],
+      "at": [14, 9]
+    }
+  ],
+  "enums": [],
+  "state": { "name": "State", "fields": [{ "name": "admin", "type": "Key" }, { "name": "count", "type": "Int" }], "at": [10, 1] },
+  "owned": ["Slot", "Badge"],
+  "keyed": [
+    {
+      "type": "Slot",
+      "key": "key",
+      "maxKeyBytes": 32,
+      "signed": false,
+      "linkCooldownMs": 60000,
+      "linkWindowMs": 120000
+    }
+  ],
+  "params": {
+    "name": "Config",
+    "fields": [
+      { "name": "council", "type": { "list": "Key" } },
+      { "name": "threshold", "type": "Int" },
+      { "name": "feed", "type": { "instance": "Oracle" } }
+    ],
+    "at": [11, 3]
+  },
+  "contracts": [
+    {
+      "name": "Oracle",
+      "package": "org.julclang.state.examples.dsl",
+      "state": {
+        "name": "Oracle.State",
+        "fields": [
+          { "name": "publisher", "type": "Key" },
+          { "name": "price", "type": "Int" },
+          { "name": "updatedAt", "type": "Int" }
+        ],
+        "at": [7, 1]
+      },
+      "records": [],
+      "enums": [],
+      "timeFields": ["updatedAt"],
+      "receives": [],
+      "bigMaps": false
+    }
+  ],
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [15, 28] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 43] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [15, 19]
+        },
+        "at": [15, 10]
+      },
+      "at": [15, 3]
+    },
+    {
+      "kind": "action",
+      "name": "quote",
+      "params": [],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "reads": [
+        {
+          "local": {
+            "id": 1,
+            "name": "p",
+            "type": { "record": "Oracle.State" },
+            "taint": 1,
+            "at": [16, 16],
+            "fieldTaints": { "price": 0, "publisher": 0, "updatedAt": 1 }
+          },
+          "field": "feed"
+        }
+      ],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [16, 57] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [16, 52]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 1, "type": { "record": "Oracle.State" }, "taint": 1, "at": [16, 71] },
+              "record": "Oracle.State",
+              "field": "price",
+              "type": "Int",
+              "taint": 0,
+              "at": [16, 71]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [16, 52]
+        },
+        "at": [16, 43]
+      },
+      "at": [16, 3]
+    },
+    {
+      "kind": "ownedInit",
+      "name": "claim",
+      "on": "Slot",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Slot" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "Slot",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [17, 43] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [17, 58] }
+          ],
+          "type": { "record": "Slot" },
+          "taint": 0,
+          "at": [17, 36]
+        },
+        "at": [17, 27]
+      },
+      "at": [17, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "bump",
+      "on": "Slot",
+      "params": [],
+      "mods": [{ "name": "only", "field": "key" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "Slot" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "Slot",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Slot" }, "taint": 0, "at": [18, 51] },
+              "record": "Slot",
+              "field": "key",
+              "type": "Key",
+              "taint": 0,
+              "at": [18, 46]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [18, 65] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [18, 73] },
+              "type": "Int",
+              "taint": 0,
+              "at": [18, 65]
+            }
+          ],
+          "type": { "record": "Slot" },
+          "taint": 0,
+          "at": [18, 46]
+        },
+        "at": [18, 37]
+      },
+      "at": [18, 3]
+    },
+    {
+      "kind": "ownedDestroy",
+      "name": "leave",
+      "on": "Slot",
+      "params": [],
+      "mods": [{ "name": "only", "field": "key" }, { "name": "retire" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "key", "type": "Key", "taint": 0, "at": [19, 52] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [19, 57] },
+            "at": [19, 48]
+          }
+        ],
+        "result": null,
+        "at": [19, 46]
+      },
+      "at": [19, 3]
+    },
+    {
+      "kind": "ownedInit",
+      "name": "award",
+      "on": "Badge",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Badge" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "Badge",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [20, 46] },
+            { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [20, 61] }
+          ],
+          "type": { "record": "Badge" },
+          "taint": 0,
+          "at": [20, 37]
+        },
+        "at": [20, 28]
+      },
+      "at": [20, 3]
+    },
+    {
+      "kind": "ownedAction",
+      "name": "go",
+      "on": "Badge",
+      "into": {
+        "id": 2,
+        "name": "to",
+        "type": { "record": "State" },
+        "taint": 0,
+        "at": [21, 25],
+        "fieldTaints": { "admin": 0, "count": 0 }
+      },
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "Badge" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "Badge",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "Badge" }, "taint": 0, "at": [21, 60] },
+              "record": "Badge",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [21, 55]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "level", "type": "Int", "taint": 0, "at": [21, 74] },
+              "right": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 2, "type": { "record": "State" }, "taint": 0, "at": [21, 82] },
+                "record": "State",
+                "field": "count",
+                "type": "Int",
+                "taint": 0,
+                "at": [21, 82]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [21, 74]
+            }
+          ],
+          "type": { "record": "Badge" },
+          "taint": 0,
+          "at": [21, 55]
+        },
+        "at": [21, 46]
+      },
+      "at": [21, 3]
+    },
+    {
+      "kind": "ownedDestroy",
+      "name": "drop",
+      "on": "Badge",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [22, 47] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [22, 54] },
+            "at": [22, 43]
+          }
+        ],
+        "result": null,
+        "at": [22, 41]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "action",
+      "name": "admit",
+      "params": [{ "id": 3, "name": "id", "type": "Bytes", "taint": 0, "at": [23, 16] }],
+      "arriving": {
+        "id": 4,
+        "name": "arriving",
+        "type": { "record": "Badge" },
+        "taint": 0,
+        "at": [23, 27],
+        "fieldTaints": { "level": 0, "owner": 0 }
+      },
+      "mods": [{ "name": "only", "field": "admin" }, { "name": "admits", "field": "Badge" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 82] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [23, 77]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [23, 96] },
+              "right": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 4, "type": { "record": "Badge" }, "taint": 0, "at": [23, 104] },
+                "record": "Badge",
+                "field": "level",
+                "type": "Int",
+                "taint": 0,
+                "at": [23, 104]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [23, 96]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [23, 77]
+        },
+        "at": [23, 68]
+      },
+      "at": [23, 3]
+    },
+    {
+      "kind": "certify",
+      "name": "register",
+      "params": [{ "id": 5, "name": "cert", "type": "TxCert", "taint": 0, "at": [26, 20] }],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.threshold" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [26, 75] },
+        "at": [26, 75]
+      },
+      "at": [26, 3]
+    },
+    {
+      "kind": "vote",
+      "name": "choose",
+      "params": [
+        { "id": 6, "name": "voter", "type": "Voter", "taint": 0, "at": [27, 15] },
+        { "id": 7, "name": "action", "type": "GovernanceActionId", "taint": 0, "at": [27, 29] },
+        { "id": 8, "name": "vote", "type": "Vote", "taint": 0, "at": [27, 57] }
+      ],
+      "mods": [{ "name": "quorum", "keys": "params.council", "threshold": "params.threshold" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [27, 110] },
+        "at": [27, 110]
+      },
+      "at": [27, 3]
+    },
+    {
+      "kind": "propose",
+      "name": "guard",
+      "params": [{ "id": 9, "name": "p", "type": "ProposalProcedure", "taint": 0, "at": [28, 17] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": { "node": "Lit", "value": true, "type": "Bool", "taint": 0, "at": [28, 41] },
+        "at": [28, 41]
+      },
+      "at": [28, 3]
+    }
+  ],
+  "invariants": [
+    {
+      "name": "positive",
+      "on": "Slot",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Compare",
+          "op": ">=",
+          "left": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [24, 29] },
+          "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [24, 38] },
+          "type": "Bool",
+          "taint": 0,
+          "at": [24, 29]
+        },
+        "at": [24, 29]
+      },
+      "at": [24, 3]
+    },
+    {
+      "name": "leveled",
+      "on": "Badge",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Compare",
+          "op": ">=",
+          "left": { "node": "StateField", "field": "level", "type": "Int", "taint": 0, "at": [25, 29] },
+          "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [25, 38] },
+          "type": "Bool",
+          "taint": 0,
+          "at": [25, 29]
+        },
+        "at": [25, 29]
+      },
+      "at": [25, 3]
+    }
+  ],
+  "warnings": []
+}

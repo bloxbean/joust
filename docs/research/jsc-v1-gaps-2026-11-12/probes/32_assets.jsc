@@ -1,0 +1,8 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    init() { owner = caller }
+    action a(policy: Bytes, name: Bytes) payable { require receivedAsset(policy, name) == 1 "nft"
+      n = 1 }
+}

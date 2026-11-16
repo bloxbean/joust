@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "source": "Pay.jsc",
+  "java": "org/julclang/state/runtime/Pay.java",
+  "lines": [],
+  "messages": {
+    "#pay:spend1.1": [{ "line": 8, "col": 5, "kind": "pay", "in": "split" }],
+    "#pay:spend1.10": [{ "line": 17, "col": 5, "kind": "pay", "in": "split" }],
+    "not negative": [{ "line": 9, "col": 41, "kind": "require", "in": "split" }]
+  }
+}

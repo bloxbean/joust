@@ -1,0 +1,60 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Twin",
+  "source": "Twin.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "tag", "type": "Bytes", "data": "bytes" },
+      { "name": "inner", "type": "Inner", "data": "Inner" }
+    ] },
+  "owned": ["O"],
+  "holdings": [
+      { "name": "Holding", "constr": 0, "fields": [
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "value", "type": "O", "data": "O" }
+        ] }
+  ],
+  "redeemers": {
+    "spend": [
+      { "name": "Touch", "constr": 0, "fields": [] },
+      { "name": "Inc", "constr": 1, "fields": [] },
+      { "name": "End", "constr": 2, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "tag", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] },
+      { "name": "Make", "constr": 2, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "instance", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ]
+  },
+  "types": {
+    "Inner": { "kind": "record", "constructors": [{ "name": "Inner", "constr": 0, "fields": [
+        { "name": "owner", "type": "Key", "data": "bytes28" },
+        { "name": "n", "type": "Int", "data": "int" }
+      ] }] },
+    "O": { "kind": "record", "constructors": [{ "name": "O", "constr": 0, "fields": [
+        { "name": "owner", "type": "Key", "data": "bytes28" },
+        { "name": "n", "type": "Int", "data": "int" }
+      ] }] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

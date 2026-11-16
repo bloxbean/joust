@@ -1,0 +1,8 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    init() { owner = caller }
+    fn double(x: Int): Int = x * 2
+    action a(k: Int) { n = double(k) }
+}
