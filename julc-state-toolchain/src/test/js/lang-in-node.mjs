@@ -161,7 +161,9 @@ if (!isMainThread) {
       // L1 (M5b, recovered): the build stops at its first error, the model holds it among every error (code, line,
       // column); a file the build accepts gives the build's warnings exactly.
       const fmt = (d) => `${d.severity.toLowerCase()} ${d.code} ${Number(d.line)}:${Number(d.col)}`;
-      const want = jsc.map(fmt);
+      // The model lists its diagnostics by position; the build in the order its rules run, which since ADR-0018 M3 (the
+      // keyed rules' JSC9012 after the methods' JSC9011) is not always the position order: compared by position.
+      const want = [...jsc].sort((x, y) => Number(x.line) - Number(y.line) || Number(x.col) - Number(y.col)).map(fmt);
       const got = model.diagnostics.map(fmt);
       const errs = jsc.filter((d) => d.severity.toLowerCase() === 'error');
       const ok = errs.length ? want.filter((x) => x.startsWith('error')).every((x) => got.includes(x)) : JSON.stringify(want) === JSON.stringify(got);

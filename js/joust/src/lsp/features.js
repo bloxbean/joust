@@ -474,8 +474,10 @@ export function reconcile(model, oldText, newText) {
     if (!(b <= p || a >= oldEnd)) return false;
     const na = a <= p ? a : a + delta;
     const nb = na + (b - a);
-    // The same word: an edit that extends it (`left` to `leftQ`) touches it at its end.
-    return newText.slice(na, nb) === name && !identChar(newText[nb] ?? ' ') && !identChar(newText[na - 1] ?? ' ');
+    // The same word: an edit that extends it (`left` to `leftQ`) touches it at its end. A qualified name (an owned
+    // method's T.m, ADR-0018 M3; a params field's params.f) spells its last part at its name range.
+    const word = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : name;
+    return newText.slice(na, nb) === word && !identChar(newText[nb] ?? ' ') && !identChar(newText[na - 1] ?? ' ');
   };
   const declarations = [];
   for (const d of model.declarations) {

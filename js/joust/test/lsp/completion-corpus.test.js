@@ -144,6 +144,13 @@ test('inside a method with an error, completion offers what the valid file offer
       const name = m[1];
       if (!labels(completion(src, pos, model, std)).has(name)) continue;   // not in scope at that require
       const at = m.index + 'const '.length;
+      // That require is in this const's own scope, not another method's const of the same name (examples/dsl's Armory,
+      // from ADR-0018 M3: two owned actions each bind have).
+      const here = doc.positionAt(at);
+      const decl = model.declarations.find((d) => d.kind === 'const' && d.name === name && d.nameRange[0] === here.line && d.nameRange[1] === here.character);
+      const inScope = decl?.scope && (pos.line > decl.scope[0] || pos.line === decl.scope[0] && pos.character >= decl.scope[1])
+        && (pos.line < decl.scope[2] || pos.line === decl.scope[2] && pos.character <= decl.scope[3]);
+      if (!inScope) continue;
       const broken = src.slice(0, at) + name + 'Q' + src.slice(at + name.length);
       const bad = analyse(broken, f);
       if (!bad.diagnostics.some((d) => d.severity === 'error')) continue;
