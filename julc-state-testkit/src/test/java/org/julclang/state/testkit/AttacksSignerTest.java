@@ -62,4 +62,37 @@ class AttacksSignerTest {
         // A transaction that names no such key keeps the first candidate (stable across runs).
         assertArrayEquals(EE, Attacks.outsider(new TxModel(TxModel.Kind.ACTION)));
     }
+
+    /**
+     * #130 r5 (Codex X7, X8): a redirection's key. A withdrawal without a redeemer (TxModel.withdrawals allows one,
+     * StateHarness.fill makes one) is no crash, and the key is none of the transaction's: a reference input's payment key,
+     * a stake key, a withdrawal's credential, a minted policy, the token, an output's script hash.
+     */
+    @Test
+    void theRedirectKey_isNoneOfTheTransactionsNames_andANullWithdrawalRedeemerIsNone() {
+        byte[] bb = StateHarness.fill(28, 0xBB);
+        var none = new TxModel(TxModel.Kind.ACTION);
+        none.withdrawals.put(new org.julclang.ledger.Credential.PubKeyCredential(new org.julclang.ledger.PubKeyHash(StateHarness.fill(28, 0x21))), null);
+        assertArrayEquals(bb, Attacks.outsiderKey(none, 0xBB), "a null redeemer collects nothing");
+        var pk = new org.julclang.ledger.Credential.PubKeyCredential(new org.julclang.ledger.PubKeyHash(bb));
+        var sc = new org.julclang.ledger.Credential.ScriptCredential(new org.julclang.ledger.ScriptHash(bb));
+        var ref = new TxOutRef(new TxId(StateHarness.fill(32, 0x11)), BigInteger.ZERO);
+        for (int source = 0; source < 6; source++) {
+            var t = new TxModel(TxModel.Kind.ACTION);
+            t.withdrawals.put(new org.julclang.ledger.Credential.PubKeyCredential(new org.julclang.ledger.PubKeyHash(StateHarness.fill(28, 0x21))), null);
+            switch (source) {
+                case 0 -> t.referenceInputs.add(new TxInInfo(ref, new TxOut(new org.julclang.ledger.Address(pk, Optional.empty()),
+                        Value.lovelace(BigInteger.ONE), new OutputDatum.NoOutputDatum(), Optional.empty())));
+                case 1 -> t.outputs.add(new TxOut(new org.julclang.ledger.Address(new org.julclang.ledger.Credential.PubKeyCredential(
+                        new org.julclang.ledger.PubKeyHash(StateHarness.fill(28, 0x01))), Optional.of(new org.julclang.ledger.StakingCredential.StakingHash(pk))),
+                        Value.lovelace(BigInteger.ONE), new OutputDatum.NoOutputDatum(), Optional.empty()));
+                case 2 -> t.withdrawals.put(sc, null);
+                case 3 -> t.mint = org.julclang.state.api.Assets.of(bb, new byte[]{1}, BigInteger.ONE);
+                case 4 -> t.token = bb;
+                default -> t.outputs.add(new TxOut(new org.julclang.ledger.Address(sc, Optional.empty()), Value.lovelace(BigInteger.ONE),
+                        new OutputDatum.NoOutputDatum(), Optional.empty()));
+            }
+            assertFalse(among(Attacks.outsiderKey(t, 0xBB), bb), "source " + source);
+        }
+    }
 }

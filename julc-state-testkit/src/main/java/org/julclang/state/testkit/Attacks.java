@@ -309,18 +309,38 @@ public final class Attacks {
 
     /**
      * A key for a redirection or an outsider's output (#130: a payout or a send redirected, a token sent away): derived
-     * from {@code seed} as {@link #outsider} is, and none of the transaction's keys, byte strings or output addresses.
-     * The five-way fuzzer's arguments are keys of any fill byte, so a fixed key could be the very recipient a contract
-     * owes: the "attacked" transaction was then the honest one, and its acceptance no finding.
+     * from {@code seed} as {@link #outsider} is, and none of what {@link #outsider} avoids nor any 28-byte name of the
+     * transaction's addresses (the payment and stake credentials of its inputs, reference inputs and outputs, key or
+     * script), its withdrawals' credentials, its mint's policies and the token it moves (#130 r5, X8). The five-way
+     * fuzzer's arguments are keys of any fill byte, so a fixed key could be the very recipient a contract owes: the
+     * "attacked" transaction was then the honest one, and its acceptance no finding.
      */
     static byte[] outsiderKey(TxModel tx, int seed) {
         var taken = taken(tx);
-        for (var o : tx.outputs) if (o.address().credential() instanceof Credential.PubKeyCredential pk) taken.add(pk.hash().hash());
-        for (var in : tx.inputs) if (in.resolved().address().credential() instanceof Credential.PubKeyCredential pk) taken.add(pk.hash().hash());
+        for (var o : tx.outputs) addressBytes(o.address(), taken);
+        for (var in : tx.inputs) addressBytes(in.resolved().address(), taken);
+        for (var in : tx.referenceInputs) addressBytes(in.resolved().address(), taken);
+        for (var c : tx.withdrawals.keySet()) credentialBytes(c, taken);
+        for (String policy : org.julclang.state.api.Assets.read(tx.mint).keySet()) {
+            if (!policy.isEmpty()) taken.add(java.util.HexFormat.of().parseHex(policy));
+        }
+        if (tx.token != null) taken.add(tx.token);
         return fresh(seed, taken);
     }
 
-    /** Every signer and every byte string in the inputs' and outputs' inline datums and the redeemers. */
+    private static void addressBytes(Address a, List<byte[]> into) {
+        credentialBytes(a.credential(), into);
+        if (a.stakingCredential().isPresent() && a.stakingCredential().get() instanceof StakingCredential.StakingHash sh) credentialBytes(sh.credential(), into);
+    }
+
+    private static void credentialBytes(Credential c, List<byte[]> into) {
+        switch (c) {
+            case Credential.PubKeyCredential pk -> into.add(pk.hash().hash());
+            case Credential.ScriptCredential sc -> into.add(sc.hash().hash());
+        }
+    }
+
+    /** Every signer and every byte string in the inputs', reference inputs' and outputs' inline datums and the redeemers. */
     private static List<byte[]> taken(TxModel tx) {
         var taken = new ArrayList<byte[]>(tx.signers);
         for (var in : tx.inputs) datumBytes(in.resolved(), taken);
@@ -347,6 +367,8 @@ public final class Attacks {
     }
 
     private static void collectBytes(PlutusData d, List<byte[]> into) {
+        // #130 r5 (Codex X7): a withdrawal may have no redeemer (TxModel.withdrawals, StateHarness.fill): nothing to collect.
+        if (d == null) return;
         switch (d) {
             case PlutusData.BytesData b -> into.add(b.value());
             case PlutusData.ConstrData c -> c.fields().forEach(f -> collectBytes(f, into));

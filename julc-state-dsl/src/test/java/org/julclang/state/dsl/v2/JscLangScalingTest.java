@@ -1,5 +1,6 @@
 package org.julclang.state.dsl.v2;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.function.IntFunction;
@@ -50,23 +51,25 @@ class JscLangScalingTest {
         long best = Long.MAX_VALUE;
         for (int k = 0; k < 5; k++) {
             long t = System.nanoTime();
-            JscLang.analyze(src, "app/C.jsc");
+            JscLang.analyze(src, "C.jsc");
             best = Math.min(best, System.nanoTime() - t);
         }
         return best;
     }
 
-    private static void scales(String what, IntFunction<String> shape, int n) {
-        JscLang.analyze(shape.apply(n / 4), "app/C.jsc");   // warm-up
+    private static void scales(String what, IntFunction<String> shape, int n, String code) {
+        JscLang.analyze(shape.apply(n / 4), "C.jsc");   // warm-up
         long one = best(shape.apply(n)), two = best(shape.apply(2 * n));
         double ratio = (double) two / Math.max(one, 1);
         System.out.printf("S2 %s: n=%d %.1f ms, 2n %.1f ms, ratio %.2f%n", what, n, one / 1e6, two / 1e6, ratio);
         // Below a few milliseconds the ratio is noise.
         assertTrue(ratio <= 2.5 || two < 20_000_000L, what + ": " + ratio);
-        var m = JscLang.analyze(shape.apply(2 * n), "app/C.jsc");
-        long errors = m.diagnostics().stream().filter(d -> d.severity().equals("error")).count();
-        assertTrue(errors <= JscLang.MAX_ERRORS, what + ": " + errors + " errors recorded");
-        assertTrue(errors >= 1, what + ": the first error is kept");
+        // #130 r5 (Codex X9): each shape gives its own error, as many as the cap holds, and says that more were found.
+        var m = JscLang.analyze(shape.apply(2 * n), "C.jsc");
+        var errors = m.diagnostics().stream().filter(d -> d.severity().equals("error")).toList();
+        assertEquals(JscLang.MAX_ERRORS, errors.size(), what + ": the cap's errors recorded");
+        assertTrue(errors.stream().allMatch(d -> code.equals(d.code())), what + ": every error is " + code + ": " + errors.subList(0, 3));
+        assertTrue(m.advisory().contains("more-errors"), what + ": past the cap, the model says more were found");
     }
 
     /** N1 on #99 r2: the growth of each shape over n, 2n, 4n, 8n (run with -Djsc.profileScaling=true). */
@@ -75,7 +78,7 @@ class JscLangScalingTest {
         if (!Boolean.getBoolean("jsc.profileScaling")) return;
         for (var e : java.util.Map.<String, IntFunction<String>>of("unknown", JscLangScalingTest::unknown, "unclosed", JscLangScalingTest::unclosed,
                 "ats", JscLangScalingTest::ats).entrySet()) {
-            JscLang.analyze(e.getValue().apply(500), "app/C.jsc");
+            JscLang.analyze(e.getValue().apply(500), "C.jsc");
             var sb = new StringBuilder("S2 profile " + e.getKey() + ":");
             for (int n = 1000; n <= 8000; n *= 2) sb.append(String.format(" %d=%.1fms", n, best(e.getValue().apply(n)) / 1e6));
             System.out.println(sb);
@@ -84,24 +87,23 @@ class JscLangScalingTest {
 
     @Test
     void invisibleCharactersInAComment() {
-        scales("U+200B in one comment", JscLangScalingTest::invisible, 4000);
+        scales("U+200B in one comment", JscLangScalingTest::invisible, 4000, "JSC0145");
     }
 
     @Test
     void oneRefusedCharacterPerLine() {
-        scales("one @ per line", JscLangScalingTest::ats, 4000);
+        scales("one @ per line", JscLangScalingTest::ats, 4000, "JSC0108");
     }
 
     @Test
     void actionsWithAnUnknownName() {
-        scales("actions with an unknown name", JscLangScalingTest::unknown, 2000);
+        scales("actions with an unknown name", JscLangScalingTest::unknown, 2000, "JSC0217");
     }
 
     /** X6: an accepted file (no errors) with n owned members, each with field references: linear up to a log. */
     @Test
     void ownedMembersWithObjectFieldReferences() {
-        // "C.jsc": a file name the build accepts, so the whole file is analysed and indexed (the shapes above are refused
-        // at their name, app/C.jsc, before the index runs).
+        // An accepted file, so the whole file is checked and indexed with no error (the shapes above are recovery's).
         var model = JscLang.analyze(owned(10), "C.jsc");
         assertTrue(model.accepted(), "the shape is accepted: " + model.diagnostics());
         java.util.function.IntToLongFunction best = n -> {
@@ -123,6 +125,6 @@ class JscLangScalingTest {
 
     @Test
     void actionsWithAnUnclosedParenthesis() {
-        scales("actions with ( unclosed", JscLangScalingTest::unclosed, 2000);
+        scales("actions with ( unclosed", JscLangScalingTest::unclosed, 2000, "JSC0110");
     }
 }
