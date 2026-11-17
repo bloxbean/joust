@@ -15,11 +15,8 @@ chain, with no I/O and no keys. The JavaScript layer fetches what the engine ask
 MerkleMap mirrors, and hands the result to `@julclang/state-client`, which verifies it before a wallet signs. Source:
 [`js/joust-runtime/src`](https://github.com/bloxbean/joust/tree/main/js/joust-runtime/src).
 
-<Aside type="caution" title="Pre-release: from a local registry">
-Version `0.1.0-pre1-snapshot`, not on npmjs.org yet: install it from a local registry, as the
-[npm quick start](/start/quick-start-npm/#prerequisites) shows. Node 22 or newer; on Node 22 the package enables Wasm
-exception references itself (`--experimental-wasm-exnref`, set only where exnref is off, so newer Node prints no warning), so you pass no flag.
-</Aside>
+It needs Node 22 or newer; on Node 22 the package enables Wasm exception references itself
+(`--experimental-wasm-exnref`, set only where exnref is off, so newer Node prints no warning), so you pass no flag.
 
 | Entry point | Contents |
 |---|---|
@@ -182,7 +179,7 @@ See [MerkleMap mirrors](/apps/map-mirrors/).
 | `fetchNeed` | `await fetchNeed(source, snapshot, kind, key)` | fetches one engine need (`tip`, `protocolParams`, `utxos`, `assetUtxos`, `output`, `script`) into a snapshot |
 | `utxoJson` | `utxoJson(utxo)` | a provider's UTxO in Blockfrost's JSON, the snapshot's format |
 
-A keyed insert or remove ([keyed objects](/apps/keyed-objects-js/), on `main` and coming with the next release) needs
+A keyed insert or remove ([keyed objects](/apps/keyed-objects-js/)) needs
 the whole listing of the contract's state address, so the runtime fetches it before asking the engine. For a
 keyed contract, `ensureDeployment` and `rt.options(...)` also pin the slot clock in the deployment (`slotConfig`),
 which the page verifier requires for keyed calls.

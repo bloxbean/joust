@@ -18,3 +18,9 @@ bash scripts/check-site.sh   # builds a private copy and checks links (safe to r
   (annotations read from `julc-state-api`'s sources, examples from `examples/README.md`): generated at build time.
 - `site.config.mjs`: the site URL (or `JOUST_SITE_URL`), repository and summary.
 - `WRITING.md`: how the docs are written (voice, accuracy rules, page shapes). Read it before editing a page.
+- `scripts/check-versions.mjs`: run first by `npm run build`; fails on a hard-coded release version in `src/`
+  (WRITING.md, "Versions").
+
+Deploys: `.github/workflows/docs.yml` builds the site on pull requests and deploys it to GitHub Pages
+(`https://joust.julc.dev`, from `public/CNAME`) on pushes to `main`. The one-time Pages setup is in
+`docs/release-ops.md`, "Docs site".

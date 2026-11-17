@@ -13,9 +13,9 @@ If you would rather use Node and no JDK, see [Quick start: npm & JavaScript](/st
 
 <Aside type="caution" title="Experimental, pre-release: nothing is on Maven Central yet">
 
-JOUST is a research and learning project: do not use it in production. Release candidates (`0.1.0-pre1-rcN`;
-`0.1.0-pre1-rc2` today) are in the BloxBean release repository, `https://repo.bloxbean.org/maven/releases`, with the
-JuLC they need. Part 2 shows the Gradle setup.
+JOUST is a research and learning project: do not use it in production. Its releases, all pre-releases so far, are in
+the BloxBean release repository, `https://repo.bloxbean.org/maven/releases`, with the JuLC they need; the
+[releases page](https://github.com/bloxbean/joust/releases) lists them. Part 2 shows the Gradle setup.
 
 </Aside>
 
@@ -46,8 +46,8 @@ You do not need Gradle installed: the JOUST checkout has a wrapper (Gradle 9.2),
    cd joust
    ```
 
-   The build resolves JuLC (the `julc` entry of `gradle/libs.versions.toml`, `0.1.0-pre21-rc1` on `main`) and
-   cardano-client-lib from Maven Central and the BloxBean repositories; nothing needs to be built first.
+   The build resolves JuLC and cardano-client-lib (the versions in `gradle/libs.versions.toml`) from Maven Central and
+   the BloxBean repositories; nothing needs to be built first.
 
 2. **Run the counter's tests.**
 
@@ -97,11 +97,6 @@ See [Examples](/reference/examples/).
 
 ### Create it with `joust new`
 
-<Aside type="note" title="From the next release">
-The native `joust` and the Gradle plugin `org.julclang.joust` ([ADR-0017](/project/architecture-decisions/)) ship
-from the release after `0.1.0-pre1-rc7`. Until then, set the project up by hand, as the sections after this one show.
-</Aside>
-
 <Steps>
 
 1. **Install `joust`.**
@@ -129,12 +124,13 @@ from the release after `0.1.0-pre1-rc7`. Until then, set the project up by hand,
 
 </Steps>
 
-`joust new` writes the files of the sections below, with the Gradle wrapper, and a `build.gradle` that is only this:
+`joust new` (the native `joust` and the Gradle plugin `org.julclang.joust`, [ADR-0017](/project/architecture-decisions/))
+writes the files of the sections below, with the Gradle wrapper, and a `build.gradle` that is only this:
 
 ```groovy title="build.gradle"
 plugins {
     id 'application'
-    id 'org.julclang.joust' version '<version>'    // upgrading JOUST is this version
+    id 'org.julclang.joust' version '<version>'    // a JOUST release; upgrading JOUST is this version
 }
 
 repositories {
@@ -160,8 +156,9 @@ The plugin does what the hand-written `build.gradle` below spells out:
 | UTF-8 and `-parameters`; native access and in-memory map mirrors for tests; native access for `run` | compile, test and run tasks |
 | `generateJsc`, when `src/main/jsc` exists: `.jsc` contracts lowered to Java before compiling; with it `acceptJscAbi`, `checkJscAbi` (the [ABI manifest](/languages/jsc-reference/#the-abi-manifest)) and `remapJscDiagnostics` (javac's errors on the generated Java, at their `.jsc` positions) | the build |
 
-Every version comes from the JOUST release the plugin belongs to, so the JuLC and cardano-client-lib versions always
-match. It needs a Java 25 toolchain (the default; a lower one is refused with a message).
+`joust new` fills in the version of the `joust` that runs it; the newest is on the
+[releases page](https://github.com/bloxbean/joust/releases). Every other version comes from the JOUST release the
+plugin belongs to, so the JuLC and cardano-client-lib versions always match. It needs a Java 25 toolchain (the default; a lower one is refused with a message).
 
 The same command writes npm projects: `joust new my-app -t node` gives what `npm create joust` gives. In a project, the
 native `joust` and the npm one answer the same commands; see [the native `joust`](/reference/joust-cli/#the-native-joust).
@@ -171,14 +168,13 @@ native `joust` and the npm one answer the same commands; see [the native `joust`
 <Tabs>
 <TabItem label="BloxBean release repository">
 
-Release candidates are published to `https://repo.bloxbean.org/maven/releases`: `0.1.0-pre1-rc2` today (the
-[release badge](https://github.com/bloxbean/joust#readme) in the README shows the newest). Use that version below.
-Nothing is on Maven Central yet.
+Releases are published to `https://repo.bloxbean.org/maven/releases`. Use the newest from the
+[releases page](https://github.com/bloxbean/joust/releases) as `<version>` below. Nothing is on Maven Central yet.
 
 </TabItem>
 <TabItem label="Your checkout, via mavenLocal">
 
-To try what is on `main` but not released yet, publish the library modules of your checkout to `~/.m2`:
+To try what is on `main` before it is released, publish the library modules of your checkout to `~/.m2`:
 
 ```sh
 cd joust
@@ -217,16 +213,19 @@ rootProject.name = 'my-counter'
 ```
 
 ```properties title="gradle.properties"
-joustVersion=0.1.0-pre1-rc2
-julcVersion=0.1.0-pre21-rc1
+# The JOUST release: the newest from https://github.com/bloxbean/joust/releases
+joustVersion=<version>
+# The JuLC and cardano-client-lib it was built with: the julc and cardano-client-lib entries of
+# gradle/libs.versions.toml at that release's tag (v<version>)
+julcVersion=<version>
+cclVersion=<version>
 ```
 
-`julcVersion` is JuLC's processor, the one that compiles your validator: the `julc` entry of
-[`gradle/libs.versions.toml`](https://github.com/bloxbean/joust/blob/main/gradle/libs.versions.toml)
-(`0.1.0-pre21-rc1` on `main`, from the BloxBean release repository). `0.1.0-pre1-rc2` was built against the JuLC
-snapshot before it (`0.1.0-pre21-71b3a73-SNAPSHOT`), and its runtime still brings that snapshot's libraries in, which
-is why the build below lists the snapshot repository too. The project on this page builds and passes its tests with
-`0.1.0-pre1-rc2` and either JuLC version.
+`julcVersion` is JuLC's processor, the one that compiles your validator, and `cclVersion` is cardano-client-lib's.
+Take both from the release you chose: its
+[`gradle/libs.versions.toml`](https://github.com/bloxbean/joust/blob/main/gradle/libs.versions.toml) (open it at the tag
+`v<version>`) names the `julc` and `cardano-client-lib` versions it was built and tested with. The Gradle plugin does
+this for you.
 
 ```groovy title="build.gradle"
 plugins {
@@ -239,19 +238,15 @@ java {
 
 repositories {
     mavenCentral()
-    maven {          // BloxBean releases and release candidates: JOUST, JuLC
+    maven {          // BloxBean releases: JOUST, JuLC
         url = uri('https://repo.bloxbean.org/maven/releases')
         mavenContent { releasesOnly() }
-    }
-    maven {          // BloxBean development snapshots
-        url = uri('https://repo.bloxbean.org/maven/snapshots')
-        mavenContent { snapshotsOnly() }
     }
 }
 
 dependencies {
     implementation "org.julclang:julc-state-runtime:$joustVersion"
-    implementation 'com.bloxbean.cardano:cardano-client-backend-blockfrost:0.8.0-pre7'   // Yaci Store / Blockfrost
+    implementation "com.bloxbean.cardano:cardano-client-backend-blockfrost:$cclVersion"   // Yaci Store / Blockfrost
 
     annotationProcessor "org.julclang:julc-state-processor:$joustVersion"
     annotationProcessor "org.julclang:julc-annotation-processor:$julcVersion"
@@ -554,7 +549,7 @@ public class CounterMain {
 
 | Symptom | Cause and fix |
 |---|---|
-| `Could not find org.julclang:julc-...` | A repository is missing, or `julcVersion` is not the one your JOUST needs. Add both BloxBean repositories (releases and snapshots) and use the `julc` entry of `gradle/libs.versions.toml` for your JOUST version |
+| `Could not find org.julclang:julc-...` | A repository is missing, or `julcVersion` is not the one your JOUST needs. Add the BloxBean release repository (and `https://repo.bloxbean.org/maven/snapshots` for a development snapshot) and use the `julc` entry of `gradle/libs.versions.toml` at your JOUST release's tag |
 | JuLC errors such as "cannot resolve" `Ctx` or `Require` | The `onchain` bundle is missing from the annotation processor path, or a long-lived daemon holds a stale jar: check the dependency, then `./gradlew --stop` |
 | `'int' in a @StateContract ... Use BigInteger` | `SubsetLint`: contract code computes in `BigInteger` only. See [Java](/languages/java/) |
 | `PastHorizon` from the node | The validity window reaches beyond what the network can convert to time. Keep `ttl` short on DevKit (20 s in the examples) |

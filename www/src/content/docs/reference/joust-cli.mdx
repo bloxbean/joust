@@ -12,12 +12,7 @@ The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalV
 `@julclang/joust` is JOUST's command line and Vite plugin. It carries the **toolchain engine**: JOUST's annotation
 processor and JuLC's compiler, compiled to Wasm, which build `.java` and `.jsc` contracts in Node exactly as the
 Gradle build does. Source: [`js/joust`](https://github.com/bloxbean/joust/tree/main/js/joust). For a guided tour, see
-[The joust CLI and projects](/apps/cli-and-projects/).
-
-<Aside type="caution" title="Pre-release: from a local registry">
-Version `0.1.0-pre1-snapshot`, not on npmjs.org yet: install it from a local registry, as the
-[npm quick start](/start/quick-start-npm/#prerequisites) shows. Node 22 or newer.
-</Aside>
+[The joust CLI and projects](/apps/cli-and-projects/). It needs Node 22 or newer.
 
 | Entry point | Contents |
 |---|---|
@@ -243,7 +238,7 @@ To check a downloaded archive before using it: `shasum -a 256 -c joust-<version>
 ## `create-joust`
 
 ```sh
-npm create joust@0.1.0-pre1-snapshot [dir] -- [--template node|web] [--lang jsc|java]
+npm create joust@latest [dir] -- [--template node|web] [--lang jsc|java]
 ```
 
 Writes a new project into `dir` (default `joust-app`), which must be empty or absent, and names the package after the

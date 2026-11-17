@@ -72,7 +72,7 @@ const { instance } = await counter.deploy(wallet, {});   // the wallet signs
 await instance.increment(wallet, { by: 1n });            // verified by the page first
 await instance.increment(wallet, { by: 0n });            // refused: "increment must be positive"`;
 
-export const NPM = `npm create joust@latest my-app   # once the npm packages are released
+export const NPM = `npm create joust@latest my-app
 cd my-app && npm install
 npm start          # contracts/ -> validator and typed client (no JDK); deploys to Yaci DevKit; runs index.js
 
@@ -80,17 +80,19 @@ npm create joust@latest my-web-app -- --template web
 cd my-web-app && npm install
 npm run dev        # deploys to Yaci DevKit, serves the page`;
 
-export const GRADLE = `repositories {
-    mavenCentral()
-    maven { url = uri('https://repo.bloxbean.org/maven/releases') }    // JOUST, JuLC
-    maven { url = uri('https://repo.bloxbean.org/maven/snapshots') }   // development snapshots
+export const GRADLE = `// settings.gradle: the plugin comes from the BloxBean release repository
+pluginManagement {
+    repositories { maven { url = uri('https://repo.bloxbean.org/maven/releases') } }
 }
-dependencies {
-    implementation      "org.julclang:julc-state-runtime:$joustVersion"
-    annotationProcessor "org.julclang:julc-state-processor:$joustVersion"
-    annotationProcessor "org.julclang:julc-state-api:$joustVersion:onchain"
-    annotationProcessor "org.julclang:julc-annotation-processor:$julcVersion"
-    testImplementation  "org.julclang:julc-state-testkit:$joustVersion"
+
+// build.gradle (joust new writes both files)
+plugins {
+    id 'application'
+    id 'org.julclang.joust' version '<version>'   // github.com/bloxbean/joust/releases
+}
+repositories {
+    mavenCentral()
+    maven { url = uri('https://repo.bloxbean.org/maven/releases') }   // JOUST, JuLC
 }`;
 
 // The Java client: generated from Counter.java, on cardano-client-lib (examples/counter's CounterApp does the same).

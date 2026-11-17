@@ -26,10 +26,10 @@ compiler matches it.
 
 ## VS Code
 
-Install the JOUST extension, `julc.vscode-joust`. It has its own version: **0.1.0 bundles the compiler of JOUST
-0.1.0-pre2**, and each later JOUST release that publishes it bumps the patch (its
-[changelog](https://github.com/bloxbean/joust/blob/main/js/vscode-joust/CHANGELOG.md) lists which JOUST release each
-version bundles). It is published as a pre-release while JOUST is one, so pick one of these:
+Install the JOUST extension, `julc.vscode-joust`. It has its own version, apart from JOUST's: each version bundles the
+compiler of one JOUST release, and each JOUST release that publishes the extension bumps its patch. Its
+[changelog](https://github.com/bloxbean/joust/blob/main/js/vscode-joust/CHANGELOG.md) names the JOUST release each
+version bundles. It is published as a pre-release while JOUST is one, so pick one of these:
 
 - **From the Visual Studio Marketplace.** In the Extensions view, search for `julc.vscode-joust` and install it
   (choose the pre-release version if VS Code offers both). Or from a terminal:
@@ -38,8 +38,8 @@ version bundles). It is published as a pre-release while JOUST is one, so pick o
   code --install-extension julc.vscode-joust --pre-release
   ```
 
-- **From a JOUST release on GitHub.** From 0.1.0-pre2 on, each [release](https://github.com/bloxbean/joust/releases)
-  has the same extension attached as `vscode-joust-<ext>.vsix`. Optionally check that the release's own workflow built
+- **From a JOUST release on GitHub.** A [release](https://github.com/bloxbean/joust/releases) with editor assets (its
+  notes say so) has the same extension attached as `vscode-joust-<ext>.vsix`. Optionally check that the release's own workflow built
   it from the release's tag (this needs the [GitHub CLI](https://cli.github.com/)), then install it:
 
   ```sh
@@ -183,7 +183,7 @@ because these editors have no workspace trust:
 
 ## The tree-sitter grammar
 
-Highlighting and folding in Neovim and Helix come from `tree-sitter-jsc`. Each JOUST release, from 0.1.0-pre2 on,
+Highlighting and folding in Neovim and Helix come from `tree-sitter-jsc`. Each JOUST release with editor assets
 attaches it as `tree-sitter-jsc-<version>.tar.gz`, with its SHA-256 in the release's
 `editor-assets-<joust-version>-SHA256SUMS.txt` and a provenance attestation. Download it, optionally check it, and
 unpack it where you keep editor plugins:

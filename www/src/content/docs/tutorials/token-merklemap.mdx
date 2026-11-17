@@ -15,8 +15,7 @@ on `:8080`, the admin API on `:10000`).
 
 <Aside type="caution" title="Experimental, pre-release">
 JOUST is experimental and pre-release (not for production). The Java part runs in a JOUST checkout with JDK 25; the
-npm packages are not released yet and install from a local registry. Both are covered in the steps below and in the
-quick starts ([Java](/start/quick-start-java/), [npm](/start/quick-start-npm/)).
+page part needs Node 22 or newer and the npm packages. Both are covered in the steps below and in the quick starts ([Java](/start/quick-start-java/), [npm](/start/quick-start-npm/)).
 </Aside>
 
 ## The contract
@@ -170,14 +169,12 @@ transaction; the page verifies it before the key signs. The worker also keeps th
 
 <Steps>
 
-1. **Create a project.** With Node 22 or newer, and the packages published to a local registry (in a JOUST checkout:
-   `./gradlew npmPublishLocal -PgraalvmHome=...` then `bash js/publish-local.sh`, which serves them at
-   `http://127.0.0.1:4873/`):
+1. **Create a project.** With Node 22 or newer:
 
    ```sh
-   npm_config_registry=http://127.0.0.1:4873/ npm create joust@0.1.0-pre1-snapshot token-app -- --template web --lang java
+   npm create joust@latest token-app -- --template web --lang java
    cd token-app
-   npm_config_registry=http://127.0.0.1:4873/ npm install
+   npm install
    ```
 
    The web template in Java holds a Counter contract (`Counter.java`), a page and a test.

@@ -420,7 +420,7 @@ make it a keyed type. **Source:**
 public record Account(byte[] owner, BigInteger balance) {}
 ```
 
-**Keyed types** (ADR-0016; on `main`, not in `0.1.0-pre1-rc2`, coming with the next release). Naming a `byte[]`
+**Keyed types** (ADR-0016). Naming a `byte[]`
 component as `key` makes the type keyed: at most one object per key and instance, in a sorted on-chain list. Guide:
 [Keyed objects](/contracts/keyed-objects/).
 

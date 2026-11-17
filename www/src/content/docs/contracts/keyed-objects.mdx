@@ -5,12 +5,6 @@ description: At most one object per key, each in its own UTxO, kept in a sorted 
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-<Aside type="caution" title="New on main, not in a release yet">
-Keyed objects are on `main` since PR #37 ([ADR-0016](https://github.com/bloxbean/joust/blob/main/docs/adr/0016-keyed-objects.md)).
-They are not in the published `0.1.0-pre1-rc2`; they come with the next release. Until then, build JOUST from a
-checkout of `main` to use them.
-</Aside>
-
 A *keyed object* is an [owned object](/contracts/owned-objects/) with a key: one ballot per voter, one name in a
 registry, one position per account. Like any owned object it is its own UTxO, so updates to different keys never
 wait for each other. Unlike a plain owned object, the chain guarantees that an instance holds **at most one object per

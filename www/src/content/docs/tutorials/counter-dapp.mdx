@@ -21,11 +21,6 @@ You will learn:
 - how the page connects CIP-30 wallets, and shows each call for review before signing;
 - what the page verifier checks, and why a bad call never reaches the wallet.
 
-<Aside type="caution" title="Pre-release: the npm packages come from a local registry">
-The npm packages are not on npmjs.org yet. Publish them to a local registry first, as the
-[npm quick start](/start/quick-start-npm/#prerequisites) shows, and set `npm_config_registry=http://127.0.0.1:4873/`.
-</Aside>
-
 ## Set up
 
 <Steps>
@@ -39,7 +34,7 @@ The npm packages are not on npmjs.org yet. Publish them to a local registry firs
 2. Create the app and install it:
 
    ```sh
-   npm create joust@0.1.0-pre1-snapshot counter-dapp -- --template web --lang java
+   npm create joust@latest counter-dapp -- --template web --lang java
    cd counter-dapp
    npm install
    ```

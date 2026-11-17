@@ -46,8 +46,9 @@ input being spent (`by`), so the mint is valid only together with that call (ADR
 
 ### CCL (cardano-client-lib)
 
-The Java library for Cardano transactions JOUST's off-chain runtime builds on (QuickTx, addresses, CBOR). JOUST uses
-version 0.8.0-pre7. See [Java off-chain runtime](/apps/java-runtime/).
+The Java library for Cardano transactions JOUST's off-chain runtime builds on (QuickTx, addresses, CBOR). A JOUST
+release brings the version it was built with (`gradle/libs.versions.toml` at its tag). See
+[Java off-chain runtime](/apps/java-runtime/).
 
 ### CIP-30
 
@@ -169,8 +170,8 @@ from a subset of Java. See [Java](/languages/java/).
 ### Keyed object
 
 An [owned object](#owned-object) with a key (`@Owned(key = "...")`): at most one per key and instance, each its own
-UTxO with a 29-byte token starting `0x4B`, kept in a sorted on-chain list whose neighbours prove uniqueness (ADR-0016;
-on `main`, coming with the next release). See [Keyed objects](/contracts/keyed-objects/).
+UTxO with a 29-byte token starting `0x4B`, kept in a sorted on-chain list whose neighbours prove uniqueness (ADR-0016).
+See [Keyed objects](/contracts/keyed-objects/).
 
 ### MapVerifier
 
