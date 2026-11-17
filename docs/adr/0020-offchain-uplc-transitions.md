@@ -754,7 +754,7 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
     but `null` or `undefined`) is refused at construction ("the portable option was removed; the page verifier still
     checks every transaction; remove the option"), so a page that asked for the check never silently goes without it.
     `JoustContract.recompute` and F84's keyed-only refusal are gone.
-  - *The `.jsc` 2 branches* (ADR-0018) still turn the option on in `examples/dsl`; that goes in that stack.
+  - *`examples/dsl`* (`.jsc` 2, ADR-0018, on `main` since #130) does not use the option.
   No reachability metadata was specific to portable (the dApp image's entry point carried its own exports). The dApp
   server's `POST /chain/utils/txs/evaluate` route, used only by the serverless demo, is removed (r12).
 - C5 (a per-request bound in the prepare service), caps from protocol parameters, C7 (a step-independent outflow
@@ -857,4 +857,5 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
   construction, S1/F2); §12.3 names what the page no longer checks before signing (exact per-payee amounts, no tagged
   payout to a non-payee) and points to C7 (S3); the dApp's e2e keeps a changed next state as an expected failure at
   submission (S2); `GeneratedVectorsTest` carries `WasmParityTest`'s edge vectors (F1); the dApp server's evaluate route
-  is removed (F3). Status stays Proposed.
+  is removed (F3); §12.3's `examples/dsl` note now reflects `.jsc` 2 on `main` (#130; design review K3). Status stays
+  Proposed.
