@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 612" width="1020" height="612" role="img" aria-label="What JOUST generates from one contract" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>What JOUST generates from one contract</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#3a3f5c"/></marker>
+    <marker id="arrow-indigo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#4f4ce0"/></marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#c46a06"/></marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b1d3a" flood-opacity="0.08"/></filter>
+  </defs>
+  <rect width="1020" height="612" rx="18" fill="#f7f8fc"/>
+  <text x="28" y="40" font-size="17" font-weight="800" fill="#151729">What JOUST generates from one contract</text>
+  <text x="28" y="60" font-size="12.5" fill="#5b6074">Java with Gradle: the JOUST annotation processor runs inside javac</text>
+  <circle cx="92" cy="216" r="14" fill="#eceeff" stroke="#b9b8f6" stroke-width="1.5"/>
+  <path d="M64 264 q0 -30 28 -30 q28 0 28 30 z" fill="#eceeff" stroke="#b9b8f6" stroke-width="1.5"/>
+  <text x="92" y="284" text-anchor="middle" font-size="14" font-weight="700" fill="#151729">You</text>
+  <text x="92" y="301" text-anchor="middle" font-size="12" fill="#5b6074">write one class</text>
+  <g filter="url(#shadow)"><rect x="170" y="175" width="220" height="150" rx="12" fill="#eceeff" stroke="#b9b8f6" stroke-width="1.5"/></g>
+  <text x="280" y="201" text-anchor="middle" font-size="15" font-weight="700" fill="#151729" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">Counter.java</text>
+  <text x="280" y="220" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4f4ce0">[Java, or .jsc lowered to Java]</text>
+  <text x="280" y="245" text-anchor="middle" font-size="12.5" fill="#5b6074">A state record plus pure</text>
+  <text x="280" y="262" text-anchor="middle" font-size="12.5" fill="#5b6074">static methods: @Init,</text>
+  <text x="280" y="279" text-anchor="middle" font-size="12.5" fill="#5b6074">@Action, @View, @Destroy</text>
+  <polyline points="128,248 166,248" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <g filter="url(#shadow)"><rect x="440" y="175" width="200" height="150" rx="12" fill="#eef0f6" stroke="#c3c7da" stroke-width="1.5"/></g>
+  <text x="540" y="201" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">JOUST processor</text>
+  <text x="540" y="220" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">[julc-state-processor]</text>
+  <text x="540" y="245" text-anchor="middle" font-size="12.5" fill="#5b6074">Reads the contract into a</text>
+  <text x="540" y="262" text-anchor="middle" font-size="12.5" fill="#5b6074">State IR and generates what</text>
+  <text x="540" y="279" text-anchor="middle" font-size="12.5" fill="#5b6074">follows</text>
+  <polyline points="390,250 436,250" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="390.25" y="210" width="45.5" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="413" y="225" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">javac</text>
+  <g filter="url(#shadow)"><rect x="700" y="80" width="232" height="120" rx="12" fill="#fff4e2" stroke="#f2c47c" stroke-width="1.5"/></g>
+  <text x="816" y="106" text-anchor="middle" font-size="15" font-weight="700" fill="#151729" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">CounterValidator</text>
+  <text x="816" y="125" text-anchor="middle" font-size="11.5" font-weight="600" fill="#c46a06">[JuLC: UPLC, Plutus V3]</text>
+  <text x="816" y="150" text-anchor="middle" font-size="12.5" fill="#5b6074">Re-runs your method on chain and</text>
+  <text x="816" y="167" text-anchor="middle" font-size="12.5" fill="#5b6074">enforces the result</text>
+  <g filter="url(#shadow)"><rect x="700" y="220" width="232" height="110" rx="12" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/></g>
+  <text x="816" y="246" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">Description</text>
+  <text x="816" y="265" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">[CIP-57 + x-joust JSON]</text>
+  <text x="816" y="290" text-anchor="middle" font-size="12.5" fill="#5b6074">For typed JavaScript clients</text>
+  <text x="816" y="307" text-anchor="middle" font-size="12.5" fill="#5b6074">(npm, experimental)</text>
+  <g filter="url(#shadow)"><rect x="700" y="360" width="232" height="120" rx="12" fill="#e6f6ef" stroke="#9fd9c0" stroke-width="1.5"/></g>
+  <text x="816" y="386" text-anchor="middle" font-size="15" font-weight="700" fill="#151729" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">CounterClient</text>
+  <text x="816" y="405" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f7a55">[Java on cardano-client-lib]</text>
+  <text x="816" y="430" text-anchor="middle" font-size="12.5" fill="#5b6074">Runs the method on the JVM, then</text>
+  <text x="816" y="447" text-anchor="middle" font-size="12.5" fill="#5b6074">builds, submits and confirms</text>
+  <polyline points="640,215 670,215 670,140 696,140" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <polyline points="640,270 696,270" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <polyline points="640,300 670,300 670,420 696,420" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <g filter="url(#shadow)"><rect x="440" y="380" width="200" height="80" rx="12" fill="#eceeff" stroke="#b9b8f6" stroke-width="1.5"/></g>
+  <text x="540" y="406" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">Your app</text>
+  <text x="540" y="425" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4f4ce0">[Java]</text>
+  <text x="540" y="450" text-anchor="middle" font-size="12.5" fill="#5b6074">Calls the generated client</text>
+  <polyline points="640,440 696,440" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="645.25" y="450" width="45.5" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="668" y="465" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">calls</text>
+  <g filter="url(#shadow)"><rect x="170" y="520" width="762" height="70" rx="12" fill="#eef0f6" stroke="#c3c7da" stroke-width="1.5"/></g>
+  <text x="551" y="546" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">Cardano</text>
+  <text x="551" y="565" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">[each instance is a UTxO with an inline datum and a thread token]</text>
+  <polyline points="816,480 816,516" fill="none" stroke="#4f4ce0" stroke-width="1.6" marker-end="url(#arrow-indigo)"/>
+  <rect x="833.2" y="490" width="89.6" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="878" y="505" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4f4ce0">transactions</text>
+  <polyline points="932,140 972,140 972,560 936,560" fill="none" stroke="#c46a06" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <rect x="936.65" y="278" width="70.69999999999999" height="38" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="972" y="293" text-anchor="middle" font-size="11.5" font-weight="600" fill="#c46a06">reference</text>
+  <text x="972" y="308" text-anchor="middle" font-size="11.5" font-weight="600" fill="#c46a06">script</text>
+
+</svg>

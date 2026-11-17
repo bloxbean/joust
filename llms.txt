@@ -1,0 +1,123 @@
+# JOUST
+
+> JOUST: write Cardano smart contracts in Java as state plus actions. The same method runs on chain and off; JOUST generates the validator and a typed client on cardano-client-lib. Also .jsc, and JavaScript (experimental).
+
+Key facts an AI agent should know before generating JOUST code:
+
+- A contract is a class annotated `@StateContract` (Java) or a `contract` (.jsc): a **state record** plus **pure static methods**: `@Init` creates an instance, `@Action` returns the next state, `@View` reads, `@Destroy` ends an instance and returns payouts.
+- The **same method runs twice**: off chain (JVM, or the Wasm engine in Node or a browser worker) to compute the next state and build the transaction, and on chain, compiled by JuLC to UPLC, where the generated validator re-runs it and requires the output datum to equal the result.
+- Contract code is a **JuLC subset of Java**: records and sealed interfaces, `BigInteger` (never int/long), immutable locals, `Require.that(cond, "msg")` for rules, `ByteStringLib.equals` for byte arrays (never `==` or `.equals`), no generic records, no exceptions.
+- State lives in one UTxO per instance (inline datum + a one-shot thread token). Larger state: `MerkleMap` fields (off-chain MPF, proofs checked on chain), owned objects (`@Owned`, one UTxO each), `@Batched` intents.
+- Java is the first-class path: Gradle, the JOUST annotation processor, and a generated `<Name>Client` on cardano-client-lib (`CounterClient.deploy(runtime, account)`, `counter.increment(account, BigInteger.ONE)`).
+- JavaScript is **experimental** (the toolchain and runtime run as WebAssembly built with GraalVM Web Image): `npm create joust`, `joust build` (no JDK), `joust deploy`, `joust dev`; generated typed clients (`<Contract>.js`) call `deploy`, `at(id).<action>(wallet, args)`; every transaction is verified by the page before a CIP-30 wallet signs.
+- Status: pre-release. Maven snapshots are published; the npm packages are not on npmjs.org yet.
+
+## Start here for AI agents
+
+- [AI starter pack](https://joust.julc.dev/ai/starter-pack/): the one file to ingest before writing JOUST code: rules, idioms, patterns, errors and fixes.
+- [llms-full.txt](https://joust.julc.dev/llms-full.txt): every page of this site as one markdown file.
+- [catalog.json](https://joust.julc.dev/ai/catalog.json): every annotation (with its elements) and every example, machine-readable.
+
+## Start here
+
+- [Why JOUST](https://joust.julc.dev/start/why-joust/): The work a Cardano contract normally needs, what JOUST does instead, what it generates and checks for you, and where the project stands today.
+- [How JOUST works](https://joust.julc.dev/start/how-it-works/): The architecture end to end - the annotation processor, the generated validator and client, the runtime, an instance's life as UTxOs, storage strategies and the npm path.
+- [Quick start: Java & Gradle](https://joust.julc.dev/start/quick-start-java/): Run the counter example, then set up your own Gradle project with JOUST, write a contract, test it and run it on Yaci DevKit.
+- [Your first contract](https://joust.julc.dev/start/first-contract/): Build the counter step by step - state, @Init, actions with and without Ctx, @OnlyOwner, @View, @Destroy - then run it on Yaci DevKit from Java or JavaScript.
+- [Quick start: JavaScript & TypeScript](https://joust.julc.dev/start/quick-start-npm/): (Experimental) Create a JOUST app with npm only, build and deploy its Counter contract on Yaci DevKit, and call it from a Node script, a test and a browser page.
+
+## Tutorials: Java
+
+- [Vault: deposits, time and payouts](https://joust.julc.dev/tutorials/vault/): Build and run a time-locked savings vault on Yaci DevKit, with payable deposits, an owner-only withdraw after a deadline, payouts and close.
+- [Escrow and crowdfunding](https://joust.julc.dev/tutorials/escrow-crowdfund/): Two contracts with several parties - an escrow with two ways to end and a deadline refund, and a crowdfund with a canonical map of backers, refunds and a size cap.
+- [Token balances in a MerkleMap](https://joust.julc.dev/tutorials/token-merklemap/): Run an account-model token whose balances live in a MerkleMap, from Java on DevKit and from a browser page that reads balances from its own mirror.
+- [Bank: owned objects](https://joust.julc.dev/tutorials/bank-owned-objects/): Run a bank where each customer's account is its own UTxO, so customers act in parallel, with shared settings read by reference and an escape hatch.
+- [Pool: batched intents](https://joust.julc.dev/tutorials/pool-batched-intents/): Run a community pool where donations and rising-price ticket sales arrive as intents and a permissionless batcher applies them in one transaction.
+- [DEX: native assets and LP tokens](https://joust.julc.dev/tutorials/dex-assets/): Run a constant-product AMM that holds a token reserve, mints and burns LP tokens and swaps with slippage bounds; then a look at an NFT marketplace.
+- [Multisig treasury](https://joust.julc.dev/tutorials/multisig-treasury/): A council-governed treasury with deploy-time @Params, @Quorum payments, a guardian script approving through a zero withdrawal, an @Invariant and authenticated events.
+- [Oracle and composition](https://joust.julc.dev/tutorials/oracle-composition/): Run a price oracle and a shop that reads it with @Reads, then put calls to both contracts into one atomic transaction with Compose.
+- [Staked vault and governance](https://joust.julc.dev/tutorials/staked-vault/): Run a council-governed vault whose funds earn staking rewards; delegate by quorum with @Certify, collect rewards with @Withdraw, and vote as a script DRep.
+- [Upgrading a contract](https://joust.julc.dev/tutorials/upgrades/): Migrate a live CounterV1 instance, with its count and funds, into CounterV2 in one composed transaction on Yaci DevKit.
+
+## Tutorials: JavaScript
+
+- [A counter dApp in the browser](https://joust.julc.dev/tutorials/counter-dapp/): Build the template's Counter dApp end to end, from the Java contract to a page that prepares, checks and signs its own transactions.
+- [Deploy to preview](https://joust.julc.dev/tutorials/deploy-preview/): Take the Counter dApp from Yaci DevKit to Cardano's preview testnet, run it with Eternl or Lace, and ship the page as static files.
+
+## Writing contracts
+
+- [State and lifecycle](https://joust.julc.dev/contracts/state-and-lifecycle/): The state record, @StateContract options, the @Init/@Action/@View/@Destroy method shapes, instance ids, datum size limits and maps kept canonical.
+- [Ctx, funds and payouts](https://joust.julc.dev/contracts/ctx-and-funds/): Read the caller, payments, balance and time through Ctx, accept lovelace with @Payable, pay it out with Payouts, and return everything on @Destroy.
+- [Authorization](https://joust.julc.dev/contracts/authorization/): Decide who may call each method with Ctx.caller, @SignedBy and @OnlyOwner, M-of-N @Quorum, and @AuthorizedBy keys or withdraw-zero governor scripts.
+- [Time](https://joust.julc.dev/contracts/time/): Deadlines and time locks on Cardano with validity intervals, Ctx.validFrom/validTo, Clock.after/before, @ValidAfter/@ValidBefore, TTLs and maxValidityMs.
+- [Require and errors](https://joust.julc.dev/contracts/require-and-errors/): Write contract rules with Require.that, see how a refusal reaches Java and JavaScript callers, and debug a transaction that fails on chain.
+- [Params, invariants and events](https://joust.julc.dev/contracts/params-invariants-events/): Fix values at deploy time with @Params, enforce rules on every state with @Invariant, and emit events that indexers can trust.
+- [MerkleMaps](https://joust.julc.dev/contracts/merklemaps/): Keep an unbounded map in a 32-byte root. How MerkleMap fields work, the MerkleMaps API, what the map verifier checks and the rules to follow.
+- [Owned objects](https://joust.julc.dev/contracts/owned-objects/): Give each user their own UTxO with @Owned records, so calls never queue. Owned methods, @Shared reads, several types, moves and maps inside objects.
+- [Keyed objects](https://joust.julc.dev/contracts/keyed-objects/): At most one object per key, each in its own UTxO, kept in a sorted on-chain list. @Owned(key = ...), inserts, removes, retires, cooldowns, the Java client.
+- [Batched intents](https://joust.julc.dev/contracts/batched-intents/): Let many users write one hot shared state without contention. @Batched actions run as intents that a permissionless batcher applies together.
+- [Native assets, mints and sends](https://joust.julc.dev/contracts/assets-mints-sends/): Hold native tokens in contract state, mint and burn your own tokens, and send outputs to any address with any datum, with every output counted once.
+- [Reads and composition](https://joust.julc.dev/contracts/reads-and-composition/): Read another contract's state with @Reads, and put several contracts' calls in one atomic transaction with Compose, from Java and JavaScript.
+- [Deposits](https://joust.julc.dev/contracts/deposits/): Pay value into another JOUST contract's instance in the same transaction, with @Receives on the receiving side and the output registry keeping both honest.
+- [Staking and governance](https://joust.julc.dev/contracts/staking-and-governance/): Stake a contract's funds to its own script and govern rewards, certificates, DRep votes and proposals with @Withdraw, @Certify, @Votes and @Propose.
+- [Upgrades and migration](https://joust.julc.dev/contracts/upgrades/): Move a live instance, state and funds, to a new contract version with @MigrateTo on the old side and @Migrate on the new, in one composed transaction.
+- [Fees and script size](https://joust.julc.dev/contracts/fees-and-size/): What a JOUST call costs on Cardano (size fee, execution units, reference-script fee), measured script sizes and budgets, the 16 KB limit, and how to stay small.
+- [Security model](https://joust.julc.dev/contracts/security-model/): What JOUST's generated validator enforces on chain, how the attack suite tests it, and what clients, pages, services and MerkleMap mirrors are trusted with.
+- [Testing](https://joust.julc.dev/contracts/testing/): Test a contract at every level - its methods as plain Java, the compiled validator with StateHarness, the attack suite, DevKit end-to-end tests, and the JavaScript and page tests.
+
+## Building apps: Java
+
+- [Java off-chain runtime](https://joust.julc.dev/apps/java-runtime/): Use generated clients from Java - configure StateRuntime, deploy and call instances, read state and views, compose several calls in one transaction, and prepare transactions for browser wallets.
+
+## Building apps: JavaScript
+
+- [JavaScript clients](https://joust.julc.dev/apps/javascript-clients/): Call JOUST contracts from JavaScript - generated clients, JoustContract, joustRuntime in Node, prepare services, the page verifier and JSON conventions.
+- [Wallets](https://joust.julc.dev/apps/wallets/): Connect CIP-30 browser wallets such as Eternl and Lace, review and sign JOUST transactions, use the DevKit dev wallet, and know what a wallet risks.
+- [Pages: worker, Vite, static builds](https://joust.julc.dev/apps/pages/): Run JOUST's runtime engine in a page's Web Worker, configure Vite with @julclang/joust/vite, and ship a page as static files with SRI-checked engine files.
+- [The joust CLI and projects](https://joust.julc.dev/apps/cli-and-projects/): How a JOUST npm project is laid out, what joust build, deploy, dev and serve do, and every file they write.
+- [Networks and chain providers](https://joust.julc.dev/apps/networks-and-providers/): Configure networks for JOUST's npm tooling, read the chain through Blockfrost, Yaci Store or Ogmios, and handle clocks, TTLs and project ids safely.
+- [Keyed objects in JavaScript](https://joust.julc.dev/apps/keyed-objects-js/): Call keyed objects from Node and pages - JoustKeyedList and JoustKeyedObject, keyed calls through the engine, what the page checks, and retries that survive a reload.
+- [MerkleMap mirrors](https://joust.julc.dev/apps/map-mirrors/): How JOUST keeps MerkleMaps off chain - mirrors over Aiken's MPF that answer the engine's proofs, persist in LevelDB, IndexedDB or RocksDB, and rebuild from chain history.
+
+## Languages
+
+- [Java](https://joust.julc.dev/languages/java/): The Java subset contract code is written in - types, numbers, byte[] equality, records and sealed interfaces, loops, maps, library code - and the checks that enforce it.
+- [.jsc](https://joust.julc.dev/languages/jsc/): Write a JOUST contract in .jsc, an immutable, expression-oriented contract language that reads like TypeScript and lowers to a Java @StateContract.
+- [.jsc reference](https://joust.julc.dev/languages/jsc-reference/): The precise .jsc language: lexical rules, grammar, types and encodings, names, operators, effects, the time rule, BigMaps, the ABI manifest and diagnostics.
+- [.jsc standard library](https://joust.julc.dev/languages/jsc-std/): Every function a .jsc contract can call: the prelude and the std modules, with each one's signature, domain, time rule and the Java it binds to.
+- [TypeScript](https://joust.julc.dev/languages/typescript/): The TypeScript types JOUST generates for each contract, how schemas map to TS types, the In input types, and typing a page against the packages.
+- [Editors](https://joust.julc.dev/languages/editors/): Edit .jsc with diagnostics and navigation in VS Code, Neovim, Helix and any LSP client, plus completion, quick fixes, rename and formatting in VS Code; joust fmt formats everywhere, and the tree-sitter grammar highlights.
+
+## Reference: Java
+
+- [Annotations](https://joust.julc.dev/reference/annotations/): Every JOUST annotation in julc-state-api, with its target, elements and defaults, what the processor checks and what the validator enforces.
+- [State API (julc-state-api)](https://joust.julc.dev/reference/state-api/): Every class of julc-state-api besides the annotations, with exact signatures: Ctx, Require, Clock, Payouts, Funds, Assets, MerkleMaps and more.
+- [Java runtime API](https://joust.julc.dev/reference/java-runtime-api/): Every public class of julc-state-runtime and julc-state-server, with signatures, builder options and defaults, read from the sources.
+
+## Reference: JavaScript
+
+- [@julclang/state-client](https://joust.julc.dev/reference/state-client/): API reference of @julclang/state-client - clients, services, chain providers, wallets, verifiers, data codecs, ledger helpers and joust-gen.
+- [@julclang/joust-runtime](https://joust.julc.dev/reference/joust-runtime/): API reference of @julclang/joust-runtime - joustRuntime and its options, engineService, the page worker and engineWorker, mirrors, snapshots and DevKit helpers.
+- [@julclang/joust (CLI, Vite)](https://joust.julc.dev/reference/joust-cli/): Reference of @julclang/joust - every joust command and flag, environment variables, the dev server's routes, the Vite plugin and virtual:joust/network, and create-joust.
+- [joust.config.json](https://joust.julc.dev/reference/config/): Every key of a JOUST project's joust.config.json, with its default, which command reads it, and how networks merge over the built-in ones.
+
+## Reference
+
+- [Contract description](https://joust.julc.dev/reference/description-format/): The JSON description JOUST writes for every contract (CIP-57 plus x-joust, version 2), key by key, with its type mapping and JSON conventions.
+- [Examples](https://joust.julc.dev/reference/examples/): Every JOUST example contract, what it shows, its key annotations, how to run it, and the measured script sizes and execution budgets.
+- [Troubleshooting](https://joust.julc.dev/reference/troubleshooting/): Symptoms you may meet building, calling and serving JOUST contracts, with the cause and the fix for each, from the build to the browser.
+- [Glossary](https://joust.julc.dev/reference/glossary/): The Cardano and JOUST terms used across these docs, from UTxO and redeemer to thread token, mirror and page verifier, each with a link to more.
+
+## AI
+
+- [Using JOUST with AI](https://joust.julc.dev/ai/): The files this site publishes for AI agents, how to give them to Claude Code, Cursor or a chat assistant, and how to check what an agent writes.
+- [AI starter pack](https://joust.julc.dev/ai/starter-pack/): Everything an AI agent needs to write correct JOUST contracts and clients on the first try. Ingest this file before generating JOUST code.
+
+## Project
+
+- [Status and roadmap](https://joust.julc.dev/project/status-and-roadmap/): What JOUST does today, what is experimental, what comes next, what is published and how releases are made.
+- [Architecture decisions](https://joust.julc.dev/project/architecture-decisions/): Every JOUST architecture decision record (ADR-0001 to ADR-0021), with its status, the decision in one paragraph and the guide that covers it.
+
+## Optional
+
+- [Source code](https://github.com/bloxbean/joust): the JOUST repository (Java modules, js/ packages, examples, ADRs in docs/adr).

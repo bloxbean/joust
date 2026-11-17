@@ -1,0 +1,616 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-g5ptsecz"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>.jsc standard library | JOUST</title><link rel="canonical" href="https://joust.julc.dev/languages/jsc-std/"/><link rel="sitemap" href="/sitemap-index.xml"/><link rel="shortcut icon" href="/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v7.3.8"/><meta name="generator" content="Starlight v0.42.10"/><meta property="og:title" content=".jsc standard library"/><meta property="og:type" content="article"/><meta property="og:url" content="https://joust.julc.dev/languages/jsc-std/"/><meta property="og:locale" content="en"/><meta property="og:description" content="Every function a .jsc contract can call: the prelude and the std modules, with each one's signature, domain, time rule and the Java it binds to."/><meta property="og:site_name" content="JOUST"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="Every function a .jsc contract can call: the prelude and the std modules, with each one's signature, domain, time rule and the Java it binds to."/><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"><link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt"><meta property="og:image" content="https://joust.julc.dev/joust-knight.png"><meta property="og:image:alt" content="JOUST — State Contract Simplified"><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/_astro/print.C9eyqPGL.css" media="print"><link rel="stylesheet" href="/_astro/common.CKVVw45s.css"><style>@layer starlight.components{svg:where(.astro-hkc32dio){color:var(--sl-icon-color);font-size:var(--sl-icon-size,1em);width:1em;height:1em;overflow:visible}}
+</style><script type="module" src="/_astro/page.cNngjUgL.js"></script><style>@layer starlight.components{.card-grid:where(.astro-7qmvx3iy){grid-template-columns:100%;gap:1rem;display:grid}.card-grid:where(.astro-7qmvx3iy)>*{margin-top:0!important}@media (width>=50rem){.card-grid:where(.astro-7qmvx3iy){grid-template-columns:1fr 1fr;gap:1.5rem}.stagger:where(.astro-7qmvx3iy){--stagger-height:5rem;padding-bottom:var(--stagger-height)}.stagger:where(.astro-7qmvx3iy)>:nth-child(2n){transform:translateY(var(--stagger-height))}}}
+</style><style>@layer starlight.components{starlight-file-tree:where(.astro-a2hqddox){--x-space:1.5rem;--y-space:.125rem;--y-pad:0;border:1px solid var(--sl-color-gray-5);background-color:var(--sl-color-gray-6);font-size:var(--sl-text-xs);font-family:var(--__sl-font-mono);padding:1rem;display:block;overflow-x:auto}starlight-file-tree:where(.astro-a2hqddox) .directory>details{padding:0;background:0 0;border:0;padding-inline-start:var(--x-space)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary{padding:var(--y-pad) .625rem;color:var(--sl-color-white);border:0;max-width:100%;margin-inline-start:calc(-1 * var(--x-space));font-weight:400}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary::marker,starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary::-webkit-details-marker{color:var(--sl-color-gray-3)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover,starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover .tree-icon{cursor:pointer;color:var(--sl-color-text-accent);fill:currentColor}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover~ul{border-color:var(--sl-color-gray-4)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover .highlight .tree-icon{color:var(--sl-color-text-invert);fill:currentColor}starlight-file-tree:where(.astro-a2hqddox) ul{border-inline-start:1px solid var(--sl-color-gray-5);margin-inline-start:.5rem;padding:0;padding-inline-start:.125rem;list-style:none}starlight-file-tree:where(.astro-a2hqddox)>ul{border:0;margin:0;padding:0}starlight-file-tree:where(.astro-a2hqddox) li{margin:var(--y-space) 0;padding:var(--y-pad) 0}starlight-file-tree:where(.astro-a2hqddox) .file{color:var(--sl-color-white);margin-inline-start:calc(var(--x-space) - .125rem)}starlight-file-tree:where(.astro-a2hqddox) .tree-entry{flex-wrap:wrap;align-items:flex-start;max-width:calc(100% - 1rem);display:inline-flex}@media (width>=30em){starlight-file-tree:where(.astro-a2hqddox) .tree-entry{flex-wrap:nowrap}}starlight-file-tree:where(.astro-a2hqddox) .tree-entry>:first-child{flex-shrink:0}starlight-file-tree:where(.astro-a2hqddox) .empty{color:var(--sl-color-gray-3);padding-inline-start:.375rem}starlight-file-tree:where(.astro-a2hqddox) .comment{color:var(--sl-color-gray-3);min-width:12rem;max-width:24rem;padding-inline-start:1.625rem}starlight-file-tree:where(.astro-a2hqddox) .highlight{color:var(--sl-color-text-invert);background-color:var(--sl-color-text-accent);border-radius:.25rem;padding-inline-end:.5rem;display:inline-block}starlight-file-tree:where(.astro-a2hqddox) svg{fill:var(--sl-color-gray-3);vertical-align:middle;width:.875rem;height:.875rem;margin-inline:.25rem .375rem;display:inline;overflow:visible}starlight-file-tree:where(.astro-a2hqddox) .highlight svg.tree-icon{fill:currentColor}}
+</style><style>@layer starlight.components{.sl-link-card:where(.astro-zaaezwya){border:1px solid var(--sl-color-gray-5);box-shadow:var(--sl-shadow-sm);border-radius:.5rem;grid-template-columns:1fr auto;gap:.5rem;padding:1rem;display:grid;position:relative}a:where(.astro-zaaezwya){line-height:var(--sl-line-height-headings);text-decoration:none}a:where(.astro-zaaezwya):before{content:"";position:absolute;inset:0}.stack:where(.astro-zaaezwya){flex-direction:column;gap:.5rem}.title:where(.astro-zaaezwya){color:var(--sl-color-white);font-weight:600;font-size:var(--sl-text-lg)}.description:where(.astro-zaaezwya){color:var(--sl-color-gray-3);line-height:1.5}.icon:where(.astro-zaaezwya){color:var(--sl-color-gray-3)}.sl-link-card:where(.astro-zaaezwya):hover{background:var(--sl-color-gray-7,var(--sl-color-gray-6));border-color:var(--sl-color-gray-2)}.sl-link-card:where(.astro-zaaezwya):hover .icon:where(.astro-zaaezwya){color:var(--sl-color-white)}}
+</style><style>@layer starlight.components{.sl-steps{--bullet-size:calc(var(--sl-line-height) * 1rem);--bullet-margin:.375rem;counter-reset:steps-counter var(--sl-steps-start,0);padding-inline-start:0;list-style:none}.sl-steps>li{counter-increment:steps-counter;padding-inline-start:calc(var(--bullet-size) + 1rem);min-height:calc(var(--bullet-size) + var(--bullet-margin));padding-bottom:1px;position:relative}.sl-steps>li+li{margin-top:0}.sl-steps>li:before{content:counter(steps-counter);top:0;width:var(--bullet-size);height:var(--bullet-size);line-height:var(--bullet-size);font-size:var(--sl-text-xs);text-align:center;color:var(--sl-color-white);background-color:var(--sl-color-gray-6);box-shadow:inset 0 0 0 1px var(--sl-color-gray-5);border-radius:99rem;font-weight:600;position:absolute;inset-inline-start:0}.sl-steps>li:after{--guide-width:1px;content:"";top:calc(var(--bullet-size) + var(--bullet-margin));bottom:var(--bullet-margin);width:var(--guide-width);background-color:var(--sl-color-hairline-light);position:absolute;inset-inline-start:calc((var(--bullet-size) - var(--guide-width)) / 2)}}@layer starlight.content{.sl-steps>li>:first-child{--lh:calc(1em * var(--sl-line-height));--shift-y:calc(.5 * (var(--bullet-size) - var(--lh)));transform:translateY(var(--shift-y));margin-bottom:var(--shift-y)}.sl-steps>li>:first-child:where(h1,h2,h3,h4,h5,h6){--lh:calc(1em * var(--sl-line-height-headings))}@supports (--prop:1lh){.sl-steps>li>:first-child{--lh:1lh}}}
+</style><style>@layer starlight.components{starlight-tabs:where(.astro-scn3uvmv){display:block}.tablist-wrapper:where(.astro-scn3uvmv){overflow-x:auto}:where(.astro-scn3uvmv)[role=tablist]{border-bottom:2px solid var(--sl-color-gray-5);padding:0;list-style:none;display:flex}.tab:where(.astro-scn3uvmv){display:flex}.tab:where(.astro-scn3uvmv)>:where(.astro-scn3uvmv)[role=tab]{--sl-tab-color-border:var(--sl-color-gray-5);line-height:var(--sl-line-height-headings);box-shadow:0 2px 0 var(--sl-tab-color-border);color:var(--sl-color-gray-3);outline-offset:var(--sl-outline-offset-inside);overflow-wrap:initial;align-items:center;gap:.5rem;padding:.275rem 1.25rem;text-decoration:none;display:flex}.tab:where(.astro-scn3uvmv) :where(.astro-scn3uvmv)[role=tab][aria-selected=true]{--sl-tab-color-border:var(--sl-color-text-accent);color:var(--sl-color-white);font-weight:600}.tablist-wrapper:where(.astro-scn3uvmv)~[role=tabpanel]{margin-top:1rem}}
+</style><style>@layer starlight.components{.card:where(.astro-oag6qnet){--sl-card-border:var(--sl-color-purple);--sl-card-bg:var(--sl-color-purple-low);border:1px solid var(--sl-color-gray-5);background-color:var(--sl-color-black);flex-direction:column;gap:clamp(.5rem,.125rem + 1vw,1rem);padding:clamp(1rem,.125rem + 3vw,2.5rem)}.card:where(.astro-oag6qnet):nth-child(4n+1){--sl-card-border:var(--sl-color-orange);--sl-card-bg:var(--sl-color-orange-low)}.card:where(.astro-oag6qnet):nth-child(4n+3){--sl-card-border:var(--sl-color-green);--sl-card-bg:var(--sl-color-green-low)}.card:where(.astro-oag6qnet):nth-child(4n+4){--sl-card-border:var(--sl-color-red);--sl-card-bg:var(--sl-color-red-low)}.card:where(.astro-oag6qnet):nth-child(4n+5){--sl-card-border:var(--sl-color-blue);--sl-card-bg:var(--sl-color-blue-low)}.title:where(.astro-oag6qnet){font-weight:600;font-size:var(--sl-text-h4);color:var(--sl-color-white);line-height:var(--sl-line-height-headings);align-items:center;gap:1rem}.card:where(.astro-oag6qnet) .icon:where(.astro-oag6qnet){border:1px solid var(--sl-card-border);background-color:var(--sl-card-bg);border-radius:.25rem;flex-shrink:0;padding:.2em}.card:where(.astro-oag6qnet) .body:where(.astro-oag6qnet){font-size:clamp(var(--sl-text-sm), calc(.5rem + 1vw), var(--sl-text-body));margin:0}}
+</style></head><body class="astro-g5ptsecz"><a class="sl-skip-link astro-qb7clj6f" href="#_top">Skip to content</a><div class="page sl-flex astro-yntsjkba"><header class="header astro-yntsjkba"><div class="header astro-by6fddyj"><div class="title-wrapper sl-flex astro-by6fddyj"><a href="/" class="site-title sl-flex astro-6rvad3va"><img class="light:sl-hidden print:hidden astro-6rvad3va" alt src="/_astro/joust-emblem-on-dark.jQuOM2iw.svg" width="570" height="836"><img class="dark:sl-hidden print:block astro-6rvad3va" alt src="/_astro/joust-emblem.BEwrtsDr.svg" width="570" height="836"><span class="astro-6rvad3va" translate="no">JOUST</span></a></div><div class="sl-flex print:hidden astro-by6fddyj"><site-search class="astro-by6fddyj astro-b5kgnn7o" data-translations="{&quot;placeholder&quot;:&quot;Search&quot;}"><button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-b5kgnn7o"><svg aria-hidden="true" class="astro-b5kgnn7o astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg><span class="sl-hidden md:sl-block astro-b5kgnn7o" aria-hidden="true">Search</span><kbd class="sl-hidden md:sl-flex astro-b5kgnn7o" style="display: none"><kbd class="astro-b5kgnn7o">Ctrl</kbd><kbd class="astro-b5kgnn7o">K</kbd></kbd></button><dialog style="padding: 0" aria-label="Search" class="astro-b5kgnn7o"><div class="dialog-frame sl-flex astro-b5kgnn7o"><button data-close-modal class="sl-flex md:sl-hidden astro-b5kgnn7o">Cancel</button><div class="search-container astro-b5kgnn7o"><div id="starlight__search" class="astro-b5kgnn7o"></div></div></div></dialog></site-search><script>
+	(() => {
+		const openBtn = document.querySelector('button[data-open-modal]');
+		const shortcut = openBtn?.querySelector('kbd');
+		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
+		const platformKey = shortcut.querySelector('kbd');
+		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+			platformKey.textContent = '⌘';
+			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
+		}
+		shortcut.style.display = '';
+	})();
+</script><script type="module" src="/_astro/Search.astro_astro_type_script_index_0_lang.CibB10mu.js"></script></div><div class="sl-hidden md:sl-flex print:hidden right-group astro-by6fddyj"><div class="sl-flex social-icons astro-by6fddyj"><a href="https://github.com/bloxbean/joust" rel="me" class="sl-flex astro-n2mnl6yq"><span class="sr-only astro-n2mnl6yq">GitHub</span><svg aria-hidden="true" class="astro-n2mnl6yq astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-2z5xp7gb"><span class="sr-only astro-2z5xp7gb">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-2z5xp7gb"><option value="dark" class="astro-2z5xp7gb">Dark</option><option value="light" class="astro-2z5xp7gb">Light</option><option value="auto" selected class="astro-2z5xp7gb">Auto</option></select><svg aria-hidden="true" class="icon caret astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script><script type="module">var e=`starlight-theme`,t=e=>e===`auto`||e===`dark`||e===`light`?e:`auto`,n=()=>t(typeof localStorage<`u`&&localStorage.getItem(e));function r(t){typeof localStorage<`u`&&localStorage.setItem(e,t===`light`||t===`dark`?t:``)}var i=()=>matchMedia(`(prefers-color-scheme: light)`).matches?`light`:`dark`;function a(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e===`auto`?i():e,r(e)}matchMedia(`(prefers-color-scheme: light)`).addEventListener(`change`,()=>{n()===`auto`&&a(`auto`)});var o=class extends HTMLElement{constructor(){super(),a(n()),this.querySelector(`select`)?.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&a(t(e.currentTarget.value))})}};customElements.define(`starlight-theme-select`,o);</script><script type="module">var e=class extends HTMLElement{constructor(){super();let e=this.querySelector(`select`);e&&(e.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=e.currentTarget.value)}),window.addEventListener(`pageshow`,t=>{if(!t.persisted)return;let n=e.querySelector(`option[selected]`)?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}};customElements.define(`starlight-lang-select`,e);</script></div></div></header><nav class="sidebar print:hidden astro-yntsjkba" aria-label="Main"><button popovertarget="starlight__sidebar" class="sl-menu-button sl-flex md:sl-hidden print:hidden astro-r2osgdlg"><svg aria-hidden="true" class="open-menu astro-r2osgdlg astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg><svg aria-hidden="true" class="close-menu astro-r2osgdlg astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg><span class="sr-only astro-r2osgdlg">Menu</span></button><script type="module">var e=class extends HTMLElement{constructor(){super();let e=matchMedia(`(min-width: 50em)`),t=()=>{this.popover=e.matches?null:`auto`};t(),e.addEventListener(`change`,()=>t()),this.addEventListener(`toggle`,({newState:e})=>this.trapFocus(e===`open`))}trapFocus(e){document.querySelectorAll(`.main-frame, .sl-skip-link`).forEach(t=>{t.toggleAttribute(`inert`,e)})}};customElements.define(`sl-sidebar-pane`,e);</script><sl-sidebar-pane popover id="starlight__sidebar" class="sidebar-pane astro-yntsjkba"><div class="sidebar-content sl-flex astro-yntsjkba"><sl-sidebar-state-persist data-hash="0uwcge0" class="astro-ipdry5cl"><script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script><ul class="top-level astro-rmhv4bp6"><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Start here</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="0"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/start/why-joust/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Why JOUST</span></a></li><li class="astro-rmhv4bp6"><a href="/start/how-it-works/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">How JOUST works</span></a></li><li class="astro-rmhv4bp6"><a href="/start/quick-start-java/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Quick start: Java</span></a></li><li class="astro-rmhv4bp6"><a href="/start/first-contract/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Your first contract</span></a></li><li class="astro-rmhv4bp6"><a href="/start/quick-start-npm/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Quick start: JavaScript &amp; TypeScript</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Tutorials: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="1"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/tutorials/vault/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Vault: deposits, time and payouts</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/escrow-crowdfund/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Escrow and crowdfunding</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/token-merklemap/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Token balances in a MerkleMap</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/bank-owned-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Bank: owned objects</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/pool-batched-intents/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Pool: batched intents</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/dex-assets/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">DEX: native assets and LP tokens</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/multisig-treasury/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Multisig treasury</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/oracle-composition/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Oracle and composition</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/staked-vault/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Staked vault and governance</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/upgrades/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Upgrading a contract</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Tutorials: JavaScript</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="2"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/tutorials/counter-dapp/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">A counter dApp in the browser</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/deploy-preview/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Deploy to preview</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Writing contracts</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="3"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/contracts/state-and-lifecycle/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">State and lifecycle</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/ctx-and-funds/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Ctx, funds and payouts</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/authorization/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Authorization</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/time/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Time</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/require-and-errors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Require and errors</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/params-invariants-events/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Params, invariants and events</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/merklemaps/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">MerkleMaps</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/owned-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Owned objects</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/keyed-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Keyed objects</span><span class="sl-badge note small  astro-rmhv4bp6 astro-f4zorn72">Next release</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/batched-intents/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Batched intents</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/assets-mints-sends/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Native assets, mints and sends</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/reads-and-composition/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Reads and composition</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/deposits/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Deposits</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/staking-and-governance/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Staking and governance</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/upgrades/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Upgrades and migration</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/fees-and-size/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Fees and script size</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/security-model/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Security model</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/testing/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Testing</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Building apps: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="4"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/apps/java-runtime/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The Java off-chain runtime</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Building apps: JavaScript</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="5"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/apps/javascript-clients/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">JavaScript clients</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/wallets/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Wallets</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/pages/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Pages: worker, Vite, static builds</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/cli-and-projects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The joust CLI and projects</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/networks-and-providers/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Networks and chain providers</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/keyed-objects-js/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Keyed objects in JavaScript</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/map-mirrors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">MerkleMap mirrors</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Languages</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="6"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/languages/java/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Java</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Preview</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc-reference/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc reference</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc-std/" aria-current="page" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc standard library</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/typescript/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">TypeScript</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/editors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Editors</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="7"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/annotations/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Annotations</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/state-api/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">State API (julc-state-api)</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/java-runtime-api/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Java runtime API</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference: JavaScript</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="8"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/state-client/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/state-client</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/joust-runtime/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/joust-runtime</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/joust-cli/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/joust (CLI, Vite)</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/config/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">joust.config.json</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="9"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/description-format/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Contract description</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/examples/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Examples</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/troubleshooting/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Troubleshooting</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/glossary/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Glossary</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">AI</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="10"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/ai/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Using JOUST with AI</span></a></li><li class="astro-rmhv4bp6"><a href="/ai/starter-pack/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">AI starter pack</span></a></li><li class="astro-rmhv4bp6"><a href="/llms.txt" class="astro-rmhv4bp6" target="_blank"><span class="astro-rmhv4bp6">llms.txt</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Project</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="11"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/project/status-and-roadmap/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Status and roadmap</span></a></li><li class="astro-rmhv4bp6"><a href="/project/architecture-decisions/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Architecture decisions</span></a></li></ul></details></li></ul><script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script></sl-sidebar-state-persist><div class="md:sl-hidden"><div class="mobile-preferences sl-flex astro-p4azlveh"><div class="social-icons astro-p4azlveh"><a href="https://github.com/bloxbean/joust" rel="me" class="sl-flex astro-n2mnl6yq"><span class="sr-only astro-n2mnl6yq">GitHub</span><svg aria-hidden="true" class="astro-n2mnl6yq astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-2z5xp7gb"><span class="sr-only astro-2z5xp7gb">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-2z5xp7gb"><option value="dark" class="astro-2z5xp7gb">Dark</option><option value="light" class="astro-2z5xp7gb">Light</option><option value="auto" selected class="astro-2z5xp7gb">Auto</option></select><svg aria-hidden="true" class="icon caret astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script></div></div></div></sl-sidebar-pane></nav><div class="main-frame astro-yntsjkba"><script type="module">var e=document.getElementById(`starlight__sidebar`),t=e?.querySelector(`sl-sidebar-state-persist`),n=`sl-sidebar-state`,r=()=>{let r=[],i=t?.dataset.hash||``;try{let e=sessionStorage.getItem(n),t=JSON.parse(e||`{}`);Array.isArray(t.open)&&t.hash===i&&(r=t.open)}catch{}return{hash:i,open:r,scroll:e?.scrollTop||0}},i=e=>{try{sessionStorage.setItem(n,JSON.stringify(e))}catch{}},a=()=>i(r()),o=(e,t)=>{let n=r();n.open[t]=e,i(n)};t?.addEventListener(`click`,e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`summary`)?.closest(`details`);if(!t)return;let n=t.querySelector(`sl-sidebar-restore`),r=parseInt(n?.dataset.index||``);isNaN(r)||o(!t.open,r)}),addEventListener(`visibilitychange`,()=>{document.visibilityState===`hidden`&&a()});</script><div class="lg:sl-flex astro-lrzkfocr"><aside class="right-sidebar-container print:hidden astro-lrzkfocr"><div class="right-sidebar astro-lrzkfocr"><div class="lg:sl-hidden astro-qok35upx"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-66cqc7ze"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-66cqc7ze"><details id="starlight__mobile-toc" class="astro-66cqc7ze"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-66cqc7ze"><span class="toggle sl-flex astro-66cqc7ze">On this page<svg aria-hidden="true" class="caret astro-66cqc7ze astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-66cqc7ze"></span></summary><div class="dropdown astro-66cqc7ze"><ul class="isMobile astro-jugkfwgx" style="--depth: 0;"><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#_top" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Overview</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#how-a-row-is-bound" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">How a row is bound</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-prelude" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The prelude</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-modules" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The modules</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdcrypto" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/crypto</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdbytes" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/bytes</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdmath" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/math</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdbits" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/bits</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdlist" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/list</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdvalue" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/value</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdaddress" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/address</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdcerts" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/certs</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdtime" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/time</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#not-bound" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Not bound</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#next-steps" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Next steps</span></a></li></ul></div></details></nav></mobile-starlight-toc><script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C3fM4Kra.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-qok35upx"><div class="sl-container astro-qok35upx"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-jugkfwgx" style="--depth: 0;"><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#_top" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Overview</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#how-a-row-is-bound" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">How a row is bound</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-prelude" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The prelude</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-modules" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The modules</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdcrypto" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/crypto</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdbytes" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/bytes</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdmath" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/math</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdbits" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/bits</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdlist" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/list</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdvalue" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/value</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdaddress" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/address</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdcerts" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/certs</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#stdtime" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">std/time</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#not-bound" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Not bound</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#next-steps" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Next steps</span></a></li></ul></nav></starlight-toc><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.BpJaGz7G.js"></script></div></div></div></aside><div class="main-pane astro-lrzkfocr"><main data-pagefind-body class="astro-g5ptsecz" lang="en" dir="ltr"><div class="content-panel astro-a7po4psb"><div class="sl-container astro-a7po4psb"><h1 id="_top" class="astro-bebwqqxs">.jsc standard library</h1></div></div><div class="content-panel astro-a7po4psb"><div class="sl-container astro-a7po4psb"><div class="sl-markdown-content">
+<p>A <code dir="auto">.jsc</code> contract calls three kinds of functions: the <strong>prelude</strong> (always in scope), the <strong><code dir="auto">std</code> modules</strong> (imported
+by name), and its own <code dir="auto">fn</code>s. List and map methods (<code dir="auto">xs.fold</code>, <code dir="auto">m.get</code>) are on the
+<a href="/languages/jsc-reference/#lists-maps-and-options">language reference</a>.</p>
+<div class="expressive-code"><link rel="stylesheet" href="/_astro/ec.tpect.css"><script type="module" src="/_astro/ec.0vx5m.js"></script><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="jsc"><code><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">import</span><span style="--0:#E6EDF3;--1:#24292E"> { blake2b_224 } </span><span style="--0:#FF7B72;--1:#BF3441">from</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">"std/crypto"</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">import</span><span style="--0:#E6EDF3;--1:#24292E"> { slice, length } </span><span style="--0:#FF7B72;--1:#BF3441">from</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">"std/bytes"</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="import { blake2b_224 } from &quot;std/crypto&quot;import { slice, length } from &quot;std/bytes&quot;"><div></div></button></div></figure></div>
+<p>An import names functions of one module. A function used without its import is an error (<code dir="auto">JSC0704</code>, which names the
+module to import it from); a name imported from the wrong module is <code dir="auto">JSC0702</code>; a <code dir="auto">fn</code> with an imported name is
+<code dir="auto">JSC0703</code>.</p>
+<aside aria-label="A preview" class="starlight-aside starlight-aside--note"><p class="starlight-aside__title" aria-hidden="true"><svg aria-hidden="true" class="starlight-aside__icon astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 11a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0v-4a1 1 0 0 0-1-1Zm.38-3.92a1 1 0 0 0-.76 0 1 1 0 0 0-.33.21 1.15 1.15 0 0 0-.21.33 1 1 0 0 0 .21 1.09c.097.088.209.16.33.21A1 1 0 0 0 13 8a1.05 1.05 0 0 0-.29-.71 1 1 0 0 0-.33-.21ZM12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16.001A8 8 0 0 1 12 20Z"/></svg>A preview</p><div class="starlight-aside__content"><p><code dir="auto">.jsc</code> is a preview (<a href="https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md">ADR-0018</a>).</p></div></aside>
+<div class="sl-heading-wrapper level-h2"><h2 id="how-a-row-is-bound">How a row is bound</h2><a class="sl-anchor-link" href="#how-a-row-is-bound"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “How a row is bound”</span></a></div>
+<p>Each <code dir="auto">std</code> function is a row of a binding table
+(<a href="https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/Std.java"><code dir="auto">Std.java</code></a>,
+ADR-0018 D8): a <code dir="auto">.jsc</code> signature, a Java target, a conversion policy and a domain. The generated Java calls the target,
+so the same function runs on the JVM and, compiled by JuLC, on chain.</p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>direct</td>
+<td>Every argument and the result have the same Java type on both sides (<code dir="auto">byte[]</code>, <code dir="auto">boolean</code>, <code dir="auto">BigInteger</code>)</td>
+</tr>
+<tr>
+<td>long result</td>
+<td>The target returns a <code dir="auto">long</code>, which goes straight into <code dir="auto">BigInteger.valueOf</code>; no <code dir="auto">Int</code> argument is narrowed</td>
+</tr>
+<tr>
+<td>adapter</td>
+<td>The target is a JOUST API adapter (<code dir="auto">BytesAdapter</code>, <code dir="auto">MathAdapter</code>, <code dir="auto">BitsAdapter</code>, <code dir="auto">CryptoAdapter</code> in <code dir="auto">julc-state-api</code>) that takes <code dir="auto">BigInteger</code>s, checks the domain with a <code dir="auto">require</code> on both sides, then narrows and calls JuLC’s stdlib</td>
+</tr>
+<tr>
+<td>generated</td>
+<td>No library target: the lowering generates the code, and the reference interpreter implements it independently</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Domain:</strong> the arguments a function accepts. Outside it the call fails, on the JVM before anything is submitted and on
+chain alike. <strong>A time value as an argument:</strong> whether a value that depends on <code dir="auto">validFrom</code> or <code dir="auto">validTo</code> may reach the
+function. Only functions that are total and whose cost does not depend on the window accept one
+(<a href="/languages/jsc-reference/#time-d11">the time rule</a>); passing a time value to any other is an error at the call
+(<code dir="auto">JSC0509</code>).</p>
+<p>A test (<code dir="auto">JscV2BindingTest</code> in <code dir="auto">julc-state-toolchain</code>) resolves every row’s Java target with javac and compares it with
+the table, so a JuLC upgrade that renames or retypes a function fails JOUST’s build, never your contract. The tables
+below are generated from the same table and checked by <code dir="auto">JscV2StdDocTest</code>.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="the-prelude">The prelude</h2><a class="sl-anchor-link" href="#the-prelude"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The prelude”</span></a></div>
+<p>No import needed.</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">min</code>, <code dir="auto">max</code></td>
+<td><code dir="auto">min(Int, Int): Int</code></td>
+<td>The smaller or larger of two <code dir="auto">Int</code>s</td>
+</tr>
+<tr>
+<td><code dir="auto">abs</code></td>
+<td><code dir="auto">abs(Int): Int</code></td>
+<td>The absolute value</td>
+</tr>
+<tr>
+<td><code dir="auto">utf8</code></td>
+<td><code dir="auto">utf8("text"): Bytes</code></td>
+<td>The UTF-8 bytes of a string literal (the only place a string is a value)</td>
+</tr>
+<tr>
+<td><code dir="auto">asKey</code></td>
+<td><code dir="auto">asKey(Bytes): Key</code></td>
+<td>A checked conversion to a 28-byte key hash: a literal is checked when the file compiles (<code dir="auto">JSC0323</code>), any other value at run time. A time value cannot reach it (<code dir="auto">JSC0507</code>)</td>
+</tr>
+<tr>
+<td><code dir="auto">asHash</code></td>
+<td><code dir="auto">asHash(Bytes): Hash</code></td>
+<td>The same, to a 28-byte script hash or policy id</td>
+</tr>
+<tr>
+<td><code dir="auto">range</code></td>
+<td><code dir="auto">range(a, b)</code></td>
+<td>The <code dir="auto">Int</code>s from <code dir="auto">a</code> up to <code dir="auto">b</code>, exclusive; empty when <code dir="auto">b &lt;= a</code>. Only the receiver of <code dir="auto">any</code>, <code dir="auto">all</code>, <code dir="auto">fold</code>, <code dir="auto">filter</code> or <code dir="auto">map</code>, or the list of a <code dir="auto">for</code> loop: no list is built (<code dir="auto">JSC1009</code>). A bound cannot be a time value (<code dir="auto">JSC0516</code>)</td>
+</tr>
+<tr>
+<td><code dir="auto">Some</code></td>
+<td><code dir="auto">Some(x): Option&lt;T&gt;</code></td>
+<td>A present <code dir="auto">Option</code>; <code dir="auto">None</code> is the absent one. <code dir="auto">Some(None)</code> is refused (<code dir="auto">JSC0322</code>)</td>
+</tr>
+<tr>
+<td><code dir="auto">after</code>, <code dir="auto">before</code></td>
+<td><code dir="auto">after(Int): Bool</code></td>
+<td>The whole validity window is after (before) the time. Only at the top of a <code dir="auto">require</code>, alone or under <code dir="auto">&amp;&amp;</code> or <code dir="auto">||</code> (<a href="/languages/jsc-reference/#time-d11">time</a>). Also importable from <code dir="auto">std/time</code></td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h2"><h2 id="the-modules">The modules</h2><a class="sl-anchor-link" href="#the-modules"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The modules”</span></a></div>
+<p><code dir="auto">std/list</code> functions are generic: <code dir="auto">T</code> is the element type of the list they get, and <code dir="auto">indexOf</code> compares with the
+structural equality of <code dir="auto">==</code>.</p>
+
+<div class="sl-heading-wrapper level-h3"><h3 id="stdcrypto"><code dir="auto">std/crypto</code></h3><a class="sl-anchor-link" href="#stdcrypto"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “std/crypto”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Domain</th>
+<th>A time value as an argument</th>
+<th>Target (policy)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">sha2_256</code></td>
+<td><code dir="auto">sha2_256(Bytes): Bytes</code></td>
+<td>any bytes</td>
+<td>yes</td>
+<td><code dir="auto">CryptoLib.sha2_256</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">sha3_256</code></td>
+<td><code dir="auto">sha3_256(Bytes): Bytes</code></td>
+<td>any bytes</td>
+<td>yes</td>
+<td><code dir="auto">CryptoLib.sha3_256</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">blake2b_256</code></td>
+<td><code dir="auto">blake2b_256(Bytes): Bytes</code></td>
+<td>any bytes</td>
+<td>yes</td>
+<td><code dir="auto">CryptoLib.blake2b_256</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">blake2b_224</code></td>
+<td><code dir="auto">blake2b_224(Bytes): Bytes</code></td>
+<td>any bytes</td>
+<td>yes</td>
+<td><code dir="auto">CryptoLib.blake2b_224</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">verifyEd25519</code></td>
+<td><code dir="auto">verifyEd25519(Bytes, Bytes, Bytes): Bool</code></td>
+<td>key of 32 bytes and signature of 64 bytes, else a failure (where the builtin fails); then true or false by libsodium’s rules: a small-order key or R, a non-canonical key or S, a key off the curve are false</td>
+<td>no</td>
+<td><code dir="auto">CryptoAdapter.verifyEd25519</code> (adapter)</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="stdbytes"><code dir="auto">std/bytes</code></h3><a class="sl-anchor-link" href="#stdbytes"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “std/bytes”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Domain</th>
+<th>A time value as an argument</th>
+<th>Target (policy)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">length</code></td>
+<td><code dir="auto">length(Bytes): Int</code></td>
+<td>any bytes; the result is in [0, 2^63)</td>
+<td>yes</td>
+<td><code dir="auto">ByteStringLib.length</code> (long result)</td>
+</tr>
+<tr>
+<td><code dir="auto">concat</code></td>
+<td><code dir="auto">concat(Bytes, Bytes): Bytes</code></td>
+<td>any bytes</td>
+<td>yes</td>
+<td><code dir="auto">ByteStringLib.append</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">slice</code></td>
+<td><code dir="auto">slice(Bytes, Int, Int): Bytes</code></td>
+<td>start and length in [0, 2^31), else a failure; the result is clamped to b as the builtin does</td>
+<td>no</td>
+<td><code dir="auto">BytesAdapter.slice</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">take</code></td>
+<td><code dir="auto">take(Bytes, Int): Bytes</code></td>
+<td>n in [0, 2^31), else a failure; at most length(b) bytes</td>
+<td>no</td>
+<td><code dir="auto">BytesAdapter.take</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">drop</code></td>
+<td><code dir="auto">drop(Bytes, Int): Bytes</code></td>
+<td>n in [0, 2^31), else a failure (F18: the stdlib’s drop wraps on the JVM); empty past the end</td>
+<td>no</td>
+<td><code dir="auto">BytesAdapter.drop</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">byteAt</code></td>
+<td><code dir="auto">byteAt(Bytes, Int): Int</code></td>
+<td>index in [0, length(b)) and below 2^31, else a failure; the result is in [0, 255]</td>
+<td>no</td>
+<td><code dir="auto">BytesAdapter.at</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">toInt</code></td>
+<td><code dir="auto">toInt(Bytes): Int</code></td>
+<td>any bytes, read as an unsigned big-endian integer (empty is 0)</td>
+<td>yes</td>
+<td><code dir="auto">ByteStringLib.byteStringToInteger</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">toHex</code></td>
+<td><code dir="auto">toHex(Bytes): Bytes</code></td>
+<td>any bytes; lower-case ASCII hex, two characters a byte</td>
+<td>yes</td>
+<td><code dir="auto">ByteStringLib.toHex</code> (direct)</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="stdmath"><code dir="auto">std/math</code></h3><a class="sl-anchor-link" href="#stdmath"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “std/math”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Domain</th>
+<th>A time value as an argument</th>
+<th>Target (policy)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">div</code></td>
+<td><code dir="auto">div(Int, Int): Int</code></td>
+<td>b != 0, else a failure; rounds toward negative infinity</td>
+<td>no</td>
+<td><code dir="auto">MathAdapter.div</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">mod</code></td>
+<td><code dir="auto">mod(Int, Int): Int</code></td>
+<td>b != 0, else a failure; the result has b’s sign</td>
+<td>no</td>
+<td><code dir="auto">MathAdapter.mod</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">pow</code></td>
+<td><code dir="auto">pow(Int, Int): Int</code></td>
+<td>exponent in [0, 1024], else a failure (the cost grows with it)</td>
+<td>no</td>
+<td><code dir="auto">MathAdapter.pow</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">expMod</code></td>
+<td><code dir="auto">expMod(Int, Int, Int): Int</code></td>
+<td>exponent &gt;= 0 and modulus &gt; 0, else a failure; the result is in [0, modulus); the ExpModInteger builtin of protocol version 11 (CIP-109), which the toolchain’s PLUTUS_V3_PV11 target provides</td>
+<td>no</td>
+<td><code dir="auto">MathAdapter.expMod</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">sign</code></td>
+<td><code dir="auto">sign(Int): Int</code></td>
+<td>any Int; -1, 0 or 1</td>
+<td>yes</td>
+<td><code dir="auto">MathLib.sign</code> (direct)</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="stdbits"><code dir="auto">std/bits</code></h3><a class="sl-anchor-link" href="#stdbits"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “std/bits”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Domain</th>
+<th>A time value as an argument</th>
+<th>Target (policy)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">andBytes</code></td>
+<td><code dir="auto">andBytes(Bool, Bytes, Bytes): Bytes</code></td>
+<td>any bytes; with pad the result is as long as the longer, else as the shorter</td>
+<td>yes</td>
+<td><code dir="auto">BitwiseLib.andByteString</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">orBytes</code></td>
+<td><code dir="auto">orBytes(Bool, Bytes, Bytes): Bytes</code></td>
+<td>any bytes; with pad the result is as long as the longer, else as the shorter</td>
+<td>yes</td>
+<td><code dir="auto">BitwiseLib.orByteString</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">xorBytes</code></td>
+<td><code dir="auto">xorBytes(Bool, Bytes, Bytes): Bytes</code></td>
+<td>any bytes; with pad the result is as long as the longer, else as the shorter</td>
+<td>yes</td>
+<td><code dir="auto">BitwiseLib.xorByteString</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">complement</code></td>
+<td><code dir="auto">complement(Bytes): Bytes</code></td>
+<td>any bytes</td>
+<td>yes</td>
+<td><code dir="auto">BitwiseLib.complementByteString</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">readBit</code></td>
+<td><code dir="auto">readBit(Bytes, Int): Bool</code></td>
+<td>index in [0, 8 * length(b)), else a failure; bit 0 is the last byte’s lowest</td>
+<td>no</td>
+<td><code dir="auto">BitsAdapter.readBit</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">shift</code></td>
+<td><code dir="auto">shift(Bytes, Int): Bytes</code></td>
+<td>n in (-2^31, 2^31), else a failure; positive shifts left, zero bits fill</td>
+<td>no</td>
+<td><code dir="auto">BitsAdapter.shift</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">rotate</code></td>
+<td><code dir="auto">rotate(Bytes, Int): Bytes</code></td>
+<td>n in (-2^31, 2^31), else a failure; positive rotates left</td>
+<td>no</td>
+<td><code dir="auto">BitsAdapter.rotate</code> (adapter)</td>
+</tr>
+<tr>
+<td><code dir="auto">countSetBits</code></td>
+<td><code dir="auto">countSetBits(Bytes): Int</code></td>
+<td>any bytes</td>
+<td>yes</td>
+<td><code dir="auto">BitwiseLib.countSetBits</code> (long result)</td>
+</tr>
+<tr>
+<td><code dir="auto">findFirstSetBit</code></td>
+<td><code dir="auto">findFirstSetBit(Bytes): Int</code></td>
+<td>any bytes; -1 when no bit is set</td>
+<td>yes</td>
+<td><code dir="auto">BitwiseLib.findFirstSetBit</code> (long result)</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="stdlist"><code dir="auto">std/list</code></h3><a class="sl-anchor-link" href="#stdlist"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “std/list”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Domain</th>
+<th>A time value as an argument</th>
+<th>Target (policy)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">last</code></td>
+<td><code dir="auto">last(List&lt;T&gt;): Option&lt;T&gt;</code></td>
+<td>any list; None when empty</td>
+<td>yes</td>
+<td>none (generated)</td>
+</tr>
+<tr>
+<td><code dir="auto">nth</code></td>
+<td><code dir="auto">nth(List&lt;T&gt;, Int): Option&lt;T&gt;</code></td>
+<td>index &gt;= 0, else a failure; None past the end</td>
+<td>no</td>
+<td>none (generated)</td>
+</tr>
+<tr>
+<td><code dir="auto">indexOf</code></td>
+<td><code dir="auto">indexOf(List&lt;T&gt;, T): Option&lt;Int&gt;</code></td>
+<td>any list and value (structural equality, D6); the first index, or None</td>
+<td>yes</td>
+<td>none (generated)</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="stdvalue"><code dir="auto">std/value</code></h3><a class="sl-anchor-link" href="#stdvalue"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “std/value”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Domain</th>
+<th>A time value as an argument</th>
+<th>Target (policy)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">isEmpty</code></td>
+<td><code dir="auto">isEmpty(Value): Bool</code></td>
+<td>any value; true when it holds nothing</td>
+<td>yes</td>
+<td><code dir="auto">ValueAdapter.isEmpty</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">withoutLovelace</code></td>
+<td><code dir="auto">withoutLovelace(Value): Value</code></td>
+<td>any value; its native assets</td>
+<td>yes</td>
+<td><code dir="auto">ValueAdapter.withoutLovelace</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">scale</code></td>
+<td><code dir="auto">scale(Int, Value): Value</code></td>
+<td>every product within the 128-bit range, else a failure (the ledger’s scaleValue); 0 gives the empty value</td>
+<td>no</td>
+<td><code dir="auto">ValueAdapter.scale</code> (adapter)</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="stdaddress"><code dir="auto">std/address</code></h3><a class="sl-anchor-link" href="#stdaddress"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “std/address”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Domain</th>
+<th>A time value as an argument</th>
+<th>Target (policy)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">paymentKey</code></td>
+<td><code dir="auto">paymentKey(Address): Option&lt;Key&gt;</code></td>
+<td>any address; the key it is paid to, or None for a script’s</td>
+<td>no</td>
+<td><code dir="auto">AddressAdapter.paymentKey</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">paymentScript</code></td>
+<td><code dir="auto">paymentScript(Address): Option&lt;Hash&gt;</code></td>
+<td>any address; the script it is paid to, or None for a key’s</td>
+<td>no</td>
+<td><code dir="auto">AddressAdapter.paymentScript</code> (direct)</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="stdcerts"><code dir="auto">std/certs</code></h3><a class="sl-anchor-link" href="#stdcerts"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “std/certs”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Domain</th>
+<th>A time value as an argument</th>
+<th>Target (policy)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">isRegistration</code></td>
+<td><code dir="auto">isRegistration(TxCert): Bool</code></td>
+<td>any certificate; true for RegStaking (with or without a deposit), else false</td>
+<td>yes</td>
+<td><code dir="auto">Certs.isRegistration</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">delegatesOnlyTo</code></td>
+<td><code dir="auto">delegatesOnlyTo(TxCert, Bytes): Bool</code></td>
+<td>any certificate and pool; true for DelegStaking or RegDeleg whose delegatee is exactly Stake of that pool (a StakeVote delegation is false), else false</td>
+<td>yes</td>
+<td><code dir="auto">Certs.delegatesOnlyTo</code> (direct)</td>
+</tr>
+<tr>
+<td><code dir="auto">isDRepLifecycle</code></td>
+<td><code dir="auto">isDRepLifecycle(TxCert): Bool</code></td>
+<td>any certificate; true for RegDRep or UpdateDRep, else false</td>
+<td>yes</td>
+<td><code dir="auto">Certs.isDRepLifecycle</code> (direct)</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="stdtime"><code dir="auto">std/time</code></h3><a class="sl-anchor-link" href="#stdtime"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “std/time”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Domain</th>
+<th>A time value as an argument</th>
+<th>Target (policy)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">elapsedSince</code></td>
+<td><code dir="auto">elapsedSince(Int): Int</code></td>
+<td>max(0, validFrom - t): a lower bound of the time elapsed since t</td>
+<td>yes</td>
+<td>none (generated)</td>
+</tr>
+<tr>
+<td><code dir="auto">elapsedSinceAtMost</code></td>
+<td><code dir="auto">elapsedSinceAtMost(Int): Int</code></td>
+<td>max(0, validTo - t): an upper bound of the time elapsed since t</td>
+<td>yes</td>
+<td>none (generated)</td>
+</tr>
+<tr>
+<td><code dir="auto">windowStart</code></td>
+<td><code dir="auto">windowStart(): Int</code></td>
+<td>validFrom: the window’s start, to store</td>
+<td>yes</td>
+<td>none (generated)</td>
+</tr>
+<tr>
+<td><code dir="auto">windowEnd</code></td>
+<td><code dir="auto">windowEnd(): Int</code></td>
+<td>validTo: the window’s end, to store</td>
+<td>yes</td>
+<td>none (generated)</td>
+</tr>
+</tbody>
+</table>
+
+<div class="sl-heading-wrapper level-h2"><h2 id="not-bound">Not bound</h2><a class="sl-anchor-link" href="#not-bound"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Not bound”</span></a></div>
+<ul>
+<li><code dir="auto">keccak_256</code>, ECDSA and Schnorr signatures, RIPEMD-160: the JVM’s crypto provider lacks them, and a function is
+bound only when every runtime fails exactly where the ledger’s builtin fails (ADR-0018 D8, F18).</li>
+<li><code dir="auto">integerToByteString</code> and <code dir="auto">writeBits</code>: their domains need checks <code dir="auto">.jsc</code> does not have yet.</li>
+<li>Functions over raw <code dir="auto">PlutusData</code>, and JuLC’s transaction libraries (<code dir="auto">ContextsLib</code>, <code dir="auto">OutputLib</code>): the processor owns
+the transaction checks.</li>
+</ul>
+<p>For anything else, write the contract, or that part of it, in <a href="/languages/java/">Java</a>.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="next-steps">Next steps</h2><a class="sl-anchor-link" href="#next-steps"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Next steps”</span></a></div>
+<div class="card-grid astro-7qmvx3iy"><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/languages/jsc/" class="astro-zaaezwya"><span class="title astro-zaaezwya">.jsc guide</span></a><span class="description astro-zaaezwya">The language, by example.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/languages/jsc-reference/" class="astro-zaaezwya"><span class="title astro-zaaezwya">.jsc reference</span></a><span class="description astro-zaaezwya">Types, operators, the time rule, the ABI manifest and diagnostics.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div></div></div><footer class="sl-flex astro-ddtxxk7k"><div class="meta sl-flex astro-ddtxxk7k"><a href="https://github.com/bloxbean/joust/edit/main/www/src/content/docs/languages/jsc-std.mdx" class="sl-flex print:hidden astro-qlekgd3o"><svg aria-hidden="true" class="astro-qlekgd3o astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.2em;"><path d="M22 7.24a1 1 0 0 0-.29-.71l-4.24-4.24a1 1 0 0 0-1.1-.22 1 1 0 0 0-.32.22l-2.83 2.83L2.29 16.05a1 1 0 0 0-.29.71V21a1 1 0 0 0 1 1h4.24a1 1 0 0 0 .76-.29l10.87-10.93L21.71 8c.1-.1.17-.2.22-.33a1 1 0 0 0 0-.24v-.14l.07-.05ZM6.83 20H4v-2.83l9.93-9.93 2.83 2.83L6.83 20ZM18.17 8.66l-2.83-2.83 1.42-1.41 2.82 2.82-1.41 1.42Z"/></svg>Edit page</a></div><div class="pagination-links print:hidden astro-b5raizh3" dir="ltr"><a href="/languages/jsc-reference/" rel="prev" class="astro-b5raizh3"><svg aria-hidden="true" class="astro-b5raizh3 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg><span class="astro-b5raizh3">Previous<br class="astro-b5raizh3"><span class="link-title astro-b5raizh3">.jsc reference</span></span></a><a href="/languages/typescript/" rel="next" class="astro-b5raizh3"><svg aria-hidden="true" class="astro-b5raizh3 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg><span class="astro-b5raizh3">Next<br class="astro-b5raizh3"><span class="link-title astro-b5raizh3">TypeScript</span></span></a></div></footer></div></div></main></div></div></div></div></body></html>

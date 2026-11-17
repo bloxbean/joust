@@ -1,0 +1,858 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-g5ptsecz"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Examples | JOUST</title><link rel="canonical" href="https://joust.julc.dev/reference/examples/"/><link rel="sitemap" href="/sitemap-index.xml"/><link rel="shortcut icon" href="/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v7.3.8"/><meta name="generator" content="Starlight v0.42.10"/><meta property="og:title" content="Examples"/><meta property="og:type" content="article"/><meta property="og:url" content="https://joust.julc.dev/reference/examples/"/><meta property="og:locale" content="en"/><meta property="og:description" content="Every JOUST example contract, what it shows, its key annotations, how to run it, and the measured script sizes and execution budgets."/><meta property="og:site_name" content="JOUST"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="Every JOUST example contract, what it shows, its key annotations, how to run it, and the measured script sizes and execution budgets."/><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"><link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt"><meta property="og:image" content="https://joust.julc.dev/joust-knight.png"><meta property="og:image:alt" content="JOUST — State Contract Simplified"><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/_astro/print.C9eyqPGL.css" media="print"><link rel="stylesheet" href="/_astro/common.CKVVw45s.css"><style>@layer starlight.components{svg:where(.astro-hkc32dio){color:var(--sl-icon-color);font-size:var(--sl-icon-size,1em);width:1em;height:1em;overflow:visible}}
+</style><script type="module" src="/_astro/page.cNngjUgL.js"></script><style>@layer starlight.components{.card-grid:where(.astro-7qmvx3iy){grid-template-columns:100%;gap:1rem;display:grid}.card-grid:where(.astro-7qmvx3iy)>*{margin-top:0!important}@media (width>=50rem){.card-grid:where(.astro-7qmvx3iy){grid-template-columns:1fr 1fr;gap:1.5rem}.stagger:where(.astro-7qmvx3iy){--stagger-height:5rem;padding-bottom:var(--stagger-height)}.stagger:where(.astro-7qmvx3iy)>:nth-child(2n){transform:translateY(var(--stagger-height))}}}
+</style><style>@layer starlight.components{starlight-file-tree:where(.astro-a2hqddox){--x-space:1.5rem;--y-space:.125rem;--y-pad:0;border:1px solid var(--sl-color-gray-5);background-color:var(--sl-color-gray-6);font-size:var(--sl-text-xs);font-family:var(--__sl-font-mono);padding:1rem;display:block;overflow-x:auto}starlight-file-tree:where(.astro-a2hqddox) .directory>details{padding:0;background:0 0;border:0;padding-inline-start:var(--x-space)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary{padding:var(--y-pad) .625rem;color:var(--sl-color-white);border:0;max-width:100%;margin-inline-start:calc(-1 * var(--x-space));font-weight:400}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary::marker,starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary::-webkit-details-marker{color:var(--sl-color-gray-3)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover,starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover .tree-icon{cursor:pointer;color:var(--sl-color-text-accent);fill:currentColor}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover~ul{border-color:var(--sl-color-gray-4)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover .highlight .tree-icon{color:var(--sl-color-text-invert);fill:currentColor}starlight-file-tree:where(.astro-a2hqddox) ul{border-inline-start:1px solid var(--sl-color-gray-5);margin-inline-start:.5rem;padding:0;padding-inline-start:.125rem;list-style:none}starlight-file-tree:where(.astro-a2hqddox)>ul{border:0;margin:0;padding:0}starlight-file-tree:where(.astro-a2hqddox) li{margin:var(--y-space) 0;padding:var(--y-pad) 0}starlight-file-tree:where(.astro-a2hqddox) .file{color:var(--sl-color-white);margin-inline-start:calc(var(--x-space) - .125rem)}starlight-file-tree:where(.astro-a2hqddox) .tree-entry{flex-wrap:wrap;align-items:flex-start;max-width:calc(100% - 1rem);display:inline-flex}@media (width>=30em){starlight-file-tree:where(.astro-a2hqddox) .tree-entry{flex-wrap:nowrap}}starlight-file-tree:where(.astro-a2hqddox) .tree-entry>:first-child{flex-shrink:0}starlight-file-tree:where(.astro-a2hqddox) .empty{color:var(--sl-color-gray-3);padding-inline-start:.375rem}starlight-file-tree:where(.astro-a2hqddox) .comment{color:var(--sl-color-gray-3);min-width:12rem;max-width:24rem;padding-inline-start:1.625rem}starlight-file-tree:where(.astro-a2hqddox) .highlight{color:var(--sl-color-text-invert);background-color:var(--sl-color-text-accent);border-radius:.25rem;padding-inline-end:.5rem;display:inline-block}starlight-file-tree:where(.astro-a2hqddox) svg{fill:var(--sl-color-gray-3);vertical-align:middle;width:.875rem;height:.875rem;margin-inline:.25rem .375rem;display:inline;overflow:visible}starlight-file-tree:where(.astro-a2hqddox) .highlight svg.tree-icon{fill:currentColor}}
+</style><style>@layer starlight.components{.sl-link-card:where(.astro-zaaezwya){border:1px solid var(--sl-color-gray-5);box-shadow:var(--sl-shadow-sm);border-radius:.5rem;grid-template-columns:1fr auto;gap:.5rem;padding:1rem;display:grid;position:relative}a:where(.astro-zaaezwya){line-height:var(--sl-line-height-headings);text-decoration:none}a:where(.astro-zaaezwya):before{content:"";position:absolute;inset:0}.stack:where(.astro-zaaezwya){flex-direction:column;gap:.5rem}.title:where(.astro-zaaezwya){color:var(--sl-color-white);font-weight:600;font-size:var(--sl-text-lg)}.description:where(.astro-zaaezwya){color:var(--sl-color-gray-3);line-height:1.5}.icon:where(.astro-zaaezwya){color:var(--sl-color-gray-3)}.sl-link-card:where(.astro-zaaezwya):hover{background:var(--sl-color-gray-7,var(--sl-color-gray-6));border-color:var(--sl-color-gray-2)}.sl-link-card:where(.astro-zaaezwya):hover .icon:where(.astro-zaaezwya){color:var(--sl-color-white)}}
+</style><style>@layer starlight.components{.sl-steps{--bullet-size:calc(var(--sl-line-height) * 1rem);--bullet-margin:.375rem;counter-reset:steps-counter var(--sl-steps-start,0);padding-inline-start:0;list-style:none}.sl-steps>li{counter-increment:steps-counter;padding-inline-start:calc(var(--bullet-size) + 1rem);min-height:calc(var(--bullet-size) + var(--bullet-margin));padding-bottom:1px;position:relative}.sl-steps>li+li{margin-top:0}.sl-steps>li:before{content:counter(steps-counter);top:0;width:var(--bullet-size);height:var(--bullet-size);line-height:var(--bullet-size);font-size:var(--sl-text-xs);text-align:center;color:var(--sl-color-white);background-color:var(--sl-color-gray-6);box-shadow:inset 0 0 0 1px var(--sl-color-gray-5);border-radius:99rem;font-weight:600;position:absolute;inset-inline-start:0}.sl-steps>li:after{--guide-width:1px;content:"";top:calc(var(--bullet-size) + var(--bullet-margin));bottom:var(--bullet-margin);width:var(--guide-width);background-color:var(--sl-color-hairline-light);position:absolute;inset-inline-start:calc((var(--bullet-size) - var(--guide-width)) / 2)}}@layer starlight.content{.sl-steps>li>:first-child{--lh:calc(1em * var(--sl-line-height));--shift-y:calc(.5 * (var(--bullet-size) - var(--lh)));transform:translateY(var(--shift-y));margin-bottom:var(--shift-y)}.sl-steps>li>:first-child:where(h1,h2,h3,h4,h5,h6){--lh:calc(1em * var(--sl-line-height-headings))}@supports (--prop:1lh){.sl-steps>li>:first-child{--lh:1lh}}}
+</style><style>@layer starlight.components{starlight-tabs:where(.astro-scn3uvmv){display:block}.tablist-wrapper:where(.astro-scn3uvmv){overflow-x:auto}:where(.astro-scn3uvmv)[role=tablist]{border-bottom:2px solid var(--sl-color-gray-5);padding:0;list-style:none;display:flex}.tab:where(.astro-scn3uvmv){display:flex}.tab:where(.astro-scn3uvmv)>:where(.astro-scn3uvmv)[role=tab]{--sl-tab-color-border:var(--sl-color-gray-5);line-height:var(--sl-line-height-headings);box-shadow:0 2px 0 var(--sl-tab-color-border);color:var(--sl-color-gray-3);outline-offset:var(--sl-outline-offset-inside);overflow-wrap:initial;align-items:center;gap:.5rem;padding:.275rem 1.25rem;text-decoration:none;display:flex}.tab:where(.astro-scn3uvmv) :where(.astro-scn3uvmv)[role=tab][aria-selected=true]{--sl-tab-color-border:var(--sl-color-text-accent);color:var(--sl-color-white);font-weight:600}.tablist-wrapper:where(.astro-scn3uvmv)~[role=tabpanel]{margin-top:1rem}}
+</style><style>@layer starlight.components{.card:where(.astro-oag6qnet){--sl-card-border:var(--sl-color-purple);--sl-card-bg:var(--sl-color-purple-low);border:1px solid var(--sl-color-gray-5);background-color:var(--sl-color-black);flex-direction:column;gap:clamp(.5rem,.125rem + 1vw,1rem);padding:clamp(1rem,.125rem + 3vw,2.5rem)}.card:where(.astro-oag6qnet):nth-child(4n+1){--sl-card-border:var(--sl-color-orange);--sl-card-bg:var(--sl-color-orange-low)}.card:where(.astro-oag6qnet):nth-child(4n+3){--sl-card-border:var(--sl-color-green);--sl-card-bg:var(--sl-color-green-low)}.card:where(.astro-oag6qnet):nth-child(4n+4){--sl-card-border:var(--sl-color-red);--sl-card-bg:var(--sl-color-red-low)}.card:where(.astro-oag6qnet):nth-child(4n+5){--sl-card-border:var(--sl-color-blue);--sl-card-bg:var(--sl-color-blue-low)}.title:where(.astro-oag6qnet){font-weight:600;font-size:var(--sl-text-h4);color:var(--sl-color-white);line-height:var(--sl-line-height-headings);align-items:center;gap:1rem}.card:where(.astro-oag6qnet) .icon:where(.astro-oag6qnet){border:1px solid var(--sl-card-border);background-color:var(--sl-card-bg);border-radius:.25rem;flex-shrink:0;padding:.2em}.card:where(.astro-oag6qnet) .body:where(.astro-oag6qnet){font-size:clamp(var(--sl-text-sm), calc(.5rem + 1vw), var(--sl-text-body));margin:0}}
+</style></head><body class="astro-g5ptsecz"><a class="sl-skip-link astro-qb7clj6f" href="#_top">Skip to content</a><div class="page sl-flex astro-yntsjkba"><header class="header astro-yntsjkba"><div class="header astro-by6fddyj"><div class="title-wrapper sl-flex astro-by6fddyj"><a href="/" class="site-title sl-flex astro-6rvad3va"><img class="light:sl-hidden print:hidden astro-6rvad3va" alt src="/_astro/joust-emblem-on-dark.jQuOM2iw.svg" width="570" height="836"><img class="dark:sl-hidden print:block astro-6rvad3va" alt src="/_astro/joust-emblem.BEwrtsDr.svg" width="570" height="836"><span class="astro-6rvad3va" translate="no">JOUST</span></a></div><div class="sl-flex print:hidden astro-by6fddyj"><site-search class="astro-by6fddyj astro-b5kgnn7o" data-translations="{&quot;placeholder&quot;:&quot;Search&quot;}"><button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-b5kgnn7o"><svg aria-hidden="true" class="astro-b5kgnn7o astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg><span class="sl-hidden md:sl-block astro-b5kgnn7o" aria-hidden="true">Search</span><kbd class="sl-hidden md:sl-flex astro-b5kgnn7o" style="display: none"><kbd class="astro-b5kgnn7o">Ctrl</kbd><kbd class="astro-b5kgnn7o">K</kbd></kbd></button><dialog style="padding: 0" aria-label="Search" class="astro-b5kgnn7o"><div class="dialog-frame sl-flex astro-b5kgnn7o"><button data-close-modal class="sl-flex md:sl-hidden astro-b5kgnn7o">Cancel</button><div class="search-container astro-b5kgnn7o"><div id="starlight__search" class="astro-b5kgnn7o"></div></div></div></dialog></site-search><script>
+	(() => {
+		const openBtn = document.querySelector('button[data-open-modal]');
+		const shortcut = openBtn?.querySelector('kbd');
+		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
+		const platformKey = shortcut.querySelector('kbd');
+		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+			platformKey.textContent = '⌘';
+			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
+		}
+		shortcut.style.display = '';
+	})();
+</script><script type="module" src="/_astro/Search.astro_astro_type_script_index_0_lang.CibB10mu.js"></script></div><div class="sl-hidden md:sl-flex print:hidden right-group astro-by6fddyj"><div class="sl-flex social-icons astro-by6fddyj"><a href="https://github.com/bloxbean/joust" rel="me" class="sl-flex astro-n2mnl6yq"><span class="sr-only astro-n2mnl6yq">GitHub</span><svg aria-hidden="true" class="astro-n2mnl6yq astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-2z5xp7gb"><span class="sr-only astro-2z5xp7gb">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-2z5xp7gb"><option value="dark" class="astro-2z5xp7gb">Dark</option><option value="light" class="astro-2z5xp7gb">Light</option><option value="auto" selected class="astro-2z5xp7gb">Auto</option></select><svg aria-hidden="true" class="icon caret astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script><script type="module">var e=`starlight-theme`,t=e=>e===`auto`||e===`dark`||e===`light`?e:`auto`,n=()=>t(typeof localStorage<`u`&&localStorage.getItem(e));function r(t){typeof localStorage<`u`&&localStorage.setItem(e,t===`light`||t===`dark`?t:``)}var i=()=>matchMedia(`(prefers-color-scheme: light)`).matches?`light`:`dark`;function a(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e===`auto`?i():e,r(e)}matchMedia(`(prefers-color-scheme: light)`).addEventListener(`change`,()=>{n()===`auto`&&a(`auto`)});var o=class extends HTMLElement{constructor(){super(),a(n()),this.querySelector(`select`)?.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&a(t(e.currentTarget.value))})}};customElements.define(`starlight-theme-select`,o);</script><script type="module">var e=class extends HTMLElement{constructor(){super();let e=this.querySelector(`select`);e&&(e.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=e.currentTarget.value)}),window.addEventListener(`pageshow`,t=>{if(!t.persisted)return;let n=e.querySelector(`option[selected]`)?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}};customElements.define(`starlight-lang-select`,e);</script></div></div></header><nav class="sidebar print:hidden astro-yntsjkba" aria-label="Main"><button popovertarget="starlight__sidebar" class="sl-menu-button sl-flex md:sl-hidden print:hidden astro-r2osgdlg"><svg aria-hidden="true" class="open-menu astro-r2osgdlg astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg><svg aria-hidden="true" class="close-menu astro-r2osgdlg astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg><span class="sr-only astro-r2osgdlg">Menu</span></button><script type="module">var e=class extends HTMLElement{constructor(){super();let e=matchMedia(`(min-width: 50em)`),t=()=>{this.popover=e.matches?null:`auto`};t(),e.addEventListener(`change`,()=>t()),this.addEventListener(`toggle`,({newState:e})=>this.trapFocus(e===`open`))}trapFocus(e){document.querySelectorAll(`.main-frame, .sl-skip-link`).forEach(t=>{t.toggleAttribute(`inert`,e)})}};customElements.define(`sl-sidebar-pane`,e);</script><sl-sidebar-pane popover id="starlight__sidebar" class="sidebar-pane astro-yntsjkba"><div class="sidebar-content sl-flex astro-yntsjkba"><sl-sidebar-state-persist data-hash="0uwcge0" class="astro-ipdry5cl"><script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script><ul class="top-level astro-rmhv4bp6"><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Start here</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="0"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/start/why-joust/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Why JOUST</span></a></li><li class="astro-rmhv4bp6"><a href="/start/how-it-works/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">How JOUST works</span></a></li><li class="astro-rmhv4bp6"><a href="/start/quick-start-java/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Quick start: Java</span></a></li><li class="astro-rmhv4bp6"><a href="/start/first-contract/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Your first contract</span></a></li><li class="astro-rmhv4bp6"><a href="/start/quick-start-npm/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Quick start: JavaScript &amp; TypeScript</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Tutorials: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="1"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/tutorials/vault/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Vault: deposits, time and payouts</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/escrow-crowdfund/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Escrow and crowdfunding</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/token-merklemap/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Token balances in a MerkleMap</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/bank-owned-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Bank: owned objects</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/pool-batched-intents/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Pool: batched intents</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/dex-assets/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">DEX: native assets and LP tokens</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/multisig-treasury/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Multisig treasury</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/oracle-composition/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Oracle and composition</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/staked-vault/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Staked vault and governance</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/upgrades/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Upgrading a contract</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Tutorials: JavaScript</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="2"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/tutorials/counter-dapp/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">A counter dApp in the browser</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/deploy-preview/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Deploy to preview</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Writing contracts</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="3"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/contracts/state-and-lifecycle/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">State and lifecycle</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/ctx-and-funds/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Ctx, funds and payouts</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/authorization/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Authorization</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/time/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Time</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/require-and-errors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Require and errors</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/params-invariants-events/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Params, invariants and events</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/merklemaps/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">MerkleMaps</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/owned-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Owned objects</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/keyed-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Keyed objects</span><span class="sl-badge note small  astro-rmhv4bp6 astro-f4zorn72">Next release</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/batched-intents/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Batched intents</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/assets-mints-sends/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Native assets, mints and sends</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/reads-and-composition/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Reads and composition</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/deposits/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Deposits</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/staking-and-governance/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Staking and governance</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/upgrades/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Upgrades and migration</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/fees-and-size/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Fees and script size</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/security-model/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Security model</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/testing/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Testing</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Building apps: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="4"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/apps/java-runtime/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The Java off-chain runtime</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Building apps: JavaScript</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="5"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/apps/javascript-clients/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">JavaScript clients</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/wallets/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Wallets</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/pages/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Pages: worker, Vite, static builds</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/cli-and-projects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The joust CLI and projects</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/networks-and-providers/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Networks and chain providers</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/keyed-objects-js/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Keyed objects in JavaScript</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/map-mirrors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">MerkleMap mirrors</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Languages</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="6"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/languages/java/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Java</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Preview</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc-reference/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc reference</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc-std/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc standard library</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/typescript/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">TypeScript</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/editors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Editors</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="7"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/annotations/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Annotations</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/state-api/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">State API (julc-state-api)</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/java-runtime-api/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Java runtime API</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference: JavaScript</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="8"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/state-client/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/state-client</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/joust-runtime/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/joust-runtime</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/joust-cli/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/joust (CLI, Vite)</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/config/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">joust.config.json</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="9"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/description-format/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Contract description</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/examples/" aria-current="page" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Examples</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/troubleshooting/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Troubleshooting</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/glossary/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Glossary</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">AI</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="10"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/ai/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Using JOUST with AI</span></a></li><li class="astro-rmhv4bp6"><a href="/ai/starter-pack/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">AI starter pack</span></a></li><li class="astro-rmhv4bp6"><a href="/llms.txt" class="astro-rmhv4bp6" target="_blank"><span class="astro-rmhv4bp6">llms.txt</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Project</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="11"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/project/status-and-roadmap/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Status and roadmap</span></a></li><li class="astro-rmhv4bp6"><a href="/project/architecture-decisions/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Architecture decisions</span></a></li></ul></details></li></ul><script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script></sl-sidebar-state-persist><div class="md:sl-hidden"><div class="mobile-preferences sl-flex astro-p4azlveh"><div class="social-icons astro-p4azlveh"><a href="https://github.com/bloxbean/joust" rel="me" class="sl-flex astro-n2mnl6yq"><span class="sr-only astro-n2mnl6yq">GitHub</span><svg aria-hidden="true" class="astro-n2mnl6yq astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-2z5xp7gb"><span class="sr-only astro-2z5xp7gb">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-2z5xp7gb"><option value="dark" class="astro-2z5xp7gb">Dark</option><option value="light" class="astro-2z5xp7gb">Light</option><option value="auto" selected class="astro-2z5xp7gb">Auto</option></select><svg aria-hidden="true" class="icon caret astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script></div></div></div></sl-sidebar-pane></nav><div class="main-frame astro-yntsjkba"><script type="module">var e=document.getElementById(`starlight__sidebar`),t=e?.querySelector(`sl-sidebar-state-persist`),n=`sl-sidebar-state`,r=()=>{let r=[],i=t?.dataset.hash||``;try{let e=sessionStorage.getItem(n),t=JSON.parse(e||`{}`);Array.isArray(t.open)&&t.hash===i&&(r=t.open)}catch{}return{hash:i,open:r,scroll:e?.scrollTop||0}},i=e=>{try{sessionStorage.setItem(n,JSON.stringify(e))}catch{}},a=()=>i(r()),o=(e,t)=>{let n=r();n.open[t]=e,i(n)};t?.addEventListener(`click`,e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`summary`)?.closest(`details`);if(!t)return;let n=t.querySelector(`sl-sidebar-restore`),r=parseInt(n?.dataset.index||``);isNaN(r)||o(!t.open,r)}),addEventListener(`visibilitychange`,()=>{document.visibilityState===`hidden`&&a()});</script><div class="lg:sl-flex astro-lrzkfocr"><aside class="right-sidebar-container print:hidden astro-lrzkfocr"><div class="right-sidebar astro-lrzkfocr"><div class="lg:sl-hidden astro-qok35upx"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-66cqc7ze"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-66cqc7ze"><details id="starlight__mobile-toc" class="astro-66cqc7ze"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-66cqc7ze"><span class="toggle sl-flex astro-66cqc7ze">On this page<svg aria-hidden="true" class="caret astro-66cqc7ze astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-66cqc7ze"></span></summary><div class="dropdown astro-66cqc7ze"><ul class="isMobile astro-jugkfwgx" style="--depth: 0;"><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#_top" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Overview</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#what-every-example-contains" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">What every example contains</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#running-an-example" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Running an example</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#at-a-glance" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">At a glance</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#option-a-single-utxo-state-machines" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Option A: single-UTxO state machines</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#counter" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">counter</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#vault" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">vault</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#escrow" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">escrow</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#crowdfund" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">crowdfund</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#storage-and-execution-strategies" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Storage and execution strategies</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#token" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">token</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#bank" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">bank</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#registry" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">registry</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#pool" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">pool</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#dsl" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">dsl</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#rollup" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">rollup</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#assets-governance-and-composition" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Assets, governance and composition</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#dex" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">dex</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#market" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">market</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#treasury" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">treasury</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#staking" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">staking</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#oracle" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">oracle</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#upgrade" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">upgrade</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#fees" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">fees</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#guild" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">guild</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#locker" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">locker</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#wallets-and-pages" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Wallets and pages</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#wallet" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">wallet</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#dapp" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">dapp</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#devkit" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">devkit</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#script-sizes-and-budgets" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Script sizes and budgets</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#next-steps" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Next steps</span></a></li></ul></div></details></nav></mobile-starlight-toc><script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C3fM4Kra.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-qok35upx"><div class="sl-container astro-qok35upx"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-jugkfwgx" style="--depth: 0;"><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#_top" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Overview</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#what-every-example-contains" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">What every example contains</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#running-an-example" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Running an example</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#at-a-glance" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">At a glance</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#option-a-single-utxo-state-machines" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Option A: single-UTxO state machines</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#counter" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">counter</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#vault" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">vault</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#escrow" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">escrow</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#crowdfund" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">crowdfund</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#storage-and-execution-strategies" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Storage and execution strategies</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#token" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">token</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#bank" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">bank</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#registry" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">registry</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#pool" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">pool</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#dsl" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">dsl</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#rollup" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">rollup</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#assets-governance-and-composition" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Assets, governance and composition</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#dex" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">dex</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#market" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">market</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#treasury" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">treasury</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#staking" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">staking</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#oracle" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">oracle</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#upgrade" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">upgrade</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#fees" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">fees</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#guild" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">guild</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#locker" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">locker</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#wallets-and-pages" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Wallets and pages</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#wallet" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">wallet</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#dapp" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">dapp</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#devkit" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">devkit</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#script-sizes-and-budgets" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Script sizes and budgets</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#next-steps" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Next steps</span></a></li></ul></nav></starlight-toc><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.BpJaGz7G.js"></script></div></div></div></aside><div class="main-pane astro-lrzkfocr"><main data-pagefind-body class="astro-g5ptsecz" lang="en" dir="ltr"><div class="content-panel astro-a7po4psb"><div class="sl-container astro-a7po4psb"><h1 id="_top" class="astro-bebwqqxs">Examples</h1></div></div><div class="content-panel astro-a7po4psb"><div class="sl-container astro-a7po4psb"><div class="sl-markdown-content">
+<p>The repository’s <a href="https://github.com/bloxbean/joust/tree/main/examples"><code dir="auto">examples/</code></a> directory holds one tested
+example per feature. Each is real code, built by the same Gradle build as JOUST itself: when a guide shows a contract,
+it usually comes from here. Use this page to find the example closest to what you are building.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="what-every-example-contains">What every example contains</h2><a class="sl-anchor-link" href="#what-every-example-contains"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “What every example contains”</span></a></div>
+<ul>
+<li><strong>The contract:</strong> the only file a developer writes. The processor generates <code dir="auto">&lt;Name&gt;Validator</code> and <code dir="auto">&lt;Name&gt;Client</code>
+from it at build time.</li>
+<li><strong>Tests at three levels:</strong>
+<ul>
+<li><strong>JVM</strong> (<code dir="auto">&lt;Name&gt;Test</code>): the contract’s methods as plain Java.</li>
+<li><strong>On-chain harness:</strong> the validator as compiled by the build, evaluated against transactions shaped like the
+runtime’s. Every accepted transaction also runs the attack suite (ADR-0001 D16), and every applicable mutation
+must be rejected.</li>
+<li><strong>DevKit</strong> (<code dir="auto">&lt;Name&gt;DevnetTest</code>, tagged <code dir="auto">devnet</code>): the generated client end to end on a live Yaci DevKit. It skips
+itself when DevKit is not running.</li>
+</ul>
+</li>
+<li><strong><code dir="auto">DescriptionTest</code>:</strong> checks the generated <a href="/reference/description-format/">contract description</a>.</li>
+</ul>
+<div class="sl-heading-wrapper level-h2"><h2 id="running-an-example">Running an example</h2><a class="sl-anchor-link" href="#running-an-example"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Running an example”</span></a></div>
+<p>From a JOUST checkout (JDK 25; the build resolves JuLC and cardano-client-lib from Maven Central and the BloxBean repositories):</p>
+<div class="expressive-code"><link rel="stylesheet" href="/_astro/ec.tpect.css"><script type="module" src="/_astro/ec.0vx5m.js"></script><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="sh"><code><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">./gradlew</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">:examples:token:test</span><span style="--0:#E6EDF3;--1:#24292E">                   </span><span style="--0:#8B949E;--1:#616972"># JVM, harness and attack-suite tests; DevKit tests if it is up</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">yaci-devkit</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">up</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">--enable-yaci-store</span><span style="--0:#E6EDF3;--1:#24292E">               </span><span style="--0:#8B949E;--1:#616972"># optional: the local network (Yaci Store on :8080, admin on :10000)</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">./gradlew</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">:examples:vault:run</span><span style="--0:#E6EDF3;--1:#24292E">                    </span><span style="--0:#8B949E;--1:#616972"># the example's app against DevKit</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">./gradlew</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">:examples:token:test</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">-PjoustFixtures</span><span style="--0:#E6EDF3;--1:#24292E">   </span><span style="--0:#8B949E;--1:#616972"># re-record the ADR-0015 fixtures (DevKit must be up)</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="./gradlew :examples:token:test                   # JVM, harness and attack-suite tests; DevKit tests if it is upyaci-devkit up --enable-yaci-store               # optional: the local network (Yaci Store on :8080, admin on :10000)./gradlew :examples:vault:run                    # the example&#x27;s app against DevKit./gradlew :examples:token:test -PjoustFixtures   # re-record the ADR-0015 fixtures (DevKit must be up)"><div></div></button></div></figure></div>
+<p><code dir="auto">./gradlew build</code> runs every example. The <code dir="auto">run</code> task has an app for <code dir="auto">counter</code>, <code dir="auto">vault</code>, <code dir="auto">escrow</code>, <code dir="auto">crowdfund</code>,
+<code dir="auto">token</code> and <code dir="auto">bank</code> (<code dir="auto">&lt;Name&gt;App</code>), and for <code dir="auto">dapp</code> (a web server); the other examples run their flows in their DevKit
+tests.</p>
+<aside aria-label="Experimental, pre-release" class="starlight-aside starlight-aside--caution"><p class="starlight-aside__title" aria-hidden="true"><svg aria-hidden="true" class="starlight-aside__icon astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 16a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm10.67 1.47-8.05-14a3 3 0 0 0-5.24 0l-8 14A3 3 0 0 0 3.94 22h16.12a3 3 0 0 0 2.61-4.53Zm-1.73 2a1 1 0 0 1-.88.51H3.94a1 1 0 0 1-.88-.51 1 1 0 0 1 0-1l8-14a1 1 0 0 1 1.78 0l8.05 14a1 1 0 0 1 .05 1.02v-.02ZM12 8a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0V9a1 1 0 0 0-1-1Z"/></svg>Experimental, pre-release</p><div class="starlight-aside__content"><p>JOUST is a research and learning project, not for production. The examples build from a checkout, with JDK 25 (see
+<a href="/start/quick-start-java/">Quick start: Java &amp; Gradle</a>). To try a contract without a JDK, start from the npm template
+instead (<a href="/start/quick-start-npm/">Quick start: npm &amp; JavaScript</a>).</p></div></aside>
+<div class="sl-heading-wrapper level-h2"><h2 id="at-a-glance">At a glance</h2><a class="sl-anchor-link" href="#at-a-glance"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “At a glance”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Example</th>
+<th>Feature</th>
+<th>ADR</th>
+<th>Covered in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#counter">counter</a></td>
+<td>State machine basics</td>
+<td>0001</td>
+<td><a href="/tutorials/counter-dapp/">A counter dApp in the browser</a></td>
+</tr>
+<tr>
+<td><a href="#vault">vault</a></td>
+<td>Deposits, time locks, payouts</td>
+<td>0001</td>
+<td><a href="/tutorials/vault/">Vault</a></td>
+</tr>
+<tr>
+<td><a href="#escrow">escrow</a></td>
+<td>Two exits, a deadline</td>
+<td>0001</td>
+<td><a href="/tutorials/escrow-crowdfund/">Escrow and crowdfunding</a></td>
+</tr>
+<tr>
+<td><a href="#crowdfund">crowdfund</a></td>
+<td>An inline <code dir="auto">JulcMap</code>, refunds</td>
+<td>0001</td>
+<td><a href="/tutorials/escrow-crowdfund/">Escrow and crowdfunding</a></td>
+</tr>
+<tr>
+<td><a href="#token">token</a></td>
+<td>MerkleMap balances</td>
+<td>0002</td>
+<td><a href="/tutorials/token-merklemap/">Token balances in a MerkleMap</a></td>
+</tr>
+<tr>
+<td><a href="#bank">bank</a></td>
+<td>Owned objects</td>
+<td>0003</td>
+<td><a href="/tutorials/bank-owned-objects/">Bank: owned objects</a></td>
+</tr>
+<tr>
+<td><a href="#registry">registry</a></td>
+<td>Keyed objects</td>
+<td>0016</td>
+<td><a href="/contracts/keyed-objects/">Keyed objects</a></td>
+</tr>
+<tr>
+<td><a href="#pool">pool</a></td>
+<td>Batched intents</td>
+<td>0004</td>
+<td><a href="/tutorials/pool-batched-intents/">Pool: batched intents</a></td>
+</tr>
+<tr>
+<td><a href="#dsl">dsl</a></td>
+<td><code dir="auto">.jsc</code> contracts</td>
+<td>0005</td>
+<td><a href="/languages/jsc/">.jsc</a></td>
+</tr>
+<tr>
+<td><a href="#rollup">rollup</a></td>
+<td>Optimistic L2 spike</td>
+<td>0006</td>
+<td><a href="/project/architecture-decisions/#adr-0006-option-f-optimistic-l2-spike">Architecture decisions</a></td>
+</tr>
+<tr>
+<td><a href="#dex">dex</a></td>
+<td>Native assets, LP tokens</td>
+<td>0007</td>
+<td><a href="/tutorials/dex-assets/">DEX: native assets and LP tokens</a></td>
+</tr>
+<tr>
+<td><a href="#market">market</a></td>
+<td>NFTs in owned objects, sends</td>
+<td>0007</td>
+<td><a href="/contracts/assets-mints-sends/">Native assets, mints and sends</a></td>
+</tr>
+<tr>
+<td><a href="#treasury">treasury</a></td>
+<td>Params, quorum, governor, invariants, events</td>
+<td>0009</td>
+<td><a href="/tutorials/multisig-treasury/">Multisig treasury</a></td>
+</tr>
+<tr>
+<td><a href="#staking">staking</a></td>
+<td>Staked state, every script purpose</td>
+<td>0010</td>
+<td><a href="/tutorials/staked-vault/">Staked vault and governance</a></td>
+</tr>
+<tr>
+<td><a href="#oracle">oracle</a></td>
+<td><code dir="auto">@Reads</code>, <code dir="auto">Compose</code></td>
+<td>0011</td>
+<td><a href="/tutorials/oracle-composition/">Oracle and composition</a></td>
+</tr>
+<tr>
+<td><a href="#upgrade">upgrade</a></td>
+<td>Migration</td>
+<td>0011</td>
+<td><a href="/tutorials/upgrades/">Upgrading a contract</a></td>
+</tr>
+<tr>
+<td><a href="#fees">fees</a></td>
+<td>Deposits into another instance</td>
+<td>0011 D3</td>
+<td><a href="/contracts/deposits/">Deposits</a></td>
+</tr>
+<tr>
+<td><a href="#guild">guild</a></td>
+<td>Several owned types, moves, owned maps</td>
+<td>0012</td>
+<td><a href="/contracts/owned-objects/">Owned objects</a></td>
+</tr>
+<tr>
+<td><a href="#locker">locker</a></td>
+<td>MerkleMaps with native assets</td>
+<td>0014</td>
+<td><a href="/contracts/merklemaps/">MerkleMaps</a></td>
+</tr>
+<tr>
+<td><a href="#wallet">wallet</a></td>
+<td>Wallet-signed transactions</td>
+<td>0013</td>
+<td><a href="/apps/wallets/">Wallets</a></td>
+</tr>
+<tr>
+<td><a href="#dapp">dapp</a></td>
+<td>A browser dApp on DevKit</td>
+<td>0013</td>
+<td><a href="/apps/javascript-clients/">JavaScript clients</a></td>
+</tr>
+<tr>
+<td><a href="#devkit">devkit</a></td>
+<td>DevKit helper, fixtures</td>
+<td>0015</td>
+<td><a href="/contracts/testing/">Testing</a></td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h2"><h2 id="option-a-single-utxo-state-machines">Option A: single-UTxO state machines</h2><a class="sl-anchor-link" href="#option-a-single-utxo-state-machines"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Option A: single-UTxO state machines”</span></a></div>
+<div class="sl-heading-wrapper level-h3"><h3 id="counter">counter</h3><a class="sl-anchor-link" href="#counter"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “counter”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/counter"><code dir="auto">examples/counter</code></a> · <code dir="auto">Counter.java</code></p>
+<p>The smallest contract: a count and an owner. <code dir="auto">increment</code> is an <code dir="auto">@Action</code> anyone can call, with no <code dir="auto">Ctx</code> and no
+value; <code dir="auto">reset</code> and the <code dir="auto">@Destroy</code> <code dir="auto">close</code> are <code dir="auto">@OnlyOwner</code>, and <code dir="auto">close</code> returns the deposit. The starting point for
+every tutorial; the browser dApp uses it, and the npm template (<code dir="auto">create-joust</code>) starts from a counter too.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@StateContract(maxDatumBytes = 128)</code>, <code dir="auto">@Init</code>, <code dir="auto">@Action</code>, <code dir="auto">@OnlyOwner</code>, <code dir="auto">@Destroy</code>, <code dir="auto">@View</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:counter:run</code></li>
+<li><strong>Read:</strong> <a href="/start/first-contract/">Your first contract</a>, <a href="/tutorials/counter-dapp/">A counter dApp in the browser</a>,
+<a href="/contracts/state-and-lifecycle/">State and lifecycle</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="vault">vault</h3><a class="sl-anchor-link" href="#vault"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “vault”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/vault"><code dir="auto">examples/vault</code></a> · <code dir="auto">Vault.java</code></p>
+<p>A time-locked vault. <code dir="auto">open</code> (<code dir="auto">@Init @Payable</code>) records the owner and an unlock time; anyone may <code dir="auto">deposit</code>
+(<code dir="auto">@Payable</code>); the owner may <code dir="auto">withdraw</code> only after <code dir="auto">unlockAt</code> and gets a payout, so the action returns a <code dir="auto">Result</code>
+record of the new state and its payouts. <code dir="auto">close</code> pays everything out.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@Payable</code>, <code dir="auto">@OnlyOwner</code>, <code dir="auto">@ValidAfter("unlockAt")</code>, <code dir="auto">@Destroy</code>, <code dir="auto">@View</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:vault:run</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/vault/">Vault: deposits, time and payouts</a>, <a href="/contracts/time/">Time</a>,
+<a href="/contracts/ctx-and-funds/">Ctx, funds and payouts</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="escrow">escrow</h3><a class="sl-anchor-link" href="#escrow"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “escrow”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/escrow"><code dir="auto">examples/escrow</code></a> · <code dir="auto">Escrow.java</code></p>
+<p>The buyer funds the escrow at creation (<code dir="auto">@Payable @Init</code>). It has two <code dir="auto">@Destroy</code>s: <code dir="auto">release</code> pays the seller, and
+<code dir="auto">refund</code> returns the funds, which anyone may trigger after the deadline (<code dir="auto">Clock.after</code>).</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@Init @Payable</code>, two <code dir="auto">@Destroy</code>, <code dir="auto">@View</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:escrow:run</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/escrow-crowdfund/">Escrow and crowdfunding</a>, <a href="/contracts/time/">Time</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="crowdfund">crowdfund</h3><a class="sl-anchor-link" href="#crowdfund"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “crowdfund”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/crowdfund"><code dir="auto">examples/crowdfund</code></a> · <code dir="auto">Crowdfund.java</code></p>
+<p>A crowdfund with its backers in a <code dir="auto">JulcMap</code> inside the state, kept in canonical order with <code dir="auto">SortedMaps</code>. Refunds pay
+the caller; the creator claims with <code dir="auto">@SignedBy("creator")</code>. Its tests fill the datum to <code dir="auto">maxDatumBytes = 1024</code>
+(27 backers) to measure capacity.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@StateContract(maxDatumBytes = 1024)</code>, <code dir="auto">@Payable</code>, <code dir="auto">@SignedBy("creator")</code>, two <code dir="auto">@Destroy</code>, <code dir="auto">@View</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:crowdfund:run</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/escrow-crowdfund/">Escrow and crowdfunding</a>, <a href="/contracts/state-and-lifecycle/">State and lifecycle</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h2"><h2 id="storage-and-execution-strategies">Storage and execution strategies</h2><a class="sl-anchor-link" href="#storage-and-execution-strategies"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Storage and execution strategies”</span></a></div>
+<div class="sl-heading-wrapper level-h3"><h3 id="token">token</h3><a class="sl-anchor-link" href="#token"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “token”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/token"><code dir="auto">examples/token</code></a> · <code dir="auto">Token.java</code></p>
+<p>An account-model token whose balances live in a <code dir="auto">MerkleMap</code>: an unbounded map behind a 32-byte root. <code dir="auto">mint</code>,
+<code dir="auto">transfer</code> and <code dir="auto">burn</code> prove only the keys they touch; the MPF proofs are checked by the shared map verifier
+(withdraw-zero). The script is read by reference. Its DevKit test also rebuilds the map from the chain’s history
+with a fresh store.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@StateContract(maxDatumBytes = 160)</code>, <code dir="auto">@SignedBy("admin")</code>, <code dir="auto">@Action</code>, <code dir="auto">@View</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:token:run</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/token-merklemap/">Token balances in a MerkleMap</a>, <a href="/contracts/merklemaps/">MerkleMaps</a>,
+<a href="/apps/map-mirrors/">MerkleMap mirrors</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="bank">bank</h3><a class="sl-anchor-link" href="#bank"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “bank”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/bank"><code dir="auto">examples/bank</code></a> · <code dir="auto">Bank.java</code></p>
+<p>Shared bank configuration (admin, paused, withdrawal limit) plus one owned <code dir="auto">Account</code> per customer. Customers act in
+parallel; <code dir="auto">withdraw</code> reads the config by reference (<code dir="auto">@Shared</code>); <code dir="auto">close</code> works even when the bank is paused, the
+escape hatch every owned type needs.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@Owned</code>, <code dir="auto">@OwnedInit</code>, <code dir="auto">@OwnedAction</code>, <code dir="auto">@OwnedDestroy</code>, <code dir="auto">@Shared</code>, <code dir="auto">@SignedBy("owner")</code>,
+<code dir="auto">@SignedBy("admin")</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:bank:run</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/bank-owned-objects/">Bank: owned objects</a>, <a href="/contracts/owned-objects/">Owned objects</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="registry">registry</h3><a class="sl-anchor-link" href="#registry"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “registry”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/registry"><code dir="auto">examples/registry</code></a> · <code dir="auto">Registry.java</code></p>
+<p>Keyed objects (ADR-0016): two keyed types in sorted on-chain lists. <code dir="auto">Ballot</code> is keyed by the voter’s key hash
+(<code dir="auto">signedKey</code>) and only retires, so each voter votes once, ever. <code dir="auto">Entry</code> is a name registry: <code dir="auto">claim</code> (payable) and the admin’s <code dir="auto">grant</code> insert a name, <code dir="auto">upgrade</code>,
+<code dir="auto">withdraw</code> and the guardians’ <code dir="auto">recover</code> update it, <code dir="auto">release</code> removes it (the name is free again) and <code dir="auto">retire</code> keeps it
+taken for good. The tests cover the attack suite, list integrity under mutated transactions, and DevKit runs of
+concurrency, contested gaps, cooldowns, compositions and submission across relays; the JavaScript flow is in
+<code dir="auto">js/joust-runtime/test/examples.test.js</code>.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@Owned(key = ..., maxKeyBytes = ..., signedKey = ...)</code>, <code dir="auto">@OwnedInit</code>, <code dir="auto">@OwnedAction</code>,
+<code dir="auto">@OwnedDestroy</code>, <code dir="auto">@OwnedDestroy(retire = true)</code>, <code dir="auto">@Shared</code>, <code dir="auto">@Quorum</code>, <code dir="auto">@Invariant</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:registry:test</code></li>
+<li><strong>Read:</strong> <a href="/contracts/keyed-objects/">Keyed objects</a>, <a href="/apps/keyed-objects-js/">Keyed objects in JavaScript</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="pool">pool</h3><a class="sl-anchor-link" href="#pool"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “pool”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/pool"><code dir="auto">examples/pool</code></a> · <code dir="auto">Pool.java</code></p>
+<p>Donations and order-dependent ticket sales as intents. Users lock requests concurrently; a permissionless batcher
+applies them to the instance in one transaction, with refunds, change payouts, a cancel and an expired intent in the
+tests. <code dir="auto">donate</code> is <code dir="auto">@Batched</code> (direct call or intent); <code dir="auto">buy</code> is <code dir="auto">@Batched(only = true)</code>, because its price depends
+on the order of the batch.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@Batched</code>, <code dir="auto">@Batched(only = true)</code>, <code dir="auto">@Payable</code>, <code dir="auto">@SignedBy("admin")</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:pool:test</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/pool-batched-intents/">Pool: batched intents</a>, <a href="/contracts/batched-intents/">Batched intents</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="dsl">dsl</h3><a class="sl-anchor-link" href="#dsl"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “dsl”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/dsl"><code dir="auto">examples/dsl</code></a> · <code dir="auto">src/main/jsc/.../{Jar,Points,Guards}.jsc</code></p>
+<p>Contracts written in <code dir="auto">.jsc</code> and lowered to Java at build time by the <code dir="auto">generateJsc</code> task (into
+<code dir="auto">build/generated/sources/jsc</code>):</p>
+<ul>
+<li>
+<p><code dir="auto">Jar.jsc</code>: a tip jar. <code dir="auto">tip</code> is <code dir="auto">payable batched</code> (also an intent); <code dir="auto">withdraw</code> has a rule inside an <code dir="auto">if</code>.</p>
+</li>
+<li>
+<p><code dir="auto">Points.jsc</code>: loyalty points in a <code dir="auto">Map&lt;Key, Int&gt;</code> (a MerkleMap), with <code dir="auto">delete</code> and transfers to oneself.</p>
+</li>
+<li>
+<p><code dir="auto">Guards.jsc</code>: a semantics fixture. An untaken <code dir="auto">if</code> arm and the right side of a false <code dir="auto">||</code> must not run, on the JVM
+or on chain.</p>
+</li>
+<li>
+<p><strong>Run:</strong> <code dir="auto">./gradlew :examples:dsl:test</code></p>
+</li>
+<li>
+<p><strong>Read:</strong> <a href="/languages/jsc/">.jsc</a>, <a href="/languages/jsc-reference/">.jsc reference</a></p>
+</li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="rollup">rollup</h3><a class="sl-anchor-link" href="#rollup"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “rollup”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/rollup"><code dir="auto">examples/rollup</code></a> · <code dir="auto">Ledger.java</code>, <code dir="auto">Rollup.java</code>, <code dir="auto">Sequencer.java</code></p>
+<p>The Option F spike. <code dir="auto">Ledger</code> is an off-chain payments ledger, a total JuLC-subset program (<code dir="auto">@OnchainLibrary</code>) with
+ed25519-signed orders. <code dir="auto">Rollup</code> is an L1 contract that takes commitments (<code dir="auto">commit</code>), opens a challenge window,
+<code dir="auto">finalize</code>s, and slashes the operator’s bond when a <code dir="auto">challenge</code> re-runs <code dir="auto">Ledger.step</code> on chain and finds a wrong
+step. <code dir="auto">Sequencer</code> is the off-chain sequencer and watcher.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@StateContract(maxDatumBytes = 320)</code>, <code dir="auto">@SignedBy("operator")</code>, <code dir="auto">@Payable</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:rollup:test</code></li>
+<li><strong>Read:</strong> <a href="/project/architecture-decisions/#adr-0006-option-f-optimistic-l2-spike">ADR-0006</a>. It is a spike, not a product.</li>
+</ul>
+<div class="sl-heading-wrapper level-h2"><h2 id="assets-governance-and-composition">Assets, governance and composition</h2><a class="sl-anchor-link" href="#assets-governance-and-composition"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Assets, governance and composition”</span></a></div>
+<div class="sl-heading-wrapper level-h3"><h3 id="dex">dex</h3><a class="sl-anchor-link" href="#dex"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “dex”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/dex"><code dir="auto">examples/dex</code></a> · <code dir="auto">Dex.java</code></p>
+<p>A constant-product AMM for one ADA/token pair. The reserves are what the UTxO holds (lovelace above the deposit,
+<code dir="auto">ctx.balance()</code>, and the token, <code dir="auto">funds.held()</code>), so the state cannot drift from the funds. LP tokens are minted and
+burned by the contract’s own policy, one name per pool; swaps send tokens with <code dir="auto">Send</code>. Every call names exactly what
+it <code dir="auto">accepted</code>. Swaps pay a 0.3 % fee to the pool.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@StateContract(maxDatumBytes = 256, assetSlots = 2)</code>, <code dir="auto">@Payable</code>, <code dir="auto">@SignedBy("admin")</code>;
+methods take <code dir="auto">Funds</code> and return records with <code dir="auto">payouts</code>, <code dir="auto">sends</code>, <code dir="auto">mint</code> and <code dir="auto">accepted</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:dex:test</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/dex-assets/">DEX: native assets and LP tokens</a>, <a href="/contracts/assets-mints-sends/">Native assets, mints and sends</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="market">market</h3><a class="sl-anchor-link" href="#market"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “market”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/market"><code dir="auto">examples/market</code></a> · <code dir="auto">Market.java</code></p>
+<p>An NFT marketplace. Each listing is an owned object holding its NFT, so listings never contend. <code dir="auto">buy</code> (a <code dir="auto">@Payable</code>
+owned destroy) pays the seller, sends the NFT to the buyer and a royalty to a script address with an inline datum.
+<code dir="auto">cancel</code> lets the seller take the NFT back whatever the market’s state.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@StateContract(maxDatumBytes = 384, assetSlots = 1)</code>, <code dir="auto">@Owned</code>, <code dir="auto">@OwnedInit</code>, <code dir="auto">@OwnedAction</code>,
+<code dir="auto">@OwnedDestroy</code>, <code dir="auto">@Shared</code>, <code dir="auto">@Into</code>, <code dir="auto">@Admits</code>, <code dir="auto">@SignedBy("seller")</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:market:test</code></li>
+<li><strong>Read:</strong> <a href="/contracts/assets-mints-sends/">Native assets, mints and sends</a>, <a href="/contracts/owned-objects/">Owned objects</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="treasury">treasury</h3><a class="sl-anchor-link" href="#treasury"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “treasury”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/treasury"><code dir="auto">examples/treasury</code></a> · <code dir="auto">Treasury.java</code>, <code dir="auto">Guardian.java</code></p>
+<p>A multisig treasury. Deploy-time <code dir="auto">@Params</code> hold a guardian credential and a payout cap. A council decides by
+<code dir="auto">@Quorum</code>. A guardian <em>script</em> (<code dir="auto">Guardian</code>, a plain JuLC withdraw-zero validator) can freeze the treasury through a
+zero withdrawal (<code dir="auto">@AuthorizedBy("params.guardian")</code>, with a bound <code dir="auto">Approvals</code> redeemer). An <code dir="auto">@Invariant</code> holds on
+every state, and <code dir="auto">Paid</code>, <code dir="auto">CouncilChanged</code> and <code dir="auto">Frozen</code> events are authenticated in the redeemer.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@Params</code>, <code dir="auto">@Quorum(keys = "council", threshold = "quorum")</code>, <code dir="auto">@AuthorizedBy</code>, <code dir="auto">@Invariant</code>;
+<code dir="auto">Guardian</code> uses JuLC’s <code dir="auto">@WithdrawValidator</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:treasury:test</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/multisig-treasury/">Multisig treasury</a>, <a href="/contracts/params-invariants-events/">Params, invariants and events</a>,
+<a href="/contracts/authorization/">Authorization</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="staking">staking</h3><a class="sl-anchor-link" href="#staking"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “staking”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/staking"><code dir="auto">examples/staking</code></a> · <code dir="auto">StakedVault.java</code></p>
+<p>A council-governed vault whose state UTxOs are staked to its own script (<code dir="auto">stakeSelf = true</code>). <code dir="auto">@Certify</code> allows only
+registration and exact delegation to the params’ pool; <code dir="auto">@Withdraw</code> sends rewards only to the payee (claimed in the
+output registry); <code dir="auto">@Votes</code> votes as a script DRep by quorum; <code dir="auto">@Propose</code> is a treasury-withdrawal guardrail. Built
+with <code dir="auto">-Ajulc.blueprint=false</code>.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@StateContract(stakeSelf = true)</code>, <code dir="auto">@Params</code>, <code dir="auto">@Quorum(keys = "params.council", threshold = "params.quorum")</code>,
+<code dir="auto">@Withdraw</code>, <code dir="auto">@Certify</code>, <code dir="auto">@Votes</code>, <code dir="auto">@Propose</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:staking:test</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/staked-vault/">Staked vault and governance</a>, <a href="/contracts/staking-and-governance/">Staking and governance</a></li>
+</ul>
+<aside aria-label="Note" class="starlight-aside starlight-aside--note"><p class="starlight-aside__title" aria-hidden="true"><svg aria-hidden="true" class="starlight-aside__icon astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 11a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0v-4a1 1 0 0 0-1-1Zm.38-3.92a1 1 0 0 0-.76 0 1 1 0 0 0-.33.21 1.15 1.15 0 0 0-.21.33 1 1 0 0 0 .21 1.09c.097.088.209.16.33.21A1 1 0 0 0 13 8a1.05 1.05 0 0 0-.29-.71 1 1 0 0 0-.33-.21ZM12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16.001A8 8 0 0 1 12 20Z"/></svg>Note</p><div class="starlight-aside__content"><p>DevKit pays no rewards within a test (rewards take epochs), so the DevKit flow withdraws a zero balance. Votes and
+proposals are covered by the harness, not on DevKit.</p></div></aside>
+<div class="sl-heading-wrapper level-h3"><h3 id="oracle">oracle</h3><a class="sl-anchor-link" href="#oracle"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “oracle”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/oracle"><code dir="auto">examples/oracle</code></a> · <code dir="auto">Oracle.java</code>, <code dir="auto">Shop.java</code></p>
+<p>A price <code dir="auto">Oracle</code> and a <code dir="auto">Shop</code> that reads it with <code dir="auto">@Reads("params.oracle")</code>. The oracle instance is pinned in the
+shop’s params as a <code dir="auto">ForeignInstance</code>; the generated code checks its token kind, address and datum shape, and the
+shop checks freshness itself. The DevKit test composes a purchase and another oracle’s update into one transaction
+with <code dir="auto">Compose</code>.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@Params</code>, <code dir="auto">@Reads</code>, <code dir="auto">@Payable</code>, <code dir="auto">@SignedBy("publisher")</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:oracle:test</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/oracle-composition/">Oracle and composition</a>, <a href="/contracts/reads-and-composition/">Reads and composition</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="upgrade">upgrade</h3><a class="sl-anchor-link" href="#upgrade"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “upgrade”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/upgrade"><code dir="auto">examples/upgrade</code></a> · <code dir="auto">CounterV1.java</code>, <code dir="auto">CounterV2.java</code></p>
+<p><code dir="auto">CounterV1</code> names a successor (<code dir="auto">setSuccessor</code>) and migrates with <code dir="auto">@Destroy @MigrateTo("successor")</code>. <code dir="auto">CounterV2</code>
+adopts it with <code dir="auto">@Migrate(from = "params.previous")</code>, keeping its count and funds, in one composed transaction.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@MigrateTo</code>, <code dir="auto">@Migrate</code>, <code dir="auto">@Params</code>, <code dir="auto">@SignedBy("admin")</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:upgrade:test</code></li>
+<li><strong>Read:</strong> <a href="/tutorials/upgrades/">Upgrading a contract</a>, <a href="/contracts/upgrades/">Upgrades and migration</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="fees">fees</h3><a class="sl-anchor-link" href="#fees"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “fees”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/fees"><code dir="auto">examples/fees</code></a> · <code dir="auto">Stall.java</code>, <code dir="auto">Pot.java</code></p>
+<p>A <code dir="auto">Stall</code> deposits a 5 % fee from each sale into a <code dir="auto">Pot</code> instance fixed in its params (a <code dir="auto">ForeignInstance</code>).
+<code dir="auto">Pot.collect</code> takes the deposit in with <code dir="auto">@Receives</code> in the same composed transaction. The output registry carries
+the deposit claim, and both validators check their side.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@Params</code>, <code dir="auto">@Receives</code>, <code dir="auto">@Payable</code>, <code dir="auto">@SignedBy("owner")</code>; <code dir="auto">Stall</code>’s sale returns a list of <code dir="auto">Deposit</code>s</li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:fees:test</code></li>
+<li><strong>Read:</strong> <a href="/contracts/deposits/">Deposits</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="guild">guild</h3><a class="sl-anchor-link" href="#guild"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “guild”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/guild"><code dir="auto">examples/guild</code></a> · <code dir="auto">Guild.java</code>, <code dir="auto">Armory.java</code></p>
+<p><code dir="auto">Guild</code> has two owned types, <code dir="auto">Hero</code> and <code dir="auto">Item</code>. Each owned method runs only on its own type’s datum, and each type
+has its own invariants. A hero moves to another guild with <code dir="auto">@Into</code>, which that guild admits with <code dir="auto">@Admits("Hero")</code>
+in the same transaction (<code dir="auto">transferAdmitted</code>). <code dir="auto">Armory</code> holds <code dir="auto">Vault</code> objects, each with a MerkleMap inventory.</p>
+<ul>
+<li><strong>Annotations:</strong> two <code dir="auto">@Owned</code> types, <code dir="auto">@OwnedInit</code>, <code dir="auto">@OwnedAction</code>, <code dir="auto">@OwnedDestroy</code>, <code dir="auto">@Shared</code>, <code dir="auto">@Into</code>,
+<code dir="auto">@Admits</code>, <code dir="auto">@Invariant</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:guild:test</code></li>
+<li><strong>Read:</strong> <a href="/contracts/owned-objects/">Owned objects</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="locker">locker</h3><a class="sl-anchor-link" href="#locker"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “locker”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/locker"><code dir="auto">examples/locker</code></a> · <code dir="auto">Locker.java</code>, <code dir="auto">Safes.java</code></p>
+<p>MerkleMaps with native assets (ADR-0014). <code dir="auto">Locker</code> holds a native token for many users, with their balances in a
+MerkleMap so the datum stays small: locking takes tokens in (<code dir="auto">accepted</code>), unlocking sends them back. <code dir="auto">Safes</code> has
+owned safes, each holding tokens and a MerkleMap written at creation.</p>
+<ul>
+<li><strong>Annotations:</strong> <code dir="auto">@StateContract(assetSlots = 2)</code>, <code dir="auto">@Owned</code>, <code dir="auto">@OwnedInit</code>, <code dir="auto">@OwnedAction</code>, <code dir="auto">@OwnedDestroy</code>, <code dir="auto">@Payable</code></li>
+<li><strong>Run:</strong> <code dir="auto">./gradlew :examples:locker:test</code></li>
+<li><strong>Read:</strong> <a href="/contracts/merklemaps/">MerkleMaps</a>, <a href="/contracts/assets-mints-sends/">Native assets, mints and sends</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h2"><h2 id="wallets-and-pages">Wallets and pages</h2><a class="sl-anchor-link" href="#wallets-and-pages"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Wallets and pages”</span></a></div>
+<div class="sl-heading-wrapper level-h3"><h3 id="wallet">wallet</h3><a class="sl-anchor-link" href="#wallet"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “wallet”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/wallet"><code dir="auto">examples/wallet</code></a> · tests and <code dir="auto">js/page.mjs</code></p>
+<p>Wallet-signed transactions. A counter and a bank are used from an address-only <code dir="auto">WalletAccount</code>:
+<code dir="auto">Compose.prepare()</code>, a CIP-30-style witness set, <code dir="auto">PreparedTx.submit</code>. <code dir="auto">js/page.mjs</code> (Node) plays the page: it
+verifies the prepared transaction, refuses malicious variants, signs and submits.</p>
+<ul>
+<li><strong>Run:</strong> <code dir="auto">(cd examples/wallet/js &amp;&amp; npm install)</code>, then <code dir="auto">./gradlew :examples:wallet:test</code></li>
+<li><strong>Read:</strong> <a href="/apps/wallets/">Wallets</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="dapp">dapp</h3><a class="sl-anchor-link" href="#dapp"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “dapp”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/dapp"><code dir="auto">examples/dapp</code></a> · <a href="https://github.com/bloxbean/joust/blob/main/examples/dapp/README.md">README</a></p>
+<p>A browser dApp for <code dir="auto">Counter</code> and <code dir="auto">Bank</code> on DevKit. It uses typed JS clients generated from the contracts’
+descriptions (<code dir="auto">joust-gen</code>), the prepare service (<code dir="auto">julc-state-server</code>), a page that verifies every transaction and
+shows what it checked before a CIP-30 wallet signs, and a “malicious service” switch whose tampered transactions
+the page refuses. <code dir="auto">DappDevnetTest</code> runs the flows in Node.</p>
+<div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="sh"><code><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">./gradlew</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">:examples:dapp:jsClients</span><span style="--0:#E6EDF3;--1:#24292E">                      </span><span style="--0:#8B949E;--1:#616972"># frontend/src/generated/{Counter,Bank}.js + .d.ts</span></div></div><div class="ec-line"><div class="code"><span style="--0:#E6EDF3;--1:#24292E">(</span><span style="--0:#79C0FF;--1:#005CC5">cd</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">examples/dapp/frontend</span><span style="--0:#E6EDF3;--1:#24292E"> &amp;&amp; </span><span style="--0:#FFA657;--1:#6F42C1">npm</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">install</span><span style="--0:#E6EDF3;--1:#24292E"> &amp;&amp; </span><span style="--0:#FFA657;--1:#6F42C1">npm</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">run</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">build</span><span style="--0:#E6EDF3;--1:#24292E">)</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">./gradlew</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">:examples:dapp:run</span><span style="--0:#E6EDF3;--1:#24292E">                            </span><span style="--0:#8B949E;--1:#616972"># http://localhost:8095</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="./gradlew :examples:dapp:jsClients                      # frontend/src/generated/{Counter,Bank}.js + .d.ts(cd examples/dapp/frontend &amp;&amp; npm install &amp;&amp; npm run build)./gradlew :examples:dapp:run                            # http://localhost:8095"><div></div></button></div></figure></div>
+<ul>
+<li><strong>Read:</strong> <a href="/apps/javascript-clients/">JavaScript clients</a>, <a href="/apps/pages/">Pages</a>, <a href="/apps/wallets/">Wallets</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h3"><h3 id="devkit">devkit</h3><a class="sl-anchor-link" href="#devkit"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “devkit”</span></a></div>
+<p><a href="https://github.com/bloxbean/joust/tree/main/examples/devkit"><code dir="auto">examples/devkit</code></a> · <code dir="auto">DevKit.java</code>, <code dir="auto">Fixtures.java</code>, <code dir="auto">FixtureRecorder.java</code></p>
+<p>Not a contract: the Yaci DevKit connection helper every example’s DevKit tests use (top-ups fall back to the
+default-mnemonic genesis accounts when the faucet runs dry), and the ADR-0015 fixture recorder. <code dir="auto">FixturesTest</code> checks
+the recorded oracle in <code dir="auto">fixtures/</code>.</p>
+<ul>
+<li><strong>Read:</strong> <a href="/contracts/testing/">Testing</a>, <a href="/apps/networks-and-providers/">Networks and chain providers</a></li>
+</ul>
+<div class="sl-heading-wrapper level-h2"><h2 id="script-sizes-and-budgets">Script sizes and budgets</h2><a class="sl-anchor-link" href="#script-sizes-and-budgets"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Script sizes and budgets”</span></a></div>
+<p>The validators are compiled by JuLC (target <code dir="auto">plutus-v3-pv11</code>, <code dir="auto">pv11-safe</code> optimisation), after the ADR-0008
+optimisations. The budgets are per script execution, from the harness tests. For scale, a transaction may use
+10,000M CPU and 14M memory units on mainnet (16.5M memory on DevKit). The ADR-0008 tables give the numbers from
+before the optimisations.</p>
+<table>
+<thead>
+<tr>
+<th>Contract</th>
+<th>Script size</th>
+<th>Call</th>
+<th>Purpose</th>
+<th>CPU</th>
+<th>Mem</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Counter</td>
+<td>5,631 B</td>
+<td>create</td>
+<td>MINT</td>
+<td>86.2M</td>
+<td>271k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>increment</td>
+<td>SPEND</td>
+<td>73.4M</td>
+<td>213k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>reset</td>
+<td>SPEND</td>
+<td>74.2M</td>
+<td>216k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>close</td>
+<td>SPEND + MINT (burn)</td>
+<td>94.1M + 17.6M</td>
+<td>317k + 64k</td>
+</tr>
+<tr>
+<td>Vault</td>
+<td>6,273 B</td>
+<td>open</td>
+<td>MINT</td>
+<td>92.7M</td>
+<td>290k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>deposit</td>
+<td>SPEND</td>
+<td>99.4M</td>
+<td>303k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>withdraw</td>
+<td>SPEND</td>
+<td>140.6M</td>
+<td>445k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>close</td>
+<td>SPEND + MINT</td>
+<td>97.9M + 17.6M</td>
+<td>330k + 64k</td>
+</tr>
+<tr>
+<td>Escrow</td>
+<td>5,688 B</td>
+<td>open</td>
+<td>MINT</td>
+<td>102.5M</td>
+<td>314k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>release / refund</td>
+<td>SPEND + MINT</td>
+<td>92.1M + 17.6M</td>
+<td>309k + 64k</td>
+</tr>
+<tr>
+<td>Crowdfund</td>
+<td>7,976 B</td>
+<td>launch</td>
+<td>MINT</td>
+<td>102.8M</td>
+<td>317k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>contribute</td>
+<td>SPEND</td>
+<td>132.8M</td>
+<td>385k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>refund</td>
+<td>SPEND</td>
+<td>156.9M</td>
+<td>460k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>refund, 27 backers (<code dir="auto">maxDatumBytes</code> = 1024, at capacity)</td>
+<td>SPEND</td>
+<td>286.6M</td>
+<td>559k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>claim</td>
+<td>SPEND + MINT</td>
+<td>99.0M + 17.6M</td>
+<td>336k + 64k</td>
+</tr>
+<tr>
+<td>Bank</td>
+<td>7,920 B</td>
+<td>open account</td>
+<td>MINT</td>
+<td>124.1M</td>
+<td>392k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>deposit (owned)</td>
+<td>SPEND</td>
+<td>105.9M</td>
+<td>323k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>withdraw (owned, <code dir="auto">@Shared</code> read)</td>
+<td>SPEND</td>
+<td>171.4M</td>
+<td>547k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>close (owned)</td>
+<td>SPEND</td>
+<td>96.4M</td>
+<td>327k</td>
+</tr>
+<tr>
+<td>Pool</td>
+<td>9,586 B</td>
+<td>create intent</td>
+<td>MINT</td>
+<td>110.3M</td>
+<td>321k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>cancel intent</td>
+<td>SPEND</td>
+<td>48.3M</td>
+<td>165k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>batch of 3 (donate, buy, buy)</td>
+<td>SPEND instance</td>
+<td>517.6M</td>
+<td>1,619k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>batch of 10 donations (all scripts)</td>
+<td></td>
+<td>4,629.8M</td>
+<td>13,976k</td>
+</tr>
+<tr>
+<td>Jar (.jsc)</td>
+<td>9,507 B</td>
+<td>tip</td>
+<td>SPEND</td>
+<td>102.3M</td>
+<td>312k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>withdraw (with an <code dir="auto">if</code> arm)</td>
+<td>SPEND</td>
+<td>144.5M</td>
+<td>460k</td>
+</tr>
+<tr>
+<td>Points (.jsc)</td>
+<td>12,276 B (+ MapVerifier)</td>
+<td>give</td>
+<td>SPEND + VERIFIER</td>
+<td>235.1M + 393.6M</td>
+<td>768k + 1,496k</td>
+</tr>
+<tr>
+<td>Rollup</td>
+<td>10,447 B</td>
+<td>commit (16 steps)</td>
+<td>SPEND</td>
+<td>651.9M</td>
+<td>1,892k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>challenge, worst case (32 accounts, 16 steps)</td>
+<td>SPEND</td>
+<td>2,644.1M</td>
+<td>7,781k</td>
+</tr>
+<tr>
+<td>Token</td>
+<td>11,718 B (+ MapVerifier 4,700 B, shared)</td>
+<td>create</td>
+<td>MINT + VERIFIER</td>
+<td>121.2M + 32.0M</td>
+<td>366k + 138k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>mint (1 read, 1 write)</td>
+<td>SPEND + VERIFIER</td>
+<td>156.2M + 336.5M</td>
+<td>483k + 1,277k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>transfer (2 reads, 2 writes)</td>
+<td>SPEND + VERIFIER</td>
+<td>218.4M + 502.3M</td>
+<td>707k + 1,901k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>transfer, 203 holders in the map</td>
+<td>SPEND + VERIFIER</td>
+<td>218.4M + 742.4M</td>
+<td>707k + 2,923k</td>
+</tr>
+<tr>
+<td>Dex</td>
+<td>12,008 B (+ OutputVerifier 703 B, shared)</td>
+<td>open</td>
+<td>MINT</td>
+<td>100.4M</td>
+<td>302k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>addLiquidity (LP minted, sent)</td>
+<td>SPEND + MINT + VERIFIER</td>
+<td>256.5M + 57.8M + 21.2M</td>
+<td>793k + 214k + 86k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>swapAdaForToken</td>
+<td>SPEND + VERIFIER</td>
+<td>221.6M + 21.2M</td>
+<td>688k + 86k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>swapTokenForAda</td>
+<td>SPEND</td>
+<td>197.8M</td>
+<td>611k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>removeLiquidity (LP burned)</td>
+<td>SPEND + MINT + VERIFIER</td>
+<td>296.3M + 69.5M + 22.1M</td>
+<td>913k + 260k + 90k</td>
+</tr>
+<tr>
+<td>Market</td>
+<td>11,325 B</td>
+<td>offer (NFT in)</td>
+<td>MINT</td>
+<td>159.1M</td>
+<td>497k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>buy (payout, NFT send, royalty send)</td>
+<td>SPEND + MINT + VERIFIER</td>
+<td>345.7M + 24.0M + 35.3M</td>
+<td>1,127k + 100k + 145k</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td>cancel</td>
+<td>SPEND + MINT + VERIFIER</td>
+<td>191.0M + 24.0M + 21.2M</td>
+<td>634k + 100k + 86k</td>
+</tr>
+</tbody>
+</table>
+<p>The registry’s validator is 14,717 bytes; its whole-transaction budgets are on the
+<a href="/contracts/keyed-objects/#costs">Keyed objects</a> page (ADR-0016, M1 notes).</p>
+<p>All contracts read their script by reference (ADR-0002 D9); the first deploy of a contract type publishes it.
+ADR-0008 cut the generated checks’ cost by 30-60 % in plain contracts and the scripts by about 2.4 KB, so the
+size-based fee is now the largest part of a simple call’s fee. The source of this table is
+<a href="https://github.com/bloxbean/joust/blob/main/examples/README.md"><code dir="auto">examples/README.md</code></a>.</p>
+<aside aria-label="Tip" class="starlight-aside starlight-aside--tip"><p class="starlight-aside__title" aria-hidden="true"><svg aria-hidden="true" class="starlight-aside__icon astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path fill-rule="evenodd" d="M1.44 8.855v-.001l3.527-3.516c.34-.344.802-.541 1.285-.548h6.649l.947-.947c3.07-3.07 6.207-3.072 7.62-2.868a1.821 1.821 0 0 1 1.557 1.557c.204 1.413.203 4.55-2.868 7.62l-.946.946v6.649a1.845 1.845 0 0 1-.549 1.286l-3.516 3.528a1.844 1.844 0 0 1-3.11-.944l-.858-4.275-4.52-4.52-2.31-.463-1.964-.394A1.847 1.847 0 0 1 .98 10.693a1.843 1.843 0 0 1 .46-1.838Zm5.379 2.017-3.873-.776L6.32 6.733h4.638l-4.14 4.14Zm8.403-5.655c2.459-2.46 4.856-2.463 5.89-2.33.134 1.035.13 3.432-2.329 5.891l-6.71 6.71-3.561-3.56 6.71-6.711Zm-1.318 15.837-.776-3.873 4.14-4.14v4.639l-3.364 3.374Z" clip-rule="evenodd"/><path d="M9.318 18.345a.972.972 0 0 0-1.86-.561c-.482 1.435-1.687 2.204-2.934 2.619a8.22 8.22 0 0 1-1.23.302c.062-.365.157-.79.303-1.229.415-1.247 1.184-2.452 2.62-2.935a.971.971 0 1 0-.62-1.842c-.12.04-.236.084-.35.13-2.02.828-3.012 2.588-3.493 4.033a10.383 10.383 0 0 0-.51 2.845l-.001.016v.063c0 .536.434.972.97.972H2.24a7.21 7.21 0 0 0 .878-.065c.527-.063 1.248-.19 2.02-.447 1.445-.48 3.205-1.472 4.033-3.494a5.828 5.828 0 0 0 .147-.407Z"/></svg>Tip</p><div class="starlight-aside__content"><p>A MerkleMap call runs two scripts: the contract’s spend and the shared <code dir="auto">MapVerifier</code>. The verifier’s cost grows with
+the number of keys touched and, slowly, with the map’s size (compare the Token transfer with 203 holders). A batch
+of 10 donations uses 13,976k memory, close to mainnet’s 14M limit: the batcher’s default is 8 intents
+(<code dir="auto">Batcher.DEFAULT_MAX</code>, ADR-0004 §6).</p></div></aside>
+<div class="sl-heading-wrapper level-h2"><h2 id="next-steps">Next steps</h2><a class="sl-anchor-link" href="#next-steps"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Next steps”</span></a></div>
+<div class="card-grid astro-7qmvx3iy"><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/start/first-contract/" class="astro-zaaezwya"><span class="title astro-zaaezwya">Your first contract</span></a><span class="description astro-zaaezwya">Write a counter from scratch.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/contracts/fees-and-size/" class="astro-zaaezwya"><span class="title astro-zaaezwya">Fees and script size</span></a><span class="description astro-zaaezwya">What a call costs, and how to keep scripts small.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/contracts/testing/" class="astro-zaaezwya"><span class="title astro-zaaezwya">Testing</span></a><span class="description astro-zaaezwya">The JVM, harness and DevKit levels every example uses.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/project/architecture-decisions/" class="astro-zaaezwya"><span class="title astro-zaaezwya">Architecture decisions</span></a><span class="description astro-zaaezwya">The ADR behind each example.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div></div></div><footer class="sl-flex astro-ddtxxk7k"><div class="meta sl-flex astro-ddtxxk7k"><a href="https://github.com/bloxbean/joust/edit/main/www/src/content/docs/reference/examples.mdx" class="sl-flex print:hidden astro-qlekgd3o"><svg aria-hidden="true" class="astro-qlekgd3o astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.2em;"><path d="M22 7.24a1 1 0 0 0-.29-.71l-4.24-4.24a1 1 0 0 0-1.1-.22 1 1 0 0 0-.32.22l-2.83 2.83L2.29 16.05a1 1 0 0 0-.29.71V21a1 1 0 0 0 1 1h4.24a1 1 0 0 0 .76-.29l10.87-10.93L21.71 8c.1-.1.17-.2.22-.33a1 1 0 0 0 0-.24v-.14l.07-.05ZM6.83 20H4v-2.83l9.93-9.93 2.83 2.83L6.83 20ZM18.17 8.66l-2.83-2.83 1.42-1.41 2.82 2.82-1.41 1.42Z"/></svg>Edit page</a></div><div class="pagination-links print:hidden astro-b5raizh3" dir="ltr"><a href="/reference/description-format/" rel="prev" class="astro-b5raizh3"><svg aria-hidden="true" class="astro-b5raizh3 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg><span class="astro-b5raizh3">Previous<br class="astro-b5raizh3"><span class="link-title astro-b5raizh3">Contract description</span></span></a><a href="/reference/troubleshooting/" rel="next" class="astro-b5raizh3"><svg aria-hidden="true" class="astro-b5raizh3 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg><span class="astro-b5raizh3">Next<br class="astro-b5raizh3"><span class="link-title astro-b5raizh3">Troubleshooting</span></span></a></div></footer></div></div></main></div></div></div></div></body></html>

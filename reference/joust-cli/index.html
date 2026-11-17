@@ -1,0 +1,570 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-g5ptsecz"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>@julclang/joust (CLI, Vite) | JOUST</title><link rel="canonical" href="https://joust.julc.dev/reference/joust-cli/"/><link rel="sitemap" href="/sitemap-index.xml"/><link rel="shortcut icon" href="/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v7.3.8"/><meta name="generator" content="Starlight v0.42.10"/><meta property="og:title" content="@julclang/joust (CLI, Vite)"/><meta property="og:type" content="article"/><meta property="og:url" content="https://joust.julc.dev/reference/joust-cli/"/><meta property="og:locale" content="en"/><meta property="og:description" content="Reference of @julclang/joust - every joust command and flag, environment variables, the dev server's routes, the Vite plugin and virtual:joust/network, and create-joust."/><meta property="og:site_name" content="JOUST"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="Reference of @julclang/joust - every joust command and flag, environment variables, the dev server's routes, the Vite plugin and virtual:joust/network, and create-joust."/><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"><link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt"><meta property="og:image" content="https://joust.julc.dev/joust-knight.png"><meta property="og:image:alt" content="JOUST — State Contract Simplified"><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/_astro/print.C9eyqPGL.css" media="print"><link rel="stylesheet" href="/_astro/common.CKVVw45s.css"><style>@layer starlight.components{svg:where(.astro-hkc32dio){color:var(--sl-icon-color);font-size:var(--sl-icon-size,1em);width:1em;height:1em;overflow:visible}}
+</style><script type="module" src="/_astro/page.cNngjUgL.js"></script><style>@layer starlight.components{.card-grid:where(.astro-7qmvx3iy){grid-template-columns:100%;gap:1rem;display:grid}.card-grid:where(.astro-7qmvx3iy)>*{margin-top:0!important}@media (width>=50rem){.card-grid:where(.astro-7qmvx3iy){grid-template-columns:1fr 1fr;gap:1.5rem}.stagger:where(.astro-7qmvx3iy){--stagger-height:5rem;padding-bottom:var(--stagger-height)}.stagger:where(.astro-7qmvx3iy)>:nth-child(2n){transform:translateY(var(--stagger-height))}}}
+</style><style>@layer starlight.components{starlight-file-tree:where(.astro-a2hqddox){--x-space:1.5rem;--y-space:.125rem;--y-pad:0;border:1px solid var(--sl-color-gray-5);background-color:var(--sl-color-gray-6);font-size:var(--sl-text-xs);font-family:var(--__sl-font-mono);padding:1rem;display:block;overflow-x:auto}starlight-file-tree:where(.astro-a2hqddox) .directory>details{padding:0;background:0 0;border:0;padding-inline-start:var(--x-space)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary{padding:var(--y-pad) .625rem;color:var(--sl-color-white);border:0;max-width:100%;margin-inline-start:calc(-1 * var(--x-space));font-weight:400}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary::marker,starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary::-webkit-details-marker{color:var(--sl-color-gray-3)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover,starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover .tree-icon{cursor:pointer;color:var(--sl-color-text-accent);fill:currentColor}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover~ul{border-color:var(--sl-color-gray-4)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover .highlight .tree-icon{color:var(--sl-color-text-invert);fill:currentColor}starlight-file-tree:where(.astro-a2hqddox) ul{border-inline-start:1px solid var(--sl-color-gray-5);margin-inline-start:.5rem;padding:0;padding-inline-start:.125rem;list-style:none}starlight-file-tree:where(.astro-a2hqddox)>ul{border:0;margin:0;padding:0}starlight-file-tree:where(.astro-a2hqddox) li{margin:var(--y-space) 0;padding:var(--y-pad) 0}starlight-file-tree:where(.astro-a2hqddox) .file{color:var(--sl-color-white);margin-inline-start:calc(var(--x-space) - .125rem)}starlight-file-tree:where(.astro-a2hqddox) .tree-entry{flex-wrap:wrap;align-items:flex-start;max-width:calc(100% - 1rem);display:inline-flex}@media (width>=30em){starlight-file-tree:where(.astro-a2hqddox) .tree-entry{flex-wrap:nowrap}}starlight-file-tree:where(.astro-a2hqddox) .tree-entry>:first-child{flex-shrink:0}starlight-file-tree:where(.astro-a2hqddox) .empty{color:var(--sl-color-gray-3);padding-inline-start:.375rem}starlight-file-tree:where(.astro-a2hqddox) .comment{color:var(--sl-color-gray-3);min-width:12rem;max-width:24rem;padding-inline-start:1.625rem}starlight-file-tree:where(.astro-a2hqddox) .highlight{color:var(--sl-color-text-invert);background-color:var(--sl-color-text-accent);border-radius:.25rem;padding-inline-end:.5rem;display:inline-block}starlight-file-tree:where(.astro-a2hqddox) svg{fill:var(--sl-color-gray-3);vertical-align:middle;width:.875rem;height:.875rem;margin-inline:.25rem .375rem;display:inline;overflow:visible}starlight-file-tree:where(.astro-a2hqddox) .highlight svg.tree-icon{fill:currentColor}}
+</style><style>@layer starlight.components{.sl-link-card:where(.astro-zaaezwya){border:1px solid var(--sl-color-gray-5);box-shadow:var(--sl-shadow-sm);border-radius:.5rem;grid-template-columns:1fr auto;gap:.5rem;padding:1rem;display:grid;position:relative}a:where(.astro-zaaezwya){line-height:var(--sl-line-height-headings);text-decoration:none}a:where(.astro-zaaezwya):before{content:"";position:absolute;inset:0}.stack:where(.astro-zaaezwya){flex-direction:column;gap:.5rem}.title:where(.astro-zaaezwya){color:var(--sl-color-white);font-weight:600;font-size:var(--sl-text-lg)}.description:where(.astro-zaaezwya){color:var(--sl-color-gray-3);line-height:1.5}.icon:where(.astro-zaaezwya){color:var(--sl-color-gray-3)}.sl-link-card:where(.astro-zaaezwya):hover{background:var(--sl-color-gray-7,var(--sl-color-gray-6));border-color:var(--sl-color-gray-2)}.sl-link-card:where(.astro-zaaezwya):hover .icon:where(.astro-zaaezwya){color:var(--sl-color-white)}}
+</style><style>@layer starlight.components{.sl-steps{--bullet-size:calc(var(--sl-line-height) * 1rem);--bullet-margin:.375rem;counter-reset:steps-counter var(--sl-steps-start,0);padding-inline-start:0;list-style:none}.sl-steps>li{counter-increment:steps-counter;padding-inline-start:calc(var(--bullet-size) + 1rem);min-height:calc(var(--bullet-size) + var(--bullet-margin));padding-bottom:1px;position:relative}.sl-steps>li+li{margin-top:0}.sl-steps>li:before{content:counter(steps-counter);top:0;width:var(--bullet-size);height:var(--bullet-size);line-height:var(--bullet-size);font-size:var(--sl-text-xs);text-align:center;color:var(--sl-color-white);background-color:var(--sl-color-gray-6);box-shadow:inset 0 0 0 1px var(--sl-color-gray-5);border-radius:99rem;font-weight:600;position:absolute;inset-inline-start:0}.sl-steps>li:after{--guide-width:1px;content:"";top:calc(var(--bullet-size) + var(--bullet-margin));bottom:var(--bullet-margin);width:var(--guide-width);background-color:var(--sl-color-hairline-light);position:absolute;inset-inline-start:calc((var(--bullet-size) - var(--guide-width)) / 2)}}@layer starlight.content{.sl-steps>li>:first-child{--lh:calc(1em * var(--sl-line-height));--shift-y:calc(.5 * (var(--bullet-size) - var(--lh)));transform:translateY(var(--shift-y));margin-bottom:var(--shift-y)}.sl-steps>li>:first-child:where(h1,h2,h3,h4,h5,h6){--lh:calc(1em * var(--sl-line-height-headings))}@supports (--prop:1lh){.sl-steps>li>:first-child{--lh:1lh}}}
+</style><style>@layer starlight.components{starlight-tabs:where(.astro-scn3uvmv){display:block}.tablist-wrapper:where(.astro-scn3uvmv){overflow-x:auto}:where(.astro-scn3uvmv)[role=tablist]{border-bottom:2px solid var(--sl-color-gray-5);padding:0;list-style:none;display:flex}.tab:where(.astro-scn3uvmv){display:flex}.tab:where(.astro-scn3uvmv)>:where(.astro-scn3uvmv)[role=tab]{--sl-tab-color-border:var(--sl-color-gray-5);line-height:var(--sl-line-height-headings);box-shadow:0 2px 0 var(--sl-tab-color-border);color:var(--sl-color-gray-3);outline-offset:var(--sl-outline-offset-inside);overflow-wrap:initial;align-items:center;gap:.5rem;padding:.275rem 1.25rem;text-decoration:none;display:flex}.tab:where(.astro-scn3uvmv) :where(.astro-scn3uvmv)[role=tab][aria-selected=true]{--sl-tab-color-border:var(--sl-color-text-accent);color:var(--sl-color-white);font-weight:600}.tablist-wrapper:where(.astro-scn3uvmv)~[role=tabpanel]{margin-top:1rem}}
+</style><style>@layer starlight.components{.card:where(.astro-oag6qnet){--sl-card-border:var(--sl-color-purple);--sl-card-bg:var(--sl-color-purple-low);border:1px solid var(--sl-color-gray-5);background-color:var(--sl-color-black);flex-direction:column;gap:clamp(.5rem,.125rem + 1vw,1rem);padding:clamp(1rem,.125rem + 3vw,2.5rem)}.card:where(.astro-oag6qnet):nth-child(4n+1){--sl-card-border:var(--sl-color-orange);--sl-card-bg:var(--sl-color-orange-low)}.card:where(.astro-oag6qnet):nth-child(4n+3){--sl-card-border:var(--sl-color-green);--sl-card-bg:var(--sl-color-green-low)}.card:where(.astro-oag6qnet):nth-child(4n+4){--sl-card-border:var(--sl-color-red);--sl-card-bg:var(--sl-color-red-low)}.card:where(.astro-oag6qnet):nth-child(4n+5){--sl-card-border:var(--sl-color-blue);--sl-card-bg:var(--sl-color-blue-low)}.title:where(.astro-oag6qnet){font-weight:600;font-size:var(--sl-text-h4);color:var(--sl-color-white);line-height:var(--sl-line-height-headings);align-items:center;gap:1rem}.card:where(.astro-oag6qnet) .icon:where(.astro-oag6qnet){border:1px solid var(--sl-card-border);background-color:var(--sl-card-bg);border-radius:.25rem;flex-shrink:0;padding:.2em}.card:where(.astro-oag6qnet) .body:where(.astro-oag6qnet){font-size:clamp(var(--sl-text-sm), calc(.5rem + 1vw), var(--sl-text-body));margin:0}}
+</style></head><body class="astro-g5ptsecz"><a class="sl-skip-link astro-qb7clj6f" href="#_top">Skip to content</a><div class="page sl-flex astro-yntsjkba"><header class="header astro-yntsjkba"><div class="header astro-by6fddyj"><div class="title-wrapper sl-flex astro-by6fddyj"><a href="/" class="site-title sl-flex astro-6rvad3va"><img class="light:sl-hidden print:hidden astro-6rvad3va" alt src="/_astro/joust-emblem-on-dark.jQuOM2iw.svg" width="570" height="836"><img class="dark:sl-hidden print:block astro-6rvad3va" alt src="/_astro/joust-emblem.BEwrtsDr.svg" width="570" height="836"><span class="astro-6rvad3va" translate="no">JOUST</span></a></div><div class="sl-flex print:hidden astro-by6fddyj"><site-search class="astro-by6fddyj astro-b5kgnn7o" data-translations="{&quot;placeholder&quot;:&quot;Search&quot;}"><button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-b5kgnn7o"><svg aria-hidden="true" class="astro-b5kgnn7o astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg><span class="sl-hidden md:sl-block astro-b5kgnn7o" aria-hidden="true">Search</span><kbd class="sl-hidden md:sl-flex astro-b5kgnn7o" style="display: none"><kbd class="astro-b5kgnn7o">Ctrl</kbd><kbd class="astro-b5kgnn7o">K</kbd></kbd></button><dialog style="padding: 0" aria-label="Search" class="astro-b5kgnn7o"><div class="dialog-frame sl-flex astro-b5kgnn7o"><button data-close-modal class="sl-flex md:sl-hidden astro-b5kgnn7o">Cancel</button><div class="search-container astro-b5kgnn7o"><div id="starlight__search" class="astro-b5kgnn7o"></div></div></div></dialog></site-search><script>
+	(() => {
+		const openBtn = document.querySelector('button[data-open-modal]');
+		const shortcut = openBtn?.querySelector('kbd');
+		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
+		const platformKey = shortcut.querySelector('kbd');
+		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+			platformKey.textContent = '⌘';
+			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
+		}
+		shortcut.style.display = '';
+	})();
+</script><script type="module" src="/_astro/Search.astro_astro_type_script_index_0_lang.CibB10mu.js"></script></div><div class="sl-hidden md:sl-flex print:hidden right-group astro-by6fddyj"><div class="sl-flex social-icons astro-by6fddyj"><a href="https://github.com/bloxbean/joust" rel="me" class="sl-flex astro-n2mnl6yq"><span class="sr-only astro-n2mnl6yq">GitHub</span><svg aria-hidden="true" class="astro-n2mnl6yq astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-2z5xp7gb"><span class="sr-only astro-2z5xp7gb">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-2z5xp7gb"><option value="dark" class="astro-2z5xp7gb">Dark</option><option value="light" class="astro-2z5xp7gb">Light</option><option value="auto" selected class="astro-2z5xp7gb">Auto</option></select><svg aria-hidden="true" class="icon caret astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script><script type="module">var e=`starlight-theme`,t=e=>e===`auto`||e===`dark`||e===`light`?e:`auto`,n=()=>t(typeof localStorage<`u`&&localStorage.getItem(e));function r(t){typeof localStorage<`u`&&localStorage.setItem(e,t===`light`||t===`dark`?t:``)}var i=()=>matchMedia(`(prefers-color-scheme: light)`).matches?`light`:`dark`;function a(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e===`auto`?i():e,r(e)}matchMedia(`(prefers-color-scheme: light)`).addEventListener(`change`,()=>{n()===`auto`&&a(`auto`)});var o=class extends HTMLElement{constructor(){super(),a(n()),this.querySelector(`select`)?.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&a(t(e.currentTarget.value))})}};customElements.define(`starlight-theme-select`,o);</script><script type="module">var e=class extends HTMLElement{constructor(){super();let e=this.querySelector(`select`);e&&(e.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=e.currentTarget.value)}),window.addEventListener(`pageshow`,t=>{if(!t.persisted)return;let n=e.querySelector(`option[selected]`)?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}};customElements.define(`starlight-lang-select`,e);</script></div></div></header><nav class="sidebar print:hidden astro-yntsjkba" aria-label="Main"><button popovertarget="starlight__sidebar" class="sl-menu-button sl-flex md:sl-hidden print:hidden astro-r2osgdlg"><svg aria-hidden="true" class="open-menu astro-r2osgdlg astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg><svg aria-hidden="true" class="close-menu astro-r2osgdlg astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg><span class="sr-only astro-r2osgdlg">Menu</span></button><script type="module">var e=class extends HTMLElement{constructor(){super();let e=matchMedia(`(min-width: 50em)`),t=()=>{this.popover=e.matches?null:`auto`};t(),e.addEventListener(`change`,()=>t()),this.addEventListener(`toggle`,({newState:e})=>this.trapFocus(e===`open`))}trapFocus(e){document.querySelectorAll(`.main-frame, .sl-skip-link`).forEach(t=>{t.toggleAttribute(`inert`,e)})}};customElements.define(`sl-sidebar-pane`,e);</script><sl-sidebar-pane popover id="starlight__sidebar" class="sidebar-pane astro-yntsjkba"><div class="sidebar-content sl-flex astro-yntsjkba"><sl-sidebar-state-persist data-hash="0uwcge0" class="astro-ipdry5cl"><script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script><ul class="top-level astro-rmhv4bp6"><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Start here</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="0"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/start/why-joust/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Why JOUST</span></a></li><li class="astro-rmhv4bp6"><a href="/start/how-it-works/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">How JOUST works</span></a></li><li class="astro-rmhv4bp6"><a href="/start/quick-start-java/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Quick start: Java</span></a></li><li class="astro-rmhv4bp6"><a href="/start/first-contract/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Your first contract</span></a></li><li class="astro-rmhv4bp6"><a href="/start/quick-start-npm/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Quick start: JavaScript &amp; TypeScript</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Tutorials: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="1"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/tutorials/vault/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Vault: deposits, time and payouts</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/escrow-crowdfund/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Escrow and crowdfunding</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/token-merklemap/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Token balances in a MerkleMap</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/bank-owned-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Bank: owned objects</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/pool-batched-intents/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Pool: batched intents</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/dex-assets/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">DEX: native assets and LP tokens</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/multisig-treasury/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Multisig treasury</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/oracle-composition/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Oracle and composition</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/staked-vault/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Staked vault and governance</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/upgrades/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Upgrading a contract</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Tutorials: JavaScript</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="2"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/tutorials/counter-dapp/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">A counter dApp in the browser</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/deploy-preview/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Deploy to preview</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Writing contracts</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="3"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/contracts/state-and-lifecycle/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">State and lifecycle</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/ctx-and-funds/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Ctx, funds and payouts</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/authorization/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Authorization</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/time/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Time</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/require-and-errors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Require and errors</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/params-invariants-events/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Params, invariants and events</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/merklemaps/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">MerkleMaps</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/owned-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Owned objects</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/keyed-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Keyed objects</span><span class="sl-badge note small  astro-rmhv4bp6 astro-f4zorn72">Next release</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/batched-intents/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Batched intents</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/assets-mints-sends/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Native assets, mints and sends</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/reads-and-composition/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Reads and composition</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/deposits/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Deposits</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/staking-and-governance/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Staking and governance</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/upgrades/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Upgrades and migration</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/fees-and-size/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Fees and script size</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/security-model/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Security model</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/testing/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Testing</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Building apps: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="4"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/apps/java-runtime/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The Java off-chain runtime</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Building apps: JavaScript</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="5"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/apps/javascript-clients/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">JavaScript clients</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/wallets/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Wallets</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/pages/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Pages: worker, Vite, static builds</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/cli-and-projects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The joust CLI and projects</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/networks-and-providers/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Networks and chain providers</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/keyed-objects-js/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Keyed objects in JavaScript</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/map-mirrors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">MerkleMap mirrors</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Languages</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="6"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/languages/java/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Java</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Preview</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc-reference/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc reference</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc-std/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc standard library</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/typescript/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">TypeScript</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/editors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Editors</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="7"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/annotations/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Annotations</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/state-api/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">State API (julc-state-api)</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/java-runtime-api/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Java runtime API</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference: JavaScript</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="8"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/state-client/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/state-client</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/joust-runtime/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/joust-runtime</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/joust-cli/" aria-current="page" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/joust (CLI, Vite)</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/config/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">joust.config.json</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Experimental</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="9"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/description-format/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Contract description</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/examples/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Examples</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/troubleshooting/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Troubleshooting</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/glossary/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Glossary</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">AI</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="10"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/ai/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Using JOUST with AI</span></a></li><li class="astro-rmhv4bp6"><a href="/ai/starter-pack/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">AI starter pack</span></a></li><li class="astro-rmhv4bp6"><a href="/llms.txt" class="astro-rmhv4bp6" target="_blank"><span class="astro-rmhv4bp6">llms.txt</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Project</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="11"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/project/status-and-roadmap/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Status and roadmap</span></a></li><li class="astro-rmhv4bp6"><a href="/project/architecture-decisions/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Architecture decisions</span></a></li></ul></details></li></ul><script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script></sl-sidebar-state-persist><div class="md:sl-hidden"><div class="mobile-preferences sl-flex astro-p4azlveh"><div class="social-icons astro-p4azlveh"><a href="https://github.com/bloxbean/joust" rel="me" class="sl-flex astro-n2mnl6yq"><span class="sr-only astro-n2mnl6yq">GitHub</span><svg aria-hidden="true" class="astro-n2mnl6yq astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-2z5xp7gb"><span class="sr-only astro-2z5xp7gb">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-2z5xp7gb"><option value="dark" class="astro-2z5xp7gb">Dark</option><option value="light" class="astro-2z5xp7gb">Light</option><option value="auto" selected class="astro-2z5xp7gb">Auto</option></select><svg aria-hidden="true" class="icon caret astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script></div></div></div></sl-sidebar-pane></nav><div class="main-frame astro-yntsjkba"><script type="module">var e=document.getElementById(`starlight__sidebar`),t=e?.querySelector(`sl-sidebar-state-persist`),n=`sl-sidebar-state`,r=()=>{let r=[],i=t?.dataset.hash||``;try{let e=sessionStorage.getItem(n),t=JSON.parse(e||`{}`);Array.isArray(t.open)&&t.hash===i&&(r=t.open)}catch{}return{hash:i,open:r,scroll:e?.scrollTop||0}},i=e=>{try{sessionStorage.setItem(n,JSON.stringify(e))}catch{}},a=()=>i(r()),o=(e,t)=>{let n=r();n.open[t]=e,i(n)};t?.addEventListener(`click`,e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`summary`)?.closest(`details`);if(!t)return;let n=t.querySelector(`sl-sidebar-restore`),r=parseInt(n?.dataset.index||``);isNaN(r)||o(!t.open,r)}),addEventListener(`visibilitychange`,()=>{document.visibilityState===`hidden`&&a()});</script><div class="lg:sl-flex astro-lrzkfocr"><aside class="right-sidebar-container print:hidden astro-lrzkfocr"><div class="right-sidebar astro-lrzkfocr"><div class="lg:sl-hidden astro-qok35upx"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-66cqc7ze"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-66cqc7ze"><details id="starlight__mobile-toc" class="astro-66cqc7ze"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-66cqc7ze"><span class="toggle sl-flex astro-66cqc7ze">On this page<svg aria-hidden="true" class="caret astro-66cqc7ze astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-66cqc7ze"></span></summary><div class="dropdown astro-66cqc7ze"><ul class="isMobile astro-jugkfwgx" style="--depth: 0;"><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#_top" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Overview</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#commands" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Commands</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#outputs-of-joust-build" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Outputs of joust build</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#offline-tests" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Offline tests</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#joust-deploy" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">joust deploy</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#environment-variables" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Environment variables</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-dev-server" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The dev server</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-vite-plugin" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The Vite plugin</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#virtualjoustnetwork" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">virtual:joust/network</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-native-joust" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The native joust</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#create-joust" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">create-joust</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#functions" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Functions</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#next-steps" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Next steps</span></a></li></ul></div></details></nav></mobile-starlight-toc><script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C3fM4Kra.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-qok35upx"><div class="sl-container astro-qok35upx"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-jugkfwgx" style="--depth: 0;"><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#_top" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Overview</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#commands" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Commands</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#outputs-of-joust-build" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Outputs of joust build</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#offline-tests" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Offline tests</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#joust-deploy" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">joust deploy</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#environment-variables" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Environment variables</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-dev-server" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The dev server</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-vite-plugin" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The Vite plugin</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#virtualjoustnetwork" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">virtual:joust/network</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-native-joust" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The native joust</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#create-joust" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">create-joust</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#functions" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Functions</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#next-steps" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Next steps</span></a></li></ul></nav></starlight-toc><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.BpJaGz7G.js"></script></div></div></div></aside><div class="main-pane astro-lrzkfocr"><main data-pagefind-body class="astro-g5ptsecz" lang="en" dir="ltr"><div class="content-panel astro-a7po4psb"><div class="sl-container astro-a7po4psb"><h1 id="_top" class="astro-bebwqqxs">@julclang/joust (CLI, Vite)</h1></div></div><div class="content-panel astro-a7po4psb"><div class="sl-container astro-a7po4psb"><div class="sl-markdown-content"><aside aria-label="Experimental" class="starlight-aside starlight-aside--caution"><p class="starlight-aside__title" aria-hidden="true"><svg aria-hidden="true" class="starlight-aside__icon astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 16a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm10.67 1.47-8.05-14a3 3 0 0 0-5.24 0l-8 14A3 3 0 0 0 3.94 22h16.12a3 3 0 0 0 2.61-4.53Zm-1.73 2a1 1 0 0 1-.88.51H3.94a1 1 0 0 1-.88-.51 1 1 0 0 1 0-1l8-14a1 1 0 0 1 1.78 0l8.05 14a1 1 0 0 1 .05 1.02v-.02ZM12 8a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0V9a1 1 0 0 0-1-1Z"/></svg>Experimental</p><div class="starlight-aside__content"><p>The npm path runs JOUST’s toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see <a href="/start/quick-start-java/">Quick start: Java</a>.</p></div></aside>
+<p><code dir="auto">@julclang/joust</code> is JOUST’s command line and Vite plugin. It carries the <strong>toolchain engine</strong>: JOUST’s annotation
+processor and JuLC’s compiler, compiled to Wasm, which build <code dir="auto">.java</code> and <code dir="auto">.jsc</code> contracts in Node exactly as the
+Gradle build does. Source: <a href="https://github.com/bloxbean/joust/tree/main/js/joust"><code dir="auto">js/joust</code></a>. For a guided tour, see
+<a href="/apps/cli-and-projects/">The joust CLI and projects</a>. It needs Node 22 or newer.</p>
+<table>
+<thead>
+<tr>
+<th>Entry point</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>bin <code dir="auto">joust</code></td>
+<td>the CLI</td>
+</tr>
+<tr>
+<td><code dir="auto">@julclang/joust</code></td>
+<td><code dir="auto">build</code>, <code dir="auto">deploy</code>, <code dir="auto">loadConfig</code>, <code dir="auto">network</code>, <code dir="auto">loadToolchain</code>, <code dir="auto">VERSION</code> (the commands as functions)</td>
+</tr>
+<tr>
+<td><code dir="auto">@julclang/joust/vite</code></td>
+<td>the Vite plugin, <code dir="auto">joust(options)</code> (also the default export)</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h2"><h2 id="commands">Commands</h2><a class="sl-anchor-link" href="#commands"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Commands”</span></a></div>
+<p>Every command reads <code dir="auto">joust.config.json</code> from the working directory (see <a href="/reference/config/"><code dir="auto">joust.config.json</code></a>).
+<code dir="auto">--network &lt;name&gt;</code> defaults to the config’s <code dir="auto">network</code> (<code dir="auto">devkit</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Flags</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">joust build</code></td>
+<td><code dir="auto">--src &lt;dir&gt;</code> (default config <code dir="auto">contracts</code>), <code dir="auto">--out &lt;dir&gt;</code> (default config <code dir="auto">out</code>), <code dir="auto">--accept-abi</code>, <code dir="auto">--accept-lock</code>, <code dir="auto">--traces</code></td>
+<td>compiles every <code dir="auto">.java</code> and <code dir="auto">.jsc</code> file under the source folder into the output folder, with the libraries of the project’s npm packages (<code dir="auto">joust-lib/</code>); exits 1 on a compile error, on a <code dir="auto">.jsc</code> ABI manifest that is missing or changed unless <code dir="auto">--accept-abi</code> writes it (<a href="/languages/jsc/#the-abi-manifest">the ABI manifest</a>), or on a library from a package that <code dir="auto">joust.lock</code> does not pin at its hash unless <code dir="auto">--accept-lock</code> writes it (<a href="/languages/jsc-reference/#library-packages-and-joustlock">library packages</a>). <code dir="auto">--traces</code> keeps the contracts’ traces in the scripts (larger scripts; for debugging)</td>
+</tr>
+<tr>
+<td><code dir="auto">joust fmt</code></td>
+<td><code dir="auto">[--check]</code>, <code dir="auto">[&lt;file or dir&gt;...]</code> (default: the configured contracts directory, only inside the project)</td>
+<td>formats <code dir="auto">.jsc</code> files in place, changing only whitespace (style version 1: <a href="/languages/editors/">editors</a>). A file that does not parse, is not valid UTF-8, or is read-only is refused and left as it was; a formatted file keeps its permissions. <code dir="auto">--check</code> writes nothing and lists the files that are not formatted. Exits 0 formatted (with <code dir="auto">--check</code>: already was), 1 not formatted (<code dir="auto">--check</code>), 2 a file refused, 3 a usage error. Gradle projects use <code dir="auto">JscMain --fmt [--check]</code>, with the same codes</td>
+</tr>
+<tr>
+<td><code dir="auto">joust test</code></td>
+<td><code dir="auto">[-- &lt;node --test args&gt;]</code></td>
+<td>builds, then runs <code dir="auto">test/*.test.js</code> with Node’s test runner (one file at a time). Tests that use <code dir="auto">@julclang/joust/test</code> run offline: see <a href="#offline-tests">offline tests</a></td>
+</tr>
+<tr>
+<td><code dir="auto">joust deploy</code></td>
+<td><code dir="auto">--network &lt;name&gt;</code></td>
+<td>publishes each contract’s reference script (once) and writes <code dir="auto">&lt;out&gt;/deployments.&lt;network&gt;.json</code></td>
+</tr>
+<tr>
+<td><code dir="auto">joust dev</code></td>
+<td><code dir="auto">--network &lt;name&gt;</code>, <code dir="auto">--port &lt;port&gt;</code> (default config <code dir="auto">dev.port</code>, else 5178), <code dir="auto">--accept-abi</code></td>
+<td>attaches to the chain (starting it with the network’s <code dir="auto">start</code> command if needed), builds, deploys, serves the page; rebuilds and redeploys on save</td>
+</tr>
+<tr>
+<td><code dir="auto">joust serve</code></td>
+<td><code dir="auto">--network &lt;name&gt;</code>, <code dir="auto">--dir &lt;dir&gt;</code> (default <code dir="auto">dist</code>), <code dir="auto">--port &lt;port&gt;</code> (default as <code dir="auto">dev</code>)</td>
+<td>serves a built page as static files, with the chain API at <code dir="auto">/chain</code> and on DevKit the faucet</td>
+</tr>
+<tr>
+<td><code dir="auto">joust version</code></td>
+<td>(also <code dir="auto">joust --version</code>, <code dir="auto">-V</code>, <code dir="auto">-v</code>)</td>
+<td>prints <code dir="auto">joust &lt;version&gt; (npm)</code></td>
+</tr>
+<tr>
+<td><code dir="auto">joust help</code></td>
+<td>(also <code dir="auto">--help</code>, <code dir="auto">-h</code>, <code dir="auto">&lt;command&gt; --help</code>)</td>
+<td>the usage; never runs a command</td>
+</tr>
+<tr>
+<td><code dir="auto">joust new</code></td>
+<td></td>
+<td>prints the <code dir="auto">npm create joust</code> command to run (Gradle projects come from the native <code dir="auto">joust</code>); creates nothing</td>
+</tr>
+</tbody>
+</table>
+<p>In a project, a project command (<code dir="auto">build</code>, <code dir="auto">test</code>, <code dir="auto">deploy</code>, <code dir="auto">dev</code>, <code dir="auto">serve</code>) runs at the project’s root (the nearest directory
+with <code dir="auto">joust.config.json</code>, or a <code dir="auto">package.json</code> that depends on <code dir="auto">@julclang/joust</code>), and by the project’s own
+<code dir="auto">@julclang/joust</code>: a global or other copy hands over to it, as <a href="#the-native-joust">the native <code dir="auto">joust</code></a> does.</p>
+<p><code dir="auto">joust</code> with no command prints the usage; an unknown command prints it and exits 1. Errors are printed as
+<code dir="auto">joust: &lt;message&gt;</code> with exit status 1. <code dir="auto">joust dev</code> and <code dir="auto">joust serve</code> bind to <code dir="auto">127.0.0.1</code> and stop on <code dir="auto">SIGINT</code> or
+<code dir="auto">SIGTERM</code>.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="outputs-of-joust-build">Outputs of <code dir="auto">joust build</code></h3><a class="sl-anchor-link" href="#outputs-of-joust-build"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Outputs of joust build”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">contracts.json</code></td>
+<td><code dir="auto">[{ description, script, transitions, manifest, built: { joust } }]</code> for the runtime</td>
+</tr>
+<tr>
+<td><code dir="auto">&lt;Contract&gt;.json</code></td>
+<td>the description (CIP-57 + <code dir="auto">x-joust</code>, version 2)</td>
+</tr>
+<tr>
+<td><code dir="auto">&lt;Contract&gt;.plutus</code></td>
+<td>the validator, CBOR hex</td>
+</tr>
+<tr>
+<td><code dir="auto">&lt;Contract&gt;.js</code>, <code dir="auto">&lt;Contract&gt;.d.ts</code></td>
+<td>the typed client and its types</td>
+</tr>
+<tr>
+<td><code dir="auto">generated/&lt;package path&gt;/&lt;Contract&gt;.java</code>, <code dir="auto">.jscmap.json</code></td>
+<td>the Java a <code dir="auto">.jsc</code> file lowered to, and its source map (<code dir="auto">.jsc</code> only)</td>
+</tr>
+<tr>
+<td><code dir="auto">validators.json</code></td>
+<td>plain JuLC validators: <code dir="auto">[{ name, package, purpose, script, scriptHash, params, built }]</code> (only if there are any)</td>
+</tr>
+<tr>
+<td><code dir="auto">&lt;Validator&gt;.plutus</code></td>
+<td>each plain validator’s script, parameters not applied</td>
+</tr>
+<tr>
+<td><code dir="auto">joust.lock.json</code></td>
+<td><code dir="auto">{ joust, descriptionVersion, contracts: { &lt;title&gt;: { scriptHash } }, validators? }</code></td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="offline-tests">Offline tests</h3><a class="sl-anchor-link" href="#offline-tests"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Offline tests”</span></a></div>
+<p><code dir="auto">@julclang/joust/test</code> runs a project’s contracts without a chain (ADR-0018 D14):</p>
+<div class="expressive-code"><link rel="stylesheet" href="/_astro/ec.tpect.css"><script type="module" src="/_astro/ec.0vx5m.js"></script><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="js"><code><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">import</span><span style="--0:#E6EDF3;--1:#24292E"> { offline } </span><span style="--0:#FF7B72;--1:#BF3441">from</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">'@julclang/joust/test'</span><span style="--0:#E6EDF3;--1:#24292E">;</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">import</span><span style="--0:#E6EDF3;--1:#24292E"> contracts </span><span style="--0:#FF7B72;--1:#BF3441">from</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">'../build/joust/contracts.json'</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#FF7B72;--1:#BF3441">with</span><span style="--0:#E6EDF3;--1:#24292E"> { type: </span><span style="--0:#A5D6FF;--1:#032F62">'json'</span><span style="--0:#E6EDF3;--1:#24292E"> };</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">import</span><span style="--0:#E6EDF3;--1:#24292E"> { Counter } </span><span style="--0:#FF7B72;--1:#BF3441">from</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">'../build/joust/Counter.js'</span><span style="--0:#E6EDF3;--1:#24292E">;</span></div></div><div class="ec-line"><div class="code">
+</div></div><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">const</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">net</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#FF7B72;--1:#BF3441">=</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#FF7B72;--1:#BF3441">await</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#D2A8FF;--1:#6F42C1">offline</span><span style="--0:#E6EDF3;--1:#24292E">({ contracts });</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">const</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">owner</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#FF7B72;--1:#BF3441">=</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#FF7B72;--1:#BF3441">await</span><span style="--0:#E6EDF3;--1:#24292E"> net.</span><span style="--0:#D2A8FF;--1:#6F42C1">wallet</span><span style="--0:#E6EDF3;--1:#24292E">(</span><span style="--0:#79C0FF;--1:#005CC5">100</span><span style="--0:#E6EDF3;--1:#24292E">);                       </span><span style="--0:#8B949E;--1:#616972">// a funded key wallet, in ADA</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">const</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">counter</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#FF7B72;--1:#BF3441">=</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#FF7B72;--1:#BF3441">new</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#D2A8FF;--1:#6F42C1">Counter</span><span style="--0:#E6EDF3;--1:#24292E">(</span><span style="--0:#FF7B72;--1:#BF3441">await</span><span style="--0:#E6EDF3;--1:#24292E"> net.</span><span style="--0:#D2A8FF;--1:#6F42C1">options</span><span style="--0:#E6EDF3;--1:#24292E">(</span><span style="--0:#A5D6FF;--1:#032F62">'app.Counter'</span><span style="--0:#E6EDF3;--1:#24292E">, owner));</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">const</span><span style="--0:#E6EDF3;--1:#24292E"> { </span><span style="--0:#79C0FF;--1:#005CC5">instance</span><span style="--0:#E6EDF3;--1:#24292E"> } </span><span style="--0:#FF7B72;--1:#BF3441">=</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#FF7B72;--1:#BF3441">await</span><span style="--0:#E6EDF3;--1:#24292E"> counter.</span><span style="--0:#D2A8FF;--1:#6F42C1">deploy</span><span style="--0:#E6EDF3;--1:#24292E">(owner, {});</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">await</span><span style="--0:#E6EDF3;--1:#24292E"> instance.</span><span style="--0:#D2A8FF;--1:#6F42C1">increment</span><span style="--0:#E6EDF3;--1:#24292E">(owner, { by: </span><span style="--0:#79C0FF;--1:#005CC5">5</span><span style="--0:#FF7B72;--1:#BF3441">n</span><span style="--0:#E6EDF3;--1:#24292E"> });</span></div></div><div class="ec-line"><div class="code"><span style="--0:#E6EDF3;--1:#24292E">assert.</span><span style="--0:#D2A8FF;--1:#6F42C1">deepEqual</span><span style="--0:#E6EDF3;--1:#24292E">(net.ledger.</span><span style="--0:#D2A8FF;--1:#6F42C1">acceptedAttacks</span><span style="--0:#E6EDF3;--1:#24292E">(), []);        </span><span style="--0:#8B949E;--1:#616972">// every mutation of the offline attack suite was refused</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="import { offline } from &#x27;@julclang/joust/test&#x27;;import contracts from &#x27;../build/joust/contracts.json&#x27; with { type: &#x27;json&#x27; };import { Counter } from &#x27;../build/joust/Counter.js&#x27;;const net = await offline({ contracts });const owner = await net.wallet(100);                       // a funded key wallet, in ADAconst counter = new Counter(await net.options(&#x27;app.Counter&#x27;, owner));const { instance } = await counter.deploy(owner, {});await instance.increment(owner, { by: 5n });assert.deepEqual(net.ledger.acceptedAttacks(), []);        // every mutation of the offline attack suite was refused"><div></div></button></div></figure></div>
+<p><code dir="auto">net.ledger</code> is an in-memory ledger behind the same provider interface as Yaci Store or Blockfrost. Before it applies
+a transaction it checks these phase-1 rules (each refusal names the node’s error):</p>
+<ul>
+<li>the transaction is tagged valid, is at most <code dir="auto">max_tx_size</code> bytes, and its inputs, reference inputs and collateral exist
+and are unspent; at protocol versions 9 and 10 an output is not both spent and referenced (the ledger lifts that at 11);</li>
+<li>the validity interval holds at the ledger’s slot (<code dir="auto">ledger.advance(ms)</code> moves its clock);</li>
+<li>withdrawals come from registered reward accounts and take exactly their balance (always 0: no rewards are paid);</li>
+<li>the transaction balances, with the fee and the deposits, and every output holds its minimum ADA, the collateral
+return included;</li>
+<li>the fee is at least the size’s, the declared execution units’ and the reference scripts’ fee;</li>
+<li>every key that must sign has a verifying witness, every script credential that must authorise (a script-locked input,
+a mint policy, a script withdrawal or certificate) has its script, witnessed or referenced; native scripts are
+evaluated; each Plutus purpose has a redeemer and no redeemer is extra; a Plutus-locked input’s datum hash has its
+datum (a key-locked output with a datum hash needs none), and a witness datum is either needed or named by an output
+(the collateral return included) or a reference input;</li>
+<li>certificates: a stake registration (once, paying <code dir="auto">key_deposit</code>) and a deregistration (when registered, refunding the
+deposit held); a certificate that states another amount is refused;</li>
+<li>with Plutus scripts: the collateral is key-locked, at most <code dir="auto">max_collateral_inputs</code>, ADA only unless returned, at least
+<code dir="auto">collateral_percent</code> of the fee, and matches <code dir="auto">total_collateral</code> when it is declared; the script integrity hash
+matches; the declared units are within the per-transaction limit;</li>
+<li>phase 2: every Plutus script that must run, evaluated by the runtime engine (<code dir="auto">joust.evaluate</code>, the evaluator that
+prices transactions), within its redeemer’s declared units.</li>
+</ul>
+<p>Concurrent submissions are applied one at a time. A transaction carrying what the ledger does not model is refused
+(<code dir="auto">NotModelled</code>): votes, proposals, treasury donations and values, and every certificate but stake registration and
+deregistration (delegation to a pool or a DRep, DRep, committee and pool certificates); test those on DevKit. Not modelled otherwise: rewards (withdrawals take 0), PlutusV1’s integrity hash, and the collateral loss of a
+failing script (an invalid-tagged transaction is refused; a failing script refuses the whole transaction).</p>
+<p>A refusal is a <code dir="auto">LedgerRefusal</code>. For each transaction a script ran in, the ledger also runs the attack suite
+(<code dir="auto">joust.attacks</code>, a subset of the JVM testkit’s <code dir="auto">Attacks</code>) on it: the state datum replaced or hashed, one lovelace
+skimmed, token dust added, the output sent to a key address or given a stake credential, the output dropped, the
+required signer replaced, the validity bounds moved or removed. Only a script’s refusal counts as refused; any other
+failure of a mutation is reported as accepted, with its reason, so that it fails the test. <code dir="auto">ledger.attacks()</code> lists
+every attack with its outcome; <code dir="auto">ledger.acceptedAttacks()</code> lists those the scripts accepted, which should be none. Pass
+<code dir="auto">{ attacks: false }</code> to <code dir="auto">offline</code> to skip the suite. <code dir="auto">joust test</code> runs offline: a network provider (Blockfrost, Yaci
+Store, Ogmios) refuses to start under it.</p>
+<p>The template’s <code dir="auto">test/counter.test.js</code> is such a test: <code dir="auto">npm test</code> runs <code dir="auto">joust test</code>. Its DevKit test is in <code dir="auto">test/devkit/</code>.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="joust-deploy"><code dir="auto">joust deploy</code></h3><a class="sl-anchor-link" href="#joust-deploy"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “joust deploy”</span></a></div>
+<p><code dir="auto">&lt;out&gt;/deployments.&lt;network&gt;.json</code> is <code dir="auto">{ network, networkId, chain, clock, contracts: { &lt;title&gt;: deployment } }</code>, each
+deployment <code dir="auto">{ contract, policy, address, networkId, referenceScripts }</code> plus <code dir="auto">params</code>, <code dir="auto">mapVerifier</code> and
+<code dir="auto">outputVerifier</code> when the contract has them. The deployer is <code dir="auto">JOUST_MNEMONIC</code>’s key; without it, on a network with an
+<code dir="auto">admin</code> API (DevKit), a key kept in <code dir="auto">.joust/&lt;network&gt;-wallet.json</code>, topped up with 1000 ADA when it holds less than
+200 ADA. A contract with <code dir="auto">@Params</code> is deployed with the config’s <code dir="auto">params</code> for it (by title or simple name) and skipped
+without them.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="environment-variables">Environment variables</h2><a class="sl-anchor-link" href="#environment-variables"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Environment variables”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Read by</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">JOUST_MNEMONIC</code></td>
+<td><code dir="auto">joust deploy</code>, <code dir="auto">joust dev</code></td>
+<td>the deployer’s mnemonic; required on networks without an <code dir="auto">admin</code> API</td>
+</tr>
+<tr>
+<td><code dir="auto">BLOCKFROST_PREVIEW_PROJECT_ID</code></td>
+<td>any command on <code dir="auto">preview</code></td>
+<td>the Blockfrost project id (the built-in <code dir="auto">preview</code>’s <code dir="auto">projectIdEnv</code>)</td>
+</tr>
+<tr>
+<td>(a network’s <code dir="auto">projectIdEnv</code>)</td>
+<td>any command on that network</td>
+<td>its chain API’s project id</td>
+</tr>
+<tr>
+<td><code dir="auto">JOUST_NETWORK</code></td>
+<td>the Vite plugin, in <code dir="auto">vite build</code></td>
+<td>the network a build is for, unless the plugin’s <code dir="auto">network</code> option names one</td>
+</tr>
+<tr>
+<td><code dir="auto">JOUST_VITE_LOG</code></td>
+<td><code dir="auto">joust dev</code></td>
+<td>Vite’s log level (default <code dir="auto">warn</code>); <code dir="auto">info</code> shows dependency bundling and reloads</td>
+</tr>
+<tr>
+<td><code dir="auto">JOUST_DEBUG_NEEDS</code></td>
+<td><code dir="auto">@julclang/joust-runtime</code></td>
+<td>logs each chain read the engine asks for</td>
+</tr>
+</tbody>
+</table>
+<p>A command on a network whose <code dir="auto">projectIdEnv</code> is not set stops and names the variable.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="the-dev-server">The dev server</h2><a class="sl-anchor-link" href="#the-dev-server"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The dev server”</span></a></div>
+<p><code dir="auto">joust dev</code> serves one origin (default <code dir="auto">http://127.0.0.1:5178</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Method</th>
+<th>Answers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">/chain/&lt;path&gt;</code></td>
+<td>GET, POST (<code dir="auto">/chain/tx/submit</code>)</td>
+<td>the network’s chain API, proxied with its project id; one upstream session (Blockfrost’s affinity cookie)</td>
+</tr>
+<tr>
+<td><code dir="auto">/joust/network.json</code></td>
+<td>GET</td>
+<td><code dir="auto">{ network, networkId, chain: "/chain", engine: { url, integrity: { script, wasm } }, contracts: "/joust/contracts.json", service: "/joust/service", clock, ttlMs, explorer, deployments }</code></td>
+</tr>
+<tr>
+<td><code dir="auto">/joust/engine/&lt;file&gt;</code></td>
+<td>GET</td>
+<td>the runtime engine (<code dir="auto">joust-runtime.js</code>, <code dir="auto">joust-runtime.js.wasm</code>), streamed, with an ETag</td>
+</tr>
+<tr>
+<td><code dir="auto">/joust/service/prepare</code></td>
+<td>POST</td>
+<td>the engine in the dev server as a prepare service (<code dir="auto">httpService('/joust/service')</code>); 422 <code dir="auto">{ error }</code> on a contract’s refusal</td>
+</tr>
+<tr>
+<td><code dir="auto">/joust/&lt;file&gt;</code></td>
+<td>GET</td>
+<td>files of the build folder</td>
+</tr>
+<tr>
+<td><code dir="auto">/dev/topup</code></td>
+<td>POST <code dir="auto">{ address, ada? }</code></td>
+<td>DevKit only: funds the address from the faucet (default 1000 ADA)</td>
+</tr>
+<tr>
+<td>anything else</td>
+<td></td>
+<td>the page: Vite in middleware mode when the project has <code dir="auto">vite</code> and an <code dir="auto">index.html</code> in the page folder, else the page folder’s files</td>
+</tr>
+</tbody>
+</table>
+<p>Responses carry <code dir="auto">access-control-allow-origin: *</code>. The page folder is the config’s <code dir="auto">page</code>, else <code dir="auto">page/</code> if it exists,
+else the project root.</p>
+<p><code dir="auto">joust serve</code> answers <code dir="auto">/chain/&lt;path&gt;</code>, <code dir="auto">/dev/topup</code> (DevKit only) and the files of its folder (<code dir="auto">/</code> is <code dir="auto">index.html</code>).
+It has no <code dir="auto">/joust</code> routes.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="the-vite-plugin">The Vite plugin</h2><a class="sl-anchor-link" href="#the-vite-plugin"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The Vite plugin”</span></a></div>
+<div class="expressive-code"><figure class="frame has-title not-content"><figcaption class="header"><span class="title">vite.config.js</span></figcaption><pre data-language="js"><code><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">import</span><span style="--0:#E6EDF3;--1:#24292E"> { joust } </span><span style="--0:#FF7B72;--1:#BF3441">from</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">'@julclang/joust/vite'</span><span style="--0:#E6EDF3;--1:#24292E">;</span></div></div><div class="ec-line"><div class="code">
+</div></div><div class="ec-line"><div class="code"><span style="--0:#FF7B72;--1:#BF3441">export</span><span style="--0:#FFA657;--1:#24292E"> </span><span style="--0:#FF7B72;--1:#BF3441">default</span><span style="--1:#24292E"><span style="--0:#FFA657"> { </span><span style="--0:#E6EDF3">root: </span></span><span style="--0:#A5D6FF;--1:#032F62">'page'</span><span style="--1:#24292E"><span style="--0:#FFA657">, </span><span style="--0:#E6EDF3">plugins: [</span></span><span style="--0:#D2A8FF;--1:#6F42C1">joust</span><span style="--0:#E6EDF3;--1:#24292E">({ root: process.</span><span style="--0:#D2A8FF;--1:#6F42C1">cwd</span><span style="--1:#24292E"><span style="--0:#E6EDF3">() })] </span><span style="--0:#FFA657">}</span><span style="--0:#E6EDF3">;</span></span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="import { joust } from &#x27;@julclang/joust/vite&#x27;;export default { root: &#x27;page&#x27;, plugins: [joust({ root: process.cwd() })] };"><div></div></button></div></figure></div>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">root</code></td>
+<td>the working directory</td>
+<td>the project: where <code dir="auto">joust.config.json</code> and the build folder are</td>
+</tr>
+<tr>
+<td><code dir="auto">network</code></td>
+<td><code dir="auto">JOUST_NETWORK</code>, else Vite’s mode if it names a network, else the config’s <code dir="auto">network</code></td>
+<td>the network a <code dir="auto">vite build</code> is for</td>
+</tr>
+</tbody>
+</table>
+<p>It returns a list of plugins that:</p>
+<ul>
+<li>alias Node’s <code dir="auto">buffer</code>, <code dir="auto">events</code>, <code dir="auto">util</code>, <code dir="auto">stream</code>, <code dir="auto">process</code> and <code dir="auto">assert</code> to browser versions, resolved from the
+plugin’s own package by absolute path, and inject the <code dir="auto">Buffer</code> (one class, <code dir="auto">src/shims/buffer.js</code>) and <code dir="auto">process</code>
+globals;</li>
+<li>set <code dir="auto">global</code> to <code dir="auto">globalThis</code> and target es2022 for the dev server’s dependency bundling and for builds;</li>
+<li>build workers as ES modules with the same aliases and globals (injected <code dir="auto">post</code> in workers);</li>
+<li>scan <code dir="auto">**/*.html</code> and <code dir="auto">**/*.worker.{js,mjs,ts}</code> for dependencies (unless the config sets <code dir="auto">optimizeDeps.entries</code>), and
+pre-bundle <code dir="auto">node:buffer</code>;</li>
+<li>allow the project root in <code dir="auto">server.fs.allow</code>, so a page imports <code dir="auto">build/joust/*.js</code>;</li>
+<li>provide <code dir="auto">virtual:joust/network</code>.</li>
+</ul>
+<p><code dir="auto">vite-plugin-node-polyfills</code> and <code dir="auto">@rollup/plugin-inject</code> are dependencies of the package; <code dir="auto">vite</code> (5 or newer) is an
+optional peer dependency.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="virtualjoustnetwork"><code dir="auto">virtual:joust/network</code></h3><a class="sl-anchor-link" href="#virtualjoustnetwork"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “virtual:joust/network”</span></a></div>
+<p>The default export, in a build:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">network</code></td>
+<td>the network’s name</td>
+</tr>
+<tr>
+<td><code dir="auto">networkId</code></td>
+<td>the network’s <code dir="auto">networkId</code>, else the deployments file’s</td>
+</tr>
+<tr>
+<td><code dir="auto">chain</code></td>
+<td>the network’s <code dir="auto">pageChain</code>, else <code dir="auto">"/chain"</code></td>
+</tr>
+<tr>
+<td><code dir="auto">clock</code></td>
+<td>the deployments file’s clock, else the network’s</td>
+</tr>
+<tr>
+<td><code dir="auto">ttlMs</code></td>
+<td>the config’s <code dir="auto">dev.ttlMs</code>, else 20 000 on a DevKit, 180 000 elsewhere</td>
+</tr>
+<tr>
+<td><code dir="auto">explorer</code></td>
+<td>the network’s <code dir="auto">explorer</code>, or <code dir="auto">null</code></td>
+</tr>
+<tr>
+<td><code dir="auto">deployments</code></td>
+<td>the deployments file’s <code dir="auto">contracts</code></td>
+</tr>
+<tr>
+<td><code dir="auto">contracts</code></td>
+<td><code dir="auto">contracts.json</code></td>
+</tr>
+<tr>
+<td><code dir="auto">validators</code></td>
+<td><code dir="auto">validators.json</code>, or <code dir="auto">[]</code></td>
+</tr>
+<tr>
+<td><code dir="auto">engine</code></td>
+<td><code dir="auto">{ url: "&lt;base&gt;joust/engine-&lt;id&gt;/joust-runtime.js", integrity: { script, wasm } }</code></td>
+</tr>
+</tbody>
+</table>
+<p>A build emits the engine’s two files to <code dir="auto">joust/engine-&lt;id&gt;/</code> (<code dir="auto">id</code>: 8 hex characters from the files’ hashes) and fails
+without <code dir="auto">contracts.json</code> or <code dir="auto">deployments.&lt;network&gt;.json</code>. Under <code dir="auto">joust dev</code>, the module instead fetches
+<code dir="auto">/joust/network.json</code> and then its <code dir="auto">contracts</code> when the page loads (the fields of the dev server’s <code dir="auto">network.json</code>,
+above).</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="the-native-joust">The native <code dir="auto">joust</code></h2><a class="sl-anchor-link" href="#the-native-joust"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The native joust”</span></a></div>
+<p>ADR-0017 adds a native <code dir="auto">joust</code> (no Node, no JDK needed to run it): <code dir="auto">brew install bloxbean/tap/joust</code>, or the release
+archives (macOS arm64, Linux x86_64 and arm64). It creates projects and hands project commands to the project:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Native <code dir="auto">joust</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">joust new &lt;dir&gt; [-t gradle|node|web] [-l java|jsc] [-p &lt;package&gt;]</code></td>
+<td><code dir="auto">gradle</code> (default, <code dir="auto">java</code> by default): a Gradle project with the plugin <code dir="auto">org.julclang.joust</code>; <code dir="auto">node</code>, <code dir="auto">web</code>: what <code dir="auto">npm create joust</code> writes, fetched with <code dir="auto">npm pack create-joust@&lt;its version&gt;</code> and run by its own <code dir="auto">node</code>, isolated from the directory’s npm configuration</td>
+</tr>
+<tr>
+<td><code dir="auto">joust version</code></td>
+<td><code dir="auto">joust &lt;version&gt; (native)</code>, and in an npm project <code dir="auto">project: @julclang/joust &lt;version&gt; (npm)</code></td>
+</tr>
+<tr>
+<td><code dir="auto">joust help</code>, <code dir="auto">&lt;command&gt; --help</code></td>
+<td>the usage; never runs a command</td>
+</tr>
+<tr>
+<td>any other command, in an npm project</td>
+<td>the project’s own <code dir="auto">@julclang/joust</code> (<code dir="auto">node_modules</code>), at the project’s root, with the arguments unchanged and its exit code; <code dir="auto">run npm install first</code> if it is missing, never a stand-in</td>
+</tr>
+<tr>
+<td><code dir="auto">joust build</code>, <code dir="auto">test</code>, <code dir="auto">run</code>, in a Gradle build</td>
+<td>the build’s <code dir="auto">./gradlew &lt;task&gt;</code> (a subproject’s directory selects the subproject); <code dir="auto">deploy</code>, <code dir="auto">dev</code> and <code dir="auto">serve</code> explain that they are npm commands</td>
+</tr>
+</tbody>
+</table>
+<p>Both <code dir="auto">joust</code> commands answer <code dir="auto">new</code>, <code dir="auto">version</code> and <code dir="auto">help</code> themselves, and both hand project commands to the project’s
+own <code dir="auto">@julclang/joust</code>. So <code dir="auto">joust build</code> does the same, whichever binary <code dir="auto">PATH</code> finds. Install the native one globally and
+<code dir="auto">@julclang/joust</code> per project (both global at once is not supported: with Homebrew’s Node they share one path).</p>
+<p>The walk up to a project does not enter directories owned by another user (a planted <code dir="auto">package.json</code> in <code dir="auto">/tmp</code> is
+ignored); list directories you trust, such as a container bind mount, in <code dir="auto">JOUST_SAFE_DIRS</code> (<code dir="auto">:</code>-separated). Both CLIs
+apply this rule, as git’s <code dir="auto">safe.directory</code> does: in a container or CI job that runs as another user than the one owning
+the checkout (for example root over a mounted workspace), run as its owner, or set <code dir="auto">JOUST_SAFE_DIRS</code>. Its entries are
+absolute paths and trust those exact directories, not their subdirectories: <code dir="auto">JOUST_SAFE_DIRS=/workspace</code> works for
+<code dir="auto">joust build</code> run in <code dir="auto">/workspace</code>; run from <code dir="auto">/workspace/contracts</code>, list that directory too. Otherwise <code dir="auto">joust build</code>
+reports that it found no project.</p>
+<p>To check a downloaded archive before using it: <code dir="auto">shasum -a 256 -c joust-&lt;version&gt;-SHA256SUMS.txt --ignore-missing</code>, then
+<code dir="auto">gh attestation verify joust-&lt;version&gt;-&lt;platform&gt;.zip -R bloxbean/joust</code>; on macOS, <code dir="auto">xattr -d com.apple.quarantine joust</code>
+(the binary is not notarized; Homebrew installs need none of this).</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="create-joust"><code dir="auto">create-joust</code></h2><a class="sl-anchor-link" href="#create-joust"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “create-joust”</span></a></div>
+<div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="sh"><code><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">npm</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">create</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">joust@latest</span><span style="--0:#E6EDF3;--1:#24292E"> [dir] -- [--template node</span><span style="--0:#FF7B72;--1:#BF3441">|</span><span style="--0:#E6EDF3;--1:#24292E">web] [--lang jsc</span><span style="--0:#FF7B72;--1:#BF3441">|</span><span style="--0:#E6EDF3;--1:#24292E">java]</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="npm create joust@latest [dir] -- [--template node|web] [--lang jsc|java]"><div></div></button></div></figure></div>
+<p>Writes a new project into <code dir="auto">dir</code> (default <code dir="auto">joust-app</code>), which must be empty or absent, and names the package after the
+folder. Every project has a <code dir="auto">Counter</code> contract, <code dir="auto">joust.config.json</code> for DevKit, a DevKit test
+(<code dir="auto">test/counter.test.js</code>) and <code dir="auto">.gitignore</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Values</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">--template</code>, <code dir="auto">-t</code></td>
+<td><code dir="auto">node</code> (default): <code dir="auto">index.js</code>, a Node script that deploys and calls the contract; scripts <code dir="auto">start</code>, <code dir="auto">build</code>, <code dir="auto">deploy</code>, <code dir="auto">test</code>. <code dir="auto">web</code>: a page (<code dir="auto">page/</code>) with the Cardano Foundation’s connect button and an in-page DevKit key, and <code dir="auto">vite.config.js</code>; the scripts listed under <a href="/start/quick-start-npm/#a-browser-page">A browser page</a></td>
+</tr>
+<tr>
+<td><code dir="auto">--lang</code>, <code dir="auto">-l</code></td>
+<td><code dir="auto">jsc</code> (default): <code dir="auto">contracts/app/Counter.jsc</code> in <code dir="auto">.jsc</code> (a language preview), with its ABI manifest <code dir="auto">Counter.abi.json</code>. <code dir="auto">java</code>: <code dir="auto">contracts/app/Counter.java</code>. Both give the same description and client</td>
+</tr>
+<tr>
+<td><code dir="auto">--help</code>, <code dir="auto">-h</code></td>
+<td>the usage</td>
+</tr>
+</tbody>
+</table>
+<p>Options go after <code dir="auto">--</code> with <code dir="auto">npm create</code> (npm passes them on); <code dir="auto">npx create-joust my-app --lang java</code> takes them
+directly.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="functions">Functions</h2><a class="sl-anchor-link" href="#functions"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Functions”</span></a></div>
+<p>The commands are also functions, for scripts and tests:</p>
+<table>
+<thead>
+<tr>
+<th>Export</th>
+<th>Signature</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">build</code></td>
+<td><code dir="auto">await build({ root?, src?, out?, options?, log?, keep? })</code></td>
+<td><code dir="auto">{ ok, contracts, validators, diagnostics }</code></td>
+</tr>
+<tr>
+<td><code dir="auto">deploy</code></td>
+<td><code dir="auto">await deploy({ root?, config, networkName?, log?, fetchImpl? })</code></td>
+<td>the deployments written</td>
+</tr>
+<tr>
+<td><code dir="auto">loadConfig</code></td>
+<td><code dir="auto">loadConfig(root = process.cwd())</code></td>
+<td>the config, merged over the defaults</td>
+</tr>
+<tr>
+<td><code dir="auto">network</code></td>
+<td><code dir="auto">await network(config, name?)</code></td>
+<td>the network with its clock resolved (a DevKit’s from its admin API) and <code dir="auto">projectId</code> read</td>
+</tr>
+<tr>
+<td><code dir="auto">loadToolchain</code></td>
+<td><code dir="auto">loadToolchain({ dir? } = {})</code></td>
+<td>the toolchain engine (<code dir="auto">engine.joust.build({ files, options })</code>)</td>
+</tr>
+<tr>
+<td><code dir="auto">VERSION</code></td>
+<td>constant</td>
+<td>the package version</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h2"><h2 id="next-steps">Next steps</h2><a class="sl-anchor-link" href="#next-steps"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Next steps”</span></a></div>
+<div class="card-grid astro-7qmvx3iy"><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/reference/config/" class="astro-zaaezwya"><span class="title astro-zaaezwya">joust.config.json</span></a><span class="description astro-zaaezwya">Every key, default and the merge rule.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/apps/cli-and-projects/" class="astro-zaaezwya"><span class="title astro-zaaezwya">The joust CLI and projects</span></a><span class="description astro-zaaezwya">The commands in context.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/apps/pages/" class="astro-zaaezwya"><span class="title astro-zaaezwya">Pages: worker, Vite, static builds</span></a><span class="description astro-zaaezwya">The plugin and virtual:joust/network at work.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/reference/joust-runtime/" class="astro-zaaezwya"><span class="title astro-zaaezwya">@julclang/joust-runtime</span></a><span class="description astro-zaaezwya">The runtime engine's API.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div></div></div><footer class="sl-flex astro-ddtxxk7k"><div class="meta sl-flex astro-ddtxxk7k"><a href="https://github.com/bloxbean/joust/edit/main/www/src/content/docs/reference/joust-cli.mdx" class="sl-flex print:hidden astro-qlekgd3o"><svg aria-hidden="true" class="astro-qlekgd3o astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.2em;"><path d="M22 7.24a1 1 0 0 0-.29-.71l-4.24-4.24a1 1 0 0 0-1.1-.22 1 1 0 0 0-.32.22l-2.83 2.83L2.29 16.05a1 1 0 0 0-.29.71V21a1 1 0 0 0 1 1h4.24a1 1 0 0 0 .76-.29l10.87-10.93L21.71 8c.1-.1.17-.2.22-.33a1 1 0 0 0 0-.24v-.14l.07-.05ZM6.83 20H4v-2.83l9.93-9.93 2.83 2.83L6.83 20ZM18.17 8.66l-2.83-2.83 1.42-1.41 2.82 2.82-1.41 1.42Z"/></svg>Edit page</a></div><div class="pagination-links print:hidden astro-b5raizh3" dir="ltr"><a href="/reference/joust-runtime/" rel="prev" class="astro-b5raizh3"><svg aria-hidden="true" class="astro-b5raizh3 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg><span class="astro-b5raizh3">Previous<br class="astro-b5raizh3"><span class="link-title astro-b5raizh3">@julclang/joust-runtime</span></span></a><a href="/reference/config/" rel="next" class="astro-b5raizh3"><svg aria-hidden="true" class="astro-b5raizh3 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg><span class="astro-b5raizh3">Next<br class="astro-b5raizh3"><span class="link-title astro-b5raizh3">joust.config.json</span></span></a></div></footer></div></div></main></div></div></div></div></body></html>
