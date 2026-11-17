@@ -3,16 +3,21 @@ import type { JoustOptions, Cip30Api, ChainProvider } from '@julclang/state-clie
 export { JoustContract, VerificationError, blockfrostChain, chainOf, blockfrostProvider, ogmiosProvider, toJson } from '@julclang/state-client';
 
 export interface Clock { zeroSlot: number; zeroTimeMs: number; slotLengthMs: number }
-/** A contract as `joust build` writes it in build/joust/contracts.json. */
 /** A message map site (ADR-0018 D12): where a traced message is raised in the .jsc file. */
 export interface MessageSite { line: number; col: number; kind: 'input' | 'pay' | 'require' | 'operation'; in: string; what?: string }
-/** A .jsc 2 contract's message map, as `joust build` writes it beside the script it explains. */
-/** A contract's message map (ADR-0018 D12). `scriptHash` is what the build recorded; the runtime derives the hash from the entry's own `script` instead (issue #74). */
+/** A .jsc 2 contract's message map (ADR-0018 D12), as `joust build` writes it beside the script it explains. `scriptHash` is what the build recorded; the runtime derives the hash from the entry's own `script` instead (issue #74). */
 export interface MessageMap { source: string; scriptHash?: string; messages: Record<string, MessageSite[]> }
+/** A contract as `joust build` writes it in build/joust/contracts.json. */
 export interface BuiltContract {
   description: string | object; script: string; transitions: Record<string, string>;
-  /** The transition programs' manifest (ADR-0020 D8): the engine refuses programs without a matching one. */
-  manifest: string | object;
+  /**
+   * The transition programs' manifest (ADR-0020 D8), as an object or its JSON text: the engine refuses programs without
+   * a matching one. Required when `transitions` is not empty; `null` (as `joust build` writes it) for a contract with no
+   * programs.
+   */
+  manifest?: string | object | null;
+  /** The compiler that built it: this @julclang/joust version, and the engine's JOUST and JuLC versions (null if unknown). The runtime refuses a bundle built by an incompatible `joust`. */
+  built?: { joust: string; engine: string | null; julc: string | null };
   messages?: MessageMap;
 }
 /** A plain JuLC validator as `joust build` writes it in build/joust/validators.json (a governor, ...). */
