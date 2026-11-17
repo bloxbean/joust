@@ -872,7 +872,14 @@ final class IrJson {
                 if (x.get("reads") != null) {
                     for (Object ro : l(x.get("reads"))) {
                         known(m(ro), Set.of("local", "field"), "a read");
-                        reads.add(new Ir.Read(decl(m(ro).get("local")), s(m(ro).get("field"))));
+                        var read = new Ir.Read(decl(m(ro).get("local")), s(m(ro).get("field")));
+                        // #133's IR-reader fuzz: a read's local has its instance's state type, as the JavaScript reader reads
+                        // it (a field that is not an Instance<C> is #97's "a name that resolves to nothing", refused there).
+                        if (params0 != null && params0.fields().get(read.field()) instanceof Ty.Instance in
+                                && !new Ty.Rec(in.contract() + ".State").equals(read.local().type)) {
+                            throw new IllegalArgumentException("method " + x.get("name") + ": a read of " + in.contract() + " has its state's type");
+                        }
+                        reads.add(read);
                     }
                 }
                 var mods = new ArrayList<Ir.Mod>();

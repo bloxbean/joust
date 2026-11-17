@@ -517,6 +517,21 @@ class IrReaderFuzzTest {
     }
 
     /**
+     * #133's short fuzz (run 43907527995): a read of another contract (StashReader's {@code reads}) whose local is not of
+     * the instance's state type. validate.js refused it; the Java reader made no such check and accepted it. Both refuse
+     * it now, in the same words. The fuzzer's own input is regression-c07df5ea… in IrReaderFuzzTestInputs/readersAgree.
+     */
+    @org.junit.jupiter.api.Test
+    void aReadWhoseLocalIsNotTheInstancesState_isRefusedByBothReaders() throws IOException {
+        String text = Files.readString(Path.of("src/test/resources/ir-regressions/read-local-type-StashReader.ir.json"));
+        String j = java(text);
+        String js = js(text);
+        assertTrue(j.startsWith("refused") && j.contains("a read of Stash has its state's type"), j);
+        assertTrue(js.contains("\"irWhat\":\"a read of Stash has its state's type\""), js);
+        assertEquals("agree", verdict(j, js));
+    }
+
+    /**
      * #130 round r2 (security Z3): a check's words start with fixed text, never an IR-supplied name, so a name holding a
      * rule's prefix ("no fn x") cannot have a check registered under that rule. An invariant whose type is "no fn x".
      */
