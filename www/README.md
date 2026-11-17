@@ -21,6 +21,7 @@ bash scripts/check-site.sh   # builds a private copy and checks links (safe to r
 - `scripts/check-versions.mjs`: run first by `npm run build`; fails on a hard-coded release version in `src/`
   (WRITING.md, "Versions").
 
-Deploys: `.github/workflows/docs.yml` builds the site on pull requests and deploys it to GitHub Pages
-(`https://joust.julc.dev`, from `public/CNAME`) on pushes to `main`. The one-time Pages setup is in
+Deploys: `.github/workflows/docs.yml` builds the site on pull requests. On pushes to `main` it also pushes the built
+site to the `gh-pages` branch, which GitHub Pages serves at `https://joust.julc.dev`; each such publish goes live once
+its `pages-build-deployment` run is approved in the `github-pages` environment. The one-time setup is in
 `docs/release-ops.md`, "Docs site".
