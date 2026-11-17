@@ -3,7 +3,7 @@ title: Your first contract
 description: Build the counter step by step - state, @Init, actions with and without Ctx, @OnlyOwner, @View, @Destroy - then run it on Yaci DevKit from Java or JavaScript.
 ---
 
-import { Aside, LinkCard, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+import { LinkCard, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 In this tutorial you build the contract from
 [`examples/counter`](https://github.com/bloxbean/joust/tree/main/examples/counter): a counter anyone can increment,
@@ -325,13 +325,6 @@ assert.equal(await instance.state(), null);
 
 The same `Require` message comes back in JavaScript, because the same method ran (compiled to UPLC, in the
 runtime engine) before anything was signed.
-
-<Aside type="caution">
-
-The npm packages are not on npmjs.org yet: install them from a local registry as described in
-[Quick start: npm](/start/quick-start-npm/).
-
-</Aside>
 
 </TabItem>
 </Tabs>

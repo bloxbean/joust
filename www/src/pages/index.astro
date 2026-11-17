@@ -26,7 +26,7 @@ const kinds = [
   { n: '03', t: 'Owned objects', href: '/contracts/owned-objects/' },
   { n: '04', t: 'Batched intents', href: '/contracts/batched-intents/' },
   { n: '05', t: 'Native assets', href: '/contracts/assets-mints-sends/' },
-  { n: '06', t: 'Keyed objects (next release)', href: '/contracts/keyed-objects/' },
+  { n: '06', t: 'Keyed objects', href: '/contracts/keyed-objects/' },
 ];
 const ecosystem = [
   { t: 'JuLC', d: 'The Java to UPLC compiler', href: 'https://julc.dev' },
@@ -171,7 +171,7 @@ const ecosystem = [
             <a class="card path" href="/languages/jsc/"><h3>.jsc, when you want it</h3><p>A compact contract syntax that lowers to the same Java contract at build time.</p></a>
           </div>
         </div>
-        <p class="note">JOUST is experimental, a research and learning project: not for production. Release candidates (<code>0.1.0-pre1-rc2</code>) are in the BloxBean release repository; nothing is on Maven Central yet. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
+        <p class="note">JOUST is experimental, a research and learning project: not for production. Its <a href="https://github.com/bloxbean/joust/releases">releases</a> are in the BloxBean release repository; nothing is on Maven Central yet. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
       </div>
     </section>
 
@@ -196,7 +196,7 @@ const ecosystem = [
               <a class="btn btn-ghost" href="/start/quick-start-npm/">Quick start: JavaScript &amp; TypeScript</a>
               <a class="link-arrow" href="/apps/pages/">How pages work &rarr;</a>
             </div>
-            <p class="note">The npm packages are not released yet: until they are, the quick start installs them from a local registry.</p>
+            <p class="note">The npm packages are on npmjs.org: <code>npm create joust@latest</code>.</p>
           </div>
         </div>
         <figure class="diagram"><img src={browserSvg.src} width={browserSvg.width} height={browserSvg.height} alt="A JOUST page from the browser to the chain" loading="lazy" /></figure>

@@ -53,7 +53,7 @@ instead ([Quick start: npm & JavaScript](/start/quick-start-npm/)).
 | [crowdfund](#crowdfund) | An inline `JulcMap`, refunds | 0001 | [Escrow and crowdfunding](/tutorials/escrow-crowdfund/) |
 | [token](#token) | MerkleMap balances | 0002 | [Token balances in a MerkleMap](/tutorials/token-merklemap/) |
 | [bank](#bank) | Owned objects | 0003 | [Bank: owned objects](/tutorials/bank-owned-objects/) |
-| [registry](#registry) | Keyed objects (on `main`, next release) | 0016 | [Keyed objects](/contracts/keyed-objects/) |
+| [registry](#registry) | Keyed objects | 0016 | [Keyed objects](/contracts/keyed-objects/) |
 | [pool](#pool) | Batched intents | 0004 | [Pool: batched intents](/tutorials/pool-batched-intents/) |
 | [dsl](#dsl) | `.jsc` contracts | 0005 | [.jsc](/languages/jsc/) |
 | [rollup](#rollup) | Optimistic L2 spike | 0006 | [Architecture decisions](/project/architecture-decisions/#adr-0006-option-f-optimistic-l2-spike) |
@@ -154,9 +154,8 @@ escape hatch every owned type needs.
 
 [`examples/registry`](https://github.com/bloxbean/joust/tree/main/examples/registry) · `Registry.java`
 
-Keyed objects (ADR-0016): on `main` since PR #37, not in `0.1.0-pre1-rc2`; they come with the next release. Two keyed
-types in sorted on-chain lists. `Ballot` is keyed by the voter's key hash (`signedKey`) and only retires, so each voter
-votes once, ever. `Entry` is a name registry: `claim` (payable) and the admin's `grant` insert a name, `upgrade`,
+Keyed objects (ADR-0016): two keyed types in sorted on-chain lists. `Ballot` is keyed by the voter's key hash
+(`signedKey`) and only retires, so each voter votes once, ever. `Entry` is a name registry: `claim` (payable) and the admin's `grant` insert a name, `upgrade`,
 `withdraw` and the guardians' `recover` update it, `release` removes it (the name is free again) and `retire` keeps it
 taken for good. The tests cover the attack suite, list integrity under mutated transactions, and DevKit runs of
 concurrency, contested gaps, cooldowns, compositions and submission across relays; the JavaScript flow is in

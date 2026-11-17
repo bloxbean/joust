@@ -378,8 +378,7 @@ That last one is why `Armory` is a second contract. If yours grows past about 14
   instance changes first, the call fails and the runtime retries. Keep shared writes rare and gated.
 - **Ownership is a field.** Transferring an object means an owned action that changes its owner field.
 - **Objects are not unique by any field.** Two users can create objects with the same name or owner. When at most one
-  object per key matters (one ballot per voter, unique names), use [keyed objects](/contracts/keyed-objects/) (on
-  `main`, coming with the next release).
+  object per key matters (one ballot per voter, unique names), use [keyed objects](/contracts/keyed-objects/).
 - **Gating creation** is your method's job: check the `@Shared` state with `Require`, as `open` checks `paused`.
 
 ## Reference

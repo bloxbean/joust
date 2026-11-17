@@ -357,8 +357,10 @@ test('#133 E1: release-environments.mjs requires reviewers and deployments from 
   assert.match(missing[0], /vscode-marketplace: cannot be read \(.*HTTP 404\)/);
 });
 
-// #133 E2, V1, E3: the user-facing commands keep the source ref, and the pages say which JOUST the extension bundles.
-test('#133 E2, V1, E3: user verify commands name the tag as the source ref; the pages and the changelog name the bundled JOUST', () => {
+// #133 E2, V1, E3: the user-facing commands keep the source ref, and the extension's own pages say which JOUST it bundles.
+// The docs site names no JOUST version (www/WRITING.md, "Versions"; #137): editors.mdx points to the changelog and the
+// releases instead.
+test('#133 E2, V1, E3: user verify commands name the tag as the source ref; the README and the changelog name the bundled JOUST; the docs page points to them', () => {
   const pkg = JSON.parse(readFileSync(`${REPO}js/vscode-joust/package.json`, 'utf8'));
   const readme = readFileSync(`${REPO}js/vscode-joust/README.md`, 'utf8');
   const page = readFileSync(`${REPO}www/src/content/docs/languages/editors.mdx`, 'utf8');
@@ -373,13 +375,17 @@ test('#133 E2, V1, E3: user verify commands name the tag as the source ref; the 
     assert.match(text, /`--source-ref refs\/heads\/main`/, `${name}: the by-hand fallback`);
     assert.match(text, /julc\.vscode-joust/);
   }
-  // Which JOUST release the extension bundles: the changelog's entry for this version, and both pages say the same.
+  // Which JOUST release the extension bundles: the changelog's entry for this version, and the README (the Marketplace
+  // page, shipped with the extension) says the same.
   const entry = new RegExp(`^## ${pkg.version.replace(/\./g, '\\.')}\\n\\n- Bundles the compiler of \\*\\*JOUST ([^*]+)\\*\\*\\.`, 'm').exec(changelog);
   assert.ok(entry, `CHANGELOG.md has an entry for ${pkg.version} naming its JOUST`);
   const joust = entry[1];
-  for (const [name, text] of [['README', readme], ['editors.mdx', page]]) {
-    assert.ok(text.replace(/\s+/g, ' ').includes(`${pkg.version} bundles the compiler of JOUST ${joust}`), `${name} names ${pkg.version} and JOUST ${joust}`);
-  }
+  assert.ok(readme.replace(/\s+/g, ' ').includes(`${pkg.version} bundles the compiler of JOUST ${joust}`), `README names ${pkg.version} and JOUST ${joust}`);
+  // The docs page points to the changelog (which JOUST each version bundles) and to the releases, and names no version.
+  assert.ok(page.includes('https://github.com/bloxbean/joust/blob/main/js/vscode-joust/CHANGELOG.md'), 'editors.mdx links the changelog');
+  assert.ok(page.includes('https://github.com/bloxbean/joust/releases'), 'editors.mdx links the releases');
+  assert.ok(!page.includes(joust), `editors.mdx does not name JOUST ${joust}`);
+  assert.doesNotMatch(page, /\b\d+\.\d+\.\d+-pre\d/, 'editors.mdx names no prerelease version');
   // While this release publishes the extension, the changelog's JOUST is the release's version (the cli job checks it too).
   const props = readFileSync(`${REPO}gradle.properties`, 'utf8');
   const prop = (k) => new RegExp(`^${k}=(.*)$`, 'm').exec(props)?.[1];

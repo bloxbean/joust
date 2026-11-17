@@ -13,11 +13,6 @@ The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalV
 annotation processor and JuLC's compiler, compiled to Wasm), publishes their reference scripts, and serves pages
 during development and after a build. It needs Node 22 or newer and nothing else: no JDK, no Gradle.
 
-<Aside type="caution" title="Pre-release: the npm packages come from a local registry">
-`@julclang/joust` and `create-joust` are not on npmjs.org yet. Install them from a local registry, as the
-[npm quick start](/start/quick-start-npm/#prerequisites) shows.
-</Aside>
-
 ## A project
 
 `npm create joust <dir>` makes one from its template. By default the contract is `.jsc` and a Node script calls it;
@@ -96,7 +91,7 @@ manifest was refused).
 
 ```json title="build/joust/joust.lock.json"
 {
-  "joust": "0.1.0-pre1-snapshot",
+  "joust": "<version>",
   "descriptionVersion": 2,
   "contracts": {
     "app.Counter": { "scriptHash": "572399fa2a90a0452c3b29da48af6b90905ac8cfb503e1af803c942c" }

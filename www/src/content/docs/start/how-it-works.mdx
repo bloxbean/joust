@@ -213,7 +213,7 @@ JOUST offers other strategies, chosen by how you declare the state:
 | Inline (Option A) | A state record | Contracts with modest state and modest traffic | [State and lifecycle](/contracts/state-and-lifecycle/) |
 | MerkleMap (Option B) | A `MerkleMap` component in the state | Unbounded maps (balances, registries): the datum keeps a 32-byte root, each call proves the keys it touches, checked by the shared map verifier | [MerkleMaps](/contracts/merklemaps/) |
 | Owned objects (Option C) | An `@Owned` record and owned methods | Per-user objects in their own UTxOs, beside shared state read by reference, so users do not contend | [Owned objects](/contracts/owned-objects/) |
-| Keyed objects (ADR-0016; on `main`, coming with the next release) | `@Owned(key = "...")` on an owned record | At most one object per key (ballots, names), each its own UTxO in a sorted on-chain list; uniqueness is proved by the neighbours | [Keyed objects](/contracts/keyed-objects/) |
+| Keyed objects (ADR-0016) | `@Owned(key = "...")` on an owned record | At most one object per key (ballots, names), each its own UTxO in a sorted on-chain list; uniqueness is proved by the neighbours | [Keyed objects](/contracts/keyed-objects/) |
 | Batched intents (Option D) | `@Batched` on an action | Hot shared state: users lock requests in parallel, a permissionless batcher applies them in one transaction | [Batched intents](/contracts/batched-intents/) |
 
 On top of these: native assets and contract-minted tokens, deploy-time parameters, quorums and script callers,
@@ -241,9 +241,8 @@ JavaScript developers use the same processor, validators and runtime, compiled t
 
 <Aside type="note">
 
-The npm packages are not released yet (npmjs.org holds placeholders only). The quick start installs them from a local registry. Details of
-the JavaScript side are in [Quick start: npm](/start/quick-start-npm/) and
-[JavaScript clients](/apps/javascript-clients/).
+The npm packages are on npmjs.org (`npm create joust@latest`). Details of the JavaScript side are in
+[Quick start: npm](/start/quick-start-npm/) and [JavaScript clients](/apps/javascript-clients/).
 
 </Aside>
 

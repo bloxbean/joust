@@ -31,40 +31,17 @@ You will:
 
   This gives a Blockfrost-compatible chain API on `http://localhost:8080/api/v1`, DevKit's admin API (slot clock,
   faucet) on `:10000`, and the Yaci Viewer explorer on `http://localhost:5173`.
-- **The JOUST npm packages**, from a local registry until they are published (see below).
-
-<Aside type="caution" title="Pre-release: the npm packages come from a local registry">
-
-`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client` and `create-joust` are **not released yet**
-(npmjs.org holds only placeholders). Once they are, `npm create joust@latest my-app` is all you need. Until then,
-publish them to a local registry from a JOUST checkout:
-
-```sh
-# in a JOUST checkout: builds both Wasm engines, then publishes the four packages to http://127.0.0.1:4873/
-./gradlew npmPublishLocal -PgraalvmHome=/path/to/graalvm
-# later, with the engines already built:
-bash js/publish-local.sh
-```
-
-The script starts [Verdaccio](https://verdaccio.org/) with `js/verdaccio/config.yaml` if no registry answers on
-`:4873`, so `verdaccio` must be on your `PATH`. Building the engines is the only step that needs a JDK and GraalVM;
-your app never does. Every other package is proxied from npmjs.org, so one registry setting is enough:
-
-```sh
-export npm_config_registry=http://127.0.0.1:4873/
-```
-
-</Aside>
+- **The JOUST npm packages** come from npmjs.org: `npm create joust@latest` installs what it needs. Their versions
+  follow JOUST's [releases](https://github.com/bloxbean/joust/releases).
 
 ## Create and build the app
 
 <Steps>
 
-1. **Create the project.** The package version is part of the command until the packages are released (then it is
-   `npm create joust@latest my-app`):
+1. **Create the project.**
 
    ```sh
-   npm create joust@0.1.0-pre1-snapshot my-app
+   npm create joust@latest my-app
    cd my-app
    npm install
    ```
@@ -79,7 +56,7 @@ export npm_config_registry=http://127.0.0.1:4873/
    | `--template` | `node` (the default): `index.js`; `web`: a browser page instead ([below](#a-browser-page)) |
 
    ```sh
-   npm create joust@0.1.0-pre1-snapshot my-app -- --lang java
+   npm create joust@latest my-app -- --lang java
    ```
 
    The contract is the same in both languages:
@@ -263,7 +240,7 @@ methods marked `@Init`, `@Action`, `@Destroy` and `@View`, in the subset JuLC co
 `--template web` makes the same project with a page instead of `index.js`:
 
 ```sh
-npm create joust@0.1.0-pre1-snapshot my-web-app -- --template web
+npm create joust@latest my-web-app -- --template web
 cd my-web-app
 npm install
 ```

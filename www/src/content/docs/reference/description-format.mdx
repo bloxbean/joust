@@ -279,7 +279,7 @@ the right arity (`isBool` and `isOptional` in `js/state-client/src/data.js`).
 | `maxDatumBytes` | number | The largest state datum the contract accepts (`@StateContract(maxDatumBytes)`) |
 | `assetAware` | boolean | Whether the contract handles native assets (`Funds`, sends, mints) |
 | `owned` | array | The `@Owned` types (below) |
-| `keyed` | array | The keyed types (below). Only in contracts with keyed types (ADR-0016; on `main`, coming with the next release) |
+| `keyed` | array | The keyed types (below). Only in contracts with keyed types (ADR-0016) |
 | `creations` | array | `@Init`, `@OwnedInit` and `@Migrate` methods (below) |
 | `actions` | array | `@Action`, `@Destroy`, `@OwnedAction` and `@OwnedDestroy` methods, in `Calls` order (below) |
 | `views` | array | `@View` methods (below) |
