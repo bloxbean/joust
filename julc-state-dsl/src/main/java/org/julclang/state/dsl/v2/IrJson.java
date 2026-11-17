@@ -604,6 +604,9 @@ final class IrJson {
             }
         }
 
+        /** validate.js's INT_RE: a decimal integer, no sign but minus, no leading zero. */
+        static final String INT_RE = "-?(0|[1-9][0-9]*)";
+
         static List<Object> l(Object o) {
             return (List<Object>) o;
         }
@@ -759,7 +762,9 @@ final class IrJson {
             var options = new ArrayList<Ir.ContractOption>();
             for (Object o : l(r.get("options"))) {
                 known(m(o), Set.of("name", "value"), "an option");
-                options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
+                // #134 sweep: a decimal integer as validate.js reads it (BigInteger also takes "00" and "+5").
+                if (!(m(o).get("value") instanceof String ov) || !ov.matches(INT_RE)) throw new IllegalArgumentException("option: not an integer: " + m(o).get("value"));
+                options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(ov)));
             }
             var records = records(r.get("records"));
             var enums = enums(r.get("enums"));
@@ -787,6 +792,10 @@ final class IrJson {
             }
             // M3b: the keyed types, each an owned type once, with its options (checked with the methods: keyedChecked).
             var keyed = new LinkedHashMap<String, Ir.Keyed>();
+            // #134 sweep: keyed is written only when the contract has keyed types, as validate.js reads it.
+            if (r.containsKey("keyed") && !(r.get("keyed") instanceof List<?> kl0 && !kl0.isEmpty())) {
+                throw new IllegalArgumentException("keyed: a non-empty list, absent when there are none");
+            }
             if (r.get("keyed") != null) {
                 for (Object o : l(r.get("keyed"))) {
                     var k = m(o);
@@ -808,6 +817,14 @@ final class IrJson {
             for (Object o : l(r.get("libraries"))) {
                 var x = m(o);
                 known(x, Set.of("library", "source", "sourceSha256", "records", "enums", "fns"), "a library");
+                // #134 sweep: a library's name and hash, as validate.js reads them.
+                if (!s(x.get("library")).matches("([A-Za-z_][A-Za-z0-9_]*\\.)+[A-Z][A-Za-z0-9]*")) {
+                    throw new IllegalArgumentException("library: a bad class name " + x.get("library"));
+                }
+                s(x.get("source"));
+                if (!(x.get("sourceSha256") instanceof String lh) || !lh.matches("[0-9a-f]{64}")) {
+                    throw new IllegalArgumentException("library: sourceSha256 must be 64 hex digits");
+                }
                 libraries.add(new Ir.Library(s(x.get("library")), s(x.get("source")), s(x.get("sourceSha256")), records(x.get("records")),
                         enums(x.get("enums")), fns(x.get("fns"))));
             }
@@ -818,10 +835,19 @@ final class IrJson {
                 known(x, Set.of("class", "sourceSha256", "records", "fns"), "a Java library");
                 // #110 C17: a library is listed once (two entries of one class would let one's fns hide the other's).
                 if (!javaClasses.add(String.valueOf(x.get("class")))) throw new IllegalArgumentException("java:" + x.get("class") + " is listed twice");
+                // #134 sweep: a Java library's class name and hash, as validate.js reads them.
+                if (!s(x.get("class")).matches("([A-Za-z_][A-Za-z0-9_]*\\.)+[A-Za-z_][A-Za-z0-9_]*")) {
+                    throw new IllegalArgumentException("java library: a bad class name " + x.get("class"));
+                }
+                if (!(x.get("sourceSha256") instanceof String jh) || !jh.matches("[0-9a-f]{64}")) {
+                    throw new IllegalArgumentException("java library: sourceSha256 must be 64 hex digits");
+                }
                 var recs = new LinkedHashMap<String, Ir.JavaRec>();
                 for (Object ro : l(x.get("records"))) {
                     var rm = m(ro);
                     known(rm, Set.of("name", "fields", "at", "owner", "import", "javaName", "verified"), "a Java library record");
+                    // #134 sweep: verified is a boolean (a cast let null through), as validate.js reads it.
+                    if (!(rm.get("verified") instanceof Boolean)) throw new IllegalArgumentException("java record: verified is a boolean");
                     Ir.RecordType t = jrecord(rm);
                     recs.put(t.name(), new Ir.JavaRec(t, s(rm.get("owner")), s(rm.get("import")), s(rm.get("javaName")), (Boolean) rm.get("verified")));
                 }
@@ -872,7 +898,14 @@ final class IrJson {
                 if (x.get("reads") != null) {
                     for (Object ro : l(x.get("reads"))) {
                         known(m(ro), Set.of("local", "field"), "a read");
-                        reads.add(new Ir.Read(decl(m(ro).get("local")), s(m(ro).get("field"))));
+                        var read = new Ir.Read(decl(m(ro).get("local")), s(m(ro).get("field")));
+                        // #133's IR-reader fuzz: a read's local has its instance's state type, as the JavaScript reader reads
+                        // it (a field that is not an Instance<C> is #97's "a name that resolves to nothing", refused there).
+                        if (params0 != null && params0.fields().get(read.field()) instanceof Ty.Instance in
+                                && !new Ty.Rec(in.contract() + ".State").equals(read.local().type)) {
+                            throw new IllegalArgumentException("method " + x.get("name") + ": a read of " + in.contract() + " has its state's type");
+                        }
+                        reads.add(read);
                     }
                 }
                 var mods = new ArrayList<Ir.Mod>();
@@ -1104,7 +1137,10 @@ final class IrJson {
                         throw new IllegalArgumentException("invariant " + x.get("name") + ": an invariant by type is not supported beside an owned"
                                 + " type that keeps a BigMap (" + mapped + ") yet (JSC1217)");
                     }
-                    invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at")), on));
+                    Ir.Block body = block(x.get("body"));
+                    // #134 review W2: an invariant's body has a result, as validate.js reads it.
+                    if (body.result() == null) throw new IllegalArgumentException("invariant " + x.get("name") + ": an invariant has a value");
+                    invariants.add(new Ir.Invariant(s(x.get("name")), body, pos(x.get("at")), on));
                 }
             }
             purposesChecked(r, options, records, enums, state, params0, methods, fns, owned, contracts, timeFields);
@@ -1177,6 +1213,23 @@ final class IrJson {
                     }
                 }
             }
+            // #134 review W1: an arm of a match over a sealed ledger type binds none of its constructor's PlutusData fields,
+            // whatever type the IR gives the binding (validate.js reads the field's type from gov.js, so must this reader).
+            if (m.get("arms") instanceof List<?> as && m.get("scrutinee") instanceof Map<?, ?> sc && sc.get("type") instanceof String st
+                    && Gov.SUMS.containsKey(st)) {
+                for (Object ao : as) {
+                    if (!(ao instanceof Map<?, ?> a) || !(a.get("ctors") instanceof List<?> cs) || cs.size() != 1
+                            || !(cs.get(0) instanceof String c) || !(a.get("fields") instanceof List<?> fs)) continue;
+                    Gov.Ctor ctor = Gov.ctor(st, c);
+                    if (ctor == null) continue;
+                    for (Object f : fs) {
+                        Gov.Field gf = f instanceof String fn ? ctor.field(fn) : null;
+                        if (gf != null && gf.opaque()) {
+                            throw new IllegalArgumentException(where + "the field " + c + "." + f + " is PlutusData, never bound (JSC1320)");
+                        }
+                    }
+                }
+            }
             for (Object v : m.values()) ledgerExpressions(v, where);
         }
 
@@ -1186,6 +1239,10 @@ final class IrJson {
             // Review C2: the ledger types' expression rules, over every method's and fn's body.
             for (Object mo : l(r.get("methods"))) ledgerExpressions(m(mo).get("body"), "method " + m(mo).get("name") + ": ");
             if (r.get("fns") instanceof List<?> fl) for (Object fo : fl) ledgerExpressions(m(fo).get("body"), "fn " + m(fo).get("name") + ": ");
+            // #134 review W1: and the invariants' bodies, as validate.js checks every body.
+            if (r.get("invariants") instanceof List<?> il) {
+                for (Object io : il) ledgerExpressions(m(io).get("body"), "invariant " + m(io).get("name") + ": ");
+            }
             // Review C8 (r3): and every imported .jsc library's fns, which the program's bodies call.
             if (r.get("libraries") instanceof List<?> ll) {
                 for (Object lo : ll) {
@@ -1754,7 +1811,11 @@ final class IrJson {
                 }
                 case "Require" -> new Ir.Require(expr(x.get("cond")), s(x.get("message")), at);
                 case "Pay" -> new Ir.Pay(expr(x.get("to")), expr(x.get("amount")), at);
-                case "Send" -> new Ir.Send(expr(x.get("to")), expr(x.get("value")), x.get("datum") == null ? null : expr(x.get("datum")), at);
+                case "Send" -> {
+                    // #134 sweep: an absent datum is not written, so a present null is malformed (validate.js reads it as a node).
+                    if (x.containsKey("datum") && x.get("datum") == null) throw new IllegalArgumentException("a Send's \"datum\" is null: an absent field is not written");
+                    yield new Ir.Send(expr(x.get("to")), expr(x.get("value")), x.get("datum") == null ? null : expr(x.get("datum")), at);
+                }
                 case "Deposit" -> new Ir.Deposit(expr(x.get("target")), expr(x.get("value")), expr(x.get("memo")), at);
                 case "Mint" -> {
                     if (!(x.get("burn") instanceof Boolean burn)) throw new IllegalArgumentException("Mint's burn is a boolean");
@@ -1834,6 +1895,8 @@ final class IrJson {
                     if (v instanceof String text && !(t.equals(Ty.INT) ? text.matches("-?(0|[1-9][0-9]*)") : text.matches("([0-9a-f]{2})*"))) {
                         throw new IllegalArgumentException("a literal that is not " + (t.equals(Ty.INT) ? "a decimal integer" : "lower-case hex") + ": " + text);
                     }
+                    // #134 sweep: an Int literal is a decimal integer as validate.js reads it (BigInteger also takes "00", "+5").
+                    if (t.equals(Ty.INT) && !(v instanceof String iv && iv.matches(INT_RE))) throw new IllegalArgumentException("not a decimal integer: " + v);
                     Object value = v instanceof Boolean b ? b : t.equals(Ty.INT) ? new BigInteger(s(v)) : HEX.parseHex(s(v));
                     yield new Ir.Lit(value, t, at);
                 }

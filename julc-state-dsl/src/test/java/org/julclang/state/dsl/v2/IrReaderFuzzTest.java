@@ -517,6 +517,99 @@ class IrReaderFuzzTest {
     }
 
     /**
+     * #133's short fuzz (run 43907527995): a read of another contract (StashReader's {@code reads}) whose local is not of
+     * the instance's state type. validate.js refused it; the Java reader made no such check and accepted it. Both refuse
+     * it now, in the same words. The fuzzer's own input is regression-c07df5ea… in IrReaderFuzzTestInputs/readersAgree.
+     */
+    @org.junit.jupiter.api.Test
+    void aReadWhoseLocalIsNotTheInstancesState_isRefusedByBothReaders() throws IOException {
+        String text = Files.readString(Path.of("src/test/resources/ir-regressions/read-local-type-StashReader.ir.json"));
+        String j = java(text);
+        String js = js(text);
+        assertTrue(j.startsWith("refused") && j.contains("a read of Stash has its state's type"), j);
+        assertTrue(js.contains("\"irWhat\":\"a read of Stash has its state's type\""), js);
+        assertEquals("agree", verdict(j, js));
+    }
+
+    /**
+     * #134 review W1 (Codex): Guardrail's ParameterChange arm naming the constructor's PlutusData field, parameters, with the
+     * binding's type left as the IR wrote it (an Option of GovernanceActionId) or written Int. validate.js reads the field's
+     * type from the ledger table and refuses it (JSC1320); the Java reader read only the binding's claimed type and accepted
+     * it. Both refuse it now, in the same words.
+     */
+    @org.junit.jupiter.api.Test
+    void aBindingOfALedgerConstructorsPlutusDataField_isRefusedByBothReaders_whateverItsClaimedType() throws IOException {
+        for (String name : List.of("opaque-bind-guardrail-opaque-field.ir.json", "opaque-bind-as-int.ir.json")) {
+            String text = Files.readString(Path.of("src/test/resources/ir-regressions", name));
+            String j = java(text);
+            String js = js(text);
+            String words = "the field ParameterChange.parameters is PlutusData, never bound (JSC1320)";
+            assertTrue(j.startsWith("refused") && j.contains(words), name + ": " + j);
+            assertTrue(js.contains("\"irWhat\":\"" + words + "\""), name + ": " + js);
+            assertEquals("agree", verdict(j, js), name);
+        }
+    }
+
+    /**
+     * #134 review W2 (Codex): an invariant whose body has no result (Ratio's first invariant with {@code result: null}; and
+     * the fuzzer's input, regression-d744911d… in IrReaderFuzzTestInputs/readersAgree). validate.js refused it; the Java
+     * reader built the invariant and accepted it. Both refuse it now, in the same words.
+     */
+    @org.junit.jupiter.api.Test
+    void anInvariantWithoutAResult_isRefusedByBothReaders() throws IOException {
+        for (String name : List.of("invariant-null-result-Ratio.ir.json", "invariant-null-result-fuzz.ir.json")) {
+            String text = Files.readString(Path.of("src/test/resources/ir-regressions", name));
+            String j = java(text);
+            String js = js(text);
+            assertTrue(j.startsWith("refused") && j.contains("an invariant has a value"), name + ": " + j);
+            assertTrue(js.contains("\"irWhat\":\"an invariant has a value\""), name + ": " + js);
+            assertEquals("agree", verdict(j, js), name);
+        }
+    }
+
+    /**
+     * #134 round r2's sweep: every refusal of validate.js against the Java reader, by an exhaustive one-step mutation of
+     * every IR fixture (each field removed, nulled, emptied, given another kind or any value the format holds there) and by
+     * reading the sites no mutation reaches. Each input it found refused by validate.js and accepted here (a library's or a
+     * Java library's name or hash, a Java record's verified, a Send's present null datum, an integer with a leading zero, an empty keyed list),
+     * and two controls each reader accepts: {JS words, Java words}, or none for a control.
+     */
+    static final Map<String, String[]> SWEEP = new java.util.TreeMap<>(Map.ofEntries(
+            Map.entry("sweep-library-class-name.ir.json", new String[]{"a bad class name zz", "library: a bad class name zz"}),
+            Map.entry("sweep-library-hash.ir.json", new String[]{"sourceSha256 must be 64 hex digits", "library: sourceSha256 must be 64 hex digits"}),
+            Map.entry("sweep-java-library-class-name.ir.json", new String[]{"a bad class name zz", "java library: a bad class name zz"}),
+            Map.entry("sweep-java-library-hash.ir.json", new String[]{"sourceSha256 must be 64 hex digits", "java library: sourceSha256 must be 64 hex digits"}),
+            Map.entry("sweep-java-record-verified-null.ir.json", new String[]{"verified is a boolean", "java record: verified is a boolean"}),
+            Map.entry("sweep-send-null-datum.ir.json", new String[]{"unknown node undefined", "a Send's \"datum\" is null"}),
+            Map.entry("sweep-option-leading-zero.ir.json", new String[]{"not an integer: 00", "option: not an integer: 00"}),
+            Map.entry("sweep-int-literal-leading-zero.ir.json", new String[]{"not a decimal integer: \\\"00\\\"", "not a decimal integer: 00"}),
+            Map.entry("sweep-keyed-empty.ir.json", new String[]{"a non-empty list, absent when there are none", "keyed: a non-empty list, absent when there are none"}),
+            Map.entry("sweep-java-library-control.ir.json", new String[0]),
+            Map.entry("sweep-java-record-control.ir.json", new String[0])));
+
+    @org.junit.jupiter.api.Test
+    void theSweepsFindings_areRefusedByBothReaders_andItsControlsLoad() throws IOException {
+        Path dir = Path.of("src/test/resources/ir-regressions");
+        try (Stream<Path> s = Files.list(dir)) {
+            assertEquals(SWEEP.keySet(), s.map(p -> p.getFileName().toString()).filter(n -> n.startsWith("sweep-"))
+                    .collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new)), "every sweep input is listed");
+        }
+        for (var e : SWEEP.entrySet()) {
+            String text = Files.readString(dir.resolve(e.getKey()));
+            String j = java(text);
+            String js = js(text);
+            if (e.getValue().length == 0) {
+                assertEquals("ok", j, e.getKey());
+                assertTrue(js.startsWith("{\"ok\":true"), e.getKey() + ": " + js);
+                continue;
+            }
+            assertTrue(js.contains("\"irWhat\":\"" + e.getValue()[0] + "\""), e.getKey() + ": " + js);
+            assertTrue(j.startsWith("refused") && j.contains(e.getValue()[1]), e.getKey() + ": " + j);
+            assertEquals("agree", verdict(j, js), e.getKey());
+        }
+    }
+
+    /**
      * #130 round r2 (security Z3): a check's words start with fixed text, never an IR-supplied name, so a name holding a
      * rule's prefix ("no fn x") cannot have a check registered under that rule. An invariant whose type is "no fn x".
      */
