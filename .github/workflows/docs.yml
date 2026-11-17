@@ -109,7 +109,9 @@ jobs:
           path: site
 
       # Replaces the whole gh-pages tree with the built site, with a CNAME for the custom domain and a .nojekyll (the
-      # action's default), so Pages serves _astro/ as is.
+      # action's default), so Pages serves _astro/ as is. The commit is github-actions[bot]'s (the action would
+      # otherwise use the triggering actor) and names main's commit and this run: what the approver checks before
+      # approving its pages-build-deployment (docs/release-ops.md, "Docs site").
       - name: Push site to gh-pages
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
@@ -117,6 +119,9 @@ jobs:
           publish_branch: gh-pages
           publish_dir: ./site
           cname: joust.julc.dev
+          user_name: 'github-actions[bot]'
+          user_email: '41898282+github-actions[bot]@users.noreply.github.com'
+          full_commit_message: 'deploy: ${{ github.sha }} (Docs site run ${{ github.run_id }})'
 
       - name: Record the pending Pages deployment
         shell: bash

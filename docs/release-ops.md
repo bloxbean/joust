@@ -366,8 +366,10 @@ The documentation site (`www/`, Astro Starlight) is served at <https://joust.jul
   built site to `gh-pages`**, replacing the branch's tree, with `CNAME` and `.nojekyll`. A manual run on another branch
   only builds. Not triggered by tags.
 - **The live site changes only after approval.** Each push to `gh-pages` starts GitHub's own
-  `pages-build-deployment` run, which deploys in the `github-pages` environment; with a required reviewer there, it
-  waits for that approval. The `publish` job's summary links the waiting run.
+  `pages-build-deployment` run, which deploys in the `github-pages` environment and waits there for its required
+  reviewer (setup step 5). The `publish` job's summary links the waiting run. The approval is the gate for anything
+  pushed to `gh-pages`, not only this workflow's commits: other workflows' `contents: write` tokens and any writer can
+  push there too.
 
 Pages does not need a release: the site describes `main`, and its pages never name a JOUST version (they point to
 the [releases page](https://github.com/bloxbean/joust/releases); `www/WRITING.md`, "Versions").
@@ -381,8 +383,17 @@ the [releases page](https://github.com/bloxbean/joust/releases); `www/WRITING.md
    certificate. Every publish writes the same name to `gh-pages`' `CNAME`.
 4. **DNS:** a `CNAME` record `joust` → `bloxbean.github.io` in the `julc.dev` zone. Verifying the domain for the
    `bloxbean` organization (Organization settings → Pages) protects it from takeover.
-5. **The `github-pages` environment** keeps its deployment branch policy at `gh-pages` only (as it is). For an
-   approval gate, as JuLC has, add the maintainer as its required reviewer.
+5. **The `github-pages` environment** (Settings → Environments), both required:
+   - **Deployment branches:** exactly `gh-pages`. Remove `main` (added for #137's `deploy-pages` model, now unused).
+   - **Required reviewers:** the maintainer (as JuLC's). Without a reviewer, whatever is pushed to `gh-pages` goes
+     live at once.
+6. **Optional:** a ruleset on `refs/heads/gh-pages` that blocks deletion and force pushes (`deletion`,
+   `non_fast_forward`), so the published history stays intact. The workflow only adds commits on top.
 
-**Each publish:** approve the `pages-build-deployment` run for that push in the `github-pages` environment
-(Actions → pages-build-deployment). If several are waiting, approve the newest and reject the older ones.
+**Each publish:** before approving the `pages-build-deployment` run in the `github-pages` environment (Actions →
+pages-build-deployment), check the `gh-pages` commit it deploys:
+- its author is `github-actions[bot]`;
+- its message is `deploy: <sha> (Docs site run <run id>)`, the run is a **Docs site** run of this workflow on `main`,
+  and `<sha>` is a commit on `main` (`git branch -r --contains <sha>` lists `origin/main`).
+
+Reject anything else. If several are waiting, approve the newest and reject the older ones.
