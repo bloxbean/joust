@@ -1,0 +1,9 @@
+{
+  "name": "joust-vsce",
+  "private": true,
+  "description": "The pinned vsce that publish-vscode.yml installs (npm ci --ignore-scripts) to publish the attested .vsix with Marketplace trusted publishing (ADR-0021 D11). Keep it equal to js/vscode-joust's @vscode/vsce.",
+  "license": "MIT",
+  "dependencies": {
+    "@vscode/vsce": "4.1.1"
+  }
+}

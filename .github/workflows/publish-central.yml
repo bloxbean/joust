@@ -42,8 +42,9 @@ jobs:
             exit 1
           fi
 
-  # The approval gate. The `release` environment holds no secrets: it only requires a release owner's
-  # approval (prevent self-review) and accepts runs from the release branches.
+  # The approval gate. The `release` environment holds no secrets: it only requires a release owner's approval
+  # and deploys only from main and v* tags (so run this from main). "Prevent self-review" is off while JOUST has one
+  # maintainer, so the approver checks the run themselves (docs/release-ops.md).
   approve:
     needs: validate-input
     runs-on: ubuntu-24.04

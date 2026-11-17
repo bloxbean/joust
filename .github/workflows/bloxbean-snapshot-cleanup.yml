@@ -71,8 +71,8 @@ jobs:
           ARTIFACTS: ${{ steps.discover.outputs.artifacts }}
         run: python3 .github/scripts/clean-maven-snapshots.py plan
 
-  # The approval gate. The `release` environment holds no secrets; its reviewers are the release-owners team, and
-  # the person who started the run can't approve it.
+  # The approval gate. The `release` environment holds no secrets; it deploys only from main and v* tags. With one
+  # maintainer, "prevent self-review" is off, so the approver checks the run (docs/release-ops.md).
   approve:
     needs: plan
     if: ${{ !inputs.dry_run && needs.plan.outputs.versions != '' }}

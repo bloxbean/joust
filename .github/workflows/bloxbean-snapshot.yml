@@ -30,10 +30,10 @@ concurrency:
 
 jobs:
   publish:
-    # The bucket credentials are secrets of this environment, which only accepts main, release/** and v* tags.
+    # The bucket credentials are secrets of this environment. Snapshots come from main only (#133 R2): no workflow that
+    # holds release-staging's secrets runs from a release/** branch, so that environment's release/** rule is unused.
     # Skip other branches rather than fail on the environment's branch policy.
-    if: >-
-      github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    if: github.ref == 'refs/heads/main'
     environment: release-staging
     runs-on: ubuntu-24.04
     timeout-minutes: 120

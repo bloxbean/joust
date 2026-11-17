@@ -24,6 +24,14 @@ name: Release (Maven artifacts and npm)
 # gated by homebrew_publish. CLI archives go out only with github_release, bloxbean_repo_publish and npm_publish all
 # true (.github/scripts/release-flags.sh).
 #
+# The VS Code extension (ADR-0021 D11 r11): with vscode_assets, `editor-assets` calls editor-assets.yml after the npm
+# packages and the GitHub release: it builds the .vsix (with the engine npm now serves) and the tree-sitter package from
+# this tag, attests them and attaches them in the `release` environment. With vscode_publish, `vscode-publish` then calls
+# publish-vscode.yml, which verifies that attested .vsix and publishes it, unchanged, to the Visual Studio Marketplace
+# through trusted publishing, in the `vscode-marketplace` environment. The cli job checks first, before anything is
+# published, what those jobs would refuse: a tag main does not reach, the two environments' reviewers and deployment
+# rules, a final JOUST version, the changelog, and an extension version the Marketplace already has.
+#
 # No Gradle cache (gradle/actions/setup-gradle) in these jobs: they hold the release secrets and the npm OIDC token, and
 # a cache restored from another run could change what runs next to them (release-ops docs/03 §1).
 #
@@ -101,8 +109,42 @@ jobs:
           fi
           flag() { awk -v k="^$1:" '$0 ~ k { print $2; exit }' <<< "$PROPS"; }
           bash .github/scripts/release-flags.sh "$(flag github_release)" "$(flag bloxbean_repo_publish)" \
-            "$(flag npm_publish)" "$(flag homebrew_publish)"
+            "$(flag npm_publish)" "$(flag homebrew_publish)" "$(flag vscode_assets)" "$(flag vscode_publish)" \
+            | tee -a "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # ADR-0021 D11 r11, #133 E1: what the release's last jobs (editor-assets, vscode-publish) would refuse, refused here,
+      # before Maven, npm or the GitHub release. One platform is enough: maven needs every cli job. Only gh, git and
+      # these two scripts see the read-only token.
+      - name: Check the editor-assets and Marketplace preconditions
+        if: >-
+          matrix.label == 'linux-x86_64'
+          && (steps.version.outputs.vscode_assets == 'true' || steps.version.outputs.vscode_publish == 'true')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          VSCODE_PUBLISH: ${{ steps.version.outputs.vscode_publish }}
+        run: |
+          set -euo pipefail
+          # editor-assets.yml builds only a tag that main reaches (releases come from main only: tag-release.yml).
+          head=$(git rev-parse HEAD)
+          status=$(gh api "repos/${GH_REPO}/compare/main...${head}" --jq .status)
+          if [[ "$status" != identical && "$status" != behind ]]; then
+            echo "::error::v$VERSION ($head) is not reachable from main ($status): releases come from main only, and the" \
+              "editor assets are built only from a tag on main (docs/release-ops.md)." >&2
+            exit 1
+          fi
+          envs=(release)
+          if [[ "$VSCODE_PUBLISH" == true ]]; then envs+=(vscode-marketplace); fi
+          node .github/scripts/release-environments.mjs "${envs[@]}"
+          # The Marketplace refuses a version it has; a final JOUST version has no extension channel yet; the changelog
+          # names the JOUST release the extension bundles.
+          if [[ "$VSCODE_PUBLISH" == true ]]; then
+            node .github/scripts/vscode-marketplace.mjs manifest js/vscode-joust/package.json --joust "$VERSION" \
+              --changelog js/vscode-joust/CHANGELOG.md
+          fi
 
       - name: Build the native joust
         run: ./gradlew :julc-state-cli:nativeCompile -PskipSigning --no-daemon --stacktrace
@@ -170,6 +212,8 @@ jobs:
       github_release: ${{ steps.version.outputs.github_release }}
       cli_assets: ${{ steps.version.outputs.cli_assets }}
       homebrew_publish: ${{ steps.version.outputs.homebrew }}
+      vscode_assets: ${{ steps.version.outputs.vscode_assets }}
+      vscode_publish: ${{ steps.version.outputs.vscode_publish }}
     env:
       GROUP_PATH: org/julclang
       BUCKET: ${{ vars.R2_BUCKET }}
@@ -257,8 +301,11 @@ jobs:
           GITHUB_RELEASE=$(awk '/^github_release:/ { print $2; exit }' <<< "$PROPS")
           # ADR-0017 D10: what happens to the native joust (CLI archives, the Homebrew formula), checked here too.
           HOMEBREW_PUBLISH=$(awk '/^homebrew_publish:/ { print $2; exit }' <<< "$PROPS")
+          # ADR-0021 D11 r11: the editor assets and the Marketplace publish, checked here too.
+          VSCODE_ASSETS=$(awk '/^vscode_assets:/ { print $2; exit }' <<< "$PROPS")
+          VSCODE_PUBLISH=$(awk '/^vscode_publish:/ { print $2; exit }' <<< "$PROPS")
           bash .github/scripts/release-flags.sh "${GITHUB_RELEASE:-}" "$BLOXBEAN_REPO_PUBLISH" "$NPM_PUBLISH" \
-            "${HOMEBREW_PUBLISH:-}" >> "$GITHUB_OUTPUT"
+            "${HOMEBREW_PUBLISH:-}" "${VSCODE_ASSETS:-}" "${VSCODE_PUBLISH:-}" >> "$GITHUB_OUTPUT"
           {
             echo "version=$VERSION"
             echo "is_final=$IS_FINAL"
@@ -270,7 +317,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Version $VERSION (final: $IS_FINAL), Maven Central: $MAVEN_CENTRAL_PUBLISH," \
             "BloxBean repository: $BLOXBEAN_REPO_PUBLISH, npm: $NPM_PUBLISH, snapshot dependencies allowed: $ALLOW_SNAPSHOTS," \
-            "GitHub release: ${GITHUB_RELEASE:-false}"
+            "GitHub release: ${GITHUB_RELEASE:-false}, VS Code assets: ${VSCODE_ASSETS:-false}, Marketplace: ${VSCODE_PUBLISH:-false}"
 
       # A release that names a snapshot cannot be resolved for long: snapshots are pruned (JuLC keeps 20 commit
       # versions or 60 days), and Central hosts none. allow_snapshot_dependencies=true (rehearsals only, with every
@@ -425,6 +472,8 @@ jobs:
           BLOXBEAN_REPO_PUBLISH: ${{ steps.version.outputs.bloxbean_repo_publish }}
           BLOXBEAN_OUTCOME: ${{ steps.bloxbean.outcome }}
           GITHUB_RELEASE: ${{ steps.version.outputs.github_release }}
+          VSCODE_ASSETS: ${{ steps.version.outputs.vscode_assets }}
+          VSCODE_PUBLISH: ${{ steps.version.outputs.vscode_publish }}
         shell: bash
         run: |
           set -euo pipefail
@@ -463,6 +512,13 @@ jobs:
               if [[ "$BLOXBEAN_REPO_PUBLISH" != true ]]; then
                 echo "If this was a rehearsal, drop any Central deployment in the portal."
               fi
+            fi
+            echo
+            if [[ "$VSCODE_ASSETS" == true ]]; then
+              echo "The editor-assets job attaches the VS Code extension and the tree-sitter package (environment release)."
+            fi
+            if [[ "$VSCODE_PUBLISH" == true ]]; then
+              echo "The vscode-publish job then publishes the attested .vsix to the Marketplace (environment vscode-marketplace)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -630,10 +686,14 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           name: ${{ needs.maven.outputs.version }}
-          body: >-
+          body: |
             ${{ needs.maven.outputs.cli_assets == 'true'
               && 'The native joust (macOS arm64, Linux x86_64 and arm64) is attached by the cli-assets job once the published artifacts have been checked with a generated project.'
               || 'No native joust archives for this release: they need github_release, bloxbean_repo_publish and npm_publish all true (ADR-0017 D10).' }}
+
+            ${{ needs.maven.outputs.vscode_assets == 'true'
+              && 'The VS Code extension (vscode-joust-<version>.vsix) and the tree-sitter package (tree-sitter-jsc-<version>.tar.gz) are attached by the editor-assets job, with provenance attestations (ADR-0021 D11).'
+              || '' }}
           prerelease: ${{ needs.maven.outputs.is_final != 'true' }}
           # Latest is decided by semantic version and date, so a maintenance release (e.g. 0.7.3 after
           # 0.8.0) does not take the Latest badge.
@@ -763,6 +823,36 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: published/joust-*.zip
+
+  # ADR-0021 D11 r11: the .vsix and the tree-sitter package, built from this tag with the engine npm now serves, attested
+  # and attached in the `release` environment (editor-assets.yml, which also runs by hand from main). The called
+  # workflow's jobs ask for no more than this; its build job is read-only, and nothing in it publishes.
+  editor-assets:
+    needs: [maven, npm, github-release]
+    if: needs.maven.outputs.vscode_assets == 'true'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      actions: read
+    uses: ./.github/workflows/editor-assets.yml
+    with:
+      version: ${{ needs.maven.outputs.version }}
+
+  # ADR-0021 D11 r11: the attested .vsix, unchanged, to the Visual Studio Marketplace (publish-vscode.yml: trusted
+  # publishing in the `vscode-marketplace` environment; the trusted publisher names that file and environment). If it
+  # fails, run publish-vscode.yml by hand from main with this version (docs/release-ops.md).
+  vscode-publish:
+    needs: [maven, editor-assets]
+    if: needs.maven.outputs.vscode_publish == 'true'
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+      id-token: write
+    uses: ./.github/workflows/publish-vscode.yml
+    with:
+      version: ${{ needs.maven.outputs.version }}
 
   # ADR-0017 D7: Formula/joust.rb in bloxbean/homebrew-tap, gated by homebrew_publish. The token is the organization
   # secret HOMEBREW_TAP_TOKEN, shared with the other bloxbean releases that push to the tap (ADR-0017 implementation

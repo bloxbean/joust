@@ -1,0 +1,245 @@
+# ADR-0021 D11 (r11): publishes the VS Code extension to the Visual Studio Marketplace as publisher `julc`, through
+# Marketplace trusted publishing (GitHub OIDC; no Marketplace token exists anywhere). It never builds: it publishes,
+# unchanged, the vscode-joust-<ext>.vsix that editor-assets.yml attached to the GitHub release v<version>, after
+# verifying that file's build-provenance attestation. Two ways start it:
+#   - release.yml, on the release's v* tag, when vscode_publish=true in gradle.properties (workflow_call, after
+#     editor-assets.yml attached the assets);
+#   - a maintainer, by hand (Actions -> "Publish the VS Code extension" -> Run workflow, from main, with the JOUST
+#     version whose attached .vsix to publish), e.g. after a failed publish.
+# Any other repository, event or ref skips both jobs; the environment's deployment rules refuse other refs too.
+#
+# The Marketplace's trusted publisher names this repository, THIS FILE (publish-vscode.yml; the name must not change)
+# and the environment `vscode-marketplace`, whose required reviewers approve each publish. Only the publish job holds
+# id-token: write, and it runs only the pinned vsce (.github/scripts/vsce, installed without scripts) on the verified
+# file. The check job runs first, without the environment: the reviewers approve a file that is already verified.
+#
+# Open VSX stays manual (docs/release-ops.md).
+name: Publish the VS Code extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The JOUST release whose attached vscode-joust-<ext>.vsix to publish (the GitHub release v<version>)'
+        required: true
+        type: string
+  # release.yml, on the release's tag (vscode_publish=true).
+  workflow_call:
+    inputs:
+      version:
+        description: 'The JOUST release whose attached .vsix to publish'
+        required: true
+        type: string
+
+permissions: {}
+
+# One publish at a time; never cancel one that may already have reached the Marketplace.
+concurrency:
+  group: publish-vscode
+  cancel-in-progress: false
+
+jobs:
+  # Everything that can be checked before anyone approves: the environment, the release's .vsix and its attestation,
+  # the manifest, and that the Marketplace does not have this version yet.
+  check:
+    # This repository only (#133 R3: a public reusable workflow can be called from anywhere), and a dispatch from main
+    # or release.yml's run on the tag v<version> (a called workflow has its caller's event and ref).
+    if: >-
+      github.repository == 'bloxbean/joust' && (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'push' && github.ref == format('refs/tags/v{0}', inputs.version)))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read        # the environment's protection rules
+      attestations: read   # gh attestation verify
+    outputs:
+      vsix: ${{ steps.vsix.outputs.vsix }}
+      sha256: ${{ steps.vsix.outputs.sha256 }}
+      ext_version: ${{ steps.marketplace.outputs.ext_version }}
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      # The script only (this ref's: main's, or the tag's when release.yml calls).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.12.0'
+
+      # GitHub creates a missing environment, unprotected, on first use; this run would then need no approval.
+      - name: Check the version and the vscode-marketplace environment's reviewers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::not a version: $VERSION" >&2; exit 1; }
+          n=$(gh api "repos/${GH_REPO}/environments/vscode-marketplace" --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          if [[ "$n" -lt 1 ]]; then
+            echo "::error::the vscode-marketplace environment has no required reviewers: set them up (docs/release-ops.md), then run again" >&2
+            exit 1
+          fi
+
+      - name: Download and verify the release's .vsix
+        id: vsix
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/vsix"
+          gh release download "v$VERSION" --pattern 'vscode-joust-*.vsix' --dir "$d"
+          files=("$d"/vscode-joust-*.vsix)
+          [[ ${#files[@]} == 1 && -f "${files[0]}" ]] || { echo "::error::expected one vscode-joust-*.vsix on v$VERSION" >&2; exit 1; }
+          f="${files[0]}"
+          # Its attestations, kept for the publish job, which verifies the same bundle (offline, no API permission).
+          mkdir -p "$RUNNER_TEMP/attestation"
+          (cd "$RUNNER_TEMP/attestation" && gh attestation download "$f" -R "$GH_REPO")
+          bundles=("$RUNNER_TEMP"/attestation/*.jsonl)
+          [[ ${#bundles[@]} == 1 && -f "${bundles[0]}" ]] || { echo "::error::no attestation bundle for $(basename "$f")" >&2; exit 1; }
+          # Named sha256:<digest>.jsonl; an artifact's file names cannot hold a colon.
+          mv "${bundles[0]}" "$RUNNER_TEMP/attestation/vsix.jsonl"
+          bundles=("$RUNNER_TEMP/attestation/vsix.jsonl")
+          # Signed by editor-assets.yml (called by release.yml from the tag, or run by hand from main).
+          verified=false
+          for ref in "refs/tags/v$VERSION" refs/heads/main; do
+            if gh attestation verify "$f" -R "$GH_REPO" --bundle "${bundles[0]}" \
+                --signer-workflow "$GH_REPO/.github/workflows/editor-assets.yml" --source-ref "$ref" --deny-self-hosted-runners; then
+              verified=true
+              echo "attested by editor-assets.yml at $ref" >> "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+          done
+          [[ $verified == true ]] || { echo "::error::$(basename "$f") has no attestation from editor-assets.yml" >&2; exit 1; }
+          echo "vsix=$(basename "$f")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$f" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Check the manifest and the Marketplace
+        id: marketplace
+        shell: bash
+        env:
+          VSIX: ${{ steps.vsix.outputs.vsix }}
+        run: node .github/scripts/vscode-marketplace.mjs vsix "$RUNNER_TEMP/vsix/$VSIX" --joust "$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the attestation bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vscode-joust-attestation
+          path: ${{ runner.temp }}/attestation/vsix.jsonl
+          if-no-files-found: error
+          retention-days: 7
+
+  # The only job that can publish: it holds id-token: write (for the Marketplace's token exchange) and nothing else
+  # beyond reading, in the vscode-marketplace environment, which the trusted publisher names.
+  publish:
+    needs: check
+    if: >-
+      github.repository == 'bloxbean/joust' && (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'push' && github.ref == format('refs/tags/v{0}', inputs.version)))
+    environment: vscode-marketplace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ inputs.version }}
+      VSIX: ${{ needs.check.outputs.vsix }}
+      SHA256: ${{ needs.check.outputs.sha256 }}
+    steps:
+      # The script and vsce's lockfile only.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.12.0'
+
+      # Again inside the environment (it could have changed since the check job). The environment is public data of a
+      # public repository: the job's token reads it without actions: read, else the unauthenticated API does.
+      - name: Check the vscode-marketplace environment's reviewers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          q='[.protection_rules[]? | select(.type == "required_reviewers")] | length'
+          url="repos/${GH_REPO}/environments/vscode-marketplace"
+          n=$(gh api "$url" --jq "$q" 2>/dev/null || curl -sSf "https://api.github.com/$url" | jq "$q")
+          if [[ "$n" -lt 1 ]]; then
+            echo "::error::the vscode-marketplace environment has no required reviewers: set them up (docs/release-ops.md), then run again" >&2
+            exit 1
+          fi
+
+      - name: Download the attestation bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vscode-joust-attestation
+          path: ${{ runner.temp }}/attestation
+
+      # The same file the check job verified (its SHA-256), verified again here against the bundle (a bundle is
+      # checked cryptographically, so this needs no attestations permission).
+      - name: Download and verify the .vsix
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/vsix"
+          gh release download "v$VERSION" --pattern "$VSIX" --dir "$d"
+          echo "${SHA256}  $d/$VSIX" | sha256sum -c -
+          bundles=("$RUNNER_TEMP/attestation/vsix.jsonl")
+          verified=false
+          for ref in "refs/tags/v$VERSION" refs/heads/main; do
+            if gh attestation verify "$d/$VSIX" -R "$GH_REPO" --bundle "${bundles[0]}" \
+                --signer-workflow "$GH_REPO/.github/workflows/editor-assets.yml" --source-ref "$ref" --deny-self-hosted-runners; then
+              verified=true
+              break
+            fi
+          done
+          [[ $verified == true ]] || { echo "::error::$VSIX has no attestation from editor-assets.yml" >&2; exit 1; }
+
+      # Again right before publishing: another run may have published this version since the check.
+      - name: Check the manifest and the Marketplace
+        run: node .github/scripts/vscode-marketplace.mjs vsix "$RUNNER_TEMP/vsix/$VSIX" --joust "$VERSION"
+
+      # The pinned vsce (.github/scripts/vsce/package-lock.json), no install scripts.
+      - name: Install vsce
+        run: npm ci --ignore-scripts --prefix .github/scripts/vsce
+
+      # Marketplace trusted publishing: vsce exchanges this job's GitHub OIDC token (audience
+      # marketplace.visualstudio.com) for a Marketplace credential of up to 15 minutes. --pre-release is checked
+      # against the package (vsce refuses a .vsix not packaged as a pre-release); --packagePath publishes that file as is.
+      - name: Publish to the Marketplace
+        run: >-
+          .github/scripts/vsce/node_modules/.bin/vsce publish --oidc --pre-release
+          --packagePath "$RUNNER_TEMP/vsix/$VSIX"
+
+      - name: Record the publish
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          OUTCOME: ${{ job.status }}
+        run: |
+          {
+            echo "## VS Code extension of JOUST \`$VERSION\`"
+            echo
+            echo "\`$VSIX\` (SHA-256 \`$SHA256\`), publish: $OUTCOME."
+            echo "https://marketplace.visualstudio.com/items?itemName=julc.vscode-joust (may take a few minutes)"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,10 +1,10 @@
-// ADR-0021 r10 §16 (M5e) E7, D11: the editor assets of a JOUST release, built from a checkout of its tag:
+// ADR-0021 r11 §16 (M5e) E7, D11: the editor assets of a JOUST release, built from a checkout of its tag:
 //   vscode-joust-<ext>.vsix              the extension, its engine taken from the release's published @julclang/joust
 //   tree-sitter-jsc-<ts>.tar.gz          the tree-sitter package (tree-sitter-jsc/scripts/package.mjs)
 //   editor-assets-<version>.json         what was built from what: the engine's digests and where they came from
 //   editor-assets-<version>-SHA256SUMS.txt
-// It builds and checks only; it uploads nothing and publishes nothing (editor-assets.yml attaches, a maintainer
-// publishes). The engine comes from the npm tarball of @julclang/joust@<version> (--engine-tarball, as `npm pack`
+// It builds and checks only; it uploads nothing and publishes nothing (editor-assets.yml attests and attaches;
+// publish-vscode.yml publishes the attached .vsix to the Marketplace, unchanged; Open VSX is by hand). The engine comes from the npm tarball of @julclang/joust@<version> (--engine-tarball, as `npm pack`
 // fetched it), or, in CI's dry run, from a directory (--engine-dir).
 //   node .github/scripts/editor-assets.mjs --version <v> (--engine-tarball <tgz> | --engine-dir <dir>) --out <dir>
 import { spawnSync } from 'node:child_process';
@@ -72,7 +72,7 @@ const record = {
   // #121 S4: the tree-sitter archive's gzip bytes depend on Node's zlib.
   node: process.version,
   publisher: JSON.parse(readFileSync(join(ext, 'package.json'), 'utf8')).publisher,
-  note: 'Attached for maintainers to publish by hand after gh attestation verify (ADR-0021 D11); nothing here is published.',
+  note: 'Attested and attached by editor-assets.yml; publish-vscode.yml publishes this .vsix, unchanged, to the Visual Studio Marketplace after gh attestation verify (ADR-0021 D11 r11). Open VSX is by hand.',
 };
 const recordName = `editor-assets-${version}.json`;
 writeFileSync(join(out, recordName), JSON.stringify(record, null, 2) + '\n');

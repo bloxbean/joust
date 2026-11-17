@@ -1,6 +1,8 @@
-# ADR-0021 r10 §16 (M5e) E7, D11: attaches the editor assets to an existing JOUST release, when a maintainer runs it
-# (Actions -> "Editor assets" -> Run workflow, with the release's version). Nothing else starts it: no push, tag, pull
-# request or schedule, so adding this file changes no release.
+# ADR-0021 r11 §16 (M5e) E7, D11: attaches the editor assets to an existing JOUST release. Two ways start it:
+#   - release.yml, on the release's v* tag, when vscode_assets=true in gradle.properties (workflow_call, after the npm
+#     packages and the GitHub release are out);
+#   - a maintainer, by hand (Actions -> "Editor assets" -> Run workflow, from main, with the release's version), to
+#     attach them to an earlier release or after a failed run.
 #
 #   vscode-joust-<ext>.vsix             the extension, its engine from the release's published @julclang/joust tarball
 #   tree-sitter-jsc-<ts>.tar.gz         the tree-sitter package
@@ -9,16 +11,19 @@
 #
 # Each is attested first, then attached (#121 F6: a failure between the two leaves nothing unattested), and an asset is
 # never replaced: one already on the release with the same bytes is accepted, one with other bytes fails the run.
-# #121 S1: it runs only from main (both jobs check github.ref), builds the tag itself (refs/tags/v<version>, checked to be
-# the tag's commit and reachable from main), and attaches only in the `release` environment, whose reviewers a
-# maintainer sets up (docs/release-ops.md); #121 F10: the attach job checks, before anything is uploaded, that the
-# environment has required reviewers.
+# #121 S1: both jobs run only in bloxbean/joust (#133 R3), for a dispatch from main or for release.yml's run on the tag
+# v<version> itself (a called workflow sees its caller's repository, event and ref). The build checks out the tag
+# (refs/tags/v<version>, checked to be the tag's commit and reachable from main), and the assets are attached only in
+# the `release` environment, whose reviewers a maintainer sets up (docs/release-ops.md); #121 F10: the attach job
+# checks, before anything is uploaded, that the environment has required reviewers.
 #
-# Nothing is published: no Marketplace or Open VSX token exists here, and no step runs vsce publish or ovsx publish. A
-# maintainer publishes from the attached .vsix by hand (D11), once the publisher (Q4) is decided, after verifying it:
+# Nothing is published here: no Marketplace or Open VSX token exists, and no step runs vsce publish or ovsx publish.
+# publish-vscode.yml publishes the attached .vsix, unchanged, after verifying its attestation (ADR-0021 D11 r11); Open
+# VSX stays manual. The attestation's signer is this workflow, called or not; its source ref is the tag when release.yml
+# called it, and main when a maintainer ran it:
 #
 #   gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust \
-#     --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml --source-ref refs/heads/main
+#     --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml --source-ref refs/tags/v<version>
 name: Editor assets
 
 on:
@@ -26,6 +31,13 @@ on:
     inputs:
       version:
         description: 'The JOUST release whose editor assets to attach (its tag v<version> and GitHub release must exist)'
+        required: true
+        type: string
+  # release.yml, on the release's tag (vscode_assets=true).
+  workflow_call:
+    inputs:
+      version:
+        description: 'The JOUST release whose editor assets to attach'
         required: true
         type: string
 
@@ -39,7 +51,12 @@ jobs:
   # Builds from the release's tag with a read-only token and no secrets; installs with --ignore-scripts except the
   # pinned tree-sitter-cli (its install step fetches its binary, as build.yml's grammar job does).
   build:
-    if: github.ref == 'refs/heads/main'
+    # This repository only (#133 R3: a public reusable workflow can be called from anywhere), and a dispatch from main
+    # or release.yml's run on the tag v<version> (a called workflow has its caller's event and ref).
+    if: >-
+      github.repository == 'bloxbean/joust' && (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'push' && github.ref == format('refs/tags/v{0}', inputs.version)))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -87,7 +104,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/npm"
-          npm pack "@julclang/joust@$VERSION" --ignore-scripts --pack-destination "$RUNNER_TEMP/npm"
+          # Called right after the npm job, the registry may take a moment to serve the new version.
+          for attempt in 1 2 3 4 5; do
+            if npm pack "@julclang/joust@$VERSION" --ignore-scripts --pack-destination "$RUNNER_TEMP/npm"; then
+              break
+            fi
+            if [[ $attempt == 5 ]]; then
+              echo "::error::npm does not serve @julclang/joust@$VERSION" >&2
+              exit 1
+            fi
+            sleep 30
+          done
           ls -l "$RUNNER_TEMP/npm"
 
       # #121 S4: no install scripts. tree-sitter-cli's would download its binary unchecked: the pinned release asset is
@@ -128,7 +155,12 @@ jobs:
   # Attaches them (never replacing one) and attests their provenance. Runs no repository code (no checkout).
   attach:
     needs: build
-    if: github.ref == 'refs/heads/main'
+    # This repository only (#133 R3: a public reusable workflow can be called from anywhere), and a dispatch from main
+    # or release.yml's run on the tag v<version> (a called workflow has its caller's event and ref).
+    if: >-
+      github.repository == 'bloxbean/joust' && (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'push' && github.ref == format('refs/tags/v{0}', inputs.version)))
     # #121 S1: reviewers approve the attachment (a maintainer creates this environment; docs/release-ops.md).
     environment: release
     runs-on: ubuntu-24.04

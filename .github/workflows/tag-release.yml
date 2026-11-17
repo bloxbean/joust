@@ -2,15 +2,20 @@
 name: Tag release
 
 # Step 2 of the PR-gated release flow. When a code-owner-approved PR changes `version` in
-# gradle.properties and merges to the default branch or a release/** branch, and a release owner approves, create and
-# push the matching v<version> tag on that commit. The tag then triggers release.yml.
+# gradle.properties and merges to the default branch, and a release owner approves, create and push the matching
+# v<version> tag on that commit. The tag then triggers release.yml.
+#
+# Releases come from main only (ADR-0021 D11 r11, #133 E7). The `release` environment, where `authorize` waits,
+# deploys only from main and v* tags (the release's editor-assets and Marketplace jobs need that, and release.yml's
+# preflight checks it), so a run on any other branch could never be approved: this workflow does not run there.
 #
 # Jobs:
 #   resolve    reads the version; skips SNAPSHOT versions and tags that already exist (no approval asked)
-#   authorize  waits for a release owner's approval in the `release` environment (team release-owners,
-#              prevent self-review). A version bump can be merged now and tagged later, and manual runs,
-#              which any write-access user can start, are gated the same way. Reject an approval you
-#              don't want rather than leaving it pending; GitHub cancels a pending one after 30 days.
+#   authorize  waits for a release owner's approval in the `release` environment (main and v* only; "prevent
+#              self-review" off while JOUST has one maintainer, docs/release-ops.md). A version bump can be
+#              merged now and tagged later, and manual runs, which any write-access user can start, are gated
+#              the same way. Reject an approval you don't want rather than leaving it pending; GitHub cancels a
+#              pending one after 30 days.
 #   tag        creates the tag with the release App token (secrets in `release-staging`)
 #
 # The tag is pushed with a GitHub App token (bloxbean-release-tagger), NOT the default GITHUB_TOKEN:
@@ -21,14 +26,11 @@ on:
   push:
     branches:
       - main
-      - 'release/**'
     paths:
       - 'gradle.properties'
-  # With more than one release branch (e.g. main + next), list each one under `branches:` and in the `resolve`
-  # guard, and keep this file identical on all of them.
-  # Manual run: tag the version currently in gradle.properties on the default branch or release/**, e.g. when
-  # the push run never happened or its approval was rejected or expired. It tags the branch's current commit. Idempotent:
-  # skips if the tag already exists.
+  # Manual run, from main only: tag the version currently in gradle.properties on main, e.g. when the push run never
+  # happened or its approval was rejected or expired. It tags main's current commit. Idempotent: skips if the tag
+  # already exists.
   workflow_dispatch:
 
 permissions: {}
@@ -36,10 +38,9 @@ permissions: {}
 jobs:
   resolve:
     runs-on: ubuntu-24.04
-    # Only protected branches can be tagged. Push runs are already limited by the trigger.
+    # Only main can be tagged. Push runs are already limited by the trigger; a manual run must start from main.
     if: >-
-      github.event_name == 'push' ||
-      github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+      github.event_name == 'push' || github.ref == 'refs/heads/main'
     permissions:
       contents: read
     outputs:
@@ -100,8 +101,8 @@ jobs:
             echo "Reject it to hold the release; a manual run of this workflow can tag the version later."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # The approval gate. The `release` environment holds no secrets; its reviewers are the release-owners team,
-  # and the person who triggered the run can't approve it (org admins can bypass).
+  # The approval gate. The `release` environment holds no secrets; it deploys only from main and v* tags. With one
+  # maintainer, "prevent self-review" is off, so the approver checks the run's commit is on main (docs/release-ops.md).
   authorize:
     needs: resolve
     if: needs.resolve.outputs.skip == 'false'
@@ -116,8 +117,8 @@ jobs:
   tag:
     needs: [resolve, authorize]
     runs-on: ubuntu-24.04
-    # The App id and private key are secrets of this environment, which only accepts the default branch, release/**
-    # (creation restricted by ruleset) and v* tags.
+    # The App id and private key are secrets of this environment, which accepts the default branch and v* tags (and
+    # still release/**, which this workflow no longer runs on).
     environment: release-staging
     permissions:
       contents: read

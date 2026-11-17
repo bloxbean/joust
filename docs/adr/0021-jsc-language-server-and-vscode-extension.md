@@ -1,14 +1,17 @@
 # ADR-0021: A language server and VS Code extension for `.jsc`
 
-**Status:** Proposed (r10, with r7a and r7b); M5a–M5e built: M5a in #83, M5b in #99, M5c in #115, M5d in #120, M5e in
+**Status:** Proposed (r11, with r7a and r7b); M5a–M5e built: M5a in #83, M5b in #99, M5c in #115, M5d in #120, M5e in
 #121. *(r10, F8 on #121)* Acceptance waits on two conditions: ADR-0018's acceptance (this ADR builds on it; it is
-Proposed, r26), and the idle three-run L10 measurement. Q4 is the maintainers' (D11) and does not hold acceptance. r5 was approved on #66 (design, security, Codex); r6 records the amendments
+Proposed, r26), and the idle three-run L10 measurement. *(r11)* Q4 is closed for the Marketplace (publisher
+`julc`, published by a gated trusted-publishing workflow, D11); Open VSX stays the maintainers' and does not hold
+acceptance. r5 was approved on #66 (design, security, Codex); r6 records the amendments
 that M5a's implementation (#83) made, which its reviews asked for, and was approved with #83. r7a records the project
 reading that the `.jsc` 2 integration (#98) brought forward from M5c; r7 records M5b's amendments (§13, #99), approved
 with #99; r7b records the `.jsc` v1 removal (#111); r8 records M5c's (§14, #115), approved with #115; r9 records M5d's
 formatter (§15), reviewed with #120; r10 states M5e (§16: other editors, the tree-sitter package, docs, the release
-attachment and the editor's `joust.lock` gate), reviewed with #121, with the acceptance cleanup (§10, F3 on #121).
-**Date:** 2026-11-13
+attachment and the editor's `joust.lock` gate), reviewed with #121, with the acceptance cleanup (§10, F3 on #121); r11
+amends D11 for the first Marketplace publish (the release prep for JOUST 0.1.0-pre2).
+**Date:** 2026-11-13 (r11: 2026-11-16)
 **Builds on:** ADR-0018 (`.jsc`, called `.jsc` 2 before its r26), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
 D3 (names), D9 (libraries and `java:` imports, built in M4), D12 (stable codes, source maps, generated Java, ABI
 manifest), D13 (tree-sitter and TextMate grammars), D14 (npm projects), D16 (deployed scripts stay rebuildable), §8
@@ -58,6 +61,7 @@ hostile input, and how much of the front end it needs to change. Facts this desi
 | F16 | VS Code: the Marketplace accepts only `major.minor.patch` extension versions ("semver pre-release tags are not supported"); pre-releases use `vsce publish --pre-release`; extensions can be platform-specific (`--target`) or universal. Workspace Trust offers `capabilities.untrustedWorkspaces: { supported: "limited", restrictedConfigurations }`, and Restricted Mode disables workspace tasks; settings of scope `machine` or `application` cannot be set by a workspace. `editor.codeActionsOnSave` and `editor.formatOnSave` are editor settings a workspace can set. Current stable is 1.146.0 | code.visualstudio.com: "Publishing extensions", "Workspace Trust", "Contribution points" (fetched 2026-11-13); `update.code.visualstudio.com/api/releases/stable` (2026-11-13) |
 | F17 | Current versions: LSP 3.18 is the latest specification (versioned `documentChanges` in `WorkspaceEdit`, `version` on `publishDiagnostics`); `vscode-languageserver` and `vscode-languageclient` 11.0.0 (protocol 3.18.5; the client needs VS Code ≥ 1.91.0); `@vscode/test-electron` 3.1.0; `@vscode/vsce` 4.1.0; `ovsx` 1.4.0; `web-tree-sitter` 0.27.2; LSP4J 1.0.0 | microsoft.github.io/language-server-protocol; `npm view` and Maven Central metadata (2026-11-13) |
 | F18 | Names others hold: the unscoped npm package **`joust`** belongs to an unrelated maintainer (0.0.0, no `bin` today), and `npx` assumes `--yes` when stdin is not a TTY (as for a language server); the Open VSX namespaces `julclang` and `bloxbean` do not exist (HTTP 404), so anyone can create them | `npm view joust`; `npm help exec` (npm 10.9.0); `open-vsx.org/api/julclang`, `/api/bloxbean` (2026-11-13) |
+| F19 | *(r11)* **Marketplace trusted publishing:** the Visual Studio Marketplace accepts a GitHub Actions OIDC token instead of a PAT. A publisher's Trusted Publishing policy names the repository owner, the repository, the workflow **file name** under `.github/workflows` and, optionally, a GitHub environment; the publishing job needs `id-token: write` (and `contents: read`) and runs `vsce publish --oidc`; the Marketplace credential lasts 15 minutes and each OIDC token is exchanged once. GitHub Actions is the only supported provider. `@vscode/vsce` 4.1.1 implements `--oidc` (audience `marketplace.visualstudio.com`, exchanged at `/_apis/gallery/token`), rejects it combined with `--pat` or `--azure-credential`, and with `--packagePath` publishes the given `.vsix` as is; `--pre-release` there only checks that the package was made with `vsce package --pre-release`. The docs do not say which OIDC claim carries the workflow when a reusable workflow publishes (`workflow_ref`, the caller, or `job_workflow_ref`, the called file) | code.visualstudio.com "Publishing extensions", Trusted Publishing (fetched 2026-11-16); `@vscode/vsce` 4.1.1's `out/oidc.js`, `out/publish.js`, `vsce publish --help`; microsoft/vscode-vsce#1291 |
 
 ### Measurements
 
@@ -638,7 +642,8 @@ revision it also could not be safe: a moved line, a file name and some parameter
   test of D12; 1.109.0 is verified locally (§1), the smoke tests also run on the current stable (1.146.0 on
   2026-11-13), and `vscode-languageclient` 11.0.0 alone would allow 1.91.0 (Q5).
 - **The templates** (`npm create joust`, `joust new -t node|web`) add `.vscode/extensions.json` recommending the
-  extension once it is published and Q4 is resolved (D11).
+  extension once it is published and Q4 is resolved (D11). *(r11)* It is published from 0.1.0-pre2 on as
+  `julc.vscode-joust` (a pre-release); the templates' recommendation is a later change.
 
 ### D10. Trust and security
 
@@ -678,7 +683,7 @@ revision it also could not be safe: a moved line, a file name and some parameter
   the project's CLI (L3). The server's only own file writes are D3b's checked engine copy, in the extension's (or the
   user-installed server's) private storage, outside every workspace folder.
 
-### D11. Publishing is human-only, and the supply chain (revised in r2)
+### D11. Publishing: attested in CI, approved by a human, and the supply chain (revised in r2; amended in r11)
 
 - **Build:** CI builds the `.vsix` (`vsce package`, plus `--pre-release` for pre-releases) on every pull request that
   touches the extension or the server, on `pull_request` (never `pull_request_target`), and smoke-tests it (D12). The
@@ -688,20 +693,53 @@ revision it also could not be safe: a moved line, a file name and some parameter
 - **Engine provenance:** the bundled engine is the one in the same release's `@julclang/joust` tarball; CI checks that
   the `.vsix`'s engine files have the same digests as the tarball's, and the release notes record them.
 - **Release:** the release workflow attaches the `.vsix` to the GitHub release with its SHA-256 and a build-provenance
-  attestation, as ADR-0017 D6 does for the CLI archives, never replacing an asset.
-- **Publishing to the VS Code Marketplace and to Open VSX is done by a maintainer, by hand**, from that attached
-  `.vsix` (`vsce publish --packagePath`, `ovsx publish`), after **`gh attestation verify <vsix> -R bloxbean/joust --signer-workflow
-  bloxbean/joust/.github/workflows/editor-assets.yml --source-ref refs/heads/main`** (a hash on the same release page
-  alone would be circular; *r10, S1 on #121:* the signer workflow and its ref, so an attestation from another workflow
-  or branch does not verify). No Marketplace or Open VSX token is stored in the repository
-  or in CI. Automating it later needs its own decision, like the Homebrew tap's in ADR-0017 D7.
-- **Token custody:** a Marketplace PAT scoped to Marketplace (Manage), one organisation, a short expiry, kept outside
-  CI, held by at least two named maintainers; an Open VSX token likewise. **Incident procedure:** unpublish or
-  deprecate the version on both registries, revoke and rotate the tokens, publish a fixed version, and say so in the
-  release notes (Marketplace auto-update reaches every user at once).
-- **Namespaces (maintainer actions, before any template recommends an extension ID):** create the Marketplace
-  publisher and **claim the Open VSX namespaces `julclang` and `bloxbean` now** (both are unclaimed, F18), apply for
-  verification on both, and decide Q4.
+  attestation, as ADR-0017 D6 does for the CLI archives, never replacing an asset. *(r11)* `release.yml` calls
+  `editor-assets.yml` on the release's tag when `vscode_assets=true` (gradle.properties), after the npm packages and the
+  GitHub release; a maintainer can still run it by hand from `main`. Either way it builds the tag itself (its commit,
+  reachable from `main`) and attaches in the `release` environment.
+- *(r11, amends r2's "by hand")* **Publishing to the VS Code Marketplace is a gated workflow with trusted publishing.**
+  With `vscode_publish=true`, `release.yml` then calls `publish-vscode.yml` (also runnable by hand, from `main` only). It
+  never builds: it downloads the `.vsix` attached to the GitHub release, verifies it with **`gh attestation verify
+  <vsix> -R bloxbean/joust --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml --source-ref <ref>`**,
+  where the ref is the release's tag (`refs/tags/v<version>`, when `release.yml` called `editor-assets.yml`: a called
+  workflow is the attestation's signer, and its source ref is the caller's) or `refs/heads/main` (a run by hand); a
+  hash on the same release page alone would be circular, and *(r10, S1 on #121)* the signer workflow and its ref keep
+  an attestation from another workflow or branch from verifying. It checks the manifest (publisher `julc`, name
+  `vscode-joust`, the file's version, packaged as a pre-release) and that the Marketplace has neither this version nor
+  a later one, then publishes **exactly that file** with `vsce publish --oidc --pre-release --packagePath` (F19), from
+  a job in the **`vscode-marketplace` environment** (required reviewers; deployments from `main` and `v*` tags only)
+  whose only permissions are `id-token: write` and `contents: read`. The Marketplace's trusted publisher names
+  `bloxbean/joust`, the file `publish-vscode.yml` and that environment.
+- **Token custody** *(r11)*: **no Marketplace token exists**: the publish job's OIDC token is exchanged for a credential
+  of 15 minutes, once (F19). The trust moves to the workflow file and the environment: `publish-vscode.yml` is a code
+  owner's path (`.github/workflows/`), the environment's reviewers approve each publish, and its deployment rules
+  admit only `main` and the `v*` tags, never `release/**` or another branch, which could carry a modified
+  `publish-vscode.yml` under the file name the policy trusts. *(#133 R1, R4)* `main` and `v*` carry only reviewed
+  workflow files while the repository's rulesets are active (`protected-branches`, `release-branch-creation`, and
+  `V_tagrule`: only the tagger App creates `v*` tags); with them disabled, the environment's reviewer, who checks that
+  the run's commit is on `main`, is the only gate. With one maintainer, "prevent self-review" is off (it would deadlock
+  every run). The Marketplace
+  policy, the publisher's owners and the environment's reviewers are maintainer settings, outside the repository.
+  **Open VSX stays by hand:** an Open VSX token scoped to the namespace, kept outside CI, held by at least two named
+  maintainers, used on the same attested `.vsix` after the same verification (`ovsx publish <vsix> --pre-release`).
+- **Incident procedure:** unpublish or deprecate the version on the Marketplace (and Open VSX), remove or narrow the
+  Marketplace's trusted-publishing policy (and revoke the Open VSX token), publish a fixed version under a new
+  extension version, and say so in the release notes (Marketplace auto-update reaches every user at once).
+- **Versions** *(r11)*: the extension keeps its own `major.minor.patch` (F16, D9), bumped (patch) for every Marketplace
+  publish, an odd minor while it is a pre-release; 0.1.0 is the first, and bundles JOUST 0.1.0-pre2's compiler. *(#133
+  E3)* `js/vscode-joust/CHANGELOG.md` (the Marketplace's changelog tab) names the JOUST release each version bundles,
+  and the README and the editors page say so.
+- **Preflight** *(r11; #133 E1, V2)*: a release never stops at the editor assets or the Marketplace midway. Before
+  anything is published, `release.yml`'s `cli` job refuses the tag when `main` does not reach it (with `vscode_assets`;
+  *(#133 E7)* releases come from `main` only, and `tag-release.yml` no longer runs on `release/**`), when an
+  environment the last jobs need is missing, has no required reviewers or deploys from anything but `main` and `v*`,
+  and, with `vscode_publish`, when the JOUST version is final (the extension's channel is undecided), the changelog lacks the extension version's entry naming that JOUST
+  version, or the Marketplace already has that extension version or a later one. The Marketplace query fails closed:
+  an error, or an answer of any unexpected shape, is a failure, never "not published".
+- **Namespaces (maintainer actions, before any template recommends an extension ID):** *(r11)* the Marketplace
+  publisher **`julc`** exists, with its trusted publisher. Still to do: **claim the Open VSX namespaces `julc` (the
+  Marketplace's), `julclang` and `bloxbean`** (the last two were unclaimed, F18), apply for verification, and decide
+  Open VSX's half of Q4.
 
 ### D12. Testing
 
@@ -861,7 +899,9 @@ Beyond D2's hosts (a)–(e):
   Rejected: `java:` imports need javac, and a second image is a second artifact to build, ship and keep identical.
   Kept as the fallback if the full engine's memory proves a problem.
 - **`npx joust lsp` for other editors** (r1). Rejected in r2 (F18, D3b).
-- **Publishing from CI with stored tokens.** Rejected for now (D11).
+- **Publishing from CI with stored tokens.** Rejected (D11). *(r11)* Publishing from CI with Marketplace trusted
+  publishing (OIDC, no stored token) behind an environment's reviewers is chosen instead; Open VSX, which would need a
+  stored token in CI, stays by hand.
 
 ## 6. Consequences
 
@@ -875,7 +915,8 @@ layer in JavaScript and a core in Java, so features cross a boundary and need pa
 must grow recovery, spans, trivia and a model export, all inside the trusted toolchain (L5 guards the build against
 them, and they join ADR-0018's security review); Gradle projects get an advisory bundled compiler that may differ
 from theirs and does not resolve their `java:` libraries (Q3, D4b); the extension adds a release artifact and a
-manual publishing step with token custody; M5a waits for ADR-0018's M1e.
+publishing step: *(r11)* for the Marketplace, a reviewer's approval and settings outside the repository (the trusted
+publisher, the environment's rules); for Open VSX, a manual step with token custody; M5a waits for ADR-0018's M1e.
 
 ## 7. Compatibility
 
@@ -893,7 +934,7 @@ it. The Web Image gains entries and reachability metadata for the model's record
 | M5b | Recovery (lexer, parser, checker) and the remaining spans and reference mapping; hover, definition and references within a file, semantic tokens, completion, rename within a file, quick fixes and **Remove invisible characters…**, generated-Java view, ABI diff and **Accept ABI…** (D7a, with ADR-0018's D12 acceptance change), build diagnostics on save (worker) | M5a exit (Q1(b): may run alongside ADR-0018 M2/M3, with L5's corpus test in their front-end PRs) | L1 (recovered), L5, L6, L12, L13 tested; the recovery mutation corpus and the save tests green; latency still within L10. *(r7, M5b)* How each is tested: §13 note 9 |
 | M5c | Across files: `.jsc` libraries, `import contract`, `java:` imports (read-only library documents), project-wide references and rename, library signature cache. *(r7)* The index (references, types, expressions) leaves the per-edit diagnostics path (built on the first navigation request of a version, or behind its own entry), or L10 is revisited in this ADR with measurements: L10's model-size guard is not raised to make room for cross-file data. *(r8)* Built in #115: the index left the per-edit path (§14 note 1); the java: libraries' signature cache is keyed by the engine and the SHA-256 of the sources read, in the server's private storage (outside every workspace folder, as the engine copies; not per workspace: a content key is safe to share) | M5b exit; ADR-0018 M4 exited; javac attribution cost in the engine measured | definition and references across a `.jsc` library and into a Java library in the language server's protocol tests (`m5c.test.js`, `m5c-r2.test.js`) and the extension's (`cross` electron scenario) *(r8, F5 on #115: not the template's)*; L6 and L12 across files; L10 with its CI guards |
 | M5d | Formatter: trivia-preserving lexing, `joust fmt`, `textDocument/formatting`. *(r9)* Its invariants and vectors: §15 | M5b exit (M1e's message scheme is in place since M5a) | L7 and L12 over the corpus and generated layouts |
-| M5e | Other editors: Neovim and Helix configurations (a user-installed `joust-lsp`), the tree-sitter grammar packaged with its queries, docs; the `.vsix` attached to a release for maintainers to publish (D11). *(r8, F13 on #115)* The `joust.lock` gate (ADR-0018 J12) on the on-save build, deferred from M5c (D4). *(r10)* Its invariants and vectors: §16 | M5a exit (configurations), M5c exit (docs complete). *(r10, F2 on #121)* M5e builds and attaches without publishing, so the namespaces and Q4 gate the maintainers' publishing step (D11), not M5e | *(r10)* E5's CI runs on pinned Neovim and Helix (in place of a hand checklist); the docs test (E8) green; the on-save build reports J12's errors as `joust build` does (E1, its differential test) |
+| M5e | Other editors: Neovim and Helix configurations (a user-installed `joust-lsp`), the tree-sitter grammar packaged with its queries, docs; the `.vsix` attached to a release for maintainers to publish (D11). *(r8, F13 on #115)* The `joust.lock` gate (ADR-0018 J12) on the on-save build, deferred from M5c (D4). *(r10)* Its invariants and vectors: §16 | M5a exit (configurations), M5c exit (docs complete). *(r10, F2 on #121)* M5e builds and attaches without publishing, so the namespaces and Q4 gate the maintainers' publishing step (D11), not M5e. *(r11)* The release prep for 0.1.0-pre2 wires the attachment into `release.yml` and adds the Marketplace's gated publish (D11) | *(r10)* E5's CI runs on pinned Neovim and Helix (in place of a hand checklist); the docs test (E8) green; the on-save build reports J12's errors as `joust build` does (E1, its differential test) |
 
 Recommendation: ADR-0018's recommendation gate (`.jsc` 2 recommended once M2 and M4 exit and the security review
 passes) does not depend on M5; the extension is labelled preview while `.jsc` 2 is.
@@ -908,7 +949,8 @@ formatter invariants including the script hash. None of these certify the compil
 
 ## 10. Open questions
 
-*(r10, F3 on #121: resolved or decided as M5a–M5e built them; Q4 alone stays with the maintainers.)*
+*(r10, F3 on #121: resolved or decided as M5a–M5e built them; Q4 alone stays with the maintainers.)* *(r11)* Q4 is closed
+for the Marketplace; its Open VSX half stays open.
 
 1. **When M5 starts.** **Resolved:** (b) with the design review's conditions (§3a item 1, §8). ADR-0018 r12 recorded it,
    and M5a started after M1e (#71, integrated in #76).
@@ -920,8 +962,11 @@ formatter invariants including the script hash. None of these certify the compil
    (c) is rejected: it runs Gradle, that is workspace code, and needs a second host.
 4. **Publisher identity.** `julclang` or `bloxbean`, on both the Marketplace and Open VSX, and which maintainers hold the
    credentials. **Left to the maintainers under D11.** M5e builds and attaches the `.vsix` without publishing, so
-   neither M5e nor this ADR's acceptance waits for it; until it is decided, the manifest's publisher is
-   `joust-q4-undecided`. Claim both Open VSX namespaces either way (D11).
+   neither M5e nor this ADR's acceptance waits for it. *(r11)* **Closed for the Marketplace:** the maintainers created
+   the publisher **`julc`** (neither of the two names above), and the manifest's `publisher` is `julc` (it was the placeholder
+   `joust-q4-undecided`). No maintainer holds a Marketplace credential: the publisher's trusted publisher and the
+   `vscode-marketplace` environment's reviewers decide (D11). **Open for Open VSX:** which namespace, and who holds its
+   token; claim `julc`, `julclang` and `bloxbean` either way (D11).
 5. **Minimum VS Code version.** **Decided: 1.109.0**, the oldest whose extension host loads the engine in D12's smoke test.
    The Electron suite runs on it and on the current stable (1.146.0) for every change.
 6. **Tree-sitter in the server.** **Decided: no** (D5). The server stays on the hand-written front end, and M5b's recovery
@@ -988,7 +1033,8 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
    advisory) is in the `joust/status` request and notification, which the status bar shows.
 8. **Workspace folders.** The server does not advertise workspace-folder change notifications (they are not on D10's
    allow-list); the extension starts a new server when the window's folders change.
-9. **Publisher (Q4).** The extension's `publisher` is the placeholder `joust-q4-undecided` until Q4 is decided.
+9. **Publisher (Q4).** The extension's `publisher` was the placeholder `joust-q4-undecided` until Q4 was decided.
+   *(r11)* It is `julc` (Q4, for the Marketplace).
 10. **The analysis runs the front end alone** (amended into L1 and D7): the file name's check, parse and check
     (`JscV2.check`), not the whole `JscV2.lower`. Every coded diagnostic of the build comes from those steps; the
     emitter, the ABI manifest and the IR export raise only internal errors (JSC0005 on the build paths), which therefore
@@ -1404,7 +1450,8 @@ a comment kept); an empty file and a file of comments only.
 
 Written before the code. M5e is ADR-0021's last row: nothing here adds a capability to the server (D10's allow-list is
 unchanged), and nothing is published. The Marketplace publisher, Open VSX namespaces and Q4 stay maintainer
-decisions (D11); M5e builds what they publish from.
+decisions (D11); M5e builds what they publish from. *(r11)* The maintainers decided the Marketplace's half: see D11 and
+"Since M5e (r11)" below.
 
 **Scope.**
 
@@ -1423,6 +1470,8 @@ decisions (D11); M5e builds what they publish from.
    the warnings D3b requires.
 5. **The release attachment** (D11): the `.vsix` and the tree-sitter archive attached to an existing GitHub release with
    their SHA-256 and build-provenance attestations, by a workflow a maintainer runs. Publishing from them stays by hand.
+   *(r11)* `release.yml` also calls that workflow on the release's tag (`vscode_assets`), and the Marketplace publish is
+   `publish-vscode.yml` (`vscode_publish`, D11).
 
 **Invariants** (each with its test):
 
@@ -1434,7 +1483,7 @@ decisions (D11); M5e builds what they publish from.
 | E4 | **Editor configurations run only the user-installed `joust-lsp`.** The shipped Neovim and Helix configurations name the server by an absolute path the user supplies. Neovim refuses a relative path, a bare name, or a server inside the buffer's project (*r10, F1 on #121:* the project JOUST's markers find, never `.git` alone or the working directory, so an install under `$HOME` is the user's). *(r10, S2)* The server runs on an absolute `node`, given or found on an absolute `PATH` entry only, and never one inside the project; Helix's file names `node` as the command. None names `npx`, `node_modules/.bin`, a workspace path or `--project-engine` | `editors` lint test (configurations and docs); Neovim headless test: a planted `node_modules/.bin/joust-lsp`, `node` and `.nvim.lua` never run (sentinel); a fake `$HOME` install starts |
 | E5 | **The configurations work.** Neovim (headless, `nvim --headless`) starts the server through the shipped module and receives `.jsc` diagnostics with JOUST's codes; `hx --health jsc` reports the shipped language server and the grammar's highlight queries | CI on pinned Neovim and Helix releases (downloaded by SHA-256); the same scripts locally |
 | E6 | **The tree-sitter package is complete, valid and reproducible.** The archive holds the generated parser and every query. Every query compiles against the grammar it ships with (`tree-sitter query` over the corpus, no error), and two builds from one commit are byte-identical (sorted entries, fixed times and owners) | `tree-sitter-jsc` package test |
-| E7 | **The release step only attaches.** The workflow runs only on `workflow_dispatch` for an existing release tag, never on a push, a tag or a pull request. It builds the `.vsix` with the engine from that release's published `@julclang/joust` tarball (digests compared and recorded, D11) and the tree-sitter archive, and uploads them with `SHA256SUMS` and provenance attestations. It **never replaces an asset**: an existing asset with the same bytes is accepted and one with other bytes fails. It references no Marketplace or Open VSX token and runs no `vsce publish` or `ovsx publish`; the publisher stays `joust-q4-undecided` until Q4 | workflow lint test (triggers, permissions, no publish commands or tokens, SHA-pinned actions); the asset script run in PR CI without uploading |
+| E7 | **The release step only attaches.** *(r11, rewritten: #133 E5)* The workflow runs only in `bloxbean/joust`, for an existing release tag, on a `workflow_dispatch` from `main` or as `release.yml`'s `workflow_call` on `refs/tags/v<version>` itself (`vscode_assets`); never on a pull request or another push. It builds the `.vsix` with the engine from that release's published `@julclang/joust` tarball (digests compared and recorded, D11) and the tree-sitter archive, and uploads them with `SHA256SUMS` and provenance attestations. It **never replaces an asset**: an existing asset with the same bytes is accepted and one with other bytes fails. It references no Marketplace or Open VSX token and runs no `vsce publish` or `ovsx publish`. *(r11)* The publisher is `julclang`; `publish-vscode.yml` alone publishes, the attested file unchanged, from the `vscode-marketplace` environment with `id-token: write` and `contents: read` only | workflow lint test (triggers, refs, permissions, no publish commands or tokens, SHA-pinned actions; r11: publish-vscode.yml's triggers, environment, permissions, verification before publishing, the pinned vsce, and release.yml's calls); the asset script and the `.vsix` check run in PR CI without uploading |
 | E8 | **The docs never recommend running workspace code.** No editor configuration on the site or in `editors/` uses `npx joust`. The project-local server (`./node_modules/.bin/joust-lsp`) and `--project-engine` appear only with D3b's warning | the docs test (D12, M5e exit) |
 
 **Attack and edge vectors** (each in the tests):
@@ -1518,6 +1567,34 @@ are opened in the background and may be saved by `files.refactoring.autoSave`.
 **Not in M5e:** publishing to the Marketplace, Open VSX, npm (`tree-sitter-jsc`) or crates.io; other editors' plugins
 (Emacs, Zed, Sublime): the generic LSP instructions cover them. Wiring the attachment into `release.yml`'s tag run is a
 later decision, like D11's automation.
+
+**Since M5e (r11, the release prep for 0.1.0-pre2).** The later decision above, made:
+- `gradle.properties` gains `vscode_assets` (needs `github_release` and `npm_publish`) and `vscode_publish` (needs
+  `vscode_assets`), checked by `release-flags.sh` with the others.
+- `editor-assets.yml` gains a `workflow_call` trigger. `release.yml`'s `editor-assets` job calls it after `npm` and
+  `github-release`. The ref guard becomes "a dispatch from `main`, or a call on `refs/tags/v<version>`": a called
+  workflow sees its caller's `github.ref` (the tag) and event (`push`), so the r10 guard (`refs/heads/main`) would
+  have skipped it. The build still checks out the tag, checks its commit and that `main` reaches it. The registry may
+  lag the npm job, so `npm pack` retries.
+- `publish-vscode.yml` (new): a `check` job (the environment's reviewers, the release's `.vsix`, its attestation, the
+  manifest, the Marketplace's versions), then the `publish` job in `vscode-marketplace`. The publish job verifies the
+  same file (its SHA-256, and the attestation bundle the check job fetched, offline), installs the pinned
+  `@vscode/vsce` 4.1.1 from `.github/scripts/vsce`'s lockfile without scripts, and runs `vsce publish --oidc
+  --pre-release --packagePath`. `release.yml`'s `vscode-publish` job calls it after `editor-assets`.
+- `.github/scripts/vscode-marketplace.mjs` checks the extension's version against the Marketplace's public gallery
+  query, in `release.yml`'s `cli` job (before anything is published) and in both jobs of `publish-vscode.yml`.
+- *(#133 round r1)* The publisher is **`julc`** (the maintainers' choice, after `julclang`), so the extension is
+  `julc.vscode-joust`. The `cli` job's preflight (D11) runs `.github/scripts/release-environments.mjs` (the
+  environments, from GitHub's API) and `vscode-marketplace.mjs manifest --joust <version> --changelog …`; the gallery
+  answer is validated (an application error, a missing envelope, another extension or a malformed version list fails).
+  Both reusable workflows' jobs also require `github.repository == 'bloxbean/joust'` (R3). The user-facing `gh
+  attestation verify` commands name `--source-ref refs/tags/v<joust-version>` again, with `refs/heads/main` for assets
+  attached by hand (E2, V1). Follow-up (E4): an extension version and the tree-sitter archive's version can repeat
+  across releases that attach without publishing.
+- Which claim the Marketplace matches for a called workflow is not documented (F19). If it matches the caller
+  (`release.yml`), the automatic publish's token exchange is refused, nothing is published, and the documented
+  recovery, `publish-vscode.yml` run by hand from `main`, is a top-level run of the trusted file; a second Marketplace
+  policy naming `release.yml` with the same environment would admit the automatic path then.
 
 ## Revision history
 
@@ -1685,3 +1762,18 @@ later decision, like D11's automation.
   `keyed by f` (the type's field), `init migrate from params.f`, owned methods' and invariants' qualifiers, and
   `admits T`. Owned types are renamable (with the ABI warning); owned methods, handlers and `init migrate` are refused.
   Completion after `state.` in an owned method, and on an arriving object, offers its owned type's fields.
+- **r11** (2026-11-16; the release prep for JOUST 0.1.0-pre2): D11 amended. The Marketplace publish is a gated workflow,
+  `publish-vscode.yml`, with Marketplace trusted publishing (GitHub OIDC, no token) from the separate
+  `vscode-marketplace` environment. It publishes the `.vsix` that `editor-assets.yml` attested and attached, unchanged,
+  after `gh attestation verify`, a manifest check and a Marketplace version check. `release.yml` calls both workflows by
+  the new flags `vscode_assets` and `vscode_publish`. The publisher is `julc`: Q4 is closed for the Marketplace,
+  and Open VSX (namespace and manual publishing) stays open. Carried through the Status line, F19 (new), D9, D11,
+  §5, §6, the M5e row, Q4, §12 note 9 and §16 (scope 5, E7, "Since M5e").
+- **r11, round r2** (2026-11-17; #133 round 1: design E1–E6, security R1–R4, Codex V1–V2): the Marketplace publisher is
+  `julc` (the maintainers' change); D11 gains the preflight (E1), fail-closed Marketplace answers (V2) and the changelog
+  (E3), and qualifies the `main`/`v*` argument on the active rulesets and the single maintainer's review (R1, R4); E7's
+  first sentence is rewritten (E5); §16 "Since M5e" records the repository guard (R3), the user commands' source ref
+  (E2, V1) and E4 as a follow-up.
+- **r11, round r3** (2026-11-17; #133 round 2, design E7): releases come from `main` only. `tag-release.yml` no longer
+  runs on `release/**` (the `release` environment, which the preflight requires to deploy from `main` and `v*` only,
+  could never approve such a run).
