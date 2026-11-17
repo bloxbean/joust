@@ -132,7 +132,7 @@ The process is in [`docs/release-ops.md`](https://github.com/bloxbean/joust/blob
 | Piece | What it does |
 |---|---|
 | [`.github/workflows/build.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/build.yml) | CI on pushes to `main` and `release/**` and on pull requests: `./gradlew build -PnoDevnet` (JVM and harness tests, the JavaScript client's tests), the DevKit tests in shards (`-PdevnetOnly`) on Yaci DevKit, and the publication scope check |
-| [`.github/workflows/tag-release.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/tag-release.yml) | Runs when `version` in `gradle.properties` changes on `main` or `release/**`: after a release owner approves, it tags `v<version>` |
+| [`.github/workflows/tag-release.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/tag-release.yml) | Runs when `version` in `gradle.properties` changes on `main` (releases come from `main` only): after a release owner approves, it tags `v<version>` |
 | [`.github/workflows/release.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/release.yml) | Runs on a `v*` tag: builds and signs the Maven artifacts once, publishes them to `https://repo.bloxbean.org/maven/releases`, stages a Maven Central deployment that a maintainer publishes by hand, and builds the Wasm engines and publishes the npm packages (or only checks them, with `npm_publish=false`) |
 | [`.github/workflows/bloxbean-snapshot.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/bloxbean-snapshot.yml) | Manual. Publishes a development snapshot of a commit whose `build.yml` run passed to `https://repo.bloxbean.org/maven/snapshots` (versions `0.1.0-pre1-<sha7>-SNAPSHOT`) |
 

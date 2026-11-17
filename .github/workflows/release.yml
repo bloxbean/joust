@@ -128,12 +128,12 @@ jobs:
           VSCODE_PUBLISH: ${{ steps.version.outputs.vscode_publish }}
         run: |
           set -euo pipefail
-          # editor-assets.yml builds only a tag that main reaches: a release from release/** sets vscode_assets=false.
+          # editor-assets.yml builds only a tag that main reaches (releases come from main only: tag-release.yml).
           head=$(git rev-parse HEAD)
           status=$(gh api "repos/${GH_REPO}/compare/main...${head}" --jq .status)
           if [[ "$status" != identical && "$status" != behind ]]; then
-            echo "::error::v$VERSION ($head) is not reachable from main ($status): the editor assets are built only from" \
-              "a tag on main. For a release from another branch, set vscode_assets=false and vscode_publish=false." >&2
+            echo "::error::v$VERSION ($head) is not reachable from main ($status): releases come from main only, and the" \
+              "editor assets are built only from a tag on main (docs/release-ops.md)." >&2
             exit 1
           fi
           envs=(release)

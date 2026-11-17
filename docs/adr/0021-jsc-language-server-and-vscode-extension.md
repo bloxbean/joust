@@ -731,9 +731,9 @@ revision it also could not be safe: a moved line, a file name and some parameter
   and the README and the editors page say so.
 - **Preflight** *(r11; #133 E1, V2)*: a release never stops at the editor assets or the Marketplace midway. Before
   anything is published, `release.yml`'s `cli` job refuses the tag when `main` does not reach it (with `vscode_assets`;
-  a release from `release/**` sets both flags false), when an environment the last jobs need is missing, has no
-  required reviewers or deploys from anything but `main` and `v*`, and, with `vscode_publish`, when the JOUST version is
-  final (the extension's channel is undecided), the changelog lacks the extension version's entry naming that JOUST
+  *(#133 E7)* releases come from `main` only, and `tag-release.yml` no longer runs on `release/**`), when an
+  environment the last jobs need is missing, has no required reviewers or deploys from anything but `main` and `v*`,
+  and, with `vscode_publish`, when the JOUST version is final (the extension's channel is undecided), the changelog lacks the extension version's entry naming that JOUST
   version, or the Marketplace already has that extension version or a later one. The Marketplace query fails closed:
   an error, or an answer of any unexpected shape, is a failure, never "not published".
 - **Namespaces (maintainer actions, before any template recommends an extension ID):** *(r11)* the Marketplace
@@ -1774,3 +1774,6 @@ later decision, like D11's automation.
   (E3), and qualifies the `main`/`v*` argument on the active rulesets and the single maintainer's review (R1, R4); E7's
   first sentence is rewritten (E5); §16 "Since M5e" records the repository guard (R3), the user commands' source ref
   (E2, V1) and E4 as a follow-up.
+- **r11, round r3** (2026-11-17; #133 round 2, design E7): releases come from `main` only. `tag-release.yml` no longer
+  runs on `release/**` (the `release` environment, which the preflight requires to deploy from `main` and `v*` only,
+  could never approve such a run).

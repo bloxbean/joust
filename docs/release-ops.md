@@ -19,7 +19,7 @@ is specific to JOUST and points to the standard for the rest:
 ## The flow
 
 ```
-PR: bump `version` in gradle.properties ── code-owner review ──► merge to main (or release/**)
+PR: bump `version` in gradle.properties ── code-owner review ──► merge to main (releases come from main only)
   └─ tag-release.yml   resolve → authorize [env release: a release owner approves] → tag [env release-staging]
        └─ v<version> (pushed by the bloxbean-release-tagger App)
             └─ release.yml
@@ -33,6 +33,11 @@ release owner ─► publish-central.yml   approve [env release] → publish [en
 
 Nothing reaches Maven Central without a release owner's approval, and tags only come from the App after a reviewed
 version bump and an approval. Never push a `v*` tag by hand.
+
+**Releases come from `main` only** (ADR-0021 D11 r11, #133 E7). `tag-release.yml` runs on `main` alone (its push
+trigger and its manual run), and the `release` environment it waits in deploys only from `main` and `v*` tags, as the
+release's editor-assets and Marketplace jobs need. There are no `release/**` releases: a maintenance release of an older
+line would need its own decision first (its own environments, and the editor flags off).
 
 ## What JOUST publishes
 
@@ -99,9 +104,8 @@ refs too.
 **Checked before anything is published.** With `vscode_assets` or `vscode_publish` on, the `cli` job of `release.yml`
 (the first job; one platform) refuses the tag when any of these would stop the release's last jobs after Maven, npm and
 the GitHub release are out:
-- `main` does not reach the tag's commit. **A release from a `release/**` branch must set `vscode_assets=false` and
-  `vscode_publish=false`**: the editor assets are built only from a tag on `main`, and both environments accept only
-  `main` and `v*`;
+- `main` does not reach the tag's commit (tags come from `main` only, so this catches a tag pushed some other way): the
+  editor assets are built only from a tag on `main`, and both environments accept only `main` and `v*`;
 - `release` (and, with `vscode_publish`, `vscode-marketplace`) is missing, has no required reviewers, or deploys from
   anything but the branch `main` and the tags `v*` (`.github/scripts/release-environments.mjs`, from GitHub's API);
 - with `vscode_publish`: the JOUST version is final (no suffix: the extension's release channel is not decided yet); the
@@ -174,8 +178,9 @@ GitHub creates a missing environment, unprotected, on first use, so **set them u
   (only the tagger App, through `tag-release.yml`, creates `v*` tags). While they are disabled, anyone with write access
   can push to `main` or create a `v*` tag on any commit, and the environment's reviewer is the only gate. Activate them
   before relying on this (release-ops' `verify-repo-settings.sh` checks them).
-- **Never name a pull request's head branch `release/…`.** A push to `release/**` that changes `gradle.properties` starts
-  `tag-release.yml`, which asks a release owner to tag that branch's commit (reject such a request).
+- **Don't name a pull request's head branch `release/…`.** `tag-release.yml` no longer runs on `release/**`, but
+  `build.yml` treats such a push as a release branch's (whole mutation sets), and the `protected-branches` ruleset,
+  once active, covers `release/**`.
 - **The Marketplace trusted publisher** (publisher `julc`, Trusted Publishing): repository owner `bloxbean`,
   repository `joust`, workflow `publish-vscode.yml`, environment `vscode-marketplace`. Never rename
   `publish-vscode.yml` or the environment without changing the policy first.

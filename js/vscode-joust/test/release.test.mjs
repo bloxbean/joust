@@ -385,3 +385,20 @@ test('#133 E2, V1, E3: user verify commands name the tag as the source ref; the 
   const prop = (k) => new RegExp(`^${k}=(.*)$`, 'm').exec(props)?.[1];
   if (prop('vscode_publish') === 'true') assert.equal(joust, prop('version'), 'the changelog names the JOUST version being released');
 });
+
+// #133 E7: releases come from main only; tag-release.yml cannot run on release/** (its `release` environment, which the
+// preflight requires to deploy from main and v* only, could never approve it).
+test('#133 E7: tag-release.yml runs on main only', () => {
+  const tr = load('tag-release.yml');
+  const on = onBlock(tr.lines);
+  assert.deepEqual([...on.matchAll(/^ {2}([a-z_]+):/gm)].map((m) => m[1]), ['push', 'workflow_dispatch']);
+  assert.match(on, /^ {4}branches:\n {6}- main\n {4}paths:/m);
+  assert.ok(!/release\//.test(on), 'no release/** trigger');
+  const j = jobs(tr.lines);
+  assert.match(j.resolve, /^ {4}if: >-\n {6}github\.event_name == 'push' \|\| github\.ref == 'refs\/heads\/main'$/m);
+  assert.ok(!/refs\/heads\/release/.test(tr.body), 'no release/** ref anywhere');
+  assert.match(j.authorize, /^ {4}environment: release$/m);
+  const ops = readFileSync(`${REPO}docs/release-ops.md`, 'utf8');
+  assert.match(ops, /\*\*Releases come from `main` only\*\*/);
+  assert.ok(!/merge to main \(or release\/\*\*\)/.test(ops));
+});
