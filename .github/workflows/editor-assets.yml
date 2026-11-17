@@ -104,16 +104,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/npm"
-          # Called right after the npm job, the registry may take a moment to serve the new version.
-          for attempt in 1 2 3 4 5; do
+          # Called right after the npm job, the registry can take several minutes to serve a new version ("Your package
+          # is being processed"; v0.1.0-pre2's first run gave up after 2.5 minutes). Wait up to about 15 minutes:
+          # 30 s, 60 s, then 120 s between attempts. Nothing else is fetched or built until it is served.
+          waits=(30 60 120 120 120 120 120 120 120)
+          for attempt in $(seq 0 "${#waits[@]}"); do
             if npm pack "@julclang/joust@$VERSION" --ignore-scripts --pack-destination "$RUNNER_TEMP/npm"; then
               break
             fi
-            if [[ $attempt == 5 ]]; then
-              echo "::error::npm does not serve @julclang/joust@$VERSION" >&2
+            if (( attempt == ${#waits[@]} )); then
+              echo "::error::npm still does not serve @julclang/joust@$VERSION after about 15 minutes. If the npm job published it, re-run this job (Re-run failed jobs) once 'npm view @julclang/joust@$VERSION version' answers." >&2
               exit 1
             fi
-            sleep 30
+            echo "npm does not serve @julclang/joust@$VERSION yet; trying again in ${waits[$attempt]} s"
+            sleep "${waits[$attempt]}"
           done
           ls -l "$RUNNER_TEMP/npm"
 
