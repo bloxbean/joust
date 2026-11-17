@@ -1184,6 +1184,23 @@ final class IrJson {
                     }
                 }
             }
+            // #134 review W1: an arm of a match over a sealed ledger type binds none of its constructor's PlutusData fields,
+            // whatever type the IR gives the binding (validate.js reads the field's type from gov.js, so must this reader).
+            if (m.get("arms") instanceof List<?> as && m.get("scrutinee") instanceof Map<?, ?> sc && sc.get("type") instanceof String st
+                    && Gov.SUMS.containsKey(st)) {
+                for (Object ao : as) {
+                    if (!(ao instanceof Map<?, ?> a) || !(a.get("ctors") instanceof List<?> cs) || cs.size() != 1
+                            || !(cs.get(0) instanceof String c) || !(a.get("fields") instanceof List<?> fs)) continue;
+                    Gov.Ctor ctor = Gov.ctor(st, c);
+                    if (ctor == null) continue;
+                    for (Object f : fs) {
+                        Gov.Field gf = f instanceof String fn ? ctor.field(fn) : null;
+                        if (gf != null && gf.opaque()) {
+                            throw new IllegalArgumentException(where + "the field " + c + "." + f + " is PlutusData, never bound (JSC1320)");
+                        }
+                    }
+                }
+            }
             for (Object v : m.values()) ledgerExpressions(v, where);
         }
 
@@ -1193,6 +1210,10 @@ final class IrJson {
             // Review C2: the ledger types' expression rules, over every method's and fn's body.
             for (Object mo : l(r.get("methods"))) ledgerExpressions(m(mo).get("body"), "method " + m(mo).get("name") + ": ");
             if (r.get("fns") instanceof List<?> fl) for (Object fo : fl) ledgerExpressions(m(fo).get("body"), "fn " + m(fo).get("name") + ": ");
+            // #134 review W1: and the invariants' bodies, as validate.js checks every body.
+            if (r.get("invariants") instanceof List<?> il) {
+                for (Object io : il) ledgerExpressions(m(io).get("body"), "invariant " + m(io).get("name") + ": ");
+            }
             // Review C8 (r3): and every imported .jsc library's fns, which the program's bodies call.
             if (r.get("libraries") instanceof List<?> ll) {
                 for (Object lo : ll) {

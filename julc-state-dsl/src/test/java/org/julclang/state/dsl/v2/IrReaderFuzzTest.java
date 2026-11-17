@@ -532,6 +532,25 @@ class IrReaderFuzzTest {
     }
 
     /**
+     * #134 review W1 (Codex): Guardrail's ParameterChange arm naming the constructor's PlutusData field, parameters, with the
+     * binding's type left as the IR wrote it (an Option of GovernanceActionId) or written Int. validate.js reads the field's
+     * type from the ledger table and refuses it (JSC1320); the Java reader read only the binding's claimed type and accepted
+     * it. Both refuse it now, in the same words.
+     */
+    @org.junit.jupiter.api.Test
+    void aBindingOfALedgerConstructorsPlutusDataField_isRefusedByBothReaders_whateverItsClaimedType() throws IOException {
+        for (String name : List.of("opaque-bind-guardrail-opaque-field.ir.json", "opaque-bind-as-int.ir.json")) {
+            String text = Files.readString(Path.of("src/test/resources/ir-regressions", name));
+            String j = java(text);
+            String js = js(text);
+            String words = "the field ParameterChange.parameters is PlutusData, never bound (JSC1320)";
+            assertTrue(j.startsWith("refused") && j.contains(words), name + ": " + j);
+            assertTrue(js.contains("\"irWhat\":\"" + words + "\""), name + ": " + js);
+            assertEquals("agree", verdict(j, js), name);
+        }
+    }
+
+    /**
      * #130 round r2 (security Z3): a check's words start with fixed text, never an IR-supplied name, so a name holding a
      * rule's prefix ("no fn x") cannot have a check registered under that rule. An invariant whose type is "no fn x".
      */
