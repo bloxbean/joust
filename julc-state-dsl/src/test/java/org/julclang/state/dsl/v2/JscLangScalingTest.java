@@ -7,9 +7,16 @@ import java.util.function.IntFunction;
 import org.junit.jupiter.api.Test;
 
 /**
- * S2 on #99: recovery is linear (up to a log) in the number of errors. Each hostile shape is analysed at n and 2n
- * errors; 2n may take at most 2.5 times n (best of five, after a warm-up: linear is 2, quadratic 4; N1 on #99 r2 removed
+ * S2 on #99: recovery is linear (up to a log) in the number of errors. Each hostile shape is analysed at n and 4n
+ * errors; 4n may take at most {@value #BOUND} times n (linear is 4, n log n about 4.5, quadratic 16; N1 on #99 r2 removed
  * the two per-error searches that made recovering dropped members superlinear), and the recorded errors are capped.
+ * <p>
+ * #134: one slow sample on a shared runner broke the old 2n bound of 2.5 (3.27, 3.42 on CI, the shapes taking about 20 ms
+ * since #130's X9). Each size is now timed {@value #RUNS} times, n and 4n interleaved after a warm-up of both, and the best
+ * of each is compared: a pause slows one sample, never every sample of one size. The sizes are four times the old ones,
+ * so the 4n file takes 50 to 180 ms and a quadratic term dominates it. The index exposes no operation count to assert
+ * instead. A deliberately quadratic implementation (the pre-X6 linear inputAt; a per-error list search in the error
+ * cap) fails these bounds, at 10 to 13.5 times.
  */
 class JscLangScalingTest {
 
@@ -47,6 +54,12 @@ class JscLangScalingTest {
         return b.append("}\n").toString();
     }
 
+    /** 4n over n: linear is 4 (measured 3.7 to 5.3 at these sizes), quadratic 16 (the controls measure 10 to 13.5). */
+    static final double BOUND = 8.0;
+    static final int RUNS = 7;
+    /** Below this (4n's best) the ratio is timer and allocation noise. */
+    static final long FLOOR_NS = 30_000_000L;
+
     private static long best(String src) {
         long best = Long.MAX_VALUE;
         for (int k = 0; k < 5; k++) {
@@ -57,13 +70,29 @@ class JscLangScalingTest {
         return best;
     }
 
+    private static long once(String src) {
+        long t = System.nanoTime();
+        JscLang.analyze(src, "C.jsc");
+        return System.nanoTime() - t;
+    }
+
+    /** The best of RUNS timings of n and of 4n, interleaved, after a warm-up of both; asserts 4n / n is at most BOUND. */
+    static void linear(String what, IntFunction<String> shape, int n) {
+        String small = shape.apply(n), big = shape.apply(4 * n);
+        once(small);
+        once(big);
+        long one = Long.MAX_VALUE, four = Long.MAX_VALUE;
+        for (int k = 0; k < RUNS; k++) {
+            one = Math.min(one, once(small));
+            four = Math.min(four, once(big));
+        }
+        double ratio = (double) four / Math.max(one, 1);
+        System.out.printf("S2 %s: n=%d %.1f ms, 4n %.1f ms, ratio %.2f%n", what, n, one / 1e6, four / 1e6, ratio);
+        assertTrue(ratio <= BOUND || four < FLOOR_NS, what + ": 4n takes " + String.format("%.2f", ratio) + " times n");
+    }
+
     private static void scales(String what, IntFunction<String> shape, int n, String code) {
-        JscLang.analyze(shape.apply(n / 4), "C.jsc");   // warm-up
-        long one = best(shape.apply(n)), two = best(shape.apply(2 * n));
-        double ratio = (double) two / Math.max(one, 1);
-        System.out.printf("S2 %s: n=%d %.1f ms, 2n %.1f ms, ratio %.2f%n", what, n, one / 1e6, two / 1e6, ratio);
-        // Below a few milliseconds the ratio is noise.
-        assertTrue(ratio <= 2.5 || two < 20_000_000L, what + ": " + ratio);
+        linear(what, shape, n);
         // #130 r5 (Codex X9): each shape gives its own error, as many as the cap holds, and says that more were found.
         var m = JscLang.analyze(shape.apply(2 * n), "C.jsc");
         var errors = m.diagnostics().stream().filter(d -> d.severity().equals("error")).toList();
@@ -87,17 +116,17 @@ class JscLangScalingTest {
 
     @Test
     void invisibleCharactersInAComment() {
-        scales("U+200B in one comment", JscLangScalingTest::invisible, 4000, "JSC0145");
+        scales("U+200B in one comment", JscLangScalingTest::invisible, 16000, "JSC0145");
     }
 
     @Test
     void oneRefusedCharacterPerLine() {
-        scales("one @ per line", JscLangScalingTest::ats, 4000, "JSC0108");
+        scales("one @ per line", JscLangScalingTest::ats, 16000, "JSC0108");
     }
 
     @Test
     void actionsWithAnUnknownName() {
-        scales("actions with an unknown name", JscLangScalingTest::unknown, 2000, "JSC0217");
+        scales("actions with an unknown name", JscLangScalingTest::unknown, 8000, "JSC0217");
     }
 
     /** X6: an accepted file (no errors) with n owned members, each with field references: linear up to a log. */
@@ -106,25 +135,11 @@ class JscLangScalingTest {
         // An accepted file, so the whole file is checked and indexed with no error (the shapes above are recovery's).
         var model = JscLang.analyze(owned(10), "C.jsc");
         assertTrue(model.accepted(), "the shape is accepted: " + model.diagnostics());
-        java.util.function.IntToLongFunction best = n -> {
-            String src = owned(n);
-            long b = Long.MAX_VALUE;
-            for (int k = 0; k < 5; k++) {
-                long t = System.nanoTime();
-                JscLang.analyze(src, "C.jsc");
-                b = Math.min(b, System.nanoTime() - t);
-            }
-            return b;
-        };
-        best.applyAsLong(500);   // warm-up
-        long one = best.applyAsLong(2000), two = best.applyAsLong(4000);
-        double ratio = (double) two / Math.max(one, 1);
-        System.out.printf("S2 owned members with object-field references: n=2000 %.1f ms, 2n %.1f ms, ratio %.2f%n", one / 1e6, two / 1e6, ratio);
-        assertTrue(ratio <= 2.5 || two < 20_000_000L, "owned members: " + ratio);
+        linear("owned members with object-field references", JscLangScalingTest::owned, 4000);
     }
 
     @Test
     void actionsWithAnUnclosedParenthesis() {
-        scales("actions with ( unclosed", JscLangScalingTest::unclosed, 2000, "JSC0110");
+        scales("actions with ( unclosed", JscLangScalingTest::unclosed, 8000, "JSC0110");
     }
 }
