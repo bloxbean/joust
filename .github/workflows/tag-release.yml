@@ -11,10 +11,11 @@ name: Tag release
 #
 # Jobs:
 #   resolve    reads the version; skips SNAPSHOT versions and tags that already exist (no approval asked)
-#   authorize  waits for a release owner's approval in the `release` environment (team release-owners,
-#              prevent self-review). A version bump can be merged now and tagged later, and manual runs,
-#              which any write-access user can start, are gated the same way. Reject an approval you
-#              don't want rather than leaving it pending; GitHub cancels a pending one after 30 days.
+#   authorize  waits for a release owner's approval in the `release` environment (main and v* only; "prevent
+#              self-review" off while JOUST has one maintainer, docs/release-ops.md). A version bump can be
+#              merged now and tagged later, and manual runs, which any write-access user can start, are gated
+#              the same way. Reject an approval you don't want rather than leaving it pending; GitHub cancels a
+#              pending one after 30 days.
 #   tag        creates the tag with the release App token (secrets in `release-staging`)
 #
 # The tag is pushed with a GitHub App token (bloxbean-release-tagger), NOT the default GITHUB_TOKEN:
@@ -100,8 +101,8 @@ jobs:
             echo "Reject it to hold the release; a manual run of this workflow can tag the version later."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # The approval gate. The `release` environment holds no secrets; its reviewers are the release-owners team,
-  # and the person who triggered the run can't approve it (org admins can bypass).
+  # The approval gate. The `release` environment holds no secrets; it deploys only from main and v* tags. With one
+  # maintainer, "prevent self-review" is off, so the approver checks the run's commit is on main (docs/release-ops.md).
   authorize:
     needs: resolve
     if: needs.resolve.outputs.skip == 'false'

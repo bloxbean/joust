@@ -37,7 +37,10 @@ version bump and an approval. Never push a `v*` tag by hand.
 **Releases come from `main` only** (ADR-0021 D11 r11, #133 E7). `tag-release.yml` runs on `main` alone (its push
 trigger and its manual run), and the `release` environment it waits in deploys only from `main` and `v*` tags, as the
 release's editor-assets and Marketplace jobs need. There are no `release/**` releases: a maintenance release of an older
-line would need its own decision first (its own environments, and the editor flags off).
+line would need its own decision first (its own environments, and the editor flags off). **Snapshots too come from
+`main` only** (`bloxbean-snapshot.yml` skips any other branch), so no workflow that holds `release-staging`'s secrets
+runs from a `release/**` branch, and that environment's `release/**` deployment rule is unused (a maintainer can
+remove it).
 
 ## What JOUST publishes
 
@@ -281,9 +284,9 @@ requires for provenance.
 Development snapshots go to the BloxBean snapshot repository (`https://repo.bloxbean.org/maven/snapshots`), one
 version per commit: `0.1.0-pre1-SNAPSHOT` becomes `0.1.0-pre1-<sha7>-SNAPSHOT` (`build.gradle`; plain git, not grgit,
 so it also works in a worktree). There is no Central snapshot publication (`snapshot_manual.yml`).
-1. `version` must end in `-SNAPSHOT`. Merge to `main` (or `release/**`) and wait for `build.yml` to pass on that commit:
-   `bloxbean-snapshot.yml` publishes only commits whose push run of `build.yml` passed (every job, devnet shards
-   included).
+1. `version` must end in `-SNAPSHOT`. Merge to `main` (snapshots come from `main` only) and wait for `build.yml` to pass
+   on that commit: `bloxbean-snapshot.yml` publishes only commits whose push run of `build.yml` passed (every job,
+   devnet shards included).
 2. `gh workflow run bloxbean-snapshot.yml --repo bloxbean/joust --ref main`.
 3. Check the run summary,
    `https://repo.bloxbean.org/maven/snapshots/org/julclang/julc-state-runtime/maven-metadata.xml` and the "Development
