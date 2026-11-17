@@ -35,8 +35,9 @@ This pack is written for machine ingestion. For people, start at [How JOUST work
   TypeScript, lowered to a Java `@StateContract` at build time; `.jsc` is a language preview). Clients: Java (`XClient`) or JavaScript (`X.js`, plus `X.d.ts`).
 - Built on JuLC (Java to UPLC compiler, julc.dev) and cardano-client-lib (CCL). Plutus V3. A JOUST release brings the
   JuLC and CCL versions it was built with (`gradle/libs.versions.toml` at its tag).
-- Status: experimental, pre-release, not for production. Never guess a version: take the newest from
-  https://github.com/bloxbean/joust/releases. JOUST's Maven modules, its Gradle plugin `org.julclang.joust` and the
+- Status: experimental, pre-release, not for production. Never guess a version: take the newest release whose tag
+  starts with `v` on https://github.com/bloxbean/joust/releases (not the "Development snapshot" entry), or run
+  `npm view @julclang/joust version`. JOUST's Maven modules, its Gradle plugin `org.julclang.joust` and the
   JuLC they need are in `https://repo.bloxbean.org/maven/releases`; nothing is on Maven Central. The npm packages
   (`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are on npmjs.org
   (`npm create joust@latest`).
@@ -65,8 +66,9 @@ repositories {
         mavenContent { releasesOnly() }
     }
 }
-// gradle.properties: joustVersion=<version> (https://github.com/bloxbean/joust/releases), julcVersion=<version>
-// (the julc entry of gradle/libs.versions.toml at that release's tag)
+// gradle.properties: joustVersion=<version> (npm view @julclang/joust version; or the newest v... tag on
+// https://github.com/bloxbean/joust/releases), julcVersion=<version> (the julc entry of gradle/libs.versions.toml at
+// that release's tag)
 dependencies {
     implementation "org.julclang:julc-state-runtime:$joustVersion"
     annotationProcessor "org.julclang:julc-state-processor:$joustVersion"

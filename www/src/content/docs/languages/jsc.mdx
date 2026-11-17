@@ -588,13 +588,16 @@ agree.
 
 ## What still needs Java
 
-Every feature of the contract model has a `.jsc` form ([.jsc reference](/languages/jsc-reference/)). A few
-combinations of features are refused in `.jsc` until a test covers them (ADR-0018 D10, M3's final pass):
+Every feature of the contract model has a `.jsc` form ([.jsc reference](/languages/jsc-reference/)). This table lists
+what `.jsc` refuses and a Java contract accepts; limits both languages share are in the
+[diagnostics catalogue](https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-diagnostics.md):
 
 | Combination | Code |
 |---|---|
 | `stakeSelf` or a `withdraw` handler beside owned objects; a `withdraw` handler beside `BigMap` state | `JSC1305` |
 | Beside an owned type that keeps a `BigMap`: a move, a `batched` action, deposits, a read of another contract, a `certify`, `vote` or `propose` handler, or an invariant by type | `JSC1217` |
+| `import contract` of a Java contract | `JSC0741` |
+| Importing a contract whose state, declared types, events or memos use a type from a library it imports | `JSC0746` |
 
 Write such a contract in [Java](/languages/java/); you can start from the generated Java of a `.jsc` version.
 

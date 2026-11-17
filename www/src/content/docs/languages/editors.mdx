@@ -38,9 +38,10 @@ version bundles. It is published as a pre-release while JOUST is one, so pick on
   code --install-extension julc.vscode-joust --pre-release
   ```
 
-- **From a JOUST release on GitHub.** A [release](https://github.com/bloxbean/joust/releases) with editor assets (its
-  notes say so) has the same extension attached as `vscode-joust-<ext>.vsix`. Optionally check that the release's own workflow built
-  it from the release's tag (this needs the [GitHub CLI](https://cli.github.com/)), then install it:
+- **From a JOUST release on GitHub.** [Releases](https://github.com/bloxbean/joust/releases) that include the
+  extension list `vscode-joust-<ext>.vsix` among their assets (the release notes alone are no sign: look at the asset
+  list). Optionally check that the release's own workflow built it from the release's tag (this needs the
+  [GitHub CLI](https://cli.github.com/)), then install it:
 
   ```sh
   gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust \
@@ -183,8 +184,8 @@ because these editors have no workspace trust:
 
 ## The tree-sitter grammar
 
-Highlighting and folding in Neovim and Helix come from `tree-sitter-jsc`. Each JOUST release with editor assets
-attaches it as `tree-sitter-jsc-<version>.tar.gz`, with its SHA-256 in the release's
+Highlighting and folding in Neovim and Helix come from `tree-sitter-jsc`. Releases that include it list
+`tree-sitter-jsc-<version>.tar.gz` among their assets, with its SHA-256 in the release's
 `editor-assets-<joust-version>-SHA256SUMS.txt` and a provenance attestation. Download it, optionally check it, and
 unpack it where you keep editor plugins:
 

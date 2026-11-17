@@ -156,8 +156,8 @@ The plugin does what the hand-written `build.gradle` below spells out:
 | UTF-8 and `-parameters`; native access and in-memory map mirrors for tests; native access for `run` | compile, test and run tasks |
 | `generateJsc`, when `src/main/jsc` exists: `.jsc` contracts lowered to Java before compiling; with it `acceptJscAbi`, `checkJscAbi` (the [ABI manifest](/languages/jsc-reference/#the-abi-manifest)) and `remapJscDiagnostics` (javac's errors on the generated Java, at their `.jsc` positions) | the build |
 
-`joust new` fills in the version of the `joust` that runs it; the newest is on the
-[releases page](https://github.com/bloxbean/joust/releases). Every other version comes from the JOUST release the
+`joust new` fills in the version of the `joust` that runs it; the newest is the newest release whose tag starts with
+`v` on the [releases page](https://github.com/bloxbean/joust/releases) (`npm view @julclang/joust version`). Every other version comes from the JOUST release the
 plugin belongs to, so the JuLC and cardano-client-lib versions always match. It needs a Java 25 toolchain (the default; a lower one is refused with a message).
 
 The same command writes npm projects: `joust new my-app -t node` gives what `npm create joust` gives. In a project, the
@@ -168,8 +168,10 @@ native `joust` and the npm one answer the same commands; see [the native `joust`
 <Tabs>
 <TabItem label="BloxBean release repository">
 
-Releases are published to `https://repo.bloxbean.org/maven/releases`. Use the newest from the
-[releases page](https://github.com/bloxbean/joust/releases) as `<version>` below. Nothing is on Maven Central yet.
+Releases are published to `https://repo.bloxbean.org/maven/releases`. Use as `<version>` below the newest release
+whose tag starts with `v` on the [releases page](https://github.com/bloxbean/joust/releases) (not the "Development
+snapshot" entry), without the `v`. The quickest check is `npm view @julclang/joust version`, since each release
+publishes the npm packages at the same version. Nothing is on Maven Central yet.
 
 </TabItem>
 <TabItem label="Your checkout, via mavenLocal">
@@ -213,7 +215,8 @@ rootProject.name = 'my-counter'
 ```
 
 ```properties title="gradle.properties"
-# The JOUST release: the newest from https://github.com/bloxbean/joust/releases
+# The JOUST release: the newest tag starting with v on https://github.com/bloxbean/joust/releases, without the v
+# (not the "Development snapshot" entry); or run: npm view @julclang/joust version
 joustVersion=<version>
 # The JuLC and cardano-client-lib it was built with: the julc and cardano-client-lib entries of
 # gradle/libs.versions.toml at that release's tag (v<version>)

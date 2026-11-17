@@ -43,13 +43,17 @@ Two readers, often the same person on different days:
   testing and verification; not for production. Say so where a page tells the reader to depend on JOUST.
 - **Versions: never write a JOUST version number in a page.** Releases come often and a number in a page goes stale.
   Point to the [releases page](https://github.com/bloxbean/joust/releases) instead, and write `<version>` where a
-  command or a build file needs one (`id 'org.julclang.joust' version '<version>'`). Do not repeat JuLC's or
-  cardano-client-lib's version either: a JOUST release brings the ones it was built with (they are in
-  `gradle/libs.versions.toml` at the release's tag), and the Gradle plugin adds them for you. Name a specific version
-  only where it is the point (a troubleshooting entry about one release, say), worded so it does not go stale, and mark
-  that line with `joust-version-ok` (in MDX prose, `{/* joust-version-ok: why */}` on the line or the line before; in
-  a code block, a comment in the block's language). `npm run build` runs `scripts/check-versions.mjs` first, which
-  fails on any unmarked prerelease version literal (`<major>.<minor>.<patch>-pre<n>...`) under `src/`.
+  command or a build file needs one (`id 'org.julclang.joust' version '<version>'`). Where the reader must pick a
+  version, say how: the newest release whose tag starts with `v` (not the "Development snapshot" entry), or
+  `npm view @julclang/joust version`. Do not repeat JuLC's or cardano-client-lib's version either: a JOUST release
+  brings the ones it was built with (they are in `gradle/libs.versions.toml` at the release's tag), and the Gradle
+  plugin adds them for you. Name a specific version only where it is the point (a troubleshooting entry about one
+  release, say), worded so it does not go stale, and put the marker `joust-version-ok: <that version>` on the same
+  line (in MDX prose, `{/* joust-version-ok: 1.2.3-pre4 */}`; in a code block, a comment in the block's language). A
+  marker exempts only the version it names, on its own line. `npm run build` runs `scripts/check-versions.mjs` first;
+  it fails on any other prerelease version literal (`<major>.<minor>.<patch>-pre<n>...`) under `src/`, and on final
+  versions in the shapes pages use (`create-joust@1.2.3`, `@julclang/joust@1.2.3`, `joustVersion=1.2.3`,
+  `version '1.2.3'`, `org.julclang:julc-state-api:1.2.3`), and prints how many markers it honoured.
 - **Java path:** JDK 25 and Gradle. JOUST's releases (pre-releases so far) are in the BloxBean release repository,
   `https://repo.bloxbean.org/maven/releases`, with the JuLC they need; nothing is on Maven Central yet. `joust new`
   (the native `joust`, from Homebrew `bloxbean/tap/joust` or a release's archives) writes a project whose
