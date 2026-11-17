@@ -20,7 +20,7 @@ is specific to JOUST and points to the standard for the rest:
 
 ```
 PR: bump `version` in gradle.properties ── code-owner review ──► merge to main (releases come from main only)
-  └─ tag-release.yml   resolve → authorize [env release: a release owner approves] → tag [env release-staging]
+  └─ tag-release.yml   resolve → authorize [env release: a release owner approves] → tag [env release-staging, no approval]
        └─ v<version> (pushed by the bloxbean-release-tagger App)
             └─ release.yml
                  ├─ maven           [env release-staging]  build, sign once, BloxBean repository, Central deployment (staged)
@@ -168,6 +168,12 @@ GitHub creates a missing environment, unprotected, on first use, so **set them u
 - **`vscode-marketplace`**: the Marketplace publish only. Required reviewers (the maintainers who may publish the
   extension), deployment branches and tags: exactly the branch `main` and the tags `v*`. No secrets or variables:
   trusted publishing needs none. Both jobs of `publish-vscode.yml` stop when it has no required reviewers.
+- **`release-staging`**: the release secrets only (signing key, Central and bucket credentials, the tagger App's key).
+  Deployment branches and tags: exactly the branch `main` and the tags `v*`. **No required reviewers**: the release
+  decision is the approval in `release` (`tag-release.yml`'s `authorize`), and a second reviewer here would only ask the
+  same question again, once in `tag` and once in `release.yml`'s publishing jobs. With the rulesets active, nothing
+  else reaches these secrets: `main` takes only reviewed pull requests, and only the tagger App (after that approval)
+  or an organization admin creates a `v*` tag. While the rulesets are disabled, add a required reviewer here too.
 - **"Prevent self-review"** is off on both while JOUST has a single maintainer (the accepted setup: with it on, a
   one-person reviewer list deadlocks every run that person starts). Turn it on once there are two. Until then the
   approval is a check the reviewer makes, not a second person: **before approving, open the run and check that its
@@ -194,10 +200,12 @@ GitHub creates a missing environment, unprotected, on first use, so **set them u
   policy makes the automatic path work either way; only `publish-vscode.yml`'s job uses that environment. Decide before
   the tag.
 
-**Who approves what.** A release with both flags waits for approvals in this order: the tag (`tag-release.yml`,
-environment `release`, a release owner), the attach (`editor-assets`, environment `release`), the publish
-(`vscode-publish`, environment `vscode-marketplace`, a maintainer who may publish the extension), and, separately,
-the Central deployment (`publish-central.yml`). A run started by hand needs the same approval as the automatic one.
+**Who approves what.** A release with both flags waits for approvals in this order: the tag (`tag-release.yml`'s
+`authorize`, environment `release`, a release owner; this is the release decision), the attach (`editor-assets`,
+environment `release`), the publish (`vscode-publish`, environment `vscode-marketplace`, a maintainer who may publish
+the extension), and, separately, the Central deployment (`publish-central.yml`). Jobs in `release-staging` (the tag push,
+Maven, npm, the CLI archives) ask for no approval of their own: they run once the tag exists. A run started by hand needs
+the same approval as the automatic one.
 
 **If the attach fails:** the attestation comes first, so an uploaded asset is always attested. The `.vsix` is not
 byte-reproducible, though, so a re-run after a partial upload stops at "differs from this run's build". Delete the
