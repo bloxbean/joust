@@ -352,33 +352,37 @@ environments keep the team as reviewers: with "prevent self-review", a one-perso
 
 ## Docs site
 
-The documentation site (`www/`, Astro Starlight) is served at <https://joust.julc.dev> from GitHub Pages, deployed by
-[`.github/workflows/docs.yml`](../.github/workflows/docs.yml):
+The documentation site (`www/`, Astro Starlight) is served at <https://joust.julc.dev> from GitHub Pages, from the
+`gh-pages` branch, as JuLC's and Yano's sites are (release-ops `templates/workflows/docs-deploy.yml`).
+[`.github/workflows/docs.yml`](../.github/workflows/docs.yml) builds and publishes it:
 
 - **Pull requests** that change `www/**` (or the files the site reads from elsewhere: the `.jsc` grammar,
   `julc-state-api`'s sources, `examples/README.md`, the workflow itself) **build only**: `npm ci` and `npm run build`
   in `www/`, which checks that no page hard-codes a release version (`www/scripts/check-versions.mjs`), builds the
   site and checks every internal link; then the job checks that `dist/CNAME`, the canonical links and the sitemap name
-  `joust.julc.dev`.
-- **Pushes to `main`** that change those paths build the same way, then **deploy** the built `www/dist` in the
-  `github-pages` environment. A manual run (`workflow_dispatch`) from `main` deploys too; from any other branch it only
-  builds.
-- The deploy job alone has `pages: write` and `id-token: write`, runs only in `bloxbean/joust`, and uses no secrets.
-  Deployments share the concurrency group `pages`: a newer one waits, and none is cancelled while in progress.
+  `joust.julc.dev`, and uploads `www/dist` as an artifact.
+- **Pushes to `main`** that change those paths, and manual runs (`workflow_dispatch`) on `main`, build the same way;
+  then the `publish` job (`contents: write` only, this run's `GITHUB_TOKEN`, only in `bloxbean/joust`) **pushes the
+  built site to `gh-pages`**, replacing the branch's tree, with `CNAME` and `.nojekyll`. A manual run on another branch
+  only builds. Not triggered by tags.
+- **The live site changes only after approval.** Each push to `gh-pages` starts GitHub's own
+  `pages-build-deployment` run, which deploys in the `github-pages` environment; with a required reviewer there, it
+  waits for that approval. The `publish` job's summary links the waiting run.
 
 Pages does not need a release: the site describes `main`, and its pages never name a JOUST version (they point to
 the [releases page](https://github.com/bloxbean/joust/releases); `www/WRITING.md`, "Versions").
 
-**One-time setup** (a maintainer; nothing deploys until it is done, and the deploy job fails at "Check the Pages
-configuration"):
+**One-time setup** (a maintainer):
 
-1. **Settings → Pages → Build and deployment → Source: "GitHub Actions".**
-2. **Custom domain:** `joust.julc.dev` (Settings → Pages), then **Enforce HTTPS** once GitHub has issued the
-   certificate. The build ships `www/public/CNAME` with the same name.
-3. **DNS:** a `CNAME` record `joust.julc.dev` → `bloxbean.github.io` at the `julc.dev` DNS provider. Verifying the
-   domain for the `bloxbean` organization (Organization settings → Pages) protects it from takeover.
-4. **The `github-pages` environment** (Settings → Environments; GitHub created it) must allow deployments from `main`:
-   its deployment branch policy allows only `gh-pages` today, so add `main` (and remove `gh-pages`, which nothing
-   uses). If the environment gets required reviewers (Settings above), every deploy waits for an approval.
+1. **Publish once**: run **Docs site** from the Actions tab on `main` (or merge a change under `www/`). Its `publish`
+   job creates the `gh-pages` branch.
+2. **Settings → Pages → Build and deployment → Source: "Deploy from a branch"**, branch `gh-pages`, folder `/ (root)`.
+3. **Custom domain:** `joust.julc.dev` (Settings → Pages), then **Enforce HTTPS** once GitHub has issued the
+   certificate. Every publish writes the same name to `gh-pages`' `CNAME`.
+4. **DNS:** a `CNAME` record `joust` → `bloxbean.github.io` in the `julc.dev` zone. Verifying the domain for the
+   `bloxbean` organization (Organization settings → Pages) protects it from takeover.
+5. **The `github-pages` environment** keeps its deployment branch policy at `gh-pages` only (as it is). For an
+   approval gate, as JuLC has, add the maintainer as its required reviewer.
 
-Then run **Docs site** from the Actions tab on `main` (or push a change under `www/`) for the first deployment.
+**Each publish:** approve the `pages-build-deployment` run for that push in the `github-pages` environment
+(Actions → pages-build-deployment). If several are waiting, approve the newest and reject the older ones.
