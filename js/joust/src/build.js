@@ -1,5 +1,6 @@
 // joust build: contracts/**/*.java and *.jsc -> build/joust/ (ADR-0015 D9)
-//   contracts.json        what the runtime needs: [{ description, script, transitions }]
+//   contracts.json        what the runtime needs: [{ description, script, transitions, manifest, built }]; the
+//                         manifest binds the programs to the script and description (ADR-0020 D8)
 //   <Contract>.json       the description (CIP-57 + x-joust v2)
 //   <Contract>.plutus     the compiled validator (CBOR hex)
 //   <Contract>.js/.d.ts   the typed client (joust-gen), importing @julclang/state-client
@@ -147,12 +148,14 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     const { js, dts } = generate(description);
     writeFileSync(join(dir, c.name + '.js'), js);
     writeFileSync(join(dir, c.name + '.d.ts'), dts);
+    // The programs' manifest (ADR-0020 D8): the engine checks it before it runs any of them.
+    const manifest = c.manifestJson ? JSON.parse(c.manifestJson) : null;
     const map = messagesOf[`${c.packageName.replaceAll('.', '/')}/${c.name}.java`];
     // The script it explains: a map read from an audit file names its script (review r1 S1).
     const messages = map ? { ...map, scriptHash: c.scriptHash } : undefined;
     // Review r3 F9: the compiler that built each script (this package's version, the engine's JOUST and JuLC versions),
     // carried into each deployment record.
-    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions,
+    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, manifest,
       built: { joust: VERSION, engine: r.joust ?? null, julc: r.julc ?? null }, ...(messages ? { messages } : {}) });
     log(`${c.packageName}.${c.name}: ${c.scriptSizeBytes} bytes, hash ${c.scriptHash || '(parameterised)'}, `
       + `${Object.keys(c.transitions).length} transitions`);

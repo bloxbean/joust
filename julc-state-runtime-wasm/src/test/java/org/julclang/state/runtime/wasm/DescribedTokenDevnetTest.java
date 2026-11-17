@@ -34,7 +34,7 @@ class DescribedTokenDevnetTest {
     @Test
     void tokenThroughDescriptionAndPrograms() throws Exception {
         var c = DescribedReplayTest.contract("token");
-        var token = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
+        var token = new DescribedContract(JSON.readTree(c.description()), c.script(), UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions()));
         var rt = DevKit.runtime();
         var admin = DevKit.fundedAccount(500);
         var ann = DevKit.fundedAccount(100);

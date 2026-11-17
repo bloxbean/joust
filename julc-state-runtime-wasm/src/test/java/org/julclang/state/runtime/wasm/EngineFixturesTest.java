@@ -24,6 +24,12 @@ class EngineFixturesTest {
     static final Path FIXTURES = Path.of("../fixtures/m3");
     static final ObjectMapper JSON = new ObjectMapper();
 
+    /** A contract's manifest as contracts.json holds it (an object), as the engine takes it (text); null when absent. */
+    static String manifest(JsonNode c) {
+        JsonNode m = c.get("manifest");
+        return m == null || m.isNull() ? null : m.isTextual() ? m.asText() : m.toString();
+    }
+
     @Test
     void engineFixturesReplayOnTheJvm() throws Exception {
         assumeTrue(Files.isDirectory(FIXTURES), "no fixtures/m3 (record with JOUST_RECORD)");
@@ -34,7 +40,7 @@ class EngineFixturesTest {
                 var transitions = new LinkedHashMap<String, String>();
                 c.path("transitions").fields().forEachRemaining(e -> transitions.put(e.getKey(), e.getValue().asText()));
                 contracts.put(p.getFileName().toString().replace(".json", ""),
-                        new Prepare.Contract(c.get("description").asText(), c.get("script").asText(), transitions));
+                        new Prepare.Contract(c.get("description").asText(), c.get("script").asText(), transitions, manifest(c)));
             }
         }
         List<String> diffs = new ArrayList<>();

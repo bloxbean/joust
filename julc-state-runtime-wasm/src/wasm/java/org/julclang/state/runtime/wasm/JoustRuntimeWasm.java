@@ -21,10 +21,20 @@ public final class JoustRuntimeWasm {
     private JoustRuntimeWasm() {
     }
 
+    /** {@code joust.info}'s (empty) request. */
+    public record InfoRequest() {}
+
+    /** The engine's JOUST version, the JuLC version it evaluates with, and the program manifest version it reads. */
+    public record Info(String joust, String julc, int manifest) {}
+
     public static void main(String[] args) {
         var api = new ApiRegistry();
         new VmApi().register(api);
         api.add("joust.prepare", Prepare.Request.class, r -> ServiceResult.ok(Prepare.prepare(r)));
+        // What the engine checks bundles against (ADR-0020 D8): a client reports a mismatch before the first call.
+        api.add("joust.info", InfoRequest.class, r -> ServiceResult.ok(new Info(VERSION,
+                org.julclang.state.runtime.described.JulcVersion.VERSION,
+                org.julclang.state.runtime.described.ProgramManifest.VERSION)));
         api.add("joust.validatorScript", Scripts.Request.class, r -> ServiceResult.ok(Scripts.load(r)));
         // ADR-0018 D14 (M4c): offline tests' ledger: a transaction's scripts evaluated against a snapshot, and the attack
         // suite on a prepared transaction.

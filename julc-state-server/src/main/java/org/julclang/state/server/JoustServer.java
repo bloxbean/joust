@@ -217,8 +217,9 @@ public final class JoustServer {
             } catch (Busy e) {
                 reply(ex, e.status, error(e.getMessage()));
             } catch (JoustException e) {
-                // The runtime's refusal (a co-signer needed, contention, a failed check): the caller may act on it.
-                reply(ex, 422, error(e.getMessage()));
+                // The runtime's refusal (a co-signer needed, contention, a failed check): the caller may act on it. A
+                // keyed call's cooldown carries its slot as a field (ADR-0020 §12.1): clients wait on it, not on text.
+                reply(ex, 422, refusal(e));
             } catch (RuntimeException e) {
                 LOG.log(System.Logger.Level.WARNING, "request " + path + " failed", e);
                 reply(ex, 500, error("internal error"));
@@ -388,6 +389,15 @@ public final class JoustServer {
 
     private static JsonNode error(String message) {
         return JsonValues.JSON.createObjectNode().put("error", message == null ? "error" : message);
+    }
+
+    /** A refusal's body: its message, and {@code retryAtSlot} when it is a keyed call's cooldown. */
+    static JsonNode refusal(Throwable e) {
+        var body = (com.fasterxml.jackson.databind.node.ObjectNode) error(e.getMessage());
+        for (Throwable c = e; c != null; c = c.getCause()) {
+            if (c instanceof org.julclang.state.runtime.NotYetException n) return body.put("retryAtSlot", n.prepareAt());
+        }
+        return body;
     }
 
     private static void reply(HttpExchange ex, int status, JsonNode body) throws IOException {

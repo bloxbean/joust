@@ -104,10 +104,12 @@ class JscV2M1eR2BuildTest {
             var traced = strings(c.scriptCborHex());
             traced.remove("");   // the require that keeps an arm helper's call: it cannot fail
             // The transition programs too, but for the read discovery's own trace (MerkleMaps' discovery variant traces
-            // "joust:read " + root + " " + key, which the runtime reads and never shows: ADR-0015 D3).
+            // "joust:read " + root + " " + key, which the runtime reads and never shows: ADR-0015 D3) and Require's tag
+            // (the programs' Require variant traces "joust:require " + message; the runtime shows only the message:
+            // ADR-0020 D9).
             for (String t : c.transitions().values()) {
                 var x = strings(t);
-                x.removeAll(List.of("", "joust:read ", " "));
+                x.removeAll(List.of("", "joust:read ", " ", org.julclang.state.runtime.described.UplcTransitions.REQUIRE_TAG));
                 traced.addAll(x);
             }
             var missing = new TreeSet<>(traced);
@@ -140,7 +142,10 @@ class JscV2M1eR2BuildTest {
         assertEquals(1, lowered.explain(five).size());
     }
 
-    /** The last trace of a refused transition run (the runtime's refusal message). */
+    /**
+     * The runtime's refusal message of a refused transition run: the message of its last {@code joust:require} trace
+     * (ADR-0020 D9: the programs' Require variant tags it; UplcTransitions reads only the tag).
+     */
     static String trace(String program, FourWay f, Rec state, List<Object> args) throws Exception {
         var in = new ArrayList<org.julclang.core.PlutusData>();
         in.add(TransitionParityTest.julc(TransitionParityTest.data(f.java(state))));
@@ -153,8 +158,10 @@ class JscV2M1eR2BuildTest {
                 org.julclang.vm.LedgerEvaluationTarget.pv11(org.julclang.vm.PlutusLanguage.PLUTUS_V3), in,
                 new org.julclang.vm.ExBudget(10_000_000_000L, 14_000_000L), org.julclang.vm.EvalOptions.DEFAULT);
         assertInstanceOf(EvalResult.Failure.class, r);
-        List<String> traces = ((EvalResult.Failure) r).traces();
-        return traces.get(traces.size() - 1);
+        String tag = org.julclang.state.runtime.described.UplcTransitions.REQUIRE_TAG, required = null;
+        for (String t : ((EvalResult.Failure) r).traces()) if (t.startsWith(tag)) required = t.substring(tag.length());
+        assertNotNull(required, "a refusal is a tagged require");
+        return required;
     }
 
     static final byte[] OWNER = fill(0x0A), ANN = fill(0xA1);

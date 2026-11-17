@@ -32,7 +32,7 @@ class DescribedLockerDevnetTest {
     @Test
     void lockerThroughDescriptionAndPrograms() throws Exception {
         var c = DescribedReplayTest.contract("locker", "Locker");
-        var locker = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
+        var locker = new DescribedContract(JSON.readTree(c.description()), c.script(), UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions()));
         assertTrue(locker.name().endsWith(".Locker"), locker.name());
         var rt = DevKit.runtime();
         var admin = DevKit.fundedAccount(300);

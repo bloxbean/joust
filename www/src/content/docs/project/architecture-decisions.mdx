@@ -1,6 +1,6 @@
 ---
 title: Architecture decisions
-description: Every JOUST architecture decision record (ADR-0001 to ADR-0018, and ADR-0021), with its status, the decision in one paragraph and the guide that covers it.
+description: Every JOUST architecture decision record (ADR-0001 to ADR-0021), with its status, the decision in one paragraph and the guide that covers it.
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
@@ -43,6 +43,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
 | [0018](#adr-0018-the-jsc-language-an-immutable-contract-language) | The `.jsc` language: an immutable contract language for JavaScript developers | Proposed (r29); M0–M5 on `main` (#130) | [.jsc](/languages/jsc/) |
 | [0019](#adr-0019-programmable-tokens-cip-113) | Programmable tokens (CIP-113): issuers, holders, contracts paid in them | Proposed (r5) | – |
+| [0020](#adr-0020-uplc-transition-programs-off-chain-a-spike) | UPLC transition programs as the off-chain meaning: a spike and its report | Proposed (r9); the spike's "adopt now" items implemented in the engine | [Program manifests](/apps/cli-and-projects/#program-manifests) |
 | [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc) | A language server and VS Code extension for `.jsc` | Proposed (r10, with r7a and r7b); M5a–M5e on `main` (#130) | – |
 
 ## The base
@@ -341,6 +342,21 @@ Equality, time, inputs and audiences are made sound by rule: generated structura
 keeps time out of control flow, deep checks on every input, and an explicit audience for every paying method. It still lowers to a
 Java `@StateContract`, so nothing new is trusted on chain; an independent reference interpreter checks the lowering.
 The first language, `.jsc` v1 (ADR-0005), and its migration were removed in r26.
+
+### ADR-0020: UPLC transition programs off chain, a spike
+
+[`0020-offchain-uplc-transitions.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0020-offchain-uplc-transitions.md)
+· Proposed (r9); the spike is reported (§11) and its "adopt now" items are implemented in the runtime engine (§12)
+
+ADR-0015 left open which meaning of a contract's method is the reference off chain (Q6): the JVM method, or its
+transition program (the same Java compiled by JuLC, evaluated by JuLC's VM). The spike ran both on every recorded
+transaction and on generated inputs and found no difference, so its proposed answer keeps the JVM methods on the
+typed Java path and the programs in the engine, and compares the two in CI. It also adopts, in the engine: a strict
+check of each program's inputs against the contract's declared types, a tagged `Require` (a refusal is recognised by
+its tag, not by its last trace), a program manifest per contract that the engine checks before it evaluates anything,
+and a thread-safe `UplcTransitions`.
+
+Covered in: [Program manifests](/apps/cli-and-projects/#program-manifests), [Contract description](/reference/description-format/).
 
 ### ADR-0021: A language server and VS Code extension for `.jsc`
 

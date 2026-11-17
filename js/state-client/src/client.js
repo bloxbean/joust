@@ -37,7 +37,11 @@ export function httpService(baseUrl, { fetchImpl } = {}) {
     } catch (e) {
       body = { error: text };
     }
-    if (!r.ok) throw new Error(body.error ?? `${path}: ${r.status}`);
+    if (!r.ok) {
+      const e = new Error(body.error ?? `${path}: ${r.status}`);
+      if (Number.isSafeInteger(body.retryAtSlot) && body.retryAtSlot >= 0) e.retryAtSlot = body.retryAtSlot;
+      throw e;
+    }
     return body;
   };
   return {
@@ -426,9 +430,11 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
         break;
       } catch (e) {
         // A link window that starts beyond the page's start limit (a cooldown; ADR-0016 D7 step 5): wait, prepare again.
-        const m = /prepare again at slot (\d+)/.exec(e.message ?? '');
-        if (!m || i >= 16) throw e;
-        await untilSlot(this.chain, Number(m[1]));
+        // The slot is the service's structured field: never read from the message, whose text a contract can forge
+        // (ADR-0020 §12.1).
+        const slot = e?.retryAtSlot;
+        if (!Number.isSafeInteger(slot) || slot < 0 || i >= 16) throw e;
+        await untilSlot(this.chain, slot);
       }
     }
     const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);

@@ -57,5 +57,6 @@ class WalletDesignationTest {
         assertEquals(1_300, p.fromSlot());
         assertEquals(1_240, p.prepareAt());
         assertTrue(KeyedObjects.notYet("Registry.claim", p.prepareAt()).getMessage().endsWith("prepare again at slot 1240"));
+        assertEquals(1240, KeyedObjects.notYet("Registry.claim", p.prepareAt()).prepareAt());
     }
 }

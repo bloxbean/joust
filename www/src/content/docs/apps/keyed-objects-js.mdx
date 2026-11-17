@@ -77,8 +77,11 @@ the neighbour; `@julclang/joust-runtime` fetches that listing up front. The Java
 (`julc-state-server`) refuses keyed calls.
 
 When the neighbour is cooling down ([Cooldown and window](/contracts/keyed-objects/#cooldown-and-window)) and the
-call's window would start further ahead than the page allows, the engine answers "prepare again at slot N". The
-client waits for that slot and prepares again, so a call can take a minute or more. A window that starts a little
+call's window would start further ahead than the page allows, the engine refuses the call with the slot to prepare
+again at, as a field of its answer (`retryAtSlot`; a prepare service over HTTP sends it in its error body). The
+client waits for that slot and prepares again, so a call can take a minute or more. The message also says "prepare
+again at slot N", but only for people: the client never reads the slot from text, which a contract could forge
+(ADR-0020 §12.1). A window that starts a little
 ahead is submitted when it starts.
 
 ## What the page checks

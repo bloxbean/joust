@@ -32,8 +32,8 @@ class DescribedUpgradeDevnetTest {
     void upgradeAndAdoptInOneTransaction() throws Exception {
         var c1 = DescribedReplayTest.contract("upgrade", "CounterV1");
         var c2 = DescribedReplayTest.contract("upgrade", "CounterV2");
-        var v1 = new DescribedContract(JSON.readTree(c1.description()), c1.script(), new UplcTransitions(c1.transitions()));
-        var v2 = new DescribedContract(JSON.readTree(c2.description()), c2.script(), new UplcTransitions(c2.transitions()));
+        var v1 = new DescribedContract(JSON.readTree(c1.description()), c1.script(), UplcTransitions.verified(c1.manifest(), c1.description(), c1.script(), c1.transitions()));
+        var v2 = new DescribedContract(JSON.readTree(c2.description()), c2.script(), UplcTransitions.verified(c2.manifest(), c2.description(), c2.script(), c2.transitions()));
         var rt = DevKit.runtime();
         var admin = DevKit.fundedAccount(100);
         var empty = JSON.createObjectNode();

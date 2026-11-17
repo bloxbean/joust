@@ -9,7 +9,12 @@ export interface MessageSite { line: number; col: number; kind: 'input' | 'pay' 
 /** A .jsc 2 contract's message map, as `joust build` writes it beside the script it explains. */
 /** A contract's message map (ADR-0018 D12). `scriptHash` is what the build recorded; the runtime derives the hash from the entry's own `script` instead (issue #74). */
 export interface MessageMap { source: string; scriptHash?: string; messages: Record<string, MessageSite[]> }
-export interface BuiltContract { description: string | object; script: string; transitions: Record<string, string>; messages?: MessageMap }
+export interface BuiltContract {
+  description: string | object; script: string; transitions: Record<string, string>;
+  /** The transition programs' manifest (ADR-0020 D8): the engine refuses programs without a matching one. */
+  manifest: string | object;
+  messages?: MessageMap;
+}
 /** A plain JuLC validator as `joust build` writes it in build/joust/validators.json (a governor, ...). */
 export interface BuiltValidator { name: string; package: string; purpose: string; script: string; scriptHash: string; params: { name: string; type: string }[] }
 /** A governor with its parameters applied (ensureGovernor): give it to a call as opts.governor = { governor, signers }. */

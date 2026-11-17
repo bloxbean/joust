@@ -380,11 +380,12 @@ final class KeyedObjects {
     /**
      * A wallet's keyed call whose link window must start beyond the page's start limit (the anchor or predecessor is
      * cooling down; ADR-0016 D7 step 5): an engine cannot wait, so it refuses with the slot from which to prepare again.
-     * The JavaScript client reads it ("prepare again at slot N"), waits, and prepares again.
+     * The engine returns the slot as a structured field ({@link NotYetException#prepareAt()}); the JavaScript client waits
+     * until it and prepares again. The text is for people only.
      */
-    static SubmitException notYet(String what, long prepareAt) {
-        return new SubmitException(SubmitException.Kind.TRANSIENT, what + ": not yet: the link window starts beyond the page's"
-                + " start limit (a cooldown, ADR-0016 D9); prepare again at slot " + prepareAt);
+    static NotYetException notYet(String what, long prepareAt) {
+        return new NotYetException(what + ": not yet: the link window starts beyond the page's"
+                + " start limit (a cooldown, ADR-0016 D9); prepare again at slot " + prepareAt, prepareAt);
     }
 
     /** A call's time rule, resolved for the current state: the POSIX ms in {@code field}. */
