@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const vscode = require('vscode');
 
-const EXT = 'julclang.vscode-joust';
+const EXT = 'julc.vscode-joust';
 const SCENARIO = process.env.JOUST_SCENARIO;
 const WS = process.env.JOUST_WS;
 const SENTINEL = process.env.JOUST_SENTINEL;

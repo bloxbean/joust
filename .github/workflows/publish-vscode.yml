@@ -1,4 +1,4 @@
-# ADR-0021 D11 (r11): publishes the VS Code extension to the Visual Studio Marketplace as publisher `julclang`, through
+# ADR-0021 D11 (r11): publishes the VS Code extension to the Visual Studio Marketplace as publisher `julc`, through
 # Marketplace trusted publishing (GitHub OIDC; no Marketplace token exists anywhere). It never builds: it publishes,
 # unchanged, the vscode-joust-<ext>.vsix that editor-assets.yml attached to the GitHub release v<version>, after
 # verifying that file's build-provenance attestation. Two ways start it:
@@ -6,7 +6,7 @@
 #     editor-assets.yml attached the assets);
 #   - a maintainer, by hand (Actions -> "Publish the VS Code extension" -> Run workflow, from main, with the JOUST
 #     version whose attached .vsix to publish), e.g. after a failed publish.
-# Any other event or ref skips both jobs; the environment's deployment rules refuse other refs too.
+# Any other repository, event or ref skips both jobs; the environment's deployment rules refuse other refs too.
 #
 # The Marketplace's trusted publisher names this repository, THIS FILE (publish-vscode.yml; the name must not change)
 # and the environment `vscode-marketplace`, whose required reviewers approve each publish. Only the publish job holds
@@ -42,10 +42,12 @@ jobs:
   # Everything that can be checked before anyone approves: the environment, the release's .vsix and its attestation,
   # the manifest, and that the Marketplace does not have this version yet.
   check:
-    # A dispatch from main, or release.yml's run on the tag v<version> (a called workflow has its caller's event and ref).
+    # This repository only (#133 R3: a public reusable workflow can be called from anywhere), and a dispatch from main
+    # or release.yml's run on the tag v<version> (a called workflow has its caller's event and ref).
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
-      || (github.event_name == 'push' && github.ref == format('refs/tags/v{0}', inputs.version))
+      github.repository == 'bloxbean/joust' && (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'push' && github.ref == format('refs/tags/v{0}', inputs.version)))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -141,8 +143,9 @@ jobs:
   publish:
     needs: check
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
-      || (github.event_name == 'push' && github.ref == format('refs/tags/v{0}', inputs.version))
+      github.repository == 'bloxbean/joust' && (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        || (github.event_name == 'push' && github.ref == format('refs/tags/v{0}', inputs.version)))
     environment: vscode-marketplace
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -238,5 +241,5 @@ jobs:
             echo "## VS Code extension of JOUST \`$VERSION\`"
             echo
             echo "\`$VSIX\` (SHA-256 \`$SHA256\`), publish: $OUTCOME."
-            echo "https://marketplace.visualstudio.com/items?itemName=julclang.vscode-joust (may take a few minutes)"
+            echo "https://marketplace.visualstudio.com/items?itemName=julc.vscode-joust (may take a few minutes)"
           } >> "$GITHUB_STEP_SUMMARY"

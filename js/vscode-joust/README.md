@@ -4,23 +4,33 @@ JOUST's contract language, `.jsc`, in VS Code (ADR-0021, milestones M5a–M5e). 
 
 ## Install
 
-**From the Visual Studio Marketplace.** The extension is `julclang.vscode-joust`, published as a **pre-release** while
-JOUST is one. In VS Code's Extensions view, search for `julclang.vscode-joust` and install it (choose the pre-release
+**Versions.** The extension has its own version. **0.1.0 bundles the compiler of JOUST 0.1.0-pre2**; each later JOUST
+release that publishes the extension bumps its patch. The
+[changelog](https://github.com/bloxbean/joust/blob/main/js/vscode-joust/CHANGELOG.md) lists which JOUST release each
+version bundles.
+
+**From the Visual Studio Marketplace.** The extension is `julc.vscode-joust`, published as a **pre-release** while
+JOUST is one. In VS Code's Extensions view, search for `julc.vscode-joust` and install it (choose the pre-release
 version if VS Code offers both), or from a terminal:
 
 ```sh
-code --install-extension julclang.vscode-joust --pre-release
+code --install-extension julc.vscode-joust --pre-release
 ```
 
 **From a JOUST release on GitHub.** Each release from 0.1.0-pre2 on has the same file attached as
 `vscode-joust-<ext>.vsix` ([releases](https://github.com/bloxbean/joust/releases)). Checking its provenance is
-optional; it needs the [GitHub CLI](https://cli.github.com/):
+optional; it needs the [GitHub CLI](https://cli.github.com/). The check names the workflow that built it and the
+release's tag, so a build from any other workflow or branch does not pass:
 
 ```sh
 gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust \
-  --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml
+  --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml \
+  --source-ref refs/tags/v<joust-version>
 code --install-extension vscode-joust-<ext>.vsix
 ```
+
+If that fails because a maintainer attached the release's assets by hand, check with `--source-ref refs/heads/main`
+instead; if both fail, don't install it.
 
 Neovim, Helix and other editors use the language server you install from npm and the release's tree-sitter package
 (`tree-sitter-jsc-<version>.tar.gz`): see the [editors page](https://github.com/bloxbean/joust/blob/main/www/src/content/docs/languages/editors.mdx).
@@ -137,7 +147,7 @@ npm run test:electron          # @vscode/test-electron on VS Code 1.109.0 and st
 
 **Publishing.** A JOUST release builds the `.vsix` from its tag, attests it and attaches it to the GitHub release
 (`editor-assets.yml`); with `vscode_publish`, `publish-vscode.yml` then publishes that file, unchanged, to the Visual
-Studio Marketplace as `julclang` through trusted publishing, after a maintainer approves (ADR-0021 D11,
+Studio Marketplace as `julc` through trusted publishing, after a maintainer approves (ADR-0021 D11,
 [docs/release-ops.md](https://github.com/bloxbean/joust/blob/main/docs/release-ops.md)). The extension's `version` is its
 own (`major.minor.patch`): bump its patch for each release that publishes. Open VSX is published by hand.
 

@@ -26,25 +26,31 @@ compiler matches it.
 
 ## VS Code
 
-Install the JOUST extension, `julclang.vscode-joust`. It is published as a pre-release while JOUST is one, so pick
-one of these:
+Install the JOUST extension, `julc.vscode-joust`. It has its own version: **0.1.0 bundles the compiler of JOUST
+0.1.0-pre2**, and each later JOUST release that publishes it bumps the patch (its
+[changelog](https://github.com/bloxbean/joust/blob/main/js/vscode-joust/CHANGELOG.md) lists which JOUST release each
+version bundles). It is published as a pre-release while JOUST is one, so pick one of these:
 
-- **From the Visual Studio Marketplace.** In the Extensions view, search for `julclang.vscode-joust` and install it
+- **From the Visual Studio Marketplace.** In the Extensions view, search for `julc.vscode-joust` and install it
   (choose the pre-release version if VS Code offers both). Or from a terminal:
 
   ```sh
-  code --install-extension julclang.vscode-joust --pre-release
+  code --install-extension julc.vscode-joust --pre-release
   ```
 
 - **From a JOUST release on GitHub.** From 0.1.0-pre2 on, each [release](https://github.com/bloxbean/joust/releases)
   has the same extension attached as `vscode-joust-<ext>.vsix`. Optionally check that the release's own workflow built
-  it (this needs the [GitHub CLI](https://cli.github.com/)), then install it:
+  it from the release's tag (this needs the [GitHub CLI](https://cli.github.com/)), then install it:
 
   ```sh
   gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust \
-    --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml
+    --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml \
+    --source-ref refs/tags/v<joust-version>
   code --install-extension vscode-joust-<ext>.vsix
   ```
+
+  If a maintainer attached the release's assets by hand, the check passes with `--source-ref refs/heads/main` instead.
+  If neither passes, don't install the file.
 
   VSCodium and other editors that use Open VSX can install the `.vsix` the same way.
 
@@ -185,12 +191,15 @@ unpack it where you keep editor plugins:
 ```sh
 gh release download v<joust-version> -R bloxbean/joust --pattern 'tree-sitter-jsc-*.tar.gz'
 gh attestation verify tree-sitter-jsc-<version>.tar.gz -R bloxbean/joust \
-  --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml
+  --signer-workflow bloxbean/joust/.github/workflows/editor-assets.yml \
+  --source-ref refs/tags/v<joust-version>
+mkdir -p ~/.local/share
 tar xzf tree-sitter-jsc-<version>.tar.gz -C ~/.local/share
 cd ~/.local/share/tree-sitter-jsc-<version>
 ```
 
-That directory is the `/ABSOLUTE/PATH/TO/tree-sitter-jsc` the Helix configuration above names. The archive holds:
+As for the `.vsix`, assets a maintainer attached by hand pass with `--source-ref refs/heads/main` instead. That
+directory is the `/ABSOLUTE/PATH/TO/tree-sitter-jsc` the Helix configuration above names. The archive holds:
 - the grammar and the generated parser (`src/`);
 - the queries (`queries/`, and `neovim/queries/jsc/`);
 - Helix's highlights, with Helix's capture names (`helix/queries/jsc/`);

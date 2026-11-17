@@ -1,5 +1,5 @@
 # Only what the extension runs ships in the .vsix (ADR-0021 D9): the two bundles, the engine, the grammar and the
-# language files. No node_modules, no sources, no tests.
+# language files, the README and the CHANGELOG (the Marketplace page). No node_modules, no sources, no tests.
 **
 !dist/extension.js
 !dist/server.js
@@ -11,5 +11,6 @@
 !snippets/jsc.json
 !language-configuration.json
 !README.md
+!CHANGELOG.md
 !LICENSE
 !package.json

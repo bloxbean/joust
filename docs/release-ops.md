@@ -91,9 +91,24 @@ by `.github/workflows/publish-vscode.yml`. Both run in two ways:
 - **by hand**, from `main` only (Actions, then "Editor assets" or "Publish the VS Code extension", then Run workflow,
   with the JOUST version): to attach the assets to an earlier release, or to retry after a failure.
 
-Every job of both workflows refuses any other event or ref: a dispatch must come from `refs/heads/main`, and a call
-must come from `release.yml`'s run on `refs/tags/v<version>` itself (a called workflow sees its caller's event and ref).
-The environments' deployment rules (below) refuse other refs too.
+Every job of both workflows refuses any other repository, event or ref: it runs only in `bloxbean/joust`, a dispatch
+must come from `refs/heads/main`, and a call must come from `release.yml`'s run on `refs/tags/v<version>` itself (a
+called workflow sees its caller's repository, event and ref). The environments' deployment rules (below) refuse other
+refs too.
+
+**Checked before anything is published.** With `vscode_assets` or `vscode_publish` on, the `cli` job of `release.yml`
+(the first job; one platform) refuses the tag when any of these would stop the release's last jobs after Maven, npm and
+the GitHub release are out:
+- `main` does not reach the tag's commit. **A release from a `release/**` branch must set `vscode_assets=false` and
+  `vscode_publish=false`**: the editor assets are built only from a tag on `main`, and both environments accept only
+  `main` and `v*`;
+- `release` (and, with `vscode_publish`, `vscode-marketplace`) is missing, has no required reviewers, or deploys from
+  anything but the branch `main` and the tags `v*` (`.github/scripts/release-environments.mjs`, from GitHub's API);
+- with `vscode_publish`: the JOUST version is final (no suffix: the extension's release channel is not decided yet); the
+  extension is not `julc.vscode-joust`; `js/vscode-joust/CHANGELOG.md` has no entry for the extension's version naming
+  this JOUST version; or the Marketplace already has that extension version or a later one
+  (`.github/scripts/vscode-marketplace.mjs`; an unreadable or malformed Marketplace answer is a failure, never "not
+  published").
 
 What `editor-assets.yml` does:
 1. It checks out `refs/tags/v<version>`, the tag itself, and checks that HEAD is the tag's commit and that `main`
@@ -113,7 +128,7 @@ What `publish-vscode.yml` does (it never builds):
 1. `check` (no environment; read-only, plus `actions: read` and `attestations: read`): checks that the
    `vscode-marketplace` environment has required reviewers; downloads `vscode-joust-*.vsix` from the GitHub release
    `v<version>`; verifies its attestation (signer `editor-assets.yml`, source ref the tag or `main`, GitHub-hosted
-   runner); checks the manifest (publisher `julclang`, name `vscode-joust`, the file's version, packaged as a
+   runner); checks the manifest (publisher `julc`, name `vscode-joust`, the file's version, packaged as a
    pre-release while JOUST is one) and that the Marketplace does not have that version or a later one
    (`.github/scripts/vscode-marketplace.mjs`, the public gallery query).
 2. `publish`, in the `vscode-marketplace` environment, with `id-token: write` and `contents: read` only, after a
@@ -131,29 +146,50 @@ gh attestation verify vscode-joust-<ext>.vsix -R bloxbean/joust --signer-workflo
 ```
 
 **The extension's version** is its own semver in `js/vscode-joust/package.json` (`version`, `major.minor.patch` only: the
-Marketplace accepts no other form). **Bump its patch in the version-bump PR of every release that publishes** (0.1.0 is
-the first; then 0.1.1, …), and keep the odd minor while JOUST is a pre-release (the Marketplace's recommendation for
-pre-release versions; the `.vsix` is packaged and published with `--pre-release`). With `vscode_publish=true`, the `cli`
-job of `release.yml` refuses the tag before anything is published when the Marketplace already has that version or a
-later one, so a release never stops at the Marketplace midway. A final JOUST release (no suffix) is refused by
-`publish-vscode.yml` until the extension's release channel is decided.
+Marketplace accepts no other form). **In the version-bump PR of every release that publishes, bump its patch** (0.1.0 is
+the first; then 0.1.1, …) **and add its entry to `js/vscode-joust/CHANGELOG.md`** naming the JOUST version it bundles
+("Bundles the compiler of **JOUST <version>**"; the Marketplace shows the changelog, and users read there which JOUST
+release an extension version carries). Keep the odd minor while JOUST is a pre-release (the Marketplace's
+recommendation for pre-release versions; the `.vsix` is packaged and published with `--pre-release`). A final JOUST
+release (no suffix) is refused until the extension's release channel is decided: set `vscode_publish=false` for it.
 
 **Maintainer setup, once** (Settings, Environments; the workflows name the environments but never create them, and
 GitHub creates a missing environment, unprotected, on first use, so **set them up before the first run**):
-- **`release`**: required reviewers (the maintainers who may attach release assets), "prevent self-review", deployment
-  branches and tags: the branch `main` and tags `v*`. The attach job checks, before it attests or uploads anything, that
-  it has required reviewers.
+- **`release`**: required reviewers (the maintainers who may attach release assets), deployment branches and tags:
+  exactly the branch `main` and the tags `v*`. The attach job checks, before it attests or uploads anything, that it
+  has required reviewers; the `cli` job checks all of it before the release publishes anything.
 - **`vscode-marketplace`**: the Marketplace publish only. Required reviewers (the maintainers who may publish the
-  extension), "prevent self-review", deployment branches and tags: the branch `main` and tags `v*`. No secrets or
-  variables: trusted publishing needs none. The `check` job stops when it has no required reviewers.
+  extension), deployment branches and tags: exactly the branch `main` and the tags `v*`. No secrets or variables:
+  trusted publishing needs none. Both jobs of `publish-vscode.yml` stop when it has no required reviewers.
+- **"Prevent self-review"** is off on both while JOUST has a single maintainer (the accepted setup: with it on, a
+  one-person reviewer list deadlocks every run that person starts). Turn it on once there are two. Until then the
+  approval is a check the reviewer makes, not a second person: **before approving, open the run and check that its
+  commit is on `main`, or is a `v*` tag of a commit on `main`** (the run's page shows the ref and commit; `gh api
+  repos/bloxbean/joust/compare/main...<sha> --jq .status` says `identical` or `behind`).
 - Why `main` and `v*` and nothing else, in particular not `release/**`: the Marketplace's trusted publisher matches the
   repository, the workflow **file name** and the environment, not the file's content or branch. A branch other than
   `main` could carry a modified `publish-vscode.yml`, and an environment that accepted that branch would let it
-  publish. `main` and the `v*` tags (created only by the tagger App, from reviewed commits on `main`) are the refs whose
-  workflow files went through review.
-- **The Marketplace trusted publisher** (publisher `julclang`, Trusted Publishing): repository owner `bloxbean`,
+  publish. `main` and the `v*` tags are the refs whose workflow files went through review **once the rulesets are
+  active**: `protected-branches` (pull requests into `main` and `release/**`), `release-branch-creation` and `V_tagrule`
+  (only the tagger App, through `tag-release.yml`, creates `v*` tags). While they are disabled, anyone with write access
+  can push to `main` or create a `v*` tag on any commit, and the environment's reviewer is the only gate. Activate them
+  before relying on this (release-ops' `verify-repo-settings.sh` checks them).
+- **Never name a pull request's head branch `release/…`.** A push to `release/**` that changes `gradle.properties` starts
+  `tag-release.yml`, which asks a release owner to tag that branch's commit (reject such a request).
+- **The Marketplace trusted publisher** (publisher `julc`, Trusted Publishing): repository owner `bloxbean`,
   repository `joust`, workflow `publish-vscode.yml`, environment `vscode-marketplace`. Never rename
   `publish-vscode.yml` or the environment without changing the policy first.
+- **Optional, a second policy:** owner `bloxbean`, repository `joust`, workflow `release.yml`, environment
+  `vscode-marketplace`. The Marketplace's docs do not say whether a called workflow is matched by its own file
+  (`publish-vscode.yml`) or by its caller's (`release.yml`). With only the first policy, and if it is the caller's, the
+  automatic publish's token exchange is refused (nothing is published) and the manual run below publishes. The second
+  policy makes the automatic path work either way; only `publish-vscode.yml`'s job uses that environment. Decide before
+  the tag.
+
+**Who approves what.** A release with both flags waits for approvals in this order: the tag (`tag-release.yml`,
+environment `release`, a release owner), the attach (`editor-assets`, environment `release`), the publish
+(`vscode-publish`, environment `vscode-marketplace`, a maintainer who may publish the extension), and, separately,
+the Central deployment (`publish-central.yml`). A run started by hand needs the same approval as the automatic one.
 
 **If the attach fails:** the attestation comes first, so an uploaded asset is always attested. The `.vsix` is not
 byte-reproducible, though, so a re-run after a partial upload stops at "differs from this run's build". Delete the
@@ -173,6 +209,11 @@ and Maven are unaffected. Read the `publish` job's log:
 Never publish a different build of the same extension version: if the `.vsix` itself must change, bump the extension's
 version and release again.
 
+**If a published version is bad** (it succeeded, but must not stay): follow ADR-0021 D11's incident procedure. Unpublish
+or deprecate the version on the Marketplace (and on Open VSX if it was published there), remove or narrow the
+Marketplace's trusted-publishing policy if the workflow itself is suspect, publish a fixed version under a new
+extension version, and say so in the release notes: Marketplace auto-update reaches every user at once.
+
 **Open VSX stays manual.** No Open VSX token exists in the repository or in CI. A maintainer who holds the namespace's
 token publishes the same attested file from their machine, after verifying it as above: `ovsx publish
 vscode-joust-<ext>.vsix --pre-release` (ADR-0021 D11's custody and incident rules; the Open VSX namespace is still
@@ -191,7 +232,7 @@ Each must be `true` or `false`; `release.yml` refuses a missing or misspelled fl
 | `npm_publish` | publish the npm packages; `false` runs `npm publish --dry-run` only |
 | `github_release` | create the GitHub release (pre-release for versions with a suffix); `false` for rehearsals. The native `joust` archives are attached only when `bloxbean_repo_publish` and `npm_publish` are `true` too (its `joust new` needs both) |
 | `vscode_assets` | build the VS Code extension's `.vsix` and the tree-sitter archive from the tag, attest them and attach them to the GitHub release (`editor-assets.yml`, environment `release`); needs `github_release` and `npm_publish` (the `.vsix` bundles the published `@julclang/joust`'s engine) |
-| `vscode_publish` | publish that attested `.vsix` to the Visual Studio Marketplace as `julclang` (`publish-vscode.yml`, trusted publishing, environment `vscode-marketplace`); needs `vscode_assets`. The extension's version in `js/vscode-joust/package.json` must be above every version on the Marketplace (bump its patch); the `cli` job checks it first |
+| `vscode_publish` | publish that attested `.vsix` to the Visual Studio Marketplace as `julc` (`publish-vscode.yml`, trusted publishing, environment `vscode-marketplace`); needs `vscode_assets`. The extension's version in `js/vscode-joust/package.json` must be above every version on the Marketplace (bump its patch); the `cli` job checks it first |
 | `homebrew_publish` | update `Formula/joust.rb` in `bloxbean/homebrew-tap`; needs `github_release`, `bloxbean_repo_publish` and `npm_publish`. Needs the organization secret `HOMEBREW_TAP_TOKEN` (`contents: write` on the tap) to reach `bloxbean/joust`. Still recommended (ADR-0017 D10): remove joust from the organization secret `NPM_TOKEN`; activate the `V_tagrule` and `protected-branches` rulesets; and require a reviewer on the `release` environment (ADR-0017 D10; release-ops' `verify-repo-settings.sh` checks the settings) |
 | `allow_snapshot_dependencies` | let a release depend on a SNAPSHOT pin in `gradle/libs.versions.toml`, with a warning. **Rehearsals only:** with it `true`, every publish flag above must be `false` (Central refuses snapshot dependencies, and a release naming a snapshot breaks once the snapshot is pruned) |
 

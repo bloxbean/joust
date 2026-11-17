@@ -51,7 +51,8 @@ if (native.length) fail.push(`native code in the .vsix: ${native.map((e) => e.na
 const allowed = new Set(['extension/dist/extension.js', 'extension/dist/server.js', 'extension/engine/joust-toolchain.js',
   'extension/engine/joust-toolchain.js.wasm', 'extension/engine/package.json', 'extension/engine/engine.json',
   'extension/syntaxes/jsc.tmLanguage.json', 'extension/snippets/jsc.json', 'extension/language-configuration.json',
-  'extension/readme.md', 'extension/README.md', 'extension/LICENSE.txt', 'extension/LICENSE', 'extension/package.json',
+  'extension/readme.md', 'extension/README.md', 'extension/changelog.md', 'extension/CHANGELOG.md',
+  'extension/LICENSE.txt', 'extension/LICENSE', 'extension/package.json',
   'extension.vsixmanifest', '[Content_Types].xml']);
 const extra = list.filter((e) => !allowed.has(e.name));
 if (extra.length) fail.push(`unexpected files: ${extra.map((e) => e.name).join(', ')}`);
