@@ -41,9 +41,10 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
+| [0017](#adr-0017-one-joust-new-for-java-and-npm) | One `joust new` for Java and npm: a native `joust` CLI and a JOUST Gradle plugin | Proposed (r5, approved by review); implemented (PR #55), not yet in a release | [The native `joust`](/reference/joust-cli/#the-native-joust) |
 | [0018](#adr-0018-the-jsc-language-an-immutable-contract-language) | The `.jsc` language: an immutable contract language for JavaScript developers | Proposed (r29); M0–M5 on `main` (#130) | [.jsc](/languages/jsc/) |
 | [0019](#adr-0019-programmable-tokens-cip-113) | Programmable tokens (CIP-113): issuers, holders, contracts paid in them | Proposed (r5) | – |
-| [0020](#adr-0020-uplc-transition-programs-off-chain-a-spike) | UPLC transition programs as the off-chain meaning: a spike and its report | Proposed (r9); the spike's "adopt now" items implemented in the engine | [Program manifests](/apps/cli-and-projects/#program-manifests) |
+| [0020](#adr-0020-uplc-transition-programs-off-chain-a-spike) | UPLC transition programs as the off-chain meaning: a spike and its report | Proposed (r12); the spike's "adopt now" items implemented in the engine | [Program manifests](/apps/cli-and-projects/#program-manifests) |
 | [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc) | A language server and VS Code extension for `.jsc` | Proposed (r10, with r7a and r7b); M5a–M5e on `main` (#130) | – |
 
 ## The base
@@ -287,7 +288,8 @@ prepares an unsigned transaction for an address-only `WalletAccount` (`Compose.p
 the wallet signs, and **the page verifies every transaction before the wallet is asked** (D2). D3 describes each
 contract for JavaScript (CIP-57 plus `x-joust`), from which `@julclang/state-client` encodes calls, verifies and
 generates typed clients (`joust-gen`); `julc-state-server` is the prepare service. Phase 4 ran a contract's Java in
-the page through GraalVM Web Image (`-Ajoust.portable=true`); ADR-0015's engines replace it.
+the page through GraalVM Web Image (`-Ajoust.portable=true`); ADR-0015's engines replaced it, and it is retired
+(ADR-0020 §12.3).
 
 Covered in: [Wallets](/apps/wallets/), [JavaScript clients](/apps/javascript-clients/),
 [Contract description](/reference/description-format/).
@@ -346,7 +348,7 @@ The first language, `.jsc` v1 (ADR-0005), and its migration were removed in r26.
 ### ADR-0020: UPLC transition programs off chain, a spike
 
 [`0020-offchain-uplc-transitions.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0020-offchain-uplc-transitions.md)
-· Proposed (r9); the spike is reported (§11) and its "adopt now" items are implemented in the runtime engine (§12)
+· Proposed (r12); the spike is reported (§11) and its "adopt now" items are implemented in the runtime engine (§12)
 
 ADR-0015 left open which meaning of a contract's method is the reference off chain (Q6): the JVM method, or its
 transition program (the same Java compiled by JuLC, evaluated by JuLC's VM). The spike ran both on every recorded

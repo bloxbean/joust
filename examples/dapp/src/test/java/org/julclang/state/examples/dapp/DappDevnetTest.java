@@ -36,7 +36,6 @@ class DappDevnetTest {
         var dapp = DappServer.start(runtime, Path.of("build/e2e-frontend"), "127.0.0.1", 0, 600);
         try {
             var user = DevKit.fundedAccount(300);
-            // The scripts enable Wasm exnref themselves when this Node lacks it (js/joust-runtime/src/exnref.js).
             var pb = new ProcessBuilder("node", "e2e/run.mjs").directory(FRONTEND).redirectErrorStream(true);
             var env = pb.environment();
             env.put("SERVICE", "http://127.0.0.1:" + dapp.port());
@@ -44,8 +43,6 @@ class DappDevnetTest {
             env.put("DEPLOYMENT", dapp.deployment().toString());
             env.put("MNEMONIC", user.mnemonic());
             env.put("ADDRESS", user.baseAddress());
-            File wasm = new File(FRONTEND, "public/wasm/joust.js");
-            if (wasm.isFile()) env.put("WASM", wasm.getParentFile().getAbsolutePath());   // experimental (phase 4)
             Process node = pb.start();
             String out = new String(node.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             int code = node.waitFor();

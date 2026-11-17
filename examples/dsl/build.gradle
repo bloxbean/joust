@@ -180,7 +180,6 @@ def registryCopied = ['org/julclang/state/examples/registry/KeyedRuntimeChecksTe
                       'org/julclang/state/runtime/DuplicateKeyDevnetTest.java', 'org/julclang/state/runtime/UntimedKeyedPendingDevnetTest.java']
 def registryLeftOut = [
         'org/julclang/state/examples/registry/SizeAndBudgetTest.java': 'the Java example\'s size and budget gate over its own test contract (Widest); JscV2M3bGateTest measures the port',
-        'org/julclang/state/examples/registry/RegistryPortableTest.java': 'the Java example\'s portable steps (-Ajoust.portable), which examples/dsl does not generate',
         'org/julclang/state/examples/registry/widest/Widest.java': 'a test contract of the processor (the widest keyed record), not the port',
         'org/julclang/state/examples/registry/widest/WidestTest.java': 'tests the Widest test contract, not the port',
         'org/julclang/state/examples/registry/m2/Capacity.java': 'a test contract of the runtime (ADR-0016 M2), not the port',
