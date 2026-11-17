@@ -1,0 +1,108 @@
+name: Docs site
+
+# The documentation site (www/: Astro Starlight), served at https://joust.julc.dev from GitHub Pages:
+#   build   every trigger. `npm run build` checks that no page hard-codes a release version, builds the site and the AI
+#           artifacts, and checks every internal link; then this job checks the custom domain and the canonical links,
+#           and uploads www/dist as the Pages artifact. Read-only token, no secrets.
+#   deploy  pushes to main and manual runs from main only: publishes that artifact to GitHub Pages, in the
+#           github-pages environment. A pull request only builds.
+# The site also reads files outside www/ at build time (the .jsc grammar, julc-state-api's annotations for
+# ai/catalog.json, examples/README.md), so changes to those rebuild it too. Pages must be set to "GitHub Actions" in the
+# repository's settings; docs/release-ops.md, "Docs site", has the one-time setup.
+#
+# Every action is pinned by its commit SHA. npm installs run with --ignore-scripts, from www/package-lock.json.
+
+on:
+  pull_request:
+    paths:
+      - 'www/**'
+      - '.github/workflows/docs.yml'
+      - 'js/vscode-joust/syntaxes/jsc.tmLanguage.json'
+      - 'julc-state-api/src/main/java/**'
+      - 'examples/README.md'
+  push:
+    branches: [ main ]
+    paths:
+      - 'www/**'
+      - '.github/workflows/docs.yml'
+      - 'js/vscode-joust/syntaxes/jsc.tmLanguage.json'
+      - 'julc-state-api/src/main/java/**'
+      - 'examples/README.md'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # The site's identity (www/site.config.mjs; JOUST_SITE_URL is not set, so the default applies).
+      SITE_HOST: joust.julc.dev
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install the site's dependencies
+        working-directory: www
+        run: npm ci --ignore-scripts
+
+      # check-versions.mjs, astro build (with the AI artifacts), check-links.mjs.
+      - name: Build the site and check it
+        working-directory: www
+        run: npm run build
+
+      # GitHub Pages serves the custom domain from dist/CNAME (public/CNAME); the canonical links and the sitemap must
+      # name the same host.
+      - name: Check the custom domain and canonical links
+        working-directory: www/dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(tr -d '[:space:]' < CNAME)" = "$SITE_HOST" || { echo "::error::dist/CNAME is not $SITE_HOST"; exit 1; }
+          grep -q "<link rel=\"canonical\" href=\"https://$SITE_HOST/\"" index.html \
+            || { echo "::error::index.html's canonical link is not https://$SITE_HOST/"; exit 1; }
+          grep -q "<link rel=\"canonical\" href=\"https://$SITE_HOST/start/quick-start-java/\"" start/quick-start-java/index.html \
+            || { echo "::error::a page's canonical link is not on https://$SITE_HOST/"; exit 1; }
+          grep -q "<loc>https://$SITE_HOST/</loc>" sitemap-0.xml || { echo "::error::the sitemap is not on https://$SITE_HOST/"; exit 1; }
+          echo "CNAME, canonical links and sitemap name https://$SITE_HOST/"
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: www/dist
+
+  deploy:
+    needs: build
+    if: >-
+      github.repository == 'bloxbean/joust'
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # One deployment at a time; a newer one waits and never cancels a deployment in progress.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      # Fails with a clear message while Pages is not set to "GitHub Actions" (docs/release-ops.md, "Docs site").
+      - name: Check the Pages configuration
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
