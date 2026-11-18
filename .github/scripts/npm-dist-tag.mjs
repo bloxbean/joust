@@ -7,7 +7,9 @@
 //     registry; preview once it has one, so a later 0.2.0-pre1 never displaces 0.1.0 on latest
 // No dist-tag ever moves backwards: when the chosen tag already names a higher version of the package (npm's semver
 // precedence), the version goes to `release-<major>.<minor>` instead, and when that one does too, to
-// `release-<version>`, which can only ever name this version. None of these is a valid semver range, which npm refuses
+// `release-<version>`, which can only ever name this version. A prerelease channel (`preview`, `beta`, `next`) is what
+// comes after `latest`, so it is taken only by a version above the package's current `latest`; any other version falls
+// through to the release tags (0.1.0-pre23 published after 0.1.0 goes to release-0.1, not preview), as JuLC's r23. None of these is a valid semver range, which npm refuses
 // as a tag. Every case is a recovery of version N after N+1, a maintenance release, or one package of N+1 published
 // before the others; the workflow publishes one version at a time (the npm job's concurrency group).
 //
@@ -84,9 +86,13 @@ export function candidateTags(version, tag) {
   return [tag, `release-${major}.${minor}`, `release-${version}`];
 }
 
+/** The prerelease channels: each is taken only by a version above the package's `latest`. */
+export const CHANNELS = ['preview', 'beta', 'next'];
+
 /**
  * The tag one package's version is published with: the first candidate that does not already name a higher version
- * of that package. `reason` says why it is not the rule's tag (null when it is).
+ * of that package, a channel only for a version above `latest`. `reason` says why it is not the rule's tag (null when
+ * it is).
  */
 export function chooseTag(version, document) {
   if (document != null && (typeof document !== 'object' || Array.isArray(document))) {
@@ -97,6 +103,10 @@ export function chooseTag(version, document) {
   const higher = [];
   for (const candidate of candidateTags(version, ruleTag(version, document))) {
     const holder = tags[candidate];
+    if (CHANNELS.includes(candidate) && tags.latest !== undefined && compareVersions(tags.latest, version) >= 0) {
+      higher.push(`latest is ${tags.latest}, not below it (for ${candidate})`);
+      continue;
+    }
     if (holder === undefined || compareVersions(holder, version) <= 0) {
       return { tag: candidate, reason: higher.length ? `${higher.join(', ')}: higher than ${version}` : null };
     }

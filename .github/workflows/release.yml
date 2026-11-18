@@ -642,8 +642,8 @@ jobs:
       # has no final version on npm (npm made each package's first version, the trusted-publishing placeholder, `latest`,
       # and `npm install`/`npm create joust` resolve only `latest`), and to `preview` once it has one, so a later
       # prerelease never displaces a final release. No dist-tag moves backwards: when the tag already names a higher
-      # version, the package goes to `release-<major>.<minor>`, or else `release-<version>`. The dry run reads the same
-      # tags. Provenance attestations need a public repository: added automatically once the repository is public.
+      # version, or it is a channel (`preview`, `beta`, `next`) and the version is not above the package's `latest`, the
+      # package goes to `release-<major>.<minor>`, or else `release-<version>`. The dry run reads the same tags. Provenance attestations need a public repository: added automatically once the repository is public.
       - name: Publish the packages
         env:
           REPO_PRIVATE: ${{ github.event.repository.private }}

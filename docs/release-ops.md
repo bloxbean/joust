@@ -299,7 +299,9 @@ above `0.1.0-pre3`, so the release after it could not take `latest` back.
 **No dist-tag moves backwards.** When the tag already names a higher version of that package (npm's semver order), the
 package goes to `release-<major>.<minor>` instead, and when that one does too, to `release-<version>` (none of these is
 a semver range, which npm refuses as a tag). That happens for a maintenance release, a recovery of an older version, or
-one package of a release published after the next release's. The job summary lists the tag each package got. Prerelease
+one package of a release published after the next release's. A channel (`preview`, `beta`, `next`) is what comes after
+`latest`, so it is taken only by a version above the package's current `latest`; any other version falls through the
+same way (`0.1.0-pre23` published after `0.1.0` goes to `release-0.1`, not `preview`), as JuLC's ADR-077 r23. The job summary lists the tag each package got. Prerelease
 identifiers are compared as text: `0.1.0-pre10` is **lower** than `0.1.0-pre9`, so it would go to `release-0.1`, not
 `latest`. Before a tenth `-preN` of a version, move to the next minor (`0.2.0-pre1`). The `npm` job has one concurrency
 group (`npm-publish-joust`, never cancelled in progress) for every version, so two releases' publications never

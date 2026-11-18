@@ -122,6 +122,27 @@ describe('no dist-tag moves backwards', () => {
       { latest: '0.1.0-pre2', next: '0.1.0-pre3-rc1' })), 'latest');
   });
 
+  test('a channel is taken only by a version above latest', () => {
+    const released = doc(['0.1.0'], { latest: '0.1.0' });
+    // 0.1.0-pre23 ranks below 0.1.0: not preview, so release-0.1.
+    assert.deepEqual(chooseTag('0.1.0-pre23', released),
+      { tag: 'release-0.1', reason: 'latest is 0.1.0, not below it (for preview): higher than 0.1.0-pre23' });
+    assert.equal(tagOf('0.1.0-beta1', released), 'release-0.1');
+    assert.equal(tagOf('0.1.0-rc1', released), 'release-0.1');
+    // Above latest: the channel.
+    assert.equal(tagOf('0.1.1-pre1', released), 'preview');
+    assert.equal(tagOf('0.2.0-beta1', released), 'beta');
+    assert.equal(tagOf('0.2.0-rc1', released), 'next');
+    // Before any final: latest holds a prerelease; a candidate below it does not take next.
+    assert.equal(tagOf('0.1.0-pre3-rc1', doc(['0.1.0-pre4'], { latest: '0.1.0-pre4' })), 'release-0.1');
+    assert.equal(tagOf('0.1.0-pre4-rc1', doc(['0.1.0-pre3'], { latest: '0.1.0-pre3' })), 'next');
+    // The package's own latest only: release-0.1 taken by a higher version too gives release-<version>.
+    assert.equal(tagOf('0.1.0-pre23', doc(['0.1.0', '0.1.1'], { latest: '0.1.1', 'release-0.1': '0.1.0' })),
+      'release-0.1.0-pre23');
+    // Without latest (never published): the channel rule's own guard only.
+    assert.equal(tagOf('0.2.0-beta1', doc(['0.2.0-beta2'], { beta: '0.2.0-beta2' })), 'release-0.2');
+  });
+
   test('the same version on the tag is not higher', () => {
     assert.equal(tagOf('0.1.0-pre3', doc(['0.1.0-pre3'], { latest: '0.1.0-pre3' })), 'latest');
   });
