@@ -10,15 +10,17 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DistTagError, candidateTags, chooseTag, compareVersions, hasFinalVersion, packageTag, parseVersion, ruleTag,
+  DistTagError, alreadyPublished, candidateTags, checkDocument, chooseTag, compareVersions, hasFinalVersion, packageTag,
+  parseVersion, ruleTag,
 } from './npm-dist-tag.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'npm-dist-tag.mjs');
 
 /** A registry document with these versions and dist-tags. */
-const doc = (versions, tags = {}) => ({
-  name: 'x', 'dist-tags': tags, versions: Object.fromEntries(versions.map((v) => [v, { version: v }])),
+const doc = (versions, tags = {}, name = 'x') => ({
+  name, 'dist-tags': tags, versions: Object.fromEntries(versions.map((v) => [v, { version: v, dist: { integrity: `sha512-${v}` } }])),
 });
+const named = (name, d) => ({ ...d, name });
 // What npmjs.org holds for each JOUST package today (2026-11-18).
 const TODAY = doc(['0.0.0-oidc-bootstrap.0', '0.0.0-stage', '0.1.0-pre1-rc7', '0.1.0-pre1-rc8', '0.1.0-pre1-rc9',
   '0.1.0-pre2'], { bootstrap: '0.0.0-oidc-bootstrap.0', latest: '0.1.0-pre2' });
@@ -74,6 +76,25 @@ describe('the rule', () => {
     }
   });
 
+  test('versions beyond npm\'s limits are refused: a number above 2^53 - 1, more than 256 characters', () => {
+    // npm keeps 9007199254740993 as text and orders 1.0.0-9007199254740993.1 equal to 1.0.0-9007199254740992.2.
+    for (const v of ['1.0.0-9007199254740993.1', '1.0.0-9007199254740992.2', '9007199254740992.0.0', '0.9007199254740992.0',
+      '0.0.9007199254740992', `1.0.0-${'a'.repeat(251)}`]) {
+      assert.throws(() => parseVersion(v), DistTagError, v);
+      assert.throws(() => compareVersions(v, '1.0.0'), DistTagError, v);
+    }
+    assert.equal(`1.0.0-${'a'.repeat(251)}`.length, 257);
+    assert.deepEqual(parseVersion(`1.0.0-${'a'.repeat(250)}`).prerelease, ['a'.repeat(250)]);   // 256 characters
+    const semver = npmSemver();
+    if (semver) {
+      assert.equal(semver.valid(`1.0.0-${'a'.repeat(251)}`), null);
+      assert.equal(semver.valid(`1.0.0-${'a'.repeat(250)}`), `1.0.0-${'a'.repeat(250)}`);
+      assert.equal(semver.valid('9007199254740992.0.0'), null);
+      assert.equal(semver.compare('1.0.0-9007199254740993.1', '1.0.0-9007199254740992.2'), 0);   // why they are refused
+    }
+    assert.equal(parseVersion('9007199254740991.0.0').major, Number.MAX_SAFE_INTEGER);
+  });
+
   test('hasFinalVersion reads the versions, not the dist-tags', () => {
     assert.equal(hasFinalVersion(null), false);
     assert.equal(hasFinalVersion(TODAY), false);
@@ -109,7 +130,11 @@ describe('no dist-tag moves backwards', () => {
     assert.equal(tagOf('0.2.0', doc(['0.2.0-pre1'], { latest: '0.2.0-pre1' })), 'latest');
   });
 
-  test('npm orders pre10 below pre9: 0.1.0-pre10 would not take latest from 0.1.0-pre9', () => {
+  test('npm orders pre10 below pre9 and rc10 below rc9 (text); rc.10 above rc.9 (numbers)', () => {
+    assert.ok(compareVersions('0.1.0-pre1-rc10', '0.1.0-pre1-rc9') < 0);
+    assert.equal(tagOf('0.1.0-pre2-rc10', doc(['0.1.0-pre1', '0.1.0-pre2-rc9'], { latest: '0.1.0-pre1', next: '0.1.0-pre2-rc9' })),
+      'release-0.1');
+    assert.ok(compareVersions('1.0.0-rc.10', '1.0.0-rc.9') > 0);
     assert.ok(compareVersions('0.1.0-pre10', '0.1.0-pre9') < 0);
     assert.equal(tagOf('0.1.0-pre10', doc(['0.1.0-pre9'], { latest: '0.1.0-pre9' })), 'release-0.1');
     assert.equal(tagOf('0.2.0-pre1', doc(['0.1.0-pre9'], { latest: '0.1.0-pre9' })), 'latest');
@@ -161,6 +186,29 @@ describe('no dist-tag moves backwards', () => {
     }
   });
 
+  test('a registry answer that is not a whole document for the package fails closed', () => {
+    const ok = doc(['0.1.0'], { latest: '0.1.0' }, 'p');
+    assert.equal(checkDocument(ok, 'p'), ok);
+    const bad = {
+      'dist-tags only': { name: 'p', 'dist-tags': { latest: '1.0.0' } },
+      'null': null,
+      'an empty object': {},
+      'an error body': { error: 'E404' },
+      'another package': named('q', ok),
+      'no name': { versions: ok.versions, 'dist-tags': ok['dist-tags'] },
+      'versions only': { name: 'p', versions: ok.versions },
+      'versions an array': { name: 'p', versions: ['0.1.0'], 'dist-tags': {} },
+      'dist-tags an array': { name: 'p', versions: ok.versions, 'dist-tags': [] },
+      'an unparseable version key': doc(['0.1.0', 'nope'], { latest: '0.1.0' }, 'p'),
+      'a version key beyond npm\'s limits': doc(['9007199254740992.0.0'], {}, 'p'),
+      'an unparseable holder': doc(['0.1.0'], { latest: 'nope' }, 'p'),
+      'a holder not among the versions': doc(['0.1.0'], { latest: '0.2.0' }, 'p'),
+      'a string': 'x',
+      'an array': [],
+    };
+    for (const [what, d] of Object.entries(bad)) assert.throws(() => checkDocument(d, 'p'), DistTagError, what);
+  });
+
   test('a malformed registry document or dist-tag fails closed', () => {
     assert.throws(() => chooseTag('0.1.0', []), DistTagError);
     assert.throws(() => chooseTag('0.1.0', 'x'), DistTagError);
@@ -184,6 +232,8 @@ function npmSemver() {
 test('the comparator orders versions as npm\'s semver does', (t) => {
   const semver = npmSemver();
   if (!semver) {
+    // In CI the oracle must run: its absence is a failure, not a skip.
+    if (process.env.CI) assert.fail('npm\'s bundled semver not found (CI is set)');
     t.skip('npm\'s bundled semver not found');
     return;
   }
@@ -201,9 +251,13 @@ describe('the registry', () => {
   let server;
   let registry;
   const documents = {
-    '/@julclang%2fjoust': TODAY,
-    '/create-joust': doc(['0.1.0'], { latest: '0.1.0' }),
+    '/@julclang%2fjoust': named('@julclang/joust', TODAY),
+    '/create-joust': doc(['0.1.0'], { latest: '0.1.0' }, 'create-joust'),
     '/broken': 'not json',
+    '/tagsonly': { name: 'tagsonly', 'dist-tags': { latest: '1.0.0' } },
+    '/empty': {},
+    '/nullbody': null,
+    '/errorbody': { error: 'E404' },
   };
   before(async () => {
     server = createServer((req, res) => {
@@ -224,11 +278,24 @@ describe('the registry', () => {
       { tag: 'release-0.0', reason: 'create-joust: latest is 0.1.0: higher than 0.0.9' });
   });
 
+  test('a version already published: skipped with the same integrity, refused with another or none', async () => {
+    assert.deepEqual(await packageTag(registry, 'create-joust', '0.1.0', 'sha512-0.1.0'),
+      { tag: 'skip', reason: 'create-joust@0.1.0 is already published with this tarball\'s integrity' });
+    await assert.rejects(packageTag(registry, 'create-joust', '0.1.0', 'sha512-other'), /other bytes.*release a new version/);
+    await assert.rejects(packageTag(registry, 'create-joust', '0.1.0'), /already on the registry; give --integrity/);
+    // Not yet published: the rule's tag, whatever the integrity.
+    assert.deepEqual(await packageTag(registry, 'create-joust', '0.2.0-pre1', 'sha512-x'), { tag: 'preview', reason: null });
+    assert.equal(alreadyPublished(null, 'x', '0.1.0', 'sha512-x'), null);
+  });
+
   test('a package the registry does not know (404) has no tags yet', async () => {
     assert.deepEqual(await packageTag(registry, '@julclang/new', '0.1.0-pre3'), { tag: 'latest', reason: null });
   });
 
-  test('an error or a malformed answer fails closed', async () => {
+  test('an error or a malformed answer fails closed; only a 404 is "not published"', async () => {
+    for (const n of ['tagsonly', 'empty', 'nullbody', 'errorbody']) {
+      await assert.rejects(packageTag(registry, n, '2.0.0-pre1'), DistTagError, n);
+    }
     await assert.rejects(packageTag(registry, 'down', '0.1.0'), /HTTP 500/);
     await assert.rejects(packageTag(registry, 'broken', '0.1.0'), /not JSON/);
     await assert.rejects(packageTag('http://127.0.0.1:9', 'x', '0.1.0'), DistTagError);
@@ -260,5 +327,12 @@ describe('the registry', () => {
     assert.equal((await run(['x', '0.1.0-SNAPSHOT', '--registry', registry])).code, 1);
     assert.equal((await run(['x'])).code, 2);
     assert.equal((await run(['x', '0.1.0', '--registry'])).code, 2);
+    assert.equal((await run(['x', '0.1.0', '--registry', registry, '--integrity'])).code, 2);
+    const skip = await run(['create-joust', '0.1.0', '--integrity', 'sha512-0.1.0', '--registry', registry]);
+    assert.deepEqual([skip.code, skip.out], [0, 'skip\n']);
+    assert.match(skip.err, /::notice::create-joust@0\.1\.0 is already published with this tarball's integrity: skipped/);
+    const other = await run(['create-joust', '0.1.0', '--integrity', 'sha512-zzz', '--registry', registry]);
+    assert.deepEqual([other.code, other.out], [1, '']);
+    assert.match(other.err, /::error::create-joust@0\.1\.0: .*other bytes/);
   });
 });

@@ -13,10 +13,13 @@
 // as a tag. Every case is a recovery of version N after N+1, a maintenance release, or one package of N+1 published
 // before the others; the workflow publishes one version at a time (the npm job's concurrency group).
 //
-//   node .github/scripts/npm-dist-tag.mjs <package> <version> [--registry <url>]
+//   node .github/scripts/npm-dist-tag.mjs <package> <version> [--integrity <sri>] [--registry <url>]
 //       Prints the tag on stdout, and on stderr why it is not the rule's tag. The registry is npm's configured one
 //       (`npm config get registry`: setup-node's registry-url in the workflow) unless --registry names one. Fails
 //       closed: an unreadable or malformed registry answer is an error, never "not published yet"; only a 404 is.
+//       When the registry already has <package>@<version> (a release resumed after a partial publication), prints
+//       `skip` if its dist.integrity is --integrity (the local tarball's), and fails otherwise: npm never replaces a
+//       published version, and a skipped package keeps the tag it was published with.
 //
 // Plain Node.js (18 or later, for fetch), no dependencies.
 import { execFileSync } from 'node:child_process';
@@ -28,17 +31,26 @@ const fail = (message) => { throw new DistTagError(message); };
 const IDENTIFIER = '(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)';
 const SEMVER = new RegExp(`^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-(${IDENTIFIER}(?:\\.${IDENTIFIER})*))?$`);
 
-/** A strict semantic version without build metadata, as npm publishes it. */
+/**
+ * A strict semantic version without build metadata, within npm's limits (its semver package: at most 256 characters,
+ * each number a safe integer; npm compares a numeric prerelease identifier above that as text), as JuLC's.
+ */
 export function parseVersion(version) {
-  const m = SEMVER.exec(String(version));
+  const text = String(version);
+  const m = text.length <= 256 ? SEMVER.exec(text) : null;
   if (!m) fail(`not a semantic version: ${JSON.stringify(version)}`);
+  const numbers = [m[1], m[2], m[3], ...(m[4] ?? '').split('.').filter((part) => /^\d+$/.test(part))];
+  if (numbers.some((n) => !Number.isSafeInteger(Number(n)))) {
+    fail(`not a semantic version within npm's limits (a number above ${Number.MAX_SAFE_INTEGER}): ${JSON.stringify(version)}`);
+  }
   return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), prerelease: m[4] ? m[4].split('.') : [] };
 }
 
 /**
  * Semantic-version precedence (semver 2.0.0 §11, as npm's semver orders versions): negative, zero or positive.
  * Prerelease identifiers are separated by dots only, so `pre10` and `pre9` are single alphanumeric identifiers, compared
- * as text: 0.1.0-pre10 is lower than 0.1.0-pre9, and 0.1.0-pre3-rc1 is higher than 0.1.0-pre3.
+ * as text: 0.1.0-pre10 is lower than 0.1.0-pre9, 0.1.0-pre1-rc10 lower than 0.1.0-pre1-rc9, and 0.1.0-pre3-rc1 higher
+ * than 0.1.0-pre3. Numeric dotted identifiers (1.0.0-rc.10) compare as numbers.
  */
 export function compareVersions(a, b) {
   const x = parseVersion(a);
@@ -115,7 +127,27 @@ export function chooseTag(version, document) {
   fail(`${higher.join(', ')}: every tag ${version} may go to names a higher version`);
 }
 
-/** The registry's document for a package, or null when the registry does not know it (404 only). */
+/**
+ * A registry document as JOUST relies on it, or a refusal: an object for this package, with object-valued `versions`
+ * and `dist-tags`, every version key and dist-tag holder a version within npm's limits, every holder among the
+ * versions. An answer that lacks any of it (an error body, `{}`, `null`, dist-tags without versions) is never read as
+ * "no final version yet" or "no tags".
+ */
+export function checkDocument(document, name) {
+  const isObject = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+  if (!isObject(document)) fail(`the registry's document for ${name} is not a JSON object`);
+  if (document.name !== name) fail(`the registry's document names ${JSON.stringify(document.name)}, not ${name}`);
+  if (!isObject(document.versions)) fail(`the registry's document for ${name} has no versions object`);
+  if (!isObject(document['dist-tags'])) fail(`the registry's document for ${name} has no dist-tags object`);
+  for (const v of Object.keys(document.versions)) parseVersion(v);
+  for (const [tag, holder] of Object.entries(document['dist-tags'])) {
+    parseVersion(holder);
+    if (!Object.hasOwn(document.versions, holder)) fail(`${name}: dist-tag ${tag} names ${holder}, which versions does not list`);
+  }
+  return document;
+}
+
+/** The registry's document for a package (checked), or null when the registry does not know it (404 only). */
 export async function packument(registry, name) {
   const url = registry.replace(/\/*$/, '/') + name.replace('/', '%2f');
   let response;
@@ -126,36 +158,60 @@ export async function packument(registry, name) {
   }
   if (response.status === 404) return null;
   if (!response.ok) fail(`GET ${url}: HTTP ${response.status}`);
+  let document;
   try {
-    return await response.json();
+    document = await response.json();
   } catch {
     fail(`GET ${url}: the answer is not JSON`);
   }
+  return checkDocument(document, name);
 }
 
-/** The tag for `name@version`, from the registry as it is now. */
-export async function packageTag(registry, name, version) {
-  const { tag, reason } = chooseTag(version, await packument(registry, name));
+/**
+ * Whether `name@version` is already published: 'skip' when the registry holds it with this integrity (a resumed
+ * release), null when it does not hold it; fails when it holds other bytes, or when no integrity is given to compare.
+ */
+export function alreadyPublished(document, name, version, integrity) {
+  const published = document?.versions?.[version];
+  if (published === undefined) return null;
+  const theirs = published?.dist?.integrity;
+  if (!integrity) fail(`${name}@${version} is already on the registry; give --integrity to resume a release`);
+  if (theirs === integrity) return 'skip';
+  fail(`${name}@${version} is already on the registry with other bytes (${theirs ?? 'no integrity'}, this build ${integrity}). `
+    + 'npm never replaces a version: release a new version (docs/release-ops.md, "Finishing a partial npm release")');
+}
+
+/** The tag for `name@version` from the registry as it is now, or `skip` when it is already published (integrity). */
+export async function packageTag(registry, name, version, integrity = null) {
+  const document = await packument(registry, name);
+  if (alreadyPublished(document, name, version, integrity) === 'skip') {
+    return { tag: 'skip', reason: `${name}@${version} is already published with this tarball's integrity` };
+  }
+  const { tag, reason } = chooseTag(version, document);
   return { tag, reason: reason && `${name}: ${reason}` };
 }
 
 async function main(argv) {
   const args = [...argv];
-  let registry = null;
-  const i = args.indexOf('--registry');
-  if (i >= 0) {
-    registry = args[i + 1];
+  const option = (flag) => {
+    const i = args.indexOf(flag);
+    if (i < 0) return undefined;
+    const value = args[i + 1];
     args.splice(i, 2);
-  }
-  if (args.length !== 2 || !registry && i >= 0) {
-    console.error('::error::usage: node npm-dist-tag.mjs <package> <version> [--registry <url>]');
+    return value ?? null;
+  };
+  let registry = option('--registry');
+  const integrity = option('--integrity');
+  if (args.length !== 2 || registry === null || integrity === null) {
+    console.error('::error::usage: node npm-dist-tag.mjs <package> <version> [--integrity <sri>] [--registry <url>]');
     return 2;
   }
   const [name, version] = args;
   try {
     registry ??= execFileSync('npm', ['config', 'get', 'registry'], { encoding: 'utf8' }).trim();
-    const { tag, reason } = await packageTag(registry, name, version);
-    if (reason) console.error(`::notice::${reason}, so ${name}@${version} goes to ${tag}`);
+    const { tag, reason } = await packageTag(registry, name, version, integrity);
+    if (tag === 'skip') console.error(`::notice::${reason}: skipped`);
+    else if (reason) console.error(`::notice::${reason}, so ${name}@${version} goes to ${tag}`);
     console.log(tag);
     return 0;
   } catch (e) {
