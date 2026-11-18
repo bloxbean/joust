@@ -178,11 +178,13 @@ jobs:
         working-directory: js/jsc-interpreter
         run: ../../scripts/node-test.sh jsc-interpreter test/*.test.js
 
-      # ADR-0017 D7, D10: the Homebrew formula and JOUST's version order; the release flags' combinations.
+      # ADR-0017 D7, D10: the Homebrew formula and JOUST's version order; the release flags' combinations; the npm
+      # dist-tags release.yml's npm job chooses (with npm's own semver as the comparator's oracle).
       - name: Test the release scripts
         run: |
           bash .github/scripts/homebrew-formula-test.sh
           bash .github/scripts/release-flags-test.sh
+          node --test .github/scripts/npm-dist-tag-test.mjs
 
       # The mutation gates' own tests (scripts/test: review r3, design F19, Codex C12 and C13): the summaries and selectors
       # on synthetic reports, baselines and repositories.

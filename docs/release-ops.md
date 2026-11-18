@@ -280,9 +280,63 @@ mesmo and yano do. Once per package, an npm owner of `@julclang` (and of `create
    workflow `release.yml`, environment `release-staging`. The publish commands must stay in `release.yml`.
 3. Then set `npm_publish=true` in `gradle.properties` for the release.
 
-Dist-tags: before 1.0, a `-preN` version is published as `latest` (as mesmo): npm made each package's first version,
-the trusted-publishing placeholder, `latest`, and `npm install` / `npm create joust` resolve only `latest`. `-beta` and
-`-rc` versions without `-pre` go to `beta` and `next`. At 1.0.0, switch `-pre` back to `preview` in `release.yml`.
+Dist-tags (the rule JuLC adopted in ADR-077 D8, r23): each package's tag is chosen from the registry right before its
+`npm publish` (`.github/scripts/npm-dist-tag.mjs`, tested by `npm-dist-tag-test.mjs` in `build.yml`):
+
+| Version | Dist-tag |
+|---|---|
+| final (`0.1.0`, `1.2.3`) | `latest` |
+| release candidate, any `rc` part (`1.0.0-rc1`, `0.1.0-pre3-rc1`) | `next` |
+| `-beta` (`0.2.0-beta1`) | `beta` |
+| any other prerelease (`-preN`, `-preview`, `-alpha`) | `latest` while the package has no final version on npm; `preview` once it has one |
+
+A `-preN` goes to `latest` until the first final release because npm made each package's first version, the
+trusted-publishing placeholder, `latest`, and `npm install` / `npm create joust` resolve only `latest`. After a final
+release, `npm create joust@latest` keeps giving the final release, and previews install with `@preview` (for example
+`npm create joust@preview my-app`). A release candidate never goes to `latest`: npm's semver orders `0.1.0-pre3-rc1`
+above `0.1.0-pre3`, so the release after it could not take `latest` back.
+
+**No dist-tag moves backwards.** When the tag already names a higher version of that package (npm's semver order), the
+package goes to `release-<major>.<minor>` instead, and when that one does too, to `release-<version>` (none of these is
+a semver range, which npm refuses as a tag). That happens for a maintenance release, a recovery of an older version, or
+one package of a release published after the next release's. A channel (`preview`, `beta`, `next`) is what comes after
+`latest`, so it is taken only by a version above the package's current `latest`; any other version falls through the
+same way (`0.1.0-pre23` published after `0.1.0` goes to `release-0.1`, not `preview`), as JuLC's ADR-077 r23. The job
+summary lists the tag chosen for each package (under "Dist-tags (dry run; nothing published)" when `npm_publish` is
+false) and, after a publication, the dist-tags the registry then reports.
+
+The registry's answer is checked before it is used: exactly HTTP 200 (a 404 means "not published yet"; any other status
+stops the job), a document for that package with at least one version and a `latest` tag, every version and tag holder a
+version string within npm's limits (at most 256 characters, every number a safe integer), every holder among the
+versions. Anything else stops the job. The job installs one exact npm (11.21.1, checked by SHA-256; trusted publishing
+needs 11.5.1 or later), and reads `npm pack --json` in both npm 11's and npm 12's shapes.
+
+**Ordering.** A prerelease identifier with letters is compared as text: `0.1.0-pre10` is **lower** than `0.1.0-pre9`,
+and `0.1.0-pre1-rc10` lower than `0.1.0-pre1-rc9`, so a tenth `-preN` of a version would not take `latest` (it goes to
+`release-0.1`), and a tenth candidate of one prerelease would not take `next`. Purely numeric dotted identifiers
+(`1.0.0-rc.10`) compare as numbers. Before a tenth `-preN` of a version, move to the next minor (`0.2.0-pre1`); before a
+tenth candidate, release the prerelease or start the next one. For users: pin a prerelease exactly
+(`"@julclang/joust": "0.1.0-pre2"`), since a range such as `^0.1.0-pre2` also matches later prereleases of 0.1.0, release
+candidates among them.
+
+The `npm` job has one concurrency group (`npm-publish-joust`, never cancelled in progress) for every version, so two
+releases' publications never interleave. GitHub keeps one pending job per group: a newer pending job cancels an older one
+while it waits (before it has published anything), and that release's failed jobs are then re-run once the other has
+finished.
+
+### Finishing a partial npm release
+
+The job packs each package (`npm pack`) and publishes the tarball, in dependency order. If it stops after some packages
+are published (a registry error, a timeout), re-run the release's failed jobs: for each package npm already has at this
+version, the job compares npm's `dist.integrity` with the rebuilt tarball's. The same bytes: the package is skipped and
+keeps the tag it was published with (the summary says "already published with these bytes, skipped"), and the job goes
+on with the rest. Other bytes: the job stops and names both integrities. A registry manifest with no valid SHA-512 `dist.integrity` (a
+shasum only, or a digest that is not `sha512-` and base64 of exactly 64 bytes) also stops the job: byte equality cannot
+be established, so treat it as other bytes. npm never replaces a published version, so
+then publish a new version (bump the patch or the prerelease number and release again); never unpublish. The engines are
+rebuilt on a re-run, so `@julclang/joust-runtime` and `@julclang/joust` can be skipped only when the engine build gives
+the same bytes again.
+
 Provenance attestations are added automatically once the repository is public (`--provenance` when
 `github.event.repository.private` is false); each package's `repository.url` already names `bloxbean/joust`, as npm
 requires for provenance.

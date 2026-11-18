@@ -531,6 +531,15 @@ jobs:
     # the publish commands must stay in THIS file, which npm validates) and this environment. Requires npm >= 11.5.1
     # and Node >= 22.14.
     environment: release-staging
+    # One npm publication at a time, of any version: the dist-tags are shared by every version, and each package's tag
+    # is chosen in this job from the registry as it is then (.github/scripts/npm-dist-tag.mjs). The workflow's own group
+    # is per tag, so two releases' npm jobs would otherwise interleave. A running publication is never cancelled.
+    # GitHub keeps one pending job per group: a newer pending job cancels an older one while it waits, before it has
+    # published anything; re-run that release's failed jobs once the other has finished. A publication that stopped
+    # partway is finished the same way: the re-run skips what npm already has (the publish step below).
+    concurrency:
+      group: npm-publish-joust
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -595,8 +604,18 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Ensure npm supports trusted publishing
-        run: npm install -g npm@latest
+      # Trusted publishing needs npm >= 11.5.1. One exact npm, as JuLC: npm@latest is 12.x, whose `npm pack --json`
+      # has another shape (an object keyed by package name; the publish step reads both). Checked against the SHA-256
+      # recorded here and installed offline without scripts (npm bundles its dependencies).
+      - name: Install npm 11.21.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          f="$RUNNER_TEMP/npm-11.21.1.tgz"
+          curl -sSfL -o "$f" https://registry.npmjs.org/npm/-/npm-11.21.1.tgz
+          echo "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b  $f" | sha256sum -c -
+          npm install -g --ignore-scripts --offline "$f"
+          test "$(npm --version)" = 11.21.1
 
       - name: Build the engines
         run: >-
@@ -628,30 +647,44 @@ jobs:
           }
           EOF
 
-      # In dependency order. Beta and rc versions get their own dist-tag; before 1.0, -preN versions go to `latest`
-      # (below). Provenance attestations need a public repository: added automatically once the repository is public.
+      # In dependency order, each package with its own dist-tag, read from the registry right before its publish
+      # (.github/scripts/npm-dist-tag.mjs, as JuLC's ADR-077 D8): a final version goes to `latest`, a release candidate
+      # (-rc) to `next`, a -beta to `beta`; any other prerelease (-preN, -preview, -alpha) to `latest` while the package
+      # has no final version on npm (npm made each package's first version, the trusted-publishing placeholder, `latest`,
+      # and `npm install`/`npm create joust` resolve only `latest`), and to `preview` once it has one, so a later
+      # prerelease never displaces a final release. No dist-tag moves backwards: when the tag already names a higher
+      # version, or it is a channel (`preview`, `beta`, `next`) and the version is not above the package's `latest`, the
+      # package goes to `release-<major>.<minor>`, or else `release-<version>`. The dry run reads the same tags.
+      # Each package is packed first and the tarball published, so a re-run of a partial release skips a package npm
+      # already has with the same bytes (dist.integrity) and keeps its tag, and stops on other bytes (docs/release-ops.md,
+      # "Finishing a partial npm release"). Provenance attestations need a public repository: added automatically once
+      # the repository is public.
       - name: Publish the packages
         env:
           REPO_PRIVATE: ${{ github.event.repository.private }}
         shell: bash
         run: |
           set -euo pipefail
-          TAG=latest
-          # Before 1.0, a -preN version is published as `latest` (as mesmo): npm made each package's first version, the
-          # trusted-publishing placeholder, `latest` whatever --tag said, and `npm install`/`npm create joust` resolve only
-          # `latest`. A semver range never matches a prerelease either. At 1.0.0, change the -pre arm back to preview
-          # so a later 1.1.0-pre1 cannot displace the stable release on `latest`.
-          case "$VERSION" in
-            *-preview*|*-pre*|*-alpha*) TAG=latest ;;
-            *-beta*)                    TAG=beta ;;
-            *-rc*)                      TAG=next ;;
-          esac
-          ARGS=(--access public --tag "$TAG" --ignore-scripts)
+          ARGS=(--access public --ignore-scripts)
           if [[ "$REPO_PRIVATE" != true ]]; then ARGS+=(--provenance); fi
           if [[ "$NPM_PUBLISH" != true ]]; then ARGS+=(--dry-run); fi
+          : > "$RUNNER_TEMP/npm-tags.txt"
+          rm -rf "$RUNNER_TEMP/npm-pack" && mkdir -p "$RUNNER_TEMP/npm-pack"
           for p in state-client joust-runtime joust create-joust; do
+            name="$(node -p "require('./js/$p/package.json').name")"
             # Leading ./ : npm would read a bare path as a github:owner/repo shorthand.
-            npm publish "./js/$p" "${ARGS[@]}"
+            npm pack "./js/$p" --ignore-scripts --pack-destination "$RUNNER_TEMP/npm-pack" --json > "$RUNNER_TEMP/npm-pack/$p.json"
+            # The entry for this package (npm 11 or 12 shape): name, version, file name and SHA-512 checked.
+            entry="$(node .github/scripts/npm-dist-tag.mjs pack-entry "$RUNNER_TEMP/npm-pack/$p.json" "$name" "$VERSION" \
+              "$RUNNER_TEMP/npm-pack")"
+            read -r file integrity <<< "$entry"
+            tag="$(node .github/scripts/npm-dist-tag.mjs "$name" "$VERSION" --integrity "$integrity")"
+            if [[ "$tag" == skip ]]; then
+              echo "$name@$VERSION: already published with these bytes, skipped" | tee -a "$RUNNER_TEMP/npm-tags.txt"
+              continue
+            fi
+            echo "$name@$VERSION: $tag" | tee -a "$RUNNER_TEMP/npm-tags.txt"
+            npm publish "$RUNNER_TEMP/npm-pack/$file" "${ARGS[@]}" --tag "$tag"
           done
 
       - name: Record the npm release
@@ -667,6 +700,24 @@ jobs:
                 "\`$VERSION\` through npm trusted publishing, if the step above succeeded."
             else
               echo "Checked only (npm_publish=false in gradle.properties): \`npm publish --dry-run\`."
+            fi
+            if [[ -s "$RUNNER_TEMP/npm-tags.txt" ]]; then
+              echo
+              if [[ "$NPM_PUBLISH" == true ]]; then echo "Dist-tags chosen:"; else echo "Dist-tags (dry run; nothing published):"; fi
+              echo '```'
+              cat "$RUNNER_TEMP/npm-tags.txt"
+              echo '```'
+            fi
+            # Read back from the registry (it may lag a minute behind a publish).
+            if [[ "$NPM_PUBLISH" == true ]]; then
+              echo
+              echo "Dist-tags on the registry now:"
+              echo '```'
+              for p in state-client joust-runtime joust create-joust; do
+                name="$(node -p "require('./js/$p/package.json').name")"
+                echo "$name: $(npm view "$name" dist-tags --json 2>/dev/null | tr -d '\n ' || echo '(unreadable)')"
+              done
+              echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
