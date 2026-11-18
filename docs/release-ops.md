@@ -280,9 +280,30 @@ mesmo and yano do. Once per package, an npm owner of `@julclang` (and of `create
    workflow `release.yml`, environment `release-staging`. The publish commands must stay in `release.yml`.
 3. Then set `npm_publish=true` in `gradle.properties` for the release.
 
-Dist-tags: before 1.0, a `-preN` version is published as `latest` (as mesmo): npm made each package's first version,
-the trusted-publishing placeholder, `latest`, and `npm install` / `npm create joust` resolve only `latest`. `-beta` and
-`-rc` versions without `-pre` go to `beta` and `next`. At 1.0.0, switch `-pre` back to `preview` in `release.yml`.
+Dist-tags (the rule JuLC adopted in ADR-077 D8, r23): each package's tag is chosen from the registry right before its
+`npm publish` (`.github/scripts/npm-dist-tag.mjs`, tested by `npm-dist-tag-test.mjs` in `build.yml`):
+
+| Version | Dist-tag |
+|---|---|
+| final (`0.1.0`, `1.2.3`) | `latest` |
+| release candidate, any `rc` part (`1.0.0-rc1`, `0.1.0-pre3-rc1`) | `next` |
+| `-beta` (`0.2.0-beta1`) | `beta` |
+| any other prerelease (`-preN`, `-preview`, `-alpha`) | `latest` while the package has no final version on npm; `preview` once it has one |
+
+A `-preN` goes to `latest` until the first final release because npm made each package's first version, the
+trusted-publishing placeholder, `latest`, and `npm install` / `npm create joust` resolve only `latest`. After a final
+release, `npm create joust@latest` keeps giving the final release, and previews install with `@preview` (for example
+`npm create joust@preview my-app`). A release candidate never goes to `latest`: npm's semver orders `0.1.0-pre3-rc1`
+above `0.1.0-pre3`, so the release after it could not take `latest` back.
+
+**No dist-tag moves backwards.** When the tag already names a higher version of that package (npm's semver order), the
+package goes to `release-<major>.<minor>` instead, and when that one does too, to `release-<version>` (none of these is
+a semver range, which npm refuses as a tag). That happens for a maintenance release, a recovery of an older version, or
+one package of a release published after the next release's. The job summary lists the tag each package got. Prerelease
+identifiers are compared as text: `0.1.0-pre10` is **lower** than `0.1.0-pre9`, so it would go to `release-0.1`, not
+`latest`. Before a tenth `-preN` of a version, move to the next minor (`0.2.0-pre1`). The `npm` job has one concurrency
+group (`npm-publish-joust`, never cancelled in progress) for every version, so two releases' publications never
+interleave; GitHub keeps one pending job per group, and a newer pending one cancels the older, which is then re-run.
 Provenance attestations are added automatically once the repository is public (`--provenance` when
 `github.event.repository.private` is false); each package's `repository.url` already names `bloxbean/joust`, as npm
 requires for provenance.

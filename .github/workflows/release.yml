@@ -531,6 +531,14 @@ jobs:
     # the publish commands must stay in THIS file, which npm validates) and this environment. Requires npm >= 11.5.1
     # and Node >= 22.14.
     environment: release-staging
+    # One npm publication at a time, of any version: the dist-tags are shared by every version, and each package's tag
+    # is chosen in this job from the registry as it is then (.github/scripts/npm-dist-tag.mjs). The workflow's own group
+    # is per tag, so two releases' npm jobs would otherwise interleave. A running publication is never cancelled.
+    # GitHub keeps one pending job per group: a newer pending job cancels an older pending one, which then shows as
+    # cancelled; re-run that release's failed jobs once the other has finished.
+    concurrency:
+      group: npm-publish-joust
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -628,30 +636,30 @@ jobs:
           }
           EOF
 
-      # In dependency order. Beta and rc versions get their own dist-tag; before 1.0, -preN versions go to `latest`
-      # (below). Provenance attestations need a public repository: added automatically once the repository is public.
+      # In dependency order, each package with its own dist-tag, read from the registry right before its publish
+      # (.github/scripts/npm-dist-tag.mjs, as JuLC's ADR-077 D8): a final version goes to `latest`, a release candidate
+      # (-rc) to `next`, a -beta to `beta`; any other prerelease (-preN, -preview, -alpha) to `latest` while the package
+      # has no final version on npm (npm made each package's first version, the trusted-publishing placeholder, `latest`,
+      # and `npm install`/`npm create joust` resolve only `latest`), and to `preview` once it has one, so a later
+      # prerelease never displaces a final release. No dist-tag moves backwards: when the tag already names a higher
+      # version, the package goes to `release-<major>.<minor>`, or else `release-<version>`. The dry run reads the same
+      # tags. Provenance attestations need a public repository: added automatically once the repository is public.
       - name: Publish the packages
         env:
           REPO_PRIVATE: ${{ github.event.repository.private }}
         shell: bash
         run: |
           set -euo pipefail
-          TAG=latest
-          # Before 1.0, a -preN version is published as `latest` (as mesmo): npm made each package's first version, the
-          # trusted-publishing placeholder, `latest` whatever --tag said, and `npm install`/`npm create joust` resolve only
-          # `latest`. A semver range never matches a prerelease either. At 1.0.0, change the -pre arm back to preview
-          # so a later 1.1.0-pre1 cannot displace the stable release on `latest`.
-          case "$VERSION" in
-            *-preview*|*-pre*|*-alpha*) TAG=latest ;;
-            *-beta*)                    TAG=beta ;;
-            *-rc*)                      TAG=next ;;
-          esac
-          ARGS=(--access public --tag "$TAG" --ignore-scripts)
+          ARGS=(--access public --ignore-scripts)
           if [[ "$REPO_PRIVATE" != true ]]; then ARGS+=(--provenance); fi
           if [[ "$NPM_PUBLISH" != true ]]; then ARGS+=(--dry-run); fi
+          : > "$RUNNER_TEMP/npm-tags.txt"
           for p in state-client joust-runtime joust create-joust; do
+            name="$(node -p "require('./js/$p/package.json').name")"
+            tag="$(node .github/scripts/npm-dist-tag.mjs "$name" "$VERSION")"
+            echo "$name@$VERSION: $tag" | tee -a "$RUNNER_TEMP/npm-tags.txt"
             # Leading ./ : npm would read a bare path as a github:owner/repo shorthand.
-            npm publish "./js/$p" "${ARGS[@]}"
+            npm publish "./js/$p" "${ARGS[@]}" --tag "$tag"
           done
 
       - name: Record the npm release
@@ -667,6 +675,13 @@ jobs:
                 "\`$VERSION\` through npm trusted publishing, if the step above succeeded."
             else
               echo "Checked only (npm_publish=false in gradle.properties): \`npm publish --dry-run\`."
+            fi
+            if [[ -s "$RUNNER_TEMP/npm-tags.txt" ]]; then
+              echo
+              echo "Dist-tags chosen:"
+              echo '```'
+              cat "$RUNNER_TEMP/npm-tags.txt"
+              echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
