@@ -604,8 +604,18 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Ensure npm supports trusted publishing
-        run: npm install -g npm@latest
+      # Trusted publishing needs npm >= 11.5.1. One exact npm, as JuLC: npm@latest is 12.x, whose `npm pack --json`
+      # has another shape (an object keyed by package name; the publish step reads both). Checked against the SHA-256
+      # recorded here and installed offline without scripts (npm bundles its dependencies).
+      - name: Install npm 11.21.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          f="$RUNNER_TEMP/npm-11.21.1.tgz"
+          curl -sSfL -o "$f" https://registry.npmjs.org/npm/-/npm-11.21.1.tgz
+          echo "dd77c48eb845f4856c2cdba347cfb52bd877a2655a1ea48ff0c4796e3df9dd7b  $f" | sha256sum -c -
+          npm install -g --ignore-scripts --offline "$f"
+          test "$(npm --version)" = 11.21.1
 
       - name: Build the engines
         run: >-
@@ -661,11 +671,13 @@ jobs:
           : > "$RUNNER_TEMP/npm-tags.txt"
           rm -rf "$RUNNER_TEMP/npm-pack" && mkdir -p "$RUNNER_TEMP/npm-pack"
           for p in state-client joust-runtime joust create-joust; do
+            name="$(node -p "require('./js/$p/package.json').name")"
             # Leading ./ : npm would read a bare path as a github:owner/repo shorthand.
             npm pack "./js/$p" --ignore-scripts --pack-destination "$RUNNER_TEMP/npm-pack" --json > "$RUNNER_TEMP/npm-pack/$p.json"
-            read -r name file integrity < <(node -e 'const [x] = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-              console.log(x.name, x.filename, x.integrity)' "$RUNNER_TEMP/npm-pack/$p.json")
-            if [[ -z "${integrity:-}" || ! -f "$RUNNER_TEMP/npm-pack/$file" ]]; then echo "::error::npm pack ./js/$p gave no tarball" >&2; exit 1; fi
+            # The entry for this package (npm 11 or 12 shape): name, version, file name and SHA-512 checked.
+            entry="$(node .github/scripts/npm-dist-tag.mjs pack-entry "$RUNNER_TEMP/npm-pack/$p.json" "$name" "$VERSION" \
+              "$RUNNER_TEMP/npm-pack")"
+            read -r file integrity <<< "$entry"
             tag="$(node .github/scripts/npm-dist-tag.mjs "$name" "$VERSION" --integrity "$integrity")"
             if [[ "$tag" == skip ]]; then
               echo "$name@$VERSION: already published with these bytes, skipped" | tee -a "$RUNNER_TEMP/npm-tags.txt"

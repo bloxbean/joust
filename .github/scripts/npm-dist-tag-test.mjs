@@ -2,7 +2,7 @@
 // backwards, the comparator against npm's own semver, and the registry lookup (a local HTTP server).
 //   node --test .github/scripts/npm-dist-tag-test.mjs
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -10,11 +10,16 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DistTagError, alreadyPublished, candidateTags, checkDocument, chooseTag, compareVersions, hasFinalVersion, packageTag,
-  parseVersion, ruleTag,
+  DistTagError, alreadyPublished, candidateTags, checkDocument, chooseTag, compareVersions, hasFinalVersion, packEntry,
+  packageTag, parseVersion, ruleTag,
 } from './npm-dist-tag.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'npm-dist-tag.mjs');
+// npm-dist-tag-fixtures: `npm pack --json` of one scoped package (@julclang/state-client@0.1.0-pre3, a package.json and
+// an index.js) by npm 11.21.3 (an array) and npm 12.2.3 (an object keyed by package name), and the tarball both wrote.
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'npm-dist-tag-fixtures');
+const PACKED = 'julclang-state-client-0.1.0-pre3.tgz';
+const PACKED_SRI = 'sha512-Fb7STP9P0q3kyLPuc76wTRZv2k38G0KmRDW4qATOECQcT/dQ+qpNGuwbySS4VT3/q9zn5HEdtCIxlPe7rJDi7Q==';
 
 /** A registry document with these versions and dist-tags. */
 const doc = (versions, tags = {}, name = 'x') => ({
@@ -203,6 +208,11 @@ describe('no dist-tag moves backwards', () => {
       'a version key beyond npm\'s limits': doc(['9007199254740992.0.0'], {}, 'p'),
       'an unparseable holder': doc(['0.1.0'], { latest: 'nope' }, 'p'),
       'a holder not among the versions': doc(['0.1.0'], { latest: '0.2.0' }, 'p'),
+      'no versions': { name: 'p', versions: {}, 'dist-tags': {} },
+      'no versions, a latest': { name: 'p', versions: {}, 'dist-tags': { latest: '1.0.0' } },
+      'no latest': doc(['0.1.0'], { next: '0.1.0' }, 'p'),
+      'a holder that is an array': { ...doc(['2.0.0-pre2'], {}, 'p'), 'dist-tags': { latest: ['2.0.0-pre2'] } },
+      'a holder that is a number': { ...doc(['1.0.0'], {}, 'p'), 'dist-tags': { latest: 1 } },
       'a string': 'x',
       'an array': [],
     };
@@ -214,6 +224,49 @@ describe('no dist-tag moves backwards', () => {
     assert.throws(() => chooseTag('0.1.0', 'x'), DistTagError);
     assert.throws(() => chooseTag('0.1.0', { 'dist-tags': [] }), DistTagError);
     assert.throws(() => chooseTag('0.1.0', { 'dist-tags': { latest: 'nonsense' } }), DistTagError);
+  });
+});
+
+describe('npm pack output (the workflow parses it with pack-entry)', () => {
+  const read = (f) => JSON.parse(readFileSync(join(FIXTURES, f), 'utf8'));
+  const bytes = readFileSync(join(FIXTURES, PACKED));
+
+  test('npm 11 (an array) and npm 12 (an object keyed by name) give the same entry', () => {
+    for (const f of ['npm-pack-11.json', 'npm-pack-12.json']) {
+      assert.deepEqual(packEntry(read(f), '@julclang/state-client', '0.1.0-pre3', bytes), { file: PACKED, integrity: PACKED_SRI }, f);
+    }
+    assert.ok(Array.isArray(read('npm-pack-11.json')) && !Array.isArray(read('npm-pack-12.json')));
+  });
+
+  test('another package, version, file name or integrity is refused', () => {
+    const v11 = read('npm-pack-11.json');
+    const v12 = read('npm-pack-12.json');
+    const entry = v11[0];
+    assert.throws(() => packEntry(v11, '@julclang/joust', '0.1.0-pre3'), /expected one entry/);
+    assert.throws(() => packEntry(v12, '@julclang/joust', '0.1.0-pre3'), /expected one entry keyed/);
+    assert.throws(() => packEntry(v11, '@julclang/state-client', '0.1.0-pre4'), /is version/);
+    assert.throws(() => packEntry([entry, entry], '@julclang/state-client', '0.1.0-pre3'), /expected one entry/);
+    assert.throws(() => packEntry({ '@julclang/state-client': { ...entry, name: 'x' } }, '@julclang/state-client', '0.1.0-pre3'),
+      /the entry names/);
+    for (const filename of ['../x.tgz', 'a/b.tgz', 'x.tar', '', undefined]) {
+      assert.throws(() => packEntry([{ ...entry, filename }], '@julclang/state-client', '0.1.0-pre3'), /file name/, String(filename));
+    }
+    for (const integrity of ['sha1-abc', 'sha512-short', undefined, entry.shasum]) {
+      assert.throws(() => packEntry([{ ...entry, integrity }], '@julclang/state-client', '0.1.0-pre3'), /no SHA-512 integrity/);
+    }
+    assert.throws(() => packEntry(v11, '@julclang/state-client', '0.1.0-pre3', Buffer.from('other bytes')), /but npm pack reported/);
+    for (const output of [null, 'x', 1]) assert.throws(() => packEntry(output, '@julclang/state-client', '0.1.0-pre3'), DistTagError);
+  });
+
+  test('the command prints `<file> <integrity>` for both shapes, and fails otherwise', () => {
+    for (const f of ['npm-pack-11.json', 'npm-pack-12.json']) {
+      const out = execFileSync(process.execPath, [SCRIPT, 'pack-entry', join(FIXTURES, f), '@julclang/state-client', '0.1.0-pre3',
+        FIXTURES], { encoding: 'utf8' });
+      assert.equal(out, `${PACKED} ${PACKED_SRI}\n`, f);
+    }
+    assert.throws(() => execFileSync(process.execPath, [SCRIPT, 'pack-entry', join(FIXTURES, 'npm-pack-12.json'), '@julclang/joust',
+      '0.1.0-pre3', FIXTURES], { stdio: 'pipe' }), /expected one entry keyed/);
+    assert.throws(() => execFileSync(process.execPath, [SCRIPT, 'pack-entry', join(FIXTURES, 'npm-pack-12.json')], { stdio: 'pipe' }));
   });
 });
 
@@ -258,10 +311,20 @@ describe('the registry', () => {
     '/empty': {},
     '/nullbody': null,
     '/errorbody': { error: 'E404' },
+    '/noversions': { name: 'noversions', versions: {}, 'dist-tags': {} },
+    '/nolatest': doc(['0.1.0'], { next: '0.1.0' }, 'nolatest'),
+    '/arraytag': { ...doc(['2.0.0-pre2'], {}, 'arraytag'), 'dist-tags': { latest: ['2.0.0-pre2'] } },
+    '/partial': 'partial',
+    '/shasumonly': { name: 'shasumonly', 'dist-tags': { latest: '0.1.0' },
+      versions: { '0.1.0': { version: '0.1.0', dist: { shasum: 'e7adf1882b2f846ea7eb78ce2afc4874a78749e8' } } } },
   };
   before(async () => {
     server = createServer((req, res) => {
       if (req.url === '/down') { res.writeHead(500).end(); return; }
+      if (req.url === '/partial') {
+        res.writeHead(206, { 'content-type': 'application/json' }).end(JSON.stringify(doc(['0.1.0'], { latest: '0.1.0' }, 'partial')));
+        return;
+      }
       const body = documents[req.url];
       if (body === undefined) { res.writeHead(404, { 'content-type': 'application/json' }).end('{}'); return; }
       res.writeHead(200, { 'content-type': 'application/json' }).end(typeof body === 'string' ? body : JSON.stringify(body));
@@ -286,6 +349,9 @@ describe('the registry', () => {
     // Not yet published: the rule's tag, whatever the integrity.
     assert.deepEqual(await packageTag(registry, 'create-joust', '0.2.0-pre1', 'sha512-x'), { tag: 'preview', reason: null });
     assert.equal(alreadyPublished(null, 'x', '0.1.0', 'sha512-x'), null);
+    // A manifest with a shasum only: still a stop, saying why.
+    await assert.rejects(packageTag(registry, 'shasumonly', '0.1.0', PACKED_SRI),
+      /the registry gives no SHA-512 integrity for shasumonly@0\.1\.0; byte equality cannot be established/);
   });
 
   test('a package the registry does not know (404) has no tags yet', async () => {
@@ -293,9 +359,13 @@ describe('the registry', () => {
   });
 
   test('an error or a malformed answer fails closed; only a 404 is "not published"', async () => {
-    for (const n of ['tagsonly', 'empty', 'nullbody', 'errorbody']) {
+    for (const n of ['tagsonly', 'empty', 'nullbody', 'errorbody', 'noversions', 'nolatest', 'arraytag']) {
       await assert.rejects(packageTag(registry, n, '2.0.0-pre1'), DistTagError, n);
     }
+    await assert.rejects(packageTag(registry, 'noversions', '2.0.0-pre1'), /lists no versions/);
+    await assert.rejects(packageTag(registry, 'nolatest', '2.0.0-pre1'), /no latest dist-tag/);
+    await assert.rejects(packageTag(registry, 'arraytag', '2.0.0-pre1'), /not a version string/);
+    await assert.rejects(packageTag(registry, 'partial', '2.0.0-pre1'), /HTTP 206 \(only 200/);
     await assert.rejects(packageTag(registry, 'down', '0.1.0'), /HTTP 500/);
     await assert.rejects(packageTag(registry, 'broken', '0.1.0'), /not JSON/);
     await assert.rejects(packageTag('http://127.0.0.1:9', 'x', '0.1.0'), DistTagError);

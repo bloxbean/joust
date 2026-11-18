@@ -9,8 +9,8 @@
 // precedence), the version goes to `release-<major>.<minor>` instead, and when that one does too, to
 // `release-<version>`, which can only ever name this version. A prerelease channel (`preview`, `beta`, `next`) is what
 // comes after `latest`, so it is taken only by a version above the package's current `latest`; any other version falls
-// through to the release tags (0.1.0-pre23 published after 0.1.0 goes to release-0.1, not preview), as JuLC's r23. None of these is a valid semver range, which npm refuses
-// as a tag. Every case is a recovery of version N after N+1, a maintenance release, or one package of N+1 published
+// through to the release tags (0.1.0-pre23 published after 0.1.0 goes to release-0.1, not preview), as JuLC's r23.
+// None of these is a valid semver range, which npm refuses as a tag. Every case is a recovery of version N after N+1, a maintenance release, or one package of N+1 published
 // before the others; the workflow publishes one version at a time (the npm job's concurrency group).
 //
 //   node .github/scripts/npm-dist-tag.mjs <package> <version> [--integrity <sri>] [--registry <url>]
@@ -20,9 +20,16 @@
 //       When the registry already has <package>@<version> (a release resumed after a partial publication), prints
 //       `skip` if its dist.integrity is --integrity (the local tarball's), and fails otherwise: npm never replaces a
 //       published version, and a skipped package keeps the tag it was published with.
+//   node .github/scripts/npm-dist-tag.mjs pack-entry <npm-pack.json> <package> <version> <dir>
+//       Reads `npm pack --json` output (npm 11: an array of entries; npm 12: an object keyed by package name), takes
+//       the entry for <package>, checks its name, version, file name (a plain name in <dir>) and SHA-512 integrity
+//       (against the tarball's bytes), and prints `<file name> <integrity>`.
 //
 // Plain Node.js (18 or later, for fetch), no dependencies.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export class DistTagError extends Error {}
@@ -36,7 +43,8 @@ const SEMVER = new RegExp(`^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-(${
  * each number a safe integer; npm compares a numeric prerelease identifier above that as text), as JuLC's.
  */
 export function parseVersion(version) {
-  const text = String(version);
+  if (typeof version !== 'string') fail(`not a semantic version: ${JSON.stringify(version)} (not a string)`);
+  const text = version;
   const m = text.length <= 256 ? SEMVER.exec(text) : null;
   if (!m) fail(`not a semantic version: ${JSON.stringify(version)}`);
   const numbers = [m[1], m[2], m[3], ...(m[4] ?? '').split('.').filter((part) => /^\d+$/.test(part))];
@@ -139,8 +147,13 @@ export function checkDocument(document, name) {
   if (document.name !== name) fail(`the registry's document names ${JSON.stringify(document.name)}, not ${name}`);
   if (!isObject(document.versions)) fail(`the registry's document for ${name} has no versions object`);
   if (!isObject(document['dist-tags'])) fail(`the registry's document for ${name} has no dist-tags object`);
+  // A published package has at least one version and a `latest` (npm sets it on the first publication); one that is
+  // genuinely new is a 404, never an empty document.
+  if (Object.keys(document.versions).length === 0) fail(`the registry's document for ${name} lists no versions`);
+  if (!Object.hasOwn(document['dist-tags'], 'latest')) fail(`the registry's document for ${name} has no latest dist-tag`);
   for (const v of Object.keys(document.versions)) parseVersion(v);
   for (const [tag, holder] of Object.entries(document['dist-tags'])) {
+    if (typeof holder !== 'string') fail(`${name}: dist-tag ${tag} holds ${JSON.stringify(holder)}, not a version string`);
     parseVersion(holder);
     if (!Object.hasOwn(document.versions, holder)) fail(`${name}: dist-tag ${tag} names ${holder}, which versions does not list`);
   }
@@ -157,7 +170,7 @@ export async function packument(registry, name) {
     fail(`GET ${url}: ${e.cause?.message ?? e.message}`);
   }
   if (response.status === 404) return null;
-  if (!response.ok) fail(`GET ${url}: HTTP ${response.status}`);
+  if (response.status !== 200) fail(`GET ${url}: HTTP ${response.status} (only 200, or 404 for an unpublished package)`);
   let document;
   try {
     document = await response.json();
@@ -176,6 +189,10 @@ export function alreadyPublished(document, name, version, integrity) {
   if (published === undefined) return null;
   const theirs = published?.dist?.integrity;
   if (!integrity) fail(`${name}@${version} is already on the registry; give --integrity to resume a release`);
+  if (typeof theirs !== 'string' || !theirs.startsWith('sha512-')) {
+    fail(`the registry gives no SHA-512 integrity for ${name}@${version}; byte equality cannot be established `
+      + '(docs/release-ops.md, "Finishing a partial npm release")');
+  }
   if (theirs === integrity) return 'skip';
   fail(`${name}@${version} is already on the registry with other bytes (${theirs ?? 'no integrity'}, this build ${integrity}). `
     + 'npm never replaces a version: release a new version (docs/release-ops.md, "Finishing a partial npm release")');
@@ -191,7 +208,59 @@ export async function packageTag(registry, name, version, integrity = null) {
   return { tag, reason: reason && `${name}: ${reason}` };
 }
 
+const SRI_SHA512 = /^sha512-[A-Za-z0-9+/]{86}==$/;
+
+/**
+ * The entry for `name` in `npm pack --json` output (npm 11: an array; npm 12: an object keyed by package name),
+ * checked: its name and version, a plain .tgz file name, an SHA-512 integrity. `bytes`, when given, must have that
+ * integrity.
+ */
+export function packEntry(output, name, version, bytes = null) {
+  let entry;
+  if (Array.isArray(output)) {
+    const entries = output.filter((x) => x?.name === name);
+    if (entries.length !== 1 || output.length !== 1) fail(`npm pack output: expected one entry for ${name}, found ${output.length}`);
+    entry = entries[0];
+  } else if (output !== null && typeof output === 'object') {
+    if (Object.keys(output).length !== 1 || !Object.hasOwn(output, name)) {
+      fail(`npm pack output: expected one entry keyed ${name}, found ${JSON.stringify(Object.keys(output))}`);
+    }
+    entry = output[name];
+  } else {
+    fail('npm pack output is neither an array nor an object');
+  }
+  if (entry?.name !== name) fail(`npm pack output: the entry names ${JSON.stringify(entry?.name)}, not ${name}`);
+  if (entry.version !== version) fail(`npm pack output: ${name} is version ${JSON.stringify(entry.version)}, not ${version}`);
+  const file = entry.filename;
+  if (typeof file !== 'string' || !/^[A-Za-z0-9._-]+\.tgz$/.test(file)) fail(`npm pack output: file name ${JSON.stringify(file)}`);
+  if (typeof entry.integrity !== 'string' || !SRI_SHA512.test(entry.integrity)) {
+    fail(`npm pack output: ${name} has no SHA-512 integrity (${JSON.stringify(entry.integrity)})`);
+  }
+  if (bytes !== null) {
+    const actual = 'sha512-' + createHash('sha512').update(bytes).digest('base64');
+    if (actual !== entry.integrity) fail(`${file}: SHA-512 ${actual}, but npm pack reported ${entry.integrity}`);
+  }
+  return { file, integrity: entry.integrity };
+}
+
 async function main(argv) {
+  if (argv[0] === 'pack-entry') {
+    if (argv.length !== 5) {
+      console.error('::error::usage: node npm-dist-tag.mjs pack-entry <npm-pack.json> <package> <version> <dir>');
+      return 2;
+    }
+    const [, json, name, version, dir] = argv;
+    try {
+      const output = JSON.parse(readFileSync(json, 'utf8'));
+      const probe = packEntry(output, name, version);
+      const { file, integrity } = packEntry(output, name, version, readFileSync(join(dir, probe.file)));
+      console.log(`${file} ${integrity}`);
+      return 0;
+    } catch (e) {
+      console.error(`::error::${name}@${version}: ${e.message}`);
+      return 1;
+    }
+  }
   const args = [...argv];
   const option = (flag) => {
     const i = args.indexOf(flag);
