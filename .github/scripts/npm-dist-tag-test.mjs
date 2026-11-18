@@ -2,6 +2,7 @@
 // backwards, the comparator against npm's own semver, and the registry lookup (a local HTTP server).
 //   node --test .github/scripts/npm-dist-tag-test.mjs
 import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
@@ -11,7 +12,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DistTagError, alreadyPublished, candidateTags, checkDocument, chooseTag, compareVersions, hasFinalVersion, packEntry,
-  packageTag, parseVersion, ruleTag,
+  packageTag, parseVersion, ruleTag, isSha512Integrity,
 } from './npm-dist-tag.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'npm-dist-tag.mjs');
@@ -21,9 +22,11 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'npm-dist-tag-fix
 const PACKED = 'julclang-state-client-0.1.0-pre3.tgz';
 const PACKED_SRI = 'sha512-Fb7STP9P0q3kyLPuc76wTRZv2k38G0KmRDW4qATOECQcT/dQ+qpNGuwbySS4VT3/q9zn5HEdtCIxlPe7rJDi7Q==';
 
+/** A well-formed SHA-512 integrity standing for version `v`'s tarball. */
+const sri = (v) => 'sha512-' + createHash('sha512').update(v).digest('base64');
 /** A registry document with these versions and dist-tags. */
 const doc = (versions, tags = {}, name = 'x') => ({
-  name, 'dist-tags': tags, versions: Object.fromEntries(versions.map((v) => [v, { version: v, dist: { integrity: `sha512-${v}` } }])),
+  name, 'dist-tags': tags, versions: Object.fromEntries(versions.map((v) => [v, { version: v, dist: { integrity: sri(v) } }])),
 });
 const named = (name, d) => ({ ...d, name });
 // What npmjs.org holds for each JOUST package today (2026-11-18).
@@ -227,6 +230,14 @@ describe('no dist-tag moves backwards', () => {
   });
 });
 
+test('an SHA-512 integrity is sha512- and base64 of exactly 64 bytes', () => {
+  assert.equal(isSha512Integrity(PACKED_SRI), true);
+  for (const v of ['sha512-', PACKED_SRI.slice(0, 40), PACKED_SRI.replace('==', ''), PACKED_SRI + 'A', 'sha1-' + PACKED_SRI.slice(7),
+    `sha512-${Buffer.alloc(63).toString('base64')}`, `sha512-${Buffer.alloc(65).toString('base64')}`, 'sha512-!!!!', null, 1]) {
+    assert.equal(isSha512Integrity(v), false, String(v));
+  }
+});
+
 describe('npm pack output (the workflow parses it with pack-entry)', () => {
   const read = (f) => JSON.parse(readFileSync(join(FIXTURES, f), 'utf8'));
   const bytes = readFileSync(join(FIXTURES, PACKED));
@@ -315,6 +326,10 @@ describe('the registry', () => {
     '/nolatest': doc(['0.1.0'], { next: '0.1.0' }, 'nolatest'),
     '/arraytag': { ...doc(['2.0.0-pre2'], {}, 'arraytag'), 'dist-tags': { latest: ['2.0.0-pre2'] } },
     '/partial': 'partial',
+    '/truncated': { name: 'truncated', 'dist-tags': { latest: '0.1.0' },
+      versions: { '0.1.0': { version: '0.1.0', dist: { integrity: PACKED_SRI.slice(0, 40) } } } },
+    '/emptydigest': { name: 'emptydigest', 'dist-tags': { latest: '0.1.0' },
+      versions: { '0.1.0': { version: '0.1.0', dist: { integrity: 'sha512-' } } } },
     '/shasumonly': { name: 'shasumonly', 'dist-tags': { latest: '0.1.0' },
       versions: { '0.1.0': { version: '0.1.0', dist: { shasum: 'e7adf1882b2f846ea7eb78ce2afc4874a78749e8' } } } },
   };
@@ -342,7 +357,7 @@ describe('the registry', () => {
   });
 
   test('a version already published: skipped with the same integrity, refused with another or none', async () => {
-    assert.deepEqual(await packageTag(registry, 'create-joust', '0.1.0', 'sha512-0.1.0'),
+    assert.deepEqual(await packageTag(registry, 'create-joust', '0.1.0', sri('0.1.0')),
       { tag: 'skip', reason: 'create-joust@0.1.0 is already published with this tarball\'s integrity' });
     await assert.rejects(packageTag(registry, 'create-joust', '0.1.0', 'sha512-other'), /other bytes.*release a new version/);
     await assert.rejects(packageTag(registry, 'create-joust', '0.1.0'), /already on the registry; give --integrity/);
@@ -352,6 +367,11 @@ describe('the registry', () => {
     // A manifest with a shasum only: still a stop, saying why.
     await assert.rejects(packageTag(registry, 'shasumonly', '0.1.0', PACKED_SRI),
       /the registry gives no SHA-512 integrity for shasumonly@0\.1\.0; byte equality cannot be established/);
+    // A malformed digest (truncated, or `sha512-` alone) is the same stop, never "other bytes".
+    for (const n of ['truncated', 'emptydigest']) {
+      await assert.rejects(packageTag(registry, n, '0.1.0', PACKED_SRI),
+        new RegExp(`the registry gives no SHA-512 integrity for ${n}@0\\.1\\.0; byte equality cannot be established`), n);
+    }
   });
 
   test('a package the registry does not know (404) has no tags yet', async () => {
@@ -398,7 +418,7 @@ describe('the registry', () => {
     assert.equal((await run(['x'])).code, 2);
     assert.equal((await run(['x', '0.1.0', '--registry'])).code, 2);
     assert.equal((await run(['x', '0.1.0', '--registry', registry, '--integrity'])).code, 2);
-    const skip = await run(['create-joust', '0.1.0', '--integrity', 'sha512-0.1.0', '--registry', registry]);
+    const skip = await run(['create-joust', '0.1.0', '--integrity', sri('0.1.0'), '--registry', registry]);
     assert.deepEqual([skip.code, skip.out], [0, 'skip\n']);
     assert.match(skip.err, /::notice::create-joust@0\.1\.0 is already published with this tarball's integrity: skipped/);
     const other = await run(['create-joust', '0.1.0', '--integrity', 'sha512-zzz', '--registry', registry]);

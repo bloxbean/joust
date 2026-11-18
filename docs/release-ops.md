@@ -330,8 +330,9 @@ The job packs each package (`npm pack`) and publishes the tarball, in dependency
 are published (a registry error, a timeout), re-run the release's failed jobs: for each package npm already has at this
 version, the job compares npm's `dist.integrity` with the rebuilt tarball's. The same bytes: the package is skipped and
 keeps the tag it was published with (the summary says "already published with these bytes, skipped"), and the job goes
-on with the rest. Other bytes: the job stops and names both integrities. A registry manifest with no SHA-512 `dist.integrity` (a shasum
-only) also stops the job: byte equality cannot be established, so treat it as other bytes. npm never replaces a published version, so
+on with the rest. Other bytes: the job stops and names both integrities. A registry manifest with no valid SHA-512 `dist.integrity` (a
+shasum only, or a digest that is not `sha512-` and base64 of exactly 64 bytes) also stops the job: byte equality cannot
+be established, so treat it as other bytes. npm never replaces a published version, so
 then publish a new version (bump the patch or the prerelease number and release again); never unpublish. The engines are
 rebuilt on a re-run, so `@julclang/joust-runtime` and `@julclang/joust` can be skipped only when the engine build gives
 the same bytes again.

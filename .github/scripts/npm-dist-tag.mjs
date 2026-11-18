@@ -180,6 +180,14 @@ export async function packument(registry, name) {
   return checkDocument(document, name);
 }
 
+/** An SRI SHA-512 digest: `sha512-` and base64 that decodes to exactly 64 bytes. */
+export function isSha512Integrity(value) {
+  if (typeof value !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+  const b64 = value.slice('sha512-'.length);
+  const bytes = Buffer.from(b64, 'base64');
+  return bytes.length === 64 && bytes.toString('base64') === b64;
+}
+
 /**
  * Whether `name@version` is already published: 'skip' when the registry holds it with this integrity (a resumed
  * release), null when it does not hold it; fails when it holds other bytes, or when no integrity is given to compare.
@@ -189,7 +197,7 @@ export function alreadyPublished(document, name, version, integrity) {
   if (published === undefined) return null;
   const theirs = published?.dist?.integrity;
   if (!integrity) fail(`${name}@${version} is already on the registry; give --integrity to resume a release`);
-  if (typeof theirs !== 'string' || !theirs.startsWith('sha512-')) {
+  if (!isSha512Integrity(theirs)) {
     fail(`the registry gives no SHA-512 integrity for ${name}@${version}; byte equality cannot be established `
       + '(docs/release-ops.md, "Finishing a partial npm release")');
   }
@@ -207,8 +215,6 @@ export async function packageTag(registry, name, version, integrity = null) {
   const { tag, reason } = chooseTag(version, document);
   return { tag, reason: reason && `${name}: ${reason}` };
 }
-
-const SRI_SHA512 = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
 /**
  * The entry for `name` in `npm pack --json` output (npm 11: an array; npm 12: an object keyed by package name),
@@ -233,7 +239,7 @@ export function packEntry(output, name, version, bytes = null) {
   if (entry.version !== version) fail(`npm pack output: ${name} is version ${JSON.stringify(entry.version)}, not ${version}`);
   const file = entry.filename;
   if (typeof file !== 'string' || !/^[A-Za-z0-9._-]+\.tgz$/.test(file)) fail(`npm pack output: file name ${JSON.stringify(file)}`);
-  if (typeof entry.integrity !== 'string' || !SRI_SHA512.test(entry.integrity)) {
+  if (!isSha512Integrity(entry.integrity)) {
     fail(`npm pack output: ${name} has no SHA-512 integrity (${JSON.stringify(entry.integrity)})`);
   }
   if (bytes !== null) {
