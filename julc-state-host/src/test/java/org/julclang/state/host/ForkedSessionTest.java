@@ -63,10 +63,26 @@ class ForkedSessionTest {
     }
     JsonNode hello(Path root, List<Path> entries, String fingerprint) throws Exception {
         var dir = Files.createTempDirectory(temp,"working");
-        var cmd = new ProcessBuilder(System.getProperty("joust.host.java"),"-XX:+DisplayVMOutputToStderr",
-                "-Xlog:disable","-Xlog:all=warning:stderr","--enable-native-access=ALL-UNNAMED",
-                "-cp",String.join(File.pathSeparator,entries.stream().map(Path::toString).toList()),
-                DevHost.class.getName(),"--stdio").directory(dir.toFile());
+        var home = Files.createTempDirectory(temp, "home");
+        var tmp = Files.createTempDirectory(temp, "tmp");
+        var trace = Files.createTempFile(temp, "syscalls", ".log");
+        var argv = new ArrayList<String>();
+        String audit = System.getProperty("joust.host.traceLauncher");
+        if (audit != null) argv.addAll(List.of(audit, trace.toString()));
+        argv.addAll(List.of(System.getProperty("joust.host.java"), "-XX:+DisplayVMOutputToStderr",
+                "-Xlog:disable", "-Xlog:all=warning:stderr", "--enable-native-access=ALL-UNNAMED",
+                "-Duser.home=" + home, "-Djava.io.tmpdir=" + tmp, "-Djoust.dumpTx=" + dir,
+                "-cp", String.join(File.pathSeparator, entries.stream().map(Path::toString).toList()),
+                DevHost.class.getName(), "--stdio"));
+        var cmd = new ProcessBuilder(argv).directory(dir.toFile());
+        cmd.environment().keySet().removeIf(k -> !Set.of("PATH", "LANG", "SYSTEMROOT").contains(k.toUpperCase(Locale.ROOT))
+                && !k.startsWith("LC_"));
+        cmd.environment().put("HOME", home.toString());
+        if (File.separatorChar == '\\') {
+            cmd.environment().put("USERPROFILE", home.toString());
+            cmd.environment().put("TEMP", tmp.toString());
+            cmd.environment().put("TMP", tmp.toString());
+        }
         var diagnostics = temp.resolve("diagnostics");
         var child = cmd.redirectError(diagnostics.toFile()).start();
         try {
@@ -74,13 +90,49 @@ class ForkedSessionTest {
             var p = init();
             p.withObject("/build").put("snapshot",root.toString()).put("digest",fingerprint);
             assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","initialize").put("id",1).set("params",p))));
-            byte[] reply = new Frames.Reader(child.getInputStream()).next();
-            assertNotNull(reply,() -> diagnostics.toString());
+            var reader = new Frames.Reader(child.getInputStream());
+            byte[] reply = reader.next();
+            assertNotNull(reply, () -> diagnostics.toString());
+            if (JSON.readTree(reply).has("result")) {
+                var fixture = IntegrationTest.record();
+                assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","prepare")
+                        .put("id",2).set("params",fixture.params()))));
+                var frame = JSON.readTree(reader.next());
+                while (frame.has("method")) {
+                    assertEquals("chain/read", frame.required("method").asText());
+                    var answer = obj().put("jsonrpc","2.0");
+                    answer.set("id",frame.required("id"));
+                    answer.set("result",fixture.answer(frame.required("params")));
+                    assertTrue(writer.write(JSON.writeValueAsBytes(answer)));
+                    frame = JSON.readTree(reader.next());
+                }
+                assertEquals(2, frame.required("id").asInt());
+                assertEquals(fixture.fixture().required("unsignedTx"), success(frame).at("/prepared/cbor"));
+            }
             assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","exit"))));
             assertTrue(child.waitFor(5,TimeUnit.SECONDS));
             assertEquals(0,child.exitValue(),Files.readString(diagnostics));
-            try (var files = Files.list(dir)) { assertEquals(0,files.count()); }
+            for (Path empty : List.of(dir, home, tmp)) {
+                try (var files = Files.list(empty)) { assertEquals(List.of(), files.toList(), empty.toString()); }
+            }
+            if (audit != null) checkTrace(trace);
             return JSON.readTree(reply);
         } finally { child.destroyForcibly(); }
+    }
+
+    // The first stdin read marks the serving interval, after the JVM's own launch and perf-data setup.
+    private static void checkTrace(Path log) throws IOException {
+        boolean serving = false;
+        try (var lines = Files.lines(log)) {
+            for (var iterator = lines.iterator(); iterator.hasNext();) {
+                String line = iterator.next();
+                if (line.contains(" read(0,")) serving = true;
+                if (!serving) continue;
+                assertFalse(line.contains(" connect(") || line.contains(" execve(") || line.contains(" socket(")
+                        || line.contains(" openat(") && (line.contains("O_WRONLY") || line.contains("O_RDWR")
+                        || line.contains("O_CREAT") || line.contains("O_TRUNC")), line);
+            }
+        }
+        assertTrue(serving, "strace did not observe the host reading stdin");
     }
 }

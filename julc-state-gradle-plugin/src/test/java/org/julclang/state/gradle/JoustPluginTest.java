@@ -66,6 +66,11 @@ class JoustPluginTest {
         assertThat(deps(p, "implementation")).containsExactly(
                 "com.bloxbean.cardano:cardano-client-backend-blockfrost:" + v.getProperty("ccl"),
                 "org.julclang:julc-state-runtime:" + j);
+        var host = p.getConfigurations().getByName("joustHost");
+        assertThat(host.isCanBeResolved()).isTrue();
+        assertThat(host.isCanBeConsumed()).isFalse();
+        assertThat(host.isTransitive()).isFalse();
+        assertThat(deps(p, "joustHost")).containsExactly("org.julclang:julc-state-host:" + j, "org.julclang:julc-state-serve:" + j);
         assertThat(deps(p, "annotationProcessor")).containsExactly(
                 "org.julclang:julc-annotation-processor:" + v.getProperty("julc"),
                 "org.julclang:julc-state-api:" + j,

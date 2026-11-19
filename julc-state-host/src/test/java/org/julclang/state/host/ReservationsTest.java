@@ -43,6 +43,7 @@ class ReservationsTest {
         held(false);
         assertEquals("expired",settle("expired",34,null));
         code("conflict",() -> settle("discarded",34,null));
+        code("conflict",() -> settle("confirmed",34,19L));
     }
     @Test void confirmedRewindAndDeepRollback() {
         table.commit(entry);
