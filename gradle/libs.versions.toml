@@ -1,11 +1,11 @@
 [versions]
-# JuLC 0.1.0-pre21 (tag v0.1.0-pre21 at 08b021ce, released 2026-11-18; includes bloxbean/julc#311 and #313), on Maven
+# JuLC 0.1.0-pre22 (tag v0.1.0-pre22 at b782bf4c, released 2026-11-19; includes bloxbean/julc#311, #313 and #348), on Maven
 # Central and in the BloxBean release repository (https://repo.bloxbean.org/maven/releases). It depends on
 # cardano-client-lib 0.8.0-pre8: keep the two in step.
-julc = "0.1.0-pre21"
+julc = "0.1.0-pre22"
 cardano-client-lib = "0.8.0-pre8"
 junit = "5.11.4"
-# JuLC 0.1.0-pre21 uses bcprov 1.86 in every published module (julc-vm, julc-vm-java, julc-testkit).
+# JuLC 0.1.0-pre22 uses bcprov 1.86 in every published module (julc-vm, julc-vm-java, julc-testkit).
 bouncycastle = "1.86"
 assertj = "3.25.1"
 # Coverage-guided fuzzing (as JuLC, ADR-063 D13): gradle/jazzer-fuzz.gradle.
