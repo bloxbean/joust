@@ -123,6 +123,13 @@ final class Reads {
         catch (InvocationTargetException e) { throw e.getCause(); }
     }
 
+    List<Utxo> outputs(String address) {
+        utxos(address);
+        return snapshot.utxos.get(address);
+    }
+
+    String tipHash() { return lastHash; }
+
     private void utxos(String address) {
         if (snapshot.utxos.containsKey(address)) return;
         checkAddress(address, network);

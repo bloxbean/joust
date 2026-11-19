@@ -40,10 +40,17 @@ dependencies {
     testImplementation project(':examples:bank')
     testImplementation project(':examples:treasury')
     testImplementation project(':examples:devkit')
+    testImplementation project(':examples:dex')
+    testImplementation project(':examples:registry')
+    testImplementation project(':examples:pool')
+    testAnnotationProcessor project(':julc-state-processor')
+    testAnnotationProcessor libs.julc.annotation.processor
+    testAnnotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
 }
 
 tasks.withType(Test).configureEach {
     inputs.file(rootProject.file('fixtures/m3/escrow/001-open.json')).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.file('fixtures/m3/dex/003-swapAdaForToken.json')).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('fixtures/m0')).withPropertyName('fixturesM0').withPathSensitivity(PathSensitivity.RELATIVE)
     // The forked-host tests (fd 1 diversion, no side effects) launch `java` from this toolchain.
     def launcher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
@@ -72,5 +79,19 @@ if (providers.gradleProperty('joustHostTrace').isPresent()) {
         def launcher = rootProject.file('.github/scripts/trace-dev-host.sh')
         inputs.file(launcher)
         systemProperty 'joust.host.traceLauncher', launcher.absolutePath
+    }
+}
+
+tasks.named('test', Test) {
+    def vectors = rootProject.file('fixtures/host')
+    inputs.files(rootProject.fileTree(vectors) { include '*.json' }).withPropertyName('hostVectors')
+    systemProperty 'joust.host.vectors', vectors.absolutePath
+    if (providers.gradleProperty('joustHostFixtures').isPresent()) {
+        systemProperty 'joust.host.record', 'true'
+        outputs.upToDateWhen { false }
+    }
+    if (providers.gradleProperty('joustHostE2e').isPresent()) {
+        systemProperty 'joust.host.e2e', 'true'
+        outputs.upToDateWhen { false }
     }
 }

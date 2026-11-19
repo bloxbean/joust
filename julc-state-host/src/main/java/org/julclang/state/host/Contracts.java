@@ -27,15 +27,14 @@ record Contracts(Map<String, Contract> all) {
         String code(String kind, JsonNode meta) {
             if (unsupported != null) return unsupported;
             if (kind.startsWith("keyed") || kind.equals("init") && spec.hasKeyed()) return "keyed";
-            if (kind.equals("view")) return "notYet";
+            if (kind.equals("view")) return null;
             var p = meta.path("policies");
             if (p.path("authorizedBy").size() > 0) return "authorizedBy";
-            if (p.path("batched").asBoolean() || p.path("into").asBoolean() || p.hasNonNull("admits")
+            if (p.hasNonNull("migrateTo") || p.path("batched").asBoolean() || p.path("into").asBoolean() || p.hasNonNull("admits")
                     || p.path("receives").asBoolean() || meta.path("returns").path("deposits").asBoolean()
-                    || meta.path("needsService").asBoolean() && (!meta.hasNonNull("recipe")
-                    || meta.path("returns").path("sends").asBoolean())) return "unverifiable";
-            if (p.hasNonNull("quorum") || kind.startsWith("owned")) return "m1b";
-            return Set.of("init", "action", "destroy").contains(kind) ? null : "unverifiable";
+                    || meta.path("needsService").asBoolean() && !meta.hasNonNull("recipe")) return "unverifiable";
+            if (p.hasNonNull("quorum") && !Set.of("action", "destroy", "ownedAction", "ownedDestroy").contains(kind)) return "unverifiable";
+            return Set.of("init", "action", "destroy", "ownedInit", "ownedAction", "ownedDestroy").contains(kind) ? null : "unverifiable";
         }
         ObjectNode describe() {
             var out = obj();

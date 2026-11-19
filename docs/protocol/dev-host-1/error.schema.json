@@ -32,7 +32,7 @@
           "properties": {
             "kind": {"const": "bad"},
             "code": {
-              "enum": ["busy", "network", "nowDecreased", "nowImplausible", "tooLarge", "stageMismatch", "unknownReservation", "conflict", "notExpired", "unbounded", "restoreClosed", "request", "contract", "method", "readLimit"]
+              "enum": ["busy", "network", "nowDecreased", "nowImplausible", "tooLarge", "stageMismatch", "unknownReservation", "conflict", "notExpired", "unbounded", "restoreClosed", "request", "contract", "method", "readLimit", "listingGone"]
             }
           }
         },
