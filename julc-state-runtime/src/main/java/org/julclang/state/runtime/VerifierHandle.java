@@ -69,12 +69,14 @@ public final class VerifierHandle {
                 .registerStakeAddress(rewardAddress)
                 .from(payerAddress);
         try {
-            var ctx = Designation.builder(runtime.backend(), null).compose(tx)
+            var ctx = Designation.builder(runtime, null).compose(tx)
                     .feePayer(payerAddress)
                     .additionalSignersCount(1);
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
-            var claimed = Designation.build(payerAddress, null, ctx::build);
+            var claimed = Designation.build(runtime.claimStore(), payerAddress, null, ctx::build);
             return TxRunner.exportPrepared(runtime, "publish and register the JOUST " + label, claimed);
+        } catch (ReservedInputException e) {
+            throw e;
         } catch (Exception e) {
             throw new SubmitException("publish the " + label + ": could not build the transaction: " + e.getMessage(), e);
         }

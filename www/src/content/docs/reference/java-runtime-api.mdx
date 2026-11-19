@@ -58,8 +58,11 @@ Contracts with keyed types (ADR-0016) get, per keyed type `T`, `<t>List()`, `<t>
 | `backend()` | `BackendService` | |
 | `evaluator()` | `TransactionEvaluator` | May be null: QuickTx then uses the backend's evaluation endpoint |
 | `network()` | `Network` | |
-| `chainTime()` | `ChainTime` | |
-| `ttlMs()` | `long` | |
+| `chainTime()` | `ChainTime` | The builder's; inside a call scope, its `now` is both `currentSlot()` and `tipSlot()` |
+| `ttlMs()` | `long` | The effective TTL in milliseconds. Inside a scope, `callScope().ttlSlots()` gives the optional slot count |
+| `inScope(CallScope scope, Supplier<T> body)` | `T` | Runs one call with its own clock, TTL and page limits (ADR-0022 D7); on this thread only, until `body` ends |
+| `callScope()` | `CallScope` | The scope active on this thread, or null |
+| `claimStore()` | `ClaimStore` | Where claims and designated inputs are kept (ADR-0022 D8) |
 | `maxRetries()` | `int` | |
 | `confirmTimeout()` | `Duration` | |
 | `mapVerifier()` | `VerifierHandle` | The shared MerkleMap verifier on this network (ADR-0002 D9) |
@@ -78,6 +81,7 @@ Contracts with keyed types (ADR-0016) get, per keyed type `T`, `<t>List()`, `<t>
 | `maxRetries(int)` | 3 | Rebuilds after the node rejected a call because the state moved |
 | `confirmTimeout(Duration)` | 90 seconds | Wait for a submitted transaction to appear on chain |
 | `address(byte[] pkh, String bech32)` | none | Pay this key hash at this address instead of its enterprise address |
+| `claimStore(ClaimStore)` | `ClaimStore.jvm()` | Where the runtime keeps the claims of what it builds and how they expire; the default is the JVM's static store, released by the machine clock |
 | `log(Consumer<String>)` | no-op | Progress messages |
 | `onBuilt(Consumer<BuiltTx>)` | none | Called with every transaction built, before it is submitted or returned |
 | `referenceScript(Utxo)` | none | A known reference-script output; contracts with that script hash use it instead of scanning their address |
@@ -248,7 +252,10 @@ transaction (`prepare()` cannot be nested).
 | `cbor()` | `String` | The unsigned transaction, hex CBOR, for CIP-30 `signTx(cbor, true)` |
 | `txHash()` | `String` | |
 | `requiredSigners()` | `List<String>` | Key hashes (hex) that must sign: the payer's and each caller's |
-| `validTo()` | `long` | The last valid slot, or -1 if unbounded |
+| `validTo()` | `long` | The end of the window the call chose, or -1 when it chose none (an untimed call's body still has the runtime's TTL: see `validToSlot()`) |
+| `validToSlot()`, `validFromSlot()` | `OptionalLong` | The body's validity bounds (upper: its `ttl`), empty when it has none |
+| `payouts()` | `List<PreparedTx.Payout>` | The payouts the build recorded: address, the lovelace owed, tag (hex CBOR) |
+| `sends()` | `List<PreparedTx.Send>` | The sends the build recorded, at their output indices |
 | `plan()` | `Map<String, Object>` | The portable plan of the transaction (`TxPlan`) |
 | `transaction()` | `Transaction` | A copy, for inspection |
 | `withWitnesses(String... witnessSetsCbor)` | `String` | The signed transaction, hex CBOR, after checking every signature |
@@ -338,12 +345,22 @@ These serve the runtime engine and the prepare service (ADR-0015). Applications 
 | `snapshot.Snapshot` | The chain as a call sees it: tip, protocol parameters, UTxOs by address, outputs by reference, scripts. JSON in and out |
 | `snapshot.SnapshotBackend` | A CCL `BackendService` answering from a `Snapshot`; throws `Need` for anything missing |
 | `snapshot.Need` | What a call needs from the chain next (`kind()`, `key()`) |
+| `snapshot.ReadFailed`, `snapshot.Unsupported` | A chain read that failed, or a backend method a restricted backend does not serve: `Error`s, like `Need`, so no `catch (RuntimeException)` takes them for absence (ADR-0022 D6). All three are `CallAbort`s |
+| `CallScope`, `ClaimStore` | One call's clock, TTL and page limits; the store of claims and designated inputs (ADR-0022 D7, D8) |
 | `snapshot.SuppliedProver`, `snapshot.SnapshotNodeStore` | Map proofs and nodes supplied by the caller |
 | `described.DescribedContract` | A contract known by its description, compiled script and transitions; runs call requests through the runtime core |
 | `described.TransitionFn`, `described.UplcTransitions` | A transition's off-chain meaning, and its implementation by JuLC's VM over the toolchain's transition programs, obtained with `UplcTransitions.verified(manifest, description, script, programs)` (the manifest is checked first); a failed run is the contract's refusal only when it carries the `joust:require` tag |
 | `described.TransitionInputs` | Checks every evaluation's inputs against the description's declared types first (ADR-0020); `DescribedContract` wraps its transitions in it |
 | `described.ProgramManifest`, `described.CanonicalJson` | The program manifest's format (version 2) and its check (ADR-0020 D8), and the canonical JSON its description hash is over |
 | `described.SchemaCodec`, `described.DataFidelity` | JSON and Plutus data by a description's schema |
+
+## julc-state-serve: ServedContract
+
+`public final class ServedContract` (package `org.julclang.state.serve`, ADR-0022 D16): a generated client driven by its
+description, without a transport. `of(Class<?> generatedClient)`, `meta(kind, method)`, `call(...)`, `view(runtime,
+instance, view, args)` and `viewJson(...)` (a view, or the state with `view` null), `deployment(runtime)`. Failures from
+the generated client reach the caller as they were thrown: a `RuntimeException` as itself, a `CallAbort` error as
+itself. `JsonValues` (same package) is the description's JSON codec; `BadRequest` is a request's mistake.
 
 ## julc-state-server: JoustServer
 

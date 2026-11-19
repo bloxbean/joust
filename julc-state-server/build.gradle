@@ -2,6 +2,8 @@ description = 'JOUST prepare service: prepares wallet transactions for JavaScrip
 
 dependencies {
     api project(':julc-state-runtime')
+    // The transport-independent adapter over generated clients (ADR-0022 D16), shared with the dev host.
+    api project(':julc-state-serve')
     testImplementation project(':julc-state-testkit')
 }
 

@@ -1,0 +1,14 @@
+description = 'JOUST serving adapter: drives generated clients by their descriptions, without a transport (ADR-0022 D16)'
+
+dependencies {
+    api project(':julc-state-runtime')
+    api libs.jackson.databind
+}
+
+dependencies {
+    // Generated clients to serve in the tests (no DevKit needed for these).
+    testImplementation project(':examples:counter')
+    testImplementation project(':examples:bank')
+    testImplementation project(':examples:devkit')
+    testImplementation project(':julc-state-testkit')
+}

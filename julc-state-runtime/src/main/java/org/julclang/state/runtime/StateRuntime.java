@@ -15,6 +15,8 @@ import java.util.function.Consumer;
 /**
  * Everything a generated client needs to talk to a network: backend, optional script evaluator, network id, clock,
  * TTL, retry policy and an address book for payout recipients. Immutable; build with {@link #builder(BackendService)}.
+ * A caller may run one call with its own clock, TTL and page limits ({@link #inScope}); outside a scope the builder's
+ * settings apply, as always.
  */
 public final class StateRuntime {
 
@@ -37,6 +39,11 @@ public final class StateRuntime {
     private final long topUpAllowance;
     private final Duration relayTimeout;
     private final long settlementSlots;
+    private final ClaimStore claimStore;
+    /** The call scope active on each thread for this runtime (ADR-0022 D7); none by default. */
+    private final ThreadLocal<Scoped> scope = new ThreadLocal<>();
+
+    private record Scoped(CallScope scope, ChainTime clock) {}
 
     /** A transaction the runtime built: what it is for, and the transaction (signed when submitted, unsigned when prepared). */
     public record BuiltTx(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {}
@@ -61,6 +68,7 @@ public final class StateRuntime {
         this.topUpAllowance = b.topUpAllowance;
         this.relayTimeout = b.relayTimeout;
         this.settlementSlots = b.settlementSlots;
+        this.claimStore = b.claimStore;
         org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
     }
 
@@ -72,8 +80,61 @@ public final class StateRuntime {
     /** May be null: then QuickTx uses the backend's evaluation endpoint. */
     public TransactionEvaluator evaluator() { return evaluator; }
     public Network network() { return network; }
-    public ChainTime chainTime() { return chainTime; }
-    public long ttlMs() { return ttlMs; }
+    /**
+     * The clock: the builder's; inside a {@linkplain #inScope call scope}, the same conversions with the scope's
+     * {@code now} as both {@code currentSlot()} and {@code tipSlot()}.
+     */
+    public ChainTime chainTime() {
+        Scoped s = scope.get();
+        return s == null ? chainTime : s.clock();
+    }
+    /** The TTL of Ctx-reading and wallet calls, in milliseconds, including when converted from a scope's slot count. */
+    public long ttlMs() {
+        Scoped s = scope.get();
+        if (s == null || s.scope().ttlSlots().isEmpty()) return ttlMs;
+        return Math.multiplyExact(s.scope().ttlSlots().getAsLong(), chainTime.slotLengthMs());
+    }
+
+    /**
+     * Runs {@code body} on this thread with {@code callScope}'s clock, TTL and page limits in place of this runtime's
+     * (ADR-0022 D7). Scopes nest (the innermost applies) and end with {@code body}, however it ends; other threads, and
+     * this thread outside {@code body}, keep the builder's settings.
+     */
+    public <T> T inScope(CallScope callScope, java.util.function.Supplier<T> body) {
+        Objects.requireNonNull(callScope, "callScope");
+        Scoped before = scope.get();
+        scope.set(new Scoped(callScope, new CallScope.Clock(chainTime, callScope.now())));
+        try {
+            return body.get();
+        } finally {
+            if (before == null) scope.remove();
+            else scope.set(before);
+        }
+    }
+
+    /** As {@link #inScope(CallScope, java.util.function.Supplier)}, for a body without a result. */
+    public void inScope(CallScope callScope, Runnable body) {
+        inScope(callScope, () -> {
+            body.run();
+            return null;
+        });
+    }
+
+    /** The call scope active on this thread for this runtime, or null. */
+    public CallScope callScope() {
+        Scoped s = scope.get();
+        return s == null ? null : s.scope();
+    }
+
+    void requireUnscopedSubmission() {
+        if (callScope() != null) throw new IllegalStateException("submitting inside a call scope");
+    }
+
+    /**
+     * Where this runtime keeps the claims of what it builds and its designated inputs (ADR-0022 D8): the builder's
+     * store, by default {@link ClaimStore#jvm()} (this JVM's, expiring by the machine clock, as before).
+     */
+    public ClaimStore claimStore() { return claimStore; }
     public int maxRetries() { return maxRetries; }
     public Duration confirmTimeout() { return confirmTimeout; }
     /**
@@ -98,7 +159,11 @@ public final class StateRuntime {
      * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null: keyed
      * calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
      */
-    public long[] pageLimits() { return pageLimits == null ? null : pageLimits.clone(); }
+    public long[] pageLimits() {
+        Scoped s = scope.get();
+        if (s != null && s.scope().pageLimits() != null) return s.scope().pageLimits();
+        return pageLimits == null ? null : pageLimits.clone();
+    }
     void log(String message) { log.accept(message); }
     /** Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). */
     void built(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {
@@ -187,6 +252,7 @@ public final class StateRuntime {
         private long topUpAllowance = 10_000_000L;
         private Duration relayTimeout = Duration.ofSeconds(60);
         private long settlementSlots = 2;
+        private ClaimStore claimStore = ClaimStore.jvm();
 
         private Builder(BackendService backend) {
             this.backend = backend;
@@ -280,6 +346,16 @@ public final class StateRuntime {
                 throw new IllegalArgumentException("settlementSlots must be 0 to " + MAX_SETTLEMENT_SLOTS);
             }
             this.settlementSlots = slots;
+            return this;
+        }
+
+        /**
+         * Where the runtime keeps the claims of the transactions it builds, its designated inputs and how they expire
+         * (ADR-0022 D8). Default {@link ClaimStore#jvm()}: this JVM's static claims, released by the machine clock
+         * (ADR-0016 D7, unchanged). Only ever set here: a runtime never discovers a store by itself.
+         */
+        public Builder claimStore(ClaimStore store) {
+            this.claimStore = Objects.requireNonNull(store, "claimStore");
             return this;
         }
 

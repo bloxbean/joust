@@ -308,6 +308,7 @@ final class AssetTx {
                 var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 100, page);
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
+                    if (contract.runtime.claimStore().avoids(Designation.ref(u))) continue;
                     if (alreadyIn != null && u.getTxHash().equals(alreadyIn.getTxHash())
                             && u.getOutputIndex() == alreadyIn.getOutputIndex()) continue;
                     boolean useful = false;

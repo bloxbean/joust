@@ -32,14 +32,36 @@ public final class PreparedTx {
     private final List<byte[]> requiredSigners;
     private final Window window;
     private final String what;
+    private final List<Payout> payouts;
+    private final List<Send> sends;
+
+    /**
+     * A payout the build recorded (ADR-0022 D5a, F12): an output at {@code address} tagged with {@code tagCbor} (the
+     * paying instance's or object's input, hex CBOR) holding at least {@code owed} lovelace, the amount the contract
+     * owes; the output itself may hold more (topped up to the ledger minimum).
+     */
+    public record Payout(String address, java.math.BigInteger owed, String tagCbor) {}
+
+    /**
+     * A send the build recorded (ADR-0007 D6): output {@code index} of the transaction, at {@code address}, with exactly
+     * this inline datum ({@code inlineDatumCbor}, hex) or datum hash, or neither, holding at least {@code value}.
+     */
+    public record Send(int index, String address, String inlineDatumCbor, String datumHash, org.julclang.ledger.Value value) {}
 
     PreparedTx(StateRuntime runtime, Transaction tx, List<byte[]> requiredSigners, Window window, String what) {
+        this(runtime, tx, requiredSigners, window, what, List.of(), List.of());
+    }
+
+    PreparedTx(StateRuntime runtime, Transaction tx, List<byte[]> requiredSigners, Window window, String what,
+               List<Payout> payouts, List<Send> sends) {
         this.runtime = runtime;
         this.tx = tx;
         this.txHash = TransactionUtil.getTxHash(tx);
         this.requiredSigners = List.copyOf(requiredSigners);
         this.window = window;
         this.what = what;
+        this.payouts = List.copyOf(payouts);
+        this.sends = List.copyOf(sends);
     }
 
     /** The unsigned transaction, hex CBOR, for CIP-30 {@code signTx}. */
@@ -60,9 +82,37 @@ public final class PreparedTx {
         return requiredSigners.stream().map(HexUtil::encodeHexString).toList();
     }
 
-    /** The last slot the transaction is valid in, or -1 if it has no upper bound. Sign and submit before it. */
+    /**
+     * The end of the window the call chose, or -1 when the call chose none (an untimed call: its body may still carry
+     * the runtime's TTL as an upper bound; {@link #validToSlot()} reads the body). Sign and submit before it.
+     */
     public long validTo() {
         return window == null ? -1 : window.toSlot();
+    }
+
+    /**
+     * The transaction body's validity upper bound (its {@code ttl}: the first slot it is no longer valid in), or empty
+     * when the body has none (ADR-0022 D5: read from the final body, never from build metadata).
+     */
+    public java.util.OptionalLong validToSlot() {
+        long ttl = tx.getBody().getTtl();
+        return ttl == 0 ? java.util.OptionalLong.empty() : java.util.OptionalLong.of(ttl);
+    }
+
+    /** The transaction body's validity lower bound (its first valid slot), or empty when the body has none. */
+    public java.util.OptionalLong validFromSlot() {
+        long from = tx.getBody().getValidityStartInterval();
+        return from == 0 ? java.util.OptionalLong.empty() : java.util.OptionalLong.of(from);
+    }
+
+    /** The payouts the build recorded, with the amounts owed (ADR-0022 D5a); the transaction pays each, possibly more. */
+    public List<Payout> payouts() {
+        return payouts;
+    }
+
+    /** The sends the build recorded, at their output indices (ADR-0007 D6, ADR-0022 D5a). */
+    public List<Send> sends() {
+        return sends;
     }
 
     /** The portable plan of this transaction (ADR-0013 D4): see {@link TxPlan}. */
@@ -91,6 +141,7 @@ public final class PreparedTx {
 
     /** Adds the witnesses as {@link #withWitnesses} does, submits, and waits until the transaction is on chain. */
     public String submit(String... witnessSetsCbor) {
+        runtime.requireUnscopedSubmission();
         return new TxRunner(runtime).submitSigned(signed(witnessSetsCbor), what);
     }
 

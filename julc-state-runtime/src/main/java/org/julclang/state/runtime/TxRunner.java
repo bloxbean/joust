@@ -235,13 +235,14 @@ final class TxRunner {
             cap.record(caller, requiredSigners, expected, extraExpected, payouts, sends, referenceScripts, cosigners, what);
             return "composed";
         }
+        rt.requireUnscopedSubmission();
         if (designated != null && window == null) window = untimedWindow(rt.chainTime(), rt.ttlMs());
         // What the attempt depends on, as the calls built it: the script inputs it spends and the references it reads
         // (ADR-0016 D7: a build or script failure is contention only if one of them moved; F68).
         if (designated != null && tx instanceof RecordingTx r) designated.noteInputs(r.spent, r.read);
         Designation.Claimed built;
         try {
-            var ctx = Designation.builder(rt.backend(), designated).compose(tx)
+            var ctx = Designation.builder(rt, designated).compose(tx)
                     .withSigner(SignerProviders.signerFrom(allSigners(caller)))
                     .feePayer(caller.baseAddress())
                     .collateralPayer(caller.baseAddress())
@@ -259,8 +260,8 @@ final class TxRunner {
             // Selected and claimed under the payer's lock: no keyed operation designates these inputs meanwhile (D7).
             var scriptInputs = new java.util.HashSet<String>();
             if (tx instanceof RecordingTx r) for (Utxo u : r.spent) scriptInputs.add(Designation.ref(u));
-            built = Designation.build(caller.baseAddress(), designated, scriptInputs, finalCtx::buildAndSign);
-        } catch (SubmitException e) {
+            built = Designation.build(rt.claimStore(), caller.baseAddress(), designated, scriptInputs, finalCtx::buildAndSign);
+        } catch (SubmitException | ReservedInputException e) {
             throw e;
         } catch (Exception e) {
             throw new SubmitException(SubmitException.Kind.BUILD, what + ": could not build the transaction: " + rootMessage(e), e);
@@ -314,8 +315,9 @@ final class TxRunner {
                 designated.hold(built.claim().refs);
                 built.claim().release();
             } else if (pending) {
-                built.claim().releaseAt(window != null ? safeMs(rt.chainTime(), window.toSlot()) + 10_000
-                        : System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
+                built.claim().releaseAt(window != null
+                        ? new ClaimStore.Expiry(safeMs(rt.chainTime(), window.toSlot()) + 10_000, window.toSlot())
+                        : ClaimStore.Expiry.atMs(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS));
             } else {
                 built.claim().release();
             }
@@ -341,7 +343,7 @@ final class TxRunner {
             returned = true;
             return claimed.tx();
         } finally {
-            if (returned) claimed.claim().releaseAt(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
+            if (returned) claimed.claim().releaseAt(ClaimStore.Expiry.atMs(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS));
             else claimed.claim().release();
         }
     }
@@ -385,6 +387,7 @@ final class TxRunner {
      * window closed is refused as transient, so the operation rebuilds it with the same designated input (F57, R-C18).
      */
     private void awaitWindow(Window window, String what) {
+        rt.requireUnscopedSubmission();
         ChainTime time = rt.chainTime();
         long now = time.currentSlot();
         if (now < window.fromSlot()) {
@@ -588,13 +591,13 @@ final class TxRunner {
         // change output (and picking another largest UTxO could pick it twice).
         if (designated == null && payouts.stream().anyMatch(p -> p.address().equals(payer.baseAddress()))) {
             // Picked and claimed under the payer's lock, so no keyed operation designates it before the build (F63).
-            Utxo funding = Designation.pick(payer.baseAddress(), PICK_CLAIM_MS, () -> largestAdaOnly(payer.baseAddress(), spent));
+            Utxo funding = Designation.pick(rt.claimStore(), payer.baseAddress(), PICK_CLAIM_MS, () -> largestAdaOnly(payer.baseAddress(), spent));
             if (funding != null) tx.collectFrom(java.util.List.of(funding));
         }
         Transaction unsigned;
         Designation.Claimed built;
         try {
-            var ctx = Designation.builder(rt.backend(), null).compose(tx)
+            var ctx = Designation.builder(rt, designated).compose(tx)
                     .feePayer(payer.baseAddress())
                     .collateralPayer(payer.baseAddress())
                     .mergeOutputs(false)
@@ -609,16 +612,21 @@ final class TxRunner {
             } else {
                 // A wallet transaction always expires soon, so a withheld signature cannot be used much later (ADR-0013):
                 // the runtime's TTL, as for Ctx-reading calls (DevKit's time horizon is only minutes).
-                long tip = rt.backend().getBlockService().getLatestBlock().getValue().getSlot();
+                // In a call scope the slot is the scope's clock (ADR-0022 D7: one clock per call); outside one, the
+                // latest block, read as before.
+                long tip = rt.callScope() != null ? rt.chainTime().tipSlot()
+                        : rt.backend().getBlockService().getLatestBlock().getValue().getSlot();
                 ctx = ctx.validTo(tip + Math.max(1, rt.ttlMs() / rt.chainTime().slotLengthMs()));
             }
             if (rt.evaluator() != null) ctx = ctx.withTxEvaluator(rt.evaluator());
             var finalCtx = ctx;
             // Built and claimed under the payer's lock (F63).
-            built = Designation.build(payer.baseAddress(), null, finalCtx::build);
+            built = Designation.build(rt.claimStore(), payer.baseAddress(), designated, finalCtx::build);
             unsigned = built.tx();
             // ADR-0016 D11: a keyed call prepared for a wallet spends the page's designated input.
             if (designated != null) requireSpends(unsigned, designated.ref(), what);
+        } catch (ReservedInputException e) {
+            throw e;
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
@@ -631,7 +639,14 @@ final class TxRunner {
             verifySends(unsigned, sends, what);
             // Every key whose UTxO the transaction spends (or takes as collateral) must sign too (review r3).
             for (byte[] owner : inputOwners(unsigned)) needed.putIfAbsent(HexUtil.encodeHexString(owner), owner);
-            var prepared = new PreparedTx(rt, unsigned, new java.util.ArrayList<>(needed.values()), window, what);
+            var expectedPayouts = new java.util.ArrayList<PreparedTx.Payout>();
+            for (ExpectedPayout p : payouts) expectedPayouts.add(new PreparedTx.Payout(p.address(), p.lovelace(), Datums.hex(p.tag())));
+            var expectedSends = new java.util.ArrayList<PreparedTx.Send>();
+            for (ExpectedSend sd : sends) {
+                expectedSends.add(new PreparedTx.Send(sd.index(), sd.address(), sd.inlineDatumHex(), sd.datumHash(), sd.value()));
+            }
+            var prepared = new PreparedTx(rt, unsigned, new java.util.ArrayList<>(needed.values()), window, what,
+                    expectedPayouts, expectedSends);
             returned = true;
             return prepared;
         } finally {
@@ -639,7 +654,8 @@ final class TxRunner {
             // Not returned (a check or a lookup failed): nothing can be submitted, so the claim ends now (F71).
             if (returned) {
                 long ttl = unsigned.getBody().getTtl();
-                built.claim().releaseAt(ttl > 0 ? safeMs(rt.chainTime(), ttl) + 10_000 : System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
+                built.claim().releaseAt(ttl > 0 ? new ClaimStore.Expiry(safeMs(rt.chainTime(), ttl) + 10_000, ttl)
+                        : ClaimStore.Expiry.atMs(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS));
             } else {
                 built.claim().release();
             }
@@ -693,7 +709,7 @@ final class TxRunner {
                 for (Utxo u : r.getValue()) {
                     if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null) continue;
                     if (spent.contains(u.getTxHash() + "#" + u.getOutputIndex())) continue;
-                    if (!Designation.pickable(u, currentOperation())) continue;   // another operation's (ADR-0016 D7, F72)
+                    if (!Designation.pickable(rt.claimStore(), u, currentOperation())) continue;   // another operation's (ADR-0016 D7, F72)
                     BigInteger q = lovelace(u);
                     if (q.compareTo(BigInteger.valueOf(3_000_000)) < 0) continue;
                     if (best == null || q.compareTo(lovelace(best)) > 0) best = u;
@@ -734,6 +750,7 @@ final class TxRunner {
 
     /** Submits a signed transaction and waits for it (a {@link PreparedTx} after the wallets signed). */
     String submitSigned(Transaction signed, String what) {
+        rt.requireUnscopedSubmission();
         String txHash = TransactionUtil.getTxHash(signed);
         try {
             var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
@@ -750,6 +767,7 @@ final class TxRunner {
 
     /** Builds, signs, submits and confirms a transaction without scripts (e.g. publishing a reference script). */
     String submitPlain(com.bloxbean.cardano.client.quicktx.Tx tx, Account payer, String what) {
+        rt.requireUnscopedSubmission();
         Capture cap = CAPTURE.get();
         if (payer instanceof WalletAccount || (cap != null && cap.walletOnly)) {
             throw new JoustException(what + ": needs a key-holding account to pay and sign; publish reference scripts and"
@@ -757,10 +775,12 @@ final class TxRunner {
         }
         Designation.Claimed built;
         try {
-            var ctx = Designation.builder(rt.backend(), null).compose(tx)
+            var ctx = Designation.builder(rt, null).compose(tx)
                     .withSigner(SignerProviders.signerFrom(payer))
                     .feePayer(payer.baseAddress());
-            built = Designation.build(payer.baseAddress(), null, ctx::buildAndSign);
+            built = Designation.build(rt.claimStore(), payer.baseAddress(), null, ctx::buildAndSign);
+        } catch (ReservedInputException e) {
+            throw e;
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
@@ -772,7 +792,7 @@ final class TxRunner {
             throw e;
         } finally {
             // A pending publication may still land: it has no validity bound, so its inputs stay claimed for a while.
-            if (pending) built.claim().releaseAt(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
+            if (pending) built.claim().releaseAt(ClaimStore.Expiry.atMs(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS));
             else built.claim().release();
         }
     }
@@ -895,6 +915,7 @@ final class TxRunner {
     }
 
     private void awaitInclusion(String txHash, String what) {
+        rt.requireUnscopedSubmission();
         long deadline = System.currentTimeMillis() + rt.confirmTimeout().toMillis();
         while (System.currentTimeMillis() < deadline) {
             try {
