@@ -59,7 +59,7 @@ Contracts with keyed types (ADR-0016) get, per keyed type `T`, `<t>List()`, `<t>
 | `evaluator()` | `TransactionEvaluator` | May be null: QuickTx then uses the backend's evaluation endpoint |
 | `network()` | `Network` | |
 | `chainTime()` | `ChainTime` | The builder's; inside a call scope, its `now` is both `currentSlot()` and `tipSlot()` |
-| `ttlMs()` | `long` | The builder's TTL; inside a call scope that sets one, its TTL in slots |
+| `ttlMs()` | `long` | The effective TTL in milliseconds. Inside a scope, `callScope().ttlSlots()` gives the optional slot count |
 | `inScope(CallScope scope, Supplier<T> body)` | `T` | Runs one call with its own clock, TTL and page limits (ADR-0022 D7); on this thread only, until `body` ends |
 | `callScope()` | `CallScope` | The scope active on this thread, or null |
 | `claimStore()` | `ClaimStore` | Where claims and designated inputs are kept (ADR-0022 D8) |

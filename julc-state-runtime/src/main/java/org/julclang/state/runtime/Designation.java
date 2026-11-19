@@ -2,6 +2,7 @@ package org.julclang.state.runtime;
 
 import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.api.UtxoSupplier;
+import com.bloxbean.cardano.client.api.common.OrderEnum;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.backend.api.BackendService;
 import com.bloxbean.cardano.client.quicktx.QuickTxBuilder;
@@ -294,6 +295,9 @@ final class Designation {
      */
     static Designated given(StateRuntime rt, Account payer, String ref) {
         String address = payer.baseAddress();
+        // ADR-0022 D8, D11: a reserved input is taken only by the operation its reservation belongs to.
+        ClaimStore store = rt.claimStore();
+        if (store.avoids(ref) && !store.reusable(ref)) throw new ReservedInputException("the designated input", ref);
         boolean complete = false;
         try {
             for (int page = 1; page <= 20; page++) {
@@ -399,14 +403,37 @@ final class Designation {
 
     static QuickTxBuilder builder(BackendService backend, ClaimStore store, Designated own) {
         var all = new com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier(backend.getUtxoService());
-        String ownRef = own == null ? null : own.ref();
-        boolean skipClaimed = own != null;
-        Object owner = own;
+        // A wallet designation is an explicit spend. It gives no exemption from local keyed claims.
+        Object owner = own == null || own.given() ? null : own;
+        String ownRef = selectableDesignation(store, own);
         UtxoSupplier free = new UtxoSupplier() {
+            record Query(String address, int size, OrderEnum order) {}
+            class Pages {
+                final List<Utxo> eligible = new ArrayList<>();
+                int next;
+                boolean finished;
+            }
+            private final Map<Query, Pages> pages = new java.util.HashMap<>();
+
             @Override
-            public List<Utxo> getPage(String address, Integer nrOfItems, Integer page,
-                                      com.bloxbean.cardano.client.api.common.OrderEnum order) {
-                return free(store, all.getPage(address, nrOfItems, page, order), ownRef, skipClaimed ? owner : null);
+            public List<Utxo> getPage(String address, Integer nrOfItems, Integer page, OrderEnum order) {
+                if (store instanceof JvmClaimStore) {
+                    return free(store, all.getPage(address, nrOfItems, page, order), ownRef, owner);
+                }
+                // CCL indexes pages from zero. Read just far enough to fill the requested eligible page,
+                // retaining the provider's order and any surplus for the next request.
+                int size = nrOfItems == null ? UtxoSupplier.DEFAULT_NR_OF_ITEMS_TO_FETCH : nrOfItems;
+                int start = Math.multiplyExact(page == null ? 0 : page, size);
+                int end = Math.addExact(start, size);
+                Pages cursor = pages.computeIfAbsent(new Query(address, size, order), key -> new Pages());
+                while (!cursor.finished && cursor.eligible.size() < end) {
+                    var raw = all.getPage(address, size, cursor.next, order);
+                    cursor.eligible.addAll(free(store, raw, ownRef, owner));
+                    cursor.next++;
+                    cursor.finished = raw.size() < size;
+                }
+                int count = cursor.eligible.size();
+                return new ArrayList<>(cursor.eligible.subList(Math.min(start, count), Math.min(end, count)));
             }
 
             @Override
@@ -416,7 +443,7 @@ final class Designation {
 
             @Override
             public List<Utxo> getAll(String address) {
-                return free(store, all.getAll(address), ownRef, skipClaimed ? owner : null);
+                return free(store, all.getAll(address), ownRef, owner);
             }
 
             @Override
@@ -426,6 +453,7 @@ final class Designation {
 
             @Override
             public void setSearchByAddressVkh(boolean flag) {
+                pages.clear();
                 all.setSearchByAddressVkh(flag);
             }
         };
@@ -475,7 +503,7 @@ final class Designation {
     }
 
     private static boolean selectable(ClaimStore store, String ref, String ownRef, Object owner) {
-        if (ref.equals(ownRef)) return true;
+        if (ref.equals(ownRef)) return !store.avoids(ref) || store.reusable(ref);
         boolean designated = store instanceof JvmClaimStore j ? j.designatedRaw(ref) : store.isDesignated(ref);
         return !designated && !store.avoids(ref) && !(owner != null && claimedByOther(store, ref, owner));
     }
@@ -513,10 +541,22 @@ final class Designation {
     static Claimed build(ClaimStore store, String address, Designated own, Set<String> scriptInputs, Supplier<Transaction> build) {
         return locked(address, () -> {
             Transaction t = build.get();
-            var claim = new ClaimStore.Claim(own, store);
-            for (var in : t.getBody().getInputs()) if (!scriptInputs.contains(ref(in))) claim.refs.add(ref(in));
-            if (t.getBody().getCollateral() != null) for (var in : t.getBody().getCollateral()) claim.refs.add(ref(in));
-            String ownRef = own == null ? null : own.ref();
+            // Wallet prepares retain ordinary claim ownership, including when the page supplied a designation.
+            Designated owner = own != null && !own.given() ? own : null;
+            var claim = new ClaimStore.Claim(owner, store);
+            String ownRef = selectableDesignation(store, own);
+            for (var in : t.getBody().getInputs()) {
+                String ref = ref(in);
+                checkReservation(store, ref, ownRef);
+                if (!scriptInputs.contains(ref)) claim.refs.add(ref);
+            }
+            if (t.getBody().getCollateral() != null) {
+                for (var in : t.getBody().getCollateral()) {
+                    String ref = ref(in);
+                    checkReservation(store, ref, ownRef);
+                    claim.refs.add(ref);
+                }
+            }
             for (String r : claim.refs) {
                 if (!r.equals(ownRef) && isDesignated(store, r)) {
                     throw new SubmitException(SubmitException.Kind.TRANSIENT, "input " + r + " was designated by a keyed"
@@ -524,7 +564,7 @@ final class Designation {
                 }
                 // A keyed attempt never spends what another keyed operation's handed-out attempts hold, even as an
                 // explicit input (F72); plain transactions keep their pre-M2 selection.
-                if (own != null && heldByAnotherOperation(store, r, own)) {
+                if (owner != null && heldByAnotherOperation(store, r, owner)) {
                     throw new SubmitException(SubmitException.Kind.TRANSIENT, "input " + r + " is held by another keyed"
                             + " operation's attempt; rebuild");
                 }
@@ -532,6 +572,20 @@ final class Designation {
             store.add(claim, null);
             return new Claimed(t, claim);
         });
+    }
+
+    /** A supplied ref alone gives no exemption from another operation's designation. */
+    private static String selectableDesignation(ClaimStore store, Designated own) {
+        if (own == null) return null;
+        String ref = own.ref();
+        if (own.given() && !(store.avoids(ref) && store.reusable(ref))) return null;
+        return ref;
+    }
+
+    private static void checkReservation(ClaimStore store, String ref, String ownRef) {
+        if (store.avoids(ref) && !(ref.equals(ownRef) && store.reusable(ref))) {
+            throw new ReservedInputException("build", ref);
+        }
     }
 
     /**

@@ -10,8 +10,10 @@ import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 import org.julclang.core.types.JulcList;
 import org.julclang.core.types.JulcMap;
+import org.julclang.state.runtime.CallAbort;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
@@ -35,7 +37,15 @@ public final class JsonValues {
     static final int MAX_DEPTH = 32;
     static final int MAX_ITEMS = 1024;
 
-    private JsonValues() {
+    /** Propagate a record constructor's or accessor's call abort to its host. */
+    public static final JsonValues TYPED = new JsonValues(true);
+    /** Report record reflection failures as bad values, as the HTTP service has always done. */
+    public static final JsonValues BAD_VALUES = new JsonValues(false);
+
+    private final boolean propagateAborts;
+
+    private JsonValues(boolean propagateAborts) {
+        this.propagateAborts = propagateAborts;
     }
 
     public static final class BadValue extends RuntimeException {
@@ -46,10 +56,15 @@ public final class JsonValues {
 
     /** {@code json} as a value of {@code type}. */
     public static Object fromJson(JsonNode json, Type type, String path) {
+        return TYPED.decode(json, type, path);
+    }
+
+    /** Decode with this codec's record-error policy. */
+    public Object decode(JsonNode json, Type type, String path) {
         return fromJson(json, type, path, 0);
     }
 
-    private static Object fromJson(JsonNode json, Type type, String path, int depth) {
+    private Object fromJson(JsonNode json, Type type, String path, int depth) {
         if (depth > MAX_DEPTH) throw new BadValue(path + ": nested too deeply");
         if (json == null || json.isMissingNode()) throw new BadValue(path + ": missing");
         Class<?> raw = rawOf(type);
@@ -106,7 +121,7 @@ public final class JsonValues {
         throw new BadValue(path + ": arguments of type " + raw.getSimpleName() + " are not supported");
     }
 
-    private static Object record(JsonNode json, Class<?> raw, String path, int depth, boolean variant) {
+    private Object record(JsonNode json, Class<?> raw, String path, int depth, boolean variant) {
         if (!json.isObject()) throw new BadValue(path + ": expected an object for " + raw.getSimpleName());
         RecordComponent[] cs = raw.getRecordComponents();
         var names = new ArrayList<String>();
@@ -119,7 +134,7 @@ public final class JsonValues {
         return construct(raw, args);
     }
 
-    private static Object construct(Class<?> raw, Object... args) {
+    private Object construct(Class<?> raw, Object... args) {
         try {
             Class<?>[] types = new Class<?>[raw.getRecordComponents().length];
             for (int i = 0; i < types.length; i++) types[i] = raw.getRecordComponents()[i].getType();
@@ -127,7 +142,7 @@ public final class JsonValues {
             k.setAccessible(true);
             return k.newInstance(args);
         } catch (ReflectiveOperationException e) {
-            throw new BadValue("cannot build a " + raw.getSimpleName() + ": " + e.getMessage());
+            throw reflectionFailure(e, "cannot build a " + raw.getSimpleName() + ": " + e.getMessage());
         }
     }
 
@@ -157,6 +172,11 @@ public final class JsonValues {
 
     /** {@code v} as JSON by the same conventions (views and states). */
     public static JsonNode toJson(Object v) {
+        return TYPED.encode(v);
+    }
+
+    /** Encode with this codec's record-error policy. */
+    public JsonNode encode(Object v) {
         if (v == null) return JSON.nullNode();
         if (v instanceof BigInteger b) return JSON.getNodeFactory().textNode(b.toString());
         if (v instanceof Long || v instanceof Integer) return JSON.getNodeFactory().textNode(v.toString());
@@ -164,10 +184,10 @@ public final class JsonValues {
         if (v instanceof byte[] b) return JSON.getNodeFactory().textNode(HexUtil.encodeHexString(b));
         if (v instanceof String s) return JSON.getNodeFactory().textNode(HexUtil.encodeHexString(s.getBytes(StandardCharsets.UTF_8)));
         if (v instanceof PlutusData d) return JSON.getNodeFactory().textNode(HexUtil.encodeHexString(PlutusDataCborEncoder.encode(d)));
-        if (v instanceof Optional<?> o) return o.isPresent() ? toJson(o.get()) : JSON.nullNode();
+        if (v instanceof Optional<?> o) return o.isPresent() ? encode(o.get()) : JSON.nullNode();
         if (v instanceof JulcList<?> l) {
             ArrayNode a = JSON.createArrayNode();
-            for (Object x : l) a.add(toJson(x));
+            for (Object x : l) a.add(encode(x));
             return a;
         }
         if (v instanceof JulcMap<?, ?> m) {
@@ -176,22 +196,22 @@ public final class JsonValues {
             JulcMap<Object, Object> mm = (JulcMap<Object, Object>) m;
             JulcList<Object> keys = mm.keys();
             JulcList<Object> values = mm.values();
-            for (long i = 0; i < keys.size(); i++) a.add(JSON.createArrayNode().add(toJson(keys.get(i))).add(toJson(values.get(i))));
+            for (long i = 0; i < keys.size(); i++) a.add(JSON.createArrayNode().add(encode(keys.get(i))).add(encode(values.get(i))));
             return a;
         }
         if (v instanceof List<?> l) {
             ArrayNode a = JSON.createArrayNode();
-            for (Object x : l) a.add(toJson(x));
+            for (Object x : l) a.add(encode(x));
             return a;
         }
         if (v.getClass().isRecord()) {
             RecordComponent[] cs = v.getClass().getRecordComponents();
             boolean variant = false;
             for (Class<?> i : v.getClass().getInterfaces()) variant |= i.isSealed();
-            if (cs.length == 1 && !variant && isNewType(v.getClass())) return toJson(get(cs[0], v));
+            if (cs.length == 1 && !variant && isNewType(v.getClass())) return encode(get(cs[0], v));
             ObjectNode o = JSON.createObjectNode();
             if (variant) o.put("$variant", v.getClass().getSimpleName());
-            for (RecordComponent c : cs) o.set(c.getName(), toJson(get(c, v)));
+            for (RecordComponent c : cs) o.set(c.getName(), encode(get(c, v)));
             return o;
         }
         throw new BadValue("cannot show a " + v.getClass().getSimpleName());
@@ -202,13 +222,19 @@ public final class JsonValues {
         return c.getName().startsWith("org.julclang.ledger.") || c.isAnnotationPresent(org.julclang.stdlib.annotation.NewType.class);
     }
 
-    private static Object get(RecordComponent c, Object v) {
+    private Object get(RecordComponent c, Object v) {
         try {
             var m = c.getAccessor();
             m.setAccessible(true);
             return m.invoke(v);
         } catch (ReflectiveOperationException e) {
-            throw new BadValue("cannot read " + c.getName());
+            throw reflectionFailure(e, "cannot read " + c.getName());
         }
+    }
+
+    private BadValue reflectionFailure(ReflectiveOperationException failure, String message) {
+        if (propagateAborts && failure instanceof InvocationTargetException
+                && failure.getCause() instanceof Error error && error instanceof CallAbort) throw error;
+        return new BadValue(message);
     }
 }

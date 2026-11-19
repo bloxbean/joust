@@ -37,17 +37,24 @@ public final class ServedContract {
     private final JsonNode description;
     private final JsonNode x;
     private final ContractSpec<?> spec;
+    private final JsonValues codec;
 
-    private ServedContract(String name, Class<?> client, JsonNode description, ContractSpec<?> spec) {
+    private ServedContract(String name, Class<?> client, JsonNode description, ContractSpec<?> spec, JsonValues codec) {
         this.name = name;
         this.client = client;
         this.description = description;
         this.x = description.get("x-joust");
         this.spec = spec;
+        this.codec = codec;
     }
 
     /** The contract of a generated {@code <Name>Client}. */
     public static ServedContract of(Class<?> client) {
+        return of(client, JsonValues.TYPED);
+    }
+
+    /** Serve a generated client using the given record conversion policy. */
+    public static ServedContract of(Class<?> client, JsonValues codec) {
         ContractSpec<?> spec;
         try {
             spec = (ContractSpec<?>) client.getField("SPEC").get(null);
@@ -62,7 +69,7 @@ public final class ServedContract {
             if (d.get("x-joust").has("params")) {
                 throw new IllegalArgumentException(spec.name() + " takes @Params: not served yet (ADR-0013 phase 3)");
             }
-            return new ServedContract(fq, client, d, spec);
+            return new ServedContract(fq, client, d, spec, codec);
         } catch (IOException e) {
             throw new IllegalArgumentException("cannot read " + resource, e);
         }
@@ -109,8 +116,7 @@ public final class ServedContract {
         try {
             return (StateContractHandle<?>) client.getMethod("contract", StateRuntime.class).invoke(null, runtime);
         } catch (InvocationTargetException e) {
-            if (e.getCause() instanceof Error err && err instanceof CallAbort) throw err;
-            throw new IllegalStateException(e);
+            throw unwrapped(e, "contract");
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
@@ -201,7 +207,7 @@ public final class ServedContract {
             Type[] types = m.getGenericParameterTypes();
             Object[] values = new Object[names.size()];
             for (int i = 0; i < values.length; i++) {
-                values[i] = JsonValues.fromJson(args == null ? null : args.get(names.get(i)), types[i], names.get(i));
+                values[i] = codec.decode(args == null ? null : args.get(names.get(i)), types[i], names.get(i));
             }
             return m.invoke(at, values);
         } catch (InvocationTargetException e) {
@@ -213,7 +219,7 @@ public final class ServedContract {
 
     /** As {@link #view}, in the description's JSON encoding ({@code x-joust.encoding.json}). */
     public JsonNode viewJson(StateRuntime runtime, String instance, String view, JsonNode args) {
-        return JsonValues.toJson(view(runtime, instance, view, args));
+        return codec.encode(view(runtime, instance, view, args));
     }
 
     /**
@@ -232,7 +238,7 @@ public final class ServedContract {
         return client.getMethod("at", StateRuntime.class, String.class).invoke(null, runtime, instance);
     }
 
-    private static List<Object> arguments(Method m, int offset, JsonNode meta, JsonNode args, BigInteger lovelace,
+    private List<Object> arguments(Method m, int offset, JsonNode meta, JsonNode args, BigInteger lovelace,
                                           JsonNode assets, boolean payable, boolean takesAssets) {
         if (args == null || !args.isObject()) throw new BadRequest("args must be an object");
         var names = new ArrayList<String>();
@@ -242,10 +248,10 @@ public final class ServedContract {
         });
         Type[] types = m.getGenericParameterTypes();
         var out = new ArrayList<Object>();
-        for (int i = 0; i < names.size(); i++) out.add(JsonValues.fromJson(args.get(names.get(i)), types[offset + i], names.get(i)));
+        for (int i = 0; i < names.size(); i++) out.add(codec.decode(args.get(names.get(i)), types[offset + i], names.get(i)));
         int next = offset + names.size();
         if (payable) out.add(lovelace);
-        if (takesAssets) out.add(JsonValues.fromJson(assets == null ? JsonValues.JSON.createArrayNode() : assets, types[next + (payable ? 1 : 0)], "assets"));
+        if (takesAssets) out.add(codec.decode(assets == null ? JsonValues.JSON.createArrayNode() : assets, types[next + (payable ? 1 : 0)], "assets"));
         return out;
     }
 
@@ -258,12 +264,16 @@ public final class ServedContract {
 
     /** The deployment the page pins: policy, address, network, reference script. */
     public ObjectNode deployment(StateRuntime runtime) {
-        var h = handle(runtime);
+        return deploymentOf(handle(runtime));
+    }
+
+    /** The deployment for an already constructed client handle. */
+    public ObjectNode deploymentOf(StateContractHandle<?> h) {
         ObjectNode d = JsonValues.JSON.createObjectNode();
         d.put("contract", name);
         d.put("policy", h.policyId());
         d.put("address", h.address());
-        d.put("networkId", runtime.network().getNetworkId());
+        d.put("networkId", h.runtime().network().getNetworkId());
         var refs = d.putArray("referenceScripts");
         var ref = h.findReferenceScript();
         if (ref != null) refs.add(ref.getTxHash() + "#" + ref.getOutputIndex());

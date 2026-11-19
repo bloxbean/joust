@@ -4,12 +4,13 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * {@link ClaimStore#jvm()}: the runtime's claims as they always were (ADR-0016 D7), static for the whole JVM, released
- * at machine-clock times ({@link ClaimStore.Expiry#untilMs()}). The structures and their rules are the ones
- * {@link Designation} kept before ADR-0022 made the store a seam; it avoids nothing beyond them.
+ * The JVM-wide default claim store. Designations and claims expire by machine time
+ * ({@link ClaimStore.Expiry#untilMs()}). Each active designation carries its own release time so a previous
+ * owner's scheduled release cannot remove a new designation of the same input.
  */
 final class JvmClaimStore implements ClaimStore {
 
@@ -17,22 +18,26 @@ final class JvmClaimStore implements ClaimStore {
 
     private JvmClaimStore() {}
 
-    /** Designated inputs ({@code txHash#index}) of this JVM's keyed operations. */
-    private static final Set<String> DESIGNATED = ConcurrentHashMap.newKeySet();
-    /** Designated inputs kept after their operation ended pending, until this wall-clock time (ms). */
-    private static final Map<String, Long> LINGERING = new ConcurrentHashMap<>();
+    /** One entry per designation, held until its wall-clock expiry or explicit release. */
+    private static final ConcurrentHashMap<String, Long> DESIGNATED = new ConcurrentHashMap<>();
     /** Claims of transactions built (or inputs picked) and not yet resolved; each claim is its own identity. */
     private static final Set<Claim> CLAIMS = ConcurrentHashMap.newKeySet();
+    /**
+     * Each claim's release time (machine ms); absent: {@code Long.MAX_VALUE}, until released explicitly. Kept here, not
+     * on the claim (a store's own bookkeeping); weak, as the field it replaces lived and died with its claim.
+     */
+    private static final Map<Claim, Long> UNTIL = Collections.synchronizedMap(new WeakHashMap<>());
+
+    private static long until(Claim c) {
+        Long u = UNTIL.get(c);
+        return u == null ? Long.MAX_VALUE : u;
+    }
 
     /** Drops lingering designations and claims whose time has passed. */
     void purge() {
         long now = System.currentTimeMillis();
-        if (!LINGERING.isEmpty()) {
-            LINGERING.forEach((ref, until) -> {
-                if (until <= now && LINGERING.remove(ref, until)) DESIGNATED.remove(ref);
-            });
-        }
-        CLAIMS.removeIf(c -> c.until <= now);
+        DESIGNATED.entrySet().removeIf(entry -> entry.getValue() <= now);
+        CLAIMS.removeIf(c -> until(c) <= now);
     }
 
     /** Nothing designated, and (when {@code withClaims}) nothing claimed: selection then keeps the provider's list. */
@@ -47,34 +52,35 @@ final class JvmClaimStore implements ClaimStore {
 
     @Override
     public boolean designate(String ref) {
-        return DESIGNATED.add(ref);
+        while (true) {
+            Long until = DESIGNATED.putIfAbsent(ref, Long.MAX_VALUE);
+            if (until == null) return true;
+            if (until > System.currentTimeMillis()) return false;
+            if (DESIGNATED.replace(ref, until, Long.MAX_VALUE)) return true;
+            // A concurrent purge or release changed the entry. Retry acquisition against its current state.
+        }
     }
 
     @Override
     public boolean isDesignated(String ref) {
         purge();
-        return DESIGNATED.contains(ref);
+        return DESIGNATED.containsKey(ref);
     }
 
     /** Whether {@code ref} is designated, without purging (the selection filter's view, as before). */
     boolean designatedRaw(String ref) {
-        return DESIGNATED.contains(ref);
+        return DESIGNATED.containsKey(ref);
     }
 
     @Override
     public void undesignate(String ref, Expiry when) {
-        if (when == null) {
-            DESIGNATED.remove(ref);
-        } else if (when.untilMs() <= System.currentTimeMillis()) {
-            DESIGNATED.remove(ref);
-        } else {
-            LINGERING.put(ref, when.untilMs());
-        }
+        if (when == null || when.untilMs() <= System.currentTimeMillis()) DESIGNATED.remove(ref);
+        else DESIGNATED.replace(ref, when.untilMs());
     }
 
     @Override
     public void add(Claim claim, Expiry when) {
-        if (when != null) claim.until = when.untilMs();
+        if (when != null) UNTIL.put(claim, when.untilMs());
         CLAIMS.add(claim);
     }
 
@@ -86,7 +92,7 @@ final class JvmClaimStore implements ClaimStore {
     @Override
     public void expire(Claim claim, Expiry when) {
         if (when.untilMs() <= System.currentTimeMillis()) CLAIMS.remove(claim);
-        else claim.until = when.untilMs();
+        else UNTIL.put(claim, when.untilMs());
     }
 
     @Override

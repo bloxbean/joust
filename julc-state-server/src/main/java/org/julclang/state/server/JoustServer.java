@@ -9,6 +9,7 @@ import org.julclang.state.runtime.CallAbort;
 import org.julclang.state.runtime.Compose;
 import org.julclang.state.runtime.JoustException;
 import org.julclang.state.runtime.PreparedTx;
+import org.julclang.state.runtime.StateContractHandle;
 import org.julclang.state.runtime.StateRuntime;
 import org.julclang.state.runtime.WalletAccount;
 import org.julclang.state.serve.BadRequest;
@@ -97,7 +98,7 @@ public final class JoustServer {
 
         /** Serves the contract of a generated {@code <Name>Client} class. */
         public Builder contract(Class<?> generatedClient) {
-            var c = ServedContract.of(generatedClient);
+            var c = ServedContract.of(generatedClient, org.julclang.state.serve.JsonValues.BAD_VALUES);
             contracts.put(c.name(), c);
             return this;
         }
@@ -325,7 +326,18 @@ public final class JoustServer {
     private JsonNode contractsJson() {
         ObjectNode out = JsonValues.JSON.createObjectNode();
         var list = out.putArray("contracts");
-        for (ServedContract c : contracts.values()) list.add(c.deployment(runtime));
+        for (ServedContract c : contracts.values()) {
+            StateContractHandle<?> handle;
+            try {
+                handle = c.handle(runtime);
+            } catch (RuntimeException e) {
+                throw new IllegalStateException(e);
+            } catch (Error e) {
+                if (e instanceof CallAbort) throw new IllegalStateException(e);
+                throw e;
+            }
+            list.add(c.deploymentOf(handle));
+        }
         return out;
     }
 

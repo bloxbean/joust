@@ -141,6 +141,7 @@ public final class PreparedTx {
 
     /** Adds the witnesses as {@link #withWitnesses} does, submits, and waits until the transaction is on chain. */
     public String submit(String... witnessSetsCbor) {
+        runtime.requireUnscopedSubmission();
         return new TxRunner(runtime).submitSigned(signed(witnessSetsCbor), what);
     }
 

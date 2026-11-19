@@ -1,19 +1,30 @@
 package org.julclang.state.runtime;
 
 import com.bloxbean.cardano.client.account.Account;
+import com.bloxbean.cardano.client.api.common.OrderEnum;
+import com.bloxbean.cardano.client.api.model.Amount;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.common.model.Networks;
+import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.transaction.spec.Transaction;
 import com.bloxbean.cardano.client.transaction.spec.TransactionBody;
 import com.bloxbean.cardano.client.transaction.spec.TransactionInput;
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
 import com.bloxbean.cardano.client.transaction.spec.Value;
+import org.julclang.state.api.Assets;
 import org.julclang.state.api.RequireException;
 import org.julclang.state.runtime.snapshot.ReadFailed;
+import org.julclang.state.runtime.snapshot.Snapshot;
+import org.julclang.state.runtime.snapshot.SnapshotBackend;
 import org.julclang.state.runtime.snapshot.Unsupported;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -326,5 +337,154 @@ class DevHostSeamsTest {
         assertTrue(none.validToSlot().isEmpty());
         assertTrue(none.payouts().isEmpty());
         assertTrue(none.sends().isEmpty());
+    }
+
+    @Test
+    void reservationsCoverFinalScriptInputsAndCollateralBeforeClaiming() {
+        var store = new HostStore();
+        var script = utxo("script", 12_000_000);
+        var fee = utxo("payer", 9_000_000);
+        var collateral = utxo("payer", 7_000_000);
+        var tx = spending(script, fee);
+        tx.getBody().setCollateral(List.of(new TransactionInput(collateral.getTxHash(), collateral.getOutputIndex())));
+        for (var input : List.of(script, collateral, fee)) {
+            String ref = Designation.ref(input);
+            store.avoid.add(ref);
+            var refused = assertThrows(ReservedInputException.class, () ->
+                    Designation.build(store, "payer", null, Set.of(Designation.ref(script)), () -> tx));
+            assertEquals(ref, refused.ref());
+            assertTrue(store.claims.isEmpty());
+            store.avoid.clear();
+        }
+    }
+
+    @Test
+    void assetCollectionUsesTheFirstEligibleTokenInput() {
+        var chain = new Chain();
+        var store = new HostStore();
+        var rt = runtime(chain, b -> b.claimStore(store));
+        var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        var payer = new Account(Networks.testnet());
+        var token = new Amount("00".repeat(28) + "01", BigInteger.ONE);
+        var reserved = utxo(payer.baseAddress(), 9_000_000, token);
+        var free = utxo(payer.baseAddress(), 9_000_000, token);
+        chain.wallet.addAll(List.of(reserved, free));
+        store.avoid.add(Designation.ref(reserved));
+        var collected = new ArrayList<Utxo>();
+        var tx = new Tx() {
+            @Override
+            public Tx collectFrom(List<Utxo> inputs) {
+                collected.addAll(inputs);
+                return this;
+            }
+        };
+        AssetTx.collectAssets(tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
+        assertEquals(List.of(free), collected);
+    }
+
+    @Test
+    void releasingADesignationCancelsItsTimerAndAcquisitionHandlesElapsedExpiry() throws Exception {
+        ClaimStore store = ClaimStore.jvm();
+        String renewed = hash() + "#0";
+        String elapsed = hash() + "#0";
+        try {
+            assertTrue(store.designate(renewed));
+            assertTrue(store.designate(elapsed));
+            var expiry = ClaimStore.Expiry.atMs(System.currentTimeMillis() + 250);
+            store.undesignate(renewed, expiry);
+            store.undesignate(elapsed, expiry);
+            store.undesignate(renewed, null);
+            assertTrue(store.designate(renewed));
+            Thread.sleep(260);
+            assertAll(() -> assertTrue(store.designate(elapsed), "direct acquisition purges its own expiry"),
+                    () -> assertTrue(store.isDesignated(renewed), "the old timer cannot release a later owner"));
+        } finally {
+            store.undesignate(renewed, null);
+            store.undesignate(elapsed, null);
+        }
+    }
+
+    @Test
+    void pendingKeyedExpiryCarriesTheRawWindowEndForBothDesignationAndClaim() {
+        var chain = new Chain();
+        var store = new HostStore();
+        var rt = runtime(chain, b -> b.claimStore(store).settlementSlots(7));
+        var payer = new Account(Networks.testnet());
+        chain.wallet.add(utxo(payer.baseAddress(), 12_000_000));
+        var pending = assertThrows(PendingTransactionException.class, () ->
+                KeyedObjects.series(rt, payer, "test", false, d -> {
+                    d.hold(List.of(d.ref()));
+                    d.handedOut(hash(), 1010);
+                    throw new ReadFailed("tip", "", "timeout");
+                }));
+        assertEquals(1010, store.expiries.get(pending.designatedInput()).untilSlot());
+        assertEquals(1010, store.expiries.get(store.claims.iterator().next()).untilSlot());
+    }
+
+    @Test
+    void mappedRefusalSurvivesObjectSerialization() throws Exception {
+        var original = (JscMessages.Refusal) JscMessages.explained(JscMessagesTest.class, "Pay",
+                new RequireException("#pay:spend1.10"));
+        var bytes = new ByteArrayOutputStream();
+        try (var output = new ObjectOutputStream(bytes)) {
+            output.writeObject(original);
+        }
+        try (var input = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+            var restored = (JscMessages.Refusal) input.readObject();
+            assertEquals(original.sites(), restored.sites());
+            assertFalse(restored.sites().isEmpty());
+            assertEquals(original.trace(), restored.trace());
+            assertEquals(original.getMessage(), restored.getMessage());
+            assertInstanceOf(RequireException.class, restored.getCause());
+            assertEquals(original.getCause().getMessage(), restored.getCause().getMessage());
+        }
+    }
+
+    @Test
+    void scopedSubmissionAndSettlementRefuseBeforeBuildingOrWaiting() {
+        var chain = new Chain();
+        var rt = runtime(chain, b -> b);
+        var payer = new Account(Networks.testnet());
+        var runner = new TxRunner(rt);
+        rt.inScope(CallScope.at(100), () -> {
+            for (Runnable path : List.<Runnable>of(
+                    () -> runner.submit(new Tx(), payer, null, new byte[0][], null, List.of(), null, "test"),
+                    () -> runner.submitPlain(new Tx(), payer, "test"),
+                    () -> runner.submitSigned(spending(utxo(payer.baseAddress(), 8_000_000)), "test"),
+                    () -> Compose.of(rt, payer).add(() -> fail("should not start building")).submit(),
+                    () -> KeyedObjects.settle(rt, null, "test", new JoustException("refused")))) {
+                assertEquals("submitting inside a call scope", assertThrows(IllegalStateException.class, path::run).getMessage());
+            }
+        });
+        assertEquals(0, chain.reads.get());
+    }
+
+    @Test
+    void eligiblePageOffsetsPreserveOrderAcrossPageBoundaries() {
+        var snapshot = new Snapshot();
+        var store = new HostStore();
+        String address = new Account(Networks.testnet()).baseAddress();
+        var wallet = new ArrayList<Utxo>();
+        for (int i = 0; i < 12; i++) {
+            var u = utxo(address, 10_000_000);
+            wallet.add(u);
+            if (i < 3 || i % 3 == 0) store.avoid.add(Designation.ref(u));
+        }
+        snapshot.utxos.put(address, wallet);
+        var supplier = Designation.builder(new SnapshotBackend(snapshot), store, null).getUtxoSupplier();
+        for (var order : List.of(OrderEnum.asc, OrderEnum.desc)) {
+            var ordered = order == OrderEnum.asc ? wallet : wallet.reversed();
+            var eligible = ordered.stream().map(Designation::ref).filter(ref -> !store.avoids(ref)).toList();
+            for (int page : List.of(1, 0, 2, 3, 1)) {
+                var actual = supplier.getPage(address, 3, page, order).stream().map(Designation::ref).toList();
+                assertEquals(eligible.stream().skip(3L * page).limit(3).toList(), actual);
+            }
+        }
+    }
+
+    @Test
+    void publicClaimContainsNoJvmExpiryField() {
+        assertTrue(java.util.Arrays.stream(ClaimStore.Claim.class.getDeclaredFields())
+                .noneMatch(field -> field.getType() == long.class), "the JVM store owns its wall-clock timestamps");
     }
 }

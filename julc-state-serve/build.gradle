@@ -2,6 +2,7 @@ description = 'JOUST serving adapter: drives generated clients by their descript
 
 dependencies {
     api project(':julc-state-runtime')
+    api libs.jackson.databind
 }
 
 dependencies {

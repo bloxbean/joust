@@ -88,7 +88,7 @@ public final class StateRuntime {
         Scoped s = scope.get();
         return s == null ? chainTime : s.clock();
     }
-    /** The TTL of Ctx-reading and wallet calls, in ms: the builder's, or a call scope's TTL in slots. */
+    /** The TTL of Ctx-reading and wallet calls, in milliseconds, including when converted from a scope's slot count. */
     public long ttlMs() {
         Scoped s = scope.get();
         if (s == null || s.scope().ttlSlots().isEmpty()) return ttlMs;
@@ -124,6 +124,10 @@ public final class StateRuntime {
     public CallScope callScope() {
         Scoped s = scope.get();
         return s == null ? null : s.scope();
+    }
+
+    void requireUnscopedSubmission() {
+        if (callScope() != null) throw new IllegalStateException("submitting inside a call scope");
     }
 
     /**

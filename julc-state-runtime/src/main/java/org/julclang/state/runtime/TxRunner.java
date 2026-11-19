@@ -235,6 +235,7 @@ final class TxRunner {
             cap.record(caller, requiredSigners, expected, extraExpected, payouts, sends, referenceScripts, cosigners, what);
             return "composed";
         }
+        rt.requireUnscopedSubmission();
         if (designated != null && window == null) window = untimedWindow(rt.chainTime(), rt.ttlMs());
         // What the attempt depends on, as the calls built it: the script inputs it spends and the references it reads
         // (ADR-0016 D7: a build or script failure is contention only if one of them moved; F68).
@@ -260,7 +261,7 @@ final class TxRunner {
             var scriptInputs = new java.util.HashSet<String>();
             if (tx instanceof RecordingTx r) for (Utxo u : r.spent) scriptInputs.add(Designation.ref(u));
             built = Designation.build(rt.claimStore(), caller.baseAddress(), designated, scriptInputs, finalCtx::buildAndSign);
-        } catch (SubmitException e) {
+        } catch (SubmitException | ReservedInputException e) {
             throw e;
         } catch (Exception e) {
             throw new SubmitException(SubmitException.Kind.BUILD, what + ": could not build the transaction: " + rootMessage(e), e);
@@ -386,6 +387,7 @@ final class TxRunner {
      * window closed is refused as transient, so the operation rebuilds it with the same designated input (F57, R-C18).
      */
     private void awaitWindow(Window window, String what) {
+        rt.requireUnscopedSubmission();
         ChainTime time = rt.chainTime();
         long now = time.currentSlot();
         if (now < window.fromSlot()) {
@@ -595,7 +597,7 @@ final class TxRunner {
         Transaction unsigned;
         Designation.Claimed built;
         try {
-            var ctx = Designation.builder(rt, null).compose(tx)
+            var ctx = Designation.builder(rt, designated).compose(tx)
                     .feePayer(payer.baseAddress())
                     .collateralPayer(payer.baseAddress())
                     .mergeOutputs(false)
@@ -619,10 +621,12 @@ final class TxRunner {
             if (rt.evaluator() != null) ctx = ctx.withTxEvaluator(rt.evaluator());
             var finalCtx = ctx;
             // Built and claimed under the payer's lock (F63).
-            built = Designation.build(rt.claimStore(), payer.baseAddress(), null, finalCtx::build);
+            built = Designation.build(rt.claimStore(), payer.baseAddress(), designated, finalCtx::build);
             unsigned = built.tx();
             // ADR-0016 D11: a keyed call prepared for a wallet spends the page's designated input.
             if (designated != null) requireSpends(unsigned, designated.ref(), what);
+        } catch (ReservedInputException e) {
+            throw e;
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
@@ -746,6 +750,7 @@ final class TxRunner {
 
     /** Submits a signed transaction and waits for it (a {@link PreparedTx} after the wallets signed). */
     String submitSigned(Transaction signed, String what) {
+        rt.requireUnscopedSubmission();
         String txHash = TransactionUtil.getTxHash(signed);
         try {
             var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
@@ -762,6 +767,7 @@ final class TxRunner {
 
     /** Builds, signs, submits and confirms a transaction without scripts (e.g. publishing a reference script). */
     String submitPlain(com.bloxbean.cardano.client.quicktx.Tx tx, Account payer, String what) {
+        rt.requireUnscopedSubmission();
         Capture cap = CAPTURE.get();
         if (payer instanceof WalletAccount || (cap != null && cap.walletOnly)) {
             throw new JoustException(what + ": needs a key-holding account to pay and sign; publish reference scripts and"
@@ -773,6 +779,8 @@ final class TxRunner {
                     .withSigner(SignerProviders.signerFrom(payer))
                     .feePayer(payer.baseAddress());
             built = Designation.build(rt.claimStore(), payer.baseAddress(), null, ctx::buildAndSign);
+        } catch (ReservedInputException e) {
+            throw e;
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
@@ -907,6 +915,7 @@ final class TxRunner {
     }
 
     private void awaitInclusion(String txHash, String what) {
+        rt.requireUnscopedSubmission();
         long deadline = System.currentTimeMillis() + rt.confirmTimeout().toMillis();
         while (System.currentTimeMillis() < deadline) {
             try {

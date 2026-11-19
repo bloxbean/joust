@@ -10,6 +10,7 @@ assertj = "3.25.1"
 jazzer = "0.30.0"
 
 [libraries]
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version = "2.21.0" }
 julc-stdlib = { module = "org.julclang:julc-stdlib", version.ref = "julc" }
 julc-ledger-api = { module = "org.julclang:julc-ledger-api", version.ref = "julc" }
 julc-core = { module = "org.julclang:julc-core", version.ref = "julc" }

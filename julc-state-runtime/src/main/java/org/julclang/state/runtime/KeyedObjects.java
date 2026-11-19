@@ -53,6 +53,7 @@ final class KeyedObjects {
      * pending (F51, R-D1). A pending operation keeps its designated input reserved until those windows have passed.
      */
     static <T> T series(StateRuntime rt, Account payer, String what, boolean lazy, Function<Designated, T> attempt) {
+        rt.requireUnscopedSubmission();
         if (!lazy) refuseWallet(payer, what);
         Designated d = lazy ? null : Designation.reserve(rt, payer, what, Set.of());
         // True once the outcome is known for certain (landed, or no handed-out attempt can land): only then is the
@@ -107,7 +108,7 @@ final class KeyedObjects {
         } finally {
             if (d != null) {
                 if (definite || d.attempts().isEmpty()) d.release();
-                else d.releaseAt(new ClaimStore.Expiry(lingerUntilOrForever(rt, d), lingerSlot(rt, d)));
+                else d.releaseAt(new ClaimStore.Expiry(lingerUntilOrForever(rt, d), d.lastToSlot()));
             }
         }
     }
@@ -120,21 +121,6 @@ final class KeyedObjects {
         try {
             return lingerUntil(rt, d);
         } catch (Throwable t) {
-            return Long.MAX_VALUE;
-        }
-    }
-
-    /**
-     * The slot from which a pending operation's attempts can no longer land, with the settlement depth (ADR-0022 D8: a
-     * store may release on chain evidence): {@code Long.MIN_VALUE} with no attempt; {@code Long.MAX_VALUE} on overflow
-     * (fails closed, as {@link #lingerUntil}).
-     */
-    private static long lingerSlot(StateRuntime rt, Designated d) {
-        long last = d.lastToSlot();
-        if (last == Long.MIN_VALUE) return Long.MIN_VALUE;
-        try {
-            return Math.addExact(last, rt.settlementSlots());
-        } catch (ArithmeticException e) {
             return Long.MAX_VALUE;
         }
     }
@@ -250,6 +236,7 @@ final class KeyedObjects {
      * pending.
      */
     static RuntimeException settle(StateRuntime rt, Designated d, String what, RuntimeException failure) {
+        rt.requireUnscopedSubmission();
         if (d == null || d.attempts().isEmpty()) return failure;
         try {
             return settleHandedOut(rt, d, what, failure);

@@ -87,7 +87,7 @@ public final class JscMessages {
      * ({@code require}, {@code pay}, {@code input}, ...); {@code in} the function; {@code what} the parameter of an
      * {@code input} site, else null.
      */
-    public record Site(String file, int line, int col, String kind, String in, String what) {
+    public record Site(String file, int line, int col, String kind, String in, String what) implements java.io.Serializable {
         /** The site as refusal messages show it: {@code File.jsc:line:col (what)}. */
         public String text() {
             return file + ":" + line + ":" + col + " (" + describe(kind, in, what) + ")";

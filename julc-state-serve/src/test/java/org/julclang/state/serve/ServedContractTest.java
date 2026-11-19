@@ -1,5 +1,6 @@
 package org.julclang.state.serve;
 
+import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.backend.api.BackendService;
 import com.bloxbean.cardano.client.backend.api.UtxoService;
 import com.bloxbean.cardano.client.transaction.spec.Transaction;
@@ -15,6 +16,7 @@ import org.julclang.state.runtime.ClaimStore;
 import org.julclang.state.runtime.Compose;
 import org.julclang.state.runtime.JoustException;
 import org.julclang.state.runtime.PreparedTx;
+import org.julclang.state.runtime.ReservedInputException;
 import org.julclang.state.runtime.StateRuntime;
 import org.julclang.state.runtime.WalletAccount;
 import org.julclang.state.runtime.snapshot.ReadFailed;
@@ -89,6 +91,10 @@ class ServedContractTest {
 
     /** What {@code JoustServer.prepare} does for a recorded call, without HTTP. */
     static PreparedTx prepare(StateRuntime rt, JsonNode call) {
+        return prepare(rt, call, null);
+    }
+
+    private static PreparedTx prepare(StateRuntime rt, JsonNode call, String designated) {
         ServedContract c = call.get("contract").asText().endsWith(".Counter") ? COUNTER : BANK;
         String kind = call.get("kind").asText();
         JsonNode meta = c.meta(kind, call.get("method").asText());
@@ -97,8 +103,9 @@ class ServedContractTest {
         BigInteger lovelace = pay.has("lovelace") ? new BigInteger(pay.get("lovelace").asText()) : BigInteger.ZERO;
         String instance = call.path("instance").isTextual() ? call.get("instance").asText() : null;
         String object = call.path("object").isTextual() ? call.get("object").asText() : null;
-        return Compose.of(rt, wallet)
-                .add(() -> c.call(rt, wallet, kind, meta, instance, object, call.path("args"), lovelace, pay.get("assets")))
+        var composition = Compose.of(rt, wallet);
+        if (designated != null) composition.designate(designated);
+        return composition.add(() -> c.call(rt, wallet, kind, meta, instance, object, call.path("args"), lovelace, pay.get("assets")))
                 .prepare();
     }
 
@@ -214,6 +221,7 @@ class ServedContractTest {
         final Map<Claim, Expiry> expiries = new ConcurrentHashMap<>();
         final List<Set<String>> added = new ArrayList<>();
         final Set<String> avoid = new HashSet<>();
+        String retryRef;
 
         public boolean designate(String ref) { return designated.add(ref); }
         public boolean isDesignated(String ref) { return designated.contains(ref); }
@@ -226,6 +234,7 @@ class ServedContractTest {
         public void expire(Claim claim, Expiry when) { expiries.put(claim, when); }
         public Collection<Claim> claims() { return claims; }
         public boolean avoids(String ref) { return avoid.contains(ref); }
+        public boolean reusable(String ref) { return ref.equals(retryRef); }
     }
 
     @Test
@@ -279,6 +288,91 @@ class ServedContractTest {
         store2.avoid.add(avoided);
         var rt = runtime(new SnapshotBackend(alone), b -> b.claimStore(store2));
         assertThrows(RuntimeException.class, () -> prepare(rt, f.get("call")));
+    }
+
+    @Test
+    void reservationsOnInstanceAndOwnedObjectInputsRefuseThePrepare() throws Exception {
+        for (String fixture : List.of("0003-composed_transaction.json", "0018-composed_transaction.json")) {
+            JsonNode f = fixture(fixture);
+            var call = f.get("call");
+            Snapshot snapshot = Fixtures.snapshot(f);
+            var body = Transaction.deserialize(HexUtil.decodeHexString(f.get("unsignedTx").asText())).getBody();
+            var ref = body.getInputs().stream().map(i -> Snapshot.ref(i.getTransactionId(), i.getIndex()))
+                    .filter(r -> !snapshot.outputs.get(r).getAddress().equals(call.get("address").asText()))
+                    .findFirst().orElseThrow();
+            var store = new RecordingStore();
+            store.avoid.add(ref);
+            var rt = runtime(new SnapshotBackend(snapshot), b -> b.claimStore(store));
+            assertEquals(ref, assertThrows(ReservedInputException.class, () -> prepare(rt, call)).ref());
+            assertTrue(store.claims.isEmpty());
+        }
+    }
+
+    @Test
+    void suppliedDesignationCanReuseOnlyItsOwnReservation() throws Exception {
+        var f = fixture("0003-composed_transaction.json");
+        var snapshot = Fixtures.snapshot(f);
+        JsonNode call = f.get("call");
+        String wallet = call.get("address").asText();
+        var input = snapshot.utxos.get(wallet).getFirst();
+        var alternative = JSON.treeToValue(JSON.valueToTree(input), Utxo.class);
+        alternative.setTxHash("ff".repeat(32));
+        snapshot.utxos.put(wallet, List.of(input, alternative));
+        snapshot.outputs.put(Snapshot.ref(alternative.getTxHash(), alternative.getOutputIndex()), alternative);
+        var ref = Snapshot.ref(input.getTxHash(), input.getOutputIndex());
+        var store = new RecordingStore();
+        store.avoid.add(ref);
+        var rt = runtime(new SnapshotBackend(snapshot), b -> b.claimStore(store));
+        assertEquals(ref, assertThrows(ReservedInputException.class, () -> prepare(rt, call, ref)).ref());
+        store.retryRef = ref;
+        assertTrue(refs(prepare(rt, call, ref)).contains(ref));
+        snapshot.utxos.put(wallet, List.of(input));
+        assertTrue(refs(prepare(rt, call, ref)).contains(ref), "the retry can also use its input for collateral");
+    }
+
+    @Test
+    void creationAndActionSelectTheSameInputsAsTheEligibleWalletInProviderOrder() throws Exception {
+        for (String file : List.of("0002-composed_transaction.json", "0003-composed_transaction.json")) {
+            var f = fixture(file);
+            var call = f.get("call");
+            String wallet = call.get("address").asText();
+            var snapshot = Fixtures.snapshot(f);
+            var original = snapshot.utxos.get(wallet).getFirst();
+            var inputs = new ArrayList<Utxo>();
+            var eligible = new ArrayList<Utxo>();
+            var store = new RecordingStore();
+            for (int i = 0; i < 130; i++) {
+                var input = JSON.treeToValue(JSON.valueToTree(original), Utxo.class);
+                input.setTxHash("%064x".formatted(i + 1));
+                String ref = Snapshot.ref(input.getTxHash(), input.getOutputIndex());
+                inputs.add(input);
+                snapshot.outputs.put(ref, input);
+                if (i < 100 || i % 2 == 0) store.avoid.add(ref);
+                else eligible.add(input);
+            }
+            snapshot.utxos.put(wallet, eligible);
+            String expected = prepare(runtime(new SnapshotBackend(snapshot), b -> b), call).cbor();
+            snapshot.utxos.put(wallet, inputs);
+            var rt = runtime(new SnapshotBackend(snapshot), b -> b.claimStore(store));
+            assertEquals(expected, prepare(rt, call).cbor(), file);
+        }
+    }
+
+    private static final ReadFailed ABORT = new ReadFailed("output", "ab#0", "timeout");
+
+    record Input(long n) {
+        Input { throw ABORT; }
+    }
+
+    record Output(long n) {
+        public long n() { throw ABORT; }
+    }
+
+    @Test
+    void reflectedRecordFailuresKeepTheirIdentityInBothDirections() {
+        assertSame(ABORT, assertThrows(ReadFailed.class,
+                () -> JsonValues.fromJson(JSON.getNodeFactory().numberNode(1), Input.class, "arg")));
+        assertSame(ABORT, assertThrows(ReadFailed.class, () -> JsonValues.toJson(List.of(new Output(1)))));
     }
 
     /** The inputs and collateral of a prepared transaction's body. */

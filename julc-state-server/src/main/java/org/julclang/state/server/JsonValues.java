@@ -31,7 +31,7 @@ public final class JsonValues {
     /** {@code json} as a value of {@code type}. */
     public static Object fromJson(JsonNode json, Type type, String path) {
         try {
-            return org.julclang.state.serve.JsonValues.fromJson(json, type, path);
+            return org.julclang.state.serve.JsonValues.BAD_VALUES.decode(json, type, path);
         } catch (org.julclang.state.serve.JsonValues.BadValue e) {
             throw new BadValue(e.getMessage());
         }
@@ -40,7 +40,7 @@ public final class JsonValues {
     /** {@code v} as JSON by the same conventions (views and states). */
     public static JsonNode toJson(Object v) {
         try {
-            return org.julclang.state.serve.JsonValues.toJson(v);
+            return org.julclang.state.serve.JsonValues.BAD_VALUES.encode(v);
         } catch (org.julclang.state.serve.JsonValues.BadValue e) {
             throw new BadValue(e.getMessage());
         }

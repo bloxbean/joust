@@ -11,7 +11,7 @@ import java.util.OptionalLong;
  * them. Slot and time conversion stay the runtime's {@link ChainTime}'s. Immutable.
  * <p>
  * A scope is for building and reading (a prepare, a view). A submitting call that waits for the chain to move (a keyed
- * attempt's window start, its settlement) would wait on a clock that never advances: use none there.
+ * attempt's window start, its settlement) requires an advancing clock and throws {@link IllegalStateException} inside a scope.
  */
 public final class CallScope {
 
@@ -31,7 +31,7 @@ public final class CallScope {
         return new CallScope(now, 0, null);
     }
 
-    /** This scope with a TTL of {@code slots} slots (at least 1), in place of the runtime's. */
+    /** This scope with a TTL of {@code slots} slots (at least 1, subject to the host's TTL limit), in place of the runtime's. */
     public CallScope ttlSlots(long slots) {
         if (slots < 1) throw new IllegalArgumentException("ttlSlots must be at least 1");
         return new CallScope(now, slots, pageLimits);
