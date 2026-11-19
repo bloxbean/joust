@@ -1,6 +1,6 @@
 # ADR-0018: The `.jsc` language — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r29)
+**Status:** Proposed (r30)
 **Naming (r26):** the language is `.jsc`, and this is its first version: a file may start with the header `jsc 1`, and a
 file with no header is version 1 (D2). What the revisions before r26 call `.jsc` 2 is this language; `.jsc` v1 (ADR-0005)
 and its migration are removed (D16). Internal names keep the 2 (`JscV2…` classes, the `jsc-2-*` documents, IR format 2).
@@ -1083,9 +1083,18 @@ validator never accepts it (r17, #76 review S5, S6).
     script: JuLC's output depended on the order of the processor-generated validator's imports, where the contract's
     own import sorts by its package against the fixed library imports (bloxbean/julc#328). JuLC 0.1.0-pre21 orders
     library bindings by content (JuLC ADR-075), so a move keeps the hash (`JscV2HashStabilityTest` asserts it for
-    packages that sort before, among and after the library imports); JuLC still orders by name only between library
-    methods with equal bodies and in the numbering of shared strict-boundary shape checks. A language server treats a
-    package move as a code change.
+    packages that sort before, among and after the library imports). JuLC 0.1.0-pre21 still broke ties between
+    library methods with equal bodies by qualified name, so a rename that reversed their names' order moved the hash
+    (Crowdfund's `?? 0` helpers under `renameAll`); JuLC 0.1.0-pre22 breaks those ties by first use (JuLC ADR-078,
+    bloxbean/julc#348), and `JscV2HashStabilityTest` passes for all 67 contracts and all ten edits. A language server
+    treats a package move as a code change.
+  - **What "never" rests on (r30).** It is a measured gate, not a theorem about JuLC: `JscV2HashStabilityTest` (every
+    contract, every edit, release mode) must pass on each JuLC bump. JuLC ADR-078's "Known limits" lists the name and
+    order dependences JuLC still has, none reached by the gate's contracts today: the numbering of shared
+    strict-boundary shape checks (L-SC), the literal folds keying on a name bound once in the whole program (L-C19;
+    JOUST could avoid it by generating program-unique local names), list-index promotion keying on spellings (C26),
+    overload families (C14), the validator helpers' declaration order (L-H), and a library method named like a stdlib
+    intrinsic (C27). A JuLC bump that fails the gate is a JuLC regression to report, not a new rule for authors.
   - **Reaches it:** what the contract does (every expression, constant and check), the author's `require` messages
     verbatim, ABI facts (constructor indices and field positions), and the source order of checks within a method.
     Declaration order of actions and destroys is ABI (their constructor indices); of `fn`s, types and views it is in no
@@ -1973,3 +1982,7 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   meanings are stated, with JSC9016 (MD5); keyed × withdraw is JSC1244 everywhere (MD6); M3's one reserved-names rule
   (MD7, Codex M2); the reference grammar, modifier table and IR shape cover M3b and M3c (MD8); §8 records M3's exit and
   D10 the maintainers' decisions in one list (MD9); both IR readers refuse the mixed-stage mutants (MS2).
+- **r30** (2026-11-20, JuLC 0.1.0-pre22): D12's "What reaches the script" records that JuLC 0.1.0-pre22 breaks ties
+  between equal-bodied library methods by first use (JuLC ADR-078, bloxbean/julc#348), so `JscV2HashStabilityTest`
+  passes for all 67 contracts and every edit (pre21 failed Crowdfund under `renameAll`), and that "never" is a measured
+  gate on each JuLC bump, citing JuLC ADR-078's known limits.
