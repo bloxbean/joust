@@ -1,6 +1,6 @@
 # ADR-0022: A dev host — the project's own JOUST, driven by an IDE over stdio
 
-**Status:** Proposed (r3). Design only.
+**Status:** Proposed (r4). Design only.
 **Date:** 2026-11-19
 **Builds on:** ADR-0013 (WalletAccount, `Compose.prepare()`, the prepare service D2, the plan D4, the wallet verifier
 §9.2), ADR-0015 (the call request and the snapshot D5/D6, the engine and `engineService`), ADR-0016 (keyed calls,
@@ -58,7 +58,8 @@ entry point needs (§6).
 | F24 | The wallet verifier's rules exist only in JavaScript (`verify.js`, `keyed.js`, `governors.js`); for a single ordinary call it refuses `needsService` calls it cannot check without a service (`verifiableWithoutService`); `compose.js` makes some composed moves, admissions, receipts and deposits verifiable; registrations have their own rules. ADR-0013 D2 anchors the check on the description and deployment **bundled in the page** | `js/state-client/src/verify.js:86-130`, `:416-513`; `compose.js:50-61`; `governors.js:56-112`; ADR-0013 §9.2 |
 | F25 | Generated `@Quorum` methods take an extra `Account...`, `@AuthorizedBy` methods an `Authorization` (a key, or a governor's script with its reward address, redeemer and signers); a `@SignedBy` field must equal the caller on the JVM path. The JVM path puts the caller in the body's required signers only when a context or signer rule needs it; the engine adds it for `@Quorum` | `ClientGenerator.java:229-236`, `:729-765`; `Authorization.java:18-25`; `StateInstance.java:127-130`, `:199-207`, `:228-231`, `:265-271` |
 | F26 | The JS engine has no named-view dispatch: transition programs exclude views (ADR-0020 D6a) | `TransitionsGenerator.java:82-105` |
-| F27 | `ValidatorScripts` takes a validator's script from **its class's code source** (a directory or jar file), refuses copies it cannot place beside the class, and refuses duplicate simple names across origins; `JscMessages` looks in the class's own container first | `ValidatorScripts.java:116-215`; `JscMessages.java:38-57` |
+| F27 | `ValidatorScripts` takes a validator's script from **its class's code source** (a directory or jar file), refuses copies it cannot place beside the class, and refuses duplicate simple names it cannot tell apart by origin; `JscMessages` looks in the class's own container first and caches per class | `ValidatorScripts.java:116-215`; `JscMessages.java:29-62` |
+| F29 | Both publication builders pay the holder output the computed minimum **plus 1,000,000 lovelace**; the combined verifier transaction has one holder output at the verifier's enterprise address and one legacy registration of its script credential (`fixtures/m0/dex/0003`: 8,667,490 lovelace against a 7,667,490 minimum) | `StateContractHandle.java:287-295`; `VerifierHandle.java:39-49`, `:65-77`, `:141-146` |
 | F28 | The shared verifiers' scripts come from the `julc-state-verifier` jar through `ValidatorScripts` (JVM) and from the engine's bundle (npm), not from the project's outputs | `VerifierHandle.java:42`; `Prepare.java:440-459` |
 
 So JOUST has an I/O-free engine for described contracts (F3), a reflective prepare path for generated clients (F1,
@@ -109,8 +110,9 @@ binding (one network per session).
 - **T9. Launch injection.** A launch spec, environment variables (`JAVA_TOOL_OPTIONS`, `NODE_OPTIONS`) or ancestor
   `node_modules` choosing what runs, or an older runtime shadowing the host's. → D3.
 - **T10. Mainnet by accident.** → D4: protocol v1 refuses mainnet unless the client opts in explicitly.
-- **T11. A stale build** (new in r3). A rebuild after the host started runs code, or deploys a script, that
-  `initialize` did not describe. → D4: the host re-checks the build before and after every call.
+- **T11. A stale build** (r3; r4). A rebuild after the host started runs code, or deploys a script, that
+  `initialize` did not describe. → D3, D4: the host runs from an immutable, digest-named **stage** of the build,
+  verified once at `initialize`; a rebuild cannot touch it, and the client restarts the host to pick a rebuild up.
 
 **Not addressed.** Malicious project code (it runs as the user); a malicious client (it holds the keys anyway).
 
@@ -120,8 +122,9 @@ binding (one network per session).
 
 A **dev host** is a process started by a client for one project, speaking the protocol below on stdin/stdout.
 - **Gradle projects:** a JVM host (`org.julclang.state.host.DevHost`, in a new module **`julc-state-host`**), run with
-  the project's Java toolchain and one consistently resolved dependency graph, with the project's build outputs on
-  its class path (D3, D4), preparing through the generated clients via a shared adapter (D16).
+  the project's Java toolchain on the application's own resolved class path plus two host jars, from an immutable
+  stage of the build (D3, D4), preparing through the generated clients via a shared adapter (D16). One host serves
+  one project that applies the plugin.
 - **npm projects:** a Node host, the project's own `@julclang/joust` host entry (D3), over `engineService` and the
   project's `build/joust/contracts.json` (F10).
 
@@ -147,8 +150,9 @@ on npm, D15), the difference is a **capability** in `initialize`'s answer, never
 - **Fd 1 belongs to the protocol writer** (T1). In this order, as the first thing `main` does, before any other class
   of JOUST or the project is loaded or any project module is imported:
   - **JVM on Linux and macOS:** `DevHost.main` duplicates fd 1 through the FFM API with
-    `fcntl(1, F_DUPFD_CLOEXEC, 3)` (r3: close-on-exec, so a child that native code forks never inherits the protocol
-    pipe), keeps that descriptor for frames and writes to it with FFM `write` in a loop (no file is opened, I10),
+    `fcntl(1, F_DUPFD_CLOEXEC, 3)` (the saved descriptor is closed on `exec`, so a program that native code starts
+    never inherits the protocol pipe; a bare `fork` without `exec` keeps it until it exits), keeps that descriptor
+    for frames and writes to it with FFM `write` in a loop (no file is opened, I10),
     points fd 1 at stderr (`dup2(2, 1)`), so Java, native and JVM writes to fd 1 all reach stderr, and then sets
     `System.setOut(System.err)`. **On Windows** (Q6) it only sets `System.setOut(System.err)`.
   - **JVM options** are part of the protocol, fixed by JOUST and added by the client, never read from the project:
@@ -178,21 +182,28 @@ on npm, D15), the difference is a **capability** in `initialize`'s answer, never
   ```json
   { "protocol": 1, "java": "<the project toolchain's java executable>",
     "mainClass": "org.julclang.state.host.DevHost",
-    "classpath": ["…the resolved joustHost configuration: jars only…"],
-    "buildOutputs": ["…/build/classes/java/main", "…/build/resources/main"] }
+    "stage": "…/build/joust/host/<digest>", "digest": "<sha256>",
+    "classpath": ["…/build/joust/host/<digest>/0", "…/1", "…module-cache jars…", "…the two host jars…"] }
   ```
-  *(illustrative)* **`joustHost`** (r3) is a resolvable, non-consumable configuration that extends
-  `runtimeClasspath`, copies its attributes, adds `julc-state-host` at the plugin's version, and
-  **`shouldResolveConsistentlyWith(runtimeClasspath)`**, so every module both contain resolves to the version the
-  application runs with. `joustHostSpec` fails, naming the module, if any overlapping module still differs (a
-  configuration-local force or substitution). `joustHost` is never added to `implementation`, so applications neither
-  ship nor publish it. `buildOutputs` are the project's main output directories that exist (a project without
-  resources has none).
+  *(illustrative)*
+  - **The class path is the application's own** (r4, C38): exactly the resolved artifacts of `runtimeClasspath`, in
+    its order, **plus** `julc-state-serve` and `julc-state-host` at the plugin's version, resolved non-transitively
+    in a separate, non-consumable **`joustHost`** configuration. Every dependency those two jars declare must already
+    be satisfied by a component `runtimeClasspath` selected (any substitution or force included); otherwise the task
+    fails, naming it. So the host runs on precisely the graph the application runs on, and never ships with it.
+  - **The stage** (r4, C31): the task copies the project's main output directories, and every class-path artifact
+    that is not in Gradle's module cache (a sibling project's jar under `build/libs`, a local file dependency), into
+    a new directory `build/joust/host/<digest>/` named by the digest of its content (D4's algorithm), one numbered
+    root per entry, and writes the spec pointing at those copies. Module-cache jars stay where they are (their paths
+    are named by their checksums and never rewritten); the digest covers their bytes too. A stage is never written
+    again after the task creates it; the task keeps the two newest stages and deletes older ones. A rebuild therefore
+    cannot change what a running host executes: it makes a new stage, and the client restarts the host on it.
 - **The client validates the spec** before running it: `protocol` is a supported integer; `mainClass` is exactly
   `org.julclang.state.host.DevHost`; `java` is an absolute path to a regular file named `java` (or `java.exe`) in the
   `bin` directory of a **JDK home**, a directory whose `release` file declares `JAVA_VERSION` 25 or later; every
-  `classpath` and `buildOutputs` entry is absolute and exists; the spec carries no JVM arguments (D2 fixes them).
-- **The client runs** `<java> <D2's JVM options> -cp <classpath + buildOutputs> org.julclang.state.host.DevHost
+  `classpath` entry is absolute and exists; it recomputes the stage's digest itself and compares it with `digest`;
+  the spec carries no JVM arguments (D2 fixes them).
+- **The client runs** `<java> <D2's JVM options> -cp <classpath> org.julclang.state.host.DevHost
   --stdio`, with the project root as working directory and an environment built from an **allow-list** (r3): `PATH`,
   `HOME` (`USERPROFILE`, `SystemRoot` and `TEMP`/`TMP` on Windows), `LANG` and `LC_*`; nothing else. The only argument
   is `--stdio`. The host reads no environment variable and no project file for its configuration: everything comes in
@@ -221,7 +232,7 @@ The client's first call. Request *(illustrative)*:
   "clock": { "zeroSlot": 0, "zeroTimeMs": 1700000000000, "slotLengthMs": 1000 },
   "time": { "maxTtlSlots": 3600, "settlementSlots": 60, "maxNowAheadSlots": 86400 },
   "limits": { "callDeadlineMs": 60000, "readsPerCall": 256, "readBytesPerCall": 33554432 },
-  "build": { "outputs": ["…/build/classes/java/main", "…/build/resources/main"] } }
+  "build": { "stage": "…/build/joust/host/<digest>", "digest": "<sha256>" } }
 ```
 - **Network** (T10): the session's network. Protocol v1 **refuses `networkId: 1`** unless `mainnet` is `true`, which
   a client sets only behind its own mainnet gate (IntelliAda ADR-005 D14a). The host checks the network of every
@@ -230,21 +241,19 @@ The client's first call. Request *(illustrative)*:
   the client's.
 - **Time** (D7, D8): the largest TTL a call may ask for, ADR-0016's `settlementSlots`, and how far `now` may run
   ahead of the tip.
-- **Build** (Gradle): the spec's `buildOutputs`, which the client validated and put on the class path. The npm host
-  reads `build/joust/contracts.json` under its working directory and the files it references.
+- **Build** (Gradle): the spec's stage and digest, which the client verified. The npm host reads
+  `build/joust/contracts.json` under its working directory, and every file it references, **into memory** at
+  `initialize` (they are data, not code), and imports the engine then.
 
-**Restoring pending work** (r3) is a separate method, `restore` (D8), callable repeatedly after `initialize`, so a
-long list never meets the frame cap.
+**Restoring pending work** is a separate method, `restore` (D8), so a long list never meets the frame cap.
 
-**The build is checked on every call** (r3; replaces r2's in-memory loading, which the runtime's fail-closed script
-lookup refuses, F27). The project's outputs stay ordinary class-path directories, so `ValidatorScripts` and
-`JscMessages` work unchanged. At `initialize` the host computes the **fingerprint** of every regular file under the
-build outputs (Gradle), or of `contracts.json` and every file it references (npm). It **recomputes it at the start and
-at the end of every forward call**: if either differs from `initialize`'s, the call ends `bad`, code `buildChanged`,
-and so does every later call; the client starts a new host. So no result is ever computed from code or scripts that
-`initialize` did not describe (I7), whether a class was loaded before or during the change. Dependency jars are
-digested in full at `initialize` and checked by size and modification time on every call (Gradle's module cache
-stores each version at a path named by its checksum and never rewrites it).
+**What runs is the stage** (r4; r3's per-call scans withdrawn, C31). At `initialize`, before loading any project
+class, the JVM host recomputes the digest of its stage roots and module-cache jars and refuses a mismatch with
+`build.digest` (`bad`, code `stageMismatch`). Classes and resources then load from the stage's ordinary directories,
+so `ValidatorScripts` and `JscMessages` work unchanged (F27), and nothing the build does afterwards can reach them.
+`initialize`'s fingerprint and script hashes describe exactly the bytes the host runs (I7). (r2's in-memory loading
+broke the runtime's fail-closed script lookup; r3's scans before and after each call could not see a change undone
+between them, nor bind a class loaded lazily in between: §5.)
 
 **Answer:**
 - `protocol`: the version chosen (the highest both support); `capabilities`: the optional features served (`views`,
@@ -257,10 +266,10 @@ stores each version at a path named by its checksum and never rewrites it).
   validator bytes the runtime loads (`META-INF/plutus/*.plutus.json` through `ValidatorScripts`, or the bundle's
   validators), and either `served` or `unsupported` with a stable code (`params` for `@Params` contracts, F2).
 - `fingerprint`, defined so a client can recompute it from disk: for each file, the line
-  `<lowercase hex SHA-256 of its bytes> <root index>/<POSIX path relative to that root>\n` (npm: root index 0 is the
-  project root); lines sorted by their UTF-8 bytes; the fingerprint is the SHA-256 of their concatenation.
-  `classpath` (Gradle) is the same digest over the jar files in launch order, with the jar's index in place of the
-  path.
+  `<lowercase hex SHA-256 of its bytes> <root index>/<POSIX path relative to that root>\n` (Gradle: the stage's
+  numbered roots, then each module-cache jar as its own root with an empty path; npm: root index 0 is the project
+  root); lines sorted by their UTF-8 bytes; the fingerprint is the SHA-256 of their concatenation. On Gradle it equals
+  the stage's `digest`.
 
 ### D5. The methods (H2–H8, H11, H15)
 
@@ -275,9 +284,10 @@ stores each version at a path named by its checksum and never rewrites it).
 | `instances` | `{now, contract, limit}` / `{listing, after, limit}` → `{listing, items, next}` | paged over a session-held snapshot (D15) |
 | `objects` | `{now, contract, instance, limit}` / `{listing, after, limit}` → `{listing, items, next}` | owned and keyed objects (capability `objects`, D15) |
 | `decode` | `{contract, datum}` → `{type, value} \| {ambiguous: [types]}` | a datum's CBOR hex to the description's JSON encoding (D15) |
-| `settled` | `{reservation, txHash, status, tip, slot?}` → `{}` | chain-evidenced settlement (D8) |
-| `restore` | `{transactions: [{cbor, operation?}]}` → `{reservations}` | pending work after a restart (D8, D11) |
-| `reset` | `{now, clock?}` → `{}` | drops caches and map mirrors and rebuilds clock-derived state; **keeps reservations** (D8) |
+| `settled` | `{reservation, txHash, status, tip, slot?}` → `{state}` | chain-evidenced settlement; answers the reservation's state after the event (D8) |
+| `restore` | `{transactions: [{cbor, state, slot?, operation?}]}` → `{reservations}` | pending work after a restart, before the first building call (D8, D11) |
+| `registered` | `{credential, evidence}` → `{}` | the client asserts a stake credential is registered (D14) |
+| `reset` | `{now, clock?, rewound?}` → `{}` | drops caches, listing snapshots and map mirrors and rebuilds clock-derived state; **keeps reservations** (D8) |
 | `shutdown` / `exit` | → `{}` / notification | as LSP: stop accepting calls, then exit |
 
 `prepared` is `{reservation, cbor, txHash, validFrom, validTo, signers, plan, instance?, object?}`. **`validFrom` and
@@ -323,8 +333,9 @@ node. The protocol has **no field for an endpoint, a project id or a credential*
   CCL in that order, and records it in the snapshot, because coin selection keeps supplier order for ties and the
   bytes can depend on it. Only listings shown to the user are sorted (D15).
 - **A client that cannot serve a kind** (r3) answers `{unsupported: true}`; the call ends `unsupported`, code
-  `read:<kind>`. Some providers cannot tell whether a stake credential is registered (Yaci Store): those answer
-  `unsupported` for `stakeRegistration`, and D14 treats it as `unknown`.
+  `read:<kind>`. **The one exception** (r4, C35): `stakeRegistration`. Some providers cannot tell whether a stake
+  credential is registered (Yaci Store); their `{unsupported: true}` answer does not end the call but makes the
+  credential's presence `unknown` (D14).
 - **Every other `BackendService` method throws** an `Error` (`Unsupported`), submit and evaluate included; the host
   supplies a `TransactionService` object only because QuickTx takes it eagerly, and every method of it throws. A call
   reaching one ends with `unsupported`, code `read:<service>.<method>` (for example a staked contract's reward
@@ -384,10 +395,13 @@ Two slots, never confused (r3):
   also carries its own TTL and page limits: the runtime gains a **call scope** (clock, TTL, page limits) that
   overrides its fixed settings (F5) for the duration of a call (§6). The engine request gains the same (M2).
 - **The ceiling** (r3, C19): every building call's validity upper bound is at most **`now + ttlSlots`**, and the client
-  checks exactly that, with the same `now` it sent (D13), never the tip or its machine clock. Keyed calls (M3) may
-  start later, up to `maxStartSlots` (D11); their ceiling is `now + maxStartSlots + ttlSlots`. A window the contract
-  or the planner would open beyond its ceiling is **shortened** to it; if that leaves no valid window, the call is
-  refused (`refusal`, code `window`).
+  checks exactly that, with the same `now` it sent (D13), never the tip or its machine clock. A window the contract
+  would open beyond it is **shortened** to it; if that leaves no valid window, the call is refused (`refusal`, code
+  `window`).
+- **Keyed windows** (M3; r4, C39) may start later. With the call's `pageLimits` `[maxStartSlots, maxValiditySlots]`
+  (D11; the engine's defaults when absent), a keyed window `[start, end)` must satisfy `now ≤ start ≤ now +
+  maxStartSlots`, `end ≤ start + ttlSlots`, `end ≤ now + maxValiditySlots`, and `start < end`, within any tighter
+  contract or deadline limit; the final window is the one the context, the redeemers and the body use.
 - **Lower bounds:** an untimed call has **no** lower bound, as today (F14, F20); a timed call's window starts where
   `Window` puts it (at `now`, or later where a time rule requires; an ordinary future start is refused "too early" as
   today); `validFrom` is `null` when the body has none.
@@ -417,33 +431,45 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
   ends in an error, a cancellation or a deadline, or whose write fails, reserves nothing and stages nothing. **Client
   handoff:** a client that receives a result it will not use (the user declined, a check failed) settles it
   `discarded`; a client that crashes loses only what it never persisted, which it never signed.
-- **Settlement is chain-evidenced** (r3, C20, C21, S4). `settled` names the `reservation` (the `txHash` must match),
-  and carries the client's observed **`tip`** slot and, for `confirmed`, the inclusion `slot`:
+- **Settlement is chain-evidenced** (r3; r4, C32, C33). `settled` names the `reservation` (the `txHash` must
+  match) and carries the client's observed **`tip`** slot and, for `confirmed`, the inclusion `slot` (at most `tip`,
+  and within the body's validity interval). The host applies the event, then every threshold the `tip` meets, and
+  answers the resulting state. States: **prepared**, **shallow** (included, not yet `settlementSlots` deep), and the
+  final states **confirmed**, **expired** and **discarded**.
 
-  | State | Event | Next state | Effect |
+  | From | Event | To | Effect |
   |---|---|---|---|
-  | prepared | `confirmed` (slot) | shallow | ordinary inputs spent; collateral and inputs stay reserved; map writes promoted |
-  | shallow | any `tip > slot + settlementSlots` | (deep: done) | released, tombstoned; collateral free |
-  | shallow | `rolledBack` | prepared | promoted map writes reverted; still reserved |
-  | prepared | `rolledBack` | prepared | no change: it may land again until its window closes |
-  | prepared | `expired` (tip) | (expired: done) | accepted only when `tip > validTo + settlementSlots`; otherwise `bad`, code `notExpired`; staged writes dropped |
-  | prepared | any `tip > validTo + settlementSlots` observed | (expired: done) | the same, automatically |
-  | prepared | `discarded` | (discarded: done) | released at once; the client asserts it never signed for submission, exported or submitted it |
-  | prepared, shallow | `dropped` | (dropped: done) | released at once; the client asserts the chain was reset (a devnet snapshot restore) so it can never land |
+  | prepared | `confirmed` (slot) | shallow | ordinary inputs spent; inputs and collateral stay reserved; map writes promoted |
+  | shallow | `confirmed` with the same slot | shallow | none (idempotent); a different slot is `bad`, code `conflict` |
+  | shallow | an observed `tip > slot + settlementSlots` (this event's or any later call's) | confirmed (final) | released and tombstoned; collateral free |
+  | shallow | `rolledBack` | prepared | promoted map writes reverted; still reserved: it may land again |
+  | prepared | `rolledBack` | prepared | none: it may land again until its window closes |
+  | prepared | an observed `tip > validTo + settlementSlots`, or `expired` with such a tip | expired (final) | released and tombstoned; staged writes dropped. `expired` with an earlier tip is `bad`, code `notExpired` |
+  | prepared | `discarded` | discarded (final) | released at once. Only for a transaction the client never signed for submission, exported or submitted |
+  | confirmed (final) | `rolledBack` | – | **a rollback deeper than `settlementSlots`**: outside the model. The host stops building (every building call is refused, `refusal`, code `deepRollback`) until it is restarted; the client restarts it and `restore`s what is still pending |
 
   Expiry and depth use **tips the client observed**, never `now`: a `now` that runs ahead of the chain releases
-  nothing. A **done** reservation keeps a tombstone for the session; repeating its final status is accepted, any other
+  nothing. A final reservation keeps a tombstone for the session; repeating its final status is accepted; any other
   status for it is `bad`, code `conflict`, and if it touched maps the mirrors are **stale**: every later map call is
   refused (`refusal`, code `mapsStale`) until `reset` rebuilds them. An unknown reservation is `bad`, code
   `unknownReservation`. Because ids are unique, a late status for a discarded reservation can never name a later
   reservation of the same body.
-- **`reset` keeps reservations** (r3, DES-D16): a devnet time control does not undo what may still land. A devnet
-  restore is settled with `dropped`, per reservation.
+- **`reset` keeps reservations** (DES-D16): a devnet time control does not undo what may still land. **A devnet
+  snapshot restore** (r4, C32) rewinds the chain, so inputs a pending transaction spends may exist again and the
+  same signed bytes may land again while valid: nothing is released. The client sends `reset` with `rewound: true`,
+  which marks every map mirror stale, and `rolledBack` for each shallow reservation the restored chain no longer
+  includes; prepared reservations stay until an observed tip passes their window (on the restored chain the tip is
+  lower, so they last longer, never shorter). r3's `dropped` status is withdrawn.
 - **Restart:** nothing survives a host restart. `restore {transactions}` re-creates reservations from the client's
-  persisted pending transactions (signed or unsigned CBOR): the host decodes their inputs, collateral and upper bound,
-  refuses one without an upper bound (`bad`, code `unbounded`), and returns their new reservation ids; keyed ones carry
-  their `operation` (D11). Map writes of a restored transaction are not rebuilt: a map contract with restored pending
-  work is `mapsStale` until it settles and `reset` rebuilds the mirrors.
+  persisted pending transactions (signed or unsigned CBOR), each with its **state** (`prepared`, or `shallow` with
+  its inclusion `slot`) from the client's journal (r4, C33): the host decodes their inputs, collateral and upper
+  bound, refuses one without an upper bound (`bad`, code `unbounded`), and returns their reservation ids. `restore`
+  is accepted only **before the first building call** of the session (later: `bad`, code `restoreClosed`), so no
+  build can select an input that is about to be restored, and it is idempotent: a transaction already restored keeps its id. Keyed ones carry their
+  `operation` (D11). Map writes of a restored transaction are not rebuilt: a map contract with restored pending work
+  is `mapsStale` until it settles and `reset` rebuilds the mirrors.
+- **`reset` and map overlays** (r4, DES-D26): `reset` drops the mirrors and every staged or promoted overlay with
+  them; a map contract with pending work is then `mapsStale` until that work is final and the mirrors are rebuilt.
 - **Map writes** (M3): the runtime writes trie nodes while preparing (`MerkleSupport.java:334-345`), and the JS engine
   stages node CBOR before returning. The host keeps them in a per-reservation overlay, staged at the commit point and
   promoted on `confirmed`; shared content-addressed nodes are never dropped while another reservation references them.
@@ -457,10 +483,11 @@ Every failure is a JSON-RPC error whose `data` is:
 { "kind": "refusal | bad | internal | unsupported", "code": "…", "message": "…", "sites": [], "retryAtSlot": null }
 ```
 - **`refusal`:** the contract or runtime refused the call (`Require`, a policy, contention, `pending`, `window`,
-  `mapsStale`, `prerequisite`, a cooldown with `retryAtSlot`, F13). `sites` carries the `.jsc` message-map sites as
+  `mapsStale`, `prerequisite`, `deepRollback`, `mayHaveLanded`, a cooldown with `retryAtSlot`, F13). `sites` carries the `.jsc` message-map sites as
   structured values the runtime passes up before it formats any message text (a runtime seam, §6).
 - **`bad`:** the request is wrong (unknown contract or method, bad argument, `busy`, `network`, `nowDecreased`,
-  `nowImplausible`, `tooLarge`, `buildChanged`, `unknownReservation`, `conflict`, `notExpired`, …).
+  `nowImplausible`, `tooLarge`, `stageMismatch`, `unknownReservation`, `conflict`, `notExpired`, `unbounded`,
+  `restoreClosed`, …).
 - **`unsupported`:** the host does not serve this (a `@Params` contract, a capability it lacks, a read outside D6, a
   call outside D16's matrix), with a stable code.
 - **`internal`:** anything else (`readFailed`, `inconsistentRead`, `chainMoved`, `evaluator`, `cancelled`, `deadline`,
@@ -501,18 +528,22 @@ asking**, as JOUST's JS client does (`client.js:390-432`). `prepare`'s `call` ga
 persisted record of the logical operation and every attempt it handed out. Keyed kinds and the `object`-as-key mapping
 for actions, removals and retirements follow the engine's (`DescribedContract.java:376-419`). The host prepares with
 `Compose.designate(ref)` and refuses without it (`refusal`, code `needsDesignated`).
-- **The designated input is reserved** from the first prepare that names it until its operation ends, so no other
-  prepare selects it. A different operation touching the same object is refused `pending`.
-- **Attempts and retries:** a new attempt of the **same operation** (the same `designated`, contract, method and key)
-  is allowed once every earlier attempt in `operation.attempts` is released by D8's chain-evidenced rules.
+- **The designated input is reserved** (r4, DES-D24) at the **commit point** of the operation's first successful
+  prepare (D8), as part of that attempt's reservation, and stays reserved while any attempt of the operation is
+  unreleased, so no other prepare selects it. A different operation touching the same object is refused `pending`.
+- **Operation identity** (r4, C37) is the full persisted record: `designated`, contract, method, **instance** and key.
+  A new attempt of the **same operation** is allowed once every earlier attempt in `operation.attempts` is released
+  by D8's chain-evidenced rules; the host checks the attempts it holds against the record and refuses a mismatch
+  (`bad`, code `operation`).
+- **A first attempt that is refused** produces no transaction and, by D8's commit point, reserves nothing: it ends
+  atomically at the host, and the client removes its local record without any settlement call.
 - **Outcomes need chain evidence** (r3, C20): an operation **failed definitely** only when the designated input is
   still in its address's `utxos` answer at a tip past every attempt's `validTo + settlementSlots`. A designated input
-  that is **spent** means one of the attempts landed **or** another transaction spent it: the host reports
-  `mayHaveLanded` (code), and the client decides from its node (an attempt's outputs exist, or not) before it settles.
-  An operation whose first prepare was refused without a transaction ends with that refusal; the client discards its
-  record (and the host's reservation of the designated input, through `discarded` on its operation).
-- **Cooldowns:** under page limits, a cooldown yields either a window that starts later (within `maxStartSlots`; the
-  client submits at its start; D7's keyed ceiling) or a refusal with `retryAtSlot` (D9).
+  that is **spent** means one of the attempts landed **or** another transaction spent it: a further attempt is
+  refused (`refusal`, code `mayHaveLanded`), and the client decides from its node (an attempt's outputs exist, or not)
+  and settles each attempt as `confirmed` or lets it expire. Attempts that were handed out are never `discarded`.
+- **Cooldowns:** under page limits, a cooldown yields either a window that starts later (D7's keyed rule; the client
+  submits at its start) or a refusal with `retryAtSlot` (D9).
 - **Restart:** `restore` carries each pending keyed transaction with its `operation`, so the designated input and the
   attempts are reserved again.
 - Until M3, keyed calls answer `unsupported`, code `keyed`.
@@ -542,13 +573,17 @@ host, not from a bundle the client controls. So a client of this protocol **must
    refuse when it differs from `txHash`. Sign that hash, and keep that slice unchanged when adding witnesses; never
    re-encode the body.
 2. **Anchor on its own reads.**
-   - The contract's script hashes, addresses and policies: from the build outputs it reads itself (Gradle:
-     `META-INF/plutus/*.plutus.json` and the descriptions; npm: `contracts.json`). Refuse a host whose `initialize`,
-     `deployment` or fingerprint disagree (IntelliAda ADR-005 D12).
+   - The contract's script hashes, addresses and policies: from the build it reads itself (Gradle: the
+     `META-INF/plutus/*.plutus.json` resources and descriptions in the **stage** whose digest it verified (D3),
+     including contracts in a sibling project's staged jar; npm: `contracts.json`). Refuse a host whose
+     `initialize`, `deployment` or fingerprint disagree (IntelliAda ADR-005 D12).
    - **The shared verifiers' scripts** (r3, S13, F28): from the `julc-state-verifier` jar on the class path it
      validated (Gradle), or the installed `@julclang/joust-runtime`'s engine bundle (npm).
-   - **Redeemer metadata** (the redeemer index and constructor tag of a method, for comparing redeemers): from the
-     description it read itself, never from the host's answers.
+   - **Redeemers** (r4, C40), two separate comparisons: the method's **constructor alternative** comes from the
+     description the client read itself, never from the host; the redeemer's **pointer** (purpose and index) is
+     derived from the transaction: for a spend, the target input's position in the body's ledger-ordered inputs (the
+     same method's pointer differs between transactions: index 0 in `fixtures/m0/dapp` record 0003, 1 in record 0034).
+     The redeemer at that pointer is checked against the schema the client read.
 3. **Check every transaction against a minimum allow-list:**
    - the network id, and the network of every output address;
    - every input, reference input and collateral input resolved through the client's own node;
@@ -557,23 +592,30 @@ host, not from a bundle the client controls. So a client of this protocol **must
      registrations D14 allows; no votes, proposals or donations; **no auxiliary data** (metadata) (r3, S12);
    - minting only under the deployment's policies;
    - required signers within the caller and the chosen co-signers, payment keys only;
-   - **validity:** an upper bound present and at most `now + ttlSlots` (keyed: `now + maxStartSlots + ttlSlots`) for
-     the `now` and `ttlSlots` the client sent (D7); **a lower bound** where the method reads `Ctx` or a time rule, not
-     earlier than the `now` it sent (r3, S12: a call reading `Ctx` must not be backdated);
+   - **validity:** an upper bound present and at most `now + ttlSlots` for the `now` and `ttlSlots` the client sent
+     (D7); for a keyed window, D7's keyed rule with the `pageLimits` it sent (start within `[now, now +
+     maxStartSlots]`, end at most `start + ttlSlots` and `now + maxValiditySlots`, nonempty); **a lower bound** where
+     the method reads `Ctx` or a time rule, not earlier than the `now` it sent (S12: a call reading `Ctx` must not be
+     backdated);
    - a fee cap, `is_valid` true, **the balance equation** (inputs plus withdrawals and mints equal outputs plus fee and
      deposits), and a bound on the caller's net outflow (r3, S12);
    - the script inputs and redeemers those of the requested deployment, instance or object and method, as JOUST's
      wallet verifier checks them (`verify.js`; the protocol document restates its rules normatively).
-4. **Check publications positively** (r3, C23), by kind (D14):
-   - **reference script:** exactly one output at the anchored target address, carrying a reference script whose
-     language and hash equal the anchored script's, with lovelace at most the minimum UTxO the client computes for
-     that output from its own protocol parameters, and no other assets; every other output to the payer; no mint, no
-     certificates, no withdrawals, no datum other than the kind's;
-   - **stake registration:** exactly one certificate, registering the anchored credential, with the deposit the
-     client's protocol parameters require; no other certificates; outputs only to the payer;
-   - **verifier (combined):** both of the above for the anchored verifier, and nothing else;
-   - before signing, check with its own node that the target does not already carry the script (and the credential is
-     not already registered, where the node can tell).
+4. **Check publications positively** (r3, C23; r4, C34), by kind (D14). Three **disjoint shapes**; every shape has
+   no mint, no withdrawals, no auxiliary data, no other certificates, payer change only besides what the shape names,
+   and the deposit of a registration accounted for in the balance equation:
+   - **`referenceScript`:** exactly one **holder output** at the anchored target address, carrying a reference script
+     whose language and hash equal the anchored script's, no other assets, no datum, and lovelace at most the minimum
+     UTxO the client computes for that output from its own protocol parameters **plus 1,000,000 lovelace** (the
+     builders' fixed padding, F29); **no certificate**.
+   - **`stakeRegistration`:** **no holder output**; exactly one certificate, registering the anchored credential.
+   - **`verifier`** (combined, as `VerifierHandle` builds it): exactly one holder output at the anchored verifier's
+     enterprise address as in `referenceScript`, **and** exactly one certificate registering that verifier's
+     credential.
+   - **Absence checks apply only to the component being added:** before signing, the client checks with its own node
+     that the target does not already carry the script (for a shape with a holder output), and that the credential is
+     not registered where its node can tell (for a shape with a certificate). It never infers a publication from a
+     rejected transaction.
 5. **Treat `plan`, `predicted`, `signers`, `validFrom` and `validTo` as host claims.** Anything shown as a basis for
    the signing decision is computed from the body; a shown plan is compared with the client's own.
 6. **Classify verifiability itself** (r3, S13): from the description it read, the client determines whether a call is
@@ -589,24 +631,45 @@ one; each client (IntelliAda's ADR-005 D13 is its own implementation) must agree
 
 ### D14. Prerequisites and bounded publication
 
-On a fresh chain a contract cannot be deployed or called until some things exist (F8):
+On a fresh chain a contract cannot be deployed or called until some things exist (F8): the contract's reference
+script, and for each shared verifier, governor or withdraw script it uses, a reference script and/or a stake
+registration. **Script presence** comes from the target address's complete `utxos` answer, searched in full for the
+anchored script hash (no page limit). **Registration presence** comes from a `stakeRegistration` read (`true`,
+`false`, or `unknown` when the provider cannot tell), or from the session's knowledge below.
 
-| Kind | What | `present` from |
-|---|---|---|
-| `referenceScript` | the contract's reference-script output | the target address's complete `utxos` answer, searched in full for the anchored script hash (no page limit) |
-| `verifier` | a shared verifier's reference script **and** its stake registration, in one transaction, as `VerifierHandle` builds it | both parts: `present` only if both are; if only the script is there, the kind becomes `stakeRegistration` for that credential |
-| `stakeRegistration` | a governor's, withdraw script's or verifier's stake registration | a `stakeRegistration` read: `true`, `false`, or `unknown` when the client's provider cannot tell |
+What the host builds for one verifier (r4, C35), by script presence and registration presence:
 
-- `prerequisites {now, contract}` lists them in the order they must land.
-- `publish {now, ttlSlots, contract, prerequisite, address}` builds one as an unsigned transaction, paid from
-  `address`, **with a validity upper bound** applied in the builder before balancing (`StateContractHandle.
-  prepareReferenceScript` and `VerifierHandle` gain overloads taking the window and the full answer set; existing
-  callers keep today's behaviour), or returns `null` when it is present.
-- **`unknown` registrations:** the host builds the registration; the client submits it, and a node rejection saying
-  the credential is already registered counts as present (as JOUST's DevKit flows already treat Yaci Store).
-- The client checks each positively (D13 rule 4), signs, submits and waits for each in order, then settles it (D8). A
-  `prepare` while one is missing or `unknown` is refused (`refusal`, code `prerequisite`, naming it): the runtime's own
-  publish-on-demand path is never reached (D12).
+| Script | Registration | Prerequisite built | Note |
+|---|---|---|---|
+| absent | `false` | `verifier` (combined) | as `VerifierHandle` builds it today, bounded |
+| absent | `true` | `referenceScript` at the verifier's holder address | a script-only build: never a combined one, whose duplicate registration the ledger would reject |
+| absent | `unknown` | `referenceScript` first, then `stakeRegistration` (`unknown`) | never combined while registration is unknown |
+| present | `false` | `stakeRegistration` | |
+| present | `unknown` | `stakeRegistration` (`unknown`) | |
+| present | `true` | none | present |
+
+A contract's own reference script is a `referenceScript` prerequisite; a governor's or withdraw script's registration
+is a `stakeRegistration`.
+
+- `prerequisites {now, contract}` lists what is missing, in the order it must land, each with `present` (`false` or
+  `unknown`).
+- `publish {now, ttlSlots, contract, prerequisite, address}` builds one as an unsigned transaction of the matching
+  D13 shape, paid from `address`, **with a validity upper bound** applied in the builder before balancing
+  (`StateContractHandle.prepareReferenceScript` and `VerifierHandle` gain overloads that take the window and the full
+  answer set and can build the script and the registration separately; existing callers keep today's behaviour), or
+  returns `null` when it is present.
+- **Learning that a credential is registered** (r4, C35, DES-D14), once per session, from either:
+  - the host's own `stakeRegistration` or `verifier` reservation reaching **confirmed** (final, D8); or
+  - **`registered {credential, evidence}`**, the client's assertion after its node rejected a registration because
+    the credential is already registered (`evidence` names the rejected transaction and the node's message).
+  The assertion is a client claim and needs no more trust: if it is wrong, a call that relies on the registration
+  fails at the ledger and spends nothing. The knowledge is dropped by a `rolledBack` of that reservation, a
+  `reset` with `rewound`, and a restart (after which the client asserts again).
+- The client checks each publication positively (D13 rule 4), signs, submits and waits for each in order, then
+  settles it (D8). A `prepare` while a prerequisite is `false`, or `unknown` with nothing learned, is refused
+  (`refusal`, code `prerequisite`, naming it): the runtime's own publish-on-demand path is never reached (D12). On a
+  provider that always answers `unknown` (DevKit's Yaci Store), the flow is: build and submit the registration; on
+  confirmation or an already-registered rejection the host learns it; calls proceed.
 - The engine's plain builds (`Prepare.java:357-368`, `:444-468`) get the same bound in M2.
 
 ### D15. Views, listings and decoding (H5–H7)
@@ -618,9 +681,9 @@ On a fresh chain a contract cannot be deployed or called until some things exist
 - **Listings** (r3, DES-D15, C29): the first page (`{now, contract, …}`) reads the contract's address once and the
   host keeps the recognised result as a **listing snapshot** in the session, with an id (`listing`) bound to the
   query and the tip hash it was read at. Later pages (`{listing, after, limit}`) page through that snapshot: no read,
-  no chain point to lose. The host keeps at most 8 snapshots (least recently used evicted; an evicted id answers
-  `bad`, code `listingGone`, and the client starts again). Items are sorted by `(txHash, index)`; `limit` is at most
-  500.
+  no chain point to lose. The host keeps at most 8 snapshots (least recently used evicted; an evicted id, or one
+  dropped by `reset`, answers `bad`, code `listingGone`, and the client starts again). Items are sorted by
+  `(txHash, index)`; `limit` is at most 500.
 - **Recognition:** an instance holds its 32-byte thread token under the contract's policy; an owned object a `0x4F…`
   token and a keyed object a `0x4B…` token, with their datum variants (`Holding_T`; `Head_T`, `Keyed_T`,
   `Retired_T`). For `objects(contract, instance)`, an object belongs to the instance its **datum** names, not its
@@ -652,19 +715,19 @@ The Node host serves the same matrix over the engine (which already takes `cosig
 
 | # | Invariant | Decisions | Checked by |
 |---|---|---|---|
-| I1 | (r3, per platform) **JVM on Linux and macOS:** every write to fd 1 other than the protocol writer's reaches stderr. **JVM on Windows and Node:** Java- or Node-level writes are redirected; any other byte on the protocol stream is detected and ends the session before a result is used | D2 | conformance: prints from a static initializer and an action, a pre-obtained `PrintStream`, a native `write(1)`, `-Xlog` defaults, a forked child (the protocol descriptor is not inherited), `fs.writeSync(1)`, a child with inherited stdio, `System.exit`/`Runtime.halt` from contract code; each case expects diversion or detection as this row states for its platform |
+| I1 | (r3, per platform) **JVM on Linux and macOS:** every write to fd 1 other than the protocol writer's reaches stderr. **JVM on Windows and Node:** Java- or Node-level writes are redirected; any other byte on the protocol stream is detected and ends the session before a result is used | D2 | conformance: prints from a static initializer and an action, a pre-obtained `PrintStream`, a native `write(1)`, `-Xlog` defaults, an `exec`'d child (it does not inherit the protocol descriptor), `fs.writeSync(1)`, a child with inherited stdio, `System.exit`/`Runtime.halt` from contract code; each case expects diversion or detection as this row states for its platform |
 | I2 | Every frame in either direction is at most 4 MiB; a malformed or stalled frame ends the session; a legitimate oversized result or answer is a `tooLarge` error or chunks, and the session survives | D2, D6, D15 | conformance: 4 MiB + 1 byte both ways, a bad header, a stalled header, a large legitimate listing, a chunked `utxos` answer, multibyte JSON |
 | I3 | Every chain read the host makes is a `chain/read` of D6's kinds answered by the client; every other backend method throws; the protocol has no endpoint or credential field | D6 | a delegating-backend test counting reads; a call reaching an unlisted method; the schema |
 | I4 | Chain time comes only from `now` and the clock in `initialize`/`reset`; reservations are released only on observed tips | D7, D8 | a session with a clock a day off the machine's; `now` far ahead of the tip releases nothing; independent changes to `now`, tip and genesis, with a near contract deadline; two TTLs in one session on both hosts |
 | I5 | No user key is held, imported or used; co-signers are key hashes made into address-only accounts | D12, D16 | `@Quorum` fixtures with co-signers by key hash; the throwaway key's accessors fail closed |
 | I6 | Given the same initial session state and the same sequence of forward calls, read answers (in order) and settlements, the host returns the same bytes | D5, D6, D8 | replay vectors (§9) |
-| I7 | (r3) No result is computed from build outputs whose fingerprint differs from `initialize`'s; `initialize`'s script hashes are those of the validator bytes the runtime loads; a client can recompute the fingerprint from disk | D4 | changes to a validator resource, a helper class and a message map before `initialize`, between calls and during a call (`buildChanged`); split class and resource directories; a changed dependency jar |
+| I7 | (r4) The host executes only the stage whose digest `initialize` verified; `initialize`'s fingerprint and script hashes describe those bytes; a client can recompute the digest from disk | D3, D4 | a stage altered before `initialize` (`stageMismatch`); a rebuild, and a rebuild then restore, of a validator resource, a helper class loaded lazily and a message map after `initialize` (the host keeps running the stage); a sibling project's jar and a local file dependency (staged); split class and resource directories |
 | I8 | Reverse requests happen only inside a forward call, within its caps, with unique ids | D2, D6, D10 | conformance: a client counting, timing and replaying stale ids |
 | I9 | Every transaction `publish` and `prepare` return has a validity upper bound in its body, within D7's ceiling, and the result's `validTo` equals it | D5, D7, D14 | conformance over every vector, on the CBOR |
 | I10 | The host process opens no socket, writes no file and starts no process while serving the conformance fixtures; D12's listed paths are unreachable | D3, D12 | OS level: empty working directory, `HOME` and `java.io.tmpdir`, nothing new afterwards; Linux CI with no network (`unshare -n`) and `strace -f -e trace=connect,execve,openat`; JFR at threshold 0 with `-Xlog:jfr+startup=off`; Node with `net`, `fs` writes, `fetch` and `child_process` stubbed to throw |
 | I11 | A failed read never reaches the runtime as an empty result | D6 | a `failed` answer during `findReferenceScript`: the call ends `readFailed`, no publication is built |
 | I12 | The host builds only for the session's network, and refuses mainnet without the opt-in | D4 | addresses of another network; `networkId: 1` with and without `mainnet` |
-| I13 | (r3) Reservations change only as D8's table says, on chain evidence; a reserved input (collateral included) is never selected; `reset` keeps them | D8, D11 | every transition of the table; auto-expiry then a late `confirmed` (`conflict`); collateral reuse then rollback; a declined transaction; `reset` with a still-valid exported transaction; a restart with `restore`; a discard followed by an identical re-prepare and a delayed repeat of the discard |
+| I13 | (r4) Reservations change only as D8's table says, on observed tips; a reserved input (collateral included) is never selected; `reset` keeps them; a rollback deeper than `settlementSlots` stops building | D8, D11 | every transition of the table; a first `confirmed` at a tip already past depth; repeated and conflicting `confirmed`; auto-expiry then a late `confirmed` (`conflict`); collateral reuse then a deep rollback (`deepRollback`); a declined transaction; `reset` with a still-valid exported transaction; a devnet snapshot restore with a still-valid exported transaction whose inputs reappear, and with a shallow map transaction removed (`rewound`); a restart with `restore` of the same CBOR as prepared and as shallow; a retried `restore` batch; `restore` after a build (`restoreClosed`); a discard followed by an identical re-prepare and a delayed repeat of the discard |
 | I14 | Every forward call has exactly one terminal outcome, and a call that ended commits nothing afterwards | D8, D10 | cancellation while CPU-bound and during a reverse read; result/cancel races; another `prepare` sent immediately after a cancellation frame (`busy` until drained) |
 | I15 | The reference checker accepts every positive verifier vector and rejects every mutated one; a client following D13 agrees with it | D13 | the verifier vectors (§9) |
 
@@ -687,8 +750,11 @@ The Node host serves the same matrix over the engine (which already takes `cosig
   host and give the same recorded snapshot (D6). H10 left the choice to this ADR.
 - **Loading the build outputs into memory** (r2's D4, withdrawn in r3). It would bind what runs to `initialize`'s
   bytes by construction, but the runtime takes validator scripts from the class's code source and refuses copies it
-  cannot place (F27); a loader seam would touch fail-closed, security-relevant code. Checking the fingerprint before
-  and after every call gives the same guarantee (I7) without that change.
+  cannot place (F27); a loader seam would touch fail-closed, security-relevant code.
+- **Fingerprinting before and after every call** (r3's D4, withdrawn in r4). Two scans of the disk cannot see a change
+  undone between them, nor bind a class the JVM loads lazily in between and keeps afterwards; and they cost two reads
+  of the whole build on every call, listings and settlements included. The digest-named stage (D3) gives the
+  guarantee by construction, with ordinary code sources, and is checked once.
 - **Sorting UTxO answers canonically** (considered in r2, withdrawn in r3). It would make answers order-independent,
   but changes transactions the runtime builds today (F14) and the 34-record gate with them.
 - **A separate transport for frames:** an extra inherited pipe (fd 3) or a Unix socket. Java's `ProcessBuilder`,
@@ -709,6 +775,8 @@ The Node host serves the same matrix over the engine (which already takes `cosig
   in step: the protocol version is the contract between JOUST and clients. `julc-state-host` is published with the
   plugin's version.
 - **The prepare service's adapter moves** into `julc-state-serve` (D16); the service depends on it.
+- **The plugin stages builds** (D3): `joustHostSpec` writes digest-named copies under `build/joust/host/`, keeping
+  the two newest. The Gradle build writes them; the host never writes.
 - **The runtime gains seams**, each defaulting to today's behaviour:
   - a **call scope**: a clock whose `currentSlot` and `tipSlot` are the call's `now` and which also drives the untimed
     wallet path, the call's TTL and page limits (D7);
@@ -738,9 +806,9 @@ M1 is split (r3, DES-D18). Each sub-milestone is its own PR, reviewed as every m
 
 | | Scope | Entry gate | Exit |
 |---|---|---|---|
-| **M1a** | The protocol document `docs/protocol/dev-host-1.md` with JSON Schemas beside it (methods, read kinds, error codes); `julc-state-serve` and `julc-state-host` with transport (D2), launch (D3, `joustHostSpec`, `joustHost`), `initialize` and the build check (D4), reads (D6, D6a), time (D7), reservations and settlement (D8), errors and cancellation (D9, D10), `describe` and plain `prepare` of init, action and destroy calls (D5, D16 first row); the runtime's call scope, claim store, `Error` backend and typed causes | this ADR accepted | I1–I4, I6–I8, I10–I14 pass on the JVM host for the calls it serves; the 34-record replay gate (§9); a TestKit consumer (Blockfrost off, a project without resources, custom output dirs, a configuration-local dependency override) launches the host on one consistent graph, and the host is absent from the consumer's runtime and publication and from `examples/dapp`'s |
-| **M1b** | `deployment`, `prerequisites` and `publish` (D14); `view`, `instances`, `objects`, `decode` (D15); owned calls and `@Quorum` (D16); predicted effects (D5a); host vectors under `fixtures/host/` | M1a | I5, I9 and the rest of I1–I14 over the full M1 matrix; host vectors reproduce their bytes; a fresh-chain deployment end to end on DevKit (prerequisites, publications, first call) through a scripted client |
-| **M1c** | The client conformance kit: recorded sessions, a scripted fake host, the reference checker and the verifier vectors (D13) | M1b | I15: the reference checker accepts every positive vector and rejects every mutated one |
+| **M1a** | The protocol document `docs/protocol/dev-host-1.md` with JSON Schemas beside it (methods, read kinds, error codes, and D13's client rules as normative text); `julc-state-serve` and `julc-state-host` with transport (D2), launch (D3: `joustHostSpec`, `joustHost`, the stage), `initialize` and the stage check (D4), reads (D6, D6a), time (D7), reservations and settlement (D8), errors and cancellation (D9, D10), `describe` and plain `prepare` of init, action and destroy calls (D5, D16 first row); the runtime's call scope, claim store, `Error` backend and typed causes | this ADR accepted | I1–I4, I6–I14 pass on the JVM host for the calls it serves (I9 on `prepare`); the replay gate's 23 plain calls (§9); a TestKit consumer (Blockfrost off, a project without resources, custom output dirs, a configuration-local version override and a configuration-local substitution of one module by another, a sibling project's contracts) launches the host on exactly the application's graph plus the two host jars, and the host is absent from the consumer's runtime and publication and from `examples/dapp`'s |
+| **M1b** | `deployment`, `prerequisites` and `publish` (D14); `view`, `instances`, `objects`, `decode` (D15); owned calls and `@Quorum` (D16); predicted effects (D5a); host vectors under `fixtures/host/` | M1a | I5, I9 on `publish`, and the rest of I1–I14 over the full M1 matrix; the replay gate's other 11 calls (Bank's owned calls); host vectors reproduce their bytes; a fresh-chain deployment end to end on DevKit (prerequisites, publications, first call) through a scripted client |
+| **M1c** | The client conformance kit: recorded sessions, a scripted fake host, the reference checker and the verifier vectors (D13) | M1b | I15: the reference checker accepts every positive vector and rejects every mutated one; it accepts the permutation vector's transaction (§9) |
 | **M2** | `joust-host.js` for npm projects over `engineService`, with the engine running in a worker; the engine's call scope, D6 vocabulary and translations, wallet-free `deployment`, bounded plain builds and typed outcomes | M1c | the same conformance kit passes, without capability `views`; differential runs (§9) agree |
 | **M3** | Keyed designation (D11) and map contracts (D8 mirrors, Q3) on both hosts; `@AuthorizedBy` if Q7 says so | M2 | keyed and map vectors in the kit (`examples/registry`, `examples/token`, `examples/guild`), including restart before settlement and `mayHaveLanded` |
 
@@ -749,14 +817,19 @@ M3b).
 
 ## 9. Verification
 
-- **Replay gate** (r3, C1, C17): M1a is gated on the **34** `fixtures/m0` records that carry their call (F14). Each is
-  sent with its recorded request and a **synthetic reconstruction**, labelled as such: the network and slot
-  configuration from `devkit.json`, `now` = the recorded tip slot, `ttlSlots` = DevKit's 20 s in slots; its reads are
-  answered from the recording **in the recorded provider order**. It must reproduce the recorded unsigned bytes
-  **and** `txHash`; untimed calls keep no lower bound (D7), as when they were recorded. The other 177 records stay a
-  historical integrity corpus (`FixturesTest`).
-- **Order:** a permutation vector answers the same UTxO set in another order; the host must build a transaction that
-  the reference checker accepts (its bytes may differ, F14). It documents that order is part of the answer (D6).
+- **Replay gate** (r3; r4, C36): the **34** `fixtures/m0` records that carry their call (F14): the **23** plain
+  calls gate M1a, and Bank's **11** owned calls (2 inits, 7 actions, 2 destroys) gate M1b. Each starts from a clean
+  session and is sent as its **wire projection**: the recorded request without `walletUtxos` (D5 refuses that
+  field), the wallet's inputs coming instead from the recorded answers for its address. The rest is a **synthetic
+  reconstruction**, labelled as such: testnet and DevKit's 20 s TTL in slots (from `DevKit.snapshotRuntime`), the
+  slot configuration from `devkit.json`, `now` = the recorded tip slot, and the recorded tip as every answer's chain
+  point; reads are answered from the recording **in the recorded provider order**. Each must reproduce the recorded
+  unsigned bytes **and** `txHash`; untimed calls keep no lower bound (D7), as when they were recorded. (Codex r3 ran
+  this projection on the JVM runtime: 34 of 34.) The other 177 records stay a historical integrity corpus
+  (`FixturesTest`).
+- **Order** (M1c): a permutation vector answers the same UTxO set in another order; the host must build a
+  transaction that the reference checker accepts (its bytes may differ, F14). It documents that order is part of the
+  answer (D6).
 - **Host vectors** (M1b): new vectors under `fixtures/host/`, built on DevKit by the runtime, each with the full call,
   clock, `now`, `ttlSlots`, network, the ordered reads in D6's encoding, the initial session state, and the expected
   CBOR and hash; publications recorded with their bounds. Typed `unsupported` requests carry their feature label
@@ -771,9 +844,18 @@ M3b).
   publication (I11); a decreasing tip within a call; inconsistent answers; a cold engine state lookup (M2); an
   `absent` script; a client that never answers (deadline); cancellation while CPU-bound; another call right after a
   cancellation; `prepare` while another is in flight; a decreasing and an implausible `now`; a clock a day off the
-  machine's (I4); addresses of another network and `networkId: 1` (I12); D8's table (I13); a build changed during a
-  call (I7); a script beyond the first page of its address and a rolled-back publication (D14); a sub-minimum payout
-  to the payer and a destroy with events (D5a).
+  machine's (I4); addresses of another network and `networkId: 1` (I12); D8's table (I13); a rebuild after
+  `initialize` (I7); a script beyond the first page of its address and a rolled-back publication (D14); every row of
+  D14's verifier table, and a later `prepare` against a provider that keeps answering `unknown` (after a
+  `registered` assertion, and after a confirmed registration); a sub-minimum payout to the payer and a destroy with
+  events (D5a); two listings of one address interleaved across a same-height fork, each continuing from its own
+  snapshot (D15); keyed: an honest future-start window, and the widened and late-start variants rejected (D7, M3);
+  a refused first attempt, and two instances with the same method and key (D11, M3).
+- **Publication vectors** (D13 rule 4): a bounded counterpart of `fixtures/m0/dex/0003` as the positive combined
+  vector, then the holder amount, the script and the certificate varied independently; positive and mutated
+  `referenceScript` and `stakeRegistration` vectors.
+- **Redeemer pointers** (D13 rule 2): `fixtures/m0/dapp` records 0003 and 0034 (one method, pointers 0 and 1) in the
+  checker/client agreement vectors.
 - **No side effects (I10):** at the OS level as I10 states, plus a test per D12 path showing it is not reached.
 - **The conformance kit is for clients too** (M1c): published from `julc-state-host` with recorded sessions, a
   scripted fake host and the reference checker, so a client (IntelliAda, a VS Code run view) can test its side without
@@ -821,30 +903,33 @@ M3b).
 
 | H | Requirement | Here | Difference to take up in IntelliAda |
 |---|---|---|---|
-| H1 | versions, protocol, contracts, script hashes, fingerprint | D4 | `hello` is `initialize`; versions split into `build` (null on Gradle) and `engine`; the fingerprint is recomputable and re-checked on every call (`buildChanged`) |
+| H1 | versions, protocol, contracts, script hashes, fingerprint | D4 | `hello` is `initialize`; versions split into `build` (null on Gradle) and `engine`; the host runs from a digest-named stage that the client verifies and recomputes |
 | H2 | `describe` | D5 | adds `calls` with `served`/`unsupported` |
 | H3 | `deployment`; `@Params` unsupported | D5, D16 | takes `now` |
 | H4 | `prepare` with predicted effects; `cosigners`; `designate` | D5, D5a, D11, D16 | the wire field is `designated`, with an `operation` record; `ttlSlots` required; results carry a `reservation` id; payouts carry full values and `owed` |
 | H5 | `view` without HTTP | D15 | named views on Gradle projects only (Q8) |
 | H6 | `instances`, `objects` | D15 | paged over a listing snapshot |
 | H7 | `decode` | D15 | may answer `ambiguous` |
-| H8 | bounded `publish` | D14 | per prerequisite, after `prerequisites`; `present` may be `unknown` |
-| H9 | time from the client | D7 | `now` must not decrease; TTL in slots; the signing check's ceiling is `now + ttlSlots` for the `now` it sent, **not** the tip (IntelliAda's check 7 must change) |
+| H8 | bounded `publish` | D14 | per prerequisite, after `prerequisites`; `present` may be `unknown`; `registered` asserts an already-registered credential |
+| H9 | time from the client | D7 | `now` must not decrease; TTL in slots; the signing check's ceiling is `now + ttlSlots` for the `now` it sent, **not** the tip (IntelliAda's check 7 must change); keyed windows follow D7's keyed rule with the call's `pageLimits` |
 | H10 | chain reads through the client; closed vocabulary | D6, D6a | one `chain/read` method with kinds (not `chain/utxos`, …), plus `stakeRegistration`; `{unsupported}` answers; provider order kept; no `chain/evaluate` |
-| H11 | `settled`; no prepare on a pending instance | D8 | by `reservation` id with the observed `tip`; adds `discarded` and `dropped`; expiry only on observed tips; `reset` keeps reservations; `restore` after a restart |
+| H11 | `settled`; no prepare on a pending instance | D8 | by `reservation` id with the observed `tip`; adds `discarded`; expiry and depth only on observed tips; `reset` keeps reservations (`rewound` after a devnet restore); `restore` with each transaction's state, before the first build |
 | H12 | cancellation, deadlines, hard timeout | D10 | `busy` while a cancelled call drains |
 | H13 | Content-Length frames ≤ 4 MiB; stdout redirected | D2 | the client adds D2's JVM options, builds an allow-listed environment and treats unexpected frames as violations |
 | H14 | structured errors | D9 | `slot?` is `retryAtSlot` |
 | H15 | `reset(now)` | D5, D7 | keeps reservations |
-| H16 | keyed designation | D11 | M3; `operation` with attempts; `mayHaveLanded` |
+| H16 | keyed designation | D11 | M3; `operation` (with instance) and its attempts; a refused first attempt needs no settlement; `mayHaveLanded` |
 | H17 | history | – | not in v1 |
 
 Also for IntelliAda:
-- **Launch:** its ADR-005 D11 drops `-Djoust.mapStore=memory` and reads `build/joust/host-spec.json` (D3).
-- **Redeemer checks** (its check 10 and I16): the redeemer index and constructor tag come from the description
-  IntelliAda reads itself (D13 rule 2), never from the host's answers, and IntelliAda still never encodes or decodes
-  Plutus data.
-- **Positive publication checks** (D13 rule 4) and the shared verifier's anchor are new checks for it.
+- **Launch:** its ADR-005 D11 drops `-Djoust.mapStore=memory`, reads `build/joust/host-spec.json`, and verifies the
+  stage's digest before launching (D3).
+- **Redeemer checks** (its check 10 and I16): the method's constructor alternative comes from the description
+  IntelliAda reads itself, and the redeemer pointer from the target input's position in the body (D13 rule 2), never
+  from the host's answers. IntelliAda reads only the redeemer's outer constructor tag; it never encodes Plutus data.
+- **New checks for it** (D13): no auxiliary data; a lower bound not earlier than `now` for methods that read `Ctx` or
+  a time rule; the balance equation; its own classification of verifiable calls; the three positive publication
+  shapes; the shared verifier's anchor.
 - **Acceptance:** its checks agree with JOUST's reference checker on the verifier vectors (I15).
 
 ## Revision history
@@ -884,3 +969,23 @@ Also for IntelliAda:
   (verifier anchors, client-side classification); S14 → D2 (`F_DUPFD_CLOEXEC`, FFM `write`); S15 → D8 (`restore`,
   `unbounded`); S16 → D3 (dependency closure check, allow-list environment, JDK home defined); S17 → D4 (no
   in-memory loader), D6 (`Throwable` loops rethrow `ReadFailed`); S18 → D7 (a tip above `now` is normal).
+- **r4** (2026-11-19, responds to the round-3 reviews of `965e01eb`: design changes requested (one P2), Codex
+  changes requested; the round cap applies after this round). Codex: C31 → D3 (a digest-named, immutable **stage** of
+  the build, sibling jars and local files included), D4 (checked once at `initialize`; r3's per-call scans
+  withdrawn), I7, T11, §5, F27; C32 → D8 (a devnet restore releases nothing: `reset` with `rewound`, `rolledBack`
+  for shallow reservations; `dropped` withdrawn), I13; C33 → D8 (named final states, thresholds applied after each
+  event, idempotent shallow repeats, deep rollback stops building, `restore` with states before the first build,
+  idempotent), I13; C34 → D13 rule 4 (three disjoint shapes, fixed 1 ADA padding, absence checks per component), F29,
+  §9; C35 → D14 (verifier table by script and registration presence, script-only builds, `registered` assertion and
+  learning from a confirmed registration), D6 (the `stakeRegistration` exception), §9; C36 → §9 (wire projection
+  without `walletUtxos`, reconstructed values labelled, 23 calls gate M1a and 11 M1b), §8; C37 → D11 (operation
+  identity with instance, a refused first attempt reserves nothing and needs no settlement, handed-out attempts never
+  discarded); C38 → D3 (the class path is `runtimeClasspath`'s artifacts plus two non-transitive host jars whose
+  dependencies must be satisfied by it), §8; C39 → D7, D13 (keyed window rule with `pageLimits`), §12; C40 → D13
+  rule 2 (constructor alternative from the description, pointer from the body), §9, §12; C41 → D2, I1 (closed on
+  `exec`); C29 → §9 (interleaved listings across a fork). Design: DES-D14 → D14 (as C35); DES-D12 residual → D1
+  (one project per host), D3 (sibling jars staged), D13 rule 2 (anchored in the stage); DES-D23 → D4 (the stage is
+  verified before any project class loads); DES-D24 → D11 (designated input reserved at the commit point, refused
+  first attempt, `mayHaveLanded` a refusal), D7 (keyed `pageLimits` source); DES-D25 → §8 (I9 on `prepare` in M1a,
+  D13's text in M1a's protocol document, permutation vector in M1c); DES-D26 → D8 (`reset` drops overlays,
+  `mapsStale`), D15 (snapshots dropped by `reset`); DES-D27 → §12 (new client checks; outer constructor tag only).
