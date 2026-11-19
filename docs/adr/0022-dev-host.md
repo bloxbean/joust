@@ -1,6 +1,6 @@
 # ADR-0022: A dev host — the project's own JOUST, driven by an IDE over stdio
 
-**Status:** Proposed (r6). Design only.
+**Status:** Proposed (r7). Design only.
 **Date:** 2026-11-19
 **Builds on:** ADR-0013 (WalletAccount, `Compose.prepare()`, the prepare service D2, the plan D4, the wallet verifier
 §9.2), ADR-0015 (the call request and the snapshot D5/D6, the engine and `engineService`), ADR-0016 (keyed calls,
@@ -496,14 +496,23 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
       observed tip passes `slot + settlementSlots`, so its collateral stays reserved through that margin (r6, C53);
   - marks every map mirror stale and stops advancing anything by tip;
   - refuses every building call (`refusal`, code `reconcile`) until `restore` completes.
-  The client then re-imports, through `restore`, every transaction it handed out (signed for submission, exported or
-  submitted) that the host does not hold, **and every unsigned result still awaiting the user's approval** (or it
-  invalidates those approvals), whose `validTo` is above the restored tip; it completes with `complete: true`.
-  **Without that history**, the client must not complete `restore` until an observed tip passes its **recovery
-  bound**: the largest `now` it sent in any session on this chain, plus `maxTtlSlots` and `settlementSlots` (keyed:
-  plus `maxStartSlots`), which it can always compute. r3's `dropped` status is withdrawn.
-- **The fence survives a restart** (r6, C46). The client **persists** an outstanding reconciliation (the rewind, and
-  its recovery bound when history is missing) before it sends the rewound `reset`, and clears it only after `restore`
+  The client then re-imports, through `restore`, whatever the host does not hold (after a restart, everything):
+  - every transaction it handed out (signed for submission, exported or submitted) whose `validTo` is above the
+    restored tip, as `prepared`;
+  - **every inclusion the restored chain still has and that is within its margin** (`slot + settlementSlots` at or
+    above the restored tip), as `shallow` with its inclusion `slot`, **whatever its `validTo`** (r7, C53), so its
+    collateral stays reserved until an observed tip passes `slot + settlementSlots`;
+  - every unsigned result still awaiting the user's approval with `validTo` above the restored tip, or it invalidates
+    those approvals;
+  and completes with `complete: true`.
+- **The recovery bound** (r7, C54). Before it hands out any body (signs it for submission, exports or submits it),
+  the client persists, **per chain**, a high-water mark: the largest `validTo + settlementSlots` over every body it
+  has handed out, `validTo` read from the body itself and `settlementSlots` the session's. Every inclusion slot is
+  below its body's `validTo`, so the mark also covers retained inclusions. The mark survives the loss of the
+  transaction journal. **A client without that history** must not complete `restore` until an observed tip passes
+  the mark. Lowering a later session's limits does not lower it. r3's `dropped` status is withdrawn.
+- **The fence survives a restart** (r6, C46). The client **persists** an outstanding reconciliation (the rewind; the
+  recovery bound is already persisted, D8) before it sends the rewound `reset`, and clears it only after `restore`
   completes. A host started while one is outstanding is initialized with `restoring: true`, even with nothing to
   restore, so it starts fenced.
 - **Restart:** nothing survives a host restart. `restore {transactions, complete}` re-creates reservations from the
@@ -781,7 +790,7 @@ The Node host serves the same matrix over the engine (which already takes `cosig
 | I10 | The host process opens no socket, writes no file and starts no process while serving the conformance fixtures; D12's listed paths are unreachable | D3, D12 | OS level: empty working directory, `HOME` and `java.io.tmpdir`, nothing new afterwards; Linux CI with no network (`unshare -n`) and `strace -f -e trace=connect,execve,openat`; JFR at threshold 0 with `-Xlog:jfr+startup=off`; Node with `net`, `fs` writes, `fetch` and `child_process` stubbed to throw |
 | I11 | A failed read never reaches the runtime as an empty result | D6 | a `failed` answer during `findReferenceScript`: the call ends `readFailed`, no publication is built |
 | I12 | The host builds only for the session's network, and refuses mainnet without the opt-in | D4 | addresses of another network; `networkId: 1` with and without `mainnet` |
-| I13 | (r6) Reservations change only as D8 says, on observed tips; a reserved input (collateral included) is never selected; `reset` keeps them, and a rewound `reset` re-arms what the rewind may revive and fences building, across a restart, until `restore` completes; a rollback deeper than `settlementSlots` stops building | D8, D11 | every transition of the table; a first `confirmed` at a tip already past depth; repeated and conflicting `confirmed`; auto-expiry then a late `confirmed` (`conflict`); collateral reuse then a deep rollback (`deepRollback`); a declined transaction; `reset` with a still-valid exported transaction; a devnet snapshot restore with a still-valid exported transaction whose inputs reappear, and with a shallow map transaction removed (`rewound`); a restart with `restore` of the same CBOR as prepared and as shallow; a retried `restore` batch; building before `complete` (`reconcile`) and `restore` after it (`restoreClosed`); a rewind from tip 211 to 150 across an exported transaction already final `expired` at `validTo` 200 (re-armed as prepared), and across a final confirmation whose collateral was since reused; a rewind from 205 to 201 that keeps an inclusion at 199 (`validTo` 200, margin 10) on the restored chain: shallow again, its collateral reserved through tip 209; an unsigned result awaiting approval across a rewind; a host restart between the rewound `reset` and `restore`'s completion (the new host starts fenced, with nothing to restore); a client without history waiting out its recovery bound; a body whose `validTo` is at or below a tip observed in its call (`expiredOnArrival`); a discard followed by an identical re-prepare and a delayed repeat of the discard |
+| I13 | (r6) Reservations change only as D8 says, on observed tips; a reserved input (collateral included) is never selected; `reset` keeps them, and a rewound `reset` re-arms what the rewind may revive and fences building, across a restart, until `restore` completes; a rollback deeper than `settlementSlots` stops building | D8, D11 | every transition of the table; a first `confirmed` at a tip already past depth; repeated and conflicting `confirmed`; auto-expiry then a late `confirmed` (`conflict`); collateral reuse then a deep rollback (`deepRollback`); a declined transaction; `reset` with a still-valid exported transaction; a devnet snapshot restore with a still-valid exported transaction whose inputs reappear, and with a shallow map transaction removed (`rewound`); a restart with `restore` of the same CBOR as prepared and as shallow; a retried `restore` batch; building before `complete` (`reconcile`) and `restore` after it (`restoreClosed`); a rewind from tip 211 to 150 across an exported transaction already final `expired` at `validTo` 200 (re-armed as prepared), and across a final confirmation whose collateral was since reused; a rewind from 205 to 201 that keeps an inclusion at 199 (`validTo` 200, margin 10) on the restored chain: shallow again, its collateral reserved through tip 209; an unsigned result awaiting approval across a rewind; a host restart between the rewound `reset` and `restore`'s completion (the new host starts fenced, with nothing to restore); the same inclusion at 199 (`validTo` 200, margin 10) made final at tip 211, a rewind to 201 that keeps it, then a host restart before `restore` completes: the client re-imports it as shallow and its collateral first becomes selectable at tip 210; a client without history waiting out its recovery bound; a later session with a lower `maxTtlSlots` after a body with a larger TTL was handed out (the persisted mark still governs); a body whose `validTo` is at or below a tip observed in its call (`expiredOnArrival`); a discard followed by an identical re-prepare and a delayed repeat of the discard |
 | I14 | Every forward call has exactly one terminal outcome, and a call that ended commits nothing afterwards | D8, D10 | cancellation while CPU-bound and during a reverse read; result/cancel races; another `prepare` sent immediately after a cancellation frame (`busy` until drained) |
 | I15 | The reference checker accepts every positive verifier vector and rejects every mutated one; a client following D13 agrees with it | D13 | the verifier vectors (§9) |
 
@@ -1078,3 +1087,9 @@ Also for IntelliAda:
   awaiting approval are re-imported or invalidated), D5, I13. Folded: C50 (the combined verifier's certificate is a
   pure registration), Codex's M1a consumer cases (an HTTP-server consumer with a matching and an incompatible
   adapter), DES-r5 I13 headline.
+- **r7** (2026-11-19, responds to the Codex round-6 confirmation of `e71afdc3`; design and security approved r6).
+  C53 → D8 (after a rewind, and after a restart, the client re-imports every retained inclusion still within its
+  margin as `shallow` with its slot, whatever its `validTo`), I13; C54 → D8 (the recovery bound is a per-chain
+  high-water mark of `validTo + settlementSlots` over every handed-out body, persisted before handoff and surviving
+  the loss of the journal; a later session's smaller limits do not lower it), I13. The ADR index's ADR-0019 row,
+  changed to r6 by mistake in r6, is restored to r5.
