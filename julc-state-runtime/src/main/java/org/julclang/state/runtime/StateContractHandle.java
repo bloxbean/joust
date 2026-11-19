@@ -272,11 +272,11 @@ public final class StateContractHandle<S> {
                 .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
                 .from(payerAddress);
         try {
-            var ctx = Designation.builder(runtime.backend(), null).compose(tx)
+            var ctx = Designation.builder(runtime, null).compose(tx)
                     .feePayer(payerAddress)
                     .additionalSignersCount(1);
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
-            var claimed = Designation.build(payerAddress, null, ctx::build);
+            var claimed = Designation.build(runtime.claimStore(), payerAddress, null, ctx::build);
             return TxRunner.exportPrepared(runtime, "publish the " + spec.name() + " reference script", claimed);
         } catch (Exception e) {
             throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
@@ -496,7 +496,7 @@ public final class StateContractHandle<S> {
      * the transaction spending it is built (F63, R-E4).
      */
     private Utxo pickSeed(Account caller) {
-        return Designation.pick(caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
+        return Designation.pick(runtime.claimStore(), caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
     }
 
     private Utxo seedOf(Account caller) {
@@ -509,7 +509,7 @@ public final class StateContractHandle<S> {
             var own = TxRunner.currentOperation();
             // A wallet's prepared creation in a keyed contract: the page's designated input is the seed (ADR-0016 D11).
             if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
-            var free = r.getValue().stream().filter(u -> Designation.pickable(u, own)).toList();
+            var free = r.getValue().stream().filter(u -> Designation.pickable(runtime.claimStore(), u, own)).toList();
             if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
             return free.stream()
                     .filter(u -> u.getAmount().size() == 1)

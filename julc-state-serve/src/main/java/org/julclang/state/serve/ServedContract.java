@@ -1,8 +1,9 @@
-package org.julclang.state.server;
+package org.julclang.state.serve;
 
 import com.bloxbean.cardano.client.account.Account;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.julclang.state.runtime.CallAbort;
 import org.julclang.state.runtime.ContractSpec;
 import org.julclang.state.runtime.JoustException;
 import org.julclang.state.runtime.StateContractHandle;
@@ -19,16 +20,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * One contract the service serves: its generated client class (driven by reflection, by the names its description
- * gives) and its description. Every call goes through the generated client, so it runs exactly what a Java caller runs.
+ * One served contract: its generated client class (driven by reflection, by the names its description gives) and its
+ * description. Every call goes through the generated client, so it runs exactly what a Java caller runs. Transport
+ * independent (ADR-0022 D16): the HTTP prepare service ({@code julc-state-server}) and the dev host both serve through it.
+ * <p>
+ * Failures: a request's mistake is a {@link BadRequest} or a {@link JsonValues.BadValue}; what the contract or the
+ * runtime throws reaches the caller as it was thrown, the reflection wrapper removed: a {@code RuntimeException} as
+ * itself, and an {@link Error} that is a {@link CallAbort} (a read the call lacks, a failed or unsupported read, a
+ * host's cancellation) as itself, so its kind is never inferred from text (D9). Any other {@code Error} or checked
+ * exception from the generated client is wrapped in a {@link JoustException} with it as the cause, as before.
  */
-final class ServedContract {
+public final class ServedContract {
 
-    final String name;               // the contract's fully qualified class name (the description's preamble title)
-    final Class<?> client;
-    final JsonNode description;
-    final JsonNode x;
-    final ContractSpec<?> spec;
+    private final String name;               // the contract's fully qualified class name (the description's preamble title)
+    private final Class<?> client;
+    private final JsonNode description;
+    private final JsonNode x;
+    private final ContractSpec<?> spec;
 
     private ServedContract(String name, Class<?> client, JsonNode description, ContractSpec<?> spec) {
         this.name = name;
@@ -39,7 +47,7 @@ final class ServedContract {
     }
 
     /** The contract of a generated {@code <Name>Client}. */
-    static ServedContract of(Class<?> client) {
+    public static ServedContract of(Class<?> client) {
         ContractSpec<?> spec;
         try {
             spec = (ContractSpec<?>) client.getField("SPEC").get(null);
@@ -60,33 +68,78 @@ final class ServedContract {
         }
     }
 
-    StateContractHandle<?> handle(StateRuntime runtime) {
+    /** The contract's fully qualified class name (its description's preamble title): the name it is served under. */
+    public String name() {
+        return name;
+    }
+
+    /** The generated client class. */
+    public Class<?> client() {
+        return client;
+    }
+
+    /** The contract's simple name ({@code x-joust.contract}). */
+    public String contract() {
+        return x.get("contract").asText();
+    }
+
+    /** The contract's description (a copy). */
+    public JsonNode description() {
+        return description.deepCopy();
+    }
+
+    /** The description's {@code x-joust} extension (a copy). */
+    public JsonNode extension() {
+        return x.deepCopy();
+    }
+
+    /** Whether the contract has keyed types (ADR-0016): its creation is then a keyed call. */
+    public boolean hasKeyedTypes() {
+        for (JsonNode k : x.path("keyed")) if (k.isObject()) return true;
+        return false;
+    }
+
+    /** The generated client's {@code SPEC}. */
+    public ContractSpec<?> spec() {
+        return spec;
+    }
+
+    /** The generated client's handle on {@code runtime}. */
+    public StateContractHandle<?> handle(StateRuntime runtime) {
         try {
             return (StateContractHandle<?>) client.getMethod("contract", StateRuntime.class).invoke(null, runtime);
+        } catch (InvocationTargetException e) {
+            if (e.getCause() instanceof Error err && err instanceof CallAbort) throw err;
+            throw new IllegalStateException(e);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
     }
 
-    /** The x-joust entry of a creation or action called {@code method} of {@code kind}. */
-    JsonNode meta(String kind, String method) {
+    /** The x-joust entry of a creation or action called {@code method} of {@code kind} (a copy). */
+    public JsonNode meta(String kind, String method) {
         String list = kind.equals("init") || kind.equals("ownedInit") ? "creations" : "actions";
         for (JsonNode m : x.get(list)) {
-            if (m.get("name").asText().equals(method) && m.get("kind").asText().equals(kind)) return m;
+            if (m.get("name").asText().equals(method) && m.get("kind").asText().equals(kind)) return m.deepCopy();
         }
-        throw new Request.Bad(name + " has no " + kind + " " + method);
+        throw new BadRequest(name + " has no " + kind + " " + method);
     }
 
-    /** Runs the call through the generated client; returns the instance or object it creates, if any. */
-    Object call(StateRuntime runtime, Account caller, String kind, JsonNode meta, String instance, String object,
+    /**
+     * Runs the call through the generated client; returns the instance or object it creates, if any. {@code meta} is
+     * the call's {@link #meta} entry; {@code kind} one of {@code init}, {@code action}, {@code destroy},
+     * {@code ownedInit}, {@code ownedAction}, {@code ownedDestroy}. Usually run inside a {@code Compose}, which builds
+     * the transaction.
+     */
+    public Object call(StateRuntime runtime, Account caller, String kind, JsonNode meta, String instance, String object,
                 JsonNode args, BigInteger lovelace, JsonNode assets) {
         String method = meta.get("name").asText();
         int nArgs = meta.get("args").size();
         boolean payable = meta.get("payable").asBoolean();
         boolean takesAssets = meta.get("takesAssets").asBoolean();
-        if (!payable && lovelace.signum() != 0) throw new Request.Bad(method + " is not payable");
-        if (lovelace.signum() < 0) throw new Request.Bad("a negative payment");
-        if (!takesAssets && assets != null && assets.isArray() && !assets.isEmpty()) throw new Request.Bad(method + " takes no native assets");
+        if (!payable && lovelace.signum() != 0) throw new BadRequest(method + " is not payable");
+        if (lovelace.signum() < 0) throw new BadRequest("a negative payment");
+        if (!takesAssets && assets != null && assets.isArray() && !assets.isEmpty()) throw new BadRequest(method + " takes no native assets");
         try {
             switch (kind) {
                 case "init" -> {
@@ -105,7 +158,7 @@ final class ServedContract {
                     return kind.equals("ownedInit") ? r.getClass().getMethod("objectId").invoke(r) : null;
                 }
                 case "ownedAction", "ownedDestroy" -> {
-                    if (object == null || !object.matches("4f[0-9a-f]{56}")) throw new Request.Bad("an owned call needs an object id");
+                    if (object == null || !object.matches("4f[0-9a-f]{56}")) throw new BadRequest("an owned call needs an object id");
                     String lookup = null;
                     for (JsonNode o : x.get("owned")) if (o.get("type").asText().equals(meta.get("owned").asText())) lookup = o.get("lookup").asText();
                     Object at = at(runtime, instance);
@@ -116,30 +169,32 @@ final class ServedContract {
                     m.invoke(obj, values.toArray());
                     return null;
                 }
-                default -> throw new Request.Bad("unknown kind " + kind);
+                default -> throw new BadRequest("unknown kind " + kind);
             }
         } catch (InvocationTargetException e) {
-            if (e.getCause() instanceof RuntimeException r) throw r;
-            throw new JoustException(method + " failed", e.getCause());
+            throw unwrapped(e, method);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
     }
 
-    /** A view on an instance with its arguments, or the instance's state ({@code view == null}). */
-    Object view(StateRuntime runtime, String instance, String view, JsonNode args) {
+    /**
+     * A view on an instance with its arguments, or the instance's state ({@code view == null}), as the Java value the
+     * generated client returns: callable without any transport (ADR-0022 D15).
+     */
+    public Object view(StateRuntime runtime, String instance, String view, JsonNode args) {
         try {
             Object at = at(runtime, instance);
             if (view == null) return client.getMethod("state").invoke(at);
             JsonNode meta = null;
             for (JsonNode v : x.get("views")) if (v.get("name").asText().equals(view)) meta = v;
-            if (meta == null) throw new Request.Bad(name + " has no view " + view);
-            if (args != null && !args.isNull() && !args.isObject()) throw new Request.Bad("args must be an object");
+            if (meta == null) throw new BadRequest(name + " has no view " + view);
+            if (args != null && !args.isNull() && !args.isObject()) throw new BadRequest("args must be an object");
             var names = new ArrayList<String>();
             meta.path("args").forEach(a -> names.add(a.get("name").asText()));
             if (args != null && args.isObject()) {
                 args.fieldNames().forEachRemaining(n -> {
-                    if (!names.contains(n)) throw new Request.Bad("unknown argument " + n);
+                    if (!names.contains(n)) throw new BadRequest("unknown argument " + n);
                 });
             }
             Method m = find(client, view, names.size(), false);
@@ -150,25 +205,40 @@ final class ServedContract {
             }
             return m.invoke(at, values);
         } catch (InvocationTargetException e) {
-            if (e.getCause() instanceof RuntimeException r) throw r;
-            throw new JoustException(view + " failed", e.getCause());
+            throw unwrapped(e, view);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
     }
 
+    /** As {@link #view}, in the description's JSON encoding ({@code x-joust.encoding.json}). */
+    public JsonNode viewJson(StateRuntime runtime, String instance, String view, JsonNode args) {
+        return JsonValues.toJson(view(runtime, instance, view, args));
+    }
+
+    /**
+     * What a reflective call's failure becomes (ADR-0022 D9, F2): the generated client's {@code RuntimeException}, or a
+     * {@link CallAbort} {@code Error}, as it was thrown; anything else wrapped, with it as the cause, as before.
+     */
+    static RuntimeException unwrapped(InvocationTargetException e, String what) {
+        Throwable cause = e.getCause();
+        if (cause instanceof RuntimeException r) return r;
+        if (cause instanceof Error err && err instanceof CallAbort) throw err;
+        return new JoustException(what + " failed", cause);
+    }
+
     private Object at(StateRuntime runtime, String instance) throws ReflectiveOperationException {
-        if (instance == null || !instance.matches("[0-9a-f]{64}")) throw new Request.Bad("an instance id is 32 bytes of hex");
+        if (instance == null || !instance.matches("[0-9a-f]{64}")) throw new BadRequest("an instance id is 32 bytes of hex");
         return client.getMethod("at", StateRuntime.class, String.class).invoke(null, runtime, instance);
     }
 
     private static List<Object> arguments(Method m, int offset, JsonNode meta, JsonNode args, BigInteger lovelace,
                                           JsonNode assets, boolean payable, boolean takesAssets) {
-        if (args == null || !args.isObject()) throw new Request.Bad("args must be an object");
+        if (args == null || !args.isObject()) throw new BadRequest("args must be an object");
         var names = new ArrayList<String>();
         meta.get("args").forEach(a -> names.add(a.get("name").asText()));
         args.fieldNames().forEachRemaining(n -> {
-            if (!names.contains(n)) throw new Request.Bad("unknown argument " + n);
+            if (!names.contains(n)) throw new BadRequest("unknown argument " + n);
         });
         Type[] types = m.getGenericParameterTypes();
         var out = new ArrayList<Object>();
@@ -183,11 +253,11 @@ final class ServedContract {
         for (Method m : c.getMethods()) {
             if (m.getName().equals(name) && m.getParameterCount() == params && Modifier.isStatic(m.getModifiers()) == isStatic) return m;
         }
-        throw new Request.Bad(c.getSimpleName() + " has no " + name + " with " + params + " parameters");
+        throw new BadRequest(c.getSimpleName() + " has no " + name + " with " + params + " parameters");
     }
 
     /** The deployment the page pins: policy, address, network, reference script. */
-    ObjectNode deployment(StateRuntime runtime) {
+    public ObjectNode deployment(StateRuntime runtime) {
         var h = handle(runtime);
         ObjectNode d = JsonValues.JSON.createObjectNode();
         d.put("contract", name);

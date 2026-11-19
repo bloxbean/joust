@@ -26,7 +26,9 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - `julc-state-testkit`: `StateHarness` (evaluates the compiled validator) + `Attacks` (attack suite).
 - `julc-state-dsl`: `.jsc` lexer/parser/checker and the lowering to a Java `@StateContract` (ADR-0018; header `jsc 1`, optional; v1/ADR-0005 removed). Run by each
   consumer's `generateJsc` JavaExec task into `build/generated/sources/jsc`.
-- `julc-state-server`: the prepare service (ADR-0013 D2) over generated clients by reflection; `js/state-client`: the
+- `julc-state-serve`: the transport-independent adapter over generated clients (`ServedContract`, `JsonValues`; ADR-0022
+  D16), shared by the prepare service and the dev host.
+- `julc-state-server`: the prepare service (ADR-0013 D2) over generated clients by reflection, through `julc-state-serve`; `js/state-client`: the
   JS client (codec, verifier, CIP-30 flow, dev wallet, `joust-gen`); `examples/dapp`: the browser dApp on DevKit.
 - `julc-state-toolchain`: ADR-0015's toolchain. `Toolchain.build(files)` compiles `.java`/`.jsc` without Gradle,
   through JuLC's embedded javac and the shared `JoustGenerators`; `toolchainWasm` builds the Web Image (`joust.build`
