@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reads.schema.json",
+  "title": "Reverse chain/read messages",
+  "$defs": {
+    "chainPoint": {
+      "type": "object",
+      "properties": {
+        "slot": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "height": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}
+      },
+      "required": ["slot", "hash", "height"],
+      "additionalProperties": false
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {"const": "2.0"},
+        "method": {"const": "chain/read"},
+        "id": {"type": "string", "pattern": "^[1-9][0-9]*\\.[1-9][0-9]*$"},
+        "params": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "utxos"},
+                "address": {"type": "string", "minLength": 1},
+                "cursor": {"type": "string", "minLength": 1}
+              },
+              "required": ["kind", "address"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "output"},
+                "ref": {"type": "string", "pattern": "^[a-f0-9]{64}#[0-9]+$"}
+              },
+              "required": ["kind", "ref"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {"kind": {"enum": ["tip", "protocolParams"]}},
+              "required": ["kind"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {"kind": {"const": "script"}, "hash": {"type": "string", "pattern": "^[0-9a-f]{56}$"}},
+              "required": ["kind", "hash"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {"const": "stakeRegistration"},
+                "credential": {"type": "string", "pattern": "^[0-9a-f]{56}$"}
+              },
+              "required": ["kind", "credential"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": ["jsonrpc", "method", "id", "params"],
+      "additionalProperties": false
+    },
+    "utxo": {
+      "type": "object",
+      "properties": {
+        "tx_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "output_index": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "address": {"type": "string", "minLength": 1},
+        "amount": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "unit": {"type": "string", "minLength": 1},
+              "quantity": {"oneOf": [{"type": "string", "pattern": "^[0-9]+$"}, {"type": "integer", "minimum": 0}]}
+            },
+            "required": ["unit", "quantity"],
+            "additionalProperties": false
+          }
+        },
+        "data_hash": {"anyOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},
+        "inline_datum": {"anyOf": [{"type": "string", "pattern": "^(?:[a-fA-F0-9]{2})+$"}, {"type": "null"}]},
+        "reference_script_hash": {"anyOf": [{"type": "string", "pattern": "^[0-9a-f]{56}$"}, {"type": "null"}]}
+      },
+      "required": ["tx_hash", "output_index", "address", "amount"],
+      "additionalProperties": false
+    },
+    "utxos": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "value": {"type": "array", "items": {"$ref": "#/$defs/utxo"}},
+            "more": {"type": "string", "minLength": 1}
+          },
+          "required": ["tip", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "failed": {
+              "type": "object",
+              "properties": {"message": {"type": "string"}},
+              "required": ["message"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["tip", "failed"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "unsupported": {"const": true}},
+          "required": ["tip", "unsupported"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "absent": {"const": true}},
+          "required": ["tip", "absent"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "output": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "value": {"$ref": "#/$defs/utxo"}},
+          "required": ["tip", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "failed": {
+              "type": "object",
+              "properties": {"message": {"type": "string"}},
+              "required": ["message"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["tip", "failed"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "unsupported": {"const": true}},
+          "required": ["tip", "unsupported"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "absent": {"const": true}},
+          "required": ["tip", "absent"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "tip": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "value": {"$ref": "#/$defs/chainPoint"}},
+          "required": ["tip", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "failed": {
+              "type": "object",
+              "properties": {"message": {"type": "string"}},
+              "required": ["message"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["tip", "failed"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "unsupported": {"const": true}},
+          "required": ["tip", "unsupported"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "protocolParams": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "value": {
+              "type": "object",
+              "description": "CCL ProtocolParams JSON with a cost model for each language used"
+            }
+          },
+          "required": ["tip", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "failed": {
+              "type": "object",
+              "properties": {"message": {"type": "string"}},
+              "required": ["message"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["tip", "failed"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "unsupported": {"const": true}},
+          "required": ["tip", "unsupported"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "script": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "value": {
+              "type": "object",
+              "properties": {
+                "type": {"enum": ["PlutusScriptV1", "PlutusScriptV2", "PlutusScriptV3"]},
+                "cborHex": {"type": "string", "pattern": "^(?:[a-fA-F0-9]{2})+$"}
+              },
+              "required": ["type", "cborHex"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["tip", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "failed": {
+              "type": "object",
+              "properties": {"message": {"type": "string"}},
+              "required": ["message"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["tip", "failed"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "unsupported": {"const": true}},
+          "required": ["tip", "unsupported"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "absent": {"const": true}},
+          "required": ["tip", "absent"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "stakeRegistration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "value": {
+              "type": "object",
+              "properties": {"registered": {"type": "boolean"}},
+              "required": ["registered"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["tip", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tip": {"$ref": "#/$defs/chainPoint"},
+            "failed": {
+              "type": "object",
+              "properties": {"message": {"type": "string"}},
+              "required": ["message"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["tip", "failed"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "unsupported": {"const": true}},
+          "required": ["tip", "unsupported"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "response": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {"const": "2.0"},
+        "id": {"type": "string", "pattern": "^[1-9][0-9]*\\.[1-9][0-9]*$"},
+        "result": {
+          "anyOf": [
+            {"$ref": "#/$defs/utxos"},
+            {"$ref": "#/$defs/output"},
+            {"$ref": "#/$defs/tip"},
+            {"$ref": "#/$defs/protocolParams"},
+            {"$ref": "#/$defs/script"},
+            {"$ref": "#/$defs/stakeRegistration"}
+          ]
+        }
+      },
+      "required": ["jsonrpc", "id", "result"],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/response"}]
+}

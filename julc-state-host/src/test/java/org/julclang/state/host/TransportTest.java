@@ -1,0 +1,129 @@
+package org.julclang.state.host;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.julclang.state.host.Wire.*;
+import static org.julclang.state.host.Client.*;
+
+class TransportTest {
+    @ParameterizedTest @ValueSource(strings = {
+        "Content-Length: 4194305\r\n\r\n", "Content-Length: -1\r\n\r\n",
+        "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}", "X: 4\r\n\r\n",
+        "Content-Length: 5\r\n\r\n{}", "Content-Length: 0\n\n", "garbage"
+    })
+    void rejectsMalformedFrame(String wire) {
+        assertThrows(Frames.Violation.class, () -> new Frames.Reader(new ByteArrayInputStream(wire.getBytes())).next());
+    }
+    @Test void cappedHeaderAndMultibyteBody() throws Exception {
+        var longHeader = "Content-Type: " + "a".repeat(1000) + "\r\nContent-Length: 2\r\n\r\n{}";
+        assertThrows(Frames.Violation.class, () -> new Frames.Reader(new ByteArrayInputStream(longHeader.getBytes())).next());
+        var out = new ByteArrayOutputStream();
+        var body = "\"λ\"".getBytes(StandardCharsets.UTF_8);
+        assertTrue(new Frames.Writer(out).write(body));
+        assertEquals("Content-Length: 4\r\n\r\n\"λ\"", out.toString(StandardCharsets.UTF_8));
+        assertArrayEquals(body, new Frames.Reader(new ByteArrayInputStream(out.toByteArray())).next());
+    }
+    @ParameterizedTest @ValueSource(strings = {"{", "{} {}", "null", "[]", "{\"jsonrpc\":\"2.0\",\"id\":1}", "{\"jsonrpc\":\"2.0\",\"method\":1}"})
+    void invalidMessageTerminates(String body) throws Exception {
+        try (var c = new Client((call,p) -> fail())) {
+            c.writer.write(body.getBytes(StandardCharsets.UTF_8));
+            assertNotNull(c.exits.poll(2, TimeUnit.SECONDS));
+            assertTrue(c.output.isEmpty());
+        }
+    }
+    @Test void invalidUtf8Terminates() throws Exception {
+        try (var c = new Client((call,p) -> fail())) {
+            c.writer.write(new byte[]{'"', (byte)0xc0, '"'});
+            assertEquals("invalid or incomplete UTF-8 JSON frame", c.exits.poll(2, TimeUnit.SECONDS));
+        }
+    }
+    @Test void incompleteFrameTimesOutFromFirstByte() throws Exception {
+        try (var c = new Client((call,p) -> fail())) {
+            c.stdin.write('C');
+            c.stdin.flush();
+            assertNull(c.exits.poll(1, TimeUnit.SECONDS));
+            assertEquals("stalled frame", c.exits.poll(12, TimeUnit.SECONDS));
+        }
+    }
+    @Test void oversizedResultAndFailedWriteNeverCommit() throws Exception {
+        var commits = new AtomicInteger();
+        Transport.Handler handler = (call,p) -> new Transport.Reply(
+                obj().put("value", "a".repeat(p.path("large").asBoolean() ? Frames.MAX_BODY : 1)), commits::incrementAndGet);
+        try (var c = new Client(handler)) {
+            error("bad", "tooLarge", c.rpc("get", obj().put("large", true)));
+            assertEquals(0, commits.get());
+            assertEquals("a", success(c.rpc("get", obj())).path("value").textValue());
+        }
+        var exit = new CountDownLatch(1);
+        var input = new PipedOutputStream();
+        var t = new Transport(new PipedInputStream(input), new OutputStream() {
+            public void write(int b) throws IOException { throw new IOException(); }
+        }, x -> exit.countDown(), handler);
+        Thread.ofPlatform().daemon().start(t::run);
+        new Frames.Writer(input).write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get\"}".getBytes());
+        assertTrue(exit.await(2, TimeUnit.SECONDS));
+        input.close();
+        assertEquals(1, commits.get());
+    }
+    @ParameterizedTest @ValueSource(booleans = {true, false})
+    void controlWinsDuringReadAndExecutionDrains(boolean cancel) throws Exception {
+        var draining = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        Transport.Handler handler = new Transport.Handler() {
+            public long deadlineMs() { return cancel ? 60000 : 300; }
+            public Transport.Reply execute(Call call, JsonNode p) {
+                try { call.reverse("chain/read", obj().put("kind", "tip")); }
+                finally {
+                    draining.countDown();
+                    while (release.getCount() != 0) {
+                        try { release.await(); } catch (InterruptedException ignored) {}
+                    }
+                }
+                return new Transport.Reply(obj());
+            }
+        };
+        try (var c = new Client(handler)) {
+            int id = c.request("first", obj());
+            String rid = c.next().required("id").textValue();
+            assertEquals("1.1", rid);
+            error("bad", "busy", c.rpc("second", obj()));
+            if (cancel) c.send(obj().put("method", "$/cancelRequest").set("params", obj().put("id", id)));
+            var end = c.next();
+            error("internal", cancel ? "cancelled" : "deadline", end);
+            assertEquals(id, end.path("id").intValue());
+            assertTrue(draining.await(1, TimeUnit.SECONDS));
+            c.send(obj().put("id", rid).set("result", obj().putObject("failed").put("message", "too late")));
+            error("bad", "busy", c.rpc("second", obj()));
+            release.countDown();
+            JsonNode pending;
+            do { c.request("second", obj()); pending = c.next(); } while (pending.has("error"));
+            assertEquals("2.1", pending.required("id").textValue());
+            c.send(obj().put("id", rid).set("result", obj()));
+            c.send(obj().put("id", "2.1").set("result", obj()));
+            assertTrue(success(c.next()).isObject());
+        } finally { release.countDown(); }
+    }
+    @Test void uncooperativeExecutionStopsHost() throws Exception {
+        var started = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var c = new Client((call,p) -> {
+            started.countDown();
+            while (release.getCount() != 0) try { release.await(); } catch (InterruptedException ignored) {}
+            return new Transport.Reply(obj());
+        })) {
+            int id = c.request("loop", obj());
+            assertTrue(started.await(1, TimeUnit.SECONDS));
+            c.send(obj().put("method", "$/cancelRequest").set("params", obj().put("id", id)));
+            error("internal", "cancelled", c.next());
+            assertEquals("execution did not stop within two seconds", c.exits.poll(3, TimeUnit.SECONDS));
+        } finally { release.countDown(); }
+    }
+}

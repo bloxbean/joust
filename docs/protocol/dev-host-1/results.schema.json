@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "results.schema.json",
+  "title": "Successful forward response by outstanding method",
+  "$defs": {
+    "status": {
+      "oneOf": [
+        {"required": ["served"], "properties": {"served": {"const": true}}},
+        {
+          "required": ["unsupported"],
+          "properties": {
+            "unsupported": {
+              "enum": ["protocol", "runtimeVersion", "params", "maps", "m1b", "notYet", "keyed", "unverifiable", "authorizedBy"]
+            }
+          }
+        }
+      ]
+    },
+    "initialize": {
+      "type": "object",
+      "properties": {
+        "protocol": {"const": 1},
+        "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "network": {"$ref": "methods.schema.json#/$defs/network"},
+        "capabilities": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "reads": {
+          "type": "array",
+          "items": {"enum": ["utxos", "output", "tip", "protocolParams", "script", "stakeRegistration"]}
+        },
+        "versions": {
+          "type": "object",
+          "properties": {
+            "build": {"const": null},
+            "engine": {
+              "type": "object",
+              "properties": {
+                "joust": {"type": "string", "minLength": 1},
+                "ccl": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+                "julc": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+                "vmProvider": {"type": "string", "minLength": 1},
+                "vmVersion": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]}
+              },
+              "required": ["joust", "ccl", "julc", "vmProvider", "vmVersion"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["build", "engine"],
+          "additionalProperties": false
+        },
+        "contracts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "scriptHashes": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {"unapplied": {"type": "string", "pattern": "^[0-9a-f]{56}$"}},
+                    "required": ["unapplied"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "spend": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+                      "mint": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+                      "stake": {"type": "string", "pattern": "^[0-9a-f]{56}$"}
+                    },
+                    "required": ["spend", "mint"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "served": {"const": true},
+              "unsupported": {"type": "string", "minLength": 1}
+            },
+            "required": ["name", "scriptHashes"],
+            "additionalProperties": false,
+            "allOf": [{"$ref": "#/$defs/status"}]
+          }
+        }
+      },
+      "required": ["protocol", "fingerprint", "network", "capabilities", "reads", "versions", "contracts"],
+      "additionalProperties": false
+    },
+    "describe": {
+      "type": "object",
+      "properties": {
+        "description": {"type": "object"},
+        "messages": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+        "calls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {"type": "string", "minLength": 1},
+              "method": {"type": "string", "minLength": 1},
+              "served": {"const": true},
+              "unsupported": {"type": "string", "minLength": 1}
+            },
+            "required": ["kind", "method"],
+            "additionalProperties": false,
+            "allOf": [{"$ref": "#/$defs/status"}]
+          }
+        }
+      },
+      "required": ["description", "messages", "calls"],
+      "additionalProperties": false
+    },
+    "prepare": {
+      "type": "object",
+      "properties": {
+        "prepared": {
+          "type": "object",
+          "properties": {
+            "reservation": {"type": "string", "minLength": 1},
+            "cbor": {"type": "string", "pattern": "^(?:[a-fA-F0-9]{2})+$"},
+            "txHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "validFrom": {
+              "anyOf": [{"type": "integer", "minimum": 0, "maximum": 9223372036854775807}, {"type": "null"}]
+            },
+            "validTo": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+            "signers": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{56}$"}},
+            "plan": {"type": "object"},
+            "instance": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          },
+          "required": ["reservation", "cbor", "txHash", "validFrom", "validTo", "signers", "plan"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["prepared"],
+      "additionalProperties": false
+    },
+    "settled": {
+      "type": "object",
+      "properties": {"state": {"enum": ["prepared", "shallow", "confirmed", "expired", "discarded"]}},
+      "required": ["state"],
+      "additionalProperties": false
+    },
+    "restore": {
+      "type": "object",
+      "properties": {"reservations": {"type": "array", "items": {"type": "string", "minLength": 1}}},
+      "required": ["reservations"],
+      "additionalProperties": false
+    },
+    "reset": {"type": "object", "properties": {}, "required": [], "additionalProperties": false},
+    "shutdown": {"type": "object", "properties": {}, "required": [], "additionalProperties": false}
+  },
+  "type": "object",
+  "properties": {
+    "jsonrpc": {"const": "2.0"},
+    "id": {"type": ["string", "integer"]},
+    "result": {
+      "anyOf": [
+        {"$ref": "#/$defs/initialize"},
+        {"$ref": "#/$defs/describe"},
+        {"$ref": "#/$defs/prepare"},
+        {"$ref": "#/$defs/settled"},
+        {"$ref": "#/$defs/restore"},
+        {"$ref": "#/$defs/reset"},
+        {"$ref": "#/$defs/shutdown"}
+      ]
+    }
+  },
+  "required": ["jsonrpc", "id", "result"],
+  "additionalProperties": false
+}

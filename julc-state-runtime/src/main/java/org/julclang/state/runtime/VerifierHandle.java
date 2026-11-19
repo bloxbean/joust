@@ -86,6 +86,7 @@ public final class VerifierHandle {
     public Utxo ensure(Account payer) {
         Utxo found = find();
         if (found != null) return found;
+        if (runtime.hostedCall()) throw new CallScope.Refusal("prerequisite", "missing reference script at " + holder);
         var tx = new Tx()
                 .payToAddress(holder, List.of(Amount.lovelace(deposit())), script)
                 .registerStakeAddress(rewardAddress)
@@ -118,6 +119,7 @@ public final class VerifierHandle {
     }
 
     private Utxo find() {
+        if (runtime.hostedCall()) return runtime.hostedReference(holder, hash);
         if (reference != null) return reference;
         var pinned = runtime.referenceScript(hash);
         if (pinned != null && holder.equals(pinned.getAddress())) {

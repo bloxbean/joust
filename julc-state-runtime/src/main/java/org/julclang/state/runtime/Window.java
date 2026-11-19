@@ -24,12 +24,12 @@ record Window(long fromSlot, long toSlot, BigInteger fromMs, BigInteger toMs) {
             Window w = cap.forced;
             for (var rule : notAfter) {
                 if (BigInteger.valueOf(time.slotToPosixMs(w.toSlot())).compareTo(rule.time().apply(state)) > 0) {
-                    throw new RequireException(what + ": the composed window ends after the deadline in '" + rule.field() + "'");
+                    throw refusal(rt, what + ": the composed window ends after the deadline in '" + rule.field() + "'");
                 }
             }
             for (var rule : notBefore) {
                 if (w.fromMs().compareTo(rule.time().apply(state)) < 0) {
-                    throw new RequireException(what + ": the composed window starts before '" + rule.field() + "'");
+                    throw refusal(rt, what + ": the composed window starts before '" + rule.field() + "'");
                 }
             }
             return w;
@@ -42,19 +42,23 @@ record Window(long fromSlot, long toSlot, BigInteger fromMs, BigInteger toMs) {
             long last = time.posixMsToSlotFloor(deadline);   // slotToPosix(last) <= deadline
             if (last < to) to = last;
             if (to <= from) {
-                throw new RequireException(what + ": too late, the deadline in '" + rule.field() + "' has passed");
+                throw refusal(rt, what + ": too late, the deadline in '" + rule.field() + "' has passed");
             }
         }
         long fromMs = time.slotToPosixMs(from);
         for (var rule : notBefore) {
             BigInteger t = rule.time().apply(state);
             if (BigInteger.valueOf(fromMs).compareTo(t) < 0) {
-                throw new RequireException(what + ": too early, the time in '" + rule.field() + "' has not been reached");
+                throw refusal(rt, what + ": too early, the time in '" + rule.field() + "' has not been reached");
             }
         }
         Window w = new Window(from, to, BigInteger.valueOf(fromMs), BigInteger.valueOf(time.slotToPosixMs(to)));
         if (cap != null) cap.windows.add(w);
         return w;
+    }
+
+    private static RequireException refusal(StateRuntime runtime, String message) {
+        return runtime.hostedCall() ? new CallScope.Refusal("window", message) : new RequireException(message);
     }
 
     /** The intersection of windows that share their start; null if empty. */

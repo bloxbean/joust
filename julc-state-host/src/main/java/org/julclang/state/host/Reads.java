@@ -1,0 +1,271 @@
+package org.julclang.state.host;
+
+import com.bloxbean.cardano.client.address.Address;
+import com.bloxbean.cardano.client.api.model.*;
+import com.bloxbean.cardano.client.backend.api.*;
+import com.bloxbean.cardano.client.backend.model.Block;
+import com.bloxbean.cardano.client.api.util.CostModelUtil;
+import com.bloxbean.cardano.client.plutus.spec.Language;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.julclang.state.runtime.snapshot.*;
+import java.lang.reflect.*;
+import java.util.*;
+import java.util.function.LongConsumer;
+import java.util.function.Supplier;
+import static org.julclang.state.host.Wire.*;
+
+/** D6/D6a. One generation owns one snapshot. SnapshotBackend provides CCL's paging,
+ * asset filtering and canonical UTxOs after acquisition of the complete address set. */
+final class Reads {
+    interface Peer { Call.Answer read(ObjectNode request); }
+    static final List<String> KINDS = List.of("utxos", "output", "tip", "protocolParams", "script", "stakeRegistration");
+    private final Peer peer;
+    private final long now, ahead, maxCount, maxBytes;
+    private final int network;
+    private final LongConsumer observe;
+    private long count, bytes, lastHeight = -1;
+    private String lastHash;
+    long greatestTip = -1;
+    private final Snapshot snapshot = new Snapshot();
+    private final SnapshotBackend local = new SnapshotBackend(snapshot);
+    private final Set<String> absentScripts = new HashSet<>();
+    private final Map<String, Optional<Boolean>> registration = new HashMap<>();
+    private final Set<String> queriedOutputs = new HashSet<>();
+
+    Reads(Peer peer, long now, long ahead, long maxCount, long maxBytes, int network, LongConsumer observe) {
+        this.peer = peer;
+        this.now = now;
+        this.ahead = ahead;
+        this.maxCount = maxCount;
+        this.maxBytes = maxBytes;
+        this.network = network;
+        this.observe = observe;
+    }
+
+    /** Stable service objects for QuickTx, dispatching only the closed vocabulary against the current execution. */
+    static BackendService backend(Supplier<Reads> current) {
+        Map<String, Object> services = new HashMap<>();
+        for (Class<?> type : List.of(UtxoService.class, ScriptService.class, BlockService.class, EpochService.class, TransactionService.class)) {
+            services.put("get" + type.getSimpleName(), proxy(type, (self, method, args) -> {
+                String service = type.getSimpleName().replace("Service", "").toLowerCase(Locale.ROOT);
+                if (type == TransactionService.class) throw new Unsupported(service + "." + method.getName());
+                try { return current.get().invoke(service, method, args); }
+                catch (HostError e) { throw new ReadAbort(e); }
+                catch (IllegalArgumentException e) { throw new ReadAbort(inconsistent("malformed " + service + " answer")); }
+            }));
+        }
+        return (BackendService) proxy(BackendService.class, (self, method, args) -> {
+            Object target = services.get(method.getName());
+            if (target == null) throw new Unsupported("backend." + method.getName());
+            return target;
+        });
+    }
+
+    // D9: preserve the typed host cause through CCL, generated methods and the serving adapter.
+    private static final class ReadAbort extends Error implements org.julclang.state.runtime.CallAbort {
+        ReadAbort(HostError cause) { super(cause.getMessage(), cause, false, false); }
+    }
+
+    private static Object proxy(Class<?> type, InvocationHandler handler) {
+        return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, handler);
+    }
+    private Object invoke(String service, Method m, Object[] args) throws Throwable {
+        Object target;
+        switch (service + "." + m.getName()) {
+            case "utxo.getUtxos" -> {
+                utxos((String) args[0]);
+                target = local.getUtxoService();
+            }
+            case "utxo.getTxOutput" -> {
+                String ref = args[0] + "#" + args[1];
+                if (queriedOutputs.add(ref)) {
+                    var v = value("output", "ref", ref);
+                    if (v == null) {
+                        if (snapshot.outputs.containsKey(ref)) throw inconsistent("known output reported absent");
+                        snapshot.absent.add(ref);
+                    } else checkOutput(v, null, ref);
+                }
+                target = local.getUtxoService();
+            }
+            case "script.getPlutusScript", "script.getPlutusScriptCbor" -> {
+                String hash = (String) args[0];
+                if (!snapshot.scripts.containsKey(hash) && !absentScripts.contains(hash)) script(hash);
+                if (absentScripts.contains(hash)) return Result.error("absent").code(404);
+                target = local.getScriptService();
+            }
+            case "block.getLatestBlock" -> {
+                if (snapshot.tip == null) {
+                    var a = answer("tip", obj());
+                    var v = a.path("value");
+                    if (!v.equals(a.get("tip"))) throw inconsistent("tip value differs from its chain point");
+                    snapshot.tip = JSON.convertValue(v, Block.class);
+                }
+                target = local.getBlockService();
+            }
+            case "epoch.getProtocolParameters" -> {
+                if (m.getParameterCount() != 0) throw new Unsupported("epoch.getProtocolParameters");
+                if (snapshot.protocolParams == null) {
+                    var v = value("protocolParams", null, "");
+                    if (v == null || !v.isObject()) throw inconsistent("missing protocol parameters");
+                    snapshot.protocolParams = JSON.convertValue(v, ProtocolParams.class);
+                    // Every served validator in M1a is Plutus V3. Refuse before QuickTx or
+                    // JuLC can substitute its built-in costs (D6a).
+                    if (CostModelUtil.getCostModelFromProtocolParams(snapshot.protocolParams, Language.PLUTUS_V3)
+                            .filter(model -> model.getCosts().length > 0).isEmpty())
+                        throw HostError.internal("evaluator", "missing Plutus V3 cost model");
+                }
+                target = local.getEpochService();
+            }
+            default -> throw new Unsupported(service + "." + m.getName());
+        }
+        try { return m.invoke(target, args); }
+        catch (InvocationTargetException e) { throw e.getCause(); }
+    }
+
+    private void utxos(String address) {
+        if (snapshot.utxos.containsKey(address)) return;
+        checkAddress(address, network);
+        var values = new ArrayList<Utxo>();
+        Set<String> cursors = new HashSet<>(), refs = new HashSet<>();
+        String cursor = null;
+        JsonNode point = null;
+        do {
+            var request = obj().put("address", address);
+            if (cursor != null) request.put("cursor", cursor);
+            var a = answer("utxos", request);
+            if (point != null && !point.equals(a.get("tip"))) throw inconsistent("chunks have different tips");
+            point = a.get("tip");
+            var v = a.get("value");
+            if (v != null) {
+                if (!v.isArray()) throw inconsistent("utxos must be an array");
+                for (var item : v) {
+                    Utxo u = checkOutput(item, address, null);
+                    if (!refs.add(Snapshot.ref(u.getTxHash(), u.getOutputIndex()))) throw inconsistent("duplicate unspent output");
+                    values.add(u);
+                }
+            } else if (cursor != null || a.has("more")) throw inconsistent("absent chunk");
+            cursor = a.path("more").textValue();
+            if (a.has("more") && (cursor == null || cursor.isEmpty() || !cursors.add(cursor)))
+                throw inconsistent("invalid chunk cursor");
+        } while (cursor != null);
+        snapshot.utxos.put(address, values);
+    }
+
+    private Utxo checkOutput(JsonNode n, String address, String wanted) {
+        var index = n.path("output_index");
+        if (!index.isIntegralNumber() || !index.canConvertToInt() || index.intValue() < 0
+                || !n.path("tx_hash").asText("").matches("[0-9a-f]{64}") || !n.path("amount").isArray())
+            throw inconsistent("malformed output");
+        var units = new HashSet<String>();
+        for (var asset : n.get("amount")) {
+            var unit = asset.path("unit");
+            var quantity = asset.path("quantity");
+            boolean integral = quantity.isIntegralNumber() && quantity.bigIntegerValue().signum() >= 0;
+            boolean decimal = quantity.isTextual() && quantity.textValue().matches("[0-9]+");
+            if (!unit.isTextual() || unit.textValue().isEmpty() || !units.add(unit.textValue()) || !(integral || decimal))
+                throw inconsistent("invalid or duplicate output amount");
+        }
+        Utxo u;
+        try { u = JSON.convertValue(n, Utxo.class); }
+        catch (IllegalArgumentException e) { throw inconsistent("malformed output"); }
+        String ref = Snapshot.ref(u.getTxHash(), u.getOutputIndex());
+        checkAddress(u.getAddress(), network);
+        if (address != null && !address.equals(u.getAddress()) || wanted != null && !wanted.equals(ref))
+            throw inconsistent("output address or reference differs from the query");
+        // Some providers omit the redundant data_hash on output lookup. Compare it
+        // by deriving the hash from the exact inline datum bytes in both projections.
+        if (u.getInlineDatum() != null) {
+            String hash;
+            try {
+                hash = HexFormat.of().formatHex(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(
+                        HexFormat.of().parseHex(u.getInlineDatum())));
+            } catch (IllegalArgumentException e) { throw inconsistent("invalid inline datum"); }
+            if (u.getDataHash() != null && !hash.equals(u.getDataHash())) throw inconsistent("inline datum hash mismatch");
+            u.setDataHash(hash);
+        }
+        var previous = snapshot.outputs.putIfAbsent(ref, u);
+        if (snapshot.absent.contains(ref) || previous != null && !sameOutput(previous, u))
+            throw inconsistent("conflicting answers for " + ref);
+        return previous == null ? u : previous;
+    }
+
+    // The amount list encodes a ledger map. Providers can order its units differently.
+    private static boolean sameOutput(Utxo previous, Utxo current) {
+        return Objects.equals(previous.getAddress(), current.getAddress())
+                && Objects.equals(previous.getDataHash(), current.getDataHash())
+                && Objects.equals(previous.getInlineDatum(), current.getInlineDatum())
+                && Objects.equals(previous.getReferenceScriptHash(), current.getReferenceScriptHash())
+                && previous.getAmount().size() == current.getAmount().size()
+                && new HashSet<>(previous.getAmount()).equals(new HashSet<>(current.getAmount()));
+    }
+
+    static void checkAddress(String address, int network) {
+        try {
+            if (new Address(address).getNetwork().getNetworkId() == network) return;
+        } catch (RuntimeException ignored) {}
+        throw HostError.bad("network", "address is invalid or belongs to another network");
+    }
+
+    private void script(String hash) {
+        var v = value("script", "hash", hash);
+        if (v == null) { absentScripts.add(hash); return; }
+        String type = v.path("type").asText("");
+        if (!Set.of("PlutusScriptV1", "PlutusScriptV2", "PlutusScriptV3").contains(type)) throw inconsistent("unknown script language");
+        snapshot.scripts.put(hash, new Snapshot.Script(type, v.path("cborHex").asText("")));
+        try {
+            var script = local.getScriptService().getPlutusScript(hash).getValue();
+            if (HexFormat.of().formatHex(script.getScriptHash()).equals(hash)) return;
+        } catch (Exception ignored) {}
+        throw inconsistent("script hash mismatch");
+    }
+
+    Optional<Boolean> stakeRegistration(String credential) {
+        return registration.computeIfAbsent(credential, k -> {
+            var a = answer("stakeRegistration", obj().put("credential", k));
+            if (a.has("unsupported")) return Optional.empty();
+            var flag = a.path("value").path("registered");
+            if (!flag.isBoolean()) throw inconsistent("invalid registration");
+            return Optional.of(flag.booleanValue());
+        });
+    }
+
+    private JsonNode value(String kind, String field, String key) {
+        var params = obj();
+        if (field != null) params.put(field, key);
+        return answer(kind, params).get("value");
+    }
+    private JsonNode answer(String kind, ObjectNode params) {
+        if (++count > maxCount) throw HostError.bad("readLimit", "read count exceeds the session limit");
+        var response = peer.read(params.put("kind", kind));
+        bytes += response.bytes();
+        if (bytes > maxBytes) throw HostError.bad("readLimit", "read bytes exceed the session limit");
+        var a = response.message().path("result");
+        JsonNode tip = a.path("tip"), slot = tip.path("slot"), height = tip.path("height");
+        if (!slot.isIntegralNumber() || !slot.canConvertToLong() || slot.longValue() < 0
+                || !height.isIntegralNumber() || !height.canConvertToLong() || height.longValue() < 0
+                || !tip.path("hash").asText("").matches("[0-9a-f]{64}")) throw inconsistent("invalid chain point");
+        String hash = tip.get("hash").textValue();
+        if (slot.longValue() < greatestTip || height.longValue() < lastHeight
+                || slot.longValue() == greatestTip && !hash.equals(lastHash))
+            throw HostError.internal("chainMoved", "chain point rolled back or was replaced");
+        int variants = 0;
+        for (String k : List.of("value", "absent", "unsupported", "failed")) if (a.has(k)) variants++;
+        if (variants != 1 || a.path("value").isNull()
+                || a.has("absent") && !a.get("absent").booleanValue()
+                || a.has("unsupported") && !a.get("unsupported").booleanValue()
+                || a.has("more") && (!kind.equals("utxos") || !a.has("value"))) throw inconsistent("invalid read outcome");
+        lastHash = hash;
+        lastHeight = height.longValue();
+        greatestTip = slot.longValue();
+        observe.accept(greatestTip);
+        if (now - greatestTip > ahead) throw HostError.bad("nowImplausible", "now is too far ahead of the observed tip");
+        if (a.has("failed")) {
+            if (!a.path("failed").path("message").isTextual()) throw inconsistent("invalid read failure");
+            throw new ReadFailed(kind, "", a.get("failed").get("message").textValue());
+        }
+        if (a.has("unsupported") && !kind.equals("stakeRegistration")) throw new Unsupported(kind);
+        return a;
+    }
+    private static HostError inconsistent(String reason) { return HostError.internal("inconsistentRead", reason); }
+}
