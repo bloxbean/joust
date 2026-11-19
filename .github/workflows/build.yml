@@ -211,10 +211,12 @@ jobs:
 
       # Everything `./gradlew build -PnoDevnet` runs (the fuzz targets' replays included), but the short fuzz runs, which
       # the next step makes with libFuzzer's statistics logged.
+      # ADR-0022 I10: the dev host's tests run under strace in a network namespace (.github/scripts/trace-dev-host.sh).
+      - name: Install strace (dev-host trace)
+        run: command -v strace || { sudo apt-get update -q && sudo apt-get install -y -q strace; }
+
       - name: Build and test (no DevKit)
-        run: |
-          command -v strace || sudo apt-get install -y strace
-          ./gradlew build -PnoDevnet -PnoFuzz -PjoustHostTrace --continue --stacktrace
+        run: ./gradlew build -PnoDevnet -PnoFuzz -PjoustHostTrace --continue --stacktrace
 
       # gradle/jazzer-fuzz.gradle's fuzzShort (part of `build` without -PnoFuzz), each public target for 30 s: the IR readers
       # and NODE_OPTIONS. -Pfuzz.public leaves out the decoders of on-chain data (ValueAdapter, AddressAdapter, the memos),

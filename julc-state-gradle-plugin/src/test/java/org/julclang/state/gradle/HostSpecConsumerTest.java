@@ -101,8 +101,10 @@ class HostSpecConsumerTest {
         for (String file : List.of("pom-default.xml", "module.json")) {
             String publication = Files.readString(project.resolve("build/publications/app/" + file));
             assertTrue(publication.contains("julc-state-runtime"));
-            assertFalse(publication.contains("julc-state-host"));
-            assertFalse(publication.contains("julc-state-serve"));
+            // Whole module names: an HTTP-server consumer's own publication names julc-state-server, which starts with
+            // "julc-state-serve".
+            assertFalse(java.util.regex.Pattern.compile("julc-state-host\\b").matcher(publication).find(), file);
+            assertFalse(java.util.regex.Pattern.compile("julc-state-serve\\b").matcher(publication).find(), file);
         }
         return spec;
     }
