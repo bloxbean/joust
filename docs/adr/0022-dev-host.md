@@ -1,6 +1,6 @@
 # ADR-0022: A dev host — the project's own JOUST, driven by an IDE over stdio
 
-**Status:** Proposed (r5). Design only.
+**Status:** Proposed (r6). Design only.
 **Date:** 2026-11-19
 **Builds on:** ADR-0013 (WalletAccount, `Compose.prepare()`, the prepare service D2, the plan D4, the wallet verifier
 §9.2), ADR-0015 (the call request and the snapshot D5/D6, the engine and `engineService`), ADR-0016 (keyed calls,
@@ -191,7 +191,10 @@ on npm, D15), the difference is a **capability** in `initialize`'s answer, never
   *(illustrative)*
   - **The launch manifest is the application's own class path** (r5, C45): the files of `sourceSets.main.
     runtimeClasspath` in Gradle's order (the main outputs, file dependencies and the resolved artifacts of
-    `runtimeClasspath`, with every substitution and force applied), followed by `julc-state-serve` and
+    `runtimeClasspath`, with every substitution and force applied), after its producer tasks have run, **omitting
+    an optional source-set output directory that does not exist** (r6, C52: a project without resources has no
+    `build/resources/main`, as `processResources` reports NO-SOURCE), before ordinals are assigned; a missing
+    required artifact fails the task, and so does an entry that disappears while the client copies it; followed by `julc-state-serve` and
     `julc-state-host` at the plugin's version, resolved non-transitively in a non-consumable **`joustHost`**
     configuration. The task checks the dependencies those two jars declare in their runtime metadata against the
     **union** of the application's selected components and the two host components: `org.julclang` modules must be
@@ -258,8 +261,9 @@ The client's first call. Request *(illustrative)*:
   `build/joust/contracts.json` under its working directory, and every file it references, **into memory** at
   `initialize` (they are data, not code), and imports the engine then.
 
-- **Restoring** (r5, C46): `true` when the client holds pending transactions from an earlier session; building calls
-  are then refused (`refusal`, code `reconcile`) until `restore` completes (D8). A separate method, so a long list
+- **Restoring** (r5; r6, C46): `true` when the client holds pending transactions from an earlier session **or has an
+  outstanding reconciliation after a rewind** (even with nothing to restore); building calls are then refused
+  (`refusal`, code `reconcile`) until `restore` completes (D8). A separate method, so a long list
   never meets the frame cap.
 - **Time limits** (r5, S21): `maxTtlSlots` and `maxNowAheadSlots` are the client's choice per network class; on a
   public network they should stay small (the example's 900 slots), since together they bound how long a signature
@@ -307,7 +311,7 @@ bind a class loaded lazily between them; r4's stage under `build/` could be prun
 | `settled` | `{reservation, txHash, status, tip, slot?}` → `{state}` | chain-evidenced settlement; answers the reservation's state after the event (D8) |
 | `restore` | `{transactions: [{cbor, state, slot?, operation?}], complete}` → `{reservations}` | pending work after a restart or a rewind; building waits for `complete` (D8, D11) |
 | `registered` | `{credential, evidence}` → `{}` | the client asserts a stake credential is registered (D14) |
-| `reset` | `{now, clock?, rewound?}` → `{}` | drops caches, listing snapshots and map mirrors and rebuilds clock-derived state; **keeps reservations**, except `rewound`, which fences building until `restore` completes (D8) |
+| `reset` | `{now, clock?, rewound?: {tip}}` → `{}` | drops caches, listing snapshots and map mirrors and rebuilds clock-derived state; **keeps reservations**; `rewound` also re-arms what the rewind may revive and fences building until `restore` completes (D8) |
 | `shutdown` / `exit` | → `{}` / notification | as LSP: stop accepting calls, then exit |
 
 `prepared` is `{reservation, cbor, txHash, validFrom, validTo, signers, plan, instance?, object?}`. **`validFrom` and
@@ -471,21 +475,37 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
   | confirmed (final) | `rolledBack` | – | **a rollback deeper than `settlementSlots`**: outside the model. The host stops building (every building call is refused, `refusal`, code `deepRollback`) until it is restarted; the client restarts it and `restore`s what is still pending |
 
   Expiry and depth use **tips the client observed**, never `now`: a `now` that runs ahead of the chain releases
-  nothing. A final reservation keeps a tombstone for the session; repeating its final status is accepted; any other
+  nothing. A final reservation keeps a tombstone for the session (with its inputs, collateral, `validTo` and inclusion
+  slot, for a rewind); repeating its final status is accepted; any other
   status for it is `bad`, code `conflict`, and if it touched maps the mirrors are **stale**: every later map call is
   refused (`refusal`, code `mapsStale`) until `reset` rebuilds them. An unknown reservation is `bad`, code
   `unknownReservation`. Because ids are unique, a late status for a discarded reservation can never name a later
   reservation of the same body.
 - **`reset` keeps reservations** (DES-D16): a devnet time control does not undo what may still land.
-- **A rewind fences building** (r5, C46). A devnet snapshot restore (or any chain rewind) can bring back inputs and
-  validity for bytes whose reservation was already **final**, expired or confirmed, not only for pending ones. So the
-  client sends `reset` with `rewound: true`, and the host then: drops every reservation and tombstone, marks every map
-  mirror stale, stops advancing anything by tip, and refuses every building call (`refusal`, code `reconcile`) until
-  `restore` completes. The client re-imports, through `restore`, **every transaction it handed out** (signed for
-  submission, exported or submitted) whose `validTo` is above the rewound chain's tip, whatever its earlier state, so
-  their ordinary inputs, collateral and keyed designations are reserved again before any new build. A client without
-  that history must not complete `restore` until the rewound chain's observed tip passes the largest `validTo` it may
-  have handed out; that is the recovery boundary. r3's `dropped` status is withdrawn.
+- **A rewind fences building** (r5; r6, C46, C53). A devnet snapshot restore (or any chain rewind) can bring back
+  inputs and validity for bytes whose reservation was already **final**, expired or confirmed, not only for pending
+  ones; and it can leave an inclusion still on the restored chain but shallow again. So the client sends `reset` with
+  `rewound: {tip}` (the restored chain's tip), and the host then:
+  - **keeps every reservation it holds** and re-arms what the rewind may revive, from the tombstones (each keeps
+    its transaction's inputs, collateral, `validTo` and inclusion slot for the session):
+    - a **discarded** one stays released: it was never handed out;
+    - an **expired** one whose `validTo` is above the restored tip becomes **prepared** again;
+    - a **confirmed** or **shallow** one whose inclusion slot is above the restored tip (the rewind removed it)
+      becomes **prepared** again, if its `validTo` is above the restored tip;
+    - a **confirmed** one whose inclusion slot is at or below the restored tip becomes **shallow** again, until an
+      observed tip passes `slot + settlementSlots`, so its collateral stays reserved through that margin (r6, C53);
+  - marks every map mirror stale and stops advancing anything by tip;
+  - refuses every building call (`refusal`, code `reconcile`) until `restore` completes.
+  The client then re-imports, through `restore`, every transaction it handed out (signed for submission, exported or
+  submitted) that the host does not hold, **and every unsigned result still awaiting the user's approval** (or it
+  invalidates those approvals), whose `validTo` is above the restored tip; it completes with `complete: true`.
+  **Without that history**, the client must not complete `restore` until an observed tip passes its **recovery
+  bound**: the largest `now` it sent in any session on this chain, plus `maxTtlSlots` and `settlementSlots` (keyed:
+  plus `maxStartSlots`), which it can always compute. r3's `dropped` status is withdrawn.
+- **The fence survives a restart** (r6, C46). The client **persists** an outstanding reconciliation (the rewind, and
+  its recovery bound when history is missing) before it sends the rewound `reset`, and clears it only after `restore`
+  completes. A host started while one is outstanding is initialized with `restoring: true`, even with nothing to
+  restore, so it starts fenced.
 - **Restart:** nothing survives a host restart. `restore {transactions, complete}` re-creates reservations from the
   client's persisted transactions (signed or unsigned CBOR), each with its **state** (`prepared`, or `shallow` with
   its inclusion `slot`) from the client's journal (C33): the host decodes their inputs, collateral and upper bound,
@@ -643,7 +663,7 @@ host, not from a bundle the client controls. So a client of this protocol **must
      registration-and-delegation certificate (kinds 11 to 13).
    - **`verifier`** (combined, as `VerifierHandle` builds it): exactly one holder output at the anchored verifier's
      enterprise address as in `referenceScript`, **and** exactly one certificate registering that verifier's
-     credential.
+     credential, of a pure registration form with its deposit as in `stakeRegistration` (r6, C50).
    - **Absence checks apply only to the component being added:** before signing, the client checks with its own node
      that the target does not already carry the script (for a shape with a holder output), and that the credential is
      not registered where its node can tell (for a shape with a certificate). It never infers a **script
@@ -761,7 +781,7 @@ The Node host serves the same matrix over the engine (which already takes `cosig
 | I10 | The host process opens no socket, writes no file and starts no process while serving the conformance fixtures; D12's listed paths are unreachable | D3, D12 | OS level: empty working directory, `HOME` and `java.io.tmpdir`, nothing new afterwards; Linux CI with no network (`unshare -n`) and `strace -f -e trace=connect,execve,openat`; JFR at threshold 0 with `-Xlog:jfr+startup=off`; Node with `net`, `fs` writes, `fetch` and `child_process` stubbed to throw |
 | I11 | A failed read never reaches the runtime as an empty result | D6 | a `failed` answer during `findReferenceScript`: the call ends `readFailed`, no publication is built |
 | I12 | The host builds only for the session's network, and refuses mainnet without the opt-in | D4 | addresses of another network; `networkId: 1` with and without `mainnet` |
-| I13 | (r4) Reservations change only as D8's table says, on observed tips; a reserved input (collateral included) is never selected; `reset` keeps them; a rollback deeper than `settlementSlots` stops building | D8, D11 | every transition of the table; a first `confirmed` at a tip already past depth; repeated and conflicting `confirmed`; auto-expiry then a late `confirmed` (`conflict`); collateral reuse then a deep rollback (`deepRollback`); a declined transaction; `reset` with a still-valid exported transaction; a devnet snapshot restore with a still-valid exported transaction whose inputs reappear, and with a shallow map transaction removed (`rewound`); a restart with `restore` of the same CBOR as prepared and as shallow; a retried `restore` batch; building before `complete` (`reconcile`) and `restore` after it (`restoreClosed`); a rewind from tip 211 to 150 across an exported transaction already final `expired` at `validTo` 200, and across a final confirmation whose collateral was since reused (both re-imported before any build); a body whose `validTo` is at or below a tip observed in its call (`expiredOnArrival`); a discard followed by an identical re-prepare and a delayed repeat of the discard |
+| I13 | (r6) Reservations change only as D8 says, on observed tips; a reserved input (collateral included) is never selected; `reset` keeps them, and a rewound `reset` re-arms what the rewind may revive and fences building, across a restart, until `restore` completes; a rollback deeper than `settlementSlots` stops building | D8, D11 | every transition of the table; a first `confirmed` at a tip already past depth; repeated and conflicting `confirmed`; auto-expiry then a late `confirmed` (`conflict`); collateral reuse then a deep rollback (`deepRollback`); a declined transaction; `reset` with a still-valid exported transaction; a devnet snapshot restore with a still-valid exported transaction whose inputs reappear, and with a shallow map transaction removed (`rewound`); a restart with `restore` of the same CBOR as prepared and as shallow; a retried `restore` batch; building before `complete` (`reconcile`) and `restore` after it (`restoreClosed`); a rewind from tip 211 to 150 across an exported transaction already final `expired` at `validTo` 200 (re-armed as prepared), and across a final confirmation whose collateral was since reused; a rewind from 205 to 201 that keeps an inclusion at 199 (`validTo` 200, margin 10) on the restored chain: shallow again, its collateral reserved through tip 209; an unsigned result awaiting approval across a rewind; a host restart between the rewound `reset` and `restore`'s completion (the new host starts fenced, with nothing to restore); a client without history waiting out its recovery bound; a body whose `validTo` is at or below a tip observed in its call (`expiredOnArrival`); a discard followed by an identical re-prepare and a delayed repeat of the discard |
 | I14 | Every forward call has exactly one terminal outcome, and a call that ended commits nothing afterwards | D8, D10 | cancellation while CPU-bound and during a reverse read; result/cancel races; another `prepare` sent immediately after a cancellation frame (`busy` until drained) |
 | I15 | The reference checker accepts every positive verifier vector and rejects every mutated one; a client following D13 agrees with it | D13 | the verifier vectors (§9) |
 
@@ -843,7 +863,7 @@ M1 is split (r3, DES-D18). Each sub-milestone is its own PR, reviewed as every m
 
 | | Scope | Entry gate | Exit |
 |---|---|---|---|
-| **M1a** | The protocol document `docs/protocol/dev-host-1.md` with JSON Schemas beside it (methods, read kinds, error codes, and D13's client rules as normative text); `julc-state-serve` and `julc-state-host` with transport (D2), launch (D3: `joustHostSpec`, `joustHost`, the ordered launch manifest; the client snapshot in the scripted client), `initialize` and the snapshot check (D4), reads (D6, D6a), time (D7), reservations and settlement (D8), errors and cancellation (D9, D10), `describe` and plain `prepare` of init, action and destroy calls (D5, D16 first row); the runtime's call scope, claim store, `Error` backend and typed causes | this ADR accepted | I1–I4, I6–I14 pass on the JVM host for the calls it serves (I9 on `prepare`); the replay gate's 23 plain calls (§9); a TestKit consumer (Blockfrost off, a project without resources, custom output dirs, a configuration-local version override and a configuration-local substitution of one module by another, a sibling project's contracts) launches the host on exactly the application's graph plus the two host jars, and the host is absent from the consumer's runtime and publication and from `examples/dapp`'s |
+| **M1a** | The protocol document `docs/protocol/dev-host-1.md` with JSON Schemas beside it (methods, read kinds, error codes, and D13's client rules as normative text); `julc-state-serve` and `julc-state-host` with transport (D2), launch (D3: `joustHostSpec`, `joustHost`, the ordered launch manifest; the client snapshot in the scripted client), `initialize` and the snapshot check (D4), reads (D6, D6a), time (D7), reservations and settlement (D8), errors and cancellation (D9, D10), `describe` and plain `prepare` of init, action and destroy calls (D5, D16 first row); the runtime's call scope, claim store, `Error` backend and typed causes | this ADR accepted | I1–I4, I6–I14 pass on the JVM host for the calls it serves (I9 on `prepare`); the replay gate's 23 plain calls (§9); a TestKit consumer (Blockfrost off, a project without resources, custom output dirs, a configuration-local version override and a configuration-local substitution of one module by another, a sibling project's contracts, an HTTP-server consumer with a matching `julc-state-serve` and one with an incompatible one) launches the host on exactly the application's graph plus the two host jars, and the host is absent from the consumer's runtime and publication and from `examples/dapp`'s |
 | **M1b** | `deployment`, `prerequisites` and `publish` (D14); `view`, `instances`, `objects`, `decode` (D15); owned calls and `@Quorum` (D16); predicted effects (D5a); host vectors under `fixtures/host/` | M1a | I5, I9 on `publish`, and the rest of I1–I14 over the full M1 matrix; the replay gate's other 11 calls (Bank's owned calls); host vectors reproduce their bytes; a fresh-chain deployment end to end on DevKit (prerequisites, publications, first call) through a scripted client |
 | **M1c** | The client conformance kit: recorded sessions, a scripted fake host, the reference checker and the verifier vectors (D13) | M1b | I15: the reference checker accepts every positive vector and rejects every mutated one; it accepts the permutation vector's transaction (§9) |
 | **M2** | `joust-host.js` for npm projects over `engineService`, with the engine running in a worker; the engine's call scope, D6 vocabulary and translations, wallet-free `deployment`, bounded plain builds and typed outcomes | M1c | the same conformance kit passes, without capability `views`; differential runs (§9) agree |
@@ -1046,3 +1066,15 @@ Also for IntelliAda:
   covers final states removed by a restore; S19 and DES-D28 → D3 (the snapshot). Follow-up issues: C47 (restore
   conflict rules), C48 (lifetime of registration evidence), C49 (choosing the keyed or ordinary validity rule), C51
   (datum-hash normalisation in the wire replay), DES-D31's code for an unlisted event on a non-final state.
+- **r6** (2026-11-19, responds to the round-5 confirmations of `e476cd12`: design approved, security approved, Codex
+  changes requested with C46 still open and two new blockers from the r5 text). C46 → D8 (the client persists an
+  outstanding reconciliation, so a host started before `restore` completes starts fenced with `restoring: true`, even
+  with nothing to restore; a computable recovery bound for a client without history: its largest `now` plus
+  `maxTtlSlots` and `settlementSlots`, keyed plus `maxStartSlots`), D4, I13; C52 → D3 (absent optional source-set
+  output directories are omitted before ordinals; a missing required artifact, or an entry vanishing during the copy,
+  still fails); C53 → D8 (a rewound `reset`, now `rewound: {tip}`, keeps every reservation and re-arms tombstones the
+  rewind may revive: expired or removed confirmations with `validTo` above the restored tip become prepared, a
+  retained inclusion becomes shallow again so its collateral stays reserved through the margin; unsigned results
+  awaiting approval are re-imported or invalidated), D5, I13. Folded: C50 (the combined verifier's certificate is a
+  pure registration), Codex's M1a consumer cases (an HTTP-server consumer with a matching and an incompatible
+  adapter), DES-r5 I13 headline.

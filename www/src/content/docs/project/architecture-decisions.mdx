@@ -43,10 +43,10 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented (PR #37); M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
 | [0017](#adr-0017-one-joust-new-for-java-and-npm) | One `joust new` for Java and npm: a native `joust` CLI and a JOUST Gradle plugin | Proposed (r5, approved by review); implemented (PR #55) | [The native `joust`](/reference/joust-cli/#the-native-joust) |
 | [0018](#adr-0018-the-jsc-language-an-immutable-contract-language) | The `.jsc` language: an immutable contract language for JavaScript developers | Proposed (r29); M0–M4 exited, M5 (the language server, ADR-0021) built (#130) | [.jsc](/languages/jsc/) |
-| [0019](#adr-0019-programmable-tokens-cip-113) | Programmable tokens (CIP-113): issuers, holders, contracts paid in them | Proposed (r5) | – |
+| [0019](#adr-0019-programmable-tokens-cip-113) | Programmable tokens (CIP-113): issuers, holders, contracts paid in them | Proposed (r6) | – |
 | [0020](#adr-0020-uplc-transition-programs-off-chain-a-spike) | UPLC transition programs as the off-chain meaning: a spike and its report | Proposed (r12); the spike's "adopt now" items implemented in the engine | [Program manifests](/apps/cli-and-projects/#program-manifests) |
 | [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc) | A language server and VS Code extension for `.jsc` | Proposed (r11, with r7a and r7b); M5a–M5e built (#130); the release publishes the extension as `julc.vscode-joust` (D11) | [Editors](/languages/editors/) |
-| [0022](#adr-0022-a-dev-host-for-ides) | A dev host: the project's own JOUST, driven by an IDE over stdio | Proposed (r5) | – |
+| [0022](#adr-0022-a-dev-host-for-ides) | A dev host: the project's own JOUST, driven by an IDE over stdio | Proposed (r6) | – |
 
 ## The base
 
@@ -385,7 +385,7 @@ Covered in: [Editors](/languages/editors/).
 
 ### ADR-0022: A dev host for IDEs
 
-[`0022-dev-host.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0022-dev-host.md) · Proposed (r5)
+[`0022-dev-host.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0022-dev-host.md) · Proposed (r6)
 
 An IDE (IntelliAda first) deploys and calls contracts through the project's own JOUST, run as a separate process
 that it drives with JSON-RPC over stdio, so a script is always the one the project's JuLC compiles. The host holds no
