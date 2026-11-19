@@ -19,7 +19,10 @@ public final class CallScope {
     private final long ttlSlots;          // 0: the runtime's TTL
     private final long[] pageLimits;      // null: the runtime's page limits
 
-    private CallScope(long now, long ttlSlots, long[] pageLimits) {
+    private final boolean hosted;
+
+    private CallScope(long now, long ttlSlots, long[] pageLimits, boolean hosted) {
+        this.hosted = hosted;
         this.now = now;
         this.ttlSlots = ttlSlots;
         this.pageLimits = pageLimits;
@@ -28,13 +31,34 @@ public final class CallScope {
     /** A scope whose current slot and tip slot are {@code now}; the runtime's TTL and page limits otherwise. */
     public static CallScope at(long now) {
         if (now < 0) throw new IllegalArgumentException("now must be a slot (not negative)");
-        return new CallScope(now, 0, null);
+        return new CallScope(now, 0, null, false);
+    }
+
+    /**
+     * A dev-host build (ADR-0022 D6–D9, D12). Its backend exposes complete address sets and
+     * memoizes them for this call. Missing reference scripts and illegal windows are typed refusals.
+     */
+    public static CallScope hosted(long now) {
+        if (now < 0) throw new IllegalArgumentException("now must be a slot (not negative)");
+        return new CallScope(now, 0, null, true);
+    }
+
+    boolean hosted() { return hosted; }
+
+    /** A refusal at a host-only build boundary (ADR-0022 D9). */
+    public static final class Refusal extends org.julclang.state.api.RequireException {
+        private final String code;
+        Refusal(String code, String message) {
+            super(message);
+            this.code = code;
+        }
+        public String code() { return code; }
     }
 
     /** This scope with a TTL of {@code slots} slots (at least 1, subject to the host's TTL limit), in place of the runtime's. */
     public CallScope ttlSlots(long slots) {
         if (slots < 1) throw new IllegalArgumentException("ttlSlots must be at least 1");
-        return new CallScope(now, slots, pageLimits);
+        return new CallScope(now, slots, pageLimits, hosted);
     }
 
     /** This scope with keyed calls' page limits, in slots after {@link #now()} (ADR-0016 D7), in place of the runtime's. */
@@ -42,7 +66,7 @@ public final class CallScope {
         if (maxStartSlots < 0 || maxValiditySlots < 1) {
             throw new IllegalArgumentException("page limits: maxStartSlots >= 0 and maxValiditySlots >= 1");
         }
-        return new CallScope(now, ttlSlots, new long[]{maxStartSlots, maxValiditySlots});
+        return new CallScope(now, ttlSlots, new long[]{maxStartSlots, maxValiditySlots}, hosted);
     }
 
     /** The slot the caller considers current: the scope's {@code currentSlot()} and {@code tipSlot()}. */

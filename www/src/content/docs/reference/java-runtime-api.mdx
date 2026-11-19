@@ -362,6 +362,12 @@ instance, view, args)` and `viewJson(...)` (a view, or the state with `view` nul
 the generated client reach the caller as they were thrown: a `RuntimeException` as itself, a `CallAbort` error as
 itself. `JsonValues` (same package) is the description's JSON codec; `BadRequest` is a request's mistake.
 
+## julc-state-host
+
+The JVM entry point `org.julclang.state.host.DevHost --stdio` serves generated clients over the ADR-0022 protocol.
+The caller supplies chain reads, network and clock configuration. Plain preparations return unsigned transactions and
+reserve their inputs until settlement.
+
 ## julc-state-server: JoustServer
 
 `public final class JoustServer` (package `org.julclang.state.server`): the prepare service (ADR-0013 D2).

@@ -28,6 +28,8 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   consumer's `generateJsc` JavaExec task into `build/generated/sources/jsc`.
 - `julc-state-serve`: the transport-independent adapter over generated clients (`ServedContract`, `JsonValues`; ADR-0022
   D16), shared by the prepare service and the dev host.
+- `julc-state-host`: the JVM stdio dev host for generated clients (ADR-0022). Its wire interface is in
+  `docs/protocol/dev-host-1.md`.
 - `julc-state-server`: the prepare service (ADR-0013 D2) over generated clients by reflection, through `julc-state-serve`; `js/state-client`: the
   JS client (codec, verifier, CIP-30 flow, dev wallet, `joust-gen`); `examples/dapp`: the browser dApp on DevKit.
 - `julc-state-toolchain`: ADR-0015's toolchain. `Toolchain.build(files)` compiles `.java`/`.jsc` without Gradle,

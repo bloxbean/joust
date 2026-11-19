@@ -18,6 +18,7 @@ julc-compiler = { module = "org.julclang:julc-compiler", version.ref = "julc" }
 julc-annotation-processor = { module = "org.julclang:julc-annotation-processor", version.ref = "julc" }
 julc-cardano-client-lib = { module = "org.julclang:julc-cardano-client-lib", version.ref = "julc" }
 julc-testkit = { module = "org.julclang:julc-testkit", version.ref = "julc" }
+julc-vm-api = { module = "org.julclang:julc-vm", version.ref = "julc" }
 julc-vm-java = { module = "org.julclang:julc-vm-java", version.ref = "julc" }
 
 cardano-client-lib = { module = "com.bloxbean.cardano:cardano-client-lib", version.ref = "cardano-client-lib" }

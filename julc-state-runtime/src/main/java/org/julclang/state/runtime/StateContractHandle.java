@@ -221,6 +221,7 @@ public final class StateContractHandle<S> {
      * thread token: the validator never lets it be spent (I10), so it stays available. Found on chain, or null.
      */
     public Utxo findReferenceScript() {
+        if (runtime.hostedCall()) return runtime.hostedReference(address, policyId);
         if (referenceScript != null) return referenceScript;
         var pinned = runtime.referenceScript(policyId);
         if (pinned != null && pinned.getAddress() != null && pinned.getAddress().equals(address)) {
@@ -251,6 +252,7 @@ public final class StateContractHandle<S> {
     public Utxo ensureReferenceScript(Account payer) {
         Utxo existing = findReferenceScript();
         if (existing != null) return existing;
+        if (runtime.hostedCall()) throw new CallScope.Refusal("prerequisite", "missing reference script at " + address);
         var tx = new com.bloxbean.cardano.client.quicktx.Tx()
                 .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
                 .from(payer.baseAddress());

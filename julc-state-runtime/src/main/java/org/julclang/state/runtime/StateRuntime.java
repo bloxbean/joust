@@ -126,6 +126,25 @@ public final class StateRuntime {
         return s == null ? null : s.scope();
     }
 
+    boolean hostedCall() {
+        var call = callScope();
+        return call != null && call.hosted();
+    }
+
+    /** D6/D8: the host owns a complete, call-local address snapshot. Never reuse an older finder's cached hit. */
+    com.bloxbean.cardano.client.api.model.Utxo hostedReference(String holder, String hash) {
+        try {
+            var result = backend.getUtxoService().getUtxos(holder, Integer.MAX_VALUE, 1);
+            if (!result.isSuccessful()) throw new org.julclang.state.runtime.snapshot.ReadFailed("utxos", holder, result.getResponse());
+            for (var u : result.getValue()) {
+                if (hash.equalsIgnoreCase(u.getReferenceScriptHash())) return u;
+            }
+            return null;
+        } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+            throw new org.julclang.state.runtime.snapshot.ReadFailed("utxos", holder, e.getMessage());
+        }
+    }
+
     void requireUnscopedSubmission() {
         if (callScope() != null) throw new IllegalStateException("submitting inside a call scope");
     }
