@@ -1072,10 +1072,11 @@ validator never accepts it (r17, #76 review S5, S6).
   only when the method's inputs form a bounded domain the build enumerated; otherwise it is a measurement (J19).
 - **Stable diagnostic codes** (`JSC0001`…) with a catalogue in the reference docs (after Elci, F15).
 - **What reaches the script (r12, ADR-0021 review F4/Q2, S5 and §3a item 2).** The script is a function of the contract's
-  behaviour and its ABI, never of how the file is written:
+  behaviour and its ABI, never of how the file is written (what "never" rests on is stated below):
   - **Never reaches it:** layout (blank lines, indentation, line ends), comments, the file's name and path, line and
     column numbers, and names: locals, lambda, loop and match variables, `fn`s, parameters, methods, types, variants,
-    fields, the contract; renamed in any order (a rename that changes the names' alphabetical order included). The
+    fields, the contract; renamed to fresh names in any order (a rename that changes the names' alphabetical order
+    included; a rename onto a name the program already uses is not measured, see below). The
     ABI's names are in the manifest and the description, not in the script; a rename of one is reported by the ABI gate
     as an ABI change, and still leaves the script as it was.
   - **The one exception: the package.** The contract's fully qualified name is its identity (the manifest's
@@ -1085,16 +1086,22 @@ validator never accepts it (r17, #76 review S5, S6).
     library bindings by content (JuLC ADR-075), so a move keeps the hash (`JscV2HashStabilityTest` asserts it for
     packages that sort before, among and after the library imports). JuLC 0.1.0-pre21 still broke ties between
     library methods with equal bodies by qualified name, so a rename that reversed their names' order moved the hash
-    (Crowdfund's `?? 0` helpers under `renameAll`); JuLC 0.1.0-pre22 breaks those ties by first use (JuLC ADR-078,
-    bloxbean/julc#348), and `JscV2HashStabilityTest` passes for all 67 contracts and all ten edits. A language server
-    treats a package move as a code change.
+    (Crowdfund's `?? 0` helpers under `renameAll`); JuLC 0.1.0-pre22 breaks those ties by first use, and by qualified
+    name only among methods the program never reaches (JuLC ADR-078, bloxbean/julc#348), and `JscV2HashStabilityTest`
+    passes for every example contract and every edit. A language server treats a package move as a code change.
   - **What "never" rests on (r30).** It is a measured gate, not a theorem about JuLC: `JscV2HashStabilityTest` (every
-    contract, every edit, release mode) must pass on each JuLC bump. JuLC ADR-078's "Known limits" lists the name and
-    order dependences JuLC still has, none reached by the gate's contracts today: the numbering of shared
-    strict-boundary shape checks (L-SC), the literal folds keying on a name bound once in the whole program (L-C19;
-    JOUST could avoid it by generating program-unique local names), list-index promotion keying on spellings (C26),
-    overload families (C14), the validator helpers' declaration order (L-H), and a library method named like a stdlib
-    intrinsic (C27). A JuLC bump that fails the gate is a JuLC regression to report, not a new rule for authors.
+    example contract, every edit, release mode) must pass on each JuLC bump. JuLC ADR-078's "Known limits" lists the
+    name and order dependences found in JuLC so far, and says the list is not exhaustive. None of them moves a hash
+    under the gate's edits today. The gate does not show that they cannot: its renames map each name to a fresh one,
+    one to one, so a rename that makes two names equal, or splits one, is not measured. The limits an author's edit
+    could meet: shape-check numbering and per-root boundary checkers that follow class, field and method names (L-SC,
+    L-C1); type registration order reaching content keys through class renames (L-C2); backend passes that key on
+    spellings: the literal folds (L-C19; JOUST could avoid it by generating program-unique local names), list-index
+    promotion (C26) and the passes of ADR-078's audit row; overload families (C14); the validator helpers' declaration
+    order (L-H); a library method named like a stdlib intrinsic (C27); and library-source order, which can decide
+    whether a program compiles (L-C4). Builds with `--traces` are not under the gate. A JuLC bump that fails the gate
+    is a JuLC regression to report, not a new rule for authors; a contract outside the gate that meets one of these
+    limits is a JuLC issue to report under ADR-078's F-ID.
   - **Reaches it:** what the contract does (every expression, constant and check), the author's `require` messages
     verbatim, ABI facts (constructor indices and field positions), and the source order of checks within a method.
     Declaration order of actions and destroys is ABI (their constructor indices); of `fn`s, types and views it is in no
@@ -1983,6 +1990,8 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   (MD7, Codex M2); the reference grammar, modifier table and IR shape cover M3b and M3c (MD8); §8 records M3's exit and
   D10 the maintainers' decisions in one list (MD9); both IR readers refuse the mixed-stage mutants (MS2).
 - **r30** (2026-11-20, JuLC 0.1.0-pre22): D12's "What reaches the script" records that JuLC 0.1.0-pre22 breaks ties
-  between equal-bodied library methods by first use (JuLC ADR-078, bloxbean/julc#348), so `JscV2HashStabilityTest`
-  passes for all 67 contracts and every edit (pre21 failed Crowdfund under `renameAll`), and that "never" is a measured
-  gate on each JuLC bump, citing JuLC ADR-078's known limits.
+  between equal-bodied library methods by first use, by qualified name only among unreached methods (JuLC ADR-078,
+  bloxbean/julc#348), so `JscV2HashStabilityTest` passes for all 67 example contracts and all ten edits (pre21 failed
+  Crowdfund under `renameAll`); that "never" is a measured gate on each JuLC bump, citing JuLC ADR-078's known limits
+  (non-exhaustive) and what the gate's renames do not measure (a rename onto a name already used); and that "renamed"
+  means renamed to fresh names.

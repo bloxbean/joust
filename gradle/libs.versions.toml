@@ -1,6 +1,6 @@
 [versions]
-# JuLC 0.1.0-pre22 (tag v0.1.0-pre22 at b782bf4c, released 2026-11-19; includes bloxbean/julc#311, #313 and #348), on Maven
-# Central and in the BloxBean release repository (https://repo.bloxbean.org/maven/releases). It depends on
+# JuLC 0.1.0-pre22 (tag v0.1.0-pre22 at b782bf4c, released 2026-11-19; includes bloxbean/julc#311, #313, #348),
+# on Maven Central and in the BloxBean release repository (https://repo.bloxbean.org/maven/releases). It depends on
 # cardano-client-lib 0.8.0-pre8: keep the two in step.
 julc = "0.1.0-pre22"
 cardano-client-lib = "0.8.0-pre8"
