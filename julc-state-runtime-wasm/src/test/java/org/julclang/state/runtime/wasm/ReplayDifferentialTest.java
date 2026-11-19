@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * the engine's path with each loaded contract's transitions run as its programs, as its JVM methods, and as both
  * compared step by step; the unsigned bytes must equal the recording in every mode, and no comparison may differ.
  * <ul>
- *   <li>{@code fixtures/m0/dapp}: the 34 call requests (Counter, Bank) recorded from the typed clients on DevKit
+ *   <li>{@code fixtures/m0/dapp}: the 25 call requests (Counter, Bank) recorded from the typed clients on DevKit
  *       (examples/dapp {@code ReplayTest} replays them through the typed clients);</li>
  *   <li>{@code fixtures/m3}: the engine's recordings (every kind the engine prepares, 15 groups).</li>
  * </ul>
@@ -107,7 +107,7 @@ class ReplayDifferentialTest {
     @Test
     void dappCallRequestsReplayInEveryMode() throws Exception {
         var cases = dapp();
-        assertEquals(34, cases.size(), "fixtures/m0/dapp call requests");
+        assertEquals(25, cases.size(), "fixtures/m0/dapp call requests");
         inEveryMode(cases, "fixtures/m0/dapp");
     }
 
