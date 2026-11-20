@@ -1,0 +1,112 @@
+# Protocol 1 client conformance kit
+
+Use the `conformance` classifier of `org.julclang:julc-state-host` at the host version you support. It contains a Java 25 reference checker, a scripted stdio host, and the JSON inputs for testing another implementation. A client test project can resolve it with the same Maven repositories it uses for JOUST. For example, with Gradle Groovy DSL and a `joustVersion` project property:
+
+```groovy
+configurations { clientKit }
+dependencies { clientKit "org.julclang:julc-state-host:${joustVersion}:conformance" }
+
+tasks.register('copyClientKit', Sync) {
+    from configurations.clientKit
+    into layout.buildDirectory.dir('client-kit')
+}
+```
+
+Run `./gradlew copyClientKit` in the client project. From an empty test directory, with `lib` set to the absolute path of that project's `build/client-kit`, run:
+
+```sh
+jar xf "$lib"/julc-state-host-*-conformance.jar verifier sessions
+java -cp "$lib/*" org.julclang.state.host.conformance.ReferenceChecker verifier/dapp-0034.json
+java -cp "$lib/*" org.julclang.state.host.conformance.ReferenceChecker verifier/reject-shifted-pointer.json
+```
+
+The first command invoking the checker prints `[]` and exits 0. The second prints `["pointer"]` and exits 1. In Java, `ReferenceChecker.check(JsonNode)` returns the list directly. The kit's dedicated source set supplies a classified jar on the existing Maven publication. Only clients requesting that classifier resolve the kit. HostSpec continues to select the ordinary host jar.
+
+## Test a protocol peer
+
+Point the client's host launcher at this command, with the normal JVM output options:
+
+```sh
+java -XX:+DisplayVMOutputToStderr -Xlog:disable -Xlog:all=warning:stderr --enable-native-access=ALL-UNNAMED \
+  -cp "$lib/*" org.julclang.state.host.conformance.FakeHost --stdio sessions/bank.json
+```
+
+Omitting the session path selects the bundled Bank session. Start another process with `sessions/keyed.json` for the keyed refusal. Each `frames` entry contains a single `client` or `host` message, in wire order. Feed the client its recorded chain answers when it receives each reverse request. The Bank recording includes a failed digest check, successful handshake, description and deployment, missing prerequisite, publication and settlement, prepare, view, listing, cancellation, late reverse answer, shutdown and exit.
+
+Object key order and JSON whitespace are immaterial. Array order, params, error or result envelopes, and reverse IDs must match. A client may choose a string or integer forward ID. The fake host correlates its response and the cancel notification with that actual ID. Snapshot paths and fingerprints in the transcripts are fixed test identities. Use the recorded values for this scripted launch. The recorder normalizes these two machine-dependent fields after capturing real frames. The live regression also allows installed engine version strings to vary across releases.
+
+Both peers use the host's D2 frame codec. The header limit is 1,024 bytes, the UTF-8 body limit is 4,194,304 bytes in either direction, and a partial frame has ten seconds from its first byte. A mismatch, partial EOF, invalid UTF-8 or malformed frame produces a single-line diagnostic on stderr and a nonzero exit. An idle peer may wait indefinitely between frames.
+
+## Check a signing decision
+
+Read each `verifier/*.json` and compare the client's violation codes with `violations`. A positive has an empty list. Every negative names its base in `source` and its edit in `mutation`. All examples carry complete inputs. Only `result` comes from the host. Assemble the rest in the client:
+
+| Field | Origin and use |
+| --- | --- |
+| `method`, `request` | Exact forward method and sent params. The caller address, named payment keys, method, arguments, payment, window and requested publication ID come from here. |
+| `anchors` | Snapshot description, contract address, policy and script language. The shared output verifier has its own hash, language and enterprise address. The recorder reads the actual validator resources beside the compiled classes or in their jars and checks their hashes. |
+| `resolved` | Client node UTxOs keyed by `txHash#index`, using D6 amount and datum fields. The positive generator obtains these from the recorded node answers. |
+| `node` | Complete script hashes present at queried holder addresses and registration observations by credential. An empty holder list means the address was queried. Registration may be `true`, `false` or `"unknown"`. |
+| `protocolParams`, `networkId`, `maxFee` | Client node parameters, selected ledger network and user fee ceiling in lovelace. Fee and execution limits follow the protocol-1 wallet rules. |
+| `result` | The complete forward result, including `prepared` and any `predicted` projection. Signing uses the independently decoded body, witnesses and resolved UTxOs. |
+| `orderedReads` | Included on the two Bank order cases. Compare the provider arrays in `Bank-publish-1` and `permuted`. Selection can change the body hash even though the UTxO set is the same. |
+
+The checker slices the received CBOR, hashes the body and reads the ledger fields independently of the host builder. It binds the checked redeemers and datums to the body's script-data hash using the client's V3 cost model. Input order for the plan follows the wire. Spend pointers use transaction ID and numeric output index in ledger order. Compare `dapp-0003` and `dapp-0034` for the same method at pointers 0 and 1. The method constructor comes from the anchored description in both cases.
+
+The signing verdict authenticates the compared plan, bounds and signer set. The latter also includes the payment key needed to spend the payer's inputs, even on a body with no explicit required signers. The checker uses no host prediction in its decision. A UI using predicted state, events, sends or payouts to authorize a signature must derive its displayed effects independently. In particular, a tagged output reveals what was paid, including minimum-ADA padding. The pre-padding amount owed can require running the contract's transition.
+
+### Stable violation codes
+
+| Code | Failed check |
+| --- | --- |
+| `malformed` | Unreadable, ambiguous, unsupported or ill-typed transaction encoding, or missing checker input. |
+| `bodyHash` | Blake2b-256 of the received body differs from the claimed hash. |
+| `scriptIntegrity` | Witness redeemers or datums and the client's language view do not match the body commitment. |
+| `planMismatch` | Shown plan, bound, signer claims or creation ID differ from the independent projection. |
+| `notVerifiable` | Contract or method outside the locally verifiable M1 set. |
+| `network`, `isValid` | Wrong body or address network, or phase-2 validity flag differs from true. |
+| `unresolvedInput`, `scriptInput`, `referenceInput` | Missing node resolution, unexpected spending input or holding, or unpinned reference/script. |
+| `collateral` | Ownership, return, per-unit conservation or the 5,000,000-lovelace exposure limit fails. |
+| `certificate`, `deposit` | Wrong count, form or credential. Deposit covers an incorrect explicit registration deposit or excessive creation deposit. |
+| `withdrawal`, `governance`, `auxiliaryData` | Unauthorized reward account or amount, governance fields, or auxiliary data/hash present. |
+| `mint`, `signer` | Wrong policy, token or quantity, or payment-key requirements disagree with the call. |
+| `upperBound`, `lowerBound` | Missing, expired, empty or overlong upper window, or missing/backdated context or time-rule lower bound. |
+| `budget`, `fee` | Invalid execution budget or fee above the protocol-derived or user cap. |
+| `redeemer`, `pointer` | Wrong purpose/count, schema, constructor, arguments, context, seed or burn/mint authorization, or wrong ledger index. |
+| `continuingOutput`, `walletOutput` | Wrong continuation, token, inline datum or owned instance, or an unexpected wallet address, script or payout tag. |
+| `balance`, `netOutflow` | Per-unit conservation or nonnegativity fails, or wallet loss/third-party receipts exceed the authorized amounts. |
+| `publicationShape`, `publicationPresence`, `holderLovelace` | Publication target, script, holder structure or payer change fails, independent absence evidence fails, or holder value is outside the inclusive minimum through minimum + 1,000,000. |
+
+### Reproduce the recordings
+
+From the JOUST checkout run:
+
+```sh
+./gradlew :julc-state-host:recordClientConformance
+./gradlew :julc-state-host:check :julc-state-gradle-plugin:check -PnoDevnet
+(cd js/state-client && npm ci && npm test)
+```
+
+`ClientVectors` drives the actual framed host with M1b's recorded answers and the two historical M0 prepares. It also reverses the payer set and resolves the inputs selected by that build. `MutationVectors` edits individual ledger items or client evidence. When isolating a rule it updates change, deposits, witness commitments, hash and matching host claims as appropriate. `VerifierVectorsTest` recreates every negative, checks the hash independently, and reruns the oracle with just the target rule disabled. The public checker always enables every rule. `RecordedSessionsTest` regenerates and compares both sessions. The Node wallet differential exercises the intersection of the two verifiers' rules, using the same fee ceiling and sent window.
+
+### ADR-0022 §9 adversarial coverage
+
+| Scenario | Executable coverage |
+| --- | --- |
+| I1 stdout pollution, native and inherited descriptors, termination | `BootstrapTest.applicationOutputAndTermination` and `bootstrappedFdOneIsStderrEvenForEarlierReferencesAndNativeCode`. |
+| I2 frames, sizes, failed writes and stalls | `TransportTest.cappedHeaderAndMultibyteBody`, `invalidUtf8Terminates`, `incompleteFrameTimesOutFromFirstByte`, `oversizedResultAndFailedWriteNeverCommit`. `FakeHostTest` checks the client-facing replay process. |
+| Unknown response ID | `ClientConformanceTest.unsolicitedReverseIdCannotAnswerAnOutstandingPrepareRead`. The fake additionally rejects a mismatched ID in a recorded reverse answer. |
+| Late reverse answer after cancellation and forward ID reuse | `TransportTest.controlWinsDuringReadAndExecutionDrains`, including a stale answer during the following generation. The Bank transcript includes a late answer. |
+| Read count/byte cap, inconsistent answers, decreasing point | `ReadsTest.everyChunkCountsAndMustKeepItsChainPoint`, `addressReferenceDuplicatesAndScriptHashAreChecked` and `separateLookupsAgreeAndTipsCannotMoveBackwards`. |
+| Failed read during publication, script absent | `M1bTest.publicationChecksTheLastChunkAndPropagatesReadFailure`, `ReadsTest.failedUnsupportedUnknownAndNegativeAnswersAreDistinct`, `IntegrationTest.missingReferenceAndProviderFailureStopBeforePublication`. |
+| Unanswered read/deadline, cancellation during CPU execution, immediate next call, concurrent prepare | `TransportTest.controlWinsDuringReadAndExecutionDrains`, `cancelledCpuResultCannotCommitOrReplyAgain` and `uncooperativeExecutionStopsHost`. |
+| Decreasing/implausible now, machine clock one day away | `IntegrationTest.clockLimitsAndReset`, `timedEscrowUsesSessionGenesisAndSentNow`, `ClientConformanceTest.contextSeesTheClientClockOneDayAheadOfTheMachine`. |
+| Foreign address network, mainnet with and without opt-in | `IntegrationTest.wrongNetworkAndCallerSuppliedInputs`, `LaunchTest.negotiationOptInDigestAndIdentity`, the network signing vectors. |
+| D8 transitions, rollback, rewind, restart, expired-on-arrival | `ReservationsTest`, `IntegrationTest.pendingInstanceAndRewindFenceAcrossPrepares`, `expiredOnArrivalNeverReserves`, `M1bTest.finalRegistrationRollbackDropsKnowledgeAndFencesBuilds`. The persistent client journal and recovery high-water mark are client-side obligations. |
+| Rebuild after initialize, clean and evict original artifacts | `HostSpecConsumerTest.launchesExactlyTheApplicationGraphAndSurvivesSourceCleanup`. |
+| Script after first page, publication rollback | `M1bTest.publicationChecksTheLastChunkAndPropagatesReadFailure` and `finalRegistrationRollbackDropsKnowledgeAndFencesBuilds`. |
+| Every D14 verifier-table row, unknown registration after assertion and after confirmed publication | `M1bTest.verifierTableBuildsOnlyMissingComponentsBeforeBalancing` and `providerUnknownRequiresIndependentRegistrationEvidence`, including the subsequent prepare. |
+| Sub-minimum payout to payer, destroy with events | `M1bTest.quorumCountsCallerAndEventsSurviveDestroy`. |
+| Interleaved listings across a same-height fork | `InspectionTest.interleavedForkSnapshotsRespectSortOrderResetAndLru`. |
+| Cold engine state lookup | M2 Node host. JVM ordered reads are exercised in M1. |
+| Honest future-start keyed window, widened and late-start windows, refused first designation, two instances with the same method and key | M3 keyed preparation. M1 exercises the typed keyed refusal on both peers. |

@@ -14,3 +14,8 @@ Each JSON file specifies the forward method and full params (including now and t
 For a successful build, expected contains the unsigned CBOR, hash, body bounds and required signer hashes. The quorum vectors cover a no-Ctx vote with one and two keys. Unsupported vectors carry a feature label and expected kind and code. Yaci Store supplies unknown registration status. The combined verifier vector labels its historical reconstruction from the successful M0 Dex registration, whose pre-transaction status was false. Live publication vectors cover the two separate shapes.
 
 The recorded-vector test uses a JUnit assumption when this directory contains no JSON recordings. The offline suite also exercises the recorder and ordered replay against historical read data.
+
+The `verifier/` directory contains self-contained client inputs and expected signing verdicts.
+`sessions/` contains ordered JSON-RPC exchanges for the scripted stdio host. To regenerate both
+from the committed recordings, run `./gradlew :julc-state-host:recordClientConformance`.
+[Client kit and formats](../../docs/protocol/dev-host-1-conformance.md).
