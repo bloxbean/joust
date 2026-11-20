@@ -86,6 +86,9 @@ jobs:
           if dupes or missing or extra:
               print(f"::error::devnet-shards.txt: in several shards {dupes}; in no shard {missing}; no DevKit tests {extra}")
               raise SystemExit(1)
+          if any(':julc-state-host:test' in line and len(line) > 1 for line in lines):
+              print("::error::devnet-shards.txt: :julc-state-host:test needs a shard of its own (a fresh chain)")
+              raise SystemExit(1)
           shards = [{'index': i + 1, 'tasks': ' '.join(line)} for i, line in enumerate(lines)]
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write('shards=' + json.dumps(shards) + '\n')
@@ -957,7 +960,11 @@ jobs:
       - name: DevKit tests
         env:
           TASKS: ${{ matrix.shard.tasks }}
-        run: ./gradlew $TASKS -PdevnetOnly --continue --stacktrace
+        # The dev host's end-to-end test needs a fresh chain: its shard holds nothing else (plan checks that).
+        run: |
+          extra=()
+          if [ "$TASKS" = ":julc-state-host:test" ]; then extra+=(-PjoustHostE2e); fi
+          ./gradlew $TASKS -PdevnetOnly "${extra[@]}" --continue --stacktrace
 
       # Per-module test time (to rebalance .github/ci/devnet-shards.txt) and every skipped test: DevKit tests skip
       # themselves when a prerequisite is missing, which would otherwise pass silently.
