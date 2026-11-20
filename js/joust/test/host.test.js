@@ -52,11 +52,15 @@ test('I1/I10 guard redirects diagnostics, preserves only the frame writer, and d
     import { guard } from ${JSON.stringify(guard)};
     import fs from 'node:fs';
     import { connect } from 'node:net';
+    import { log } from 'node:console';
+    import { resolve4 } from 'node:dns/promises';
     import { spawn } from 'node:child_process';
     import assert from 'node:assert/strict';
     const write = guard();
     console.log('diagnostic');
-    for (const op of [() => process.stdout.write('forged'), () => connect(1), () => spawn('node'),
+    log('module diagnostic');
+    for (const op of [() => process.stdout.write('forged'), () => process.stdout.end('forged'), () => fs.writeSync(1, 'forged'),
+      () => connect(1), () => resolve4('example.invalid'), () => spawn('node'),
       () => fetch('http://localhost'), () => fs.writeFileSync('x','x'), () => fs.promises.mkdir('x'),
       () => fs.openSync('x','w+'), () => fs.promises.open('x',fs.constants.O_RDWR)]) assert.throws(op, /dev host forbids/);
     const handle = await fs.promises.open(process.execPath, 'r');
@@ -66,7 +70,7 @@ test('I1/I10 guard redirects diagnostics, preserves only the frame writer, and d
   `], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, 'frame');
-  assert.equal(r.stderr, 'diagnostic\n');
+  assert.equal(r.stderr, 'diagnostic\nmodule diagnostic\n');
 });
 
 // A controlled synchronous engine exercises transport races independently of real-contract CPU speed.

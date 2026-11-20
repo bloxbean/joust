@@ -3,15 +3,19 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import dgram from 'node:dgram';
+import dns from 'node:dns';
 import child from 'node:child_process';
-import { Console } from 'node:console';
+import consoleModule, { Console } from 'node:console';
 import { syncBuiltinESMExports } from 'node:module';
 
 export function guard() {
   const writeFrame = process.stdout.write.bind(process.stdout);
   const denied = what => () => { throw Error('dev host forbids ' + what); };
   process.stdout.write = denied('stdout writes outside the frame writer');
-  globalThis.console = new Console(process.stderr, process.stderr);
+  process.stdout.end = denied('closing protocol stdout');
+  const diagnostics = new Console(process.stderr, process.stderr);
+  for (const name of Object.keys(diagnostics)) consoleModule[name] = diagnostics[name];
+  globalThis.console = consoleModule;
   const block = (obj, names) => {
     for (const name of names) if (typeof obj[name] === 'function') obj[name] = denied(name);
   };
@@ -19,6 +23,8 @@ export function guard() {
   block(net, ['connect', 'createConnection', 'createServer']);
   block(net.Socket.prototype, ['connect']);
   block(net.Server.prototype, ['listen']);
+  for (const resolver of [dns, dns.promises, dns.Resolver.prototype, dns.promises.Resolver.prototype])
+    block(resolver, Object.getOwnPropertyNames(resolver).filter(k => /^(resolve|reverse|lookup)/.test(k)));
   block(dgram, ['createSocket']);
   block(dgram.Socket.prototype, ['bind', 'connect', 'send', 'sendto']);
   block(child, ['spawn', 'spawnSync', 'fork', 'exec', 'execSync', 'execFile', 'execFileSync']);
