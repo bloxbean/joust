@@ -1,0 +1,4 @@
+plugins { id 'org.julclang.joust' }
+joust { blockfrost = false }
+group = 'fixture'
+version = '1'

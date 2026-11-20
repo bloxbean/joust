@@ -4,6 +4,13 @@ A session runs one trusted project's generated clients. The client supplies the 
 
 ## Launch and framing (D1–D4, D10)
 
+For Gradle projects run `joustHostSpec` in the contract project and read its declared output
+`build/joust/host-spec.json` after success. Its fields are `protocol` (1), `java` (an absolute toolchain executable),
+`mainClass` (`org.julclang.state.host.DevHost`), `launch` and `digest`. Each launch entry has its zero-based ordinal,
+absolute path and kind. A `dir` has a `files` object mapping relative POSIX paths to lowercase SHA-256 hashes.
+A `jar` has one `sha256`. The digest uses the fingerprint format below. Missing optional source-set outputs take
+no ordinal. Missing artifacts and jar manifest Class-Path additions fail the build.
+
 The client must obtain user trust and an explicit launch action. Validate the ordered launch spec, copy every entry into a private immutable snapshot, verify the digest, and retain the snapshot until the process exits. Launch the project's JDK 25+ toolchain from the project root with these arguments, each passed directly to the executable.
 
 ```text
@@ -131,3 +138,27 @@ Each terminal error has a numeric JSON-RPC code, a diagnostic message, and data 
 | internal | −32603 (−32800 for cancelled) | readFailed, inconsistentRead, chainMoved, evaluator, tooDeep, cancelled, deadline, transport, internal, need |
 
 The draft 2020-12 schemas describe message envelopes and method payloads. For successful forward results and reverse answers select the matching definition using the outstanding request. The read schema's per-kind definitions constrain the result. Ordering, cross-message checks, byte limits, hashes and ledger semantics are normative above. [Methods](dev-host-1/methods.schema.json), [results](dev-host-1/results.schema.json), [reads](dev-host-1/reads.schema.json), [errors](dev-host-1/error.schema.json).
+
+## JVM conformance in M1a
+
+Run `./gradlew :julc-state-gradle-plugin:check :julc-state-host:check`. The plugin tests inject the plugin with
+Gradle TestKit. Its `hostSpecTestRepository` task stages this build's jars, on-chain classifier, generated POMs and
+Gradle module metadata under the plugin's build directory. Third-party dependencies resolve from the consumer's
+repositories. The host's normal JUnit suite runs the 23 plain wire replays. The plugin check also depends on it.
+
+| ADR-0022 invariant | Executable coverage |
+| --- | --- |
+| I1 | `BootstrapTest` exercises a static initializer, saved Java stream, native fd 1, inherited child stdout and close-on-exec on Unix. The application probe prints and exits or halts during a request. |
+| I2 | `TransportTest` checks frame caps, stalls, UTF-8, malformed envelopes and oversized results. `ReadsTest` checks chunked answers. |
+| I3 | `ReadsTest` exercises the closed backend and local evaluator. `ReplayTest` accepts only recorded read kinds. |
+| I4 | `IntegrationTest.clockLimitsAndReset` exercises implausible and decreasing slots, reset and two TTLs. Its timed Escrow case varies the genesis across a contract deadline while holding the request and tip fixed. `ReservationsTest` drives release by tip. |
+| I5 | M1b gates co-signers and quorum. The runtime's `WalletAccountTest` covers address-only accounts. |
+| I6 | `ReplayTest.plainPrepares` reproduces all 23 unsigned bodies and hashes from ordered answers in fresh sessions. |
+| I7 | `LaunchTest` and `ForkedSessionTest` check order, overlapping resources, runtime identity and tampering. `HostSpecConsumerTest` independently copies and verifies the plugin manifest and reads a lazy contract resource and a sibling anchor after rebuilds and cleanup. |
+| I8 | `TransportTest` checks generation IDs and late answers. `ReadsTest` counts chunks and bytes against the per-call caps. |
+| I9 | `ReplayTest` decodes every prepared body and checks its bounds against the response and the sent ceiling. Publication is gated in M1b. |
+| I10 | `ForkedSessionTest` prepares with an empty working directory, home and temp. Linux CI adds `-PjoustHostTrace` for network-namespace isolation and syscall tracing. `IntegrationTest` records worker I/O with JFR and checks that map contracts are refused before any history read. `DevHostSeamsTest` and `ReadsTest` exercise denial of submission, verifier publication, waits and unlisted backend methods. |
+| I11 | `IntegrationTest.missingReferenceAndProviderFailureStopBeforePublication` checks that failed and absent answers take distinct paths. |
+| I12 | `LaunchTest` checks the mainnet opt-in. `IntegrationTest` and `ReservationsTest` reject cross-network prepares and restored bodies. |
+| I13 | `ReservationsTest` and `IntegrationTest` cover spending and collateral, settlement margins, tombstones, deep rollback, rewind fences and atomic restart batches. The client journal and its high-water mark are client responsibilities. |
+| I14 | `TransportTest` races cancellation and deadlines with reverse reads and a CPU-bound result. It checks busy while draining, failure to deliver, one terminal reply and no late commit. |

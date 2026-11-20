@@ -2,6 +2,8 @@ package org.julclang.state.host;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.bloxbean.cardano.client.plutus.util.PlutusUtil;
+import org.julclang.state.runtime.snapshot.Snapshot;
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordingFile;
 import org.junit.jupiter.api.Test;
@@ -60,8 +62,47 @@ class IntegrationTest {
             var tx = success(c.rpc("prepare",r.params().deepCopy().put("ttlSlots",7),r::answer)).get("prepared");
             assertEquals(now+7,tx.get("validTo").asLong());
             assertTrue(tx.get("validFrom").isNull());
+            success(c.rpc("settled", obj().put("reservation", tx.required("reservation").asText())
+                    .put("txHash", tx.required("txHash").asText()).put("status", "discarded").put("tip", now)));
+            var second = success(c.rpc("prepare", r.params().deepCopy().put("ttlSlots", 12), r::answer)).get("prepared");
+            assertEquals(now + 12, second.required("validTo").longValue());
         }
     }
+    @Test void timedEscrowUsesSessionGenesisAndSentNow() throws Exception {
+        var file = ReplayTest.FIXTURES.resolveSibling("m3").resolve("escrow/001-open.json");
+        var vector = JSON.readTree(file.toFile());
+        var snapshot = Snapshot.fromJson(vector.required("snapshot").toString());
+        long tip = snapshot.tip.getSlot(), now = tip + 2;
+        var point = obj().put("slot", tip).put("height", snapshot.tip.getHeight()).put("hash", snapshot.tip.getHash());
+        var call = (ObjectNode) vector.required("call").deepCopy();
+        // Synthetic address-set answer: the M3 vector pins a single holder by out-ref.
+        var holder = snapshot.outputs.get(call.required("referenceScripts").get(0).textValue());
+        snapshot.utxos.put(holder.getAddress(), List.of(holder));
+        String hash = holder.getReferenceScriptHash();
+        var script = PlutusUtil.getPlutusScript(hash, snapshot.scripts.get(hash).cbor()).orElseThrow();
+        snapshot.scripts.put(hash, new Snapshot.Script("PlutusScriptV3", script.getCborHex()));
+        call.remove(List.of("walletUtxos", "referenceScripts"));
+        var params = obj().put("now", now).put("ttlSlots", 4);
+        params.set("call", call);
+        var reads = new ReplayTest.Recording(vector, snapshot, point, params);
+        long deadline = Long.parseLong(call.at("/args/deadline").asText());
+        long genesis = deadline - (now + 5) * 1000;
+        Path entry = Path.of(org.julclang.state.examples.escrow.EscrowClient.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        try (var c = new Client(new Handshake(List.of(entry)))) {
+            var init = init(entry);
+            var clock = init.withObject("/clock").put("zeroTimeMs", genesis).put("zeroSlot", 0).put("slotLengthMs", 1000);
+            success(c.rpc("initialize", init));
+            var tx = success(c.rpc("prepare", params, reads::answer)).required("prepared");
+            assertEquals(now, tx.required("validFrom").longValue());
+            assertEquals(now + 4, tx.required("validTo").longValue());
+            success(c.rpc("settled", obj().put("reservation", tx.required("reservation").asText())
+                    .put("txHash", tx.required("txHash").asText()).put("status", "discarded").put("tip", tip)));
+            // Hold the transaction request and read answers fixed. The new genesis puts its end past the deadline.
+            success(c.rpc("reset", obj().put("now", now).set("clock", clock.put("zeroTimeMs", genesis + 2000))));
+            error("refusal", "require", c.rpc("prepare", params, reads::answer));
+        }
+    }
+
     @Test void expiredOnArrivalNeverReserves() throws Exception {
         var r = record();
         try (var c = session()) {
@@ -74,6 +115,17 @@ class IntegrationTest {
             assertEquals(r.fixture().get("txHash"),success(c.rpc("prepare",r.params(),r::answer)).at("/prepared/txHash"));
         }
     }
+    @Test void mapContractCannotOpenAStoreOrRequestHistory() throws Exception {
+        var entry = Path.of(org.julclang.state.examples.token.TokenClient.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        try (var c = new Client(new Handshake(List.of(entry)))) {
+            var contract = success(c.rpc("initialize", init(entry))).at("/contracts/0");
+            assertEquals("maps", contract.required("unsupported").textValue());
+            var params = record().params().deepCopy();
+            params.withObject("/call").put("contract", contract.required("name").textValue());
+            error("unsupported", "maps", c.rpc("prepare", params)); // the peer fails any reverse request
+        }
+    }
+
     @Test void missingReferenceAndProviderFailureStopBeforePublication() throws Exception {
         var r = record();
         try (var c = session()) {

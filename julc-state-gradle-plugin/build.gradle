@@ -11,6 +11,7 @@ tasks.named('compileJava', JavaCompile) {
 
 dependencies {
     testImplementation gradleTestKit()
+    testImplementation libs.jackson.databind
 }
 
 tasks.named('test', Test) {
@@ -74,4 +75,33 @@ afterEvaluate {
             }
         }
     }
+}
+
+// TestKit injects the plugin implementation. Stage this checkout's binary publications and their actual
+// Maven/Gradle runtime metadata where the consumer can resolve them, including the processor classifier.
+def hostSpecRepo = tasks.register('hostSpecTestRepository', Sync) {
+    into layout.buildDirectory.dir('host-spec-test-repository')
+    for (String suffix : ['api', 'processor', 'runtime', 'verifier', 'serve', 'host', 'server']) {
+        def module = project(":julc-state-${suffix}")
+        def artifact = "${module.name}-${module.version}"
+        dependsOn "${module.path}:generatePomFileForMavenJavaPublication",
+                "${module.path}:generateMetadataFileForMavenJavaPublication"
+        into("org/julclang/${module.name}/${module.version}") {
+            from(module.tasks.named('jar').flatMap { it.archiveFile })
+            if (suffix == 'api') from(module.tasks.named('onchainJar').flatMap { it.archiveFile })
+            from(module.layout.buildDirectory.file('publications/mavenJava/pom-default.xml')) { rename { "${artifact}.pom" } }
+            from(module.layout.buildDirectory.file('publications/mavenJava/module.json')) { rename { "${artifact}.module" } }
+        }
+    }
+}
+
+// Both the consumer launch and the 23 plain wire replays gate the plugin's check.
+tasks.named('check') { dependsOn ':julc-state-host:test' }
+
+tasks.named('test', Test) {
+    inputs.files(hostSpecRepo)
+    def counter = rootProject.file('examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java')
+    inputs.file(counter)
+    systemProperty 'joust.hostSpec.counter', counter.absolutePath
+    systemProperty 'joust.hostSpec.repository', layout.buildDirectory.dir('host-spec-test-repository').get().asFile.absolutePath
 }

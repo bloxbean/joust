@@ -1,5 +1,6 @@
 package org.julclang.state.host;
 
+import com.bloxbean.cardano.client.transaction.spec.Transaction;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.state.examples.devkit.Fixtures;
@@ -86,6 +87,13 @@ class ReplayTest {
                         var tx = result.required("prepared");
                         assertEquals(f.get("unsignedTx"), tx.get("cbor"));
                         assertEquals(f.get("txHash"), tx.get("txHash"));
+                        // I9: compare the returned fields with the final CBOR and the client's own window.
+                        var body = Transaction.deserialize(HexFormat.of().parseHex(tx.required("cbor").asText())).getBody();
+                        long ceiling = recording.params.required("now").longValue() + recording.params.required("ttlSlots").longValue();
+                        assertTrue(body.getTtl() > 0 && body.getTtl() <= ceiling);
+                        assertEquals(body.getTtl(), tx.required("validTo").longValue());
+                        if (body.getValidityStartInterval() == 0) assertTrue(tx.required("validFrom").isNull());
+                        else assertEquals(body.getValidityStartInterval(), tx.required("validFrom").longValue());
                         assertEquals(tx.at("/plan/validFrom"), tx.required("validFrom"));
                         assertEquals(tx.at("/plan/validTo"), tx.required("validTo"));
                     }

@@ -5,7 +5,8 @@ description = 'JOUST dev host: the project\'s own JOUST, driven by an IDE over s
 dependencies {
     api project(':julc-state-serve')
     api project(':julc-state-runtime')
-    implementation libs.julc.vm.api
+    // The runtime evaluator already supplies julc-vm, at JuLC's (independent) version.
+    compileOnly libs.julc.vm.api
 }
 
 // ADR-0022 D3: the julc-state-runtime version this host was built with; `initialize` refuses another (`runtimeVersion`).
@@ -34,12 +35,15 @@ sourceSets.main.java.srcDir(generateHostVersion)
 dependencies {
     // Generated clients and recorded fixtures for the tests (no DevKit needed).
     testImplementation project(':examples:counter')
+    testImplementation project(':examples:escrow')
+    testImplementation project(':examples:token')
     testImplementation project(':examples:bank')
     testImplementation project(':examples:treasury')
     testImplementation project(':examples:devkit')
 }
 
 tasks.withType(Test).configureEach {
+    inputs.file(rootProject.file('fixtures/m3/escrow/001-open.json')).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('fixtures/m0')).withPropertyName('fixturesM0').withPathSensitivity(PathSensitivity.RELATIVE)
     // The forked-host tests (fd 1 diversion, no side effects) launch `java` from this toolchain.
     def launcher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
@@ -50,4 +54,23 @@ tasks.withType(Test).configureEach {
 // Gradle's test worker uses a bootstrap-only java.class.path. Give the child JVM its actual inputs.
 tasks.named('test') {
     doFirst { systemProperty 'joust.host.testClassPath', sourceSets.test.runtimeClasspath.asPath }
+}
+
+// The dApp exercises the HTTP adapter and must still ship without the stdio host (§8).
+def dappRuntime = project(':examples:dapp').configurations.named('runtimeClasspath')
+def dappPackaging = tasks.register('checkDappHostIsolation') {
+    def components = dappRuntime.map { it.incoming.resolutionResult.allComponents.collect { c -> c.moduleVersion?.name } }
+    inputs.property('components', components)
+    doLast {
+        if ('julc-state-host' in components.get()) throw new GradleException('examples/dapp ships julc-state-host')
+    }
+}
+tasks.named('check') { dependsOn dappPackaging }
+
+if (providers.gradleProperty('joustHostTrace').isPresent()) {
+    tasks.named('test', Test) {
+        def launcher = rootProject.file('.github/scripts/trace-dev-host.sh')
+        inputs.file(launcher)
+        systemProperty 'joust.host.traceLauncher', launcher.absolutePath
+    }
 }

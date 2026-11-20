@@ -3,6 +3,9 @@ package org.julclang.state.host;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.*;
 import com.bloxbean.cardano.client.backend.api.*;
+import org.julclang.state.runtime.CallScope;
+import org.julclang.state.runtime.SlotChainTime;
+import org.julclang.state.runtime.StateRuntime;
 import org.julclang.state.runtime.snapshot.Unsupported;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.function.Executable;
@@ -131,6 +134,23 @@ class ReadsTest {
         assertThrows(Unsupported.class,() -> b.getScriptService().getNativeScriptJson("hash"));
         assertThrows(Unsupported.class,b::getAssetService);
     }
+    @Test void missingSharedVerifierCannotSubmitItsOwnPublication() {
+        var requests = new ArrayList<JsonNode>();
+        var backend = backend(q -> {
+            assertEquals("utxos", q.required("kind").asText());
+            requests.add(q);
+            return value(JSON.createArrayNode(), 10);
+        });
+        var rt = StateRuntime.builder(backend).chainTime(new SlotChainTime(0, 0, 1000, backend))
+                .network(com.bloxbean.cardano.client.common.model.Networks.testnet()).build();
+        for (var verifier : List.of(rt.outputVerifier(), rt.mapVerifier())) {
+            var e = assertThrows(CallScope.Refusal.class,
+                    () -> rt.inScope(CallScope.hosted(10), () -> verifier.ensure(null)));
+            assertEquals("prerequisite", e.code());
+        }
+        assertEquals(2, requests.size());
+    }
+
     @Test void tipMemoizedWithinGeneration() throws Exception {
         var requests = new AtomicInteger();
         var b = backend(q -> { requests.incrementAndGet(); return value(point(12),12); });

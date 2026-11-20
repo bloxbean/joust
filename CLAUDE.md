@@ -80,6 +80,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `@ValidAfter/@ValidBefore`, `@Storage`, `@Owned/@Shared`, `@Batched`, `@Event`, `@Invariant`, `@Upgradeable`, `@Calls`.
 
 ## Gotchas
+- ADR-0022: on an explicit trusted launch, run the project's `joustHostSpec` and read `build/joust/host-spec.json`.
+  Copy its ordered class path to a private read-only snapshot outside the build and Gradle caches, verify the digest,
+  and launch the toolchain's `java` with D2's options and `DevHost --stdio` from that snapshot. The host never writes
+  files. The client owns the snapshot and keeps it until the host exits.
 - JuLC (javac frontend, ADR-068) sees only its own on-chain API plus library sources: `.java` under
   `META-INF/plutus-sources/` (with `index.txt`) on the **annotation processor path**. No `@Documented`, no `throw`,
   static calls through imported simple class names only, no generic records.
