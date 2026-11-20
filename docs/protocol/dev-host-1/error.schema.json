@@ -48,7 +48,7 @@
           "properties": {
             "kind": {"const": "internal"},
             "code": {
-              "enum": ["readFailed", "chainMoved", "inconsistentRead", "evaluator", "cancelled", "deadline", "tooDeep", "internal", "need", "transport"]
+              "enum": ["readFailed", "chainMoved", "inconsistentRead", "unbalanced", "evaluator", "cancelled", "deadline", "tooDeep", "internal", "need", "transport"]
             }
           }
         },

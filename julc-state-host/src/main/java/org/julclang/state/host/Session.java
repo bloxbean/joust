@@ -298,7 +298,9 @@ final class Session implements Transport.Handler {
     private Transport.Reply prepared(PreparedTx built, ObjectNode out, Reads reads, long ceiling, String credential) {
         long end = built.validToSlot().orElseThrow(() -> HostError.refusal("window", "no validity upper bound"));
         if (end > ceiling) throw HostError.refusal("window", "upper bound exceeds the call ceiling");
-        var entry = reservations.prepare(Reservations.Body.of(built.transaction(), built.txHash(), network.getNetworkId()), reads.greatestTip);
+        var tx = built.transaction();
+        reads.checkBalance(tx.getBody());
+        var entry = reservations.prepare(Reservations.Body.of(tx, built.txHash(), network.getNetworkId()), reads.greatestTip);
         var result = out.withObject("/prepared").put("reservation", entry.id()).put("cbor", built.cbor())
                 .put("txHash", built.txHash()).put("validTo", end);
         if (built.validFromSlot().isPresent()) result.put("validFrom", built.validFromSlot().getAsLong());

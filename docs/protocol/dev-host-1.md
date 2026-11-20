@@ -77,6 +77,8 @@ The nested call accepts contract, kind, method, instance, object, args, pay, add
 
 Serve init, action, destroy, ownedInit, ownedAction and ownedDestroy. Owned spends name the current instance in the object's holding datum. A quorum call takes optional `cosigners`, an array of lowercase 28-byte payment key hashes. The host uses enterprise wallet addresses on the session network and includes the caller once in the body's required signers, even when the method has no Ctx. A SignedBy field must equal the caller. Other methods accept only absent or empty cosigners. Refuse keyed calls with `keyed`, map contracts with `maps`, parameterized contracts with `params`, governor-authorized calls with `authorizedBy` and calls outside the wallet's verifiable set with `unverifiable`. This includes batched calls, moves, admissions, migrations and deposits. A served send pins the output verifier in deployment.
 
+Before reserving or returning a prepared transaction (including a publication), the host checks output quantities and per-unit value conservation against the call's chain reads. A negative output or a mismatch returns `internal/unbalanced`. The client independently verifies the body before signing (D13).
+
 `prepared` contains reservation, cbor, txHash, validFrom, validTo, signers and plan. A creation includes its new `instance` or `object`. The `predicted` object contains the following projections. Each item has `predicted: true`.
 
 | Field | Projection |
@@ -179,7 +181,7 @@ Each terminal error has a numeric JSON-RPC code, a diagnostic message, and data 
 | bad | −32602 | request, method, contract, busy, network, nowDecreased, nowImplausible, tooLarge, readLimit, stageMismatch, unknownReservation, conflict, notExpired, unbounded, restoreClosed, listingGone |
 | refusal | −32001 | require, runtime, pending, window, prerequisite, reconcile, deepRollback, expiredOnArrival, cooldown |
 | unsupported | −32003 | protocol, runtimeVersion, params, keyed, maps, m1b, authorizedBy, unverifiable, notYet, read:&lt;kind or service.method&gt; |
-| internal | −32603 (−32800 for cancelled) | readFailed, inconsistentRead, chainMoved, evaluator, tooDeep, cancelled, deadline, transport, internal, need |
+| internal | −32603 (−32800 for cancelled) | readFailed, inconsistentRead, chainMoved, unbalanced, evaluator, tooDeep, cancelled, deadline, transport, internal, need |
 
 The draft 2020-12 schemas describe message envelopes and method payloads. For successful forward results and reverse answers select the matching definition using the outstanding request. The read schema's per-kind definitions constrain the result. Ordering, cross-message checks, byte limits, hashes and ledger semantics are normative above. [Methods](dev-host-1/methods.schema.json), [results](dev-host-1/results.schema.json), [reads](dev-host-1/reads.schema.json), [errors](dev-host-1/error.schema.json).
 
