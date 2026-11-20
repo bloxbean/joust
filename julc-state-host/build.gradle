@@ -143,3 +143,18 @@ tasks.register('recordClientConformance', JavaExec) {
     systemProperty 'joust.host.fixtures', rootProject.file('fixtures/m0').absolutePath
     systemProperty 'joust.host.vectors', rootProject.file('fixtures/host').absolutePath
 }
+
+// Run after packaging both Web Images under js/{joust,joust-runtime}/engine, as in the engines job.
+tasks.register('nodeHostConformance', Exec) {
+    group = 'verification'
+    dependsOn clientKit
+    workingDir rootDir
+    commandLine 'node', '--test', 'js/joust/test/host.test.js', 'js/joust/test/host-conformance.test.js'
+    def cp = files(clientKit.flatMap { it.archiveFile }, configurations.conformanceRuntimeClasspath)
+    doFirst {
+        environment 'JOUST_CONFORMANCE_CP', cp.asPath
+        environment 'JOUST_TEST_JAVA', javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(25)
+        }.get().executablePath.asFile
+    }
+}

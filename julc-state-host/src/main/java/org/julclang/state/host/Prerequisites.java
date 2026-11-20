@@ -48,7 +48,7 @@ final class Prerequisites {
                         || method.path("returns").path("deposits").asBoolean() || method.at("/policies/receives").asBoolean();
             }
         }
-        if (contract.spec().stakeSelf() || withdraw || x.has("purposes")) {
+        if (contract.stakeSelf() || withdraw || x.has("purposes")) {
             addresses.put("reward", handle.rewardAddress());
             hashes.put("stake", handle.policyId());
         }

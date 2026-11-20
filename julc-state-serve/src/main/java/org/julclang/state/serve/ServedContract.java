@@ -30,7 +30,7 @@ import java.util.List;
  * host's cancellation) as itself, so its kind is never inferred from text (D9). Any other {@code Error} or checked
  * exception from the generated client is wrapped in a {@link JoustException} with it as the cause, as before.
  */
-public final class ServedContract {
+public final class ServedContract implements ContractCalls {
 
     private final String name;               // the contract's fully qualified class name (the description's preamble title)
     private final Class<?> client;

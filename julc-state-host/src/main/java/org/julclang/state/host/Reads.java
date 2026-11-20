@@ -30,7 +30,6 @@ final class Reads {
     long greatestTip = -1;
     private final Snapshot snapshot = new Snapshot();
     private final SnapshotBackend local = new SnapshotBackend(snapshot);
-    private final Set<String> absentScripts = new HashSet<>();
     private final Map<String, Optional<Boolean>> registration = new HashMap<>();
     private final Set<String> queriedOutputs = new HashSet<>();
 
@@ -91,8 +90,7 @@ final class Reads {
             }
             case "script.getPlutusScript", "script.getPlutusScriptCbor" -> {
                 String hash = (String) args[0];
-                if (!snapshot.scripts.containsKey(hash) && !absentScripts.contains(hash)) script(hash);
-                if (absentScripts.contains(hash)) return Result.error("absent").code(404);
+                if (!snapshot.scripts.containsKey(hash) && !snapshot.absentScripts.contains(hash)) script(hash);
                 target = local.getScriptService();
             }
             case "block.getLatestBlock" -> {
@@ -221,7 +219,7 @@ final class Reads {
 
     private void script(String hash) {
         var v = value("script", "hash", hash);
-        if (v == null) { absentScripts.add(hash); return; }
+        if (v == null) { snapshot.absentScripts.add(hash); return; }
         String type = v.path("type").asText("");
         if (!Set.of("PlutusScriptV1", "PlutusScriptV2", "PlutusScriptV3").contains(type)) throw inconsistent("unknown script language");
         snapshot.scripts.put(hash, new Snapshot.Script(type, v.path("cborHex").asText("")));
