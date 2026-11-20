@@ -288,6 +288,20 @@ public final class StateContractHandle<S> {
         }
     }
 
+    /** Bounded wallet publication using the complete holder answer for this call (ADR-0022 D14). */
+    public PreparedTx prepareReferenceScript(String payerAddress, long validTo, List<Utxo> holderOutputs) {
+        if (Publication.present(holderOutputs, address, policyId)) return null;
+        var tx = new com.bloxbean.cardano.client.quicktx.Tx()
+                .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script);
+        return Publication.build(runtime, payerAddress, validTo, tx);
+    }
+
+    /** Pure registration of this contract's withdrawal credential. */
+    public PreparedTx prepareStakeRegistration(String payerAddress, long validTo) {
+        return Publication.build(runtime, payerAddress, validTo,
+                new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(rewardAddress));
+    }
+
     private BigInteger referenceScriptDeposit() {
         try {
             ProtocolParams pp = runtime.backend().getEpochService().getProtocolParameters().getValue();

@@ -1,0 +1,283 @@
+package org.julclang.state.host;
+
+import com.bloxbean.cardano.client.account.Account;
+import com.bloxbean.cardano.client.api.common.OrderEnum;
+import com.bloxbean.cardano.client.api.model.Result;
+import com.bloxbean.cardano.client.backend.api.BackendService;
+import com.bloxbean.cardano.client.transaction.spec.Transaction;
+import com.bloxbean.cardano.client.transaction.util.TransactionUtil;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.*;
+import org.julclang.state.examples.devkit.DevKit;
+import org.julclang.state.examples.dex.DexClient;
+import org.julclang.state.examples.bank.BankClient;
+import org.julclang.state.host.fixture.HostCouncilClient;
+import org.julclang.state.runtime.SlotChainTime;
+import org.junit.jupiter.api.*;
+import java.nio.file.*;
+import java.net.URI;
+import java.net.http.*;
+import java.time.Duration;
+import java.util.*;
+import static org.julclang.state.host.Client.*;
+import static org.julclang.state.host.Wire.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+/** The node, key, submission, polling and recording all belong to the scripted client. */
+@Tag("devnet")
+class DevKitHostTest {
+    static class Node {
+        final BackendService backend = DevKit.backend();
+        final SlotChainTime clock = DevKit.chainTime(backend);
+        final Account payer = DevKit.fundedAccount(500);
+        final Account extra = new Account(com.bloxbean.cardano.client.common.model.Networks.testnet());
+        final Map<String, ObjectNode> vectors = new LinkedHashMap<>();
+        final ArrayNode evidence = JSON.createArrayNode();
+        final boolean recording;
+        final long magic;
+
+        Node(boolean recording) throws Exception {
+            var request = HttpRequest.newBuilder(URI.create(DevKit.ADMIN_URL + "/local-cluster/api/admin/devnet"))
+                    .timeout(Duration.ofSeconds(5)).GET().build();
+            try (var http = HttpClient.newHttpClient()) {
+                var response = http.send(request,HttpResponse.BodyHandlers.ofString());
+                assertEquals(200,response.statusCode());
+                magic = number(JSON.readTree(response.body()),"protocolMagic",0);
+            }
+            this.recording = recording;
+            // Distinct collateral and seed inputs are needed for the first scripted spend.
+            DevKit.topUp(payer.baseAddress(), 50);
+            DevKit.topUp(payer.baseAddress(), 30);
+        }
+        static String key(Account account) {
+            return HexFormat.of().formatHex(account.getBaseAddress().getPaymentCredentialHash().orElseThrow());
+        }
+        ObjectNode initialize(Path entry) throws Exception {
+            var init = init(entry);
+            init.withObject("/network").put("protocolMagic", magic);
+            init.putObject("clock").put("zeroSlot", clock.zeroSlot()).put("zeroTimeMs", clock.zeroTimeMs())
+                    .put("slotLengthMs", clock.slotLengthMs());
+            return init;
+        }
+        ObjectNode tip() throws Exception {
+            var b = backend.getBlockService().getLatestBlock().getValue();
+            return obj().put("slot", b.getSlot()).put("height", b.getHeight()).put("hash", b.getHash());
+        }
+        ObjectNode answer(JsonNode q) {
+            try {
+                for (int attempt = 0; attempt < 8; attempt++) {
+                    var point = tip();
+                    var a = obj();
+                    a.set("tip", point);
+                    switch (str(q,"kind")) {
+                        case "tip" -> a.set("value", point);
+                        case "utxos" -> {
+                            var values = a.putArray("value");
+                            for (int page = 1; ; page++) {
+                                var r = backend.getUtxoService().getUtxos(str(q,"address"), 100, page, OrderEnum.asc);
+                                if (r.code() == 404) break;
+                                assertTrue(r.isSuccessful(), r::getResponse);
+                                for (var u : r.getValue()) values.add(JSON.valueToTree(u));
+                                if (r.getValue().size() < 100) break;
+                            }
+                        }
+                        case "stakeRegistration" -> a.put("unsupported", true);
+                        case "protocolParams" -> value(a, backend.getEpochService().getProtocolParameters());
+                        case "output" -> {
+                            String[] ref = str(q,"ref").split("#");
+                            value(a, backend.getUtxoService().getTxOutput(ref[0], Integer.parseInt(ref[1])));
+                        }
+                        case "script" -> {
+                            var r = backend.getScriptService().getPlutusScript(str(q,"hash"));
+                            if (r.code() == 404) a.put("absent", true);
+                            else {
+                                assertTrue(r.isSuccessful(), r::getResponse);
+                                assertEquals("PLUTUS_V3", r.getValue().getLanguage().name());
+                                a.putObject("value").put("type","PlutusScriptV3").put("cborHex",r.getValue().getCborHex());
+                            }
+                        }
+                        default -> throw new AssertionError(q);
+                    }
+                    if (point.equals(tip())) return a;
+                }
+                throw new AssertionError("could not read at a stable chain point");
+            } catch (Exception e) { throw new AssertionError(e); }
+        }
+        static void value(ObjectNode a, Result<?> r) {
+            if (r.code() == 404) a.put("absent", true);
+            else {
+                assertTrue(r.isSuccessful(), r::getResponse);
+                a.set("value", JSON.valueToTree(Objects.requireNonNull(r.getValue())));
+            }
+        }
+        ObjectNode call(String name, String kind, String method, ObjectNode args) {
+            var call = obj().put("contract", name).put("kind", kind).put("method", method).put("address", payer.baseAddress());
+            call.set("args", args);
+            return call;
+        }
+        ObjectNode window() {
+            return obj().put("now", clock.tipSlot()).put("ttlSlots", Math.max(1, 20_000 / clock.slotLengthMs()));
+        }
+        ObjectNode params(ObjectNode call) { return window().set("call", call); }
+
+        JsonNode build(Client client, ObjectNode init, String label, String method, ObjectNode p) throws Exception {
+            if (!recording) return success(client.rpc(method, p, this::answer)).required("prepared");
+            var reads = JSON.createArrayNode();
+            var result = success(client.rpc(method, p, q -> {
+                var a = answer(q);
+                var pair = reads.addObject();
+                pair.set("request", q);
+                pair.set("answer", a);
+                return a;
+            })).required("prepared");
+            // The submitted body and its vector share the very same answers. Completed holds
+            // are inert. A new session needs only the confirmed registration evidence.
+            var ordered = reads.elements();
+            var v = HostVectorsTest.record(method, p, init, evidence.deepCopy(), q -> {
+                var pair = ordered.next();
+                assertEquals(pair.required("request"), q);
+                return pair.required("answer");
+            }, null);
+            assertFalse(ordered.hasNext());
+            assertEquals(result.required("cbor"), v.at("/expected/cbor"));
+            HostVectorsTest.replay(v);
+            vectors.put(label, v);
+            return result;
+        }
+
+        long submit(Client c, JsonNode prepared, Account... extraSigners) throws Exception {
+            byte[] bytes = HexFormat.of().parseHex(str(prepared,"cbor"));
+            String hash = TransactionUtil.getTxHash(bytes);
+            assertEquals(str(prepared,"txHash"), hash);
+            Transaction tx = payer.sign(Transaction.deserialize(bytes));
+            for (var signer : extraSigners) tx = signer.sign(tx);
+            assertEquals(hash, TransactionUtil.getTxHash(tx.serialize()));
+            var submitted = backend.getTransactionService().submitTransaction(tx.serialize());
+            assertTrue(submitted.isSuccessful(), submitted::getResponse);
+            assertEquals(hash, submitted.getValue());
+            long deadline = System.nanoTime() + Duration.ofSeconds(90).toNanos();
+            while (System.nanoTime() < deadline) {
+                var r = backend.getTransactionService().getTransaction(hash);
+                long tip = clock.tipSlot();
+                if (r.isSuccessful() && r.getValue() != null && r.getValue().getSlot() != null && tip - r.getValue().getSlot() > 2) {
+                    long slot = r.getValue().getSlot();
+                    var p = obj().put("reservation",str(prepared,"reservation")).put("txHash",hash)
+                            .put("status","confirmed").put("slot",slot).put("tip",tip);
+                    assertEquals("confirmed", success(c.rpc("settled",p)).required("state").asText());
+                    return slot;
+                }
+                Thread.sleep(500);
+            }
+            throw new AssertionError("transaction not confirmed " + hash);
+        }
+
+        void workflow(Class<?> clientClass, boolean fresh) throws Exception {
+            Path entry = M1bTest.entry(clientClass);
+            String name = clientClass.getName().replaceFirst("Client$", "");
+            String simple = clientClass.getSimpleName().replaceFirst("Client$", "");
+            try (var c = new Client(new Handshake(List.of(entry)))) {
+                var init = initialize(entry);
+                success(c.rpc("initialize", init));
+                var query = obj().put("contract", name).put("now",clock.tipSlot());
+                var missing = success(c.rpc("prerequisites",query,this::answer));
+                if (fresh) assertFalse(missing.isEmpty(), "expected a fresh chain");
+                if (fresh && clientClass == DexClient.class) {
+                    assertEquals(3, missing.size(), "fresh Dex reference, verifier reference and unknown registration");
+                    assertEquals("referenceScript", str(missing.get(0),"kind"));
+                    assertEquals("referenceScript", str(missing.get(1),"kind"));
+                    assertEquals("unknown", str(missing.get(2),"present"));
+                }
+                int publications = 0;
+                while (!missing.isEmpty()) {
+                    assertTrue(++publications <= 3);
+                    var part = missing.required(0);
+                    var p = window().put("contract",name).put("prerequisite",str(part,"id")).put("address",payer.baseAddress());
+                    var built = build(c,init,simple + "-publish-" + publications, "publish", p);
+                    long slot = submit(c,built);
+                    if (str(part,"kind").equals("stakeRegistration")) {
+                        var assertion = evidence.addObject().put("credential",str(part,"id").split(":")[1]);
+                        assertion.putObject("evidence").put("txHash",str(built,"txHash")).put("slot",slot);
+                    }
+                    missing = success(c.rpc("prerequisites",query.put("now",clock.tipSlot()),this::answer));
+                }
+                var args = obj();
+                String tokenPolicy = null;
+                if (clientClass == DexClient.class) {
+                    tokenPolicy = DevKit.mintToken(payer, "M1B", 100_000);
+                    args.put("tokenPolicy",tokenPolicy).put("tokenName","4d3142");
+                }
+                if (clientClass == BankClient.class) args.put("withdrawLimit","30000000");
+                if (clientClass == HostCouncilClient.class) {
+                    args.set("members", JSON.valueToTree(new TreeSet<>(List.of(key(payer), key(extra)))));
+                    args.put("threshold","1");
+                }
+                var call = call(name,"init",clientClass == BankClient.class ? "init" : "open",args);
+                if (clientClass == HostCouncilClient.class) call.putObject("pay").put("lovelace","5000000");
+                var built = build(c,init,simple + "-init","prepare",params(call));
+                submit(c,built);
+                String id = str(built,"instance");
+                var view = query.put("now",clock.tipSlot()).put("instance",id).putNull("view");
+                view.putObject("args");
+                assertTrue(success(c.rpc("view",view,this::answer)).required("value").isObject());
+                if (clientClass == DexClient.class) {
+                    // First spend uses both publications: the pool reference and the verifier's zero withdrawal.
+                    var add = call(name,"action","addLiquidity",obj().put("tokenIn","100000")).put("instance",id);
+                    var payment = add.putObject("pay").put("lovelace","100000000");
+                    var policy = payment.putArray("assets").addArray().add(tokenPolicy);
+                    policy.addArray().addArray().add("4d3142").add("100000");
+                    var first = build(c,init,"Dex-addLiquidity","prepare",params(add));
+                    assertEquals(1,first.at("/plan/withdrawals").asInt());
+                    submit(c,first);
+                    var updated = success(c.rpc("view",view.put("now",clock.tipSlot()),this::answer));
+                    assertEquals("100000000",updated.at("/value/lpSupply").asText());
+                }
+                if (clientClass == HostCouncilClient.class) {
+                    for (boolean cosign : List.of(false,true)) {
+                        var vote = call(name,"action","vote",obj().put("n","42").put("to",key(payer))).put("instance",id);
+                        if (cosign) vote.putArray("cosigners").add(key(extra));
+                        var tx = build(c,init,"quorum-" + (cosign ? "two" : "caller"),"prepare",params(vote));
+                        var keys = new HashSet<String>();
+                        tx.at("/plan/requiredSigners").forEach(k -> keys.add(k.textValue()));
+                        assertEquals(cosign ? Set.of(key(payer),key(extra)) : Set.of(key(payer)),keys);
+                        submit(c,tx,cosign ? new Account[]{extra} : new Account[0]);
+                    }
+                    submit(c,build(c,init,"destroy-events","prepare",params(call(name,"destroy","close",obj()).put("instance",id))));
+                }
+                if (clientClass == BankClient.class) {
+                    var open = call(name,"ownedInit","open",obj()).put("instance",id);
+                    open.putObject("pay").put("lovelace","20000000");
+                    var owned = build(c,init,"owned-init","prepare",params(open));
+                    submit(c,owned);
+                    String object = str(owned,"object");
+                    var deposit = call(name,"ownedAction","deposit",obj()).put("instance",id).put("object",object);
+                    deposit.putObject("pay").put("lovelace","3000000");
+                    submit(c,build(c,init,"owned-action","prepare",params(deposit)));
+                    var close = call(name,"ownedDestroy","close",obj()).put("instance",id).put("object",object);
+                    submit(c,build(c,init,"owned-destroy","prepare",params(close)));
+                }
+            }
+        }
+
+    }
+
+    @Test void freshChainDeployment() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("joust.host.e2e"), "enable -PjoustHostE2e on a fresh chain");
+        assertTrue(DevKit.isReachable());
+        new Node(false).workflow(DexClient.class, true);
+    }
+
+    @Test void recordHostVectors() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("joust.host.record"), "enable -PjoustHostFixtures on a fresh chain");
+        assertTrue(DevKit.isReachable());
+        var node = new Node(true);
+        node.workflow(DexClient.class,true);
+        node.workflow(HostCouncilClient.class,false);
+        node.workflow(BankClient.class,false);
+        node.vectors.putAll(HostVectorsTest.unsupportedVectors(node.initialize(counter()), node.clock.tipSlot(),
+                node.window().required("ttlSlots").asLong(), node.payer.baseAddress()));
+        node.vectors.put("Dex-combined-reconstructed", HostVectorsTest.combinedPublication());
+        Files.createDirectories(HostVectorsTest.DIRECTORY);
+        for (var v : node.vectors.entrySet())
+            JSON.writerWithDefaultPrettyPrinter().writeValue(HostVectorsTest.DIRECTORY.resolve(v.getKey()+".json").toFile(),v.getValue());
+    }
+}

@@ -32,7 +32,7 @@
           "properties": {
             "kind": {"const": "bad"},
             "code": {
-              "enum": ["busy", "network", "nowDecreased", "nowImplausible", "tooLarge", "stageMismatch", "unknownReservation", "conflict", "notExpired", "unbounded", "restoreClosed", "request", "contract", "method", "readLimit"]
+              "enum": ["busy", "network", "nowDecreased", "nowImplausible", "tooLarge", "stageMismatch", "unknownReservation", "conflict", "notExpired", "unbounded", "restoreClosed", "request", "contract", "method", "readLimit", "listingGone"]
             }
           }
         },
@@ -48,7 +48,7 @@
           "properties": {
             "kind": {"const": "internal"},
             "code": {
-              "enum": ["readFailed", "chainMoved", "inconsistentRead", "evaluator", "cancelled", "deadline", "tooDeep", "internal", "need", "transport"]
+              "enum": ["readFailed", "chainMoved", "inconsistentRead", "unbalanced", "evaluator", "cancelled", "deadline", "tooDeep", "internal", "need", "transport"]
             }
           }
         },

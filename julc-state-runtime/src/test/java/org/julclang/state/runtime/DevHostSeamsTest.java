@@ -360,16 +360,25 @@ class DevHostSeamsTest {
 
     @Test
     void assetCollectionUsesTheFirstEligibleTokenInput() {
+        checkAssetCollection(new Account(Networks.testnet()), new HostStore(), true);
+    }
+
+    @Test
+    void walletWithASessionStoreCollectsTheTokenBehindAdaAndReservedInputs() {
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        checkAssetCollection(wallet, new HostStore(), true);
+        checkAssetCollection(wallet, ClaimStore.jvm(), false);
+    }
+
+    private void checkAssetCollection(Account payer, ClaimStore store, boolean collects) {
         var chain = new Chain();
-        var store = new HostStore();
         var rt = runtime(chain, b -> b.claimStore(store));
         var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
-        var payer = new Account(Networks.testnet());
         var token = new Amount("00".repeat(28) + "01", BigInteger.ONE);
         var reserved = utxo(payer.baseAddress(), 9_000_000, token);
         var free = utxo(payer.baseAddress(), 9_000_000, token);
-        chain.wallet.addAll(List.of(reserved, free));
-        store.avoid.add(Designation.ref(reserved));
+        chain.wallet.addAll(List.of(utxo(payer.baseAddress(), 20_000_000), reserved, free));
+        if (store instanceof HostStore host) host.avoid.add(Designation.ref(reserved));
         var collected = new ArrayList<Utxo>();
         var tx = new Tx() {
             @Override
@@ -379,7 +388,7 @@ class DevHostSeamsTest {
             }
         };
         AssetTx.collectAssets(tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
-        assertEquals(List.of(free), collected);
+        assertEquals(collects ? List.of(free) : List.of(), collected);
     }
 
     @Test

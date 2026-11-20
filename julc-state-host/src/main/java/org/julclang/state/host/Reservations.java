@@ -40,6 +40,33 @@ final class Reservations implements ClaimStore {
         boolean live() { return state == State.prepared || state == State.shallow; }
     }
     private Map<String, Entry> entries = new LinkedHashMap<>();
+    private final Map<String, String> publicationCredentials = new HashMap<>();
+    private final Map<String, Set<String>> assertions = new HashMap<>();
+
+    void commit(Entry entry, String credential) {
+        commit(entry);
+        if (credential != null) publicationCredentials.put(entry.id, credential);
+    }
+
+    boolean registered(String credential) {
+        if (assertions.values().stream().anyMatch(keys -> keys.contains(credential))) return true;
+        return publicationCredentials.entrySet().stream().anyMatch(p ->
+                p.getValue().equals(credential) && entries.get(p.getKey()).state == State.confirmed);
+    }
+
+    Transport.Reply registered(JsonNode p) {
+        fields(p, "credential", "evidence");
+        String credential = str(p, "credential");
+        if (!credential.matches("[0-9a-f]{56}")) throw bad("invalid stake credential hash");
+        var evidence = fields(p.path("evidence"), "txHash", "slot", "message");
+        String hash = str(evidence, "txHash");
+        if (!hash.matches("[0-9a-f]{64}") || evidence.has("slot") == evidence.has("message"))
+            throw bad("expected transaction hash and either inclusion slot or node message");
+        if (evidence.has("slot")) number(evidence, "slot", 0);
+        else str(evidence, "message");
+        return new Transport.Reply(obj(), () -> assertions.computeIfAbsent(hash, ignored -> new HashSet<>()).add(credential));
+    }
+
     private final long margin;
     private final int network;
     private boolean reconcile;
@@ -110,7 +137,11 @@ final class Reservations implements ClaimStore {
             }
             case "rolledBack" -> {
                 if (e.state == State.confirmed) {
-                    whileLive.accept(() -> deepRollback = true);
+                    whileLive.accept(() -> {
+                        deepRollback = true;
+                        publicationCredentials.remove(e.id);
+                        assertions.remove(e.body.hash);
+                    });
                     throw HostError.refusal("deepRollback", "a final inclusion was rolled back");
                 }
                 if (!e.live()) throw conflict();
@@ -130,12 +161,15 @@ final class Reservations implements ClaimStore {
         };
         Entry finalState = reconcile ? next : advance(next, tip);
         return new Transport.Reply(obj().put("state", finalState.state.name()), () -> {
+            if (status.equals("rolledBack")) assertions.remove(e.body.hash);
             commit(finalState);
             observe(tip);
         });
     }
 
     void rewind(long tip) {
+        assertions.clear();
+        // Keep publication provenance: rewind downgrades final entries below, and re-confirmation can teach again.
         entries.replaceAll((id, e) -> switch (e.state) {
             case expired -> e.body.to > tip ? e.as(State.prepared, null) : e;
             case confirmed, shallow -> e.slot > tip ? e.as(State.prepared, null) : e.as(State.shallow, e.slot);

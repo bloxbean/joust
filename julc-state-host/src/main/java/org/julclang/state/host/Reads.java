@@ -6,6 +6,7 @@ import com.bloxbean.cardano.client.backend.api.*;
 import com.bloxbean.cardano.client.backend.model.Block;
 import com.bloxbean.cardano.client.api.util.CostModelUtil;
 import com.bloxbean.cardano.client.plutus.spec.Language;
+import com.bloxbean.cardano.client.transaction.spec.TransactionBody;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.state.runtime.snapshot.*;
@@ -122,6 +123,17 @@ final class Reads {
         try { return m.invoke(target, args); }
         catch (InvocationTargetException e) { throw e.getCause(); }
     }
+
+    List<Utxo> outputs(String address) {
+        utxos(address);
+        return snapshot.utxos.get(address);
+    }
+
+    void checkBalance(TransactionBody body) {
+        BodyBalance.check(body, snapshot);
+    }
+
+    String tipHash() { return lastHash; }
 
     private void utxos(String address) {
         if (snapshot.utxos.containsKey(address)) return;

@@ -67,12 +67,12 @@ class ReplayTest {
             return a;
         }
     }
-    @TestFactory Stream<DynamicTest> plainPrepares() throws Exception {
+    @TestFactory Stream<DynamicTest> plainAndOwnedPrepares() throws Exception {
         var tests = new ArrayList<DynamicTest>();
         try (var paths = Files.list(FIXTURES.resolve("dapp"))) {
             for (Path path : paths.sorted().toList()) {
                 var f = JSON.readTree(path.toFile());
-                if (!Set.of("init", "action", "destroy").contains(f.at("/call/kind").asText())) continue;
+                if (!f.hasNonNull("call")) continue;
                 boolean counter = f.at("/call/contract").asText().endsWith(".Counter");
                 Path entry = counter ? counter() : Path.of(org.julclang.state.examples.bank.BankClient.class
                         .getProtectionDomain().getCodeSource().getLocation().toURI());
@@ -83,7 +83,23 @@ class ReplayTest {
                         if (counter) assertEquals("c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823",
                                 hello.at("/contracts/0/scriptHashes/mint").asText());
                         var result = success(client.rpc("prepare", recording.params, recording::answer));
-                        assertFalse(result.has("predicted"));
+                        var effects = result.required("predicted");
+                        String kind = recording.params.at("/call/kind").asText();
+                        if (kind.startsWith("owned")) {
+                            var effect = effects.required("objects").required(0);
+                            assertEquals(switch (kind) {
+                                case "ownedInit" -> "created";
+                                case "ownedDestroy" -> "removed";
+                                default -> "updated";
+                            }, effect.required("effect").asText());
+                            assertEquals(kind.equals("ownedInit") ? result.at("/prepared/object") : recording.params.at("/call/object"),
+                                    effect.required("object"));
+                        } else if (kind.equals("destroy")) assertTrue(effects.required("state").isNull());
+                        else assertTrue(effects.at("/state/predicted").asBoolean());
+                        for (var payout : effects.required("payouts")) {
+                            assertEquals(result.at("/prepared/plan/outputs/" + payout.required("index") + "/value"), payout.required("value"));
+                            assertTrue(payout.required("owed").has("lovelace"));
+                        }
                         var tx = result.required("prepared");
                         assertEquals(f.get("unsignedTx"), tx.get("cbor"));
                         assertEquals(f.get("txHash"), tx.get("txHash"));
@@ -100,7 +116,7 @@ class ReplayTest {
                 }));
             }
         }
-        assertEquals(23, tests.size(), "ADR-0022 §9 plain recordings");
+        assertEquals(34, tests.size(), "ADR-0022 §9 plain and owned recordings");
         return tests.stream();
     }
 }

@@ -168,6 +168,120 @@
       },
       "required": ["now"],
       "additionalProperties": false
+    },
+    "deployment": {
+      "type": "object",
+      "properties": {
+        "now": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "contract": {"type": "string", "minLength": 1}
+      },
+      "required": ["now", "contract"],
+      "additionalProperties": false
+    },
+    "prerequisites": {"$ref": "#/$defs/deployment"},
+    "publish": {
+      "type": "object",
+      "properties": {
+        "now": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "contract": {"type": "string", "minLength": 1},
+        "ttlSlots": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "prerequisite": {"type": "string", "minLength": 1},
+        "address": {"type": "string", "minLength": 1}
+      },
+      "required": ["now", "contract", "ttlSlots", "prerequisite", "address"],
+      "additionalProperties": false
+    },
+    "view": {
+      "type": "object",
+      "properties": {
+        "now": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "contract": {"type": "string", "minLength": 1},
+        "instance": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "view": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+        "args": {"type": "object"}
+      },
+      "required": ["now", "contract", "instance", "view", "args"],
+      "additionalProperties": false
+    },
+    "cursor": {
+      "type": "object",
+      "properties": {
+        "listing": {"type": "string", "minLength": 1},
+        "after": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 500}
+      },
+      "required": ["listing", "after", "limit"],
+      "additionalProperties": false
+    },
+    "instances": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "now": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "contract": {"type": "string", "minLength": 1},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500}
+          },
+          "required": ["now", "contract", "limit"],
+          "additionalProperties": false
+        },
+        {"$ref": "#/$defs/cursor"}
+      ]
+    },
+    "objects": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "now": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "contract": {"type": "string", "minLength": 1},
+            "instance": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500}
+          },
+          "required": ["now", "contract", "instance", "limit"],
+          "additionalProperties": false
+        },
+        {"$ref": "#/$defs/cursor"}
+      ]
+    },
+    "decode": {
+      "type": "object",
+      "properties": {
+        "contract": {"type": "string", "minLength": 1},
+        "datum": {"type": "string", "pattern": "^(?:[a-fA-F0-9]{2})+$"}
+      },
+      "required": ["contract", "datum"],
+      "additionalProperties": false
+    },
+    "registered": {
+      "type": "object",
+      "properties": {
+        "credential": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+        "evidence": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "txHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "message": {"type": "string", "minLength": 1}
+              },
+              "required": ["txHash", "message"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "txHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "slot": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}
+              },
+              "required": ["txHash", "slot"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": ["credential", "evidence"],
+      "additionalProperties": false
     }
   },
   "oneOf": [
@@ -242,12 +356,87 @@
       "properties": {
         "jsonrpc": {"const": "2.0"},
         "id": {"type": ["string", "integer"]},
-        "method": {
-          "enum": ["deployment", "prerequisites", "publish", "view", "instances", "objects", "decode", "registered"]
-        },
-        "params": {"type": "object"}
+        "method": {"const": "deployment"},
+        "params": {"$ref": "#/$defs/deployment"}
       },
-      "required": ["jsonrpc", "id", "method"],
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {"const": "2.0"},
+        "id": {"type": ["string", "integer"]},
+        "method": {"const": "prerequisites"},
+        "params": {"$ref": "#/$defs/prerequisites"}
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {"const": "2.0"},
+        "id": {"type": ["string", "integer"]},
+        "method": {"const": "publish"},
+        "params": {"$ref": "#/$defs/publish"}
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {"const": "2.0"},
+        "id": {"type": ["string", "integer"]},
+        "method": {"const": "view"},
+        "params": {"$ref": "#/$defs/view"}
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {"const": "2.0"},
+        "id": {"type": ["string", "integer"]},
+        "method": {"const": "instances"},
+        "params": {"$ref": "#/$defs/instances"}
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {"const": "2.0"},
+        "id": {"type": ["string", "integer"]},
+        "method": {"const": "objects"},
+        "params": {"$ref": "#/$defs/objects"}
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {"const": "2.0"},
+        "id": {"type": ["string", "integer"]},
+        "method": {"const": "decode"},
+        "params": {"$ref": "#/$defs/decode"}
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {"const": "2.0"},
+        "id": {"type": ["string", "integer"]},
+        "method": {"const": "registered"},
+        "params": {"$ref": "#/$defs/registered"}
+      },
+      "required": ["jsonrpc", "id", "method", "params"],
       "additionalProperties": false
     },
     {

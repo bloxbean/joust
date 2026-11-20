@@ -1,6 +1,6 @@
 # JOUST dev host protocol 1
 
-A session runs one trusted project's generated clients. The client supplies the chain and slot clock and owns signing, persistence and submission. The JVM host prepares unsigned transactions in memory. This document specifies the M1a wire interface of ADR-0022.
+A session runs one trusted project's generated clients. The client supplies the chain and slot clock and owns signing, persistence and submission. The JVM host prepares unsigned transactions in memory. This document specifies the M1 JVM wire interface of ADR-0022.
 
 ## Launch and framing (D1–D4, D10)
 
@@ -50,21 +50,67 @@ For each class-path entry in zero-based ordinal order, hash every file's bytes w
 <lowercase hex sha256> <decimal ordinal> <dir or jar> <relative path>
 ```
 
-Hash the concatenation with SHA-256. The host computes this fingerprint from its actual class path before project discovery. A mismatch, a path outside the snapshot, or a jar manifest with a nonempty Class-Path fails initialization. The runtime must match the host's build version. The response gives the chosen protocol, echoed network, optional capabilities (empty in M1a), read kinds, fingerprint, versions and contract list. Gradle build versions are null. Execution version fields use null where the installed component supplies no version. Each contract names the actual spend/mint and applicable stake script hashes. A parameterized contract reports only its unapplied template hash and `unsupported:"params"`. It has no deployment hash without parameters.
+Hash the concatenation with SHA-256. The host computes this fingerprint from its actual class path before project discovery. A mismatch, a path outside the snapshot, or a jar manifest with a nonempty Class-Path fails initialization. The runtime must match the host's build version. The response gives the chosen protocol, echoed network, capabilities (`views`, `objects`, `quorum` on the JVM host), read kinds, fingerprint, versions and contract list. Gradle build versions are null. Execution version fields use null where the installed component supplies no version. Each contract names the actual spend/mint and applicable stake script hashes. A parameterized contract reports only its unapplied template hash and `unsupported:"params"`. It has no deployment hash without parameters.
 
 ## Forward methods (D5, D7, D16)
 
 | Method | Parameters | Successful result |
 | --- | --- | --- |
 | describe | contract (fully qualified name) | description, messages (null for Java), calls with method, kind and either served:true or an unsupported code |
-| prepare | now, ttlSlots, call | prepared with reservation, cbor, txHash, validFrom, validTo, signers, plan and the instance ID for a creation |
+| deployment | now, contract | addresses, policies, scriptHashes, referenceScripts, governors |
+| prerequisites | now, contract | ordered array of missing components |
+| publish | now, ttlSlots, contract, prerequisite (ID), address | {prepared} or null if satisfied |
+| registered | credential, evidence | empty object |
+| prepare | now, ttlSlots, call | prepared and predicted |
+| view | now, contract, instance, view, args | {value} |
+| instances | now, contract, limit | listing, items, next |
+| objects | now, contract, instance, limit | listing, items, next |
+| instances or objects, subsequent page | listing, after, limit | listing, items, next |
+| decode | contract, datum (hex CBOR) | type and value, or ambiguous (type names) |
 | settled | reservation, txHash, status, tip, inclusion slot for confirmed | state after applying the event and depth thresholds |
 | restore | transactions, complete | reservations, an array of IDs in transaction order |
 | reset | now, optional clock, optional rewound:{tip} | empty object |
 | shutdown | empty or omitted | empty object, then stop accepting calls |
 | exit | notification, empty or omitted | process exits |
 
-The nested call accepts contract, kind, method, instance, object, args, pay, address and cosigners. Arguments use the description's JSON encoding. A missing pay means zero. Plain calls allow an empty co-signer list. Obtain wallet inputs through the caller address's reverse read. Caller-supplied walletUtxos or other extra fields are errors. Serve plain init, action and destroy. Refuse owned and quorum calls with `m1b`, keyed calls with `keyed`, map contracts with `maps`, parameterized contracts with `params`, authorization with `authorizedBy`, and unverifiable calls including batched, moves, admissions and deposits with `unverifiable`. Deployment, prerequisites, publish, view, instances, objects, decode and registered answer `unsupported/notYet` in M1a. Predicted effects start in M1b.
+The nested call accepts contract, kind, method, instance, object, args, pay, address and cosigners. Arguments use the description's JSON encoding. A missing pay means zero. Plain calls allow an empty co-signer list. Obtain wallet inputs through the caller address's reverse read. Caller-supplied walletUtxos or other extra fields are errors.
+
+Serve init, action, destroy, ownedInit, ownedAction and ownedDestroy. Owned spends name the current instance in the object's holding datum. A quorum call takes optional `cosigners`, an array of lowercase 28-byte payment key hashes. The host uses enterprise wallet addresses on the session network and includes the caller once in the body's required signers, even when the method has no Ctx. A SignedBy field must equal the caller. Other methods accept only absent or empty cosigners. Refuse keyed calls with `keyed`, map contracts with `maps`, parameterized contracts with `params`, governor-authorized calls with `authorizedBy` and calls outside the wallet's verifiable set with `unverifiable`. This includes batched calls, moves, admissions, migrations and deposits. A served send pins the output verifier in deployment.
+
+Before reserving or returning a prepared transaction (including a publication), the host checks output quantities and per-unit value conservation against the call's chain reads. A negative output or a mismatch returns `internal/unbalanced`. The client independently verifies the body before signing (D13).
+
+`prepared` contains reservation, cbor, txHash, validFrom, validTo, signers and plan. A creation includes its new `instance` or `object`. The `predicted` object contains the following projections. Each item has `predicted: true`.
+
+| Field | Projection |
+| --- | --- |
+| state | null or {index, instance, type, value} from the continuing thread-token output at the contract address |
+| objects | Array of {index, object, type, value, effect} from a holding output, with effect created or updated. A burn produces {object, effect: "removed"}. |
+| events | Array of {value} decoded from the method's mint or spend redeemer at its ledger pointer |
+| payouts, sends | Arrays of {index, address, value, owed}. Each value is a map of unit to decimal quantity. The full output value includes any minimum-UTxO top-up. Payouts match the input tag and payee. Sends use the output verifier's claim index. Change has no attribution. |
+
+### Deployment and publication
+
+Deployment takes no wallet. The contract address and policy use the key `contract` in their respective maps. Script hashes have `spend`, `mint` and, where applicable, `stake`. A staking contract also supplies the `reward` address. Contracts using the output verifier add its script hash and holder address under `outputVerifier` and its reward address under `outputVerifierReward`. The `referenceScripts` map gives the first matching out-ref in the complete provider-ordered holder set for each published script. The M1 governor list is empty.
+
+A missing prerequisite is `{id, kind, target, present}`. Its ID is `kind:scriptHash`; target is the holder address for a publication with a script, or the reward address for registration alone. The host lists only outstanding work, in publication order. Registration comes from a stakeRegistration read. A definite provider answer controls the decision. An unsupported read uses session knowledge or gives `present: "unknown"`.
+
+| Verifier script | Registered | Outstanding work, in order |
+| --- | --- | --- |
+| absent | false | verifier (publish and register together) |
+| absent | true | referenceScript |
+| absent | unknown | referenceScript, stakeRegistration |
+| present | false or unknown | stakeRegistration |
+| present | true | none |
+
+Publish the first outstanding ID and settle its transaction before continuing. The host checks the components again on each request. An already satisfied ID returns null. A changed shape or out-of-order ID gives `refusal/prerequisite`. Every M1 publication with a registration uses a pure kind-0 certificate and the protocol key deposit. A prepare with any outstanding component gives `refusal/prerequisite` naming its ID.
+
+The host learns a registration when its publication reservation reaches final confirmation. A client can also send `registered` with the 28-byte credential hash and evidence containing a 32-byte `txHash` and exactly one of a confirmed inclusion `slot` or a duplicate-registration node `message`. A rollback invalidates the associated knowledge. A rewound reset clears learned status, and a new session starts without it. Registration evidence applies only to the credential.
+
+### Views and inspection
+
+A null view returns decoded instance state with empty args. A named view runs its generated JVM method. Values use the description's JSON encoding. Decode tries the contract's declared datum schemas by constructor tag, arity and field shapes. Multiple matches return `ambiguous`, and no match gives `bad/request`.
+
+Start a listing with a limit from 1 through 500. The session reads the full address once, binds the query and tip hash to a snapshot, and sorts by transaction hash then numeric output index. Recognized items include ref, type, decoded value and instance. Objects add the object token name and belong to the instance in the holding, head, node or retired datum. Other recognized kinds and other owners are omitted. Foreign or malformed outputs appear as `{unrecognized: ref}`. The index in `next` is the next page's `after`; null marks the end. Later pages use the same method and listing ID without reading the chain. At most eight snapshots survive, with least-recently-used eviction. Reset clears all snapshots. Restart a listing after `bad/listingGone`.
 
 Both validity fields come from the final body. validFrom is null for an absent lower bound. validTo is the exclusive upper bound. The scoped runtime uses now as its current slot and tip slot during construction, with the supplied genesis conversion. A non-keyed build must fit under now + ttlSlots and ttlSlots must fit maxTtlSlots. A tighter contract deadline shortens the window. Reject an empty window. A lower now is invalid until reset. A chain point may be ahead of now, but now may exceed a point by at most maxNowAheadSlots. Reset changes the clock origin when supplied, drops caches and establishes a new now baseline.
 
@@ -118,7 +164,7 @@ Before signing **or exporting**, the client must perform all applicable checks b
 7. Require an exclusive upper bound at most the **sent** now + ttlSlots. Require a lower bound at or after that now for methods using Ctx or time rules. A keyed client in a later milestone must check start within [now, now + maxStartSlots], a nonempty window, and end at most both start + ttlSlots and now + maxValiditySlots. Determine whether the keyed rule applies from the anchored contract and method.
 8. Recompute the bounds, signers, plan and any predicted effects used in the signing decision from the received bytes. Compare a shown plan against the client's own. Classify calls locally regardless of describe's served flag.
 
-Publication is reserved for a later milestone. Before signing one, the client must positively recognize exactly one of these shapes. Every shape allows only payer change besides the named output, no mint, withdrawals, metadata or other certificates. Account for the exact registration deposit in the balance.
+Before signing a publication, the client must positively recognize exactly one of these shapes. Every shape allows only payer change besides the named output, no mint, withdrawals, metadata or other certificates. Account for the exact registration deposit in the balance.
 
 - A referenceScript publication has one holder output at the anchored target, the anchored script language and hash, no datum or other assets, and lovelace from the client-computed minimum through that minimum plus 1,000,000 inclusive. It has no certificate.
 - A stakeRegistration has no holder output and exactly one pure legacy registration (kind 0, deposit from the client's protocol parameters) or pure Conway registration (kind 7, stated deposit equal to that parameter) of the anchored credential. Reject combined registration/delegation certificates.
@@ -132,33 +178,33 @@ Each terminal error has a numeric JSON-RPC code, a diagnostic message, and data 
 
 | Kind | JSON-RPC code | Examples |
 | --- | --- | --- |
-| bad | −32602 | request, method, contract, busy, network, nowDecreased, nowImplausible, tooLarge, readLimit, stageMismatch, unknownReservation, conflict, notExpired, unbounded, restoreClosed |
+| bad | −32602 | request, method, contract, busy, network, nowDecreased, nowImplausible, tooLarge, readLimit, stageMismatch, unknownReservation, conflict, notExpired, unbounded, restoreClosed, listingGone |
 | refusal | −32001 | require, runtime, pending, window, prerequisite, reconcile, deepRollback, expiredOnArrival, cooldown |
 | unsupported | −32003 | protocol, runtimeVersion, params, keyed, maps, m1b, authorizedBy, unverifiable, notYet, read:&lt;kind or service.method&gt; |
-| internal | −32603 (−32800 for cancelled) | readFailed, inconsistentRead, chainMoved, evaluator, tooDeep, cancelled, deadline, transport, internal, need |
+| internal | −32603 (−32800 for cancelled) | readFailed, inconsistentRead, chainMoved, unbalanced, evaluator, tooDeep, cancelled, deadline, transport, internal, need |
 
 The draft 2020-12 schemas describe message envelopes and method payloads. For successful forward results and reverse answers select the matching definition using the outstanding request. The read schema's per-kind definitions constrain the result. Ordering, cross-message checks, byte limits, hashes and ledger semantics are normative above. [Methods](dev-host-1/methods.schema.json), [results](dev-host-1/results.schema.json), [reads](dev-host-1/reads.schema.json), [errors](dev-host-1/error.schema.json).
 
-## JVM conformance in M1a
+## JVM conformance in M1
 
 Run `./gradlew :julc-state-gradle-plugin:check :julc-state-host:check`. The plugin tests inject the plugin with
 Gradle TestKit. Its `hostSpecTestRepository` task stages this build's jars, on-chain classifier, generated POMs and
 Gradle module metadata under the plugin's build directory. Third-party dependencies resolve from the consumer's
-repositories. The host's normal JUnit suite runs the 23 plain wire replays. The plugin check also depends on it.
+repositories. The host's normal JUnit suite runs the 34 plain and owned wire replays. The plugin check also depends on it.
 
 | ADR-0022 invariant | Executable coverage |
 | --- | --- |
 | I1 | `BootstrapTest` exercises a static initializer, saved Java stream, native fd 1, inherited child stdout and close-on-exec on Unix. The application probe prints and exits or halts during a request. |
-| I2 | `TransportTest` checks frame caps, stalls, UTF-8, malformed envelopes and oversized results. `ReadsTest` checks chunked answers. |
+| I2 | `TransportTest` checks frame caps, stalls, UTF-8, malformed envelopes and oversized results. `ReadsTest` checks chunked answers. `InspectionTest` checks sorted pages, forks, LRU and the listing limit. |
 | I3 | `ReadsTest` exercises the closed backend and local evaluator. `ReplayTest` accepts only recorded read kinds. |
 | I4 | `IntegrationTest.clockLimitsAndReset` exercises implausible and decreasing slots, reset and two TTLs. Its timed Escrow case varies the genesis across a contract deadline while holding the request and tip fixed. `ReservationsTest` drives release by tip. |
-| I5 | M1b gates co-signers and quorum. The runtime's `WalletAccountTest` covers address-only accounts. |
-| I6 | `ReplayTest.plainPrepares` reproduces all 23 unsigned bodies and hashes from ordered answers in fresh sessions. |
+| I5 | `M1bTest.quorumCountsCallerAndEventsSurviveDestroy` checks the final required signers with no Ctx, with the caller alone and with duplicate co-signers. `M1bTest.signedByCannotBeSatisfiedByNamingTheOwnerAsACosigner` checks the caller requirement. The runtime's `WalletAccountTest` covers address-only accounts. |
+| I6 | `ReplayTest.plainAndOwnedPrepares` reproduces all 34 M0 call bodies and hashes from ordered answers in fresh sessions. |
 | I7 | `LaunchTest` and `ForkedSessionTest` check order, overlapping resources, runtime identity and tampering. `HostSpecConsumerTest` independently copies and verifies the plugin manifest and reads a lazy contract resource and a sibling anchor after rebuilds and cleanup. |
 | I8 | `TransportTest` checks generation IDs and late answers. `ReadsTest` counts chunks and bytes against the per-call caps. |
-| I9 | `ReplayTest` decodes every prepared body and checks its bounds against the response and the sent ceiling. Publication is gated in M1b. |
+| I9 | `ReplayTest` decodes every prepared body and checks its bounds against the response and the sent ceiling. `M1bTest` checks the publication bounds, script, certificate, deposit and balance for every verifier-table row. `HostVectorsTest` checks the bounded counterpart of M0 Dex 0003. |
 | I10 | `ForkedSessionTest` prepares with an empty working directory, home and temp. Linux CI adds `-PjoustHostTrace` for network-namespace isolation and syscall tracing. `IntegrationTest` records worker I/O with JFR and checks that map contracts are refused before any history read. `DevHostSeamsTest` and `ReadsTest` exercise denial of submission, verifier publication, waits and unlisted backend methods. |
 | I11 | `IntegrationTest.missingReferenceAndProviderFailureStopBeforePublication` checks that failed and absent answers take distinct paths. |
 | I12 | `LaunchTest` checks the mainnet opt-in. `IntegrationTest` and `ReservationsTest` reject cross-network prepares and restored bodies. |
-| I13 | `ReservationsTest` and `IntegrationTest` cover spending and collateral, settlement margins, tombstones, deep rollback, rewind fences and atomic restart batches. The client journal and its high-water mark are client responsibilities. |
+| I13 | `ReservationsTest` and `IntegrationTest` cover spending and collateral, settlement margins, tombstones, deep rollback, rewind fences and atomic restart batches. `M1bTest` checks shallow and final registration knowledge and rewound reset. The client journal and its high-water mark are client responsibilities. |
 | I14 | `TransportTest` races cancellation and deadlines with reverse reads and a CPU-bound result. It checks busy while draining, failure to deliver, one terminal reply and no late commit. |

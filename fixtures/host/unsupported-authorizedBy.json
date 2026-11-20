@@ -1,0 +1,44 @@
+{
+  "method" : "prepare",
+  "params" : {
+    "now" : 1896,
+    "ttlSlots" : 20,
+    "call" : {
+      "contract" : "org.julclang.state.host.fixture.HostCouncil",
+      "kind" : "action",
+      "method" : "veto",
+      "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+      "args" : { },
+      "instance" : "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  },
+  "network" : {
+    "networkId" : 0,
+    "protocolMagic" : 42,
+    "mainnet" : false
+  },
+  "clock" : {
+    "zeroSlot" : 0,
+    "zeroTimeMs" : 1795146252000,
+    "slotLengthMs" : 1000
+  },
+  "time" : {
+    "settlementSlots" : 2,
+    "maxTtlSlots" : 900,
+    "maxNowAheadSlots" : 900
+  },
+  "limits" : {
+    "readsPerCall" : 256,
+    "readBytesPerCall" : 33554432,
+    "callDeadlineMs" : 60000
+  },
+  "initialSession" : {
+    "registered" : [ ]
+  },
+  "reads" : [ ],
+  "feature" : "authorizedBy",
+  "expected" : {
+    "kind" : "unsupported",
+    "code" : "authorizedBy"
+  }
+}

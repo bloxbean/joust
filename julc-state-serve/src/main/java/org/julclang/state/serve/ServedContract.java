@@ -139,6 +139,14 @@ public final class ServedContract {
      */
     public Object call(StateRuntime runtime, Account caller, String kind, JsonNode meta, String instance, String object,
                 JsonNode args, BigInteger lovelace, JsonNode assets) {
+        return call(runtime, caller, kind, meta, instance, object, args, lovelace, assets, null);
+    }
+
+    /** Dispatch through the generated quorum signature when the caller supplies its Account array. */
+    public Object call(StateRuntime runtime, Account caller, String kind, JsonNode meta, String instance, String object,
+                       JsonNode args, BigInteger lovelace, JsonNode assets, Account[] signers) {
+        if (signers != null && !meta.path("policies").path("quorum").isObject())
+            throw new BadRequest("expected a quorum method");
         String method = meta.get("name").asText();
         int nArgs = meta.get("args").size();
         boolean payable = meta.get("payable").asBoolean();
@@ -155,25 +163,28 @@ public final class ServedContract {
                     Object made = m.invoke(null, values.toArray());
                     return client.getMethod("instanceId").invoke(made);
                 }
-                case "action", "destroy", "ownedInit" -> {
+                case "action", "destroy", "ownedInit", "ownedAction", "ownedDestroy" -> {
+                    boolean ownedSpend = kind.equals("ownedAction") || kind.equals("ownedDestroy");
+                    if (ownedSpend && (object == null || !object.matches("4f[0-9a-f]{56}")))
+                        throw new BadRequest("an owned call needs an object id");
                     Object at = at(runtime, instance);
-                    Method m = find(client, method, 1 + nArgs + (payable ? 1 : 0) + (takesAssets ? 1 : 0), false);
+                    if (ownedSpend) {
+                        String lookup = null;
+                        for (JsonNode o : x.get("owned"))
+                            if (o.get("type").asText().equals(meta.get("owned").asText())) lookup = o.get("lookup").asText();
+                        at = client.getMethod(lookup, String.class).invoke(at, object);
+                    }
+                    Method m = find(at.getClass(), method, 1 + nArgs + (payable ? 1 : 0) + (takesAssets ? 1 : 0)
+                            + (signers == null ? 0 : 1), false);
                     var values = new ArrayList<Object>(List.of(caller));
                     values.addAll(arguments(m, 1, meta, args, lovelace, assets, payable, takesAssets));
+                    if (signers != null) {
+                        if (!m.isVarArgs() || m.getParameterTypes()[m.getParameterCount() - 1] != Account[].class)
+                            throw new BadRequest("expected generated Account... co-signers");
+                        values.add(signers);
+                    }
                     Object r = m.invoke(at, values.toArray());
                     return kind.equals("ownedInit") ? r.getClass().getMethod("objectId").invoke(r) : null;
-                }
-                case "ownedAction", "ownedDestroy" -> {
-                    if (object == null || !object.matches("4f[0-9a-f]{56}")) throw new BadRequest("an owned call needs an object id");
-                    String lookup = null;
-                    for (JsonNode o : x.get("owned")) if (o.get("type").asText().equals(meta.get("owned").asText())) lookup = o.get("lookup").asText();
-                    Object at = at(runtime, instance);
-                    Object obj = client.getMethod(lookup, String.class).invoke(at, object);
-                    Method m = find(obj.getClass(), method, 1 + nArgs + (payable ? 1 : 0) + (takesAssets ? 1 : 0), false);
-                    var values = new ArrayList<Object>(List.of(caller));
-                    values.addAll(arguments(m, 1, meta, args, lovelace, assets, payable, takesAssets));
-                    m.invoke(obj, values.toArray());
-                    return null;
                 }
                 default -> throw new BadRequest("unknown kind " + kind);
             }
