@@ -24,9 +24,9 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     root = install();
     const src = join(root, 'contracts');
     mkdirSync(src);
-    for (const name of ['Counter', 'Bank', 'Dex', 'HostCouncil', 'Registry', 'Token', 'Treasury', 'Pool']) {
+    for (const name of ['Counter', 'Bank', 'Dex', 'HostCouncil', 'HostClub', 'Registry', 'Token', 'Treasury', 'Pool']) {
       const dir = name.toLowerCase();
-      const folder = name === 'HostCouncil' ? 'julc-state-host/src/test/java/org/julclang/state/host/fixture'
+      const folder = name.startsWith('Host') ? 'julc-state-host/src/test/java/org/julclang/state/host/fixture'
         : 'examples/' + dir + '/src/main/java/org/julclang/state/examples/' + dir;
       cpSync(join(repo, folder, name + '.java'), join(src, name + '.java'));
     }
