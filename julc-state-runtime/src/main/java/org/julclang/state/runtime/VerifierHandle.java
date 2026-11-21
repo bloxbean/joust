@@ -120,10 +120,13 @@ public final class VerifierHandle {
 
     private Utxo find() {
         if (runtime.hostedCall()) return runtime.hostedReference(holder, hash);
-        if (reference != null) return reference;
+        // ADR-0022 D8: a scoped (hosted) call sees only its own answers, so it neither reads nor fills the cache that
+        // unscoped callers keep; a rollback between two calls cannot hand the second call the first call's hit.
+        boolean scoped = runtime.callScope() != null;
+        if (!scoped && reference != null) return reference;
         var pinned = runtime.referenceScript(hash);
         if (pinned != null && holder.equals(pinned.getAddress())) {
-            reference = pinned;
+            if (!scoped) reference = pinned;
             return pinned;
         }
         try {
@@ -131,7 +134,7 @@ public final class VerifierHandle {
             if (r.isSuccessful() && r.getValue() != null) {
                 for (Utxo u : r.getValue()) {
                     if (hash.equalsIgnoreCase(u.getReferenceScriptHash())) {
-                        reference = u;
+                        if (!scoped) reference = u;
                         return u;
                     }
                 }
