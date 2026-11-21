@@ -7,8 +7,9 @@ dependencyResolutionManagement {
             forRepository { maven { url = uri(providers.gradleProperty('testRepo').get()) } }
             filter { includeVersionByRegex 'org.julclang', 'julc-state-.*', java.util.regex.Pattern.quote(providers.gradleProperty('joustVersion').get()) }
         }
-        mavenLocal()
         mavenCentral()
         maven { url = uri('https://repo.bloxbean.org/maven/releases') }
+        // Last (#150 review DA10): a stale local build cannot change the graph this consumer tests.
+        mavenLocal()
     }
 }

@@ -196,6 +196,30 @@ class ServedContractTest {
         assertTrue(body.getBody().getOutputs().stream().anyMatch(o -> o.getAddress().equals(payout.address())
                 && o.getInlineDatum() != null && o.getValue().getCoin().compareTo(payout.owed()) >= 0),
                 "the body pays it, at least what is owed");
+        // #145 Codex review 6: the tag is the paying output's exact datum, and names one of the body's inputs (I7).
+        var paid = body.getBody().getOutputs().stream().filter(o -> o.getAddress().equals(payout.address())
+                && o.getInlineDatum() != null).toList();
+        assertEquals(1, paid.size());
+        assertEquals(payout.tagCbor(), HexUtil.encodeHexString(paid.get(0).getInlineDatum().serializeToBytes()),
+                "the tag is the output's datum, byte for byte");
+        // TxOutRef as data: Constr 0 [TxId, index], the id's 32 bytes inside its first field.
+        var tag = (com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData)
+                com.bloxbean.cardano.client.plutus.spec.PlutusData.deserialize(HexUtil.decodeHexString(payout.tagCbor()));
+        assertEquals(0, tag.getAlternative());
+        var fields = tag.getData().getPlutusDataList();
+        assertEquals(2, fields.size());
+        String id = HexUtil.encodeHexString(bytesIn(fields.get(0)));
+        var index = ((com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData) fields.get(1)).getValue().intValueExact();
+        assertTrue(body.getBody().getInputs().stream().anyMatch(in -> in.getTransactionId().equals(id) && in.getIndex() == index),
+                "tagged with an input the body spends: " + id + "#" + index);
+        assertTrue(f.toString().contains(id), "the recorded call's input");
+    }
+
+    private static byte[] bytesIn(com.bloxbean.cardano.client.plutus.spec.PlutusData d) {
+        if (d instanceof com.bloxbean.cardano.client.plutus.spec.BytesPlutusData b) return b.getValue();
+        var c = (com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData) d;
+        assertEquals(1, c.getData().getPlutusDataList().size());
+        return bytesIn(c.getData().getPlutusDataList().get(0));
     }
 
     // ------------------------------------------------------------------ the call scope (D7)

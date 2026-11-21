@@ -51,7 +51,11 @@ final class Reads {
             services.put("get" + type.getSimpleName(), proxy(type, (self, method, args) -> {
                 String service = type.getSimpleName().replace("Service", "").toLowerCase(Locale.ROOT);
                 if (type == TransactionService.class) throw new Unsupported(service + "." + method.getName());
-                try { return current.get().invoke(service, method, args); }
+                Reads reads = current.get();
+                // A read with no call bound is a host fault: a typed abort, which no catch (Exception) in the runtime
+                // can mistake for an empty answer (#149 reviews SA3, DA3).
+                if (reads == null) throw new ReadAbort(HostError.internal("internal", "a chain read outside a call"));
+                try { return reads.invoke(service, method, args); }
                 catch (HostError e) { throw new ReadAbort(e); }
                 catch (IllegalArgumentException e) { throw new ReadAbort(inconsistent("malformed " + service + " answer")); }
             }));
@@ -69,7 +73,17 @@ final class Reads {
     }
 
     private static Object proxy(Class<?> type, InvocationHandler handler) {
-        return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, handler);
+        return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (self, method, args) -> {
+            // Object's methods keep identity semantics, so logging or collecting a service never reaches the chain.
+            if (method.getDeclaringClass() == Object.class) {
+                return switch (method.getName()) {
+                    case "equals" -> self == args[0];
+                    case "hashCode" -> System.identityHashCode(self);
+                    default -> "dev host " + type.getSimpleName();
+                };
+            }
+            return handler.invoke(self, method, args);
+        });
     }
     private Object invoke(String service, Method m, Object[] args) throws Throwable {
         Object target;

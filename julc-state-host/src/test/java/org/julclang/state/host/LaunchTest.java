@@ -140,4 +140,14 @@ class LaunchTest {
             error("bad","request",c.rpc("describe",obj()));
         }
     }
+
+    /** #149 review SA1: a control character in a name could make two directory contents digest alike. */
+    @Test void controlCharactersInNamesFailInitialization() throws Exception {
+        var a = Files.createDirectory(root.resolve("ctl"));
+        Files.writeString(a.resolve("x\nffff 0 dir y"), "v");
+        assertEquals("stageMismatch", assertThrows(HostError.class, () -> Launch.scan(root, List.of(a))).code);
+        var b = Files.createDirectory(root.resolve("del"));
+        Files.writeString(b.resolve("z\u007f"), "v");
+        assertEquals("stageMismatch", assertThrows(HostError.class, () -> Launch.scan(root, List.of(b))).code);
+    }
 }
