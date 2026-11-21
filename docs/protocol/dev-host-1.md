@@ -205,9 +205,13 @@ Set `build.snapshot` to the absolute project root. For the npm fingerprint there
 
 Sort by UTF-8 relative path bytes using forward slashes. For each file append `<lowercase hex hash> 0 dir <path>\n` (one LF), then SHA-256 the concatenated UTF-8 lines. Send the lowercase hex digest in `build.digest`. The host returns it as `fingerprint`. A mismatch gives `bad/stageMismatch`. The host hashes the closure's bytes as read at launch, so a client that hashes the files later detects an edit made after launch as a mismatch.
 
-`versions.build` comes from the contracts' common `built` field. `versions.engine.joust` identifies the installed runtime package, `image` identifies its Web Image, and `julc` identifies the engine's evaluator. Unknown versions are null. Incompatible packages or engine versions give `unsupported/runtimeVersion`.
+`versions.build` comes from the contracts' common `built` field. `versions.engine.joust` identifies the installed runtime package, `image` identifies its Web Image, and `julc` identifies the engine's evaluator. Unknown versions are null. Incompatible packages or engine versions give `unsupported/runtimeVersion`. This includes an image that names a JOUST version other than the runtime package's. An image built without a release version names `dev`.
 
 The npm host serves state lookup through `view` with `view: null`, plus `instances`, `objects` and `decode`. It omits the `views` capability and returns `unsupported/views` for a named view. Other capabilities and the signing, restore and settlement rules follow the JVM host. A worker evaluates locally and asks the client for call-scoped chain reads. The host has no wallet, persistent journal or provider credentials. The client persists the D8 high-water mark before handing out a body.
+
+Some failures differ from the JVM host's:
+- A trap inside the engine, such as CBOR nested past the Wasm stack, is answered as `internal/tooDeep` (or `internal/internal` for another trap). The host then exits, because the engine's in-memory session may be inconsistent. The JVM host answers `internal/tooDeep` and keeps serving.
+- A transition that exhausts its execution budget gives `internal/evaluator`. The JVM host runs the contract's Java method, which has no budget.
 
 ## JVM conformance in M1
 

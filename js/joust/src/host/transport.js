@@ -48,6 +48,7 @@ export function serve({ writeFrame, Worker, launch, deferred }) {
     clearTimeout(call.timer);
     clearTimeout(call.drain);
     clearTimeout(call.wakeup);
+    clearImmediate(call.latching);
     call.reportControl?.();
     if (!initialized) discardWorker();
     active = null;
@@ -57,16 +58,24 @@ export function serve({ writeFrame, Worker, launch, deferred }) {
     call.ended = true;
     const waiting = call.reverse !== null && call.reverse !== undefined;
     call.reverse = null;
-    Atomics.store(call.control, 0, 2);
-    Atomics.notify(call.control, 0);
     call.reportControl = () => {
       call.reportControl = null;
       if (!send(error(call.id, failure('internal', code, 'call ' + code)))) stop('response id exceeds frame budget');
     };
-    // A blocked read can unwind immediately. Its response normally releases the generation
-    // before a client that has received cancellation starts the next recorded call.
-    if (waiting) call.wakeup = setTimeout(() => call.reportControl?.(), 50);
-    else call.reportControl();
+    // D10: the end is latched only between session mutations. While the worker holds the call (3), wait for it to
+    // release: its write then precedes the report, and none follows it (#154 review M2-4).
+    const latch = () => {
+      if (active !== call) return;
+      const state = Atomics.load(call.control, 0);
+      if (state === 3) { call.latching = setImmediate(latch); return; }
+      if (state !== 2 && Atomics.compareExchange(call.control, 0, state, 2) !== state) { latch(); return; }
+      Atomics.notify(call.control, 0);
+      // A blocked read can unwind immediately. Its response normally releases the generation
+      // before a client that has received cancellation starts the next recorded call.
+      if (waiting) call.wakeup = setTimeout(() => call.reportControl?.(), 50);
+      else call.reportControl?.();
+    };
+    latch();
     call.drain = setTimeout(() => stop('execution did not stop within two seconds'), 2000);
   }
   function complete(call, response, ok) {
@@ -103,6 +112,15 @@ export function serve({ writeFrame, Worker, launch, deferred }) {
         call.reverse = call.generation + '.' + ++call.sequence;
         if (!send(JSON.stringify({ jsonrpc: '2.0', method: 'chain/read', id: call.reverse, params: JSON.parse(m.read) })))
           stop('reverse request exceeds frame budget');
+      } else if (m.poisoned) {
+        // The engine trapped: answer the call (unless it ended), then end the session (#154 review M2-3).
+        const end = () => stop('engine trapped: ' + m.failure.message);
+        if (call.ended) end();
+        else {
+          call.ended = true;
+          clearTimeout(call.timer);
+          if (!send(error(call.id, m.failure), end)) end();
+        }
       } else if (m.failure) {
         if (call.ended) { release(call); return; }
         if (m.failure.code === 'outsideProject') {

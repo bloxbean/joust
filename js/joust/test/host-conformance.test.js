@@ -164,6 +164,19 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       assert.equal(failed.error.data.code, 'readFailed');
     } finally { await peer.close(); }
   });
+  it('answers CBOR nested past the engine stack as tooDeep, as the JVM host does, then ends the session', async () => {
+    const v = fixture('owned-action');
+    const { call } = v.params;
+    start(contracts.filter(c => JSON.parse(c.description).preamble.title === call.contract));
+    try {
+      await initialize({});
+      const deep = await peer.rpc('decode', { contract: call.contract, datum: '81'.repeat(100_000) + '00' });
+      assert.equal(deep.error?.data.kind, 'internal', JSON.stringify(deep));
+      assert.equal(deep.error.data.code, 'tooDeep');
+      await assert.rejects(peer.receive(), /unexpected host EOF/);
+    } finally { await peer.close(); }
+    assert.equal(peer.child.exitCode, 1);
+  });
   it('returns structured source sites for the refusing contract from its verified build bundle', async () => {
     const v = m0(history.find(f => f.startsWith('0003-')));
     const call = { ...v.params.call, args: { by: '0' } };

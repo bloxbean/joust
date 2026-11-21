@@ -23,7 +23,12 @@ public final class EngineSession {
     private Session session;
     private Transport.Reply pending;
 
-    public String execute(String frame, String setup, Function<String, String> reverse, BooleanSupplier live) {
+    /**
+     * {@code claim} takes the call for one session mutation, false once the transport has latched its end, and
+     * {@code release} gives it back: the check and the write are one step against the latch (D10; #154 review M2-4).
+     */
+    public String execute(String frame, String setup, Function<String, String> reverse, BooleanSupplier live,
+                          BooleanSupplier claim, Runnable release) {
         pending = null;
         try {
             var request = JSON.readTree(frame);
@@ -41,8 +46,8 @@ public final class EngineSession {
                 catch (java.io.IOException malformed) { throw HostError.internal("inconsistentRead", "invalid reverse answer"); }
             };
             pending = session.execute(method, peer, mutation -> {
-                if (!live.getAsBoolean()) throw HostError.internal("cancelled", "call cancelled");
-                mutation.run();
+                if (!claim.getAsBoolean()) throw HostError.internal("cancelled", "call cancelled");
+                try { mutation.run(); } finally { release.run(); }
             }, request.path("params"));
             return obj().set("result", pending.value()).toString();
         } catch (Throwable failure) {
@@ -83,7 +88,10 @@ public final class EngineSession {
             return switch (result.kind()) {
                 case STEP -> result.run().step();
                 case REFUSAL -> throw new RequireException(result.run().refusal());
-                case ERROR, BUDGET -> throw HostError.internal("evaluator", result.run().refusal());
+                // A failing transition is the contract's own failure, as a Java exception is on the JVM host. The JVM
+                // runs the method without a budget: an exhausted one has no JVM counterpart (#154 review M2-5).
+                case ERROR -> throw HostError.internal("internal", "transition failed: " + result.run().refusal());
+                case BUDGET -> throw HostError.internal("evaluator", result.run().refusal());
             };
         });
     }
@@ -103,7 +111,9 @@ public final class EngineSession {
                         null, assets, null, signers == null ? List.of() : Arrays.asList(signers));
             } catch (RequireException e) {
                 throw JscMessages.explained(messages, e);
-            } catch (IllegalArgumentException e) {
+            } catch (DescribedContract.BadCall | org.julclang.state.runtime.described.SchemaCodec.DataError e) {
+                // Only the dispatcher's own checks of the call are bad requests; any other argument exception (a
+                // library's, during the build) is internal, as on the JVM host (#154 review M2-5).
                 throw bad(e.getMessage());
             }
         }

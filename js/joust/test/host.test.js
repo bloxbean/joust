@@ -115,7 +115,7 @@ function probe(t) {
   mkdirSync(engine);
   writeFileSync(join(engine, 'joust-runtime.js.wasm'), '');
   writeFileSync(join(engine, 'joust-runtime.js'), `
-    let committed = 0;
+    let committed = 0, claimed = null;
     const spin = ms => { const end = performance.now() + ms; while (performance.now() < end) {} };
     console.log('engine diagnostic');
     // The worker's guard (#154 review M2-9): each attempt must fail, and no byte may reach the protocol stdout.
@@ -129,10 +129,14 @@ function probe(t) {
       worker: () => new (process.getBuiltinModule('node:worker_threads').Worker)('1', { eval: true }),
       binding: () => process.binding('fs'),
     })) { try { op(); attempts[name] = 'allowed'; } catch (e) { attempts[name] = e.message; } }
-    onJulcReady({ joust: { info: () => ({ joust: 'test', julc: 'test' }), host(r) {
+    onJulcReady({ joust: { info: () => ({ joust: 'dev', julc: 'test' }), host(r) {
       if (r.commit) { committed++; return {}; }
       const { method } = JSON.parse(r.frame);
       if (method === 'guarded') return { response: JSON.stringify({ result: attempts }) };
+      // #154 review M2-4: a mutation holding the call, and one attempted after the call has ended.
+      if (method === 'hold') { claimed = globalThis.joustHostClaim(); spin(300); globalThis.joustHostRelease(); }
+      if (method === 'late') { spin(300); claimed = globalThis.joustHostClaim(); if (claimed) globalThis.joustHostRelease(); }
+      if (method === 'claimed') return { response: JSON.stringify({ result: claimed }) };
       if (method === 'spin' || method === 'read') {
         globalThis.joustHostRead('{"kind":"tip"}');
         if (method === 'spin') {
@@ -177,6 +181,29 @@ test('the worker runs guarded: writes, nested workers and bindings fail, and std
   assert.deepEqual(Object.keys(attempts).sort(), ['_write', 'binding', 'worker', 'write', 'writeFile', 'writeSync']);
   for (const [name, outcome] of Object.entries(attempts)) assert.match(outcome, /dev host forbids/, name);
   assert.ok(!existsSync(join(root, 'forged.txt')));
+});
+
+test('D10 a session mutation and the latch are one step (#154 review M2-4)', async t => {
+  const { root, build } = probe(t);
+  const peer = client(root);
+  t.after(() => peer.close());
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build })).result, 0);
+  const cancel = async (method, after) => {
+    peer.send({ jsonrpc: '2.0', method, id: method });
+    await new Promise(resolve => setTimeout(resolve, after));
+    const sent = performance.now();
+    peer.send({ jsonrpc: '2.0', method: '$/cancelRequest', params: { id: method } });
+    assert.equal((await peer.receive()).error.data.code, 'cancelled');
+    const waited = performance.now() - sent;
+    await new Promise(resolve => setTimeout(resolve, 450));
+    return waited;
+  };
+  // Cancelled while the worker holds the call: the report waits for its release.
+  assert.ok(await cancel('hold', 100) >= 150);
+  assert.equal((await peer.rpc('claimed', {})).result, true);
+  // Cancelled first: the later mutation's claim fails.
+  assert.ok(await cancel('late', 50) < 150);
+  assert.equal((await peer.rpc('claimed', {})).result, false);
 });
 
 test('I7 the fingerprint covers the host closure, and the host runs the bytes it hashed (#154 review M2-6)', async t => {
@@ -242,6 +269,17 @@ test('D4 rejects a mismatched installed runtime before the engine starts', async
   const peer = client(root);
   t.after(() => peer.close());
   assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build: bundle(root) })).error.data.code, 'runtimeVersion');
+});
+
+test('D4 rejects an engine image stamped with another JOUST version (#154 review M2-10)', async t => {
+  const { root } = probe(t);
+  const engine = join(root, 'node_modules/@julclang/joust-runtime/engine/joust-runtime.js');
+  writeFileSync(engine, readFileSync(engine, 'utf8').replace("joust: 'dev'", "joust: '0.0.1'"));
+  const peer = client(root);
+  t.after(() => peer.close());
+  const r = await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build: bundle(root) });
+  assert.equal(r.error.data.code, 'runtimeVersion');
+  assert.match(r.error.message, /image is JOUST 0\.0\.1/);
 });
 
 test('D3 checks transitive runtime imports before evaluating the imported module', async t => {

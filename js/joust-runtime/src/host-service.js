@@ -31,6 +31,10 @@ export async function serve({ contracts, fingerprint, runtimeVersion }, service)
   const engine = await service.load();
   const info = engine.joust.info({});
   if (!engine.joust.host) throw Error('installed engine does not implement host protocol 1');
+  // The image holds the protocol logic: an image stamped with another JOUST version is refused. Images built without
+  // a release version say "dev" (#154 review M2-10).
+  if (info.joust !== 'dev' && info.joust !== runtimeVersion)
+    throw Error('installed engine image is JOUST ' + info.joust + ', the runtime package ' + runtimeVersion);
   const programs = service.programs;
   const build = contracts[0]?.built ?? null;
   for (const c of contracts) {
