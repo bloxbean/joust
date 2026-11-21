@@ -361,6 +361,21 @@ public final class Prepare {
                 .feePayer(payer)
                 .additionalSignersCount(1)
                 .build();
+        // Handed to a wallet like the runtime's prepared bodies: it must balance per unit too (#152 F-W1).
+        org.julclang.state.runtime.BodyBalance.check(built.getBody(), in -> {
+            try {
+                var o = backend.getUtxoService().getTxOutput(in.getTransactionId(), in.getIndex());
+                return o.isSuccessful() ? o.getValue() : null;
+            } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+                throw new IllegalStateException(e);
+            }
+        }, () -> {
+            try {
+                return backend.getEpochService().getProtocolParameters().getValue();
+            } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+                throw new IllegalStateException(e);
+            }
+        }, "register the stake credential");
         byte[] pkh = new com.bloxbean.cardano.client.address.Address(payer).getPaymentCredentialHash().orElseThrow();
         return new Result(true, com.bloxbean.cardano.client.util.HexUtil.encodeHexString(built.serialize()),
                 com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(built), null, -1,

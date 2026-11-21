@@ -15,6 +15,7 @@ import org.julclang.state.api.Assets;
 import org.julclang.state.examples.devkit.DevKit;
 import org.julclang.state.runtime.BodyBalance;
 import org.julclang.state.runtime.Compose;
+import org.julclang.state.runtime.JoustException;
 import org.julclang.state.runtime.PreparedTx;
 import org.julclang.state.runtime.StateRuntime;
 import org.julclang.state.runtime.WalletAccount;
@@ -420,32 +421,92 @@ class WalletAssetChangeTest {
     void aPreparedBodyThatDoesNotBalanceIsRefused() {
         var f = new Fixture();
         f.wallet(List.of(f.utxo("aa", 500, 100_000)));
-        var snapshot = new SnapshotBackend(f.snapshot);
-        String skewed = "aa".repeat(32);
-        UtxoService utxos = (UtxoService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{UtxoService.class},
-                (proxy, m, args) -> {
-                    Object r = m.invoke(snapshot.getUtxoService(), args);
-                    if (m.getName().equals("getTxOutput") && skewed.equals(args[0])) {
-                        Utxo u = ((Result<Utxo>) r).getValue();
-                        var amounts = new ArrayList<Amount>();
-                        for (Amount a : u.getAmount()) {
-                            amounts.add(a.getUnit().equals("lovelace") ? Amount.lovelace(a.getQuantity().add(BigInteger.ONE)) : a);
-                        }
-                        Utxo more = Utxo.builder().txHash(u.getTxHash()).outputIndex(u.getOutputIndex()).address(u.getAddress()).amount(amounts).build();
-                        return Result.success("ok").withValue(more);
-                    }
-                    return r;
-                });
-        BackendService backend = (BackendService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{BackendService.class},
-                (proxy, m, args) -> m.getName().equals("getUtxoService") ? utxos : m.invoke(snapshot, args));
         var built = new AtomicReference<Transaction>();
-        var rt = observed(f, backend, built);
+        var rt = observed(f, skewed(f, Map.of("aa".repeat(32), 1L)), built);
         var dex = DexClient.at(rt, f.instance);
         var e = assertThrows(BodyBalance.UnbalancedException.class, () -> Compose.of(rt, f.payer)
                 .add(() -> dex.addLiquidity(f.payer, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
                 .prepare());
         assertTrue(e.getMessage().contains("value is not conserved") && e.getMessage().contains("lovelace=1"), e::getMessage);
         assertNotNull(built.get(), "built and observed, then refused");
+        assertReleased("aa".repeat(32) + "#0");
+    }
+
+    /**
+     * The snapshot backend, answering each listed transaction id by reference with {@code delta} more lovelace than its
+     * listing (what QuickTx balanced with). Skews that sum to zero keep the body balanced while moving value between the
+     * inputs' owners, as the co-caller check sees it.
+     */
+    static BackendService skewed(Fixture f, Map<String, Long> delta) {
+        var snapshot = new SnapshotBackend(f.snapshot);
+        UtxoService utxos = (UtxoService) Proxy.newProxyInstance(Fixture.class.getClassLoader(), new Class<?>[]{UtxoService.class},
+                (proxy, m, args) -> {
+                    Object r = m.invoke(snapshot.getUtxoService(), args);
+                    if (m.getName().equals("getTxOutput") && delta.containsKey((String) args[0])) {
+                        Utxo u = ((Result<Utxo>) r).getValue();
+                        var amounts = new ArrayList<Amount>();
+                        for (Amount a : u.getAmount()) {
+                            amounts.add(a.getUnit().equals("lovelace")
+                                    ? Amount.lovelace(a.getQuantity().add(BigInteger.valueOf(delta.get((String) args[0])))) : a);
+                        }
+                        Utxo more = Utxo.builder().txHash(u.getTxHash()).outputIndex(u.getOutputIndex()).address(u.getAddress()).amount(amounts).build();
+                        return Result.success("ok").withValue(more);
+                    }
+                    return r;
+                });
+        return (BackendService) Proxy.newProxyInstance(Fixture.class.getClassLoader(), new Class<?>[]{BackendService.class},
+                (proxy, m, args) -> m.getName().equals("getUtxoService") ? utxos : m.invoke(snapshot, args));
+    }
+
+    /** The build's claim on {@code ref} ended (Designation, package-private in the runtime: read reflectively). */
+    static void assertReleased(String ref) {
+        try {
+            var m = Class.forName("org.julclang.state.runtime.Designation").getDeclaredMethod("isClaimed", String.class);
+            m.setAccessible(true);
+            assertFalse((Boolean) m.invoke(null, ref), ref + " still claimed");
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    /** F-W4: the prepare path runs the co-caller check. A balanced body that takes 1 ADA of B's to A is refused. */
+    @Test
+    void aPreparedBodyTakingFromACoCallerIsRefused() {
+        var f = new Fixture();
+        f.wallet(List.of(f.utxo("cc", 6, 0), f.utxo("bb", 500, 0)));   // the skewed one funds, the other is collateral
+        String b = new Account(Networks.testnet()).baseAddress();
+        f.snapshot.utxos.put(b, new ArrayList<>(List.of(walletOfB(f, b))));
+        var walletB = WalletAccount.of(b, Networks.testnet());
+        var rt = observed(f, skewed(f, Map.of("ee".repeat(32), 1_000_000L, "bb".repeat(32), -1_000_000L)), new AtomicReference<>());
+        var dex = DexClient.at(rt, f.instance);
+        var e = assertThrows(JoustException.class, () -> Compose.of(rt, f.payer)
+                .add(() -> dex.addLiquidity(walletB, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
+                .prepare());
+        assertTrue(e.getMessage().contains("1000000 lovelace from " + b), e::getMessage);
+        assertReleased("ee".repeat(32) + "#0");
+        assertReleased("bb".repeat(32) + "#0");
+    }
+
+    /** F-W4: the composed submit path runs it too, before submission (the runtime signs for the key co-caller). */
+    @Test
+    void aSubmittedBodyTakingFromAKeyCoCallerIsRefused() {
+        var f = new Fixture();
+        var keyA = new Account(Networks.testnet());
+        var keyB = new Account(Networks.testnet());
+        f.snapshot.utxos.put(keyA.baseAddress(), new ArrayList<>(List.of(
+                Utxo.builder().txHash("bb".repeat(32)).outputIndex(0).address(keyA.baseAddress())
+                        .amount(List.of(Amount.lovelace(BigInteger.valueOf(500_000_000)))).build(),
+                Utxo.builder().txHash("cc".repeat(32)).outputIndex(0).address(keyA.baseAddress())
+                        .amount(List.of(Amount.lovelace(BigInteger.valueOf(6_000_000)))).build())));
+        f.snapshot.utxos.put(keyB.baseAddress(), new ArrayList<>(List.of(walletOfB(f, keyB.baseAddress()))));
+        var rt = observed(f, skewed(f, Map.of("ee".repeat(32), 1_000_000L, "bb".repeat(32), -1_000_000L)), new AtomicReference<>());
+        var dex = DexClient.at(rt, f.instance);
+        var e = assertThrows(JoustException.class, () -> Compose.of(rt, keyA)
+                .add(() -> dex.addLiquidity(keyB, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
+                .submit());
+        assertTrue(e.getMessage().contains("1000000 lovelace from " + keyB.baseAddress()), e::getMessage);
+        assertReleased("ee".repeat(32) + "#0");
+        assertReleased("bb".repeat(32) + "#0");
     }
 
     @Test
@@ -472,7 +533,9 @@ class WalletAssetChangeTest {
         var keyB = new Account(Networks.testnet());
         f.snapshot.utxos.put(keyA.baseAddress(), new ArrayList<>(List.of(
                 Utxo.builder().txHash("bb".repeat(32)).outputIndex(0).address(keyA.baseAddress())
-                        .amount(List.of(Amount.lovelace(BigInteger.valueOf(500_000_000)))).build())));
+                        .amount(List.of(Amount.lovelace(BigInteger.valueOf(500_000_000)))).build(),
+                Utxo.builder().txHash("cc".repeat(32)).outputIndex(0).address(keyA.baseAddress())
+                        .amount(List.of(Amount.lovelace(BigInteger.valueOf(6_000_000)))).build())));
         f.snapshot.utxos.put(keyB.baseAddress(), new ArrayList<>(List.of(walletOfB(f, keyB.baseAddress()))));
         var built = new AtomicReference<Transaction>();
         var rt = observed(f, new SnapshotBackend(f.snapshot), built);

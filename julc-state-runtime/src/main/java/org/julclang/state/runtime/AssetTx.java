@@ -283,7 +283,8 @@ final class AssetTx {
      * earlier call collected) counts first, less what earlier calls took from it.
      * <p>
      * Selection: never a UTxO with a reference script (spending it would consume a deployment's script; T2) or a datum
-     * hash (unspendable without its datum); an inline datum at a key address is fine (R9). Nor
+     * hash (a conservative choice, as cardano-client-lib's selection makes: at a key address the ledger needs no datum,
+     * but whatever the hash commits to may matter to someone; F-W5); an inline datum at a key address is fine (R9). Nor
      * one another keyed operation designates or holds ({@link Designation#pickable}; R2). Like every plain
      * transaction's selection (Designation), it does not skip inputs an earlier, still-unexpired prepared transaction
      * of this JVM claims (T4): the lovelace selection of the same body would reuse them anyway; two such bodies
@@ -313,7 +314,8 @@ final class AssetTx {
                 for (Utxo u : r.getValue()) {
                     if (counted.contains(key(u)) || !holdsAny(u, missing)) continue;
                     // An inline datum at a key address is spendable as is (R9): tokens a contract sends a wallet with one
-                    // can be paid in. A datum hash needs its datum, a reference script would be consumed: not those.
+                    // can be paid in. Not a datum hash (conservative, as cardano-client-lib; F-W5), nor a reference
+                    // script (it would be consumed).
                     if (u.getReferenceScriptHash() != null || u.getDataHash() != null
                             || !Designation.pickable(u, TxRunner.currentOperation())) {
                         passedOver++;

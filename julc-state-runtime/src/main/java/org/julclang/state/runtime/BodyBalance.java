@@ -108,9 +108,15 @@ public final class BodyBalance {
             }
         }
         if (body.getProposalProcedures() != null) {
-            for (var p : body.getProposalProcedures()) balance.merge(LOVELACE, p.getDeposit().negate(), BigInteger::add);
+            for (var p : body.getProposalProcedures()) {
+                balance.merge(LOVELACE, word64(p.getDeposit(), "a proposal deposit", what).negate(), BigInteger::add);
+            }
         }
-        if (body.getDonation() != null) balance.merge(LOVELACE, body.getDonation().negate(), BigInteger::add);
+        if (body.getDonation() != null) {
+            // The ledger takes a donation only when positive (F-W2): a negative one would add value to the inputs.
+            if (body.getDonation().signum() <= 0) throw unbalanced(what, "the donation is not positive: " + body.getDonation());
+            balance.merge(LOVELACE, word64(body.getDonation(), "the donation", what).negate(), BigInteger::add);
+        }
         if (body.getSubTransactions() != null && !body.getSubTransactions().isEmpty()
                 || body.getDirectDeposits() != null && !body.getDirectDeposits().isEmpty()) {
             throw unbalanced(what, "nested transactions or direct deposits are not checked here");
@@ -129,21 +135,27 @@ public final class BodyBalance {
         requireZero(collateral, what, " on the collateral path");
     }
 
-    /** The lovelace a certificate locks (positive) or refunds (negative). */
+    /** The lovelace a certificate locks (positive) or refunds (negative); its coin within the ledger's range (F-W2). */
     static BigInteger deposit(Certificate c, ProtocolParams pp, String what) {
+        return switch (c) {
+            case RegCert r -> word64(r.getCoin(), "a certificate's deposit", what);
+            case UnregCert r -> word64(r.getCoin(), "a certificate's refund", what).negate();
+            case StakeRegDelegCert r -> word64(r.getCoin(), "a certificate's deposit", what);
+            case VoteRegDelegCert r -> word64(r.getCoin(), "a certificate's deposit", what);
+            case StakeVoteRegDelegCert r -> word64(r.getCoin(), "a certificate's deposit", what);
+            case RegDRepCert r -> word64(r.getCoin(), "a certificate's deposit", what);
+            case UnregDRepCert r -> word64(r.getCoin(), "a certificate's refund", what).negate();
+            default -> legacyOrNone(c, pp, what);
+        };
+    }
+
+    private static BigInteger legacyOrNone(Certificate c, ProtocolParams pp, String what) {
         return switch (c) {
             // The legacy forms carry no amount: the protocol's key deposit. The ledger refunds the deposit recorded at
             // registration, so after a keyDeposit change this refuses a valid deregistration (fails closed; CCL's own
             // balancer assumes the same).
             case StakeRegistration r -> new BigInteger(pp.getKeyDeposit());
             case StakeDeregistration r -> new BigInteger(pp.getKeyDeposit()).negate();
-            case RegCert r -> r.getCoin();
-            case UnregCert r -> r.getCoin().negate();
-            case StakeRegDelegCert r -> r.getCoin();
-            case VoteRegDelegCert r -> r.getCoin();
-            case StakeVoteRegDelegCert r -> r.getCoin();
-            case RegDRepCert r -> r.getCoin();
-            case UnregDRepCert r -> r.getCoin().negate();
             case StakeDelegation d -> BigInteger.ZERO;
             case VoteDelegCert d -> BigInteger.ZERO;
             case StakeVoteDelegCert d -> BigInteger.ZERO;

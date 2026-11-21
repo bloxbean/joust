@@ -187,6 +187,23 @@ class BodyBalanceTest {
     }
 
     @Test
+    void donationsAndCertificateCoinsAreRangeChecked() {
+        // F-W2: a negative donation would add 5 ADA to the inputs' side (10 ADA in, 15 ADA out).
+        var negative = body(List.of(IN_A), 0, out(15_000_000, 100));
+        negative.setDonation(BigInteger.valueOf(-5_000_000));
+        refused(negative, "donation is not positive");
+        var zero = body(List.of(IN_A), 200_000, out(9_800_000, 100));
+        zero.setDonation(BigInteger.ZERO);
+        refused(zero, "donation is not positive");
+        var donated = body(List.of(IN_A), 200_000, out(8_800_000, 100));
+        donated.setDonation(BigInteger.valueOf(1_000_000));
+        check(donated);
+        var refund = body(List.of(IN_B), 200_000, out(9_800_000, 0));
+        refund.getCerts().add(new RegCert(StakeCredential.fromKeyHash(new byte[28]), BigInteger.valueOf(-5_000_000)));
+        refused(refund, "a certificate's deposit is outside the ledger's range");
+    }
+
+    @Test
     void unitSpellingsAreOneUnit() {
         // An output's policy in upper case is the input's unit (normalised), not a new one.
         var b = body(List.of(IN_A), 200_000, out(9_800_000, 0));
