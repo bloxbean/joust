@@ -24,7 +24,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.math.BigInteger;
 import java.nio.file.Files;
@@ -44,7 +43,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * Issue #152 on the default JVM path: a wallet's prepared call paying native assets into the Dex spends the wallet's
  * token UTxOs, and the body balances per unit.
  * <p>
- * The chain reads are the dev host's recording {@code dex-add-liquidity-split-wallet.json} (ADR-0022 M1b): a Dex
+ * The chain reads are the dev host's recording {@code fixtures/wallet-assets/dex-add-liquidity-split-wallet.json}
+ * (ADR-0022 M1b; its {@code expected} is the body the unfixed runtime built, rejected by the node): a Dex
  * {@code addLiquidity} paying 100 ADA and 100,000 M1B from a wallet whose M1B sits on a 1.15 ADA UTxO apart from its
  * lovelace. Its Dex and output verifier (another JuLC build's) are replaced by this build's: script hashes, script
  * addresses and script bytes; datums and wallet UTxOs are as recorded. Replayed offline through the snapshot backend
@@ -225,9 +225,12 @@ class WalletAssetChangeTest {
         }
     }
 
+    /** In fixtures/ (not this module's resources): examples/dsl runs this test against the .jsc port too. */
+    static final Path RECORDING = Path.of("../../fixtures/wallet-assets/dex-add-liquidity-split-wallet.json");
+
     static JsonNode recording() {
-        try (InputStream in = WalletAssetChangeTest.class.getResourceAsStream("/dex-add-liquidity-split-wallet.json")) {
-            return JSON.readTree(in);
+        try {
+            return JSON.readTree(RECORDING.toFile());
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
