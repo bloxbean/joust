@@ -235,6 +235,7 @@ public final class Compose {
         var runner = new TxRunner(runtime, prepare ? List.of() : signers);
         runner.designated = designated;   // a keyed composition's attempt (ADR-0016 D7)
         runner.extraExpected = cap.expected.size() > 1 ? cap.expected.subList(1, cap.expected.size()) : List.of();
+        runner.assetInputs = cap.assetInputs;
         if (prepare) {
             return runner.prepare(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),
                     cap.expected.isEmpty() ? null : cap.expected.get(0), cap.payouts, cap.sends,

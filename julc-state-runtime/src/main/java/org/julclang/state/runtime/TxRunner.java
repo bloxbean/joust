@@ -55,6 +55,11 @@ final class TxRunner {
         final java.util.LinkedHashMap<String, Account> accounts = new java.util.LinkedHashMap<>();
         final java.util.LinkedHashMap<String, com.bloxbean.cardano.client.plutus.spec.PlutusScript> scripts = new java.util.LinkedHashMap<>();
         final java.util.Set<String> inputs = new java.util.HashSet<>();
+        /** The inputs {@code AssetTx.collectAssets} spent for the native assets a caller pays in (#152). */
+        final java.util.Set<String> assetInputs = new java.util.HashSet<>();
+        /** Inputs whose native assets {@code collectAssets} counted, and what of them is left, by address and unit. */
+        final java.util.Set<String> countedInputs = new java.util.HashSet<>();
+        final java.util.Map<String, java.util.Map<String, BigInteger>> spareAssets = new java.util.HashMap<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
         /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
@@ -220,6 +225,9 @@ final class TxRunner {
 
     /** Further state outputs to verify (a composition's other instances). */
     java.util.List<ExpectedState> extraExpected = java.util.List.of();
+
+    /** The payer UTxOs a composition spent for the assets its calls pay in ({@code Capture.assetInputs}; #152). */
+    java.util.Set<String> assetInputs = java.util.Set.of();
 
     String submit(Tx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
                   java.util.List<ExpectedPayout> payouts, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts,
@@ -586,10 +594,14 @@ final class TxRunner {
         // out of it. Spending one of the payer's UTxOs gives it a change output to pay the fee from (restorePayouts).
         // A keyed call's designated input (ADR-0016 D11) is one of the payer's ordinary UTxOs, spent already: it gives the
         // change output (and picking another largest UTxO could pick it twice).
+        // A UTxO a call collected for the assets it pays in may be the largest: it gives the change output already, and
+        // collecting it again would count it twice (ADR-0015 §13.8, #152).
         if (designated == null && payouts.stream().anyMatch(p -> p.address().equals(payer.baseAddress()))) {
+            var others = new java.util.HashSet<>(spent);
+            others.removeAll(assetInputs);
             // Picked and claimed under the payer's lock, so no keyed operation designates it before the build (F63).
-            Utxo funding = Designation.pick(payer.baseAddress(), PICK_CLAIM_MS, () -> largestAdaOnly(payer.baseAddress(), spent));
-            if (funding != null) tx.collectFrom(java.util.List.of(funding));
+            Utxo funding = Designation.pick(payer.baseAddress(), PICK_CLAIM_MS, () -> largestAdaOnly(payer.baseAddress(), others));
+            if (funding != null && !assetInputs.contains(Designation.ref(funding))) tx.collectFrom(java.util.List.of(funding));
         }
         Transaction unsigned;
         Designation.Claimed built;

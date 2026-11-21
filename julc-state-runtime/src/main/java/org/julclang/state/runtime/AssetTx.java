@@ -272,56 +272,48 @@ final class AssetTx {
 
     /**
      * Spends caller UTxOs (from its base address) that hold {@code needed}'s native assets. QuickTx balances only
-     * lovelace from the fee payer, so the assets a caller pays in must be collected explicitly; the leftovers return as
-     * change. Throws if the caller does not hold them.
+     * lovelace from the fee payer, so the assets a caller pays in must be collected explicitly, by key accounts and
+     * wallets alike: with a script input fixed, QuickTx builds the change from the fixed inputs and its fee selection
+     * asks only for lovelace, so an uncollected token payment ends as a negative quantity in the change (#152). The
+     * leftovers return as change. Throws if the caller does not hold them.
+     * <p>
+     * Never collects a UTxO twice (ADR-0015 §13.8, #152): what the transaction already spends at the caller's address
+     * (the creation's {@code alreadyIn} seed; in a composition, another call's seed, a designated input, or what an
+     * earlier call collected) counts first, less what earlier calls took from it.
      */
     static void collectAssets(Tx tx, StateContractHandle<?> contract, Account caller, Value needed, String what,
                               Utxo alreadyIn) {
         var want = Assets.read(Assets.withoutLovelace(needed));
         if (want.isEmpty()) return;
-        // A wallet's unsigned build (Compose.prepare; ADR-0013, ADR-0015) balances native assets itself: there a
-        // collected regular input counts twice when the balancing also selects it (cardano-client-lib 0.8.0-pre7, Tx),
-        // while the signing build needs them collected. Both observed on DevKit (ADR-0015 §13.8).
-        if (caller instanceof WalletAccount) return;
-        // The seed of a creation is already an input: count what it holds, never collect it twice.
-        if (alreadyIn != null) {
-            for (Amount a : alreadyIn.getAmount()) {
-                String unit = (a.getUnit().startsWith("0x") ? a.getUnit().substring(2) : a.getUnit()).toLowerCase();
-                String p = unit.length() > 56 ? unit.substring(0, 56) : unit;
-                var ts = want.get(p);
-                if (ts != null && unit.length() >= 56) {
-                    String n = unit.substring(56);
-                    if (ts.containsKey(n)) {
-                        BigInteger left = ts.get(n).subtract(a.getQuantity());
-                        if (left.signum() <= 0) ts.remove(n); else ts.put(n, left);
-                        if (ts.isEmpty()) want.remove(p);
-                    }
-                }
-            }
-            if (want.isEmpty()) return;
-        }
         var missing = new java.util.HashMap<String, BigInteger>();
         want.forEach((p, ts) -> ts.forEach((n, q) -> missing.put(p + n, q)));
+        TxRunner.Capture cap = TxRunner.capture();
+        // What the transaction's inputs at the caller's address hold beyond what earlier calls took, by unit; and the
+        // inputs counted in it. Per composition (its capture), else per call.
+        var spare = cap == null ? new java.util.HashMap<String, BigInteger>()
+                : cap.spareAssets.computeIfAbsent(caller.baseAddress(), k -> new java.util.HashMap<>());
+        var counted = cap == null ? new java.util.HashSet<String>() : cap.countedInputs;
+        if (alreadyIn != null && counted.add(Designation.ref(alreadyIn))) addAssets(spare, alreadyIn);
+        draw(missing, spare);
         var picked = new ArrayList<Utxo>();
         try {
             for (int page = 1; page < 20 && !missing.isEmpty(); page++) {
                 var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 100, page);
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
-                    if (alreadyIn != null && u.getTxHash().equals(alreadyIn.getTxHash())
-                            && u.getOutputIndex() == alreadyIn.getOutputIndex()) continue;
-                    boolean useful = false;
-                    for (Amount a : u.getAmount()) {
-                        String unit = a.getUnit().startsWith("0x") ? a.getUnit().substring(2) : a.getUnit();
-                        BigInteger need = missing.get(unit.toLowerCase());
-                        if (need != null) {
-                            useful = true;
-                            BigInteger left = need.subtract(a.getQuantity());
-                            if (left.signum() <= 0) missing.remove(unit.toLowerCase());
-                            else missing.put(unit.toLowerCase(), left);
+                    String ref = Designation.ref(u);
+                    if (counted.contains(ref) || !holdsAny(u, missing)) continue;
+                    counted.add(ref);
+                    addAssets(spare, u);
+                    // Spent already (another call's seed, a designated input): counted, not collected again.
+                    if (cap == null || !cap.inputs.contains(ref)) {
+                        picked.add(u);
+                        if (cap != null) {
+                            cap.inputs.add(ref);
+                            cap.assetInputs.add(ref);
                         }
                     }
-                    if (useful) picked.add(u);
+                    draw(missing, spare);
                     if (missing.isEmpty()) break;
                 }
             }
@@ -331,7 +323,35 @@ final class AssetTx {
         if (!missing.isEmpty()) {
             throw new RequireException(what + ": the caller's base address does not hold " + missing);
         }
-        tx.collectFrom(picked);
+        if (!picked.isEmpty()) tx.collectFrom(picked);
+    }
+
+    private static String unitOf(Amount a) {
+        return (a.getUnit().startsWith("0x") ? a.getUnit().substring(2) : a.getUnit()).toLowerCase();
+    }
+
+    private static boolean holdsAny(Utxo u, Map<String, BigInteger> missing) {
+        for (Amount a : u.getAmount()) if (missing.containsKey(unitOf(a))) return true;
+        return false;
+    }
+
+    private static void addAssets(Map<String, BigInteger> spare, Utxo u) {
+        for (Amount a : u.getAmount()) {
+            if (!a.getUnit().equals("lovelace")) spare.merge(unitOf(a), a.getQuantity(), BigInteger::add);
+        }
+    }
+
+    /** Takes what {@code spare} holds of each missing unit. */
+    private static void draw(Map<String, BigInteger> missing, Map<String, BigInteger> spare) {
+        for (var it = missing.entrySet().iterator(); it.hasNext(); ) {
+            var e = it.next();
+            BigInteger have = spare.getOrDefault(e.getKey(), BigInteger.ZERO);
+            if (have.signum() <= 0) continue;
+            BigInteger take = have.min(e.getValue());
+            spare.put(e.getKey(), have.subtract(take));
+            if (take.equals(e.getValue())) it.remove();
+            else e.setValue(e.getValue().subtract(take));
+        }
     }
 
     /** Reserved token kinds (ADR-0007 D3): instance, object, intent. */
