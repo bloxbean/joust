@@ -31,7 +31,9 @@ class VerifierVectorsTest {
             assertEquals(expected(m),ReferenceChecker.check(v));
             if (m.site()!=null && m.site().contains("/")) {
                 assertEquals(m.site(),v.required("check").asText());
-                assertEquals(List.of(),ReferenceChecker.check(v,Set.of(m.site())),"still refused with its check disabled");
+                assertEquals(List.of(),ReferenceChecker.check(v,Set.copyOf(m.sites())),"still refused with its checks disabled");
+                // DC10: a body two checks decide together is still refused with either of them alone disabled.
+                if (m.sites().size()>1) for (String site : m.sites()) assertNotEquals(List.of(),ReferenceChecker.check(v,Set.of(site)),site);
             }
             if (m.code()!=null && m.code().equals("malformed")) return;
             // CCL hashes the received body bytes too (an implementation independent of the checker's walker).
@@ -112,14 +114,15 @@ class VerifierVectorsTest {
      */
     static final Map<String,String> EQUIVALENT = Map.ofEntries(
             Map.entry("balance/conserved#withdrawals", "withdrawal/amount admits only zero withdrawals, so the term is always 0"),
-            Map.entry("continuingOutput/otherToken#mintMethod", "a contract token beyond the target's needs a mint, which mint/action#method refuses in a method without mint"),
+            Map.entry("continuingOutput/otherToken#mintMethod", "#minted requires a positive mint of the unit, which mint/action#method refuses in a method without mint"),
             Map.entry("continuingOutput/thread#address", "the one thread token away from the contract address leaves no continuation (#count)"),
-            Map.entry("continuingOutput/thread#count", "with the token in another output #address refuses; with none, the token was burnt (mint/action, mint/instance)"),
+            Map.entry("continuingOutput/thread#count", "with the token in another output #address refuses; with none, the token was burnt (mint/action#notThread, mint/instance)"),
             Map.entry("continuingOutput/thread#notDestroy", "a destroy burns the token (mint/instance), so no output holds it"),
             Map.entry("continuingOutput/thread#single", "one thread token exists: mint/instance#single and the balance allow no second"),
             Map.entry("lowerBound/context#present", "a missing bound reads as 0, which #notBefore refuses"),
             Map.entry("upperBound/window#present", "a missing bound reads as 0, which #afterNow refuses"),
-            Map.entry("mint/action#notThread", "minting the thread token again gives the continuation two (continuingOutput/thread)"),
+            Map.entry("mint/action#notThread", "minting the thread token again leaves two to place (continuingOutput/thread); " +
+                    "burning it in an action leaves no continuation (continuingOutput/thread#count; reject-action-burns-thread needs both)"),
             Map.entry("mint/instance#quantity", "a creation minting two thread tokens leaves no single-token continuation; a destroy burning two cannot balance"),
             Map.entry("mint/instance#token", "the token derives from the seed; without a decoded seed the redeemer checks refuse"),
             Map.entry("notVerifiable/classify#verifierAnchor", "without the anchored verifier hash the withdrawal and its script cannot match (withdrawal/account, referenceInput/scripts)"),
@@ -128,6 +131,24 @@ class VerifierVectorsTest {
             Map.entry("redeemer/seed#index", "#walletInput requires a spent wallet input, whose index is below 65,536 in any transaction"),
             Map.entry("withdrawal/allowed#call", "a publication has no method, so no sends (#sends)"),
             Map.entry("withdrawal/allowed#single", "a second withdrawal needs another reward account, which withdrawal/account refuses"));
+
+    /**
+     * DC10: equivalent parts whose reasons cite each other. Single-part mutation cannot see such a pair, so dropping both
+     * must change some vector's verdict.
+     */
+    static final List<List<String>> COVERING = List.of(
+            List.of("continuingOutput/thread#address","continuingOutput/thread#count"),
+            List.of("continuingOutput/thread#count","mint/action#notThread"));
+
+    @TestFactory List<DynamicTest> coveringPairsDecideTogether() throws Exception {
+        var vectors = new ArrayList<JsonNode>();
+        try (var files = Files.list(DIR)) { for (var f : files.sorted().toList()) vectors.add(JSON.readTree(f.toFile())); }
+        return COVERING.stream().map(pair -> DynamicTest.dynamicTest(String.join(" + ",pair),() -> {
+            assertTrue(EQUIVALENT.keySet().containsAll(pair),"a covering pair lists equivalent parts");
+            assertTrue(vectors.stream().anyMatch(v -> ReferenceChecker.check(v).isEmpty()!=ReferenceChecker.check(v,Set.copyOf(pair)).isEmpty()),
+                    "no vector depends on "+pair);
+        })).toList();
+    }
 
     @TestFactory List<DynamicTest> everyPartDecidesSomeVector() throws Exception {
         var parts = parts();
