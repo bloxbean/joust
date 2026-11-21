@@ -1,6 +1,6 @@
 # ADR-0024: A dev playground — one generated UI over the dev host, offline and on DevKit
 
-**Status:** Proposed (r1). Design only.
+**Status:** Proposed (r2: the maintainer's answers to Q1–Q7 recorded in §10). Design only.
 **Date:** 2026-11-21
 **Requested by:** issue #155 ("Generic Joust dev playground for Java/JSC, offline simulation, DevKit and CIP-30
 wallets"). §11 maps its acceptance criteria to this ADR.
@@ -52,6 +52,8 @@ is a **dev-host client** whose chain is either an in-memory ledger or DevKit.
 | F15 | `devWallet({chain, mnemonic, index, networkId, confirm})` is a CIP-30 API with a `confirm(txHex)` prompt before signing; `DEVKIT_MNEMONIC` is the public DevKit test mnemonic. The dApp example offers DevKit wallets by index and any injected CIP-30 wallet (Yano named) | `js/state-client/src/devwallet.js:17`, `:43-80`; `examples/dapp/frontend/src/main.js:130-194` |
 | F16 | A description's argument schemas use `integer`, `bytes` (also `String` and ledger hashes), `list`, `map`, `constructor`/`anyOf` (records, sealed types), and the titled shapes `Bool`, `Optional` and `Value`; an untyped `PlutusData` is an empty schema | `julc-state-processor/.../DescriptionWriter.java:585-620`, `:742-761` |
 | F17 | `memoryLedger` imports `node:crypto` (and the engine as Node loads it): it does not run in a page as it is | `offline.js:14-15` |
+| F18 | The dApp example and the `create-joust` template connect wallets through the Cardano Foundation's framework-independent connector, `@cardano-foundation/cardano-connect-with-wallet-core` **0.2.12** (Apache-2.0): it lists injected CIP-30 wallets, including ones injected after load, enables one with `Wallet.connect(key, NetworkType, …)` (which checks mainnet against testnet), and remembers it. The dApp adds any other injected CIP-30 object and names Yano | `examples/dapp/frontend/package.json:12`, `examples/dapp/frontend/src/main.js:8-10`, `:125-191`, `:355-357`; `js/create-joust/template/package.json:19`, `template/page/main.js:8`; ADR-0015 §13.11 |
+| F19 | A DevKit's identity is readable: its admin API's `/local-cluster/api/admin/devnet` gives the genesis `startTime`, which `devkitClock` already reads, and which a reset devnet changes. DevKit's own files are not a stable place for another tool: yaci-cli keeps devnets under `~/.yaci-cli/local-clusters/` (a configurable home, `yaci.cli.home`), and the Docker DevKit keeps them inside the container | `js/joust-runtime/src/devkit.js:8-17`; yaci-devkit `d93538a` `applications/cli/.../ClusterConfig.java:66-81` |
 
 ## 2. Threat model and trust assumptions
 
@@ -117,7 +119,10 @@ page (browser) ──HTTP on 127.0.0.1, session token──▶ playground server
 - **`joust dev`** gains the playground at **`/playground`**, bound to the dev server's own network (DevKit mode). It
   never replaces or shadows the project's page at `/` (F5).
 - **Gradle projects:** the native `joust` gains `playground` (F8 lists what it runs today). It runs `./gradlew build
-  joustHostSpec` and then the playground server; how it obtains the server, which is Node code, is **Q1**.
+  joustHostSpec` and then the playground server. It runs a `@julclang/joust` of **its own version** from a
+  JOUST-owned per-user cache (`~/.joust/playground/<version>`), installed once with npm's integrity check and never
+  from the project; Node 22+ is a stated prerequisite of the Gradle playground (Q1, decided).
+- **One command everywhere:** `joust playground` is the same command in npm and Gradle projects (Q2, decided).
 - Builds go through the existing gates: `build()` with `acceptAbi`/`acceptLock` false unless the flags are given (F7),
   `./gradlew build` (with `checkJscAbi` and the lock check) for Gradle. Starting a playground never accepts an ABI or
   lock change and never writes into `contracts/`, the ABI manifests or the lock file.
@@ -136,8 +141,13 @@ The server answers the host's `chain/read` from one of two sources, chosen per s
   (F2) and each reference script's language.
 - **DevKit:** the configured network's provider (Yaci Store, or Ogmios; F6), through the server's existing chain
   routes. Only a network with an `admin` API and network id 0 can be used in this mode (v1); mainnet is impossible
-  (no flag enables it) and public testnets are **Q3**. `now` comes from the network's clock. The server persists the
-  journal and the high-water mark that ADR-0022 D8 requires per chain (**Q6**: where).
+  (no flag enables it), and public testnets are out of v1 (Q3, decided). `now` comes from the network's clock. The
+  server persists the journal and the high-water mark that ADR-0022 D8 requires per chain in a **per-user JOUST
+  state directory** (`~/.joust/state/`), never in the project (I10) and never in DevKit's own files (F19). A chain is
+  keyed by its network id, protocol magic and the DevKit's genesis `startTime` (F19), and the journal by project and
+  chain: a reset DevKit is a new chain, so it starts an empty journal and high-water mark, and the old chain's entries
+  are never reconciled against it. Entries of chains whose `startTime` is no longer served are pruned after they are
+  shown once (Q6, decided).
 
 The offline coverage is reported as the issue asks (D9).
 
@@ -149,8 +159,14 @@ The offline coverage is reported as the issue asks (D9).
   the page then starts a new offline session (the old ledger's funds are unreachable anyway).
 - **DevKit:** test identities are `devWallet`s over the public `DEVKIT_MNEMONIC` by index (F15), in the page, labelled
   **test-only** and offered only on a DevKit network; the server tops them up through the existing faucet route
-  (`/dev/topup`). **Connect wallet** lists any injected CIP-30 wallet (Yano named first, as in the dApp example). The
-  page refuses a wallet whose `getNetworkId()` or addresses do not match the session's network.
+  (`/dev/topup`). **Connect wallet** uses the Cardano Foundation's connector (F18,
+  `cardano-connect-with-wallet-core`, pinned exactly, as in the dApp and the template): it lists the injected CIP-30
+  wallets, Yano named first, plus any other injected CIP-30 object as the dApp does, and enables the chosen one with
+  `NetworkType.TESTNET`. The connector only selects and enables a wallet; the page's checks and the signing flow are
+  the playground's (D7). The page also refuses a wallet whose `getNetworkId()` or addresses do not match the
+  session's network. Network id 0 does not tell a DevKit from a public testnet: a wallet on another testnet offers
+  UTxOs the DevKit does not have, so `prepare` fails, and a body built over DevKit inputs is not valid elsewhere.
+  Connect wallet is offered in DevKit mode only (offline has no node a wallet could follow).
 - The **active signer** is chosen explicitly and shown beside every call. `@Quorum` co-signers are chosen from the
   session's identities; each signs in the page.
 
@@ -234,7 +250,9 @@ as `NotModelled`, and what it does not check (F3). A `NotModelled` refusal is sh
 DevKit", never as a contract failure. Attacks the scripts accepted (`acceptedAttacks()`) are shown as warnings on the
 transaction that produced them.
 
-The four unchecked rules of F3 are either added to the ledger or listed as unchecked (**Q4**).
+The four unchecked rules of F3 are added to `memoryLedger` in M1 under the node's error names (Q4, decided), so
+`joust test` users gain them too; until then the list says they are unchecked. The attack suite is on by default
+offline, with a session toggle that the mode banner shows (Q7, decided).
 
 ### D10. Scenarios
 
@@ -302,8 +320,8 @@ designation and retry rules (ADR-0016 M3).
 ## 6. Consequences
 
 - `@julclang/joust` gains the playground server, its page and a `playground` command; the native `joust` gains
-  `playground` for Gradle builds (Q1).
-- `memoryLedger` gains the inclusion slot per transaction and the reference script's language (D4), and possibly the
+  `playground` for Gradle builds, running its own version's server from a per-user cache (Q1).
+- `memoryLedger` gains the inclusion slot per transaction and the reference script's language (D4), and the
   F3 checks (Q4).
 - `@julclang/state-client`'s page verifier gains the publication shapes of the protocol's D13 (D7, F14), useful to any
   dev-host client in a browser.
@@ -322,9 +340,9 @@ server ship together) and are not a public API.
 
 | | Scope | Entry gate | Exit |
 |---|---|---|---|
-| **M1** | npm, offline: the server (D2, D3 `joust playground`, D8), the offline read adapter and ledger additions (D4), identities in the page (D5), the page (D6) for init, action, destroy and owned calls, the call flow (D7) with the page verifier's publication checks, reset, advance time, history, attacks (D9) | ADR-0022 M2 on `main`; this ADR accepted | I1–I3, I5, I6, I8–I10 for npm; a Counter walkthrough (create as Alice, increment as Alice, refused as Bob, reset) for a Java and a `.jsc` Counter in an npm project |
-| **M2** | Gradle: the native `joust playground` (Q1), `joustHostSpec` launch with the client snapshot and digest (F11), named views | M1; ADR-0022 M1c on `main` | I11 across all four combinations; the same walkthrough in a Java and a `.jsc` Gradle project; I6 with a Gradle rebuild |
-| **M3** | DevKit: `--mode devkit` and `/playground` on `joust dev`, provider reads, faucet, test identities, CIP-30 (Yano), network checks, settlement and the journal (ADR-0022 D8) | M1 | I4, I7; a DevKit walkthrough with a test identity and with a CIP-30 wallet (an injected test wallet in CI, Yano by hand); a wrong-network wallet refused; a node refusal and a confirmation timeout shown at their stages |
+| **M1** | npm, offline: the server (D2, D3 `joust playground`, D8), the offline read adapter and ledger additions (D4), identities in the page (D5), the page (D6) for init, action, destroy and owned calls, the call flow (D7) with the page verifier's publication checks, reset, advance time, history, attacks (D9), the four F3 checks in `memoryLedger` (Q4) | ADR-0022 M2 on `main`; this ADR accepted | I1–I3, I5, I6, I8–I10 for npm; a Counter walkthrough (create as Alice, increment as Alice, refused as Bob, reset) for a Java and a `.jsc` Counter in an npm project |
+| **M2** | Gradle: the native `joust playground` with its per-user server cache (Q1), `joustHostSpec` launch with the client snapshot and digest (F11), named views | M1; ADR-0022 M1c on `main` | I11 across all four combinations; the same walkthrough in a Java and a `.jsc` Gradle project; I6 with a Gradle rebuild |
+| **M3** | DevKit: `--mode devkit` and `/playground` on `joust dev`, provider reads, faucet, test identities, Connect wallet through the Cardano Foundation connector (F18) with Yano first, network checks, settlement and the per-user journal keyed by chain (Q6) | M1 | I4, I7; a DevKit walkthrough with a test identity and with a CIP-30 wallet (an injected test wallet in CI, Yano by hand); a wrong-network wallet refused; a node refusal and a confirmation timeout shown at their stages |
 | **M4** | Scenarios (D10), `@Quorum` co-signing across identities, and each host capability as it lands (keyed after M3a, maps after M3b, params and governors after ADR-0023) | M1 (scenarios); the host milestone for each capability | a scenario exported, imported and replayed to the same outcomes; each new call kind's walkthrough |
 
 Documentation (a two-identity Counter walkthrough, offline vs DevKit, npm and Gradle commands, limitations,
@@ -348,25 +366,29 @@ screenshots) is part of each milestone's exit for what it adds.
 
 ## 10. Open questions
 
-- **Q1. Node in Gradle projects.** The playground server is Node code; a Gradle project has no `node_modules`.
-  (a) the native `joust` runs the playground from a `@julclang/joust` of **its own version**, installed once into a
-  JOUST-owned cache (`~/.joust/playground/<version>`) with npm's integrity check, never from the project; (b) a Gradle
-  task resolves the npm package from the BloxBean Maven repository as an artifact; (c) a Java port of the server and
-  ledger (the JVM has JuLC's evaluator). Lean: (a), with Node 22+ as a stated prerequisite of the Gradle playground.
-- **Q2. Command shape.** The issue proposes `joust dev --playground`. Lean: `joust playground` (offline by default) as
-  the command, and `/playground` on `joust dev` for its network (D3), so `joust dev` never needs an offline mode.
-- **Q3. Public testnets** (preview, preprod). Lean: not in v1. Later with CIP-30 wallets only, no test identities, no
-  faucet, and tight TTLs.
-- **Q4. The ledger's unchecked rules** (F3: output value size, network ids, the auxiliary-data hash, extraneous
-  script witnesses). (a) add them to `memoryLedger` in M1 (each is small, and `offline()` tests gain them too); (b)
-  list them as unchecked. Lean: (a).
-- **Q5. Yano.** A third mode on Yano's npm testkit (a native local node) and a differential check of `memoryLedger`
-  against Yano's `ccl-ledger-rules`. Lean: out of this ADR; a follow-up issue after M3.
-- **Q6. Where DevKit's journal lives** (ADR-0022 D8's high-water mark per chain). (a) the project's `.joust/`
-  directory; (b) a per-user state directory keyed by project and chain. Lean: (b), so the playground writes nothing
-  into the project (I10).
-- **Q7. The attack suite offline.** It runs on every script transaction (F2) and costs time. Lean: on by default, with
-  a session toggle.
+The maintainer answered Q1–Q7 on PR #159 (2026-11-21). Each keeps its ID; the decision is recorded here and in the
+sections named.
+
+- **Q1. Node in Gradle projects. Decided: (a).** The native `joust` runs a `@julclang/joust` of its own version from a
+  JOUST-owned per-user cache (`~/.joust/playground/<version>`), installed once with npm's integrity check, never from
+  the project; Node 22+ is a prerequisite of the Gradle playground (D3, M2). Rejected: (b) the npm package as a Maven
+  artifact; (c) a Java port of the server and ledger.
+- **Q2. Command shape. Decided:** `joust playground` is the one command in npm and Gradle projects (offline by
+  default), and `joust dev` gains `/playground` for its network (D3). The issue's `joust dev --playground` is not added.
+- **Q3. Public testnets. Decided:** not in v1. v1 has offline and DevKit; on DevKit, Connect wallet uses the Cardano
+  Foundation's connector with Yano first (D5, F18).
+- **Q4. The ledger's unchecked rules. Decided: (a).** Output value size, network ids, the auxiliary-data hash and
+  extraneous script witnesses are added to `memoryLedger` in M1 (D9).
+- **Q5. Yano. Decided:** not in this ADR. A Yano mode or a differential check against Yano's ledger rules is a later,
+  separate discussion.
+- **Q6. Where DevKit's journal lives. Decided: (b),** a per-user JOUST state directory, keyed by project and chain,
+  where the chain's key includes the DevKit's genesis `startTime` (D4, F19). Not DevKit's own directory: the Docker
+  DevKit keeps its files in the container, yaci-cli's home is configurable, a DevKit may run on another machine, and JOUST should not write into another tool's files. Keying by `startTime` gives what DevKit's directory
+  would have given: a reset DevKit starts with an empty journal, and the old one is never reconciled against it.
+- **Q7. The attack suite offline. Decided:** on by default, with a session toggle (D9).
+
+Still open: the replacement of the issue's Gradle "common bundle" by the host's verified snapshot (§5, §11) awaits the
+maintainer's confirmation.
 
 ## 11. Issue #155's acceptance criteria
 
@@ -374,7 +396,7 @@ screenshots) is part of each milestone's exit for what it adds.
 |---|---|
 | An ADR specifies the common bundle, CLI/modes, security model, supported subset and exclusions | this ADR; the "common bundle" is the host's launch input (D1, §5: no separate bundle) |
 | One generated UI for Java and JSC in npm and Gradle | D1, D6, I11, M2 |
-| `joust dev --playground` launches offline without DevKit | D3, Q2 (`joust playground`), I3 |
+| `joust dev --playground` launches offline without DevKit | D3: `joust playground` (Q2, decided), I3 |
 | No handwritten HTML, page or client code | D6 |
 | ABI and lock gates respected | D3, I10 |
 | Counter, Alice/Bob, an action, before/after state, an authorisation failure | D5, D7, M1 exit |
@@ -390,10 +412,14 @@ screenshots) is part of each milestone's exit for what it adds.
 - `joust dev` answers every request with `access-control-allow-origin: *` (F5), including `POST /dev/topup` and the
   prepare service. On a DevKit this lets any website spend the faucet; with a public network it exposes the project's
   chain proxy. Worth its own issue.
-- `memoryLedger`'s unchecked rules (F3) affect `joust test` users today, independently of the playground (Q4).
+- `memoryLedger`'s unchecked rules (F3) affect `joust test` users today; Q4's decision fixes them in M1.
 - Windows: the JVM host on Windows relies on detection rather than diversion of stray output (ADR-0022 Q6), and CI
   runs the hosts on Linux only. The playground inherits both.
 
 ## Revision history
 
 - **r1** (2026-11-21): initial proposal.
+- **r2** (2026-11-21, responds to the maintainer's answers on PR #159 at `904ac9a8`): Q1 → (a), D3, M2; Q2 →
+  `joust playground` everywhere, D3, §11; Q3 → no public testnets in v1, Connect wallet through the Cardano Foundation
+  connector with Yano first (D5, F18, M3); Q4 → (a), D9, M1; Q5 → later, separately; Q6 → (b) keyed by DevKit's
+  `startTime` (D4, F19, M3); Q7 → on by default (D9). Added F18 and F19.
