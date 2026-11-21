@@ -34,7 +34,7 @@ class RecordedSessionsTest {
     }
     static ObjectNode record(String name) throws Exception {
         boolean bank = name.equals("bank");
-        var first = recording(bank ? "Bank-publish-1" : "unsupported-keyed");
+        var first = recording(bank ? "Bank-publish-1" : "registry-019-release");
         var params = first.required("params");
         String contract = (bank ? params : params.required("call")).required("contract").textValue();
         var entry = M1bTest.entry(Class.forName(contract+"Client"));
@@ -48,7 +48,7 @@ class RecordedSessionsTest {
             }
             success(c.rpc("initialize",hello));
             success(c.rpc("describe",obj().put("contract",contract)));
-            if (!bank) error("unsupported","keyed",c.rpc("prepare",params));
+            if (!bank) keyed(c,first);
             else bank(c,first,contract);
             success(c.rpc("shutdown",obj()));
             c.send(obj().put("method","exit"));
@@ -66,6 +66,104 @@ class RecordedSessionsTest {
                     ((ObjectNode)f.at("/host/result")).put("fingerprint","1".repeat(64));
             }
             return obj().set("frames",c.frames);
+        }
+    }
+
+    private static void keyed(Recorder c, JsonNode recording) throws Exception {
+        ObjectNode p = recording.required("params").deepCopy();
+        var call = p.withObject("/call");
+        var answers = answers(recording);
+        String designated = call.remove("designated").textValue();
+        error("refusal","needsDesignated",c.rpc("prepare",p));
+        call.put("designated",designated);
+        call.putArray("pageLimits").add(0).add(900);
+        var cooldown = c.rpc("prepare",p,answers);
+        error("refusal","cooldown",cooldown);
+        assertEquals(recording.at("/expected/validFrom"),cooldown.at("/error/data/retryAtSlot"));
+        call.putArray("pageLimits").add(60).add(900);
+        var result = success(c.rpc("prepare",p,answers));
+        var effects = result.at("/predicted/objects");
+        assertEquals(Set.of("updated","removed"),Set.of(effects.get(0).required("effect").asText(),effects.get(1).required("effect").asText()));
+        var built = result.required("prepared");
+        assertTrue(built.required("validFrom").asLong()>p.required("now").asLong());
+        // A handed-out attempt cannot disappear from the client's persisted record.
+        error("bad","operation",c.rpc("prepare",p,answers));
+        var attempts = call.withObject("/operation").withArray("attempts");
+        attempts.addObject().setAll(((ObjectNode)built).deepCopy().retain("txHash","validTo"));
+        error("refusal","pending",c.rpc("prepare",p,answers));
+        error("bad","conflict",c.rpc("settled",obj().put("status","discarded").put("tip",p.required("now").asLong())
+                .put("reservation",str(built,"reservation")).put("txHash",str(built,"txHash"))));
+        secondInstance(c,recording,p);
+        error("refusal","mayHaveLanded",c.rpc("prepare",p,q -> {
+            ObjectNode answer = answers.apply(q).deepCopy();
+            assertEquals(call.get("address"),q.get("address"));
+            answer.putArray("value");
+            return answer;
+        }));
+    }
+
+    // Two instances at one script address, each with an Entry named "other" after "name".
+    // Give the second operation its own wallet input while the first reservation is live.
+    private static void secondInstance(Recorder c, JsonNode recording, ObjectNode first) throws Exception {
+        ObjectNode params = first.deepCopy();
+        var call = params.withObject("/call");
+        String original = str(call,"instance"), instance = "ab".repeat(32), tx = "12".repeat(32);
+        call.put("designated",tx+"#2");
+        RegistryRecording.operation(call);
+        var replies = new HashMap<JsonNode,JsonNode>();
+        var copies = new ArrayList<ObjectNode>();
+        var type = org.julclang.state.examples.registry.RegistryClient.SPEC.keyed().stream()
+                .filter(t -> t.name().equals("Entry")).findFirst().orElseThrow();
+        var hex = HexFormat.of();
+        for (var exchange : recording.required("reads")) {
+            var q = exchange.required("request");
+            ObjectNode answer = exchange.required("answer").deepCopy();
+            replies.put(q,answer);
+            if (!q.path("kind").asText().equals("output") || answer.at("/value/reference_script_hash").isTextual()) continue;
+            ObjectNode clone = answer.required("value").deepCopy();
+            int index = clone.required("output_index").intValue();
+            clone.put("tx_hash",tx);
+            if (index < 2) {
+                String key = index == 0 ? "6e616d65" : str(call,"object");
+                retag(clone,original,instance,type,key);
+            }
+            copies.add(clone);
+            replies.put(obj().put("kind","output").put("ref",tx+"#"+index),answer.deepCopy().set("value",clone));
+        }
+        for (var entry : replies.entrySet()) {
+            if (!entry.getKey().path("kind").asText().equals("utxos")) continue;
+            var values = (ArrayNode)entry.getValue().required("value");
+            var headUnit = hex.formatHex(type.keyId(hex.parseHex(original),new byte[0]));
+            for (var u : values.deepCopy()) {
+                if (!u.path("amount").findValuesAsText("unit").stream().anyMatch(unit -> unit.endsWith(headUnit))) continue;
+                ObjectNode head = u.deepCopy();
+                head.put("tx_hash",tx).put("output_index",3);
+                retag(head,original,instance,type,"");
+                values.add(head);
+            }
+            for (var u : copies) if (u.get("address").equals(entry.getKey().get("address")))
+                ((ArrayNode)entry.getValue().required("value")).add(u);
+        }
+        Function<JsonNode,JsonNode> answer = q -> Objects.requireNonNull(replies.get(q),q::toString);
+        error("refusal","pending",c.rpc("prepare",params,answer)); // New designation, same reserved node.
+        call.put("instance",instance);
+        RegistryRecording.operation(call);
+        var listing = obj().put("now",params.required("now").asLong()).put("contract",str(call,"contract"))
+                .put("instance",instance).put("limit",20);
+        var items = success(c.rpc("objects",listing,answer)).required("items");
+        assertEquals(3,java.util.stream.StreamSupport.stream(items.spliterator(),false).filter(i -> i.has("object")).count());
+        assertTrue(success(c.rpc("prepare",params,answer)).at("/prepared/txHash").isTextual());
+    }
+
+    private static void retag(ObjectNode u,String original,String instance,org.julclang.state.runtime.KeyedType<?> type,String key) {
+        var hex = HexFormat.of();
+        String datum = str(u,"inline_datum").replace(original,instance);
+        u.put("inline_datum",datum).put("data_hash",hex.formatHex(
+                com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(hex.parseHex(datum))));
+        for (var a : u.required("amount")) {
+            String unit = str(a,"unit");
+            if (!unit.equals("lovelace")) ((ObjectNode)a).put("unit",unit.substring(0,56)+
+                    hex.formatHex(type.keyId(hex.parseHex(instance),hex.parseHex(key))));
         }
     }
 

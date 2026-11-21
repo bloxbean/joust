@@ -88,6 +88,7 @@ tasks.named('test', Test) {
     systemProperty 'joust.host.vectors', vectors.absolutePath
     if (providers.gradleProperty('joustHostFixtures').isPresent()) {
         systemProperty 'joust.host.record', 'true'
+        systemProperty 'joust.host.keyedOnly', providers.gradleProperty('joustHostFixtures').get() == 'keyed'
         outputs.upToDateWhen { false }
     }
     if (providers.gradleProperty('joustHostE2e').isPresent()) {
@@ -123,6 +124,7 @@ publishing.publications.withType(MavenPublication).configureEach {
     if (name == 'mavenJava') artifact(clientKit)
 }
 tasks.named('test') {
+    inputs.dir(rootProject.file('fixtures/m3/registry'))
     inputs.dir(rootProject.file('fixtures/host/verifier'))
     inputs.dir(rootProject.file('fixtures/host/sessions'))
     def archive = clientKit.flatMap { it.archiveFile }

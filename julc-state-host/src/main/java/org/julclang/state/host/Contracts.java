@@ -25,17 +25,26 @@ record Contracts(Map<String, Contract> all) {
         private String kind(String group, JsonNode m) {
             return m.path("kind").asText(group.equals("views") ? "view" : m.path("purpose").textValue());
         }
+        String keyedLimitation(String kind, JsonNode meta) {
+            if (kind.startsWith("keyed") && (!keyed || !meta.hasNonNull("keyed"))) return "missing keyed type description";
+            if ((kind.startsWith("keyed") || keyed && kind.equals("init")) && meta.path("needsService").asBoolean())
+                return "keyed verifier cannot bind service-supplied arguments";
+            // ADR-0022 D6/D11: a balance equation cannot determine both unknown script inputs.
+            if (kind.equals("keyedRemove") && !meta.path("ctx").asBoolean())
+                return "two-input removal requires Ctx to bind the target's value";
+            return null;
+        }
         String code(String kind, JsonNode meta) {
             if (unsupported != null) return unsupported;
-            if (kind.startsWith("keyed") || kind.equals("init") && keyed) return "keyed";
             if (kind.equals("view")) return views ? null : "views";
             var p = meta.path("policies");
             if (p.path("authorizedBy").size() > 0) return "authorizedBy";
+            if (keyedLimitation(kind,meta) != null) return "keyed";
             if (p.hasNonNull("migrateTo") || p.path("batched").asBoolean() || p.path("into").asBoolean() || p.hasNonNull("admits")
                     || p.path("receives").asBoolean() || meta.path("returns").path("deposits").asBoolean()
                     || meta.path("needsService").asBoolean() && !meta.hasNonNull("recipe")) return "unverifiable";
-            if (p.hasNonNull("quorum") && !Set.of("action", "destroy", "ownedAction", "ownedDestroy").contains(kind)) return "unverifiable";
-            return Set.of("init", "action", "destroy", "ownedInit", "ownedAction", "ownedDestroy").contains(kind) ? null : "unverifiable";
+            if (p.hasNonNull("quorum") && !Set.of("action", "destroy", "ownedAction", "ownedDestroy", "keyedAction", "keyedRemove", "keyedRetire").contains(kind)) return "unverifiable";
+            return Set.of("init", "action", "destroy", "ownedInit", "ownedAction", "ownedDestroy", "keyedInit", "keyedAction", "keyedRemove", "keyedRetire").contains(kind) ? null : "unverifiable";
         }
         ObjectNode describe() {
             var out = obj();

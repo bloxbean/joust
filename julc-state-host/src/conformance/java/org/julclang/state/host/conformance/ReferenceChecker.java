@@ -35,6 +35,7 @@ public final class ReferenceChecker {
     final Ledger ledger;
     final String payer, caller, policy, address, kind;
     final boolean publish, creation, destroy, owned;
+    boolean keyed;
     final int network;
     final Set<String> disabled, problems = new LinkedHashSet<>();
     final Map<String,BigInteger> consumed = new HashMap<>(), walletIn = new HashMap<>(), targetValue = new HashMap<>();
@@ -67,7 +68,7 @@ public final class ReferenceChecker {
         inputs = strings(plan.required("inputs"));
         kind = publish ? "publish" : call.required("kind").textValue();
         owned = kind.startsWith("owned");
-        creation = Set.of("init","ownedInit").contains(kind);
+        creation = Set.of("init","ownedInit","keyedInit").contains(kind);
         destroy = Set.of("destroy","ownedDestroy").contains(kind);
 
         minted = value(plan.required("mint"));
@@ -90,7 +91,7 @@ public final class ReferenceChecker {
             test("notVerifiable", false);
             if (!disabled.contains("notVerifiable") || meta==null) return;
         }
-        if (!creation && !publish) token = policy + call.required(owned ? "object" : "instance").textValue();
+        if (!creation && !publish && !keyed) token = policy + call.required(owned ? "object" : "instance").textValue();
         var resolved = v.required("resolved");
         for (String field : List.of("inputs","referenceInputs","collateral")) {
             for (String ref : strings(plan.required(field))) {
@@ -106,6 +107,7 @@ public final class ReferenceChecker {
         certificates();
         withdrawals();
         if (publish) publication();
+        else if (keyed) new KeyedRules(this).check();
         else new CallRules(this).check();
         var balance = new HashMap<>(consumed);
         add(balance,minted,1);
@@ -124,7 +126,7 @@ public final class ReferenceChecker {
                 !x.hasNonNull("params") && !description.required("definitions").has("org.julclang.state.api.MerkleMap");
         if (publish) return knownContract;
         if (!"prepare".equals(v.required("method").textValue()) ||
-                !Set.of("init","action","destroy","ownedInit","ownedAction","ownedDestroy").contains(kind)) return false;
+                !Set.of("init","action","destroy","ownedInit","ownedAction","ownedDestroy","keyedInit","keyedAction","keyedRemove","keyedRetire").contains(kind)) return false;
         for (var m : x.required(creation ? "creations" : "actions")) {
             if (kind.equals(m.required("kind").textValue()) && call.required("method").equals(m.required("name"))) meta = m;
         }
@@ -132,7 +134,14 @@ public final class ReferenceChecker {
         var p = meta.path("policies");
         var recipe = meta.path("recipe");
         boolean keyedInit = kind.equals("init") && !x.path("keyed").isEmpty();
-        return knownContract && !keyedInit && !p.path("batched").asBoolean() && !p.path("into").asBoolean() && !p.hasNonNull("admits") &&
+        if (keyedInit || kind.startsWith("keyed")) {
+            // A legacy description without the D11 tags and schemas cannot anchor a keyed transaction.
+            if (x.path("keyed").isEmpty()) return false;
+            for (var t : x.path("keyed")) if (!t.hasNonNull("typeId") || !t.hasNonNull("link")) return false;
+            keyed = true;
+            if (meta.path("needsService").asBoolean() || kind.equals("keyedRemove") && !meta.path("ctx").asBoolean()) return false;
+        }
+        return knownContract && !p.path("batched").asBoolean() && !p.path("into").asBoolean() && !p.hasNonNull("admits") &&
                 !p.hasNonNull("migrateTo") && !p.path("receives").asBoolean() && p.path("authorizedBy").isEmpty() &&
                 !meta.at("/returns/deposits").asBoolean() && (!meta.path("needsService").asBoolean() || recipe.isObject()) &&
                 recipe.path("reads").isEmpty() && (!creation || !p.hasNonNull("quorum")) &&
@@ -148,13 +157,15 @@ public final class ReferenceChecker {
             if (wallet(addr)) {
                 walletRefs.add(ref);
                 add(walletIn,amount,1);
-            } else if (!publish && !creation && spent == null && addr.equals(address) && ONE.equals(amount.get(token))) {
+            } else if (keyed && address.equals(addr)) {
+                // KeyedRules assigns target and predecessor by token, datum and ledger pointer.
+            } else if (!keyed && !publish && !creation && spent == null && addr.equals(address) && ONE.equals(amount.get(token))) {
                 spent = ref;
                 target = u;
                 targetValue.putAll(amount);
             } else test("scriptInput",false);
         }
-        if (!publish && !creation) test("scriptInput",spent != null);
+        if (!publish && !creation && !keyed) test("scriptInput",spent != null);
         var scripts = new HashSet<String>();
         var inline = ledger.tx.at(1).fields().get(7);
         if (inline != null) for (var script : inline.set()) {
@@ -171,7 +182,7 @@ public final class ReferenceChecker {
             var verifier = anchors.path("outputVerifier");
             boolean holder = address.equals(addr) && policy.equals(hash);
             boolean shared = addr.equals(verifier.path("address").textValue()) && Objects.equals(hash,verifier.path("hash").textValue()) && hash != null;
-            boolean instance = address.equals(addr) && call.hasNonNull("instance") &&
+            boolean instance = address.equals(addr) && call.hasNonNull("instance") && (!keyed || meta.at("/recipe/shared").asBoolean()) &&
                     ONE.equals(utxoValue(u).get(policy + call.get("instance").asText()));
             test("referenceInput", !publish && (holder || shared || instance));
             if (holder || shared) scripts.add(hash);
@@ -184,10 +195,20 @@ public final class ReferenceChecker {
         var upper = plan.required("validTo");
         var lower = plan.required("validFrom");
         BigInteger now = n(req,"now"), ttl = n(req,"ttlSlots");
-        test("upperBound",upper.isIntegralNumber() && upper.bigIntegerValue().compareTo(now)>0 &&
+        if (keyed) {
+            var page = call.path("pageLimits");
+            require(page.isMissingNode() || page.isArray() && page.size() == 2 &&
+                    page.get(0).isIntegralNumber() && page.get(1).isIntegralNumber());
+            BigInteger start = page.isMissingNode() ? valueOf(60) : page.get(0).bigIntegerValue();
+            BigInteger validity = page.isMissingNode() ? valueOf(900) : page.get(1).bigIntegerValue();
+            BigInteger from = lower.bigIntegerValue(), end = upper.bigIntegerValue();
+            test("keyedWindow", lower.isIntegralNumber() && upper.isIntegralNumber() && from.compareTo(now)>=0 &&
+                    from.compareTo(now.add(start))<=0 && end.compareTo(from)>0 &&
+                    end.compareTo(from.add(ttl))<=0 && end.compareTo(now.add(validity))<=0);
+        } else test("upperBound",upper.isIntegralNumber() && upper.bigIntegerValue().compareTo(now)>0 &&
                 upper.bigIntegerValue().compareTo(now.add(ttl))<=0 &&
                 (lower.isNull() || upper.bigIntegerValue().compareTo(lower.bigIntegerValue())>0));
-        if (!publish && (meta.path("ctx").asBoolean() || !meta.at("/policies/validBefore").isEmpty() ||
+        if (!keyed && !publish && (meta.path("ctx").asBoolean() || !meta.at("/policies/validBefore").isEmpty() ||
                 !meta.at("/policies/validAfter").isEmpty()))
             test("lowerBound",lower.isIntegralNumber() && lower.bigIntegerValue().compareTo(now)>=0);
 

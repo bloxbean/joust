@@ -79,19 +79,21 @@ final class CallRules {
         outputs();
     }
 
-    private JsonNode schema(String purpose) {
+    JsonNode schema(String purpose) {
         for (var validator : c.description.required("validators"))
             if (validator.required("title").asText().endsWith("."+purpose)) return codec.resolve(validator.at("/redeemer/schema"));
         throw new IllegalArgumentException("no validator for purpose");
     }
-    private static PlutusData data(String hex) {
+    static PlutusData data(String hex) {
         byte[] bytes = HEX.parseHex(hex);
         Cbor.read(bytes); // Validate nesting and full consumption before the schema decoder.
         return PlutusDataCborDecoder.decode(bytes);
     }
     private JsonNode decodeDatum(String hex) { return codec.decode(datumSchema,data(hex)); }
-    private static String ref(JsonNode ref) { return ref.required("txId").asText()+"#"+ref.required("index").asText(); }
-    private void methodRedeemer(JsonNode r,String purpose) {
+    static String ref(JsonNode ref) { return ref.required("txId").asText()+"#"+ref.required("index").asText(); }
+    private void methodRedeemer(JsonNode r,String purpose) { methodRedeemer(r, purpose, null); }
+
+    JsonNode methodRedeemer(JsonNode r, String purpose, String anchor) {
         try {
             var schema = schema(purpose);
             var constr = (PlutusData.ConstrData)data(r.required("data").asText());
@@ -101,7 +103,7 @@ final class CallRules {
             if (alt==null || !alt.required("title").equals(meta.at("/redeemer/constructor")) ||
                     constr.tag()!=meta.at("/redeemer/index").longValue() || !purpose.equals(meta.at("/redeemer/purpose").asText())) {
                 c.test("redeemer",false);
-                return;
+                return null;
             }
             var args = new HashSet<String>();
             for (var a : meta.required("args")) args.add(a.required("name").asText());
@@ -119,6 +121,7 @@ final class CallRules {
                     case "assetsIn" -> c.test("redeemer",matches(field,codec.encode(f,pay.has("assets") ?
                             pay.get("assets") : Ledger.JSON.createArrayNode())));
                     case "events" -> { /* Fully decoded by the anchored schema. The validator checks their values. */ }
+                    case "anchor" -> c.test("redeemer",anchor != null && anchor.equals(ref(decoded.required(name))));
                     case "instance" -> c.test("redeemer",call.required("instance").equals(decoded.required(name)));
                     case "seed" -> {
                         var seed = decoded.required("seed");
@@ -133,7 +136,8 @@ final class CallRules {
                 }
             }
             c.test("redeemer",args.isEmpty());
-        } catch (RuntimeException e) { c.test("redeemer",false); }
+            return decoded;
+        } catch (RuntimeException e) { c.test("redeemer",false); return null; }
     }
     private static boolean matches(PlutusData a,PlutusData b) {
         return Arrays.equals(PlutusDataCborEncoder.encode(a),PlutusDataCborEncoder.encode(b));

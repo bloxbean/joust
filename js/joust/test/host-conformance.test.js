@@ -258,12 +258,71 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       });
       assert.equal(i, reads.length, JSON.stringify(m.error));
       if (v.expected.kind) {
-        assert.equal(m.error?.data.kind, v.expected.kind); assert.equal(m.error?.data.code, v.expected.code);
+        const current = v.feature === 'keyed' ? fixture('keyed-needs-designated') : v;
+        assert.deepEqual(v.params, current.params);
+        assert.equal(m.error?.data.kind, current.expected.kind); assert.equal(m.error?.data.code, current.expected.code);
+        if ('retryAtSlot' in v.expected) assert.equal(m.error.data.retryAtSlot, v.expected.retryAtSlot);
       } else {
         assert.ok(m.result, JSON.stringify(m.error));
         verify(name, m.result);
       }
     } finally { await peer.close(); }
+  });
+  for (const name of readdirSync(join(path, 'verifier')).filter(f => f.startsWith('registry-')).map(f => f.slice(0,-5))) {
+    it('checks the live ' + name + ' result and isolated mutations', async () => {
+      const v = fixture('verifier/' + name);
+      start(contracts.filter(c => JSON.parse(c.description).preamble.title === v.request.call.contract));
+      try {
+        await initialize({ clock: v.clock });
+        let i = 0;
+        const m = await peer.rpc('prepare', v.request, q => {
+          const r = v.orderedReads[i++];
+          assert.deepEqual(q, r.request);
+          return r.answer;
+        });
+        assert.ok(m.result, JSON.stringify(m.error));
+        assert.equal(i, v.orderedReads.length);
+        verify(name, m.result);
+      } finally { await peer.close(); }
+    });
+  }
+  it('restores keyed operation identity and its designation before settlement', async () => {
+    const v = fixture('verifier/registry-019-release');
+    const p = structuredClone(v.request);
+    const { cbor, txHash, validTo } = v.result.prepared;
+    const operation = p.call.operation;
+    operation.attempts.push({ txHash, validTo });
+    start(contracts);
+    try {
+      await initialize({ clock: v.clock, restoring: true });
+      const restore = await peer.rpc('restore', { transactions: [{ cbor, operation, state: 'prepared' }], complete: true });
+      assert.ok(restore.result, JSON.stringify(restore.error));
+      const wallet = v.orderedReads[0];
+      const answer = q => { assert.deepEqual(q, wallet.request); return wallet.answer; };
+      assert.equal((await peer.rpc('prepare', p, answer)).error.data.code, 'pending');
+      const other = structuredClone(p);
+      other.call.instance = other.call.operation.instance = 'ab'.repeat(32);
+      assert.equal((await peer.rpc('prepare', other, answer)).error.data.code, 'operation');
+      const reservation = restore.result.reservations[0];
+      const settle = (status, tip, extra = {}) => peer.rpc('settled', { reservation, txHash, status, tip, ...extra });
+      assert.equal((await settle('discarded', p.now)).error.data.code, 'conflict');
+      assert.equal((await peer.rpc('prepare', p, q => ({ ...answer(q), value: [] }))).error.data.code, 'mayHaveLanded');
+      const slot = v.result.prepared.validFrom;
+      assert.equal((await settle('confirmed', slot + 2, { slot })).result.state, 'shallow');
+      assert.equal((await settle('rolledBack', slot + 2)).result.state, 'prepared');
+      assert.equal((await settle('expired', validTo + 2)).error.data.code, 'notExpired');
+      assert.equal((await settle('expired', validTo + 3)).result.state, 'expired');
+      assert.deepEqual((await peer.rpc('reset', { now: p.now, rewound: { tip: p.now } })).result, {});
+      assert.deepEqual((await peer.rpc('restore', { transactions: [{ cbor, operation, state: 'prepared' }],
+        complete: true })).result, restore.result);
+      assert.equal((await settle('confirmed', slot + 3, { slot })).result.state, 'confirmed');
+      assert.equal((await settle('rolledBack', slot + 3)).error.data.code, 'deepRollback');
+      assert.equal((await peer.rpc('prepare', p)).error.data.code, 'deepRollback');
+    } finally { await peer.close(); }
+  });
+  it('replays the fresh DevKit keyed workflow', { skip: !names.includes('Registry-init') && 'requires fresh DevKit recording' }, () => {
+    for (const n of ['Registry-init', 'Registry-grant-62', 'Registry-grant-61', 'Registry-cooldown', 'Registry-remove', 'Registry-retire'])
+      assert.ok(names.includes(n), n);
   });
   for (const f of history) it('M0 ' + f, async () => {
     const v = m0(f);

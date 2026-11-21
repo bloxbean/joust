@@ -1,0 +1,183 @@
+{
+  "method" : "prepare",
+  "params" : {
+    "now" : 1842,
+    "ttlSlots" : 20,
+    "call" : {
+      "contract" : "org.julclang.state.examples.registry.Registry",
+      "kind" : "keyedInit",
+      "method" : "grant",
+      "address" : "addr_test1qq49rerk8zl3r72yqwlgxkqvz49ht4urhzzzvhmkjr4eu9zyu6tu5528554d3pk0e3k47w9qghlkgtn48gfj23pzfs3sph0lx7",
+      "args" : {
+        "name" : "61",
+        "owner" : "2a51e47638bf11f94403be83580c154b75d783b884265f7690eb9e14"
+      },
+      "instance" : "167313e6a1f84349d280f10b493c774693cc4091048fc5ccf8baec7b57be3e11",
+      "designated" : "60dc3bbb192b50feca7343cdfde85324ad8183fb9a483af8ec83a9a233ba77ac#1",
+      "operation" : {
+        "contract" : "org.julclang.state.examples.registry.Registry",
+        "method" : "grant",
+        "designated" : "60dc3bbb192b50feca7343cdfde85324ad8183fb9a483af8ec83a9a233ba77ac#1",
+        "instance" : "167313e6a1f84349d280f10b493c774693cc4091048fc5ccf8baec7b57be3e11",
+        "key" : null,
+        "attempts" : [ ]
+      },
+      "pageLimits" : [ 0, 900 ]
+    }
+  },
+  "network" : {
+    "networkId" : 0,
+    "protocolMagic" : 42,
+    "mainnet" : false
+  },
+  "clock" : {
+    "zeroSlot" : 0,
+    "zeroTimeMs" : 1795226073000,
+    "slotLengthMs" : 1000
+  },
+  "time" : {
+    "settlementSlots" : 2,
+    "maxTtlSlots" : 900,
+    "maxNowAheadSlots" : 900
+  },
+  "limits" : {
+    "readsPerCall" : 256,
+    "readBytesPerCall" : 33554432,
+    "callDeadlineMs" : 60000
+  },
+  "initialSession" : {
+    "registered" : [ ]
+  },
+  "reads" : [ {
+    "request" : {
+      "address" : "addr_test1qq49rerk8zl3r72yqwlgxkqvz49ht4urhzzzvhmkjr4eu9zyu6tu5528554d3pk0e3k47w9qghlkgtn48gfj23pzfs3sph0lx7",
+      "kind" : "utxos"
+    },
+    "answer" : {
+      "tip" : {
+        "slot" : 1842,
+        "height" : 51,
+        "hash" : "fed6d8e22b97e6acc44c565b3e5525578854600b96c011c172abef4854b91759"
+      },
+      "value" : [ {
+        "tx_hash" : "60dc3bbb192b50feca7343cdfde85324ad8183fb9a483af8ec83a9a233ba77ac",
+        "output_index" : 1,
+        "address" : "addr_test1qq49rerk8zl3r72yqwlgxkqvz49ht4urhzzzvhmkjr4eu9zyu6tu5528554d3pk0e3k47w9qghlkgtn48gfj23pzfs3sph0lx7",
+        "amount" : [ {
+          "unit" : "lovelace",
+          "quantity" : 433858043
+        } ],
+        "data_hash" : null,
+        "inline_datum" : null,
+        "reference_script_hash" : null
+      }, {
+        "tx_hash" : "e4a88b13af3b1975ba59049d8a585207b3629d3c401776f2f525ae149d1e3ad4",
+        "output_index" : 3,
+        "address" : "addr_test1qq49rerk8zl3r72yqwlgxkqvz49ht4urhzzzvhmkjr4eu9zyu6tu5528554d3pk0e3k47w9qghlkgtn48gfj23pzfs3sph0lx7",
+        "amount" : [ {
+          "unit" : "lovelace",
+          "quantity" : 39570343
+        } ],
+        "data_hash" : null,
+        "inline_datum" : null,
+        "reference_script_hash" : null
+      }, {
+        "tx_hash" : "6a1f0303db44ac75a4b7c3b88d9873117369dd2cce53546d428b70a4ed92b024",
+        "output_index" : 2,
+        "address" : "addr_test1qq49rerk8zl3r72yqwlgxkqvz49ht4urhzzzvhmkjr4eu9zyu6tu5528554d3pk0e3k47w9qghlkgtn48gfj23pzfs3sph0lx7",
+        "amount" : [ {
+          "unit" : "lovelace",
+          "quantity" : 26174024
+        } ],
+        "data_hash" : null,
+        "inline_datum" : null,
+        "reference_script_hash" : null
+      } ]
+    }
+  }, {
+    "request" : {
+      "address" : "addr_test1wpkarn9r300pqey66zd77lcfzptk6xhddr5lpejwy8ar9mcqu76sr",
+      "kind" : "utxos"
+    },
+    "answer" : {
+      "tip" : {
+        "slot" : 1842,
+        "height" : 51,
+        "hash" : "fed6d8e22b97e6acc44c565b3e5525578854600b96c011c172abef4854b91759"
+      },
+      "value" : [ {
+        "tx_hash" : "60dc3bbb192b50feca7343cdfde85324ad8183fb9a483af8ec83a9a233ba77ac",
+        "output_index" : 0,
+        "address" : "addr_test1wpkarn9r300pqey66zd77lcfzptk6xhddr5lpejwy8ar9mcqu76sr",
+        "amount" : [ {
+          "unit" : "lovelace",
+          "quantity" : 65322440
+        } ],
+        "data_hash" : null,
+        "inline_datum" : null,
+        "reference_script_hash" : "6dd1cca38bde10649ad09bef7f0910576d1aed68e9f0e64e21fa32ef"
+      }, {
+        "tx_hash" : "e4a88b13af3b1975ba59049d8a585207b3629d3c401776f2f525ae149d1e3ad4",
+        "output_index" : 0,
+        "address" : "addr_test1wpkarn9r300pqey66zd77lcfzptk6xhddr5lpejwy8ar9mcqu76sr",
+        "amount" : [ {
+          "unit" : "lovelace",
+          "quantity" : 3300000
+        }, {
+          "unit" : "6dd1cca38bde10649ad09bef7f0910576d1aed68e9f0e64e21fa32ef167313e6a1f84349d280f10b493c774693cc4091048fc5ccf8baec7b57be3e11",
+          "quantity" : 1
+        } ],
+        "data_hash" : "6ceb010e4fcdabaa51face5055b3e89de0b7e9f1c6f620601821d00e92dac725",
+        "inline_datum" : "d8799f581c2a51e47638bf11f94403be83580c154b75d783b884265f7690eb9e14d87a80ff",
+        "reference_script_hash" : null
+      }, {
+        "tx_hash" : "e4a88b13af3b1975ba59049d8a585207b3629d3c401776f2f525ae149d1e3ad4",
+        "output_index" : 1,
+        "address" : "addr_test1wpkarn9r300pqey66zd77lcfzptk6xhddr5lpejwy8ar9mcqu76sr",
+        "amount" : [ {
+          "unit" : "lovelace",
+          "quantity" : 3300000
+        }, {
+          "unit" : "6dd1cca38bde10649ad09bef7f0910576d1aed68e9f0e64e21fa32ef4b7997120d1019f59cf4920002909b395fc3abad79d3f4cdc7becb3824",
+          "quantity" : 1
+        } ],
+        "data_hash" : "e9b2499e4f1e1b90ae2718f03250cf0a47dadd82b90d0f5a6aa6fb5e695c2dff",
+        "inline_datum" : "d8799f5820167313e6a1f84349d280f10b493c774693cc4091048fc5ccf8baec7b57be3e114000ff",
+        "reference_script_hash" : null
+      }, {
+        "tx_hash" : "6a1f0303db44ac75a4b7c3b88d9873117369dd2cce53546d428b70a4ed92b024",
+        "output_index" : 0,
+        "address" : "addr_test1wpkarn9r300pqey66zd77lcfzptk6xhddr5lpejwy8ar9mcqu76sr",
+        "amount" : [ {
+          "unit" : "lovelace",
+          "quantity" : 3300000
+        }, {
+          "unit" : "6dd1cca38bde10649ad09bef7f0910576d1aed68e9f0e64e21fa32ef4b0479d68668ad01ef2c1cdc5c3ac7634ba65b3e1b91f48eb072266728",
+          "quantity" : 1
+        } ],
+        "data_hash" : "ad9b047e75940ad8a1c8e59b6246fd277739ce6841785f36375ad8e824b1ea53",
+        "inline_datum" : "d87c9f5820167313e6a1f84349d280f10b493c774693cc4091048fc5ccf8baec7b57be3e1141621b000001a1fbec5178ff",
+        "reference_script_hash" : null
+      }, {
+        "tx_hash" : "6a1f0303db44ac75a4b7c3b88d9873117369dd2cce53546d428b70a4ed92b024",
+        "output_index" : 1,
+        "address" : "addr_test1wpkarn9r300pqey66zd77lcfzptk6xhddr5lpejwy8ar9mcqu76sr",
+        "amount" : [ {
+          "unit" : "lovelace",
+          "quantity" : 3300000
+        }, {
+          "unit" : "6dd1cca38bde10649ad09bef7f0910576d1aed68e9f0e64e21fa32ef4baf64305b3ccee9ccb3d83e101f44c01874b743ffef4f1156139a74eb",
+          "quantity" : 1
+        } ],
+        "data_hash" : "d52053ee92c799bf44f6ae363485d882a0c6b9dbe2c49bf1db9ddda91b3deea7",
+        "inline_datum" : "d87d9f5820167313e6a1f84349d280f10b493c774693cc4091048fc5ccf8baec7b57be3e11401b000001a1fbec5178d8799f4162581c2a51e47638bf11f94403be83580c154b75d783b884265f7690eb9e1400009f581c2a51e47638bf11f94403be83580c154b75d783b884265f7690eb9e14ff01ffff",
+        "reference_script_hash" : null
+      } ]
+    }
+  } ],
+  "expected" : {
+    "kind" : "refusal",
+    "code" : "cooldown",
+    "retryAtSlot" : 1918
+  }
+}
