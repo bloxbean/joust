@@ -138,4 +138,15 @@ class ReadsTest {
         assertEquals(HASH,b.getBlockService().getLatestBlock().getValue().getHash());
         assertEquals(1,requests.get());
     }
+
+    /** #149 reviews SA3, DA3: a read with no call bound is a typed abort; Object methods do not reach the chain. */
+    @Test void aReadOutsideACallIsATypedAbort() {
+        var b = Reads.backend(() -> null);
+        failure("internal", "internal", () -> b.getUtxoService().getUtxos(ADDRESS, 10, 1));
+        var service = b.getUtxoService();
+        assertEquals(service, service);
+        assertNotEquals(service, b.getEpochService());
+        assertEquals(System.identityHashCode(service), service.hashCode());
+        assertTrue(service.toString().contains("UtxoService"));
+    }
 }
