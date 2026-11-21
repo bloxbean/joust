@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r4). Design only.
+**Status:** Proposed (r6). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -121,8 +121,9 @@ codec's exact range or decimal strings). Absent `params` for a parameterized con
   the capability keeps today's entry); `describe` gives each method of such a contract the status its own code gives
   (a plain method is `served: true`; an `@AuthorizedBy` method follows D7). The contract-wide `params` code no longer
   masks a method's own code once `params` is served (F13).
-- **Fields that need a capability** (Y1): a client sends `params` only after `initialize` advertised `params`, and
-  `governor`, `operation.policy` and a restore entry's `params` only after the matching capability; an older host
+- **Fields that need a capability** (Y1): a client sends `params` only after `initialize` advertised `params`; `operation.policy` and a
+  restore entry's `params` only after `params` (both name a parameterized contract); and `governor` only after
+  `authorizedBy:script`; an older host
   refuses unknown fields (`bad/request`), so these answers are not `unsupported` there.
 
 ### D3. The client anchors on its own application, byte for byte (amends ADR-0022 D13 rule 2)
@@ -162,7 +163,7 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
 - **The npm fingerprint is versioned** (amends ADR-0022 D3/D4; X17, Y1): `initialize`'s `build` gains
   `fingerprintVersion`, **npm only** (the JVM host's digest already covers its whole class path, so it has no version
   2; it keeps refusing the field as an unknown `build` key, `bad/request`, and a client never sends it there).
-  Hosts that ship this ADR advertise capability **`fingerprint:2`** in every `initialize` answer. Because the field
+  Hosts from the release that ships M4c advertise capability **`fingerprint:2`** in every `initialize` answer. Because the field
   travels in the first request, before any capability is known, the client decides from the installed package it
   already resolves before launch (ADR-0022 D3): it sends `fingerprintVersion: 2` only when the resolved
   `@julclang/joust` package's own `package.json` version is at or above the release that ships M4c; an older host
@@ -315,14 +316,16 @@ Observable behaviour:
   the same name (the first entry wins).
 - **Capability gating** (Y1, Y2): a new client against an M3 host (the field-gating rows of D7), and `initialize`/
   `describe` of Treasury with and without `params`.
+- **Governor registration** (Y11): mutation vectors refused for a Conway kind-7 registration, a redeemer or witness
+  script, collateral and a reference input in a governor registration.
 
 ### D9. Milestones (ADR-0022 §8 numbering continues)
 
 | Milestone | Scope | Entry | Exit |
 |---|---|---|---|
-| **M4a** | `@Params` contracts on both hosts (D2, D3, D4's JVM path for params), application vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved | application vectors agree across JuLC, Aiken and the kit; Treasury's non-governed calls served and checked on both hosts; I16, I20 |
+| **M4a** | `@Params` contracts on both hosts (D2, D3, D4's JVM path for params), application vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved; the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths) | application vectors agree across JuLC, Aiken and the kit; Treasury's non-governed calls served and checked on both hosts; I16, I20 |
 | **M4b** | Key-credential `@AuthorizedBy` (D4, D5 signers) | M4a | key vectors and mutations on both hosts; capability `authorizedBy:key`; I17, I19 |
-| **M4c** | Plutus governors (D4, D5, D6) | M4b | Treasury + Guardian recorded on a fresh DevKit (registration, `freeze`, payer ≠ owner); every D5/D8 mutation rejected with its code; capability `authorizedBy:script`; I18, I19 |
+| **M4c** | Plutus governors (D4, D5, D6) and fingerprint version 2 with capability `fingerprint:2` (D4) | M4b | Treasury + Guardian recorded on a fresh DevKit (registration, `freeze`, payer ≠ owner); every D5/D8 mutation rejected with its code; capability `authorizedBy:script`; I18, I19 |
 
 ## 4. Invariants
 
@@ -333,7 +336,7 @@ Observable behaviour:
 | I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, its V3 script in the witness set, and exactly one `Approvals` naming this policy, instance and action at that withdrawal's pointer; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
 | I19 | The body's required signers equal exactly D5's signer set | D5 | M4b/M4c mutations, payer ≠ owner |
 | I20 | Reservations exclude out-refs across all parameterizations in a session; a keyed operation retried or restored with params giving another policy is refused; other pending transactions restore as under ADR-0022 | D2 | identity tests |
-| I21 | A client that sends no fingerprint version gets the same digest and the same contract entries as under ADR-0022 on every project, and no capability whose calls it could issue changes their answers (a host with `params` reports `parameterized` only where ADR-0022 reported `unsupported:"params"`) | D2, D4, D7 | old-client vector |
+| I21 | A client that sends no fingerprint version gets the same digest as under ADR-0022 on every project; its contract entries are ADR-0022's except that a host advertising `params` reports `parameterized: true` where ADR-0022 reported `unsupported:"params"`; and every call it can issue without the new fields gets ADR-0022's answer | D2, D4, D7 | old-client vector |
 
 ## 5. Alternatives considered
 
@@ -417,3 +420,6 @@ including one with `validators.json`, and no script governors (I21). A restore e
   - Y12 → §2 (the withdraw-zero liveness limit and its recovery);
   - Y13 → D4 (the client's half of the version-2 binding);
   - Y5–Y9 left for M4a's entry review (listed in the PR reply).
+- **r6** (2026-11-21, responds to the design and security round-2 review of `289ff3be`, both approved): Y14 →
+  D4 (`fingerprint:2` ships with M4c), D9 (M4c scope), D2 (each gated field names its capability), I21 restated
+  exactly; Y15 → status line, D9 M4a entry lists the deferred Y5–Y9; Y11 → D8 (registration mutation vectors).
