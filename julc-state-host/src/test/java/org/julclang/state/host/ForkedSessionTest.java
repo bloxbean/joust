@@ -191,7 +191,8 @@ class ForkedSessionTest {
                 boolean files = line.matches(".* (creat|mkdirat?|unlinkat?|renameat2?|rename|truncate|linkat?|symlinkat?)\\(.*");
                 // The JVM's own perf-data file (/tmp/hsperfdata_<user>/<pid>, created before serving and removed at
                 // exit) is the one recorded exception (dev-host-1 I10; #150 review SA7).
-                if (line.contains("/hsperfdata_")) continue;
+                // Only its removal is exempt: any other operation on the perf-data path still fails (#150 review SA8).
+                if (line.matches(".* unlink(at)?\\(.*\"/tmp/hsperfdata_[^/\"]+/[0-9]+\".*") && !socket && !process && !opened) continue;
                 assertFalse(opened || process || socket || files, line);
             }
         }
