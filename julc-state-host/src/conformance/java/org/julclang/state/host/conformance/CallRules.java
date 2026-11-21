@@ -186,7 +186,6 @@ final class CallRules {
         var continuation = new HashMap<String,BigInteger>();
         var tagged = new HashMap<String,BigInteger>();
         var sends = new HashMap<String,BigInteger>();
-        var topUp = ZERO;
         var outputs = c.plan.required("outputs");
         for (int i = 0; i < outputs.size(); i++) {
             var o = outputs.get(i);
@@ -209,13 +208,12 @@ final class CallRules {
                     c.test("walletOutput/claimedTag",!ok || !claimed.contains(i));
                     if (ok) add(tagged,amount,1);
                 } else if (!claimed.contains(i)) c.test("walletOutput/change",c.payer.equals(addr)); // SC3: change stays at the payer
-                if (claim) {
-                    // A send's output holds the minimum ADA the payer adds to it (a token send needs it): allow that much.
-                    add(sends,amount,1);
-                    var lovelace = amount.getOrDefault("lovelace",ZERO);
-                    var raw = c.ledger.outputs.get(i);
-                    topUp = topUp.add(lovelace.min(n(c.pp,"coins_per_utxo_size").multiply(valueOf(160L + raw.end - raw.start))));
-                } else add(back,amount,1);
+                // A claimed send is the script's release to the wallet: it still returns to the wallet in the net
+                // outflow (unchanged), and it is subtracted from what third parties may receive, so the release cannot
+                // go elsewhere while the wallet's own change stands in for the send. No min-ADA slack: as the page
+                // verifier (fix/verify-wallet-sends), the third-party bound alone protects the wallet.
+                if (claim) add(sends,amount,1);
+                add(back,amount,1);
             } else if (addr.equals(c.address) && c.token!=null && ONE.equals(amount.get(c.token))) {
                 continuations++;
                 add(continuation,amount,1);
@@ -235,7 +233,7 @@ final class CallRules {
         var created = continuation.getOrDefault("lovelace",ZERO);
         if (c.creation) c.test("deposit/creation",created.compareTo(payment.add(n(c.x,"minAda")))<=0);
         var allowed = new HashMap<>(offer);
-        allowed.put("lovelace",n(c.plan,"fee").add(c.creation ? created : payment).add(topUp));
+        allowed.put("lovelace",n(c.plan,"fee").add(c.creation ? created : payment));
         c.test("netOutflow/wallet",within(net,allowed));
         var released = new HashMap<>(c.targetValue);
         add(released,continuation,-1);
