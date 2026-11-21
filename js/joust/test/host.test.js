@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { bundle, client, fixture, repo } from './host/client.js';
+import { bundle, client, closure, fixture, repo } from './host/client.js';
 import { encode, frameReader, MAX_BODY } from '../src/host/frames.js';
 
 test('D2 fragmented frames, UTF-8 byte lengths, and the exact header/body caps', () => {
@@ -127,8 +127,38 @@ test('D10 busy while a cancelled CPU call drains, abandoned generation, deadline
   assert.equal((await peer.rpc('count', {})).result, 1);
 });
 
-test('D3 refuses a runtime import resolving outside the project before loading it', async t => {
+test('I7 the fingerprint covers the host closure, and the host runs the bytes it hashed (#154 review M2-6)', async t => {
   const { root, build } = probe(t);
+  const init = fixture('sessions/bank').frames[2].client.params;
+  // A digest of another closure: each file is in the fingerprint.
+  for (const file of closure) {
+    const path = join(root, file);
+    const original = readFileSync(path);
+    writeFileSync(path, Buffer.concat([original, Buffer.from('\n')]));
+    const changed = bundle(root);
+    writeFileSync(path, original);
+    assert.notEqual(changed.digest, build.digest, file);
+  }
+  // Edited on disk after launch: the client's digest of the files now is refused, and the hashed bytes still run.
+  const worker = join(root, 'node_modules/@julclang/joust/src/host/worker.js');
+  const peer = client(root);
+  t.after(() => peer.close());
+  assert.equal((await peer.rpc('describe', {})).error.data.code, 'request');
+  writeFileSync(worker, 'throw Error("the edited worker ran");\n' + readFileSync(worker, 'utf8'));
+  assert.equal((await peer.rpc('initialize', { ...init, build: bundle(root) })).error.data.code, 'stageMismatch');
+  assert.equal((await peer.rpc('initialize', { ...init, build })).result, 0);
+});
+
+test('a missing runtime installation is a stage mismatch (#154 review M2-5)', async t => {
+  const { root, build } = probe(t);
+  rmSync(join(root, 'node_modules/@julclang/joust-runtime'), { recursive: true });
+  const peer = client(root);
+  t.after(() => peer.close());
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build })).error.data.code, 'stageMismatch');
+});
+
+test('D3 refuses a runtime import resolving outside the project before loading it', async t => {
+  const { root } = probe(t);
   const dep = join(root, 'node_modules/@julclang/joust-runtime/src/exnref.js');
   const outside = mkdtempSync(join(tmpdir(), 'joust-outside-'));
   t.after(() => rmSync(outside, { recursive: true, force: true }));
@@ -136,24 +166,24 @@ test('D3 refuses a runtime import resolving outside the project before loading i
   rmSync(dep);
   symlinkSync(join(outside, 'probe.js'), dep);
   const peer = client(root);
-  const r = await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build });
+  const r = await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build: bundle(root) });
   assert.equal(r.error.data.code, 'outsideProject');
   await peer.close();
   assert.notEqual(peer.child.exitCode, 0);
 });
 
 test('D4 rejects a mismatched installed runtime before the engine starts', async t => {
-  const { root, build } = probe(t);
+  const { root } = probe(t);
   const pkg = join(root, 'node_modules/@julclang/joust-runtime/package.json');
   const runtime = JSON.parse(readFileSync(pkg, 'utf8'));
   writeFileSync(pkg, JSON.stringify({ ...runtime, version: '0.0.1' }));
   const peer = client(root);
   t.after(() => peer.close());
-  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build })).error.data.code, 'runtimeVersion');
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build: bundle(root) })).error.data.code, 'runtimeVersion');
 });
 
 test('D3 checks transitive runtime imports before evaluating the imported module', async t => {
-  const { root, build } = probe(t);
+  const { root } = probe(t);
   const outside = mkdtempSync(join(tmpdir(), 'joust-transitive-'));
   t.after(() => rmSync(outside, { recursive: true, force: true }));
   const file = join(outside, 'probe.mjs');
@@ -162,11 +192,11 @@ test('D3 checks transitive runtime imports before evaluating the imported module
   writeFileSync(entry, 'import ' + JSON.stringify(file) + ';\n' + readFileSync(entry, 'utf8'));
   const peer = client(root);
   t.after(() => peer.close());
-  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build })).error.data.code, 'outsideProject');
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build: bundle(root) })).error.data.code, 'outsideProject');
 });
 
-test('D3 checks nested CommonJS requires and D4 reports asynchronous image load errors', async t => {
-  const { root, build } = probe(t);
+test('D3 refuses modules outside the hashed closure and D4 reports asynchronous image load errors', async t => {
+  const { root } = probe(t);
   const modules = join(root, 'node_modules/@julclang/joust-runtime/src');
   const outside = mkdtempSync(join(tmpdir(), 'joust-required-'));
   t.after(() => rmSync(outside, { recursive: true, force: true }));
@@ -178,11 +208,11 @@ test('D3 checks nested CommonJS requires and D4 reports asynchronous image load 
   writeFileSync(entry, "import './nested.cjs';\n" + original);
   const init = fixture('sessions/bank').frames[2].client.params;
   const a = client(root);
-  try { assert.equal((await a.rpc('initialize', { ...init, build })).error.data.code, 'outsideProject'); }
+  try { assert.equal((await a.rpc('initialize', { ...init, build: bundle(root) })).error.data.code, 'outsideProject'); }
   finally { await a.close(); }
   writeFileSync(entry, original);
   writeFileSync(join(modules, '../engine/joust-runtime.js'), "Promise.reject(Error('invalid image'))");
   const b = client(root);
-  try { assert.equal((await b.rpc('initialize', { ...init, build: bundle(root, []) })).error.data.code, 'runtimeVersion'); }
+  try { assert.equal((await b.rpc('initialize', { ...init, build: bundle(root) })).error.data.code, 'runtimeVersion'); }
   finally { await b.close(); }
 });

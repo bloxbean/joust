@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import { encode, frameReader, MAX_BODY } from './frames.js';
-import { failure, launchPaths } from './launch.js';
+import { failure } from './launch.js';
 
 const rpcCode = { bad: -32602, internal: -32603, unsupported: -32003, refusal: -32001 };
 function error(id, { kind, code, message }) {
@@ -8,9 +8,19 @@ function error(id, { kind, code, message }) {
     data: { kind, code, message, sites: [], retryAtSlot: null } } });
 }
 
+// The worker starts from this script, registers the closure's hooks from the hashed bytes, then imports its module
+// from those bytes too (a worker does not inherit the entry thread's hooks).
+const BOOTSTRAP = `
+const { register } = require('node:module');
+const { workerData } = require('node:worker_threads');
+register('data:text/javascript,' + encodeURIComponent(workerData.hooks), { data: { root: workerData.root, manifest: workerData.manifest } });
+import(workerData.entry).catch(e => { setImmediate(() => { throw e; }); });
+`;
+
 // The event loop owns the terminal latch. The worker may block on a reverse read or
 // execute Wasm, but cannot commit a transaction without an acknowledgement on its FIFO.
-export function serve(writeFrame) {
+// deferred: a launch failure for initialize.
+export function serve({ writeFrame, launch, deferred }) {
   let worker, active, generation = 0, initialized = false, deadline = 60_000, stopped = false, backpressure = false;
   const reader = frameReader(accept, stop);
   function stop(reason) {
@@ -80,7 +90,8 @@ export function serve(writeFrame) {
       stop('response id exceeds frame budget');
   }
   function startWorker() {
-    const w = new Worker(new URL('./worker.js', import.meta.url), { stdout: true, stderr: true, execArgv: ['--conditions=joust-host'] });
+    const workerData = { ...launch, entry: new URL('./worker.js', import.meta.url).href };
+    const w = new Worker(BOOTSTRAP, { eval: true, workerData, stdout: true, stderr: true, execArgv: ['--conditions=joust-host'] });
     w.stdout.pipe(process.stderr, { end: false });
     w.stderr.pipe(process.stderr, { end: false });
     w.on('error', e => { if (worker === w) stop(e.message); });
@@ -134,7 +145,7 @@ export function serve(writeFrame) {
     active = call;
     try {
       if (!worker) {
-        launchPaths(process.cwd());
+        if (deferred) throw deferred;
         worker = startWorker();
       }
       const buffer = new SharedArrayBuffer(MAX_BODY + 8);
@@ -150,7 +161,7 @@ export function serve(writeFrame) {
       worker.postMessage({ generation, buffer, frame: text, ...(!initialized ? { build: msg.params?.build } : {}) });
     } catch (e) {
       const outside = e.code === 'outsideProject';
-      const body = error(msg.id, failure('unsupported', outside ? 'outsideProject' : 'runtimeVersion', e.message));
+      const body = error(msg.id, e.kind ? e : failure('internal', 'internal', String(e.message)));
       call.ended = true;
       if (!send(body, () => outside ? stop(e.message) : release(call))) stop('response id exceeds frame budget');
     }

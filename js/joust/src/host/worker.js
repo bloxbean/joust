@@ -1,10 +1,18 @@
-import Module, { isBuiltin, register } from 'node:module';
-import { parentPort } from 'node:worker_threads';
-import { pathToFileURL } from 'node:url';
+import Module, { isBuiltin } from 'node:module';
+import { parentPort, workerData } from 'node:worker_threads';
 import { guard } from './guard.js';
-import { launchPaths, snapshot } from './launch.js';
+import { snapshot } from './launch.js';
 
+// The bootstrap registered the closure's module hooks before importing this module from its hashed bytes.
 guard();
+// CommonJS has its own resolver. Nothing in the closure is CommonJS: refuse every file it would load.
+const resolve = Module._resolveFilename;
+Module._resolveFilename = function(...args) {
+  const file = resolve.apply(this, args);
+  if (isBuiltin(file)) return file;
+  throw Object.assign(new Error('CommonJS module outside the host closure'), { code: 'outsideProject' });
+};
+const launch = workerData;
 let service;
 parentPort.on('message', async m => {
   if (m.commit) { service.commit(); return; }
@@ -21,16 +29,8 @@ parentPort.on('message', async m => {
   };
   try {
     if (!service) {
-      const paths = launchPaths(process.cwd());
-      const data = snapshot(paths, build);
-      // Async ESM hooks and CommonJS have separate resolution paths in Node 22.
-      register('./resolve.js', { parentURL: import.meta.url, data: paths.root });
-      const resolve = Module._resolveFilename;
-      Module._resolveFilename = function(...args) {
-        const file = resolve.apply(this, args);
-        return isBuiltin(file) ? file : paths.inside(file);
-      };
-      const runtime = await import(pathToFileURL(paths.service));
+      const data = snapshot(launch, build);
+      const runtime = await import(launch.service);
       try { service = await runtime.engineService(data); }
       catch (e) { throw Object.assign(e, { kind: 'unsupported', code: 'runtimeVersion' }); }
     }
@@ -40,6 +40,6 @@ parentPort.on('message', async m => {
     const outside = e.code === 'outsideProject';
     const kind = e.kind ?? (outside ? 'unsupported' : service ? 'internal' : 'bad');
     const code = e.kind || outside ? e.code : service ? 'internal' : 'stageMismatch';
-    parentPort.postMessage({ generation, failure: { kind, code, message: e.message } });
+    parentPort.postMessage({ generation, failure: { kind, code, message: String(e?.message ?? e) } });
   }
 });

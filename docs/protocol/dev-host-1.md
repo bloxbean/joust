@@ -193,15 +193,17 @@ Build the project with its installed `joust build`. Set the working directory to
 node node_modules/@julclang/joust/bin/joust-host.js --stdio
 ```
 
-The client checks the real paths of the package, the entry and the installed runtime before launching. The host checks its module closure and eagerly loads the verified engine and contracts at initialize. A module outside the project gives `unsupported/outsideProject`. Rebuilding or cleaning the project after initialize leaves the current session pinned to the bytes it loaded. Start a new host to use a new build.
+The client checks the real paths of the package, the entry and the installed runtime before launching. At launch the entry reads its JavaScript closure (the files listed below under the two packages) into memory once, before any of it runs. Node module hooks then evaluate exactly those bytes in the main thread and in the engine worker, and refuse every other module. The host eagerly loads the verified engine and contracts at initialize. A module outside the project, or outside the closure, gives `unsupported/outsideProject`. A missing package or closure file gives `bad/stageMismatch`. Editing, rebuilding or cleaning the project after launch leaves the session pinned to the bytes it loaded: the closure from launch, and the build and engine from initialize. Start a new host to use new files. Node reads the entry file itself before any hook exists, and the entry reads it again immediately, so a change to the entry in that window alone is not detected.
 
-Set `build.snapshot` to the absolute project root. For the npm fingerprint there is one directory entry at ordinal 0. Hash the following files with SHA-256, using the installed runtime's actual project-relative path when nested.
+Set `build.snapshot` to the absolute project root. For the npm fingerprint there is one directory entry at ordinal 0. Hash the following files with SHA-256. Use each file's real path relative to the project root, which differs from these when a package is installed nested or linked.
 
 - `build/joust/contracts.json`
 - `node_modules/@julclang/joust-runtime/engine/joust-runtime.js`
 - `node_modules/@julclang/joust-runtime/engine/joust-runtime.js.wasm`
+- `node_modules/@julclang/joust-runtime/package.json`, `src/service.js`, `src/host-service.js` and `src/exnref.js` (the runtime's closure)
+- `node_modules/@julclang/joust/package.json`, `bin/joust-host.js`, and `src/host/frames.js`, `guard.js`, `launch.js`, `resolve.js`, `transport.js` and `worker.js` (the host's closure)
 
-Sort by UTF-8 relative path bytes using forward slashes. For each file append `<lowercase hex hash> 0 dir <path>\n` (one LF), then SHA-256 the concatenated UTF-8 lines. Send the lowercase hex digest in `build.digest`. The host returns it as `fingerprint`. A mismatch gives `bad/stageMismatch`.
+Sort by UTF-8 relative path bytes using forward slashes. For each file append `<lowercase hex hash> 0 dir <path>\n` (one LF), then SHA-256 the concatenated UTF-8 lines. Send the lowercase hex digest in `build.digest`. The host returns it as `fingerprint`. A mismatch gives `bad/stageMismatch`. The host hashes the closure's bytes as read at launch, so a client that hashes the files later detects an edit made after launch as a mismatch.
 
 `versions.build` comes from the contracts' common `built` field. `versions.engine.joust` identifies the installed runtime package, `image` identifies its Web Image, and `julc` identifies the engine's evaluator. Unknown versions are null. Incompatible packages or engine versions give `unsupported/runtimeVersion`.
 
