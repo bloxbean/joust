@@ -58,7 +58,7 @@
             "code": {
               "anyOf": [
                 {
-                  "enum": ["protocol", "runtimeVersion", "params", "maps", "m1b", "notYet", "keyed", "unverifiable", "authorizedBy"]
+                  "enum": ["protocol", "runtimeVersion", "outsideProject", "views", "params", "maps", "m1b", "notYet", "keyed", "unverifiable", "authorizedBy"]
                 },
                 {"type": "string", "pattern": "^read:[A-Za-z][A-Za-z0-9.]*$"}
               ]

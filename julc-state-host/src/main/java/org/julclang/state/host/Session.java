@@ -27,7 +27,10 @@ final class Session implements Transport.Handler {
             return new Clock(number(n, "zeroSlot", 0), number(n, "zeroTimeMs", 0), number(n, "slotLengthMs", 1));
         }
     }
-    private final Launch launch;
+    private final String fingerprint;
+    private final java.util.concurrent.Callable<Contracts> catalog;
+    private final java.util.function.Supplier<JsonNode> versions;
+    private final boolean namedViews;
     private final ThreadLocal<Reads> reading = new ThreadLocal<>();
     private final ThreadLocal<TransactionEvaluator> evaluating = new ThreadLocal<>();
     private final BackendService backend = Reads.backend(reading::get);
@@ -41,23 +44,37 @@ final class Session implements Transport.Handler {
     private long highestNow = -1;
     private boolean shutdown;
 
-    Session(Launch launch) { this.launch = launch; }
+    Session(Launch launch) {
+        this(launch.fingerprint(), () -> Contracts.load(launch, Session.class.getClassLoader()), Session::jvmVersions, true);
+    }
+    Session(String fingerprint, java.util.concurrent.Callable<Contracts> catalog,
+            java.util.function.Supplier<JsonNode> versions, boolean namedViews) {
+        this.fingerprint = fingerprint;
+        this.catalog = catalog;
+        this.versions = versions;
+        this.namedViews = namedViews;
+    }
     public long deadlineMs() { return limits == null ? 60_000 : limits.deadline; }
 
     public Transport.Reply execute(Call call, JsonNode p) throws Exception {
+        return execute(call.method, params -> call.reverse("chain/read", params), call::whileLive, p);
+    }
+
+    Transport.Reply execute(String method, Reads.Peer peer, java.util.function.Consumer<Runnable> whileLive,
+                            JsonNode p) throws Exception {
         if (shutdown) throw bad("session has shut down");
-        if (call.method.equals("initialize")) {
+        if (method.equals("initialize")) {
             if (contracts != null) throw bad("session already initialized");
             return initialize(p);
         }
         if (contracts == null) throw bad("initialize first");
-        return switch (call.method) {
+        return switch (method) {
             case "describe" -> {
                 fields(p, "contract");
                 yield new Transport.Reply(contracts.get(str(p, "contract")).describe());
             }
-            case "prepare", "publish", "deployment", "prerequisites", "view" -> withReads(call, p);
-            case "instances", "objects" -> p.has("listing") ? listings.resume(call.method, p) : withReads(call, p);
+            case "prepare", "publish", "deployment", "prerequisites", "view" -> withReads(method, peer, whileLive, p);
+            case "instances", "objects" -> p.has("listing") ? listings.resume(method, p) : withReads(method, peer, whileLive, p);
             case "decode" -> {
                 fields(p, "contract", "datum");
                 var datums = new ContractDatums(contracts.get(str(p, "contract")));
@@ -66,13 +83,13 @@ final class Session implements Transport.Handler {
             }
             case "registered" -> reservations.registered(p);
             case "restore" -> reservations.restore(p);
-            case "settled" -> reservations.settled(p, call::whileLive);
+            case "settled" -> reservations.settled(p, whileLive);
             case "reset" -> reset(p);
             case "shutdown" -> {
                 if (!p.isMissingNode()) fields(p);
                 yield new Transport.Reply(obj(), () -> shutdown = true);
             }
-            default -> throw HostError.bad("method", "unknown method " + call.method);
+            default -> throw HostError.bad("method", "unknown method " + method);
         };
     }
 
@@ -98,29 +115,36 @@ final class Session implements Transport.Handler {
                 number(t, "maxNowAheadSlots", 0));
         if (config.margin > StateRuntime.Builder.MAX_SETTLEMENT_SLOTS) throw bad("settlementSlots exceeds runtime limit");
         var table = new Reservations(config.margin, bool(p, "restoring"), selected.getNetworkId());
-        var loader = getClass().getClassLoader();
-        var catalog = Contracts.load(launch, loader);
+        var entries = catalog.call();
         var rt = runtime(selected, time, table, config);
-        var out = obj().put("protocol", 1).put("fingerprint", launch.fingerprint());
+        var out = obj().put("protocol", 1).put("fingerprint", fingerprint);
         out.set("network", net);
-        out.putArray("capabilities").add("views").add("objects").add("quorum");
+        var capabilities = out.putArray("capabilities");
+        if (namedViews) capabilities.add("views");
+        capabilities.add("objects").add("quorum");
         out.set("reads", JSON.valueToTree(Reads.KINDS));
-        var engine = out.putObject("versions").putNull("build").putObject("engine");
+        out.set("versions", versions.get());
+        out.set("contracts", entries.summary());
+        return new Transport.Reply(out, () -> {
+            limits = config;
+            clock = time;
+            network = selected;
+            contracts = entries;
+            reservations = table;
+            runtime = rt;
+        });
+    }
+
+    private static JsonNode jvmVersions() {
+        var version = obj();
+        var engine = version.putNull("build").putObject("engine");
         var vm = ServiceLoader.load(JulcVmProvider.class).stream().map(ServiceLoader.Provider::get)
                 .max(Comparator.comparingInt(JulcVmProvider::priority))
                 .orElseThrow(() -> HostError.internal("evaluator", "no JuLC VM provider"));
         engine.put("joust", HostVersion.RUNTIME).put("ccl", Network.class.getPackage().getImplementationVersion())
                 .put("julc", JulcTransactionEvaluator.class.getPackage().getImplementationVersion())
                 .put("vmProvider", vm.name()).put("vmVersion", vm.getClass().getPackage().getImplementationVersion());
-        out.set("contracts", catalog.summary());
-        return new Transport.Reply(out, () -> {
-            limits = config;
-            clock = time;
-            network = selected;
-            contracts = catalog;
-            reservations = table;
-            runtime = rt;
-        });
+        return version;
     }
 
     private StateRuntime runtime(Network net, Clock time, Reservations table, Limits config) {
@@ -145,21 +169,21 @@ final class Session implements Transport.Handler {
         });
     }
 
-    private Transport.Reply withReads(Call execution, JsonNode p) {
-        boolean building = execution.method.equals("publish") || execution.method.equals("prepare");
+    private Transport.Reply withReads(String method, Reads.Peer peer, java.util.function.Consumer<Runnable> whileLive, JsonNode p) {
+        boolean building = method.equals("publish") || method.equals("prepare");
         if (building) reservations.allowBuild();
         long now = number(p, "now", 0);
         long ttl = building ? number(p, "ttlSlots", 1) : 0;
         if (now < highestNow) throw HostError.bad("nowDecreased", "now decreased since the previous call");
-        execution.whileLive(() -> highestNow = now);
+        whileLive.accept(() -> highestNow = now);
         if (ttl > limits.ttl || now > Long.MAX_VALUE - ttl || ttl > Long.MAX_VALUE / clock.length)
             throw bad("ttlSlots exceeds the session's time limits");
         try {
             runtime.chainTime().slotToPosixMs(now);
             runtime.chainTime().slotToPosixMs(now + ttl);
         } catch (ArithmeticException overflow) { throw bad("call window exceeds the clock range"); }
-        var reads = new Reads(params -> execution.reverse("chain/read", params), now, limits.ahead, limits.reads,
-                limits.bytes, network.getNetworkId(), tip -> execution.whileLive(() -> reservations.observe(tip)));
+        var reads = new Reads(peer, now, limits.ahead, limits.reads,
+                limits.bytes, network.getNetworkId(), tip -> whileLive.accept(() -> reservations.observe(tip)));
         reading.set(reads);
         evaluating.set(new JulcTransactionEvaluator(new DefaultUtxoSupplier(backend.getUtxoService()),
                 new DefaultProtocolParamsSupplier(backend.getEpochService()), new DefaultScriptSupplier(backend.getScriptService()),
@@ -167,8 +191,8 @@ final class Session implements Transport.Handler {
         try {
             var scope = CallScope.hosted(now);
             if (building) scope = scope.ttlSlots(ttl);
-            return runtime.inScope(scope, () -> execution.method.equals("prepare")
-                    ? prepare(p, reads, now + ttl) : query(execution.method, p, reads, now + ttl));
+            return runtime.inScope(scope, () -> method.equals("prepare")
+                    ? prepare(p, reads, now + ttl) : query(method, p, reads, now + ttl));
         } finally {
             evaluating.remove();
             reading.remove();

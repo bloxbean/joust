@@ -126,7 +126,8 @@ public final class StateRuntime {
         return s == null ? null : s.scope();
     }
 
-    boolean hostedCall() {
+    /** Whether this call uses the protocol host's validated clock, reads and signer rules. */
+    public boolean hostedCall() {
         var call = callScope();
         return call != null && call.hosted();
     }

@@ -10,8 +10,9 @@ import static org.julclang.state.host.Wire.*;
 
 /** Verified descriptions and the generated entry points they describe (D4/D5/D16). */
 record Contracts(Map<String, Contract> all) {
-    record Contract(String name, JsonNode description, ContractSpec<?> spec, ServedContract adapter,
-                    String hash, String unsupported) {
+    record Contract(String name, JsonNode description, boolean keyed, boolean stakeSelf, JsonNode messages,
+                    org.julclang.state.serve.ContractCalls adapter,
+                    String hash, String unsupported, boolean views) {
         JsonNode meta(String kind, String method) {
             var x = description.path("x-joust");
             for (String group : List.of("creations", "actions", "views", "purposes")) {
@@ -26,8 +27,8 @@ record Contracts(Map<String, Contract> all) {
         }
         String code(String kind, JsonNode meta) {
             if (unsupported != null) return unsupported;
-            if (kind.startsWith("keyed") || kind.equals("init") && spec.hasKeyed()) return "keyed";
-            if (kind.equals("view")) return null;
+            if (kind.startsWith("keyed") || kind.equals("init") && keyed) return "keyed";
+            if (kind.equals("view")) return views ? null : "views";
             var p = meta.path("policies");
             if (p.path("authorizedBy").size() > 0) return "authorizedBy";
             if (p.hasNonNull("migrateTo") || p.path("batched").asBoolean() || p.path("into").asBoolean() || p.hasNonNull("admits")
@@ -39,7 +40,7 @@ record Contracts(Map<String, Contract> all) {
         ObjectNode describe() {
             var out = obj();
             out.set("description", description);
-            out.set("messages", JscMessages.messageMap(spec));
+            out.set("messages", messages);
             var calls = out.putArray("calls");
             for (String group : List.of("creations", "actions", "views", "purposes")) {
                 for (var m : description.path("x-joust").path(group)) {
@@ -67,7 +68,7 @@ record Contracts(Map<String, Contract> all) {
             String hash = HexFormat.of().formatHex(script.getScriptHash());
             String code = x.has("params") ? "params" : desc.path("definitions").has("org.julclang.state.api.MerkleMap") ? "maps" : null;
             var adapter = code == null ? ServedContract.of(client) : null;
-            all.put(name, new Contract(name, desc, spec, adapter, hash, code));
+            all.put(name, new Contract(name, desc, spec.hasKeyed(), spec.stakeSelf(), JscMessages.messageMap(spec), adapter, hash, code, true));
         }
         return new Contracts(all);
     }
@@ -84,7 +85,7 @@ record Contracts(Map<String, Contract> all) {
             if ("params".equals(c.unsupported())) hashes.put("unapplied", c.hash());
             else {
                 hashes.put("spend", c.hash()).put("mint", c.hash());
-                if (c.spec().stakeSelf() || c.description().path("x-joust").has("purposes")) hashes.put("stake", c.hash());
+                if (c.stakeSelf() || c.description().path("x-joust").has("purposes")) hashes.put("stake", c.hash());
             }
             status(e, c.unsupported());
         }

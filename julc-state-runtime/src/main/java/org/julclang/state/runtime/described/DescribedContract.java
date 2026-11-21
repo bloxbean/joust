@@ -186,7 +186,9 @@ public final class DescribedContract {
             throw new IllegalArgumentException(method + ": @AuthorizedBy on a keyed call: not supported by the described"
                     + " dispatcher yet (ADR-0016 M3)");
         }
-        if (signedByOthers && !kind.equals("action") && !kind.equals("destroy") && !kind.equals("keyedAction")) {
+        boolean hostedOwnedQuorum = runtime.hostedCall() && meta.path("policies").path("quorum").isObject()
+                && (kind.equals("ownedAction") || kind.equals("ownedDestroy"));
+        if (signedByOthers && !hostedOwnedQuorum && !kind.equals("action") && !kind.equals("destroy") && !kind.equals("keyedAction")) {
             throw new IllegalArgumentException(method + ": @Quorum and @AuthorizedBy on " + kind + " calls: not supported yet (ADR-0015 M3)");
         }
         if (!signedByOthers && !cosigners.isEmpty()) throw new IllegalArgumentException(method + " takes no co-signers");
@@ -359,8 +361,16 @@ public final class DescribedContract {
                         : Call.<PlutusData>action(method, caller);
                 rules(b, recipe);
                 if (meta.path("policies").path("into").asBoolean()) b.movesTo(into);   // ADR-0012 D3
-                b.usesCtx(usesCtx).received(lovelace)
-                        .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                if (hostedOwnedQuorum) {
+                    b.cosigners(caller);
+                    b.cosigners(cosigners.toArray(new Account[0]));
+                }
+                b.usesCtx(usesCtx).received(lovelace);
+                if (runtime.hostedCall() && hasField(fields, "events")) {
+                    b.redeemerWith((ctx, t) -> redeemer(alternative, fields, withEvents(byName, t), ctxData(ctx, usesCtx), null, null, offeredData));
+                } else {
+                    b.redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                }
                 if (assetAware) {
                     boolean sharedObj = recipe.path("shared").asBoolean();
                     b.receivedAssets(offered).runAssets(sharedObj, (o, sh, ctx, funds) -> full(discover(transition, ownedLayout, o,

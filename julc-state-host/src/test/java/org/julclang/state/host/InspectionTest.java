@@ -40,7 +40,7 @@ class InspectionTest {
         var holding = desc.at("/x-joust/owned/0/holding/$ref").textValue().substring("#/definitions/".length());
         var copy = (ObjectNode)desc.required("definitions").required(holding).deepCopy();
         desc.withObject("/definitions").set(state,copy.put("title","State"));
-        var datums = new ContractDatums(new Contracts.Contract(c.name(),desc,c.spec(),c.adapter(),c.hash(),null));
+        var datums = new ContractDatums(new Contracts.Contract(c.name(),desc,c.keyed(),c.stakeSelf(),c.messages(),c.adapter(),c.hash(),null,c.views()));
         var r = ownedRecording();
         var id = r.params().at("/call/object").asText();
         var u = r.snapshot().utxos.values().stream().flatMap(List::stream)

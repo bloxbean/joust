@@ -54,6 +54,14 @@ final class HostError extends Error {
         return new HostError(Kind.INTERNAL, code, message);
     }
 
+    com.fasterxml.jackson.databind.node.ObjectNode rpcError() {
+        var error = Wire.obj().put("code", rpcCode()).put("message", getMessage());
+        var data = error.putObject("data").put("kind", kind.wire).put("code", code)
+                .put("message", getMessage()).put("retryAtSlot", retryAtSlot);
+        data.set("sites", Wire.JSON.valueToTree(sites));
+        return error;
+    }
+
     /** The JSON-RPC code for this error: the kind's, or LSP's RequestCancelled for {@code cancelled}. */
     int rpcCode() {
         return code.equals("cancelled") ? -32800 : kind.rpcCode;

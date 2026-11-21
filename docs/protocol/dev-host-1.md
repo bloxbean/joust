@@ -1,6 +1,6 @@
 # JOUST dev host protocol 1
 
-A session runs one trusted project's generated clients. The client supplies the chain and slot clock and owns signing, persistence and submission. The JVM host prepares unsigned transactions in memory. This document specifies the M1 JVM wire interface of ADR-0022.
+A session runs one trusted project's generated clients. The client supplies the chain and slot clock and owns signing, persistence and submission. Both the JVM and npm hosts prepare unsigned transactions in memory using the ADR-0022 wire interface.
 
 ## Launch and framing (D1–D4, D10)
 
@@ -180,10 +180,32 @@ Each terminal error has a numeric JSON-RPC code, a diagnostic message, and data 
 | --- | --- | --- |
 | bad | −32602 | request, method, contract, busy, network, nowDecreased, nowImplausible, tooLarge, readLimit, stageMismatch, unknownReservation, conflict, notExpired, unbounded, restoreClosed, listingGone |
 | refusal | −32001 | require, runtime, pending, window, prerequisite, reconcile, deepRollback, expiredOnArrival, cooldown |
-| unsupported | −32003 | protocol, runtimeVersion, params, keyed, maps, m1b, authorizedBy, unverifiable, notYet, read:&lt;kind or service.method&gt; |
+| unsupported | −32003 | protocol, runtimeVersion, outsideProject, views, params, keyed, maps, m1b, authorizedBy, unverifiable, notYet, read:&lt;kind or service.method&gt; |
 | internal | −32603 (−32800 for cancelled) | readFailed, inconsistentRead, chainMoved, unbalanced, evaluator, tooDeep, cancelled, deadline, transport, internal, need |
 
 The draft 2020-12 schemas describe message envelopes and method payloads. For successful forward results and reverse answers select the matching definition using the outstanding request. The read schema's per-kind definitions constrain the result. Ordering, cross-message checks, byte limits, hashes and ledger semantics are normative above. [Methods](dev-host-1/methods.schema.json), [results](dev-host-1/results.schema.json), [reads](dev-host-1/reads.schema.json), [errors](dev-host-1/error.schema.json).
+
+## npm host
+
+Build the project with its installed `joust build`. Set the working directory to the trusted project root and launch the project-local entry with the protocol environment allow-list.
+
+```sh
+node node_modules/@julclang/joust/bin/joust-host.js --stdio
+```
+
+The client checks the real paths of the package, the entry and the installed runtime before launching. The host checks its module closure and eagerly loads the verified engine and contracts at initialize. A module outside the project gives `unsupported/outsideProject`. Rebuilding or cleaning the project after initialize leaves the current session pinned to the bytes it loaded. Start a new host to use a new build.
+
+Set `build.snapshot` to the absolute project root. For the npm fingerprint there is one directory entry at ordinal 0. Hash the following files with SHA-256, using the installed runtime's actual project-relative path when nested.
+
+- `build/joust/contracts.json`
+- `node_modules/@julclang/joust-runtime/engine/joust-runtime.js`
+- `node_modules/@julclang/joust-runtime/engine/joust-runtime.js.wasm`
+
+Sort by UTF-8 relative path bytes using forward slashes. For each file append `<lowercase hex hash> 0 dir <path>\n` (one LF), then SHA-256 the concatenated UTF-8 lines. Send the lowercase hex digest in `build.digest`. The host returns it as `fingerprint`. A mismatch gives `bad/stageMismatch`.
+
+`versions.build` comes from the contracts' common `built` field. `versions.engine.joust` identifies the installed runtime package, `image` identifies its Web Image, and `julc` identifies the engine's evaluator. Unknown versions are null. Incompatible packages or engine versions give `unsupported/runtimeVersion`.
+
+The npm host serves state lookup through `view` with `view: null`, plus `instances`, `objects` and `decode`. It omits the `views` capability and returns `unsupported/views` for a named view. Other capabilities and the signing, restore and settlement rules follow the JVM host. A worker evaluates locally and asks the client for call-scoped chain reads. The host has no wallet, persistent journal or provider credentials. The client persists the D8 high-water mark before handing out a body.
 
 ## JVM conformance in M1
 

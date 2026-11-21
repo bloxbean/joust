@@ -138,7 +138,10 @@ public final class JscMessages {
 
     /** The {@code .jsc} sites of {@code message} in contract {@code name}'s map, as values (ADR-0022 D9); empty when none. */
     public static List<Site> structuredSites(Class<?> anchor, String name, String message) {
-        JsonNode map = map(anchor, name);
+        return structuredSites(map(anchor, name), message);
+    }
+
+    private static List<Site> structuredSites(JsonNode map, String message) {
         var out = new LinkedHashSet<Site>();
         if (map == null || !map.has("messages")) return new ArrayList<>(out);
         var keys = new ArrayList<String>();
@@ -168,7 +171,12 @@ public final class JscMessages {
      * {@link Refusal}, which also carries the sites as values).
      */
     public static RuntimeException explained(Class<?> anchor, String name, RequireException e) {
-        List<Site> structured = structuredSites(anchor, name, e.getMessage());
+        return explained(map(anchor, name), e);
+    }
+
+    /** Explain a described contract using its in-memory build artifact. */
+    public static RuntimeException explained(JsonNode map, RequireException e) {
+        List<Site> structured = structuredSites(map, e.getMessage());
         if (structured.isEmpty()) return e;
         var text = new LinkedHashSet<String>();
         for (Site s : structured) text.add(s.text());

@@ -13,6 +13,7 @@
               "enum": [
                 "protocol",
                 "runtimeVersion",
+                "views",
                 "params",
                 "maps",
                 "m1b",
@@ -40,11 +41,21 @@
         "versions": {
           "type": "object",
           "properties": {
-            "build": {"const": null},
+            "build": {
+              "type": ["object", "null"],
+              "properties": {
+                "joust": {"type": "string"},
+                "engine": {"type": ["string", "null"]},
+                "julc": {"type": ["string", "null"]}
+              },
+              "required": ["joust"],
+              "additionalProperties": false
+            },
             "engine": {
               "type": "object",
               "properties": {
                 "joust": {"type": "string", "minLength": 1},
+                "image": {"type": ["string", "null"]},
                 "ccl": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
                 "julc": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
                 "vmProvider": {"type": "string", "minLength": 1},

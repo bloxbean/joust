@@ -30,6 +30,8 @@ public final class JoustRuntimeWasm {
     public static void main(String[] args) {
         var api = new ApiRegistry();
         new VmApi().register(api);
+        var host = new HostApi();
+        api.add("joust.host", HostApi.Request.class, r -> ServiceResult.ok(host.invoke(r)));
         api.add("joust.prepare", Prepare.Request.class, r -> ServiceResult.ok(Prepare.prepare(r)));
         // What the engine checks bundles against (ADR-0020 D8): a client reports a mismatch before the first call.
         api.add("joust.info", InfoRequest.class, r -> ServiceResult.ok(new Info(VERSION,

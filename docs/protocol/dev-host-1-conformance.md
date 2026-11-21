@@ -89,6 +89,20 @@ From the JOUST checkout run:
 
 `ClientVectors` drives the actual framed host with M1b's recorded answers and the two historical M0 prepares. It also reverses the payer set and resolves the inputs selected by that build. `MutationVectors` edits individual ledger items or client evidence. When isolating a rule it updates change, deposits, witness commitments, hash and matching host claims as appropriate. `VerifierVectorsTest` recreates every negative, checks the hash independently, and reruns the oracle with just the target rule disabled. The public checker always enables every rule. `RecordedSessionsTest` regenerates and compares both sessions. The Node wallet differential exercises the intersection of the two verifiers' rules, using the same fee ceiling and sent window.
 
+### Exercise the npm host
+
+Package both Web Images before running the npm differential. Use a GraalVM 25.3 installation, Binaryen on PATH, and the package dependencies used by the npm toolchain.
+
+```sh
+./gradlew :julc-state-runtime-wasm:runtimeWasm :julc-state-toolchain:toolchainWasm -PgraalvmHome="$GRAALVM_HOME"
+mkdir -p js/joust-runtime/engine js/joust/engine
+cp julc-state-runtime-wasm/build/wasm/{joust-runtime.js,joust-runtime.js.wasm,package.json} js/joust-runtime/engine/
+cp julc-state-toolchain/build/wasm/{joust-toolchain.js,joust-toolchain.js.wasm,package.json} js/joust/engine/
+./gradlew :julc-state-host:nodeHostConformance
+```
+
+The task builds the conformance classifier and runs its reference checker on the npm host's actual results. The client builds the fixture contracts through the npm compiler, replays the Bank and keyed sessions in wire order, exercises every host vector and reconstructs the 34 eligible M0 calls. It checks complete unsigned bytes and body hashes. The machine-dependent snapshot identity, engine versions and named-view capability are normalized. The harness checks that each negative uses its positive's request and applies its changes to the live result or the independent client evidence. The reference checker must report the recorded violations.
+
 ### ADR-0022 §9 adversarial coverage
 
 | Scenario | Executable coverage |
@@ -108,5 +122,8 @@ From the JOUST checkout run:
 | Every D14 verifier-table row, unknown registration after assertion and after confirmed publication | `M1bTest.verifierTableBuildsOnlyMissingComponentsBeforeBalancing` and `providerUnknownRequiresIndependentRegistrationEvidence`, including the subsequent prepare. |
 | Sub-minimum payout to payer, destroy with events | `M1bTest.quorumCountsCallerAndEventsSurviveDestroy`. |
 | Interleaved listings across a same-height fork | `InspectionTest.interleavedForkSnapshotsRespectSortOrderResetAndLru`. |
-| Cold engine state lookup | M2 Node host. JVM ordered reads are exercised in M1. |
+| Cold engine state lookup | The npm conformance test starts a fresh worker, checks the complete-address read and cursor, compares Bank state against the transcript, then lists and decodes a holding. |
+| Node frame writer and D12 I/O | `js/joust/test/host.test.js` probes console and raw stdout, fs writes, child processes, sockets and fetch. It exercises fragmented and invalid frames, stalls and exact size limits. |
+| Node cancellation and commit | The controlled worker test races cancellation with CPU execution, sends an old read answer after ID reuse, waits for a deadline and exceeds the result cap. It counts committed calls. |
+| Node snapshot, restore and network | The Bank recording exercises stage mismatch and late answers. The real worker tests restore twice, rewind and rearm a tombstone, check the reconciliation fence, and exercise mainnet opt-in and wallet network validation. |
 | Honest future-start keyed window, widened and late-start windows, refused first designation, two instances with the same method and key | M3 keyed preparation. M1 exercises the typed keyed refusal on both peers. |
