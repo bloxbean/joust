@@ -60,8 +60,25 @@ class ForkedSessionTest {
         entries.addFirst(old);
         error("bad","stageMismatch",hello(root,entries,fingerprint));
         error("unsupported","runtimeVersion",hello(root,entries,Launch.scan(root,entries).fingerprint()));
+        entries.removeFirst();
+        // #151 review SB2: every recorded M1b vector (publications, owned and quorum calls, refusals) under the trace too.
+        int vectors = 0;
+        try (var files = Files.list(HostVectorsTest.DIRECTORY)) {
+            for (var f : files.filter(v -> v.toString().endsWith(".json")).sorted().toList()) {
+                var v = JSON.readTree(f.toFile());
+                // The historical M1b maps refusal is superseded: a maps host asks for prerequisite evidence first
+                // (HostVectorsTest.replay keeps its own check).
+                if ("maps".equals(v.path("feature").textValue())) continue;
+                success(hello(root, entries, fingerprint, v));
+                vectors++;
+            }
+        }
+        assertTrue(vectors >= 20, "the recorded host vectors");
     }
     JsonNode hello(Path root, List<Path> entries, String fingerprint) throws Exception {
+        return hello(root, entries, fingerprint, null);
+    }
+    JsonNode hello(Path root, List<Path> entries, String fingerprint, JsonNode vector) throws Exception {
         var dir = Files.createTempDirectory(temp,"working");
         var home = Files.createTempDirectory(temp, "home");
         var tmp = Files.createTempDirectory(temp, "tmp");
@@ -89,25 +106,14 @@ class ForkedSessionTest {
             var writer = new Frames.Writer(child.getOutputStream());
             var p = init();
             p.withObject("/build").put("snapshot",root.toString()).put("digest",fingerprint);
+            if (vector != null) for (String key : List.of("network", "clock", "time", "limits")) p.set(key, vector.required(key));
             assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","initialize").put("id",1).set("params",p))));
             var reader = new Frames.Reader(child.getInputStream());
             byte[] reply = reader.next();
             assertNotNull(reply, () -> diagnostics.toString());
             if (JSON.readTree(reply).has("result")) {
-                var fixture = IntegrationTest.record();
-                assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","prepare")
-                        .put("id",2).set("params",fixture.params()))));
-                var frame = JSON.readTree(reader.next());
-                while (frame.has("method")) {
-                    assertEquals("chain/read", frame.required("method").asText());
-                    var answer = obj().put("jsonrpc","2.0");
-                    answer.set("id",frame.required("id"));
-                    answer.set("result",fixture.answer(frame.required("params")));
-                    assertTrue(writer.write(JSON.writeValueAsBytes(answer)));
-                    frame = JSON.readTree(reader.next());
-                }
-                assertEquals(2, frame.required("id").asInt());
-                assertEquals(fixture.fixture().required("unsignedTx"), success(frame).at("/prepared/cbor"));
+                if (vector == null) serve(writer, reader);
+                else replay(writer, reader, vector);
             }
             assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","exit"))));
             assertTrue(child.waitFor(5,TimeUnit.SECONDS));
@@ -120,6 +126,89 @@ class ForkedSessionTest {
         } finally { child.destroyForcibly(); }
     }
 
+    /**
+     * #150 review SA5: everything the in-process replay covers, under the OS-level observation: all 23 plain recordings
+     * (each prepared, checked byte for byte and discarded), a contract refusal, a failed read and a cancellation.
+     */
+    private static void serve(Frames.Writer writer, Frames.Reader reader) throws Exception {
+        int id = 1;
+        int prepared = 0;
+        try (var paths = Files.list(ReplayTest.FIXTURES.resolve("dapp"))) {
+            for (Path path : paths.sorted().toList()) {
+                if (!Set.of("init", "action", "destroy").contains(JSON.readTree(path.toFile()).at("/call/kind").asText())) continue;
+                var r = ReplayTest.Recording.read(path);
+                var result = success(call(writer, reader, ++id, "prepare", r.params(), r::answer, null));
+                assertEquals(r.fixture().required("unsignedTx"), result.at("/prepared/cbor"), path.toString());
+                var tx = result.required("prepared");
+                success(call(writer, reader, ++id, "settled", obj().put("status", "discarded")
+                        .put("reservation", str(tx, "reservation")).put("txHash", str(tx, "txHash"))
+                        .put("tip", r.point().required("slot").asLong()), r::answer, null));
+                prepared++;
+            }
+        }
+        assertEquals(23, prepared, "ADR-0022 §9 plain recordings");
+        var r = IntegrationTest.record();
+        // An earlier recording: reset the session's floor for now (reservations are kept).
+        success(call(writer, reader, ++id, "reset", obj().put("now", r.point().required("slot").asLong()), r::answer, null));
+        // A contract refusal, before and after reads.
+        var refused = r.params().deepCopy();
+        refused.withObject("/call").putObject("args").put("by", "-1");
+        error("refusal", "require", call(writer, reader, ++id, "prepare", refused, r::answer, null));
+        // A failed read.
+        error("internal", "readFailed", call(writer, reader, ++id, "prepare", r.params(), q -> {
+            var a = r.answer(q);
+            a.remove("value");
+            a.remove("absent");
+            a.putObject("failed").put("message", "provider down");
+            return a;
+        }, null));
+        // A cancellation while a read is outstanding, then the recorded call again.
+        int cancelled = ++id;
+        var reply = call(writer, reader, cancelled, "prepare", r.params(), r::answer, cancelled);
+        assertEquals(-32800, reply.at("/error/code").asInt(), reply::toString);
+        var again = success(call(writer, reader, ++id, "prepare", r.params(), r::answer, null));
+        assertEquals(r.fixture().required("unsignedTx"), again.at("/prepared/cbor"));
+    }
+
+    /** A recorded host vector (HostVectorsTest): its assertions, its call with its recorded answers, its outcome. */
+    private static void replay(Frames.Writer writer, Frames.Reader reader, JsonNode v) throws Exception {
+        int id = 1;
+        for (var assertion : v.required("initialSession").required("registered"))
+            success(call(writer, reader, ++id, "registered", assertion, q -> { throw new AssertionError(q.toString()); }, null));
+        var reads = v.required("reads").elements();
+        var response = call(writer, reader, ++id, str(v, "method"), v.required("params"), q -> {
+            assertTrue(reads.hasNext(), q::toString);
+            var pair = reads.next();
+            assertEquals(pair.required("request"), q);
+            return pair.required("answer");
+        }, null);
+        HostVectorsTest.checkOutcome(v, response);
+    }
+
+    /** One forward call, answering its reverse reads; with {@code cancel}, cancels it at its first read instead. */
+    private static JsonNode call(Frames.Writer writer, Frames.Reader reader, int id, String method, JsonNode params,
+                                 java.util.function.Function<JsonNode, JsonNode> answer, Integer cancel) throws Exception {
+        assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method",method).put("id",id).set("params",params))));
+        var frame = JSON.readTree(reader.next());
+        boolean sent = false;
+        while (frame.has("method")) {
+            assertEquals("chain/read", frame.required("method").asText());
+            if (cancel != null && !sent) {
+                assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","$/cancelRequest")
+                        .set("params", obj().put("id", cancel)))));
+                sent = true;
+            } else if (cancel == null) {
+                var a = obj().put("jsonrpc","2.0");
+                a.set("id",frame.required("id"));
+                a.set("result",answer.apply(frame.required("params")));
+                assertTrue(writer.write(JSON.writeValueAsBytes(a)));
+            }
+            frame = JSON.readTree(reader.next());
+        }
+        assertEquals(id, frame.required("id").asInt(), frame::toString);
+        return frame;
+    }
+
     // The first stdin read marks the serving interval, after the JVM's own launch and perf-data setup.
     private static void checkTrace(Path log) throws IOException {
         boolean serving = false;
@@ -128,9 +217,18 @@ class ForkedSessionTest {
                 String line = iterator.next();
                 if (line.contains(" read(0,")) serving = true;
                 if (!serving) continue;
-                assertFalse(line.contains(" connect(") || line.contains(" execve(") || line.contains(" socket(")
-                        || line.contains(" openat(") && (line.contains("O_WRONLY") || line.contains("O_RDWR")
-                        || line.contains("O_CREAT") || line.contains("O_TRUNC")), line);
+                // #150 review SA6: no socket of any kind, no process, no file created, removed, renamed or opened
+                // for writing. Threads (clone with CLONE_THREAD) are the JVM's own and allowed.
+                boolean opened = (line.contains(" openat(") || line.contains(" open(")) && (line.contains("O_WRONLY")
+                        || line.contains("O_RDWR") || line.contains("O_CREAT") || line.contains("O_TRUNC"));
+                boolean process = line.matches(".* (fork|vfork|execve|execveat)\\(.*")
+                        || line.matches(".* clone3?\\(.*") && !line.contains("CLONE_THREAD");
+                boolean socket = line.matches(".* (connect|socket|socketpair|bind|listen|accept4?)\\(.*");
+                boolean files = line.matches(".* (creat|mkdirat?|unlinkat?|renameat2?|rename|truncate|linkat?|symlinkat?)\\(.*");
+                // The JVM's own perf-data file (/tmp/hsperfdata_<user>/<pid>, created before serving and removed at
+                // exit) is the one recorded exception (dev-host-1 I10; #150 review SA7).
+                if (line.contains("/hsperfdata_")) continue;
+                assertFalse(opened || process || socket || files, line);
             }
         }
         assertTrue(serving, "strace did not observe the host reading stdin");

@@ -115,7 +115,7 @@
           "type": "array", "minItems": 2, "maxItems": 2,
           "prefixItems": [{"type": "integer", "minimum": 0}, {"type": "integer", "minimum": 1}]
         },
-        "cosigners": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{56}$"}}
+        "cosigners": {"type": "array", "maxItems": 64, "items": {"type": "string", "pattern": "^[0-9a-f]{56}$"}}
       },
       "required": ["contract", "kind", "method", "args", "address"],
       "additionalProperties": false
