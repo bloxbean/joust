@@ -3238,5 +3238,6 @@
     }
   },
   "violations" : [ "mapWithdrawal" ],
-  "mutation" : "map-withdrawal"
+  "mutation" : "map-withdrawal",
+  "check" : "mapWithdrawal/withdrawal"
 }

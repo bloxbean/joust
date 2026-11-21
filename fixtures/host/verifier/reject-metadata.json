@@ -1830,5 +1830,6 @@
     }
   },
   "violations" : [ "auxiliaryData" ],
-  "mutation" : "metadata"
+  "mutation" : "metadata",
+  "check" : "auxiliaryData/present"
 }

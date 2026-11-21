@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "bodyHash" ],
-  "mutation" : "tx-hash"
+  "mutation" : "tx-hash",
+  "check" : "bodyHash/digest"
 }

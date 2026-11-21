@@ -3951,5 +3951,6 @@
     }
   },
   "violations" : [ "designatedInput" ],
-  "mutation" : "keyed-designated"
+  "mutation" : "keyed-designated",
+  "check" : "designatedInput/designated"
 }

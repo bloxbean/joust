@@ -1952,5 +1952,6 @@
     }
   },
   "violations" : [ "balance" ],
-  "mutation" : "unbalanced-asset"
+  "mutation" : "unbalanced-asset",
+  "check" : "balance/conserved"
 }

@@ -3238,5 +3238,6 @@
     }
   },
   "violations" : [ "mapClaims" ],
-  "mutation" : "map-owner"
+  "mutation" : "map-owner",
+  "check" : "mapClaims/claim"
 }

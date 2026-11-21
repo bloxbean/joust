@@ -3238,5 +3238,6 @@
     }
   },
   "violations" : [ "mapClaims" ],
-  "mutation" : "map-field"
+  "mutation" : "map-field",
+  "check" : "mapClaims/claim"
 }

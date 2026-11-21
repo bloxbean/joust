@@ -3762,5 +3762,6 @@
     }
   },
   "violations" : [ "keyedWindow" ],
-  "mutation" : "keyed-before-now"
+  "mutation" : "keyed-before-now",
+  "check" : "keyedWindow/bounds"
 }

@@ -3939,5 +3939,6 @@
     }
   },
   "violations" : [ "keyedRedeemer" ],
-  "mutation" : "keyed-swapped-redeemers"
+  "mutation" : "keyed-swapped-redeemers",
+  "check" : "keyedRedeemer/structural"
 }

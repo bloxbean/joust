@@ -1,6 +1,5 @@
-import { Worker } from 'node:worker_threads';
 import { encode, frameReader, MAX_BODY } from './frames.js';
-import { failure, launchPaths } from './launch.js';
+import { failure } from './launch.js';
 
 const rpcCode = { bad: -32602, internal: -32603, unsupported: -32003, refusal: -32001 };
 function error(id, { kind, code, message }) {
@@ -8,9 +7,19 @@ function error(id, { kind, code, message }) {
     data: { kind, code, message, sites: [], retryAtSlot: null } } });
 }
 
+// The worker starts from this script, registers the closure's hooks from the hashed bytes, then imports its module
+// from those bytes too (a worker does not inherit the entry thread's hooks).
+const BOOTSTRAP = `
+const { register } = require('node:module');
+const { workerData } = require('node:worker_threads');
+register('data:text/javascript,' + encodeURIComponent(workerData.hooks), { data: { root: workerData.root, manifest: workerData.manifest } });
+import(workerData.entry).catch(e => { setImmediate(() => { throw e; }); });
+`;
+
 // The event loop owns the terminal latch. The worker may block on a reverse read or
 // execute Wasm, but cannot commit a transaction without an acknowledgement on its FIFO.
-export function serve(writeFrame) {
+// Worker is the constructor the guard captured before denying it; deferred, a launch failure for initialize.
+export function serve({ writeFrame, Worker, launch, deferred }) {
   let worker, active, generation = 0, initialized = false, deadline = 60_000, stopped = false, backpressure = false;
   const reader = frameReader(accept, stop);
   function stop(reason) {
@@ -39,6 +48,7 @@ export function serve(writeFrame) {
     clearTimeout(call.timer);
     clearTimeout(call.drain);
     clearTimeout(call.wakeup);
+    clearImmediate(call.latching);
     call.reportControl?.();
     if (!initialized) discardWorker();
     active = null;
@@ -48,16 +58,24 @@ export function serve(writeFrame) {
     call.ended = true;
     const waiting = call.reverse !== null && call.reverse !== undefined;
     call.reverse = null;
-    Atomics.store(call.control, 0, 2);
-    Atomics.notify(call.control, 0);
     call.reportControl = () => {
       call.reportControl = null;
       if (!send(error(call.id, failure('internal', code, 'call ' + code)))) stop('response id exceeds frame budget');
     };
-    // A blocked read can unwind immediately. Its response normally releases the generation
-    // before a client that has received cancellation starts the next recorded call.
-    if (waiting) call.wakeup = setTimeout(() => call.reportControl?.(), 50);
-    else call.reportControl();
+    // D10: the end is latched only between session mutations. While the worker holds the call (3), wait for it to
+    // release: its write then precedes the report, and none follows it (#154 review M2-4).
+    const latch = () => {
+      if (active !== call) return;
+      const state = Atomics.load(call.control, 0);
+      if (state === 3) { call.latching = setImmediate(latch); return; }
+      if (state !== 2 && Atomics.compareExchange(call.control, 0, state, 2) !== state) { latch(); return; }
+      Atomics.notify(call.control, 0);
+      // A blocked read can unwind immediately. Its response normally releases the generation
+      // before a client that has received cancellation starts the next recorded call.
+      if (waiting) call.wakeup = setTimeout(() => call.reportControl?.(), 50);
+      else call.reportControl?.();
+    };
+    latch();
     call.drain = setTimeout(() => stop('execution did not stop within two seconds'), 2000);
   }
   function complete(call, response, ok) {
@@ -80,7 +98,8 @@ export function serve(writeFrame) {
       stop('response id exceeds frame budget');
   }
   function startWorker() {
-    const w = new Worker(new URL('./worker.js', import.meta.url), { stdout: true, stderr: true, execArgv: ['--conditions=joust-host'] });
+    const workerData = { ...launch, entry: new URL('./worker.js', import.meta.url).href };
+    const w = new Worker(BOOTSTRAP, { eval: true, workerData, stdout: true, stderr: true, execArgv: ['--conditions=joust-host'] });
     w.stdout.pipe(process.stderr, { end: false });
     w.stderr.pipe(process.stderr, { end: false });
     w.on('error', e => { if (worker === w) stop(e.message); });
@@ -93,6 +112,15 @@ export function serve(writeFrame) {
         call.reverse = call.generation + '.' + ++call.sequence;
         if (!send(JSON.stringify({ jsonrpc: '2.0', method: 'chain/read', id: call.reverse, params: JSON.parse(m.read) })))
           stop('reverse request exceeds frame budget');
+      } else if (m.poisoned) {
+        // The engine trapped: answer the call (unless it ended), then end the session (#154 review M2-3).
+        const end = () => stop('engine trapped: ' + m.failure.message);
+        if (call.ended) end();
+        else {
+          call.ended = true;
+          clearTimeout(call.timer);
+          if (!send(error(call.id, m.failure), end)) end();
+        }
       } else if (m.failure) {
         if (call.ended) { release(call); return; }
         if (m.failure.code === 'outsideProject') {
@@ -134,7 +162,7 @@ export function serve(writeFrame) {
     active = call;
     try {
       if (!worker) {
-        launchPaths(process.cwd());
+        if (deferred) throw deferred;
         worker = startWorker();
       }
       const buffer = new SharedArrayBuffer(MAX_BODY + 8);
@@ -150,7 +178,7 @@ export function serve(writeFrame) {
       worker.postMessage({ generation, buffer, frame: text, ...(!initialized ? { build: msg.params?.build } : {}) });
     } catch (e) {
       const outside = e.code === 'outsideProject';
-      const body = error(msg.id, failure('unsupported', outside ? 'outsideProject' : 'runtimeVersion', e.message));
+      const body = error(msg.id, e.kind ? e : failure('internal', 'internal', String(e.message)));
       call.ended = true;
       if (!send(body, () => outside ? stop(e.message) : release(call))) stop('response id exceeds frame budget');
     }

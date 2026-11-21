@@ -1834,5 +1834,6 @@
     }
   },
   "violations" : [ "publicationShape" ],
-  "mutation" : "holder-asset"
+  "mutation" : "holder-asset",
+  "check" : "publicationShape/holder"
 }

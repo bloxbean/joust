@@ -53,10 +53,80 @@ class FakeHostTest {
                         assertEquals(expected, JSON.readTree(reader.next()));
                     }
                 }
+                p.getOutputStream().close();
                 assertTrue(p.waitFor(3,TimeUnit.SECONDS));
                 assertEquals(0,p.exitValue());
             } finally { p.destroyForcibly(); }
         }
+    }
+
+    @Test @org.junit.jupiter.api.Timeout(30) void aFrameAfterTheRecordingEndsIsRefused() throws Exception {
+        var p = start("keyed");
+        try {
+            var reader = new Frames.Reader(p.getInputStream());
+            var writer = new Frames.Writer(p.getOutputStream());
+            for (var f : JSON.readTree(RecordedSessionsTest.SESSIONS.resolve("keyed.json").toFile()).required("frames")) {
+                if (f.has("client")) assertTrue(writer.write(JSON.writeValueAsBytes(f.required("client"))));
+                else assertEquals(f.required("host"),JSON.readTree(reader.next()));
+            }
+            assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","exit"))));
+            assertTrue(p.waitFor(3,TimeUnit.SECONDS));
+            assertEquals(3,p.exitValue());
+        } finally { p.destroyForcibly(); }
+    }
+
+    @Test @org.junit.jupiter.api.Timeout(30) void aClientThatStaysOpenAfterExitFails() throws Exception {
+        var p = start("keyed");
+        try {
+            var reader = new Frames.Reader(p.getInputStream());
+            var writer = new Frames.Writer(p.getOutputStream());
+            for (var f : JSON.readTree(RecordedSessionsTest.SESSIONS.resolve("keyed.json").toFile()).required("frames")) {
+                if (f.has("client")) assertTrue(writer.write(JSON.writeValueAsBytes(f.required("client"))));
+                else assertEquals(f.required("host"),JSON.readTree(reader.next()));
+            }
+            assertTrue(p.waitFor(10,TimeUnit.SECONDS));
+            assertEquals(4,p.exitValue());
+        } finally { p.destroyForcibly(); }
+    }
+
+    /**
+     * DC4: each scripted host fault. A client that stops (closes its end, after any tolerated frame) passes with exit 0;
+     * one that sends another frame fails with exit 3.
+     */
+    @org.junit.jupiter.api.TestFactory java.util.List<org.junit.jupiter.api.DynamicTest> scriptedViolationsRequireTheClientToStop() throws Exception {
+        var tests = new java.util.ArrayList<org.junit.jupiter.api.DynamicTest>();
+        try (var files = java.nio.file.Files.list(RecordedSessionsTest.SESSIONS)) {
+            for (var f : files.sorted().toList()) {
+                String name = f.getFileName().toString();
+                if (!name.startsWith("violation-")) continue;
+                String session = name.substring(0,name.length()-5);
+                for (boolean stops : java.util.List.of(true,false))
+                    tests.add(org.junit.jupiter.api.DynamicTest.dynamicTest(session+(stops ? " (client stops)" : " (client continues)"),
+                            () -> assertEquals(stops ? 0 : 3,drive(session,stops))));
+            }
+        }
+        assertEquals(14,tests.size());
+        return tests;
+    }
+
+    private int drive(String session, boolean stops) throws Exception {
+        var p = start(session);
+        try {
+            var reader = new Frames.Reader(p.getInputStream());
+            var writer = new Frames.Writer(p.getOutputStream());
+            for (var f : JSON.readTree(RecordedSessionsTest.SESSIONS.resolve(session+".json").toFile()).required("frames")) {
+                if (f.has("client")) assertTrue(writer.write(JSON.writeValueAsBytes(f.required("client"))));
+                else if (f.has("host")) assertEquals(f.required("host"),JSON.readTree(reader.next()));
+                else {
+                    for (var t : f.path("tolerate")) assertTrue(writer.write(JSON.writeValueAsBytes(t)));
+                    if (!stops) assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("id","next")
+                            .put("method","describe").set("params",obj().put("contract","x")))));
+                }
+            }
+            p.getOutputStream().close();
+            assertTrue(p.waitFor(10,TimeUnit.SECONDS));
+            return p.exitValue();
+        } finally { p.destroyForcibly(); }
     }
 
     @Test void rejectsAnAnswerToAnotherReverseRequest() throws Exception {

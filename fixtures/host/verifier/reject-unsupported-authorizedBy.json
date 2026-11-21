@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "notVerifiable" ],
-  "mutation" : "unsupported-authorizedBy"
+  "mutation" : "unsupported-authorizedBy",
+  "check" : "notVerifiable/classify"
 }

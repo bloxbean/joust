@@ -1789,5 +1789,6 @@
     }
   },
   "violations" : [ "collateral" ],
-  "mutation" : "foreign-collateral"
+  "mutation" : "foreign-collateral",
+  "check" : "collateral/owner"
 }

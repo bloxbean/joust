@@ -21,7 +21,8 @@ final class ClientVectors {
         var names = new ArrayList<>(List.of("Bank-init", "Bank-publish-1", "Dex-addLiquidity",
             "Dex-combined-reconstructed", "Dex-init", "Dex-publish-1", "Dex-publish-2", "Dex-publish-3",
             "HostCouncil-init", "HostCouncil-publish-1", "destroy-events", "owned-action", "owned-destroy",
-            "owned-init", "quorum-caller", "quorum-two", "dapp-0003", "dapp-0034", "permuted",
+            "owned-init", "quorum-caller", "quorum-two", "owned-quorum-caller", "owned-quorum-two", "owned-events-caller",
+            "owned-destroy-events", "dapp-0003", "dapp-0034", "permuted",
             "locker-003-unlock", "token-m0-mint", "token-001-create", "token-002-mint", "token-003-mint", "token-004-transfer",
             "registry-001-init", "registry-005-upgrade", "registry-017-claim", "registry-019-release", "registry-021-retire"));
         for (String name : HostVectorsTest.REGISTRY) if (!name.equals("Registry-cooldown") && Files.exists(HOST.resolve(name+".json"))) names.add(name);

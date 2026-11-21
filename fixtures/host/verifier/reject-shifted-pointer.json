@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "pointer" ],
-  "mutation" : "shifted-pointer"
+  "mutation" : "shifted-pointer",
+  "check" : "pointer/method"
 }

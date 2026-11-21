@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "redeemer" ],
-  "mutation" : "swapped-constructor"
+  "mutation" : "swapped-constructor",
+  "check" : "redeemer/constructor"
 }

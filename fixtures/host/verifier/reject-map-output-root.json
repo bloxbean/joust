@@ -3238,5 +3238,6 @@
     }
   },
   "violations" : [ "mapDatum" ],
-  "mutation" : "map-output-root"
+  "mutation" : "map-output-root",
+  "check" : "mapDatum/root"
 }

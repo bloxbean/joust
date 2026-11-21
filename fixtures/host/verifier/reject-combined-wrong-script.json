@@ -1822,5 +1822,6 @@
     }
   },
   "violations" : [ "publicationShape" ],
-  "mutation" : "combined-wrong-script"
+  "mutation" : "combined-wrong-script",
+  "check" : "publicationShape/holder"
 }

@@ -212,9 +212,13 @@ final class Reservations implements ClaimStore {
             known = true;
             expected.putAll(e.operation.attempts());
             if (e.state == State.discarded) continue; // An identical re-prepare can have the same body hash.
-            // An attempt that expired before it was ever acknowledged as handed out (neither its own record nor this
-            // one lists it) cannot land and was never signed: it does not hold the operation (#156 review K2).
-            if (e.state == State.expired && supplied == null && !e.operation.attempts().containsKey(e.body.hash)) continue;
+            // An attempt never acknowledged as handed out (neither its own record nor this one lists it): expired, it
+            // cannot land and was never signed, so it does not hold the operation (#156 review K2); still prepared
+            // (awaiting approval, or revived by a rewind) it holds it as a live attempt: pending (final review F-K3).
+            if (supplied == null && !e.operation.attempts().containsKey(e.body.hash)) {
+                if (e.state == State.expired) continue;
+                if (e.state == State.prepared) { pending = true; continue; }
+            }
             expected.put(e.body.hash,e.body.to);
             if (supplied == null || supplied != e.body.to) throw KeyedOperation.mismatch();
             pending |= e.live();
@@ -349,6 +353,12 @@ final class Reservations implements ClaimStore {
                 boolean same = op != null && previous != null && op.identity().equals(previous.identity());
                 Long deadline = op == null ? null : op.attempts().get(held.body.hash);
                 Long priorDeadline = previous == null ? null : previous.attempts().get(b.hash);
+                // As in checkOperation: another attempt of this operation that was never acknowledged and that the
+                // restored record does not list, expired (K2) or prepared (awaiting approval, or revived by a rewind
+                // below its validTo), does not refuse the client's record; a prepared one stays reserved, and the
+                // next prepare answers pending until it is discarded or expires (final review F-K1).
+                if (same && !held.body.hash.equals(b.hash) && deadline == null && !previous.attempts().containsKey(held.body.hash)
+                        && (held.state == State.expired || held.state == State.prepared)) continue;
                 if (deadline != null && (!same || deadline != held.body.to) ||
                         priorDeadline != null && (!same || priorDeadline != b.to)) throw KeyedOperation.mismatch();
                 if (same && (!op.attempts().entrySet().containsAll(previous.attempts().entrySet()) ||

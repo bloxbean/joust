@@ -3939,5 +3939,6 @@
     }
   },
   "violations" : [ "keyedToken" ],
-  "mutation" : "keyed-token"
+  "mutation" : "keyed-token",
+  "check" : "keyedToken/unit"
 }
