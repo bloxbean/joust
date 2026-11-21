@@ -56,7 +56,7 @@ const manifest = Object.fromEntries(closure.map(f => [pathToFileURL(f.path).href
 register('data:text/javascript,' + encodeURIComponent(hooks), { data: { root, manifest } });
 
 const { guard } = await import('../src/host/guard.js');
-const writeFrame = guard();
+const { writeFrame, Worker } = guard();
 const { serve } = await import('../src/host/transport.js');
-serve({ writeFrame, deferred,
+serve({ writeFrame, Worker, deferred,
   launch: { root, pkg, hooks, manifest, service: service && pathToFileURL(service).href, runtime, closure } });

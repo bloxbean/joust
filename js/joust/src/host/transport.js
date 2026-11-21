@@ -1,4 +1,3 @@
-import { Worker } from 'node:worker_threads';
 import { encode, frameReader, MAX_BODY } from './frames.js';
 import { failure } from './launch.js';
 
@@ -19,8 +18,8 @@ import(workerData.entry).catch(e => { setImmediate(() => { throw e; }); });
 
 // The event loop owns the terminal latch. The worker may block on a reverse read or
 // execute Wasm, but cannot commit a transaction without an acknowledgement on its FIFO.
-// deferred: a launch failure for initialize.
-export function serve({ writeFrame, launch, deferred }) {
+// Worker is the constructor the guard captured before denying it; deferred, a launch failure for initialize.
+export function serve({ writeFrame, Worker, launch, deferred }) {
   let worker, active, generation = 0, initialized = false, deadline = 60_000, stopped = false, backpressure = false;
   const reader = frameReader(accept, stop);
   function stop(reason) {
