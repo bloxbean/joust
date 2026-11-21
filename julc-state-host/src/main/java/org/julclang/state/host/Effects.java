@@ -14,7 +14,7 @@ import static org.julclang.state.host.Wire.*;
 /** D5a projections of the balanced body. Runtime metadata supplies only attribution and amounts owed. */
 final class Effects {
     static ObjectNode of(Contracts.Contract c, JsonNode meta, JsonNode plan, PreparedTx prepared, String address,
-                         String instance, String object, String spent) {
+                         String instance, String object, String spent, String outputReward) {
         var out = obj().putNull("state");
         var objects = out.putArray("objects");
         var events = out.putArray("events");
@@ -61,18 +61,18 @@ final class Effects {
                 }
             }
         }
-        sends(prepared, plan, outputs, spent, sends);
+        sends(prepared, plan, outputs, spent, sends, outputReward);
         if (meta.at("/returns/events").asBoolean()) events(c, meta, plan, spent, events);
         return out;
     }
 
-    private static void sends(PreparedTx prepared, JsonNode plan, JsonNode outputs, String spent, ArrayNode sends) {
+    private static void sends(PreparedTx prepared, JsonNode plan, JsonNode outputs, String spent, ArrayNode sends, String outputReward) {
         if (prepared.sends().isEmpty()) return;
         var metadata = new HashMap<Integer, PreparedTx.Send>();
         prepared.sends().forEach(s -> metadata.put(s.index(), s));
-        // M1 permits only the output verifier's zero withdrawal on a send. Its reward pointer is 0.
+        int pointer = MapWithdrawal.pointer(prepared.transaction(), outputReward);
         for (var r : plan.required("redeemers")) {
-            if (!"reward".equals(r.path("tag").asText()) || r.required("index").asInt() != 0) continue;
+            if (!"reward".equals(r.path("tag").asText()) || r.required("index").asInt() != pointer) continue;
             var claims = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(ContractDatums.parse(str(r, "data"))),
                     OutputClaims.class);
             for (var claim : claims.claims()) {

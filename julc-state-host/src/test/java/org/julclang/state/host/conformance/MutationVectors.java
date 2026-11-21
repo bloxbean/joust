@@ -235,6 +235,25 @@ public final class MutationVectors {
                 }
             }));
         }
+        String token = "token-003-mint";
+        cases.add(new Case("map-withdrawal",token,"mapWithdrawal", e -> e.body(5,"a1581df0"+OTHER+"00")));
+        cases.add(new Case("map-policy",token,"mapClaims", e -> e.swap(e.mapClaim().at(0),"581c"+OTHER)));
+        cases.add(new Case("map-owner",token,"mapClaims", e -> e.swap(e.mapClaim().at(1).tagged(121).at(0),"5820"+"12".repeat(32))));
+        cases.add(new Case("map-field",token,"mapClaims", e -> e.swap(e.mapClaim().at(2),"01")));
+        cases.add(new Case("map-proof",token,"mapClaims", e -> {
+            var after = e.mapClaim().at(5).at(0).tagged(121).at(1).tagged(121);
+            e.swap(after.at(2),"4101");
+        }));
+        cases.add(new Case("map-wrong-reward-pointer","locker-003-unlock","mapClaims", e -> {
+            String first = e.rewardData(0).raw(), second = e.rewardData(1).raw();
+            e.swap(e.rewardData(0),second);
+            e.swap(e.rewardData(1),first);
+        }));
+        cases.add(new Case("map-output-root",token,"mapDatum", e -> {
+            var datum = e.out(0).fields().get(2).at(1).tagged(24);
+            String root = e.mapClaim().at(6).bytes();
+            e.swap(datum,datum.raw().replace(root,"ab".repeat(32)));
+        }));
         return cases;
     }
 
@@ -282,6 +301,15 @@ public final class MutationVectors {
             pairs.forEach((k,value) -> buf.append(uint(k)).append(value));
             swap(obj,buf.toString());
         }
+        Cbor rewardData(int index) {
+            var rs = redeemers();
+            for (int i=0;i<rs.items.size();i+=2) {
+                var pointer = rs.items.get(i);
+                if (pointer.at(0).uint()==3 && pointer.at(1).uint()==index) return rs.items.get(i+1).at(0);
+            }
+            throw new AssertionError("missing reward pointer " + index);
+        }
+        Cbor mapClaim() { return rewardData(0).tagged(121).at(0).at(0).tagged(121); }
         void swap(Cbor item,String hex) {
             if (item.source!=ledger.tx.source) throw new IllegalArgumentException("stale edit offset");
             var original=ledger.tx.raw();

@@ -9,6 +9,8 @@ import com.bloxbean.cardano.vds.core.api.NodeStore;
 import com.bloxbean.cardano.vds.mpf.MpfTrie;
 import org.julclang.core.PlutusData;
 import org.julclang.core.cbor.PlutusDataCborDecoder;
+import org.julclang.state.runtime.snapshot.SuppliedProver;
+import org.julclang.state.api.mpf.MapWitnesses;
 import org.julclang.state.api.mpf.Mpf;
 
 import java.util.ArrayList;
@@ -67,6 +69,18 @@ public final class MapHistory {
             out.addAll(claims(PlutusDataCborDecoder.decode(cbor)));
         }
         return out;
+    }
+
+    /** Replay one identified map-verifier withdrawal from an ordered protocol-1 history.
+     * The caller checks the datum hash and supplies a private store for this read generation. */
+    public static void replay(NodeStore store, byte[] redeemer) {
+        var decoded = PlutusDataCborDecoder.decode(redeemer);
+        var typed = SuppliedProver.decodeClaims(decoded);
+        for (var claim : typed.claims()) if (!MapWitnesses.verify(claim))
+            throw new JoustException("invalid map history proof");
+        var claims = claims(decoded);
+        if (claims.isEmpty()) throw new JoustException("empty or malformed map verifier redeemer");
+        apply(store, claims);
     }
 
     /** The MapClaims a map-verifier redeemer carries (none when the data is something else). */

@@ -22,12 +22,17 @@ final class ClientVectors {
             "Dex-combined-reconstructed", "Dex-init", "Dex-publish-1", "Dex-publish-2", "Dex-publish-3",
             "HostCouncil-init", "HostCouncil-publish-1", "destroy-events", "owned-action", "owned-destroy",
             "owned-init", "quorum-caller", "quorum-two", "dapp-0003", "dapp-0034", "permuted",
+            "locker-003-unlock", "token-m0-mint", "token-001-create", "token-002-mint", "token-003-mint", "token-004-transfer",
             "registry-001-init", "registry-005-upgrade", "registry-017-claim", "registry-019-release", "registry-021-retire"));
         for (String name : HostVectorsTest.REGISTRY) if (!name.equals("Registry-cooldown") && Files.exists(HOST.resolve(name+".json"))) names.add(name);
+        for (String name : HostVectorsTest.TOKEN) if (Files.exists(HOST.resolve(name+".json"))) names.add(name);
         return List.copyOf(names);
     }
 
     static ObjectNode recording(String name) throws Exception {
+        if (name.startsWith("locker-")) return MapRecording.record("locker", name.substring(7));
+        if (name.equals("token-m0-mint")) return MapRecording.firstM0Mint();
+        if (name.startsWith("token-")) return MapRecording.record("token", name.substring(6));
         if (name.startsWith("registry-")) return RegistryRecording.record(name.substring("registry-".length()));
         if (name.startsWith("dapp-")) {
             var r = ReplayTest.Recording.read(ReplayTest.FIXTURES.resolve("dapp/" + name.substring(5) + "-composed_transaction.json"));
@@ -90,6 +95,12 @@ final class ClientVectors {
         anchors.put("language",script.required("type").asText()).put("policy", hash).put("address", scriptAddress(hash, x.path("stakeSelf").asBoolean()));
         var shared = anchors.putObject("outputVerifier").put("language",verifier.required("type").asText()).put("hash",scriptHash(verifier));
         shared.put("address", scriptAddress(shared.required("hash").asText(),false));
+        if (description.path("definitions").has("org.julclang.state.api.MerkleMap")) {
+            var scriptFile = resource(M1bTest.entry(OutputVerifier.class),"META-INF/plutus/MapVerifier.plutus.json");
+            String mapHash = scriptHash(scriptFile);
+            anchors.putObject("mapVerifier").put("language","PlutusScriptV3").put("hash", mapHash)
+                    .put("address", scriptAddress(mapHash, false));
+        }
         var resolved = vector.putObject("resolved");
         var status = vector.putObject("node");
         var reads = v.required("reads").iterator();
@@ -114,8 +125,8 @@ final class ClientVectors {
         }));
         assertFalse(reads.hasNext());
         assertEquals(v.at("/expected/cbor"), result.at("/prepared/cbor"));
-        if (call.has("operation")) vector.set("clock", v.required("clock"));
-        if (name.startsWith("registry-") || name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
+        if (call.has("operation") || name.startsWith("locker-") || name.startsWith("token-")) vector.set("clock", v.required("clock"));
+        if (name.startsWith("registry-") || name.startsWith("locker-") || name.startsWith("token-") || name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
         vector.set("result", result);
         vector.putArray("violations");
         return vector;

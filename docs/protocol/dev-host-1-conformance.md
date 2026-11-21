@@ -44,13 +44,13 @@ Read each `verifier/*.json` and compare the client's violation codes with `viola
 | Field | Origin and use |
 | --- | --- |
 | `method`, `request` | Exact forward method and sent params. The caller address, named payment keys, method, arguments, payment, window and requested publication ID come from here. |
-| `anchors` | Snapshot description, contract address, policy and script language. The shared output verifier has its own hash, language and enterprise address. The recorder reads the actual validator resources beside the compiled classes or in their jars and checks their hashes. |
+| `anchors` | Snapshot description, contract address, policy and script language. The shared output and map verifiers each have their own hash, language and enterprise address. The recorder reads the actual validator resources beside the compiled classes or in their jars and checks their hashes. |
 | `resolved` | Client node UTxOs keyed by `txHash#index`, using D6 amount and datum fields. The positive generator obtains these from the recorded node answers. |
 | `clock` | On keyed prepares, the client’s initialized slot clock for checking linkedAt, cooldowns and window width. |
 | `node` | Complete script hashes present at queried holder addresses and registration observations by credential. An empty holder list means the address was queried. Registration may be `true`, `false` or `"unknown"`. |
 | `protocolParams`, `networkId`, `maxFee` | Client node parameters, selected ledger network and user fee ceiling in lovelace. Fee and execution limits follow the protocol-1 wallet rules. |
 | `result` | The complete forward result, including `prepared` and any `predicted` projection. Signing uses the independently decoded body, witnesses and resolved UTxOs. |
-| `orderedReads` | Included on the offline Registry cases and the two Bank order cases. Compare the provider arrays in `Bank-publish-1` and `permuted`. Selection can change the body hash even though the UTxO set is the same. |
+| `orderedReads` | Included on the offline Token, Locker and Registry cases and the two Bank order cases. Compare the provider arrays in `Bank-publish-1` and `permuted`. Selection can change the body hash even though the UTxO set is the same. |
 
 The checker slices the received CBOR, hashes the body and reads the ledger fields independently of the host builder. It binds the checked redeemers and datums to the body's script-data hash using the client's V3 cost model. Input order for the plan follows the wire. Spend pointers use transaction ID and numeric output index in ledger order. Compare `dapp-0003` and `dapp-0034` for the same method at pointers 0 and 1. The method constructor comes from the anchored description in both cases.
 
@@ -70,6 +70,9 @@ The signing verdict authenticates the compared plan, bounds and signer set. The 
 | `collateral` | Ownership, return, per-unit conservation or the 5,000,000-lovelace exposure limit fails. |
 | `certificate`, `deposit` | Wrong count, form or credential. Deposit covers an incorrect explicit registration deposit or excessive creation deposit. |
 | `withdrawal`, `governance`, `auxiliaryData` | Unauthorized reward account or amount, governance fields, or auxiliary data/hash present. |
+| `mapWithdrawal` | Missing map withdrawal, unpinned reward account or nonzero amount. |
+| `mapClaims` | A claim at the map reward pointer fails its typed shape, policy, owner, field ordinal or MPF proof checks. |
+| `mapDatum` | The map in the input or continuing datum has a different root or nonempty read/write lists. |
 | `mint`, `signer` | Wrong policy, token or quantity, or payment-key requirements disagree with the call. |
 | `upperBound`, `lowerBound` | Missing, expired, empty or overlong upper window, or missing/backdated context or time-rule lower bound. |
 | `keyedWindow` | The body violates the sent start, duration, absolute end or nonempty bounds. |
@@ -106,7 +109,7 @@ cp julc-state-toolchain/build/wasm/{joust-toolchain.js,joust-toolchain.js.wasm,p
 ./gradlew :julc-state-host:nodeHostConformance
 ```
 
-The task builds the conformance classifier and runs its reference checker on the npm host's actual results. The client builds the fixture contracts through the npm compiler, replays the Bank and keyed sessions in wire order, exercises every host vector and reconstructs the 34 eligible M0 calls. It checks complete unsigned bytes and body hashes. The machine-dependent snapshot identity, engine versions and named-view capability are normalized. The harness checks that each negative uses its positive's request and applies its changes to the live result or the independent client evidence. The reference checker must report the recorded violations.
+The task builds the conformance classifier and runs its reference checker on the npm host's actual results. The client builds the fixture contracts through the npm compiler, replays the Bank, keyed and maps sessions in wire order, exercises every host vector and reconstructs the 34 eligible M0 calls. It checks complete unsigned bytes and body hashes. The machine-dependent snapshot identity, engine versions and named-view capability are normalized. The harness checks that each negative uses its positive's request and applies its changes to the live result or the independent client evidence. The reference checker must report the recorded violations.
 
 ### ADR-0022 §9 adversarial coverage
 
@@ -133,3 +136,6 @@ The task builds the conformance classifier and runs its reference checker on the
 | Node snapshot, restore and network | The Bank recording exercises stage mismatch and late answers. The real worker tests restore twice, rewind and rearm a tombstone, check the reconciliation fence, and exercise mainnet opt-in and wallet network validation. |
 | Honest future-start keyed window, widened and late-start windows, refused first designation, two instances with the same method and key | Both hosts replay `sessions/keyed.json`. The five offline Registry positives and eight isolated mutations use reconstructed ADR-0015 evidence. The shared checker tests each mutated body with its rule disabled. |
 | Keyed restart, same method and key on distinct instances, mayHaveLanded, unsigned discard, shallow rollback, expiry and deep rollback | `KeyedReservationTest`, the npm host's restore test and the framed Registry transcript. |
+| Conflicting, truncated or reordered map history, absent redeemer, wrong datum hash and count or byte overflow | `MapReadsTest` drives a cold Token spend with changed answers. `IntegrationTest.hostedMapUsesOnlyTheExplicitMemoryStoreAndProtocolHistory` makes opening the default store fail and uses the closed backend. |
+| Restart before map settlement, conflict, stale refusal, reset and cold rebuild | Both hosts replay `sessions/maps.json`. The Token vectors cover M0's first mint and four M3 engine snapshots. Locker unlock exercises both reward pointers and the sent asset. |
+| Map withdrawal, reward pointer, proof, owner, policy, field ordinal and continuation root | Seven independent body/witness mutations recompute their commitments. Each gives its one named rule and passes with that rule disabled. |

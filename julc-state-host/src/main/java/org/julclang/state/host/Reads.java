@@ -20,7 +20,13 @@ import static org.julclang.state.host.Wire.*;
  * asset filtering and canonical UTxOs after acquisition of the complete address set. */
 final class Reads {
     interface Peer { Call.Answer read(ObjectNode request); }
-    static final List<String> KINDS = List.of("utxos", "output", "tip", "protocolParams", "script", "stakeRegistration");
+    static final List<String> BASE_KINDS = List.of("utxos", "output", "tip", "protocolParams", "script", "stakeRegistration");
+    static final List<String> MAP_KINDS = List.of("assetHistory", "redeemers", "datum");
+    private final Map<JsonNode, JsonNode> mapAnswers = new HashMap<>();
+    JsonNode mapAnswer(String kind, ObjectNode request) {
+        request.put("kind", kind);
+        return mapAnswers.computeIfAbsent(request, key -> answer(kind, request));
+    }
     private final Peer peer;
     private final long now, ahead, maxCount, maxBytes;
     private final int network;
@@ -245,7 +251,7 @@ final class Reads {
         if (field != null) params.put(field, key);
         return answer(kind, params).get("value");
     }
-    private JsonNode answer(String kind, ObjectNode params) {
+    JsonNode answer(String kind, ObjectNode params) {
         if (++count > maxCount) throw HostError.bad("readLimit", "read count exceeds the session limit");
         var response = peer.read(params.put("kind", kind));
         bytes += response.bytes();
@@ -264,7 +270,7 @@ final class Reads {
         if (variants != 1 || a.path("value").isNull()
                 || a.has("absent") && !a.get("absent").booleanValue()
                 || a.has("unsupported") && !a.get("unsupported").booleanValue()
-                || a.has("more") && (!kind.equals("utxos") || !a.has("value"))) throw inconsistent("invalid read outcome");
+                || a.has("more") && (!(kind.equals("utxos") || kind.equals("assetHistory")) || !a.has("value"))) throw inconsistent("invalid read outcome");
         lastHash = hash;
         lastHeight = height.longValue();
         greatestTip = slot.longValue();

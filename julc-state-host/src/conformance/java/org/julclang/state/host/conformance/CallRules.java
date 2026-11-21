@@ -5,6 +5,11 @@ import org.julclang.core.PlutusData;
 import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 import org.julclang.state.runtime.described.SchemaCodec;
+import org.julclang.clientlib.PlutusDataAdapter;
+import org.julclang.state.api.mpf.MapClaims;
+import org.julclang.state.api.mpf.MapWitnesses;
+import org.julclang.state.runtime.CclCryptoProvider;
+import org.julclang.stdlib.Builtins;
 import java.math.BigInteger;
 import java.util.*;
 import static java.math.BigInteger.*;
@@ -19,6 +24,8 @@ final class CallRules {
     private final Map<String,BigInteger> offer = new HashMap<>();
     private final BigInteger payment;
     private final JsonNode datumSchema;
+    private String seed;
+    private JsonNode mapRedeemer, before, after;
 
     CallRules(ReferenceChecker c) {
         this.c = c;
@@ -43,6 +50,7 @@ final class CallRules {
                 var decoded = decodeDatum(c.target.required("inline_datum").asText());
                 if (c.owned) c.test("scriptInput",call.required("instance").equals(decoded.required("instance")));
                 var state = c.owned ? decoded.required("value") : decoded;
+                before = state;
                 for (var f : meta.at("/policies/signedBy")) c.test("signer",c.caller.equals(state.required(f.asText()).asText()));
             } catch (RuntimeException e) { c.test("scriptInput",false); }
         }
@@ -64,19 +72,56 @@ final class CallRules {
                     c.test("redeemer", c.destroy ? "BurnInstance".equals(decoded.path("$variant").textValue()) && decoded.size()==1 :
                             "ByAction".equals(decoded.path("$variant").textValue()) && Objects.equals(c.spent,ref(decoded.required("by"))));
                 } catch (RuntimeException e) { c.test("redeemer",false); }
-            } else if (tag.equals("reward") && meta.at("/returns/sends").asBoolean() && c.ledger.b.containsKey(5)) {
-                c.test("pointer",index==0);
+            } else if (tag.equals("reward") && index >= 0 && index < c.rewards.size()) {
+                if (!c.mapFields.isEmpty() && !c.rewards.get(index).equals(c.reward("outputVerifier"))) mapRedeemer = r;
+                else c.test("pointer", meta.at("/returns/sends").asBoolean() && (c.mapFields.isEmpty() ? index == 0 : index == c.rewards.indexOf(c.reward("outputVerifier"))));
             } else c.test("redeemer",false);
         }
         c.test("redeemer", counts.getOrDefault("spend",0)==(c.creation ? 0 : 1) &&
                 counts.getOrDefault("mint",0)==(c.creation || c.destroy || byAction ? 1 : 0) &&
-                counts.getOrDefault("reward",0)==(c.ledger.b.containsKey(5) && meta.at("/returns/sends").asBoolean() ? 1 : 0));
+                counts.getOrDefault("reward",0)==c.rewards.size());
         boolean mintOk;
         if (c.creation || c.destroy) mintOk = c.token != null && c.minted.size()==1 &&
                 (c.creation ? ONE : ONE.negate()).equals(c.minted.get(c.token));
         else mintOk = c.minted.isEmpty() || byAction && c.minted.keySet().stream().allMatch(u -> u.startsWith(c.policy) && !u.equals(c.token));
         c.test("mint",mintOk);
         outputs();
+        if (!c.mapFields.isEmpty()) checkMaps();
+    }
+
+    private void checkMaps() {
+        try {
+            Builtins.setCryptoProvider(new CclCryptoProvider());
+            var raw = data(mapRedeemer.required("data").asText());
+            var claims = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(raw),
+                    MapClaims.class);
+            // Round-trip the typed redeemer to reject ignored constructor fields and noncanonical alternatives.
+            var encoded = PlutusDataAdapter.convert(claims);
+            c.test("mapClaims", matches(raw, data(encoded.serializeToHex())));
+            c.test("mapClaims", claims.claims().size() == c.mapFields.size());
+            var seen = new HashSet<Integer>();
+            for (var claim : claims.claims()) {
+                int field = claim.field().intValueExact();
+                int index = c.creation ? -1 - field : field;
+                var owner = HEX.formatHex(claim.owner().txId().hash()) + "#" + claim.owner().index();
+                c.test("mapClaims", c.policy.equals(HEX.formatHex(claim.policy())) && owner.equals(c.creation ? seed : c.spent)
+                        && seen.add(index) && index >= 0 && index < c.mapFields.size()
+                        && MapWitnesses.verify(claim));
+                if (index < 0 || index >= c.mapFields.size()) continue;
+                String name = c.mapFields.get(index);
+                if (c.creation) c.test("mapClaims", Arrays.equals(claim.oldRoot(), new byte[32]));
+                else mapDatum(before, name, claim.oldRoot());
+                if (!c.destroy) mapDatum(after, name, claim.newRoot());
+                else c.test("mapClaims", claim.writes().isEmpty());
+            }
+        } catch (RuntimeException e) { c.test("mapClaims", false); }
+    }
+
+    private void mapDatum(JsonNode state, String field, byte[] root) {
+        var map = state.path(field);
+        c.test("mapDatum", root.length == 32 && HEX.formatHex(root).equals(map.path("root").textValue())
+                && map.path("reads").isArray() && map.get("reads").isEmpty()
+                && map.path("writes").isArray() && map.get("writes").isEmpty());
     }
 
     JsonNode schema(String purpose) {
@@ -125,6 +170,7 @@ final class CallRules {
                     case "instance" -> c.test("redeemer",call.required("instance").equals(decoded.required(name)));
                     case "seed" -> {
                         var seed = decoded.required("seed");
+                        this.seed = ref(seed);
                         int i = n(seed,"index").intValueExact();
                         c.test("redeemer",c.creation && c.walletRefs.contains(ref(seed)) && i>=0 && i<=65535);
                         byte[] bytes = HEX.parseHex(seed.required("txId").asText()+String.format("%04x",i));
@@ -173,6 +219,7 @@ final class CallRules {
                 add(continuation,amount,1);
                 try {
                     var d = decodeDatum(o.required("datum").textValue());
+                    after = c.owned ? d.required("value") : d;
                     c.test("continuingOutput", !o.get("hasScript").booleanValue() &&
                             (!c.owned || call.required("instance").equals(d.required("instance"))));
                 } catch (RuntimeException e) { c.test("continuingOutput",false); }

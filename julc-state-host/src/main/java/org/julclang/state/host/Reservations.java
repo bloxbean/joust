@@ -50,9 +50,14 @@ final class Reservations implements ClaimStore {
             return Set.copyOf(refs);
         }
         static Body decode(String cbor, int network) {
+            return imported(cbor, network, null, null).body();
+        }
+        record Imported(Body body, MapWithdrawal.Restored writes) {}
+        static Imported imported(String cbor, int network, String reward, Contracts catalog) {
             try {
                 byte[] bytes = HexFormat.of().parseHex(cbor);
-                return of(Transaction.deserialize(bytes), TransactionUtil.getTxHash(bytes), network);
+                var tx = Transaction.deserialize(bytes);
+                return new Imported(of(tx, TransactionUtil.getTxHash(bytes), network), MapWithdrawal.restored(tx, reward, catalog));
             } catch (Exception e) { throw bad("invalid transaction CBOR"); }
         }
     }
@@ -89,6 +94,12 @@ final class Reservations implements ClaimStore {
         if (evidence.has("slot")) number(evidence, "slot", 0);
         else str(evidence, "message");
         return new Transport.Reply(obj(), () -> assertions.computeIfAbsent(hash, ignored -> new HashSet<>()).add(credential));
+    }
+
+    final MapMirrors maps = new MapMirrors();
+    void resetMirrors(boolean rewound) {
+        maps.reset(entries.values());
+        if (rewound) maps.rewound();
     }
 
     private final long margin;
@@ -172,7 +183,11 @@ final class Reservations implements ClaimStore {
     }
 
     void observe(long tip) {
-        if (!reconcile) entries.replaceAll((id, e) -> advance(e, tip));
+        if (!reconcile) entries.replaceAll((id, e) -> {
+            var next = advance(e, tip);
+            if (next != e) maps.transition(next);
+            return next;
+        });
     }
     private Entry advance(Entry e, long tip) {
         if (e.state == State.prepared && tip - e.body.to > margin) return e.as(State.expired, null);
@@ -189,6 +204,13 @@ final class Reservations implements ClaimStore {
         fields(p, "reservation", "txHash", "status", "slot", "tip");
         var e = entries.get(str(p, "reservation"));
         if (e == null) throw HostError.bad("unknownReservation", "unknown reservation");
+        try { return settle(e, p, whileLive); }
+        catch (HostError err) {
+            if (err.code.equals("conflict") || err.code.equals("deepRollback")) whileLive.accept(() -> maps.conflict(e.id));
+            throw err;
+        }
+    }
+    private Transport.Reply settle(Entry e, JsonNode p, java.util.function.Consumer<Runnable> whileLive) {
         if (!e.body.hash.equals(str(p, "txHash"))) throw conflict();
         long tip = number(p, "tip", 0);
         String status = str(p, "status");
@@ -230,6 +252,7 @@ final class Reservations implements ClaimStore {
         return new Transport.Reply(obj().put("state", finalState.state.name()), () -> {
             if (status.equals("rolledBack")) assertions.remove(e.body.hash);
             commit(finalState);
+            maps.transition(finalState);
             observe(tip);
         });
     }
@@ -246,20 +269,22 @@ final class Reservations implements ClaimStore {
     }
 
     Transport.Reply restore(JsonNode p) {
-        return restore(p,null);
+        return restore(p,null,null);
     }
 
-    Transport.Reply restore(JsonNode p, Contracts contracts) {
+    Transport.Reply restore(JsonNode p, Contracts contracts, String mapReward) {
         if (!reconcile) throw HostError.bad("restoreClosed", "restore is closed");
         fields(p, "transactions", "complete");
         boolean complete = bool(p, "complete");
         if (!p.path("transactions").isArray()) throw bad("transactions must be an array");
         var staged = new LinkedHashMap<>(entries);
+        var restoredMaps = new HashMap<String, MapWithdrawal.Restored>();
         var out = obj();
         var ids = out.putArray("reservations");
         for (var t : p.get("transactions")) {
             fields(t, "cbor", "state", "slot", "operation");
-            Body b = Body.decode(str(t, "cbor"), network);
+            var imported = Body.imported(str(t, "cbor"), network, mapReward, contracts);
+            Body b = imported.body();
             var op = t.has("operation") ? KeyedOperation.parse(t.get("operation")) : null;
             if (op != null && (!b.inputs.contains(op.identity().designated()) ||
                     op.attempts().getOrDefault(b.hash, b.to) != b.to)) throw KeyedOperation.mismatch();
@@ -303,11 +328,15 @@ final class Reservations implements ClaimStore {
                 e = new Entry(Long.toString(++lastId), b, state, slot, op);
                 staged.put(e.id, e);
             }
+            maps.checkRestored(e.id, imported.writes(), restoredMaps.get(e.id));
+            if (imported.writes() != null) restoredMaps.put(e.id, imported.writes());
             ids.add(e.id);
         }
         return new Transport.Reply(out, () -> {
             entries = staged;
+            restoredMaps.forEach(maps::restore);
             reconcile = !complete;
+            if (complete) maps.reconciled();
         });
     }
 }

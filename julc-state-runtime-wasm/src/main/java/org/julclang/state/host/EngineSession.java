@@ -8,9 +8,11 @@ import org.julclang.state.api.RequireException;
 import org.julclang.state.runtime.*;
 import org.julclang.state.runtime.described.DescribedContract;
 import org.julclang.state.runtime.described.UplcTransitions;
+import org.julclang.state.runtime.described.TransitionFn;
 import org.julclang.state.runtime.wasm.Prepare;
 import org.julclang.state.serve.ContractCalls;
 
+import org.julclang.core.PlutusData;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -64,7 +66,7 @@ public final class EngineSession {
             var x = desc.required("x-joust");
             String name = str(desc.required("preamble"), "title");
             String hash = HexFormat.of().formatHex(PlutusV3Script.builder().cborHex(source.script()).build().getScriptHash());
-            String code = x.has("params") ? "params" : desc.path("definitions").has("org.julclang.state.api.MerkleMap") ? "maps" : null;
+            String code = x.has("params") ? "params" : null;
             var messages = source.messages() == null ? null : JSON.readTree(source.messages());
             if (messages instanceof ObjectNode map) map.put("scriptHash", x.has("params") ? "" : hash);
             var calls = code == null ? new Described(load(source, desc), messages) : null;
@@ -75,16 +77,23 @@ public final class EngineSession {
         return new Contracts(contracts);
     }
 
-    // Hosted calls exclude maps. Their transition needs only the step and the VM's typed verdict.
     private static DescribedContract load(Prepare.Contract source, JsonNode desc) {
         var vm = UplcTransitions.verified(source.manifest(), source.description(), source.script(), source.transitions());
-        return new DescribedContract(desc, source.script(), (method, target, shared, args, ctx) -> {
-            var result = vm.evaluate(method, target, shared, args, ctx);
-            return switch (result.kind()) {
-                case STEP -> result.run().step();
-                case REFUSAL -> throw new RequireException(result.run().refusal());
-                case ERROR, BUDGET -> throw HostError.internal("evaluator", result.run().refusal());
-            };
+        return new DescribedContract(desc, source.script(), new TransitionFn() {
+            public PlutusData apply(String method, PlutusData target,
+                    PlutusData shared, PlutusData args, PlutusData ctx) {
+                var run = run(method, target, shared, args, ctx);
+                if (run.step() == null) throw new RequireException(run.refusal());
+                return run.step();
+            }
+            public Run run(String method, PlutusData target, PlutusData shared,
+                           PlutusData args, PlutusData ctx) {
+                var result = vm.evaluate(method, target, shared, args, ctx);
+                return switch (result.kind()) {
+                    case STEP, REFUSAL -> result.run(); // Includes map-read discovery traces, also on a tentative refusal.
+                    case ERROR, BUDGET -> throw HostError.internal("evaluator", result.run().refusal());
+                };
+            }
         });
     }
 

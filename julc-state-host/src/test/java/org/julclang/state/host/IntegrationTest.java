@@ -115,14 +115,18 @@ class IntegrationTest {
             assertEquals(r.fixture().get("txHash"),success(c.rpc("prepare",r.params(),r::answer)).at("/prepared/txHash"));
         }
     }
-    @Test void mapContractCannotOpenAStoreOrRequestHistory() throws Exception {
-        var entry = Path.of(org.julclang.state.examples.token.TokenClient.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-        try (var c = new Client(new Handshake(List.of(entry)))) {
-            var contract = success(c.rpc("initialize", init(entry))).at("/contracts/0");
-            assertEquals("maps", contract.required("unsupported").textValue());
-            var params = record().params().deepCopy();
-            params.withObject("/call").put("contract", contract.required("name").textValue());
-            error("unsupported", "maps", c.rpc("prepare", params)); // the peer fails any reverse request
+    @Test void hostedMapUsesOnlyTheExplicitMemoryStoreAndProtocolHistory() throws Exception {
+        String previous = System.getProperty("joust.mapStore");
+        // Opening the default RocksDB at a regular file would fail even if its native code were present.
+        var path = java.nio.file.Files.createTempFile("not-a-map-store", ".tmp");
+        try {
+            System.setProperty("joust.mapStore", path.toString());
+            var v = MapRecording.record("token", "003-mint");
+            assertTrue(v.required("reads").findValuesAsText("kind").containsAll(List.of("assetHistory","redeemers","datum")));
+            HostVectorsTest.replay(v); // Reads.backend rejects getAssetService and every TransactionService method.
+        } finally {
+            if (previous == null) System.clearProperty("joust.mapStore"); else System.setProperty("joust.mapStore",previous);
+            java.nio.file.Files.delete(path);
         }
     }
 
