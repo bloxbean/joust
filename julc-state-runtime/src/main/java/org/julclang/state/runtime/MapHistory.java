@@ -74,13 +74,26 @@ public final class MapHistory {
     /** Replay one identified map-verifier withdrawal from an ordered protocol-1 history.
      * The caller checks the datum hash and supplies a private store for this read generation. */
     public static void replay(NodeStore store, byte[] redeemer) {
-        var decoded = PlutusDataCborDecoder.decode(redeemer);
-        var typed = SuppliedProver.decodeClaims(decoded);
-        for (var claim : typed.claims()) if (!MapWitnesses.verify(claim))
-            throw new JoustException("invalid map history proof");
-        var claims = claims(decoded);
-        if (claims.isEmpty()) throw new JoustException("empty or malformed map verifier redeemer");
-        apply(store, claims);
+        replay(store, List.of(redeemer));
+    }
+
+    /**
+     * Replay a unit's whole protocol-1 history: every withdrawal is decoded and its proofs verified first, then the
+     * claims are applied together, in any order (as {@link #rebuild} does), so the result does not depend on the
+     * order of transactions within a block (#160 review Q2). The caller checks each datum hash.
+     */
+    public static void replay(NodeStore store, List<byte[]> redeemers) {
+        var all = new ArrayList<Claim>();
+        for (byte[] redeemer : redeemers) {
+            var decoded = PlutusDataCborDecoder.decode(redeemer);
+            var typed = SuppliedProver.decodeClaims(decoded);
+            for (var claim : typed.claims()) if (!MapWitnesses.verify(claim))
+                throw new JoustException("invalid map history proof");
+            var claims = claims(decoded);
+            if (claims.isEmpty()) throw new JoustException("empty or malformed map verifier redeemer");
+            all.addAll(claims);
+        }
+        apply(store, all);
     }
 
     /** The MapClaims a map-verifier redeemer carries (none when the data is something else). */

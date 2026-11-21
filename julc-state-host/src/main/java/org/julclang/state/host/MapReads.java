@@ -50,6 +50,7 @@ record MapReads(Reads reads) {
     }
 
     void rebuild(String unit, String verifier, NodeStore store) {
+        var withdrawals = new ArrayList<byte[]>();
         for (String tx : history(unit)) {
             var rs = reads.mapAnswer("redeemers", obj().put("txHash", tx)).path("value");
             if (!rs.isArray()) throw inconsistent("missing redeemers for history transaction");
@@ -69,10 +70,12 @@ record MapReads(Reads reads) {
                     byte[] bytes = HexFormat.of().parseHex(datum.textValue());
                     if (!hash.equals(HexFormat.of().formatHex(Blake2bUtil.blake2bHash256(bytes))))
                         throw inconsistent("map datum hash mismatch");
-                    MapHistory.replay(store, bytes);
+                    withdrawals.add(bytes);
                 } catch (RuntimeException e) { throw inconsistent("malformed or inconsistent map history claim"); }
             }
         }
+        try { MapHistory.replay(store, withdrawals); }
+        catch (RuntimeException e) { throw inconsistent("malformed or inconsistent map history claim"); }
     }
 
     static HostError inconsistent(String message) { return HostError.internal("inconsistentRead", message); }
