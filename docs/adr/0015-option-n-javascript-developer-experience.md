@@ -830,6 +830,17 @@ direct `Tx` building, gated by S3.
     prepared Dex swap reproduced it on the JVM.
   - So the runtime collects only for key accounts (`caller instanceof WalletAccount` skips it). This is worth
     reporting to cardano-client-lib.
+  - **Corrected (#152).** The two build paths of `Tx` are the same; the double count was the runtime's own. A wallet's
+    prepare with a payout to the wallet also spends the wallet's largest UTxO, to give the change output the fee comes
+    from. When that UTxO is the one collected for the assets (a wallet's only UTxO), it was collected twice. QuickTx
+    keeps one input but counts its value twice in the change. Skipping the collection made a second bug: with a script
+    input fixed, QuickTx builds the change from the fixed inputs, and its fee selection asks only for lovelace. A wallet
+    whose tokens sit on a UTxO the selection does not pick then gets a negative token quantity in its change (the node
+    rejects it, "expected word"). Now the runtime collects asset UTxOs for wallets too, and never collects a UTxO twice.
+    The funding pick reuses an asset input, and each later call in a composition first counts what the inputs it
+    already spends hold. Every body handed to a wallet (`PreparedTx`, a prepared publication) must also balance per
+    unit (`BodyBalance`): no negative quantity, no input twice, inputs + mint + withdrawals + refunds = outputs + fee +
+    deposits. Otherwise it is refused.
 - **The snapshot backend** returns one object per output reference, whichever query found it: cardano-client-lib tells
   UTxOs apart by equality.
 - **`devkitSweep`** moves what contracts sent to the wallet key's enterprise address to its base address, as
