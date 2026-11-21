@@ -254,7 +254,7 @@ line that no test can fail on.
 | the `.jsc` 2 checker, `JscMain` (joust.lock) | julc-state-dsl (the checker and lock tests) | `./gradlew :julc-state-dsl:pitest` |
 | set `joust`: js/joust's `src/lsp/select.js`, `src/build.js`, `src/toolchain.js` | js/joust, without worker-limits' two slow heap cases | `bash scripts/stryker-changed.sh --all` (`JOUST_STRYKER_SETS=joust` for one set) |
 | set `joust-heap`: js/joust's `src/toolchain-heap.js` | js/joust, every case | the same |
-| set `state-client`: js/state-client's `src/verify.js`, `src/keyed.js` (the verifiers that protect a signer) | js/state-client | the same |
+| set `state-client`: js/state-client's `src/verify.js`, `src/keyed.js`, `src/claims.js` (the verifiers that protect a signer) | js/state-client | the same |
 
 worker-limits' cases that grow a worker's heap to its limit take 112 of that file's 129 seconds. Run for every mutant
 they cover, they kept CI's Stryker past its timeout, so only the `joust-heap` set, whose mutants they guard, runs them.

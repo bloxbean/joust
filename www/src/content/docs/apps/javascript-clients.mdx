@@ -244,9 +244,12 @@ For a single call, `verifyPrepared` refuses:
 - anything but exactly one continuation of the instance or object, with an inline datum that decodes;
 - a transaction that does not balance; a wallet losing more than its payment plus the fee (plus the minimum ADA of a
   new UTxO); others receiving more than the script releases beyond its payouts and sends to the wallet. An output the
-  output verifier's claims name for a send at a wallet address is the script's send, not the wallet's change: it does
-  not count as coming back to the wallet (except the minimum ADA the wallet may add to it), and a malformed claim set,
-  an output claimed twice, or a claim for another input is refused;
+  output verifier's claims name for a send at a wallet address is the script's send, not the wallet's change, so its
+  whole value is kept from others; a malformed claim set, an output claimed twice, a claim for another input, and a
+  deposit claim outside a composition with its receiver (or not by a call that deposits) are refused. A call that sends
+  tokens to the caller and pays released lovelace to others is therefore refused unless the send carries its own
+  minimum ADA (`Assets.lovelace(min)` with the tokens): the page cannot tell the wallet's minimum ADA in it from
+  lovelace the script sends;
 - a fee above the protocol's for this size and budget (times 1.2, plus `feeMargin`) or above `maxFee`; execution
   budgets above the protocol's limits;
 - collateral that is not the wallet's, not returned to the wallet, or above `maxCollateral`;

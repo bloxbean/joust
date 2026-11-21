@@ -87,6 +87,47 @@ export function inputsOf(r, { txHex = r.cbor, chain = chainOf(r.x) } = {}) {
   };
 }
 
+/**
+ * A recorded composition (fixtures/m3, a call with `calls`): { x, cbor, wallet, chain, steps } with verifyComposed's
+ * steps, each call's deployment read from the snapshot (the UTxO holding its instance or object; an adoption's policy is
+ * the other one holding the instance).
+ */
+export function recordedComposition(name) {
+  const x = JSON.parse(readFileSync(new URL(name, FIXTURES), 'utf8'));
+  const descriptions = {};
+  for (const sha of x.contracts) {
+    const built = JSON.parse(readFileSync(new URL(`contracts/${sha}.json`, FIXTURES), 'utf8'));
+    const d = typeof built.description === 'string' ? JSON.parse(built.description) : built.description;
+    descriptions[d.preamble.title] = d;
+  }
+  const keys = Object.keys(x.snapshot.assetUtxos);
+  const used = new Set();
+  const steps = x.call.calls.map((k) => {
+    const description = descriptions[k.contract];
+    const target = k.kind.startsWith('owned') ? k.object : k.instance;
+    const key = keys.find((s) => s.split('|')[1].endsWith(target) && (k.kind !== 'migrate' || !used.has(s.split('|')[1].slice(0, 56))));
+    const [address, unit] = key.split('|');
+    used.add(unit.slice(0, 56));
+    const c = makeCodec(description);
+    const xj = description['x-joust'];
+    const meta = [...xj.actions, ...xj.creations].find((a) => a.name === k.method && a.kind === k.kind);
+    const args = {};
+    for (const a of meta.args) args[a.name] = c.decode(a.schema, c.encode(a.schema, k.args[a.name], a.name));
+    return {
+      description,
+      deployment: {
+        contract: k.contract, policy: unit.slice(0, 56), address, networkId: x.networkId, referenceScripts: x.call.referenceScripts,
+        outputVerifier: { rewardAddress: rewardAddressOf(OUTPUT_VERIFIER, x.networkId), referenceScripts: [] }, params: k.params,
+      },
+      call: {
+        kind: k.kind, meta, args, instance: k.instance ?? undefined, object: k.object ?? undefined, into: k.into ?? undefined,
+        pay: { lovelace: BigInt(k.pay?.lovelace ?? 0), assets: k.pay?.assets ?? [] },
+      },
+    };
+  });
+  return { x, cbor: x.cbor, wallet: walletOf(x), chain: chainOf(x), steps };
+}
+
 // ------------------------------------------------------------------------------------------------- CSL edits
 
 const big = (n) => CSL.BigNum.from_str(String(n));

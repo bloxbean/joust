@@ -6,8 +6,8 @@
 // What the page does not check, the pinned validator does: the next state (or object) is exactly what the contract's
 // method computes from the call, payouts are paid, and the script's value is conserved. So the page checks that the
 // transaction makes exactly the call it asked for, on the pinned script, and that the wallet risks nothing else: it
-// loses at most the payment, the fee and (for a creation) the new UTxO's minimum ADA, and the outputs the output
-// verifier's claims name for its sends to the wallet are the script's, never the wallet's change (claims.js).
+// loses at most the payment, the fee and (for a creation) the new UTxO's minimum ADA; others are paid only from what the
+// script releases beyond its payouts and its claimed sends to the wallet (claims.js).
 
 import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf, objectIdOf } from './tokens.js';
@@ -16,7 +16,7 @@ import { approvalsData, rewardAddressOf } from './governors.js';
 import { parseTx, addressParts } from './ledger.js';
 import { dataHex } from './pdata.js';
 import { isKeyedCall, verifyKeyed } from './keyed.js';
-import { claimedSends } from './claims.js';
+import { outputRegistry, claimedSends } from './claims.js';
 
 export const DEFAULT_LIMITS = {
   maxCollateral: 5_000_000n,     // lovelace a failing script may cost
@@ -307,9 +307,11 @@ export async function verifyPrepared(o) {
   const back = new Map();          // every wallet output
   const tagged = new Map();        // wallet outputs carrying the payout tag (the script's payouts to the wallet)
   // Wallet outputs the output verifier's claims name for the target (ADR-0007 D5): the script's sends to the wallet,
-  // never its change (on chain a send to the wallet's address may name any output there that covers it).
-  const claimed = claimedSends(tx, [{ verifier: deployment.outputVerifier, owners: targetRef ? [targetRef] : [] }], isWallet,
-    chain.params, problems);
+  // never its change (on chain a send to the wallet's address may name any output there that covers it). No deposits:
+  // they need their receiver in the same composition (ADR-0011 D3), and a receiver credits any claim on its output.
+  const registry = outputRegistry(tx, deployment.outputVerifier, problems);
+  if (registry?.deposits.length) problems.push('a deposit claim in a single call (deposits are verified only in a composition with their receiver)');
+  const claimed = claimedSends(tx, [{ registry, owners: targetRef ? [targetRef] : [] }], isWallet, problems);
   const third = new Map();         // outputs to anyone else
   let continuation = new Map();
   const continuingUnit = createdUnit ?? (DESTROYS.has(call.kind) ? null : targetUnit);
@@ -369,33 +371,33 @@ export async function verifyPrepared(o) {
     }
   }
 
-  // The wallet loses at most the payment, the fee and (a creation) the new UTxO; and no token it does not pay. Its
-  // claimed send outputs do not count as coming back (they are what the script sends it), except the minimum ADA the
-  // wallet may add to each of them.
+  // The wallet loses at most the payment, the fee and (a creation) the new UTxO; and no token it does not pay.
   const fee = tx.fee;
   const net = new Map(spent);
   add(net, back, -1n);
-  const lost = new Map(net);       // what it loses of its own: its claimed send outputs are not its change
-  add(lost, claimed.value);
-  const sends = claimed.indexes.size ? ' (its claimed send outputs are the script\'s, not its change)' : '';
   const created = CREATIONS.has(call.kind) ? createdLovelace : 0n;
   if (CREATIONS.has(call.kind) && createdLovelace > pay.lovelace + BigInt(xj.minAda)) {
     problems.push(`the new UTxO holds ${createdLovelace} lovelace, more than the payment and its minimum ADA`);
   }
-  const allowed = fee + (CREATIONS.has(call.kind) ? created : pay.lovelace) + claimed.topUp;
+  const allowed = fee + (CREATIONS.has(call.kind) ? created : pay.lovelace);
   const offered = new Map();
   for (const [p, assets] of pay.assets) for (const [n, q] of assets) offered.set(p + n, BigInt(q));
-  for (const [unit, q] of lost) {
-    if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)${sends}`);
-    if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}${sends}`);
+  for (const [unit, q] of net) {
+    if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)`);
+    if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}`);
   }
   // Other parties are paid only from what the script releases beyond its payouts and its claimed sends to the wallet:
-  // neither may hide the wallet's own funds, or the script's release to it, going elsewhere (review r4, Critical).
+  // neither may hide the wallet's own funds, or the script's release to it, going elsewhere (review r4, Critical). This
+  // is the rule that protects the wallet: each continuation's value is exact on chain, so what the body does not pay
+  // others or the fee comes back to the wallet. A claimed send output is subtracted whole, the minimum ADA the wallet
+  // put in a token send included (the page cannot tell it from lovelace the script sends): a method that sends
+  // tokens to the caller and pays released lovelace to others should give the send its own minimum ADA.
   const released = new Map(targetValue);
   add(released, continuation, -1n);
   add(released, minted);
   for (const [unit, q] of third) {
     const free = (released.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
+    const sends = claimed.indexes.size ? ' beyond its claimed sends to the wallet' : '';
     if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the script releases to them${sends}`);
   }
   report.fee = fee;

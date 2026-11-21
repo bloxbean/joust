@@ -11,7 +11,7 @@ import {
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
-import { claimedSends } from './claims.js';
+import { outputRegistry, claimedSends } from './claims.js';
 
 /**
  * @param o.steps  [{ description, deployment, call: { kind, meta, args, pay, instance, object } }] in composition order
@@ -238,13 +238,17 @@ export async function verifyComposed(o) {
   const back = new Map();
   const tagged = new Map();
   const third = new Map();
-  // Wallet outputs the output verifiers' claims name (each for a target spent by a call pinning that verifier; ADR-0007
-  // D5): the scripts' sends to the wallet, never its change.
-  const claimed = claimedSends(tx, calls.map((k) => ({
-    verifier: k.deployment.outputVerifier,
-    owners: calls.filter((x) => x.targetRef && x.deployment.outputVerifier?.rewardAddress === k.deployment.outputVerifier?.rewardAddress)
-      .map((x) => x.targetRef),
-  })), isWallet, chain.params, problems);
+  // Each output verifier the calls pin, with its registry and the calls pinning it. The wallet outputs its claims name
+  // (each for a target spent by one of those calls; ADR-0007 D5) are the scripts' sends to the wallet, never its change.
+  const registries = [];
+  for (const k of calls) {
+    const v = k.deployment.outputVerifier;
+    if (!v?.rewardAddress || registries.some((r) => r.verifier.rewardAddress === v.rewardAddress)) continue;
+    const pinning = calls.filter((x) => x.deployment.outputVerifier?.rewardAddress === v.rewardAddress);
+    registries.push({ verifier: v, registry: outputRegistry(tx, v, problems), pinning,
+      owners: pinning.filter((x) => x.targetRef).map((x) => x.targetRef) });
+  }
+  const claimed = claimedSends(tx, registries, isWallet, problems);
   for (const [index, out] of tx.outputs.entries()) {
     const value = out.value;
     const bech = out.address;
@@ -260,6 +264,7 @@ export async function verifyComposed(o) {
     if (k) {
       k.continuations++;
       k.continuation = value;
+      k.continuationIndex = index;
       const datum = out.datum;
       if (!datum) problems.push(`${k.call.meta.name}: the continuation has no inline datum`);
       else {
@@ -289,6 +294,18 @@ export async function verifyComposed(o) {
     report.outputs.push({ address: bech, value });
     add(third, value);
   }
+  // Deposits (ADR-0011 D3): a receiver credits every deposit claimed on its continuation, whatever its `by`, so each must
+  // come from the target of a call that declares deposits (its validator checks its claims exactly: their number, values,
+  // memos and outputs) and land on the continuation of a call that receives them, both pinning this verifier. A deposit
+  // by a wallet input would move the wallet's own funds to the receiver.
+  for (const { registry, pinning } of registries) {
+    for (const d of registry?.deposits ?? []) {
+      const from = pinning.find((x) => x.targetRef === d.by);
+      const into = pinning.find((x) => x.continuationIndex === d.output);
+      if (!from || !from.call.meta.returns?.deposits) problems.push(`a deposit claimed for ${d.by}, not a composed call that deposits`);
+      if (!into || !into.call.meta.policies?.receives) problems.push(`a deposit into output ${d.output}, not the continuation of a composed call that receives`);
+    }
+  }
   for (const k of calls) {
     if (!DESTROYS.has(k.call.kind) && k.continuations !== 1) problems.push(`${k.call.meta.name}: not exactly one continuation`);
     // An adoption holds exactly what the prior instance held, its token aside (the funds move; ADR-0011 D4).
@@ -311,21 +328,18 @@ export async function verifyComposed(o) {
     }
   }
 
-  // The wallet loses at most the calls' payments and the fee, and no token it does not pay. Its claimed send outputs
-  // do not count as coming back (they are what the scripts send it), except the minimum ADA it may add to each.
+  // The wallet loses at most the calls' payments and the fee, and no token it does not pay.
   const net = new Map(spent);
   add(net, back, -1n);
-  const lost = new Map(net);       // what it loses of its own: its claimed send outputs are not its change
-  add(lost, claimed.value);
-  const sends = claimed.indexes.size ? ' (its claimed send outputs are the scripts\', not its change)' : '';
-  const allowed = fee + calls.reduce((s, k) => s + k.pay.lovelace, 0n) + claimed.topUp;
+  const allowed = fee + calls.reduce((s, k) => s + k.pay.lovelace, 0n);
   const offered = new Map();
   for (const k of calls) for (const [p, assets] of k.pay.assets) for (const [n, q] of assets) offered.set(p + n, (offered.get(p + n) ?? 0n) + BigInt(q));
-  for (const [unit, q] of lost) {
-    if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)${sends}`);
-    if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}${sends}`);
+  for (const [unit, q] of net) {
+    if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)`);
+    if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}`);
   }
-  // Others receive only what the scripts release beyond their payouts and claimed sends to the wallet, over all calls.
+  // Others receive only what the scripts release beyond their payouts and claimed sends to the wallet, over all calls
+  // (the rule that protects the wallet, as in verify.js; deposits are bound to composed calls above).
   const released = new Map();
   for (const k of calls) {
     add(released, k.targetValue);
@@ -334,6 +348,7 @@ export async function verifyComposed(o) {
   add(released, minted);
   for (const [unit, q] of third) {
     const free = (released.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
+    const sends = claimed.indexes.size ? ' beyond their claimed sends to the wallet' : '';
     if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the scripts release to them${sends}`);
   }
   report.fee = fee;

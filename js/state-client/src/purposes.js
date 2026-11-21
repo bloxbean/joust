@@ -8,7 +8,7 @@ import { codec as makeCodec } from './data.js';
 import { Data, dataEqual } from './pdata.js';
 import { rewardAddressOf } from './governors.js';
 import { parseTx } from './ledger.js';
-import { claimedSends, rewardRefOf } from './claims.js';
+import { outputRegistry, claimedSends, rewardRefOf } from './claims.js';
 
 /** The contract's purpose handler of {@code purpose} (withdraw, certify, vote, propose), or null. */
 export const purposeOf = (description, purpose) => (description['x-joust'].purposes ?? []).find((p) => p.purpose === purpose) ?? null;
@@ -120,10 +120,10 @@ export async function verifyPurpose(o) {
 
   // Outputs: the wallet's (no datum or script); others only from the rewards withdrawn beyond the handler's claimed sends
   // to the wallet (claimed for RewardRef(policy), I37: the script's release to the wallet, never its change).
-  const claimed = op === 'collect'
-    ? claimedSends(tx, [{ verifier: deployment.outputVerifier, owners: [rewardRefOf(policy)] }], isWallet, chain.params, problems)
-    : { indexes: new Set(), value: new Map(), topUp: 0n };
-  const sends = claimed.indexes.size ? ' (its claimed send outputs are the handler\'s, not its change)' : '';
+  // No deposits: a collection has no receiver.
+  const registry = op === 'collect' ? outputRegistry(tx, deployment.outputVerifier, problems) : null;
+  if (registry?.deposits.length) problems.push('a deposit claim in a reward collection');
+  const claimed = claimedSends(tx, [{ registry, owners: [rewardRefOf(policy)] }], isWallet, problems);
   const produced = new Map();
   const back = new Map();
   let others = 0n;
@@ -142,7 +142,7 @@ export async function verifyPurpose(o) {
   const free = withdrawn - (claimed.value.get('lovelace') ?? 0n);
   if (others > (free > 0n ? free : 0n)) {
     problems.push(claimed.indexes.size
-      ? `others receive ${others} lovelace, more than the ${free > 0n ? free : 0n} of rewards withdrawn beyond the sends to the wallet${sends}`
+      ? `others receive ${others} lovelace, more than the ${free > 0n ? free : 0n} of rewards withdrawn beyond the claimed sends to the wallet`
       : `others receive ${others} lovelace, more than the ${withdrawn} of rewards withdrawn`);
   }
   const fee = report.fee;
@@ -154,11 +154,9 @@ export async function verifyPurpose(o) {
   }
   const net = new Map(consumed);
   add(net, back, -1n);
-  const lost = new Map(net);       // what it loses of its own: its claimed send outputs are not its change
-  add(lost, claimed.value);
-  for (const [unit, q] of lost) {
-    if (unit === 'lovelace' && q > fee + claimed.topUp) problems.push(`the wallet loses ${q} lovelace, more than the fee${sends}`);
-    if (unit !== 'lovelace' && q > 0n) problems.push(`the wallet loses ${q} of ${unit}${sends}`);
+  for (const [unit, q] of net) {
+    if (unit === 'lovelace' && q > fee) problems.push(`the wallet loses ${q} lovelace, more than the fee`);
+    if (unit !== 'lovelace' && q > 0n) problems.push(`the wallet loses ${q} of ${unit}`);
   }
   if (fee > limits.maxFee) problems.push(`a fee of ${fee}, above the page's limit of ${limits.maxFee}`);
   report.walletNet = net.get('lovelace') ?? 0n;

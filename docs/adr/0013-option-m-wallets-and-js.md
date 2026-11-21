@@ -313,17 +313,23 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
       verifier, the page decodes that withdrawal's `OutputClaims` redeemer (its Reward redeemer, by the withdrawal's
       ledger index). Every claim must name a distinct output in strictly increasing order and, as `by`, the target
       the transaction spends; anything else (another shape, a malformed claim, an output twice or out of range,
-      another `by`) is refused, and so is a claimed output that also carries the payout tag. On chain a send to the
+      another `by`) is refused, and so is a claimed output that also carries the payout tag. A single call carries no
+      deposit claims (a deposit needs its receiver in the same composition, ADR-0011 D3). On chain a send to the
       wallet accepts any output at its address that covers it, so a claim could name the wallet's own change: every
-      claimed output at a wallet address is the script's send to the wallet, never its change. It is excluded from
-      what comes back to the wallet in the net outflow below (the wallet may add to each such output at most its
-      ledger minimum, `(160 + size) × coinsPerUTxOByte`, as a token send needs), and it is subtracted, as tagged
-      payouts are, from what others may receive. Calls without sends are unaffected;
+      claimed output at a wallet address is the script's send to the wallet, never its change, and its whole value is
+      subtracted, as tagged payouts are, from what others may receive. That bound is what protects the wallet: every
+      continuation's value is exact on chain, so value the body does not pay to others or as the fee comes back to
+      the wallet. The net outflow below is unchanged.
+    - **Known limitation** (claimed sends): the whole claimed output is subtracted, including the minimum ADA the
+      wallet adds to a send of tokens, because the page cannot tell it from lovelace the script sends. So a call that
+      sends tokens to the caller and pays lovelace the script releases to others (a fee to a third party, say) is
+      refused unless the send carries its own minimum ADA from the script (`Assets.lovelace(min)` with the tokens).
+      Transactions without the output verifier's withdrawal are verified as before;
     - no output pays the wallet's payment key at an address the wallet does not use (another stake key).
   - **The transaction balances:** inputs plus mint equal outputs plus fee. An unbalanced transaction is not worth a
     signature: the e2e test found a tampering that added an unfunded output.
   - **The wallet's net outflow** is at most the fee plus the payment (for a creation, plus the new UTxO, itself at
-    most the payment plus `minAda`), for every asset, counting claimed send outputs as not returned (above).
+    most the payment plus `minAda`), for every asset.
   - **Validity:** at most 15 minutes from now, where now is the chain's tip and, when the deployment gives the slot
     clock (`slotConfig`), also the page's own clock. A call that reads `Ctx` must start within 2 minutes before now:
     `ctx.validFrom` is the contract's "now" and may not be backdated (r4).

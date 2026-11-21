@@ -1,8 +1,9 @@
 // Stryker over @julclang/state-client's verifiers, which SECURITY.md lists as protecting a signer (review r1, design F7):
-// src/verify.js (verifyPrepared: a prepared transaction checked before a wallet signs it) and src/keyed.js (the keyed
-// calls' checks). Their tests run in Node without an engine. Run from js/state-client (scripts/stryker-changed.sh), in
-// place, as js/joust's: the tests read the repository's fixtures/ (the shared keyed vectors). Commit or stash first.
-const all = ['src/verify.js', 'src/keyed.js'];
+// src/verify.js (verifyPrepared: a prepared transaction checked before a wallet signs it), src/claims.js (the output
+// verifier's registry, claimed sends and deposits, read by verify.js, compose.js and purposes.js) and src/keyed.js (the
+// keyed calls' checks). Their tests run in Node without an engine. Run from js/state-client (scripts/stryker-changed.sh),
+// in place, as js/joust's: the tests read the repository's fixtures/ (the shared keyed vectors). Commit or stash first.
+const all = ['src/verify.js', 'src/keyed.js', 'src/claims.js'];
 const mutate = process.env.JOUST_MUTATE ? process.env.JOUST_MUTATE.split(',').filter((f) => all.includes(f)) : all;
 
 export const testFiles = ['test/*.test.js'];
