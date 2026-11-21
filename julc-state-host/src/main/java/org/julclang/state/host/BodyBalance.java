@@ -54,6 +54,27 @@ final class BodyBalance {
         requireZero(collateral);
     }
 
+    /**
+     * The shape of a call's body (#151 review SB3, defence in depth): no certificate, every withdrawal a zero one from
+     * a reward account the call may use (the contract's own, or a shared verifier's), and every mint under the
+     * contract's policy. No served call builds anything else, so anything else is a host fault, refused before it is
+     * reserved; the client checks the body independently (D13).
+     */
+    static void checkCall(TransactionBody body, java.util.Set<String> rewardAccounts, String policy) {
+        if (body.getCerts() != null && !body.getCerts().isEmpty()) throw unbalanced("unexpected certificate in a call");
+        if (body.getWithdrawals() != null) {
+            for (var withdrawal : body.getWithdrawals()) {
+                if (withdrawal.getCoin().signum() != 0 || !rewardAccounts.contains(withdrawal.getRewardAddress()))
+                    throw unbalanced("unexpected withdrawal from " + withdrawal.getRewardAddress());
+            }
+        }
+        if (body.getMint() != null) {
+            for (var minted : body.getMint()) {
+                if (!policy.equals(minted.getPolicyId())) throw unbalanced("unexpected mint under " + minted.getPolicyId());
+            }
+        }
+    }
+
     private static Map<String, BigInteger> inputs(List<TransactionInput> inputs, Snapshot snapshot) {
         var balance = new HashMap<String, BigInteger>();
         var seen = new HashSet<TransactionInput>();

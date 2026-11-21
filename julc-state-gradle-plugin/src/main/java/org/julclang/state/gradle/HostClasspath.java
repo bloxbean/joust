@@ -132,7 +132,10 @@ final class HostClasspath {
                     throw new GradleException("Unexpected dependency of " + id + ": " + dep.getRequested());
                 }
                 String found = selected.get(module.getGroup() + ":" + module.getModule());
-                if (found == null || GROUP.equals(module.getGroup()) && !version.equals(found)) {
+                // The exact version applies to JOUST's own modules (julc-state-*); JuLC shares the group at its own
+                // version (#150 review DA8).
+                boolean joust = GROUP.equals(module.getGroup()) && module.getModule().startsWith("julc-state-");
+                if (found == null || joust && !version.equals(found)) {
                     throw new GradleException("Unsatisfied runtime dependency of " + id + ": " + module.getDisplayName()
                             + (found == null ? " is absent" : " selected at " + found + ", plugin requires " + version));
                 }

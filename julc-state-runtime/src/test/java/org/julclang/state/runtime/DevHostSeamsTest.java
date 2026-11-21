@@ -496,4 +496,86 @@ class DevHostSeamsTest {
         assertTrue(java.util.Arrays.stream(ClaimStore.Claim.class.getDeclaredFields())
                 .noneMatch(field -> field.getType() == long.class), "the JVM store owns its wall-clock timestamps");
     }
+
+    // ------------------------------------------------------------------ #145 Codex review r2
+
+    @Test
+    void anInputHasOneSpellingInEveryReservation() {
+        var payer = new Account(Networks.testnet());
+        var u = utxo(payer.baseAddress(), 5_000_000);
+        String lower = "ab".repeat(32);
+        u.setTxHash(lower.toUpperCase(java.util.Locale.ROOT));
+        // A body read back from CBOR spells the id in lowercase; a provider may answer in uppercase.
+        var in = new TransactionInput(lower, 0);
+        assertEquals(Designation.ref(in), Designation.ref(u));
+        var store = new HostStore();
+        store.avoid.add(Designation.ref(in));
+        assertFalse(Designation.pickable(store, u, null), "the reservation holds whatever the spelling");
+        assertTrue(Designation.free(store, List.of(u), null, null).isEmpty());
+    }
+
+    @Test
+    void aScopedCallFindsVerifiersAndReferenceScriptsAfresh() {
+        var chain = new Chain();
+        var rt = runtime(chain, b -> b);
+        var v = rt.outputVerifier();
+        var held = utxo(v.holder(), 30_000_000);
+        held.setReferenceScriptHash(v.hash());
+        chain.script.add(held);
+        assertNotNull(rt.inScope(CallScope.at(10), v::reference), "the first call sees it");
+        chain.script.clear();   // rolled back before the next call
+        assertNull(rt.inScope(CallScope.at(11), v::reference), "the next call reads again");
+        var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        var ref = utxo(contract.address(), 30_000_000);
+        ref.setReferenceScriptHash(contract.policyId());
+        chain.script.add(ref);
+        assertNotNull(rt.inScope(CallScope.at(12), contract::findReferenceScript));
+        chain.script.clear();
+        assertNull(rt.inScope(CallScope.at(13), contract::findReferenceScript));
+        // Unscoped callers keep their cache, as before.
+        chain.script.add(held);
+        assertNotNull(v.reference());
+        chain.script.clear();
+        assertNotNull(v.reference(), "an unscoped hit is cached");
+    }
+
+    @Test
+    void aSessionStoreSeedsFromTheFirstFiftyEligibleInputsAcrossPages() throws Exception {
+        var payer = new Account(Networks.testnet());
+        String a = payer.baseAddress();
+        var token = new Amount("00".repeat(28) + "01", BigInteger.ONE);
+        var reserved = new ArrayList<Utxo>();
+        for (int i = 0; i < 49; i++) reserved.add(utxo(a, 5_000_000));
+        var mixed = utxo(a, 5_000_000, token);
+        var pure = utxo(a, 5_000_000);
+        var all = new ArrayList<Utxo>(reserved);
+        all.add(mixed);
+        all.add(pure);
+        var store = new HostStore();
+        reserved.forEach(u -> store.avoid.add(Designation.ref(u)));
+        var rt = runtime(new Chain(), b -> b.claimStore(store));
+        var paged = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
+                (p, m, args) -> {
+                    if (!m.getName().equals("getUtxos") || args.length != 3) throw new UnsupportedOperationException(m.getName());
+                    int size = (Integer) args[1], page = (Integer) args[2];
+                    var out = all.subList(Math.min(all.size(), (page - 1) * size), Math.min(all.size(), page * size));
+                    return com.bloxbean.cardano.client.api.model.Result.success("ok").withValue(new ArrayList<>(out));
+                });
+        var backend = (com.bloxbean.cardano.client.backend.api.BackendService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.BackendService.class},
+                (p, m, args) -> {
+                    if (m.getName().equals("getUtxoService")) return paged;
+                    throw new UnsupportedOperationException(m.getName());
+                });
+        var session = StateRuntime.builder(backend).chainTime(new Chain().time()).network(Networks.testnet())
+                .claimStore(store).build();
+        var contract = new StateContractHandle<>(session, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        var seedOf = StateContractHandle.class.getDeclaredMethod("seedOf", Account.class);
+        seedOf.setAccessible(true);
+        // As if the reserved inputs were not there: the pure-ADA input among the first 50 eligible, not the first mixed.
+        assertEquals(Designation.ref(pure), Designation.ref((Utxo) seedOf.invoke(contract, payer)));
+        all.remove(pure);
+        assertEquals(Designation.ref(mixed), Designation.ref((Utxo) seedOf.invoke(contract, payer)), "else the first eligible");
+    }
 }

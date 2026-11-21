@@ -24,6 +24,8 @@ final class Prerequisites {
     private final Reservations reservations;
     private final List<Part> missing = new ArrayList<>();
     private final Set<String> satisfied = new HashSet<>();
+    /** Every id this contract's deployment could list (a stale id among them is a refusal; any other is bad). */
+    private final Set<String> possible = new HashSet<>();
     private final ObjectNode deployment = obj();
 
     Prerequisites(Contracts.Contract contract, StateContractHandle<?> handle, Reads reads, Reservations reservations,
@@ -37,6 +39,7 @@ final class Prerequisites {
         deployment.putObject("referenceScripts");
         // TODO(ADR-0022 D14/D16, Q7): add governor registrations when deployments can pin applied governor scripts.
         deployment.putArray("governors");
+        possible.add("referenceScript:" + handle.policyId());
         boolean own = reference("contract", handle.address(), handle.policyId());
         component("referenceScript", handle.address(), handle.policyId(), own, null);
         var x = contract.description().path("x-joust");
@@ -52,12 +55,14 @@ final class Prerequisites {
             addresses.put("reward", handle.rewardAddress());
             hashes.put("stake", handle.policyId());
         }
+        if (withdraw) possible.add("stakeRegistration:" + handle.policyId());
         if (withdraw && checkRegistration)
             component("stakeRegistration", handle.rewardAddress(), handle.policyId(), registered(handle.policyId()), null);
         if (sends) {
             var v = handle.runtime().outputVerifier();
             addresses.put("outputVerifier", v.holder()).put("outputVerifierReward", v.rewardAddress());
             hashes.put("outputVerifier", v.hash());
+            for (String kind : List.of("referenceScript", "stakeRegistration", "verifier")) possible.add(kind + ":" + v.hash());
             boolean script = reference("outputVerifier", v.holder(), v.hash());
             if (checkRegistration) {
                 Boolean registration = registered(v.hash());
@@ -105,6 +110,7 @@ final class Prerequisites {
     }
 
     Part next(String id) {
+        if (!possible.contains(id)) throw HostError.bad("request", "not a prerequisite of this contract: " + id);
         if (satisfied.contains(id)) return null;
         if (!missing.isEmpty() && missing.getFirst().id().equals(id)) return missing.getFirst();
         throw HostError.refusal("prerequisite", "refresh the prerequisite list before publishing " + id);
