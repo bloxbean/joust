@@ -139,7 +139,8 @@ test('regression (refused before this change too): the claim left on the change 
     outputs: (cur) => [cur[0], cur[2], cslOutput({ ...partsOf(cur[1]), address: STRANGER }), ...cur.slice(3)],
   });
   const res = await verifyPrepared(inputsOf(r, { txHex: evil }));
-  refused(res, OTHERS, 'the stranger paid more than the release');
+  // Main's wording too (no claimed-sends suffix), so this pins behaviour rather than the new message (V5).
+  refused(res, /others receive \d+ of lovelace, more than the scripts? releases? to them/, 'the stranger paid more than the release');
   refused(res, /the wallet loses 1671919 lovelace/, 'the wallet funds the stranger\'s minimum ADA');
 });
 
