@@ -16,12 +16,19 @@ import static org.junit.jupiter.api.Assertions.*;
 final class ClientVectors {
     static final Path HOST = HostVectorsTest.DIRECTORY;
     static final Path DIRECTORY = HOST.resolve("verifier");
-    static final List<String> CASES = List.of("Bank-init", "Bank-publish-1", "Dex-addLiquidity",
+    static final List<String> CASES = cases();
+    private static List<String> cases() {
+        var names = new ArrayList<>(List.of("Bank-init", "Bank-publish-1", "Dex-addLiquidity",
             "Dex-combined-reconstructed", "Dex-init", "Dex-publish-1", "Dex-publish-2", "Dex-publish-3",
             "HostCouncil-init", "HostCouncil-publish-1", "destroy-events", "owned-action", "owned-destroy",
-            "owned-init", "quorum-caller", "quorum-two", "dapp-0003", "dapp-0034", "permuted");
+            "owned-init", "quorum-caller", "quorum-two", "dapp-0003", "dapp-0034", "permuted",
+            "registry-001-init", "registry-005-upgrade", "registry-017-claim", "registry-019-release", "registry-021-retire"));
+        for (String name : HostVectorsTest.REGISTRY) if (!name.equals("Registry-cooldown") && Files.exists(HOST.resolve(name+".json"))) names.add(name);
+        return List.copyOf(names);
+    }
 
     static ObjectNode recording(String name) throws Exception {
+        if (name.startsWith("registry-")) return RegistryRecording.record(name.substring("registry-".length()));
         if (name.startsWith("dapp-")) {
             var r = ReplayTest.Recording.read(ReplayTest.FIXTURES.resolve("dapp/" + name.substring(5) + "-composed_transaction.json"));
             return HostVectorsTest.record("prepare", r.params(), init(), JSON.createArrayNode(), r::answer, null);
@@ -107,7 +114,8 @@ final class ClientVectors {
         }));
         assertFalse(reads.hasNext());
         assertEquals(v.at("/expected/cbor"), result.at("/prepared/cbor"));
-        if (name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
+        if (call.has("operation")) vector.set("clock", v.required("clock"));
+        if (name.startsWith("registry-") || name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
         vector.set("result", result);
         vector.putArray("violations");
         return vector;

@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.node.*;
 import org.julclang.state.examples.devkit.DevKit;
 import org.julclang.state.examples.dex.DexClient;
 import org.julclang.state.examples.bank.BankClient;
+import org.julclang.state.examples.registry.RegistryClient;
 import org.julclang.state.host.fixture.HostCouncilClient;
 import org.julclang.state.runtime.SlotChainTime;
 import org.junit.jupiter.api.*;
@@ -35,6 +36,8 @@ class DevKitHostTest {
         final ArrayNode evidence = JSON.createArrayNode();
         final boolean recording;
         final long magic;
+        Path journal;
+        long highWaterMark;
 
         Node(boolean recording) throws Exception {
             var request = HttpRequest.newBuilder(URI.create(DevKit.ADMIN_URL + "/local-cluster/api/admin/devnet"))
@@ -149,6 +152,16 @@ class DevKitHostTest {
             byte[] bytes = HexFormat.of().parseHex(str(prepared,"cbor"));
             String hash = TransactionUtil.getTxHash(bytes);
             assertEquals(str(prepared,"txHash"), hash);
+            if (journal != null && Files.exists(journal)) {
+                var record = (ObjectNode)JSON.readTree(journal.toFile());
+                long validTo = Transaction.deserialize(bytes).getBody().getTtl();
+                record.withArray("attempts").addObject().put("txHash",hash).put("validTo",validTo);
+                highWaterMark = Math.max(highWaterMark, Math.addExact(validTo,2));
+                Files.writeString(journal.resolveSibling("high-water"),Long.toString(highWaterMark));
+                ClientVectors.write(journal,record);
+                Files.write(journal.resolveSibling(hash+".cbor"),bytes);
+                while (clock.tipSlot()<prepared.path("validFrom").asLong()) Thread.sleep(250);
+            }
             Transaction tx = payer.sign(Transaction.deserialize(bytes));
             for (var signer : extraSigners) tx = signer.sign(tx);
             assertEquals(hash, TransactionUtil.getTxHash(tx.serialize()));
@@ -199,6 +212,10 @@ class DevKitHostTest {
                         assertion.putObject("evidence").put("txHash",str(built,"txHash")).put("slot",slot);
                     }
                     missing = success(c.rpc("prerequisites",query.put("now",clock.tipSlot()),this::answer));
+                }
+                if (clientClass == RegistryClient.class) {
+                    registry(c,init,name);
+                    return;
                 }
                 var args = obj();
                 String tokenPolicy = null;
@@ -258,6 +275,50 @@ class DevKitHostTest {
             }
         }
 
+        ObjectNode designate(ObjectNode call) throws Exception {
+            var listing = answer(obj().put("kind","utxos").put("address",payer.baseAddress())).required("value");
+            // Choose and persist before asking, including an operation that might be refused without a body.
+            for (var u : listing) {
+                var amounts = u.required("amount");
+                if (amounts.size()!=1 || !"lovelace".equals(amounts.get(0).path("unit").asText()) ||
+                        amounts.get(0).path("quantity").asLong()<5_000_000 || u.hasNonNull("inline_datum") ||
+                        u.hasNonNull("data_hash") || u.hasNonNull("reference_script_hash")) continue;
+                call.put("designated",ClientVectors.ref(u));
+                ClientVectors.write(journal,RegistryRecording.operation(call));
+                return params(call);
+            }
+            throw new AssertionError("no ordinary funded input");
+        }
+
+        void registry(Client c,ObjectNode init,String contract) throws Exception {
+            var start = designate(call(contract,"init","init",obj()));
+            var built = build(c,init,"Registry-init","prepare",start);
+            submit(c,built);
+            String instance = str(built,"instance");
+            for (String key : List.of("62","61")) {
+                var call = call(contract,"keyedInit","grant",obj().put("name",key).put("owner",key(payer))).put("instance",instance);
+                var p = designate(call);
+                if (key.equals("61")) {
+                    // Both inserts use the head. The second relinks it before its cooldown has elapsed.
+                    call.putArray("pageLimits").add(0).add(900);
+                    var refused = HostVectorsTest.record("prepare",p.deepCopy(),init,evidence.deepCopy(),this::answer,"cooldown");
+                    assertTrue(refused.at("/expected/retryAtSlot").asLong()>p.required("now").asLong());
+                    vectors.put("Registry-cooldown",refused);
+                    Files.delete(journal); // refused first prepare, nothing handed out or reserved
+                    call.putArray("pageLimits").add(120).add(900);
+                    p = designate(call);
+                }
+                built = build(c,init,"Registry-grant-"+key,"prepare",p);
+                if (key.equals("61")) assertTrue(built.required("validFrom").asLong()>p.required("now").asLong());
+                submit(c,built);
+            }
+            var remove = call(contract,"keyedRemove","release",obj()).put("instance",instance).put("object","61");
+            remove.putArray("pageLimits").add(120).add(900);
+            submit(c,build(c,init,"Registry-remove","prepare",designate(remove)));
+            var retire = call(contract,"keyedRetire","retire",obj()).put("instance",instance).put("object","62");
+            submit(c,build(c,init,"Registry-retire","prepare",designate(retire)));
+        }
+
     }
 
     @Test void freshChainDeployment() throws Exception {
@@ -266,16 +327,20 @@ class DevKitHostTest {
         new Node(false).workflow(DexClient.class, true);
     }
 
-    @Test void recordHostVectors() throws Exception {
+    @Test void recordHostVectors(@org.junit.jupiter.api.io.TempDir Path directory) throws Exception {
         Assumptions.assumeTrue(Boolean.getBoolean("joust.host.record"), "enable -PjoustHostFixtures on a fresh chain");
         assertTrue(DevKit.isReachable());
         var node = new Node(true);
-        node.workflow(DexClient.class,true);
-        node.workflow(HostCouncilClient.class,false);
-        node.workflow(BankClient.class,false);
-        node.vectors.putAll(HostVectorsTest.unsupportedVectors(node.initialize(counter()), node.clock.tipSlot(),
-                node.window().required("ttlSlots").asLong(), node.payer.baseAddress()));
-        node.vectors.put("Dex-combined-reconstructed", HostVectorsTest.combinedPublication());
+        if (!Boolean.getBoolean("joust.host.keyedOnly")) {
+            node.workflow(DexClient.class,true);
+            node.workflow(HostCouncilClient.class,false);
+            node.workflow(BankClient.class,false);
+            node.vectors.putAll(HostVectorsTest.unsupportedVectors(node.initialize(counter()), node.clock.tipSlot(),
+                    node.window().required("ttlSlots").asLong(), node.payer.baseAddress()));
+            node.vectors.put("Dex-combined-reconstructed", HostVectorsTest.combinedPublication());
+        }
+        node.journal = directory.resolve("operation.json");
+        node.workflow(RegistryClient.class,true);
         Files.createDirectories(HostVectorsTest.DIRECTORY);
         for (var v : node.vectors.entrySet())
             JSON.writerWithDefaultPrettyPrinter().writeValue(HostVectorsTest.DIRECTORY.resolve(v.getKey()+".json").toFile(),v.getValue());

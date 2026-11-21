@@ -31,7 +31,7 @@ java -XX:+DisplayVMOutputToStderr -Xlog:disable -Xlog:all=warning:stderr --enabl
   -cp "$lib/*" org.julclang.state.host.conformance.FakeHost --stdio sessions/bank.json
 ```
 
-Omitting the session path selects the bundled Bank session. Start another process with `sessions/keyed.json` for the keyed refusal. Each `frames` entry contains a single `client` or `host` message, in wire order. Feed the client its recorded chain answers when it receives each reverse request. The Bank recording includes a failed digest check, successful handshake, description and deployment, missing prerequisite, publication and settlement, prepare, view, listing, cancellation, late reverse answer, shutdown and exit.
+Omitting the session path selects the bundled Bank session. Start another process with `sessions/keyed.json` for a served future-start Registry removal, a refused first attempt, and retry outcomes. Each `frames` entry contains a single `client` or `host` message, in wire order. Feed the client its recorded chain answers when it receives each reverse request. The Bank recording includes a failed digest check, successful handshake, description and deployment, missing prerequisite, publication and settlement, prepare, view, listing, cancellation, late reverse answer, shutdown and exit.
 
 Object key order and JSON whitespace are immaterial. Array order, params, error or result envelopes, and reverse IDs must match. A client may choose a string or integer forward ID. The fake host correlates its response and the cancel notification with that actual ID. Snapshot paths and fingerprints in the transcripts are fixed test identities. Use the recorded values for this scripted launch. The recorder normalizes these two machine-dependent fields after capturing real frames. The live regression also allows installed engine version strings to vary across releases.
 
@@ -46,10 +46,11 @@ Read each `verifier/*.json` and compare the client's violation codes with `viola
 | `method`, `request` | Exact forward method and sent params. The caller address, named payment keys, method, arguments, payment, window and requested publication ID come from here. |
 | `anchors` | Snapshot description, contract address, policy and script language. The shared output verifier has its own hash, language and enterprise address. The recorder reads the actual validator resources beside the compiled classes or in their jars and checks their hashes. |
 | `resolved` | Client node UTxOs keyed by `txHash#index`, using D6 amount and datum fields. The positive generator obtains these from the recorded node answers. |
+| `clock` | On keyed prepares, the client’s initialized slot clock for checking linkedAt, cooldowns and window width. |
 | `node` | Complete script hashes present at queried holder addresses and registration observations by credential. An empty holder list means the address was queried. Registration may be `true`, `false` or `"unknown"`. |
 | `protocolParams`, `networkId`, `maxFee` | Client node parameters, selected ledger network and user fee ceiling in lovelace. Fee and execution limits follow the protocol-1 wallet rules. |
 | `result` | The complete forward result, including `prepared` and any `predicted` projection. Signing uses the independently decoded body, witnesses and resolved UTxOs. |
-| `orderedReads` | Included on the two Bank order cases. Compare the provider arrays in `Bank-publish-1` and `permuted`. Selection can change the body hash even though the UTxO set is the same. |
+| `orderedReads` | Included on the offline Registry cases and the two Bank order cases. Compare the provider arrays in `Bank-publish-1` and `permuted`. Selection can change the body hash even though the UTxO set is the same. |
 
 The checker slices the received CBOR, hashes the body and reads the ledger fields independently of the host builder. It binds the checked redeemers and datums to the body's script-data hash using the client's V3 cost model. Input order for the plan follows the wire. Spend pointers use transaction ID and numeric output index in ledger order. Compare `dapp-0003` and `dapp-0034` for the same method at pointers 0 and 1. The method constructor comes from the anchored description in both cases.
 
@@ -63,7 +64,7 @@ The signing verdict authenticates the compared plan, bounds and signer set. The 
 | `bodyHash` | Blake2b-256 of the received body differs from the claimed hash. |
 | `scriptIntegrity` | Witness redeemers or datums and the client's language view do not match the body commitment. |
 | `planMismatch` | Shown plan, bound, signer claims or creation ID differ from the independent projection. |
-| `notVerifiable` | Contract or method outside the locally verifiable M1 set. |
+| `notVerifiable` | Contract or method outside the locally verifiable set. |
 | `network`, `isValid` | Wrong body or address network, or phase-2 validity flag differs from true. |
 | `unresolvedInput`, `scriptInput`, `referenceInput` | Missing node resolution, unexpected spending input or holding, or unpinned reference/script. |
 | `collateral` | Ownership, return, per-unit conservation or the 5,000,000-lovelace exposure limit fails. |
@@ -71,6 +72,10 @@ The signing verdict authenticates the compared plan, bounds and signer set. The 
 | `withdrawal`, `governance`, `auxiliaryData` | Unauthorized reward account or amount, governance fields, or auxiliary data/hash present. |
 | `mint`, `signer` | Wrong policy, token or quantity, or payment-key requirements disagree with the call. |
 | `upperBound`, `lowerBound` | Missing, expired, empty or overlong upper window, or missing/backdated context or time-rule lower bound. |
+| `keyedWindow` | The body violates the sent start, duration, absolute end or nonempty bounds. |
+| `designatedInput` | The requested persisted designation is absent from wallet spending inputs. |
+| `keyedToken`, `keyedRedeemer` | A list token differs from its instance, type and key commitment, or Link/Remove_T has the wrong pointer, constructor or input references. |
+| `keyedLink`, `keyedInputValue` | Incorrect relink, cooldown or linkedAt time, or a Ctx balance that leaves a list input unbound. |
 | `budget`, `fee` | Invalid execution budget or fee above the protocol-derived or user cap. |
 | `redeemer`, `pointer` | Wrong purpose/count, schema, constructor, arguments, context, seed or burn/mint authorization, or wrong ledger index. |
 | `continuingOutput`, `walletOutput` | Wrong continuation, token, inline datum or owned instance, or an unexpected wallet address, script or payout tag. |
@@ -126,4 +131,5 @@ The task builds the conformance classifier and runs its reference checker on the
 | Node frame writer and D12 I/O | `js/joust/test/host.test.js` probes console and raw stdout, fs writes, child processes, sockets and fetch. It exercises fragmented and invalid frames, stalls and exact size limits. |
 | Node cancellation and commit | The controlled worker test races cancellation with CPU execution, sends an old read answer after ID reuse, waits for a deadline and exceeds the result cap. It counts committed calls. |
 | Node snapshot, restore and network | The Bank recording exercises stage mismatch and late answers. The real worker tests restore twice, rewind and rearm a tombstone, check the reconciliation fence, and exercise mainnet opt-in and wallet network validation. |
-| Honest future-start keyed window, widened and late-start windows, refused first designation, two instances with the same method and key | M3 keyed preparation. M1 exercises the typed keyed refusal on both peers. |
+| Honest future-start keyed window, widened and late-start windows, refused first designation, two instances with the same method and key | Both hosts replay `sessions/keyed.json`. The five offline Registry positives and eight isolated mutations use reconstructed ADR-0015 evidence. The shared checker tests each mutated body with its rule disabled. |
+| Keyed restart, same method and key on distinct instances, mayHaveLanded, unsigned discard, shallow rollback, expiry and deep rollback | `KeyedReservationTest`, the npm host's restore test and the framed Registry transcript. |

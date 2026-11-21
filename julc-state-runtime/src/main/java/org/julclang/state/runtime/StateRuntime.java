@@ -181,8 +181,11 @@ public final class StateRuntime {
      */
     public long[] pageLimits() {
         Scoped s = scope.get();
-        if (s != null && s.scope().pageLimits() != null) return s.scope().pageLimits();
-        return pageLimits == null ? null : pageLimits.clone();
+        long[] limits = s == null ? null : s.scope().pageLimits();
+        if (limits == null && pageLimits != null) limits = pageLimits.clone();
+        // A hosted cooldown must leave at least one slot before the absolute end ceiling (D7).
+        if (limits != null && s != null && s.scope().hosted()) limits[0] = Math.min(limits[0], limits[1] - 1);
+        return limits;
     }
     void log(String message) { log.accept(message); }
     /** Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). */

@@ -179,6 +179,41 @@ public final class MutationVectors {
                 e.swap(d,"8201d8184100");
             })
         ));
+        String removal = "registry-019-release", action = "registry-005-upgrade";
+        cases.addAll(List.of(
+                new Case("keyed-widened", removal, "keyedWindow", e -> e.keyedWindow(0,1)),
+                new Case("keyed-late-start", removal, "keyedWindow", e -> e.keyedWindow(3,3)),
+                new Case("keyed-before-now", action, "keyedWindow", e -> e.keyedWindow(-1,-1)),
+                new Case("keyed-empty", action, "keyedWindow", e -> e.keyedWindow(0,-20)),
+                new Case("keyed-designated", removal, "designatedInput", e -> {
+                    // Spend a different (equally funded) wallet UTxO. Keep the client's persisted intent.
+                    String ref = e.v.at("/request/call/designated").asText();
+                    var u = e.v.withObject("/resolved").required(ref).deepCopy();
+                    ((ObjectNode)u).put("output_index",3);
+                    e.v.withObject("/resolved").set(ref.substring(0,65)+"3",u);
+                    var input = e.ledger.set(0).stream().filter(i -> i.at(1).uint()==2).findFirst().orElseThrow();
+                    e.swap(input.at(1),"03");
+                }),
+                new Case("keyed-token", removal, "keyedToken", e -> {
+                    String unit = e.ledger.plan.required("mint").fieldNames().next();
+                    String other = unit.substring(0,58)+"aa".repeat(28);
+                    for (var u : e.v.required("resolved")) for (var a : u.required("amount"))
+                        if (unit.equals(a.required("unit").asText())) ((ObjectNode)a).put("unit",other);
+                    e.ledger = new Ledger(e.ledger.tx.raw().replace(unit.substring(56),other.substring(56)));
+                }),
+                new Case("keyed-input-value", removal, "keyedInputValue", e -> {
+                    // The body still balances. Only the target's Ctx claims one extra lovelace.
+                    var ctx = e.redeemers().items.get(3).at(0).tagged(127).at(0).tagged(121);
+                    var balance = ctx.at(2);
+                    e.swap(balance,uint(balance.integer().longValueExact()+1));
+                }),
+                new Case("keyed-swapped-redeemers", removal, "keyedRedeemer", e -> {
+                    // Swap Link and Remove_T while preserving both ledger pointers and their budgets.
+                    var rs = e.redeemers();
+                    String link = rs.items.get(1).at(0).raw(), burn = rs.items.get(5).at(0).raw();
+                    e.swap(rs.items.get(1).at(0),burn);
+                    e.swap(e.redeemers().items.get(5).at(0),link);
+                })));
         for (String feature : List.of("params","keyed","maps","authorizedBy","deposits","into","admits","receives","migrateTo","needsService")) {
             cases.add(new Case("unsupported-"+feature,feature.equals("keyed") ? "Bank-init" : SPEND,"notVerifiable", e -> {
                 var desc=e.v.withObject("/anchors/description");
@@ -216,6 +251,18 @@ public final class MutationVectors {
             var out=out(i);
             var value=out.major==4 ? out.at(1) : out.fields().get(1);
             return value.major==4 ? value.at(0) : value;
+        }
+        void keyedWindow(long fromDelta, long toDelta) {
+            long from = ledger.b.get(8).integer().longValueExact(), to = ledger.b.get(3).integer().longValueExact();
+            body(8,uint(from+fromDelta));
+            body(3,uint(to+toDelta));
+            var clock = v.required("clock");
+            long length = clock.required("slotLengthMs").asLong();
+            long zero = clock.required("zeroTimeMs").asLong()-clock.required("zeroSlot").asLong()*length;
+            // Rebuild the corresponding Ctx and linkedAt fields. These recordings use fixed-width timestamps.
+            String raw = ledger.tx.raw().replace(uint(zero+from*length),uint(zero+(from+fromDelta)*length))
+                    .replace(uint(zero+to*length),uint(zero+(to+toDelta)*length));
+            ledger = new Ledger(raw);
         }
         void coin(int i,long delta) { var old=coin(i); swap(old,uint(old.integer().longValueExact()+delta)); }
         void transfer(int a,int b,long change) { coin(a,change); coin(b,-change); }

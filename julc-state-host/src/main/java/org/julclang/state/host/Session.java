@@ -82,7 +82,7 @@ final class Session implements Transport.Handler {
                 catch (IllegalArgumentException e) { throw bad("invalid or unrecognized contract datum"); }
             }
             case "registered" -> reservations.registered(p);
-            case "restore" -> reservations.restore(p);
+            case "restore" -> reservations.restore(p, contracts);
             case "settled" -> reservations.settled(p, whileLive);
             case "reset" -> reset(p);
             case "shutdown" -> {
@@ -122,6 +122,7 @@ final class Session implements Transport.Handler {
         var capabilities = out.putArray("capabilities");
         if (namedViews) capabilities.add("views");
         capabilities.add("objects").add("quorum");
+        if (entries.all().values().stream().anyMatch(c -> c.keyed() && c.unsupported() == null)) capabilities.add("keyed");
         out.set("reads", JSON.valueToTree(Reads.KINDS));
         out.set("versions", versions.get());
         out.set("contracts", entries.summary());
@@ -191,8 +192,25 @@ final class Session implements Transport.Handler {
         try {
             var scope = CallScope.hosted(now);
             if (building) scope = scope.ttlSlots(ttl);
+            if (method.equals("prepare")) {
+                var call = p.path("call");
+                if (call.has("designated") || call.has("pageLimits")) {
+                    long start = 60, validity = 900;
+                    if (call.has("pageLimits")) {
+                        var page = call.get("pageLimits");
+                        if (!page.isArray() || page.size() != 2 || !page.get(0).isIntegralNumber() ||
+                                !page.get(1).isIntegralNumber() || !page.get(0).canConvertToLong() || !page.get(1).canConvertToLong())
+                            throw bad("expected pageLimits [maxStartSlots, maxValiditySlots]");
+                        start = page.get(0).longValue();
+                        validity = page.get(1).longValue();
+                    }
+                    if (start < 0 || validity < 1 || validity > Long.MAX_VALUE - now || start > Long.MAX_VALUE - now)
+                        throw bad("invalid keyed page limits");
+                    scope = scope.pageLimits(start, validity);
+                }
+            }
             return runtime.inScope(scope, () -> method.equals("prepare")
-                    ? prepare(p, reads, now + ttl) : query(method, p, reads, now + ttl));
+                    ? prepare(p, reads, now + ttl, whileLive) : query(method, p, reads, now + ttl));
         } finally {
             evaluating.remove();
             reading.remove();
@@ -236,7 +254,7 @@ final class Session implements Transport.Handler {
         var part = prerequisites.next(str(p, "prerequisite"));
         if (part == null) return new Transport.Reply(NullNode.instance);
         var built = prerequisites.publish(part, payer, ceiling);
-        return prepared(built, obj(), reads, ceiling, part.registration());
+        return prepared(built, obj(), reads, ceiling, part.registration(), null);
     }
 
     private static String instance(JsonNode request) {
@@ -266,9 +284,9 @@ final class Session implements Transport.Handler {
         return accounts.values().toArray(Account[]::new);
     }
 
-    private Transport.Reply prepare(JsonNode p, Reads reads, long ceiling) {
+    private Transport.Reply prepare(JsonNode p, Reads reads, long ceiling, java.util.function.Consumer<Runnable> whileLive) {
         fields(p, "now", "ttlSlots", "call");
-        var request = fields(p.path("call"), "contract", "kind", "method", "instance", "object", "args", "pay", "address", "cosigners");
+        var request = fields(p.path("call"), "contract", "kind", "method", "instance", "object", "args", "pay", "address", "cosigners", "designated", "pageLimits", "operation");
         var c = served(request);
         String kind = str(request, "kind");
         if (Set.of("intent", "cancelIntent", "batch", "compose").contains(kind))
@@ -277,7 +295,19 @@ final class Session implements Transport.Handler {
         var meta = c.meta(kind, method);
         if (kind.equals("view")) throw bad("use the view method");
         String code = c.code(kind, meta);
-        if (code != null) throw HostError.unsupported(code, "unsupported call " + method);
+        if (code != null) throw HostError.unsupported(code, code.equals("keyed") ?
+                c.keyedLimitation(kind,meta)
+                : "unsupported call " + method);
+        boolean keyed = kind.startsWith("keyed") || c.keyed() && kind.equals("init");
+        KeyedOperation operation = keyed ? KeyedOperation.fromCall(request) : null;
+        if (!keyed && (request.has("designated") || request.has("operation") || request.has("pageLimits")))
+            throw bad("designation and page limits apply only to keyed calls");
+        if (keyed) {
+            boolean creation = kind.equals("init");
+            boolean spend = !creation && !kind.equals("keyedInit");
+            if (creation == (operation.identity().instance() != null) || spend != (operation.identity().key() != null))
+                throw KeyedOperation.mismatch();
+        }
         var wallet = wallet(str(request, "address"));
         boolean quorum = meta.at("/policies/quorum").isObject();
         Account[] signers = signers(wallet, request, quorum);
@@ -286,9 +316,17 @@ final class Session implements Transport.Handler {
         if (pay.has("assets") && !pay.get("assets").isArray()) throw bad("expected pay.assets array");
         var amount = pay.has("lovelace") ? (BigInteger) JsonValues.fromJson(pay.get("lovelace"), BigInteger.class, "pay.lovelace") : BigInteger.ZERO;
         var handle = c.adapter().handle(runtime);
+        String unit = keyed && operation.identity().key() != null
+                ? c.hash() + keyedToken(handle,meta,operation.identity().instance(),operation.identity().key()) : null;
+        if (keyed) {
+            String designated = operation.identity().designated();
+            boolean unspent = reads.outputs(wallet.baseAddress()).stream()
+                    .anyMatch(u -> designated.equals(u.getTxHash() + "#" + u.getOutputIndex()));
+            whileLive.accept(() -> reservations.checkOperation(operation, unspent, reads.greatestTip, unit));
+        }
         new Prerequisites(c, handle, reads, reservations, true).requireReady();
         String instance = kind.equals("init") ? null : instance(request);
-        String object = kind.startsWith("owned") ? request.path("object").textValue() : null;
+        String object = (kind.startsWith("owned") || keyed) ? request.path("object").textValue() : null;
         String spent = null;
         if (kind.equals("ownedAction") || kind.equals("ownedDestroy")) {
             if (object == null || !object.matches("4f[0-9a-f]{56}")) throw bad("invalid owned object id");
@@ -300,31 +338,50 @@ final class Session implements Transport.Handler {
                 spent = str(item, "ref");
                 break;
             }
-        } else if (instance != null) {
+        } else if (keyed && object != null) {
+            for (var u : reads.outputs(handle.address())) {
+                if (u.getAmount().stream().anyMatch(a -> unit.equals(a.getUnit()))) {
+                    spent = u.getTxHash() + "#" + u.getOutputIndex();
+                    break;
+                }
+            }
+        } else if (!keyed && instance != null) {
             var target = handle.at(instance).utxo();
             spent = target.getTxHash() + "#" + target.getOutputIndex();
         }
         if (spent != null && reservations.avoids(spent)) throw HostError.refusal("pending", "reserved input " + spent);
         Object[] made = new Object[1];
-        var built = Compose.of(runtime, wallet).add(() -> made[0] = c.adapter().call(runtime, wallet, kind, meta,
+        var compose = Compose.of(runtime, wallet);
+        if (keyed) compose.designate(operation.identity().designated());
+        var built = compose.add(() -> made[0] = c.adapter().call(runtime, wallet, kind, meta,
                 instance, object, request.path("args"), amount, pay.get("assets"), quorum ? signers : null)).prepare();
         var out = obj();
         var result = out.putObject("prepared");
         String created = (String) made[0];
-        if (created != null) result.put(kind.equals("ownedInit") ? "object" : "instance", created);
+        if (created != null && (!keyed || kind.equals("init") || kind.equals("keyedInit")))
+            result.put(kind.equals("ownedInit") || kind.equals("keyedInit") ? "object" : "instance", created);
         var plan = JSON.valueToTree(built.plan());
         result.set("plan", plan);
         out.set("predicted", Effects.of(c, meta, plan, built, handle.address(),
                 kind.equals("init") ? created : instance, kind.equals("ownedInit") ? created : object, spent));
-        return prepared(built, out, reads, ceiling, null);
+        if (keyed) {
+            long now = p.required("now").longValue();
+            long start = built.validFromSlot().orElse(-1);
+            long end = built.validToSlot().orElse(-1);
+            long[] page = runtime.pageLimits();
+            if (start < now || start - now > page[0] || end <= start || end - start > ceiling - now || end - now > page[1])
+                throw HostError.refusal("window", "keyed validity interval exceeds the requested limits");
+            ceiling = end;
+        }
+        return prepared(built, out, reads, ceiling, null, operation);
     }
 
-    private Transport.Reply prepared(PreparedTx built, ObjectNode out, Reads reads, long ceiling, String credential) {
+    private Transport.Reply prepared(PreparedTx built, ObjectNode out, Reads reads, long ceiling, String credential, KeyedOperation operation) {
         long end = built.validToSlot().orElseThrow(() -> HostError.refusal("window", "no validity upper bound"));
         if (end > ceiling) throw HostError.refusal("window", "upper bound exceeds the call ceiling");
         var tx = built.transaction();
         reads.checkBalance(tx.getBody());
-        var entry = reservations.prepare(Reservations.Body.of(tx, built.txHash(), network.getNetworkId()), reads.greatestTip);
+        var entry = reservations.prepare(Reservations.Body.of(tx, built.txHash(), network.getNetworkId()), reads.greatestTip, operation);
         var result = out.withObject("/prepared").put("reservation", entry.id()).put("cbor", built.cbor())
                 .put("txHash", built.txHash()).put("validTo", end);
         if (built.validFromSlot().isPresent()) result.put("validFrom", built.validFromSlot().getAsLong());
@@ -332,6 +389,15 @@ final class Session implements Transport.Handler {
         result.set("signers", JSON.valueToTree(built.requiredSigners()));
         if (!result.has("plan")) result.set("plan", JSON.valueToTree(built.plan()));
         return new Transport.Reply(out, () -> reservations.commit(entry, credential));
+    }
+
+    private static String keyedToken(StateContractHandle<?> handle, JsonNode meta, String instance, String key) {
+        for (var type : handle.spec().keyed()) if (type.name().equals(meta.path("keyed").asText())) {
+            if (!key.matches("(?:[0-9a-f]{2})+") || key.length()/2 > type.maxKeyBytes()) throw bad("invalid object key");
+            var hex = HexFormat.of();
+            return hex.formatHex(type.keyId(hex.parseHex(instance), hex.parseHex(key)));
+        }
+        throw bad("unknown keyed type");
     }
 
     private void checkAddressArguments(JsonNode n) {

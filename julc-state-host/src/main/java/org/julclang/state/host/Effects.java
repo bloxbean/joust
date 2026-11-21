@@ -30,14 +30,27 @@ final class Effects {
                 out.set("state", datums.decode(str(o, "datum"), "instance")
                         .put("predicted", true).put("index", i).put("instance", instance));
             }
-            if (object != null && value.path(c.hash() + object).asText().equals("1")) {
+            if (c.keyed()) for (var units = value.fieldNames(); units.hasNext();) {
+                String unit = units.next();
+                if (!unit.startsWith(c.hash() + "4b") || unit.length() != c.hash().length() + 58) continue;
+                var decoded = datums.decode(str(o, "datum"), "keyed");
+                String effect = plan.path("mint").path(unit).asText().equals("1") ? "created"
+                        : decoded.path("type").asText().startsWith("Retired_") && meta.path("kind").asText().equals("keyedRetire") ? "retired" : "updated";
+                objects.add(decoded.put("predicted", true).put("index", i).put("object", unit.substring(c.hash().length())).put("effect", effect));
+            }
+            if (object != null && !meta.path("kind").asText().startsWith("keyed") && value.path(c.hash() + object).asText().equals("1")) {
                 var decoded = datums.decode(str(o, "datum"), "owned");
                 objects.add(decoded.put("predicted", true).put("index", i).put("object", object)
                         .put("effect", plan.path("mint").path(c.hash() + object).asText().equals("1") ? "created" : "updated"));
             }
         }
-        if (object != null && plan.path("mint").path(c.hash() + object).asText().equals("-1"))
+        if (object != null && !meta.path("kind").asText().startsWith("keyed") && plan.path("mint").path(c.hash() + object).asText().equals("-1"))
             objects.addObject().put("predicted", true).put("effect", "removed").put("object", object);
+
+        if (meta.path("kind").asText().equals("keyedRemove")) plan.path("mint").fields().forEachRemaining(m -> {
+            if (m.getKey().startsWith(c.hash() + "4b") && m.getValue().asText().equals("-1"))
+                objects.addObject().put("predicted", true).put("effect", "removed").put("object", m.getKey().substring(c.hash().length()));
+        });
 
         for (var p : prepared.payouts()) {
             for (int i = 0; i < outputs.size(); i++) {

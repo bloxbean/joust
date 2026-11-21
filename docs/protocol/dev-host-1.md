@@ -50,7 +50,7 @@ For each class-path entry in zero-based ordinal order, hash every file's bytes w
 <lowercase hex sha256> <decimal ordinal> <dir or jar> <relative path>
 ```
 
-Hash the concatenation with SHA-256. The host computes this fingerprint from its actual class path before project discovery. A mismatch, a path outside the snapshot, or a jar manifest with a nonempty Class-Path fails initialization. The runtime must match the host's build version. The response gives the chosen protocol, echoed network, capabilities (`views`, `objects`, `quorum` on the JVM host), read kinds, fingerprint, versions and contract list. Gradle build versions are null. Execution version fields use null where the installed component supplies no version. Each contract names the actual spend/mint and applicable stake script hashes. A parameterized contract reports only its unapplied template hash and `unsupported:"params"`. It has no deployment hash without parameters.
+Hash the concatenation with SHA-256. The host computes this fingerprint from its actual class path before project discovery. A mismatch, a path outside the snapshot, or a jar manifest with a nonempty Class-Path fails initialization. The runtime must match the host's build version. The response gives the chosen protocol, echoed network, capabilities (`views`, `objects`, `quorum` on the JVM host, plus `keyed` on either host when the snapshot contains a served keyed contract), read kinds, fingerprint, versions and contract list. Gradle build versions are null. Execution version fields use null where the installed component supplies no version. Each contract names the actual spend/mint and applicable stake script hashes. A parameterized contract reports only its unapplied template hash and `unsupported:"params"`. It has no deployment hash without parameters.
 
 ## Forward methods (D5, D7, D16)
 
@@ -73,9 +73,34 @@ Hash the concatenation with SHA-256. The host computes this fingerprint from its
 | shutdown | empty or omitted | empty object, then stop accepting calls |
 | exit | notification, empty or omitted | process exits |
 
-The nested call accepts contract, kind, method, instance, object, args, pay, address and cosigners. Arguments use the description's JSON encoding. A missing pay means zero. Plain calls allow an empty co-signer list. Obtain wallet inputs through the caller address's reverse read. Caller-supplied walletUtxos or other extra fields are errors.
+The nested call accepts contract, kind, method, instance, object, args, pay, address and cosigners. Keyed calls also accept designated, pageLimits and operation. Arguments use the description's JSON encoding. A missing pay means zero. Plain calls allow an empty co-signer list. Obtain wallet inputs through the caller address's reverse read. Caller-supplied walletUtxos or other extra fields are errors.
 
-Serve init, action, destroy, ownedInit, ownedAction and ownedDestroy. Owned spends name the current instance in the object's holding datum. A quorum call takes optional `cosigners`, an array of lowercase 28-byte payment key hashes. The host uses enterprise wallet addresses on the session network and includes the caller once in the body's required signers, even when the method has no Ctx. A SignedBy field must equal the caller. Other methods accept only absent or empty cosigners. Refuse keyed calls with `keyed`, map contracts with `maps`, parameterized contracts with `params`, governor-authorized calls with `authorizedBy` and calls outside the wallet's verifiable set with `unverifiable`. This includes batched calls, moves, admissions, migrations and deposits. A served send pins the output verifier in deployment.
+Serve init, action, destroy, ownedInit, ownedAction and ownedDestroy. Owned spends name the current instance in the object's holding datum. A quorum call takes optional `cosigners`, an array of lowercase 28-byte payment key hashes. The host uses enterprise wallet addresses on the session network and includes the caller once in the body's required signers, even when the method has no Ctx. A SignedBy field must equal the caller. Other methods accept only absent or empty cosigners. Refuse map contracts with `maps`, parameterized contracts with `params`, governor-authorized calls with `authorizedBy` and calls outside the wallet's verifiable set with `unverifiable`. This includes batched calls, moves, admissions, migrations and deposits. A served send pins the output verifier in deployment.
+
+### Keyed calls
+
+Use the anchored `x-joust.keyed` description for an instance creation (`init` with list heads) and for `keyedInit`, `keyedAction`, `keyedRemove` and `keyedRetire`. Prepare one call per transaction. For the latter three, `object` is the logical key in lowercase hex. An insert computes its key from the transition's result and returns it in `prepared.object`. Predicted effects and listings identify objects by their 29-byte token names.
+
+Before the first request the client chooses and persists an ordinary lovelace-only input of at least 5 ADA at the payer address. Send its canonical `txHash#index` in `call.designated` and persist the following `call.operation` record. The full contract name, method, instance, key and designated reference identify the operation. Use JSON null for the instance of a deployment and the key of a deployment or insert.
+
+```json
+{
+  "designated": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#0",
+  "contract": "org.julclang.state.examples.registry.Registry",
+  "method": "release",
+  "instance": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "key": "61",
+  "attempts": []
+}
+```
+
+Each attempt signed for submission, exported or submitted is journaled as `{txHash, validTo}`, using the body's exclusive upper slot. Persist the per-chain recovery high-water mark before handoff. A declined unsigned body is settled `discarded` and omitted from the attempts array. Every successful attempt spends the same designation. A missing designation gives `refusal/needsDesignated`. Inconsistent identity or attempt history gives `bad/operation`.
+
+The complete result frame commits its reservation. A refused first attempt needs no settlement. A live attempt or another operation touching a reserved object gives `refusal/pending`. Read liveness from the payer's complete address listing. A spent designation gives `refusal/mayHaveLanded`. The client checks its node for inclusion. Retry only with the designation still unspent at a tip strictly past every handed-out attempt's `validTo + settlementSlots` and after release of all reservations. Include the persisted `operation` alongside each keyed transaction in `restore.transactions`, including unsigned bodies still awaiting approval.
+
+Send optional `call.pageLimits: [maxStartSlots, maxValiditySlots]` (default `[60, 900]`). The start limit is nonnegative and the validity limit is positive. The final keyed body, transition context and link redeemers share one nonempty window. Its start is in `[now, now + maxStartSlots]`. Its exclusive end is at most both `start + ttlSlots` and `now + maxValiditySlots`. Submit a future-start body at its start. A cooldown beyond the available window returns `refusal/cooldown` with the slot in `retryAtSlot`.
+
+A keyed method without a page-verifiable recipe or described list type, or a removal without a balance-binding Ctx, is `unsupported/keyed`. Yaci Store supplies no producing transaction CBOR. On removal the target's Ctx binds its entire input balance, leaving just the predecessor to be solved by value conservation. On an action or retirement the target's Ctx balance excludes the contract minimum ADA. A keyed method with governor authorization remains `unsupported/authorizedBy`.
 
 Before reserving or returning a prepared transaction (including a publication), the host checks output quantities and per-unit value conservation against the call's chain reads. A negative output or a mismatch returns `internal/unbalanced`. The client independently verifies the body before signing (D13).
 
@@ -84,7 +109,7 @@ Before reserving or returning a prepared transaction (including a publication), 
 | Field | Projection |
 | --- | --- |
 | state | null or {index, instance, type, value} from the continuing thread-token output at the contract address |
-| objects | Array of {index, object, type, value, effect} from a holding output, with effect created or updated. A burn produces {object, effect: "removed"}. |
+| objects | Array of {index, object, type, value, effect} from an owned holding or keyed head, node or retired output, with effect created, updated or retired. A relink reports the updated predecessor at its actual output index. A burn produces {object, effect: "removed"}. |
 | events | Array of {value} decoded from the method's mint or spend redeemer at its ledger pointer |
 | payouts, sends | Arrays of {index, address, value, owed}. Each value is a map of unit to decimal quantity. The full output value includes any minimum-UTxO top-up. Payouts match the input tag and payee. Sends use the output verifier's claim index. Change has no attribution. |
 
@@ -157,11 +182,11 @@ Before signing **or exporting**, the client must perform all applicable checks b
 
 1. Extract the exact encoded transaction-body slice from cbor and hash it. Refuse a txHash mismatch. Sign that hash and preserve those body bytes when adding witnesses.
 2. Independently read the descriptions and compiled validator resources, including sibling jars, from the immutable snapshot whose digest the client verified. Derive the contract hashes, addresses, network and policies. Anchor shared verifiers in the snapshot's julc-state-verifier jar. Refuse a conflicting fingerprint, contract entry or deployment. Determine the method and its verifiability independently from the description. Refuse any call outside the verifiable set.
-3. Resolve every spending, reference and collateral input against the bound node. Check the network ID and every output address. Permit wallet inputs and exactly the requested script target for a spend. Check its address, policy and one instance/object token. Restrict references to pinned script holders, the target and explicitly anchored foreign reads. Verify collateral ownership, return address and total at risk. Verify is_valid is true, execution budgets are within chain limits, and the fee satisfies the protocol-parameter-derived cap and the user's maximum.
+3. Resolve every spending, reference and collateral input against the bound node. Check the network ID and every output address. Permit wallet inputs and exactly the requested script target for an ordinary spend. A keyed insert spends its predecessor with Link. A removal spends that predecessor with Link and the target with the requested method, and burns exactly its token with Remove_T bound to both outrefs. Derive each keyed token as `0x4B ‖ blake2b_224(instance ‖ typeId ‖ key)`, with an empty key for a head. Require the designated wallet input and verify the relink, node or tombstone, minimum deposits, bounded top-ups and wallet loss under ADR-0016 D11. Check its address, policy and one instance/object token. Restrict references to pinned script holders, the target and explicitly anchored foreign reads. Verify collateral ownership, return address and total at risk. Verify is_valid is true, execution budgets are within chain limits, and the fee satisfies the protocol-parameter-derived cap and the user's maximum.
 4. Reject extra certificates, withdrawals, votes, proposals, donations, treasury values and auxiliary data. Permit only pinned verifier zero-withdrawals needed by the requested call, and registrations of the precise publication shapes below. Restrict mint policies and payment-key signers to those requested. Check that named co-signers are required by the body.
 5. Select the redeemer pointer from the body's ledger order. For a spend, use the target input's index. Independently select the constructor alternative from the anchored method schema. Check the redeemer at that pointer against the constructor, typed arguments, caller, payment and offered assets. Reject extra redeemers. A creation spends its wallet seed, mints exactly one derived thread token, and spends no script input. A destroy burns exactly its target token with the expected burn redeemer. Ordinary actions cannot mint unless the anchored method permits it. For a permitted method mint, check ByAction names the target.
 6. Check the one continuing output for a creation or non-destroying spend, its pinned script address, unique token and decodable inline state. A destroy has no continuation. Check tagged wallet payouts against the target out-ref. Reject unexpected wallet datums, script references and outputs using the wallet's key at unrelated addresses. Balance inputs, withdrawals and mint against outputs, fee and deposits for every unit. Bound the caller's net loss by the agreed payment and fee, including the bounded creation deposit. Third parties can receive only what the script releases after accounting for tagged wallet payouts.
-7. Require an exclusive upper bound at most the **sent** now + ttlSlots. Require a lower bound at or after that now for methods using Ctx or time rules. A keyed client in a later milestone must check start within [now, now + maxStartSlots], a nonempty window, and end at most both start + ttlSlots and now + maxValiditySlots. Determine whether the keyed rule applies from the anchored contract and method.
+7. For ordinary calls require an exclusive upper bound at most the **sent** now + ttlSlots. Require a lower bound at or after that now for methods using Ctx or time rules. For a keyed call instead check start within [now, now + maxStartSlots], a nonempty window, and end at most both start + ttlSlots and now + maxValiditySlots. Determine whether the keyed rule applies from the anchored contract and method.
 8. Recompute the bounds, signers, plan and any predicted effects used in the signing decision from the received bytes. Compare a shown plan against the client's own. Classify calls locally regardless of describe's served flag.
 
 Before signing a publication, the client must positively recognize exactly one of these shapes. Every shape allows only payer change besides the named output, no mint, withdrawals, metadata or other certificates. Account for the exact registration deposit in the balance.
@@ -178,8 +203,8 @@ Each terminal error has a numeric JSON-RPC code, a diagnostic message, and data 
 
 | Kind | JSON-RPC code | Examples |
 | --- | --- | --- |
-| bad | −32602 | request, method, contract, busy, network, nowDecreased, nowImplausible, tooLarge, readLimit, stageMismatch, unknownReservation, conflict, notExpired, unbounded, restoreClosed, listingGone |
-| refusal | −32001 | require, runtime, pending, window, prerequisite, reconcile, deepRollback, expiredOnArrival, cooldown |
+| bad | −32602 | request, method, contract, busy, network, nowDecreased, nowImplausible, tooLarge, readLimit, stageMismatch, unknownReservation, conflict, notExpired, unbounded, restoreClosed, listingGone, operation |
+| refusal | −32001 | require, runtime, pending, window, prerequisite, reconcile, deepRollback, expiredOnArrival, cooldown, needsDesignated, mayHaveLanded |
 | unsupported | −32003 | protocol, runtimeVersion, outsideProject, views, params, keyed, maps, m1b, authorizedBy, unverifiable, notYet, read:&lt;kind or service.method&gt; |
 | internal | −32603 (−32800 for cancelled) | readFailed, inconsistentRead, chainMoved, unbalanced, evaluator, tooDeep, cancelled, deadline, transport, internal, need |
 

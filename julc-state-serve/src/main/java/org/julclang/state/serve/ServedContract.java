@@ -163,7 +163,7 @@ public final class ServedContract implements ContractCalls {
                     Object made = m.invoke(null, values.toArray());
                     return client.getMethod("instanceId").invoke(made);
                 }
-                case "action", "destroy", "ownedInit", "ownedAction", "ownedDestroy" -> {
+                case "action", "destroy", "ownedInit", "ownedAction", "ownedDestroy", "keyedInit", "keyedAction", "keyedRemove", "keyedRetire" -> {
                     boolean ownedSpend = kind.equals("ownedAction") || kind.equals("ownedDestroy");
                     if (ownedSpend && (object == null || !object.matches("4f[0-9a-f]{56}")))
                         throw new BadRequest("an owned call needs an object id");
@@ -173,6 +173,14 @@ public final class ServedContract implements ContractCalls {
                         for (JsonNode o : x.get("owned"))
                             if (o.get("type").asText().equals(meta.get("owned").asText())) lookup = o.get("lookup").asText();
                         at = client.getMethod(lookup, String.class).invoke(at, object);
+                    }
+                    if (kind.startsWith("keyed") && !kind.equals("keyedInit")) {
+                        JsonNode type = null;
+                        for (var k : x.path("keyed")) if (k.path("simple").equals(meta.path("keyed"))) type = k;
+                        if (type == null || object == null || !object.matches("(?:[0-9a-f]{2})+") ||
+                                object.length() / 2 > type.required("maxKeyBytes").intValue()) throw new BadRequest("invalid object key");
+                        at = client.getMethod(type.required("lookup").asText(), byte[].class)
+                                .invoke(at, java.util.HexFormat.of().parseHex(object));
                     }
                     Method m = find(at.getClass(), method, 1 + nArgs + (payable ? 1 : 0) + (takesAssets ? 1 : 0)
                             + (signers == null ? 0 : 1), false);
@@ -184,6 +192,7 @@ public final class ServedContract implements ContractCalls {
                         values.add(signers);
                     }
                     Object r = m.invoke(at, values.toArray());
+                    if (kind.equals("keyedInit")) return java.util.HexFormat.of().formatHex((byte[]) r.getClass().getMethod("key").invoke(r));
                     return kind.equals("ownedInit") ? r.getClass().getMethod("objectId").invoke(r) : null;
                 }
                 default -> throw new BadRequest("unknown kind " + kind);

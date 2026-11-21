@@ -168,6 +168,17 @@ public final class Compose {
         if (!probe.windows.isEmpty() && window == null) {
             throw new JoustException("composition: the calls' validity windows do not overlap");
         }
+        if (prepare && runtime.hostedCall() && (probe.keyed || probe.keyedCreation)) {
+            // D7: choose the final bounds before the transition and its redeemer are rebuilt in pass two.
+            long now = runtime.chainTime().currentSlot();
+            long start = window == null ? now : window.fromSlot();
+            long[] limits = runtime.pageLimits();
+            long end = Math.min(window == null ? Math.addExact(now, runtime.callScope().ttlSlots().orElseThrow()) : window.toSlot(),
+                    Math.addExact(now, limits == null ? 900 : limits[1]));
+            if (start < now || start - now > (limits == null ? 60 : limits[0]) || end <= start)
+                throw new CallScope.Refusal("window", "no keyed window within page limits");
+            window = KeyedObjects.window(runtime.chainTime(), start, end);
+        }
         // Pass 2: every call in the common window, into one transaction.
         var cap = new TxRunner.Capture();
         cap.designated = designated;
