@@ -33,6 +33,20 @@ test('D2 rejects invalid framing, encoding, duplicate keys and envelopes', () =>
   }
 });
 
+test('D2 scans a frame in linear time: an unterminated string of escaped quotes is refused at once (#154 final review F-N1)', () => {
+  const evil = encode('{"jsonrpc":"2.0","id":1,"method":"x","params":"' + '\\"'.repeat(1_500_000));
+  const r = frameReader(assert.fail, assert.fail);
+  const start = process.hrtime.bigint();
+  try { assert.throws(() => r.chunk(evil)); } finally { r.clear(); }
+  assert.ok(process.hrtime.bigint() - start < 2_000_000_000n, 'refused within 2 s');
+  // A legal 4 MiB-class frame of many strings parses without holding every token (review r2 M2-13).
+  const many = encode('{"jsonrpc":"2.0","id":1,"method":"x","params":[' + Array(300_000).fill('"ab"').join(',') + ']}');
+  const accepted = [];
+  const ok = frameReader(m => accepted.push(m), assert.fail);
+  try { ok.chunk(many); } finally { ok.clear(); }
+  assert.equal(accepted.length, 1);
+});
+
 test('D2 bounds JSON nesting as the JVM host does: more than 1,000 levels is malformed (#154 review M2-2)', () => {
   const nested = levels => '{"jsonrpc":"2.0","id":1,"method":"x","params":' + '['.repeat(levels - 1) + ']'.repeat(levels - 1) + '}';
   const accepted = [];

@@ -37,11 +37,20 @@ const pageGaps = {
   'map-verifier-reference': 'the map verifier script supplied',
 };
 
+// Positive vectors (by `mutation`) the page verifier still refuses: protocol 1 accepts them. Each must still be refused
+// with exactly the named problem, so an entry fails once verify.js is fixed and has to be removed.
+// bloxbean/joust#164: verify.js applies "another token of the contract" to wallet outputs too (#153 F-C1).
+const pageFalseRefusals = {
+  'partial-remove-liquidity': 'an output carries another token of the contract',
+};
+
 for (const file of readdirSync(dir).filter(f => f.endsWith('.json'))) {
   const v = JSON.parse(readFileSync(new URL(file, dir)));
   if (v.method !== 'prepare' || v.violations.some(code => !common.has(code))) continue;
   const gap = pageGaps[v.mutation];
-  test(gap ? `page verifier gap on ${file}: ${gap}` : 'wallet agreement on ' + file, async t => {
+  const falseRefusal = v.violations.length === 0 ? pageFalseRefusals[v.mutation] : undefined;
+  test(gap ? `page verifier gap on ${file}: ${gap}` : falseRefusal ? `page verifier false refusal on ${file} (#164)` :
+    'wallet agreement on ' + file, async t => {
     const { description, policy, address, outputVerifier } = v.anchors;
     const { call } = v.request;
     const x = description['x-joust'];
@@ -67,6 +76,8 @@ for (const file of readdirSync(dir).filter(f => f.endsWith('.json'))) {
         maxStartSlots: call.pageLimits?.[0] ?? 60, maxBackdateSlots: 0 },
     });
     if (gap) assert.deepEqual(problems, [], `the page now refuses ${v.mutation}: remove it from pageGaps`);
+    else if (falseRefusal) assert.deepEqual([...new Set(problems)], [falseRefusal],
+      `the page's refusal of ${v.mutation} changed: remove it from pageFalseRefusals once it is accepted`);
     else assert.equal(problems.length === 0, v.violations.length === 0, problems.join('; '));
     if (file === 'dapp-0003.json' || file === 'dapp-0034.json') {
       assert.ok(report.targetRef);

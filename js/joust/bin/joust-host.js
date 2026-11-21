@@ -8,6 +8,12 @@ if (process.argv.length !== 3 || process.argv[2] !== '--stdio') {
   process.stderr.write('usage: joust-host --stdio\n');
   process.exit(2);
 }
+// D3: the client launches the host with a fixed environment and no Node options. A preload (--require, --import,
+// a loader) would run outside the hashed closure under the same fingerprint, so refuse it (final review F-N3).
+if (process.env.NODE_OPTIONS?.trim() || process.execArgv.some(a => /^(-r|--require|--import|--loader|--experimental-loader)\b/.test(a))) {
+  process.stderr.write('joust-host: refusing Node options or preloads (NODE_OPTIONS, --require, --import, --loader)\n');
+  process.exit(2);
+}
 
 // I7 (#154 review M2-6): read the host's whole JavaScript closure once, before any of it runs. The fingerprint hashes
 // these bytes, and the module hooks below evaluate exactly them in both threads; any other module is refused. Node
@@ -29,10 +35,13 @@ try {
   for (const name of ['bin/joust-host.js', 'package.json', ...['frames', 'guard', 'launch', 'resolve', 'transport', 'worker']
     .map(n => 'src/host/' + n + '.js')]) read(join(pkg, name));
 } catch (e) {
-  // The client checks the entry. A host module outside the project ends the host before any of it runs.
-  const message = 'host module outside project';
-  const body = JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32003, message,
-    data: { kind: 'unsupported', code: 'outsideProject', message, sites: [], retryAtSlot: null } } });
+  // The client checks the entry. A host module outside the project, or one missing (a snapshot the digest cannot
+  // describe, as for the runtime below; final review F-N4), ends the host before any of it runs.
+  const outside = e.code === 'outsideProject';
+  const message = outside ? 'host module outside project' : 'host module missing';
+  const [code, kind, rpc] = outside ? ['outsideProject', 'unsupported', -32003] : ['stageMismatch', 'bad', -32602];
+  const body = JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: rpc, message,
+    data: { kind, code, message, sites: [], retryAtSlot: null } } });
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\r\n\r\n' + body, () => process.exit(1));
   await new Promise(() => {});
 }
