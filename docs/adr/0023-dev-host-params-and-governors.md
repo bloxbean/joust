@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r3). Design only.
+**Status:** Proposed (r4). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -97,10 +97,14 @@ codec's exact range or decimal strings). Absent `params` for a parameterized con
   ADR-0022 D8's out-ref exclusion stays session-wide, so two parameterizations can never reserve the same payer
   input or collateral (F15). ADR-0022 D11's persisted `operation` gains **`policy`** (the applied policy) for a
   parameterized contract; a retry whose request params give another policy is `bad`, code `operation`.
-- **Restore** (ADR-0022 D8, whose entry is `{cbor, state, slot?, operation?}`): an entry for a parameterized
-  contract gains **`params`**, persisted by the client with the pending transaction. The host reapplies them and
-  requires the policy to equal both `operation.policy` (when present) and the policy the restored body spends or
-  mints under; any disagreement is `bad`, code `operation`. A later retry is compared with its own request's params.
+- **Restore** (ADR-0022 D8, whose entry is `{cbor, state, slot?, operation?}`; X19): the deployment binding applies
+  **only to keyed operations**. An entry whose `operation` names a parameterized contract (ADR-0022 still requires
+  that record for every pending keyed transaction) also carries **`params`**, persisted with it; the host reapplies
+  them to `operation.contract` and requires the policy to equal `operation.policy` and the policy the restored body
+  spends or mints under; any disagreement is `bad`, code `operation`. Every other entry (an ordinary call, a
+  reference-script publication, a stake or governor registration) is restored by ADR-0022 D8's existing path,
+  unchanged and without `params`: its reservation is of out-refs, which D8 already excludes session-wide. A later
+  retry is compared with its own request's params.
 - `deployment`'s result adds `params` (the Data, CBOR hex, D3's encoding) and the **applied** `scriptHashes` (`spend`,
   `mint`, `stake`) beside `unapplied`; the client requires `params` to equal its own bytes.
 
@@ -251,9 +255,10 @@ Observable behaviour:
   payer ≠ governor owner (positive, F8), caller-as-key with a `@Quorum` co-signer (positive), overlapping keys, a
   missing, extra or substituted named signer; registration of a wrong target, without TTL, already registered, and
   `unknown`.
-- **Identity tests:** two parameterizations competing for one wallet out-ref (refused); a restored entry whose
+- **Identity tests:** two parameterizations competing for one wallet out-ref (refused); a restored keyed entry whose
   params, `operation.policy` and body disagree (`bad/operation`), separately from a valid restore followed by a retry
-  with changed params (`bad/operation`); an npm `validators.json` changed **before** `initialize` against the old
+  with changed params (`bad/operation`); restarts with a pending **bounded governor registration** and a pending
+  **reference-script publication** of a parameterized contract (both restored, positive, by D8's path); an npm `validators.json` changed **before** `initialize` against the old
   digest (`stageMismatch`), and changed **after** it (the running session keeps its loaded bytes); an old client
   (fingerprint version 1) and a new host on a project with the manifest (initializes, no `authorizedBy:script`); two
   packages with a `Guardian` (the Gradle qualified selector works; ambiguity fails closed).
@@ -275,7 +280,7 @@ Observable behaviour:
 | I17 | A key-credential call is accepted only if the credential's key, from the client's own params, is a required signer that is the caller or a named co-signer | D4, D5 | M4b vectors |
 | I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, its V3 script in the witness set, and exactly one `Approvals` naming this policy, instance and action at that withdrawal's pointer; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
 | I19 | The body's required signers equal exactly D5's signer set | D5 | M4b/M4c mutations, payer ≠ owner |
-| I20 | Reservations exclude out-refs across all parameterizations in a session; a keyed operation retried or restored with params giving another policy is refused | D2 | identity tests |
+| I20 | Reservations exclude out-refs across all parameterizations in a session; a keyed operation retried or restored with params giving another policy is refused; other pending transactions restore as under ADR-0022 | D2 | identity tests |
 | I21 | A client that sends no fingerprint version initializes exactly as under ADR-0022 on every project | D4, D7 | old-client vector |
 
 ## 5. Alternatives considered
@@ -294,7 +299,8 @@ Observable behaviour:
 - Treasury-like contracts become usable from an IDE; IntelliAda's run panel gains `@Params` input and a governor
   picker over the snapshot's validators.
 - Clients implement plutus-core Data encoding and UPLC param application (D3); the kit's vectors make it testable.
-- The npm host's launch digest covers `validators.json` (D4), the keyed operation record gains `policy` (D2).
+- Under **fingerprint version 2**, the npm host's launch digest covers `validators.json` (D4); version 1 is unchanged.
+  The keyed operation record gains `policy`, and a parameterized keyed restore entry `params` (D2).
 - The HTTP prepare service is unchanged.
 
 ## 7. Compatibility
@@ -338,3 +344,7 @@ including one with `validators.json`, and no script governors (I21). A restore e
   - X16 → D6 (eligible governors derived from the description and params), D8;
   - X17 → D4 (fingerprint version 1/2, version 1 serves no script governors), D7, §7, D8, I21;
   - X18 → D8 (shared verifier as governor end to end; only the self-hash stays a checker-boundary unit test).
+- **r4** (2026-11-21, responds to the Codex round-3 review of `a3d91454`): X19 → D2 (the restore binding applies to
+  parameterized keyed operations only; other entries restore by ADR-0022 D8's path), D8 (positive restarts of a
+  pending governor registration and a pending reference-script publication), I20; the §6 carryover now says
+  fingerprint version 2.
