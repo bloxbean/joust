@@ -120,6 +120,82 @@ class BodyBalanceTest {
     }
 
     @Test
+    void ledgerInvalidValuesAreRefused() {
+        // T3: one input spelled in two cases is one input, counted once.
+        var twice = body(List.of(), 200_000, out(19_800_000, 200));
+        var upper = new TransactionInput(IN_A.getTransactionId().toUpperCase(), 0);
+        chain.put(upper, chain.get(IN_A));
+        twice.setInputs(new ArrayList<>(List.of(IN_A, upper)));
+        refused(twice, "spent twice");
+        // A zero-quantity asset in an output.
+        var zero = body(List.of(IN_A), 200_000, out(9_800_000, 100));
+        zero.getOutputs().getFirst().getValue().getMultiAssets().add(MultiAsset.builder().policyId("cc".repeat(28))
+                .assets(new ArrayList<>(List.of(new Asset("0x02", BigInteger.ZERO)))).build());
+        refused(zero, "zero quantity");
+        // Quantities outside the ledger's range, even when they balance.
+        var big = BigInteger.TWO.pow(70);
+        chain.put(new TransactionInput("dd".repeat(32), 0), utxo(ADDR, "dd", 10_000_000, 0));
+        chain.get(new TransactionInput("dd".repeat(32), 0)).getAmount().add(new Amount(UNIT, big));
+        var huge = body(List.of(new TransactionInput("dd".repeat(32), 0)), 200_000, out(9_800_000, 0));
+        huge.getOutputs().getFirst().getValue().getMultiAssets().add(MultiAsset.builder().policyId(POLICY)
+                .assets(new ArrayList<>(List.of(new Asset("0x01", big)))).build());
+        refused(huge, "outside the ledger's range");
+        var mint = body(List.of(IN_B), 200_000, out(4_800_000, Long.MAX_VALUE));
+        mint.getMint().add(MultiAsset.builder().policyId(POLICY)
+                .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.valueOf(Long.MAX_VALUE))))).build());
+        check(mint);   // Int64's maximum is a valid mint
+        var over = body(List.of(IN_B), 200_000, out(4_800_000, 0));
+        over.getOutputs().getFirst().getValue().getMultiAssets().add(MultiAsset.builder().policyId(POLICY)
+                .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.TWO.pow(63))))).build());
+        over.getMint().add(MultiAsset.builder().policyId(POLICY)
+                .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.TWO.pow(63))))).build());
+        refused(over, "mint quantity");
+    }
+
+    @Test
+    void aPreparedBodyTakesFromACoCallerOnlyWhatItPaysIn() {
+        // T1 defence in depth (TxRunner.checkCoCallers): B's input holds 10 ADA and 100 tokens, B pays in 40 tokens.
+        String a = new Account(Networks.testnet()).baseAddress();
+        var bIn = utxo(ADDR, "aa", 10_000_000, 100);
+        var spends = Map.of(IN_A, bIn, IN_B, utxo(a, "bb", 5_000_000, 0));
+        var paid = Map.of(ADDR, org.julclang.state.api.Assets.of(new byte[28], new byte[]{1}, BigInteger.valueOf(40)));
+        var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 60), outTo(a, 4_800_000, 40)));
+        TxRunner.checkCoCallers(t, spends, a, paid, "test");   // B gets back its lovelace and the 60 tokens it keeps
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(9_000_000, 60), outTo(a, 5_800_000, 40)));
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, "test"));
+        assertTrue(e.getMessage().contains("1000000 lovelace"), e::getMessage);
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 50), outTo(a, 4_800_000, 50)));
+        assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, "test"));
+    }
+
+    static TransactionOutput outTo(String address, long lovelace, long tokens) {
+        var o = out(lovelace, tokens);
+        o.setAddress(address);
+        return o;
+    }
+
+    @Test
+    void unitSpellingsAreOneUnit() {
+        // An output's policy in upper case is the input's unit (normalised), not a new one.
+        var b = body(List.of(IN_A), 200_000, out(9_800_000, 0));
+        b.getOutputs().getFirst().getValue().getMultiAssets().add(MultiAsset.builder().policyId(POLICY.toUpperCase())
+                .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.valueOf(100))))).build());
+        check(b);
+    }
+
+    @Test
+    void theProtocolParametersAreReadOnlyForALegacyStakeCertificate() {
+        // R3: no read without such a certificate; a failed read is a JoustException, not an NPE.
+        BodyBalance.check(body(List.of(IN_A, IN_B), 200_000, out(3_000_000, 40), out(11_800_000, 60)), chain::get,
+                () -> { throw new AssertionError("read"); }, "test");
+        var r = body(List.of(IN_B), 200_000, out(2_800_000, 0));
+        r.getCerts().add(new StakeRegistration(StakeCredential.fromKeyHash(new byte[28])));
+        var e = assertThrows(JoustException.class, () -> BodyBalance.check(r, chain::get, () -> null, "test"));
+        assertTrue(e.getMessage().contains("no protocol parameters"), e::getMessage);
+    }
+
+    @Test
     void theCollateralPathBalancesToo() {
         var b = body(List.of(IN_A, IN_B), 200_000, out(3_000_000, 40), out(11_800_000, 60));
         b.getCollateral().add(IN_B);

@@ -34,19 +34,29 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Value conservation of a built transaction body, per unit (#152): inputs + mint + withdrawals + refunds = outputs + fee
- * + deposits + donation, every output quantity non-negative, no input twice; and on the collateral path, collateral
- * inputs = collateral return + total collateral. The runtime checks every body it hands to a wallet (a
+ * Value conservation of a built transaction body, per unit (#152): inputs + mint + withdrawals + certificate refunds =
+ * outputs + fee + certificate deposits + proposal deposits + donation; every output quantity positive and within the
+ * ledger's range (an unsigned 64-bit word; mint quantities non-zero signed 64-bit), no input twice (transaction ids
+ * compared in any letter case); and on the collateral path, collateral inputs = collateral return + total collateral. The runtime checks every body it hands to a wallet (a
  * {@link PreparedTx}, a prepared publication) with it, so it never hands out one the ledger would reject for its value
  * (a negative token quantity in the change, or a token payment no input funds: such a body passes a plain
  * conservation check of the outputs alone, the negative change cancelling the payment).
  * <p>
  * Inputs are resolved through {@code resolve} (the chain reads the build used). A certificate or body field whose value
  * effect this class does not know is refused rather than guessed.
+ * <p>
+ * It is the runtime's self-check against bodies the ledger would reject for their value. It says nothing about where
+ * value goes: which address gets the change, or what goes to third parties (T5). A wallet's net outflow is the page
+ * verifier's to bound (ADR-0013); the prepare path also refuses a body that takes from a co-caller more than it pays in
+ * ({@code TxRunner.checkCoCallers}).
  */
 public final class BodyBalance {
 
     private static final String LOVELACE = "lovelace";
+    /** The ledger's ranges: output quantities and coins are Word64, mint quantities Int64 (T3). */
+    private static final BigInteger WORD64_MAX = BigInteger.TWO.pow(64).subtract(BigInteger.ONE);
+    private static final BigInteger INT64_MAX = BigInteger.valueOf(Long.MAX_VALUE);
+    private static final BigInteger INT64_MIN = BigInteger.valueOf(Long.MIN_VALUE);
 
     private BodyBalance() {}
 
@@ -63,19 +73,39 @@ public final class BodyBalance {
      */
     public static void check(TransactionBody body, Function<TransactionInput, Utxo> resolve, ProtocolParams pp,
                              String what) {
+        check(body, resolve, () -> pp, what);
+    }
+
+    /** As above, the protocol parameters read only when a legacy stake certificate needs the key deposit (R3). */
+    public static void check(TransactionBody body, Function<TransactionInput, Utxo> resolve,
+                             java.util.function.Supplier<ProtocolParams> pp, String what) {
         Map<String, BigInteger> balance = inputs(body.getInputs(), resolve, what);
         if (body.getMint() != null && !body.getMint().isEmpty()) {
             for (var a : ValueUtil.toAmountList(new Value(BigInteger.ZERO, body.getMint()))) {
-                balance.merge(a.getUnit(), a.getQuantity(), BigInteger::add);
+                if (a.getUnit().equals(LOVELACE)) continue;   // the coin of the wrapper, zero
+                BigInteger q = a.getQuantity();
+                if (q.signum() == 0 || q.compareTo(INT64_MAX) > 0 || q.compareTo(INT64_MIN) < 0) {
+                    throw unbalanced(what, "a mint quantity of " + a.getUnit() + " is zero or outside the ledger's range: " + q);
+                }
+                balance.merge(AssetUtil.normalizeUnit(a.getUnit()), q, BigInteger::add);
             }
         }
         if (body.getWithdrawals() != null) {
-            for (var w : body.getWithdrawals()) balance.merge(LOVELACE, w.getCoin(), BigInteger::add);
+            for (var w : body.getWithdrawals()) balance.merge(LOVELACE, word64(w.getCoin(), "a withdrawal", what), BigInteger::add);
         }
         for (TransactionOutput o : body.getOutputs()) subtractOutput(balance, o, what);
-        balance.merge(LOVELACE, body.getFee().negate(), BigInteger::add);
+        balance.merge(LOVELACE, word64(body.getFee(), "the fee", what).negate(), BigInteger::add);
         if (body.getCerts() != null) {
-            for (Certificate c : body.getCerts()) balance.merge(LOVELACE, deposit(c, pp, what).negate(), BigInteger::add);
+            ProtocolParams params = null;
+            for (Certificate c : body.getCerts()) {
+                if (params == null && (c instanceof StakeRegistration || c instanceof StakeDeregistration)) {
+                    params = pp.get();
+                    if (params == null || params.getKeyDeposit() == null) {
+                        throw new JoustException(what + ": no protocol parameters to check a stake certificate's deposit");
+                    }
+                }
+                balance.merge(LOVELACE, deposit(c, params, what).negate(), BigInteger::add);
+            }
         }
         if (body.getProposalProcedures() != null) {
             for (var p : body.getProposalProcedures()) balance.merge(LOVELACE, p.getDeposit().negate(), BigInteger::add);
@@ -102,7 +132,9 @@ public final class BodyBalance {
     /** The lovelace a certificate locks (positive) or refunds (negative). */
     static BigInteger deposit(Certificate c, ProtocolParams pp, String what) {
         return switch (c) {
-            // The legacy forms carry no amount: the protocol's key deposit.
+            // The legacy forms carry no amount: the protocol's key deposit. The ledger refunds the deposit recorded at
+            // registration, so after a keyDeposit change this refuses a valid deregistration (fails closed; CCL's own
+            // balancer assumes the same).
             case StakeRegistration r -> new BigInteger(pp.getKeyDeposit());
             case StakeDeregistration r -> new BigInteger(pp.getKeyDeposit()).negate();
             case RegCert r -> r.getCoin();
@@ -127,10 +159,11 @@ public final class BodyBalance {
     private static Map<String, BigInteger> inputs(List<TransactionInput> inputs, Function<TransactionInput, Utxo> resolve,
                                                   String what) {
         var balance = new HashMap<String, BigInteger>();
-        var seen = new HashSet<TransactionInput>();
+        var seen = new HashSet<String>();
         for (TransactionInput in : inputs) {
             String ref = in.getTransactionId() + "#" + in.getIndex();
-            if (!seen.add(in)) throw unbalanced(what, "input " + ref + " is spent twice");
+            // One output however its id is spelled (T3): the ledger compares the bytes.
+            if (!seen.add(ref.toLowerCase())) throw unbalanced(what, "input " + ref + " is spent twice");
             Utxo u = resolve.apply(in);
             if (u == null || u.getAmount() == null) throw unbalanced(what, "cannot resolve input " + ref);
             for (var a : u.getAmount()) balance.merge(AssetUtil.normalizeUnit(a.getUnit()), a.getQuantity(), BigInteger::add);
@@ -140,11 +173,24 @@ public final class BodyBalance {
 
     private static void subtractOutput(Map<String, BigInteger> balance, TransactionOutput o, String what) {
         for (var a : ValueUtil.toAmountList(o.getValue())) {
-            if (a.getQuantity().signum() < 0) {
+            BigInteger q = a.getQuantity();
+            if (q.signum() < 0) {
                 throw unbalanced(what, "an output to " + o.getAddress() + " holds a negative quantity of " + a.getUnit());
             }
-            balance.merge(a.getUnit(), a.getQuantity().negate(), BigInteger::add);
+            // The ledger refuses a zero-quantity asset in an output value (T3); a zero coin is the min-UTxO rule's.
+            if (q.signum() == 0 && !a.getUnit().equals(LOVELACE)) {
+                throw unbalanced(what, "an output to " + o.getAddress() + " holds a zero quantity of " + a.getUnit());
+            }
+            word64(q, "an output quantity of " + a.getUnit(), what);
+            balance.merge(AssetUtil.normalizeUnit(a.getUnit()), q.negate(), BigInteger::add);
         }
+    }
+
+    private static BigInteger word64(BigInteger q, String which, String what) {
+        if (q == null || q.signum() < 0 || q.compareTo(WORD64_MAX) > 0) {
+            throw unbalanced(what, which + " is outside the ledger's range: " + q);
+        }
+        return q;
     }
 
     private static void requireZero(Map<String, BigInteger> balance, String what, String where) {

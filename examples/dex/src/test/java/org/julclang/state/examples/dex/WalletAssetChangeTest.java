@@ -38,6 +38,22 @@ import java.util.Map;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
+import com.bloxbean.cardano.client.account.Account;
+import com.bloxbean.cardano.client.api.model.Result;
+import com.bloxbean.cardano.client.backend.api.BackendService;
+import com.bloxbean.cardano.client.backend.api.DefaultProtocolParamsSupplier;
+import com.bloxbean.cardano.client.backend.api.DefaultScriptSupplier;
+import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier;
+import com.bloxbean.cardano.client.backend.api.UtxoService;
+import com.bloxbean.cardano.client.transaction.spec.Transaction;
+import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
+import java.lang.reflect.Proxy;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicReference;
+import org.julclang.clientlib.eval.JulcTransactionEvaluator;
+import org.julclang.clientlib.eval.SlotConfig;
+import org.julclang.state.runtime.SlotChainTime;
+import org.julclang.state.runtime.snapshot.SnapshotBackend;
 
 /**
  * Issue #152 on the default JVM path: a wallet's prepared call paying native assets into the Dex spends the wallet's
@@ -56,6 +72,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * needs another input for the fee, the tokens split over two UTxOs; each with {@code addLiquidity} and with
  * {@code swapTokenForAda} (whose payout to the wallet makes the prepare pick a funding input too).
  */
+@SuppressWarnings("unchecked")
 class WalletAssetChangeTest {
     static final ObjectMapper JSON = new ObjectMapper();
     static final TransactionInput TOKEN = new TransactionInput(
@@ -339,5 +356,132 @@ class WalletAssetChangeTest {
         balance.merge("lovelace", body.getFee().negate(), BigInteger::add);
         balance.values().removeIf(v -> v.signum() == 0);
         assertEquals(Map.of(), balance, "value not conserved");
+    }
+
+    // ---------------------------------------------------------------- co-callers (review T1/R1) and R5
+    /*
+     * #152 review T1/R1: a composition whose call's caller B is not the payer A, B paying native assets from its own UTxO.
+     * What B's collected UTxO holds beyond the payment (its lovelace, an unrelated token, the rest of the paid token) goes
+     * back to B's own address; A funds the lovelace paid in and the fee. Before, all of it went to A's change: a valid body
+     * moving B's value to A (a wallet prepare), and the same for key accounts on submit (pre-existing). Also R5: the
+     * prepare path refuses a body that does not balance.
+     */
+
+    static final String OTHER = "ab".repeat(28) + "cd";
+
+    /** B's one UTxO: 300 ADA, 150,000 of the Dex token, 7 of an unrelated token. */
+    static Utxo walletOfB(Fixture f, String b) {
+        var amounts = new ArrayList<Amount>();
+        amounts.add(Amount.lovelace(BigInteger.valueOf(300_000_000)));
+        amounts.add(new Amount(f.unit(), BigInteger.valueOf(150_000)));
+        amounts.add(new Amount(OTHER, BigInteger.valueOf(7)));
+        return Utxo.builder().txHash("ee".repeat(32)).outputIndex(0).address(b).amount(amounts).build();
+    }
+
+    static Map<String, BigInteger> to(TransactionBody body, String address) {
+        var m = new HashMap<String, BigInteger>();
+        for (TransactionOutput o : body.getOutputs()) {
+            if (!o.getAddress().equals(address)) continue;
+            for (var a : ValueUtil.toAmountList(o.getValue())) m.merge(a.getUnit(), a.getQuantity(), BigInteger::add);
+        }
+        return m;
+    }
+
+    private static void assertReturned(Fixture f, TransactionBody body, String a, String b) {
+        assertTrue(body.getInputs().contains(new TransactionInput("ee".repeat(32), 0)), "B's token UTxO is spent");
+        var toB = to(body, b);
+        assertEquals(BigInteger.valueOf(300_000_000), toB.get("lovelace"), "all of B's lovelace back to B");
+        assertEquals(BigInteger.valueOf(50_000), toB.get(f.unit()), "the unpaid rest of the token back to B");
+        assertEquals(BigInteger.valueOf(7), toB.get(OTHER), "the unrelated token back to B");
+        var toA = to(body, a);
+        assertNull(toA.get(OTHER), "none of B's tokens to the payer");
+        assertNull(toA.get(f.unit()));
+        assertNoNegativeOutput(body);
+        assertBalanced(body, f.snapshot);
+    }
+
+    /** The snapshot runtime of this test over {@code backend}, the first built body kept in {@code built}. */
+    static StateRuntime observed(Fixture f, BackendService backend, AtomicReference<Transaction> built) {
+        var clock = f.vector.required("clock");
+        var time = new SlotChainTime(clock.get("zeroSlot").asLong(), clock.get("zeroTimeMs").asLong(), clock.get("slotLengthMs").asLong(), backend);
+        return StateRuntime.builder(backend).network(Networks.testnet()).chainTime(time).ttl(Duration.ofSeconds(20))
+                .evaluator(new JulcTransactionEvaluator(new DefaultUtxoSupplier(backend.getUtxoService()),
+                        new DefaultProtocolParamsSupplier(backend.getEpochService()), new DefaultScriptSupplier(backend.getScriptService()),
+                        new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())))
+                .onBuilt(b -> { if (built.get() == null) built.set(b.tx()); })
+                .build();
+    }
+
+    /**
+     * R5: the prepare path refuses a body that does not balance. The backend answers the payer's UTxO by reference with
+     * one lovelace more than its listing (what QuickTx balanced with): the built body is observed, then refused.
+     */
+    @Test
+    void aPreparedBodyThatDoesNotBalanceIsRefused() {
+        var f = new Fixture();
+        f.wallet(List.of(f.utxo("aa", 500, 100_000)));
+        var snapshot = new SnapshotBackend(f.snapshot);
+        String skewed = "aa".repeat(32);
+        UtxoService utxos = (UtxoService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{UtxoService.class},
+                (proxy, m, args) -> {
+                    Object r = m.invoke(snapshot.getUtxoService(), args);
+                    if (m.getName().equals("getTxOutput") && skewed.equals(args[0])) {
+                        Utxo u = ((Result<Utxo>) r).getValue();
+                        var amounts = new ArrayList<Amount>();
+                        for (Amount a : u.getAmount()) {
+                            amounts.add(a.getUnit().equals("lovelace") ? Amount.lovelace(a.getQuantity().add(BigInteger.ONE)) : a);
+                        }
+                        Utxo more = Utxo.builder().txHash(u.getTxHash()).outputIndex(u.getOutputIndex()).address(u.getAddress()).amount(amounts).build();
+                        return Result.success("ok").withValue(more);
+                    }
+                    return r;
+                });
+        BackendService backend = (BackendService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{BackendService.class},
+                (proxy, m, args) -> m.getName().equals("getUtxoService") ? utxos : m.invoke(snapshot, args));
+        var built = new AtomicReference<Transaction>();
+        var rt = observed(f, backend, built);
+        var dex = DexClient.at(rt, f.instance);
+        var e = assertThrows(BodyBalance.UnbalancedException.class, () -> Compose.of(rt, f.payer)
+                .add(() -> dex.addLiquidity(f.payer, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
+                .prepare());
+        assertTrue(e.getMessage().contains("value is not conserved") && e.getMessage().contains("lovelace=1"), e::getMessage);
+        assertNotNull(built.get(), "built and observed, then refused");
+    }
+
+    @Test
+    void aWalletCoCallerGetsItsSurplusBack() {
+        var f = new Fixture();
+        f.wallet(List.of(f.utxo("bb", 500, 0)));                       // payer A: lovelace only
+        String b = new Account(Networks.testnet()).baseAddress();
+        f.snapshot.utxos.put(b, new ArrayList<>(List.of(walletOfB(f, b))));
+        var walletB = WalletAccount.of(b, Networks.testnet());
+        var dex = DexClient.at(f.rt, f.instance);
+        var prepared = Compose.of(f.rt, f.payer)
+                .add(() -> dex.addLiquidity(walletB, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
+                .prepare();
+        TransactionBody body = prepared.transaction().getBody();
+        assertReturned(f, body, f.address, b);
+        assertTrue(body.getInputs().contains(new TransactionInput("bb".repeat(32), 0)), "the payer funds the lovelace and the fee");
+    }
+
+    /** Key accounts on submit (the runtime signs for B): the same return. The build is observed; nothing is submitted. */
+    @Test
+    void aKeyCoCallerOnSubmitGetsItsSurplusBack() throws Exception {
+        var f = new Fixture();
+        var keyA = new Account(Networks.testnet());
+        var keyB = new Account(Networks.testnet());
+        f.snapshot.utxos.put(keyA.baseAddress(), new ArrayList<>(List.of(
+                Utxo.builder().txHash("bb".repeat(32)).outputIndex(0).address(keyA.baseAddress())
+                        .amount(List.of(Amount.lovelace(BigInteger.valueOf(500_000_000)))).build())));
+        f.snapshot.utxos.put(keyB.baseAddress(), new ArrayList<>(List.of(walletOfB(f, keyB.baseAddress()))));
+        var built = new AtomicReference<Transaction>();
+        var rt = observed(f, new SnapshotBackend(f.snapshot), built);
+        var dex = DexClient.at(rt, f.instance);
+        // The snapshot backend submits nothing: the composition fails after the build, which the observer saw.
+        assertThrows(RuntimeException.class, () -> Compose.of(rt, keyA)
+                .add(() -> dex.addLiquidity(keyB, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
+                .submit());
+        assertNotNull(built.get(), "built");
+        assertReturned(f, built.get().getBody(), keyA.baseAddress(), keyB.baseAddress());
     }
 }

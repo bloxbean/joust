@@ -5,7 +5,6 @@ import com.bloxbean.cardano.client.api.model.Amount;
 import com.bloxbean.cardano.client.api.model.Result;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.backend.api.BackendService;
-import com.bloxbean.cardano.client.backend.api.EpochService;
 import com.bloxbean.cardano.client.backend.api.UtxoService;
 import com.bloxbean.cardano.client.common.model.Networks;
 import com.bloxbean.cardano.client.transaction.spec.Transaction;
@@ -70,20 +69,9 @@ class KeyedSeriesTest {
                         }
                         return Result.success("ok").withValue(out);
                     });
-            // The protocol parameters a body's balance check reads (#152).
-            EpochService epochs = (EpochService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{EpochService.class},
-                    (p, m, a) -> {
-                        if (!m.getName().equals("getProtocolParameters") || a != null && a.length > 0) {
-                            throw new UnsupportedOperationException(m.getName());
-                        }
-                        var pp = new com.bloxbean.cardano.client.api.model.ProtocolParams();
-                        pp.setKeyDeposit("2000000");
-                        return Result.success("ok").withValue(pp);
-                    });
             return (BackendService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{BackendService.class},
                     (p, m, a) -> {
                         if (m.getName().equals("getUtxoService")) return utxos;
-                        if (m.getName().equals("getEpochService")) return epochs;
                         throw new UnsupportedOperationException(m.getName());
                     });
         }
@@ -784,6 +772,20 @@ class KeyedSeriesTest {
         assertNotNull(TxRunner.exportPrepared(ok, "publish", again));
         assertTrue(Designation.isClaimed(Designation.ref(u)));
         again.claim().release();
+    }
+
+    @Test
+    void anExportedBodyThatDoesNotBalanceIsRefusedAndReleasesItsClaim() {
+        // R5 (#152): the export path refuses its own unbalanced body (30 ADA spent into nothing) and ends the claim.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var u = utxo(payer.baseAddress(), 30_000_000);
+        chain.wallet.add(u);
+        var rt = StateRuntime.builder(chain.backend()).chainTime(chain.time()).network(Networks.testnet()).build();
+        var claimed = Designation.build(payer.baseAddress(), null, () -> spending(u));
+        var e = assertThrows(BodyBalance.UnbalancedException.class, () -> TxRunner.exportPrepared(rt, "publish", claimed));
+        assertTrue(e.getMessage().contains("value is not conserved"), e::getMessage);
+        assertFalse(Designation.isClaimed(Designation.ref(u)), "released");
     }
 
     @Test

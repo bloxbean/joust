@@ -278,6 +278,8 @@ public final class StateContractHandle<S> {
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
             var claimed = Designation.build(payerAddress, null, ctx::build);
             return TxRunner.exportPrepared(runtime, "publish the " + spec.name() + " reference script", claimed);
+        } catch (BodyBalance.UnbalancedException e) {
+            throw e;   // the runtime refused its own body: not a build failure (R4)
         } catch (Exception e) {
             throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
                     + e.getMessage(), e);
@@ -509,8 +511,11 @@ public final class StateContractHandle<S> {
             var own = TxRunner.currentOperation();
             // A wallet's prepared creation in a keyed contract: the page's designated input is the seed (ADR-0016 D11).
             if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
-            var free = r.getValue().stream().filter(u -> Designation.pickable(u, own)).toList();
-            if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
+            // Not an input the composition spends already (an earlier call's asset input; R2).
+            var cap = TxRunner.capture();
+            var free = r.getValue().stream().filter(u -> Designation.pickable(u, own))
+                    .filter(u -> cap == null || !cap.inputs.contains(Designation.ref(u))).toList();
+            if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation or spent by the composition");
             return free.stream()
                     .filter(u -> u.getAmount().size() == 1)
                     .findFirst()

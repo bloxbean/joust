@@ -60,6 +60,10 @@ final class TxRunner {
         /** Inputs whose native assets {@code collectAssets} counted, and what of them is left, by address and unit. */
         final java.util.Set<String> countedInputs = new java.util.HashSet<>();
         final java.util.Map<String, java.util.Map<String, BigInteger>> spareAssets = new java.util.HashMap<>();
+        /** Inputs spent without a redeemer (seeds, designated inputs, asset inputs), by reference, as collected (T1). */
+        final java.util.Map<String, Utxo> regularInputs = new java.util.LinkedHashMap<>();
+        /** The native assets each caller's calls pay from its own inputs, by base address and unit (T1). */
+        final java.util.Map<String, java.util.Map<String, BigInteger>> paidAssets = new java.util.HashMap<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
         /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
@@ -197,6 +201,7 @@ final class TxRunner {
         if (c != null && !c.inputs.add(u.getTxHash() + "#" + u.getOutputIndex())) {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
+        if (c != null && redeemer == null) c.regularInputs.putIfAbsent(Designation.ref(u), u);
         return redeemer == null ? tx.collectFrom(java.util.List.of(u)) : tx.collectFrom(u, redeemer);
     }
 
@@ -228,6 +233,12 @@ final class TxRunner {
 
     /** The payer UTxOs a composition spent for the assets its calls pay in ({@code Capture.assetInputs}; #152). */
     java.util.Set<String> assetInputs = java.util.Set.of();
+
+    /**
+     * The native assets each caller other than the payer pays from its own inputs, by its address ({@code
+     * AssetTx.returnSurplus}; T1): a prepared transaction may take nothing else from that address.
+     */
+    java.util.Map<String, org.julclang.ledger.Value> coCallers = java.util.Map.of();
 
     String submit(Tx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
                   java.util.List<ExpectedPayout> payouts, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts,
@@ -642,6 +653,7 @@ final class TxRunner {
             // Resolved once: the per-unit balance (#152) and the keys whose inputs the transaction spends.
             var spends = resolveInputs(rt, unsigned);
             checkBalance(rt, unsigned, spends, what);
+            checkCoCallers(unsigned, spends, payer.baseAddress(), coCallers, what);
             verify(unsigned, expected, what);
             for (ExpectedState e : extraExpected) verify(unsigned, e, what);
             verifyPayouts(unsigned, payouts, what);
@@ -767,13 +779,65 @@ final class TxRunner {
      */
     static void checkBalance(StateRuntime rt, Transaction t,
                              java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> spends, String what) {
-        com.bloxbean.cardano.client.api.model.ProtocolParams pp;
+        // Read only when a legacy stake certificate needs the key deposit (R3).
+        BodyBalance.check(t.getBody(), spends::get, () -> protocolParams(rt, what), what);
+    }
+
+    /** The current protocol parameters, or a JoustException naming {@code what}. */
+    static com.bloxbean.cardano.client.api.model.ProtocolParams protocolParams(StateRuntime rt, String what) {
+        com.bloxbean.cardano.client.api.model.Result<com.bloxbean.cardano.client.api.model.ProtocolParams> r;
         try {
-            pp = rt.backend().getEpochService().getProtocolParameters().getValue();
+            r = rt.backend().getEpochService().getProtocolParameters();
         } catch (Exception e) {
             throw new JoustException(what + ": cannot read the protocol parameters", e);
         }
-        BodyBalance.check(t.getBody(), spends::get, pp, what);
+        if (r == null || !r.isSuccessful() || r.getValue() == null) {
+            throw new JoustException(what + ": cannot read the protocol parameters" + (r == null ? "" : ": " + r.getResponse()));
+        }
+        return r.getValue();
+    }
+
+    /**
+     * A prepared transaction takes from no key address but the payer's more than its calls pay in from there (T1): per
+     * unit, what the inputs at that address hold less what the outputs to it hold is at most {@code paid}'s quantity
+     * (nothing for lovelace; the payer funds lovelace and the fee). Defence in depth behind {@code AssetTx.returnSurplus}.
+     */
+    static void checkCoCallers(Transaction t,
+                               java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> spends,
+                               String payer, java.util.Map<String, org.julclang.ledger.Value> paid, String what) {
+        var net = new java.util.LinkedHashMap<String, java.util.Map<String, BigInteger>>();
+        for (var in : t.getBody().getInputs()) {
+            Utxo u = spends.get(in);
+            if (u == null || u.getAddress() == null || u.getAddress().equals(payer)) continue;
+            var cred = com.bloxbean.cardano.client.address.AddressProvider.getPaymentCredential(
+                    new com.bloxbean.cardano.client.address.Address(u.getAddress()));
+            if (cred.isEmpty() || cred.get().getType() != com.bloxbean.cardano.client.address.CredentialType.Key) continue;
+            var m = net.computeIfAbsent(u.getAddress(), k -> new java.util.HashMap<>());
+            for (var a : u.getAmount()) {
+                m.merge(com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(a.getUnit()), a.getQuantity(), BigInteger::add);
+            }
+        }
+        for (TransactionOutput o : t.getBody().getOutputs()) {
+            var m = net.get(o.getAddress());
+            if (m == null) continue;
+            for (var a : com.bloxbean.cardano.client.api.util.ValueUtil.toAmountList(o.getValue())) {
+                m.merge(a.getUnit(), a.getQuantity().negate(), BigInteger::add);
+            }
+        }
+        for (var e : net.entrySet()) {
+            var allowed = new java.util.HashMap<String, BigInteger>();
+            var v = paid.get(e.getKey());
+            if (v != null) {
+                org.julclang.state.api.Assets.read(v).forEach((p, ts) -> ts.forEach((n, q) -> allowed.put(p.isEmpty() ? "lovelace" : p + n, q)));
+            }
+            for (var u : e.getValue().entrySet()) {
+                if (u.getValue().compareTo(allowed.getOrDefault(u.getKey(), BigInteger.ZERO)) > 0) {
+                    throw new JoustException(what + ": the transaction would take " + u.getValue() + " " + u.getKey() + " from "
+                            + e.getKey() + ", which is not the payer and pays in only " + allowed.getOrDefault(u.getKey(),
+                            BigInteger.ZERO) + "; refused (T1, #152)");
+                }
+            }
+        }
     }
 
     /** Submits a signed transaction and waits for it (a {@link PreparedTx} after the wallets signed). */

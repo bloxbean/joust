@@ -70,6 +70,21 @@ class AssetCollectionTest {
     }
 
     @Test
+    void aUtxoWithAReferenceScriptOrADatumIsNeverCollected() {
+        // T2: spending it would consume a deployment's script (or a datum someone reads).
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var script = utxo(wallet.baseAddress(), "aa", 20_000_000, 100);
+        script.setReferenceScriptHash("11".repeat(28));
+        var datum = utxo(wallet.baseAddress(), "bb", 20_000_000, 100);
+        datum.setInlineDatum("d87980");
+        var plain = utxo(wallet.baseAddress(), "cc", 2_000_000, 100);
+        snapshot.utxos.put(wallet.baseAddress(), List.of(script, datum, plain));
+        assertEquals(List.of(plain), collect(wallet, 100, null));
+        var e = assertThrows(RequireException.class, () -> collect(wallet, 101, null));
+        assertTrue(e.getMessage().contains("2 holding it carry a reference script or a datum"), e::getMessage);
+    }
+
+    @Test
     void theSeedCountsAndIsNotCollectedAgain() {
         var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
         var seed = utxo(wallet.baseAddress(), "aa", 50_000_000, 60);

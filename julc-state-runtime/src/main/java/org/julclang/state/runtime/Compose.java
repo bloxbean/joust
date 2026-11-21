@@ -179,6 +179,9 @@ public final class Compose {
         if (designated != null && !late) TxRunner.collect(cap.tx, designated.utxo(), null);
         run(cap);
         if (late && !cap.inputs.contains(designated.ref())) TxRunner.collect(cap.tx, designated.utxo(), null);
+        // What the calls collected at a caller's address other than the payer's, less what they pay in, goes back there
+        // (T1): the payer's change would take it otherwise.
+        var coCallers = AssetTx.returnSurplus(runtime, cap, payer.baseAddress());
         if (!sharedSigners) {
             for (var e : cap.signerCalls.entrySet()) {
                 if (e.getValue().size() > 1) {
@@ -236,6 +239,7 @@ public final class Compose {
         runner.designated = designated;   // a keyed composition's attempt (ADR-0016 D7)
         runner.extraExpected = cap.expected.size() > 1 ? cap.expected.subList(1, cap.expected.size()) : List.of();
         runner.assetInputs = cap.assetInputs;
+        runner.coCallers = coCallers;
         if (prepare) {
             return runner.prepare(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),
                     cap.expected.isEmpty() ? null : cap.expected.get(0), cap.payouts, cap.sends,
