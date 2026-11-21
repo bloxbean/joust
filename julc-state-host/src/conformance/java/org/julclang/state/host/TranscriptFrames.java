@@ -32,5 +32,25 @@ public final class TranscriptFrames implements AutoCloseable {
     public void write(JsonNode frame) throws IOException {
         if (!writer.write(json.writeValueAsBytes(frame))) throw new IOException("failed to deliver host frame");
     }
+    /** Unframed bytes on the protocol descriptor: a scripted transport violation. */
+    public void writeRaw(byte[] bytes) {
+        System.out.write(bytes, 0, bytes.length);
+        System.out.flush();
+    }
+    /** End of the host's output, as if it had exited mid-call. */
+    public void closeOutput() { System.out.close(); }
+    /** The next client frame within the bound: empty on timeout, null at end of input. */
+    public java.util.Optional<JsonNode> readWithin(long millis) throws Exception {
+        var next = CompletableFuture.supplyAsync(() -> {
+            try { return read(); }
+            catch (EOFException e) { return null; }
+            catch (Exception e) { throw new CompletionException(e); }
+        }, Executors.newVirtualThreadPerTaskExecutor());
+        try { return java.util.Optional.ofNullable(next.get(millis, TimeUnit.MILLISECONDS)).or(() -> java.util.Optional.of(EOF)); }
+        catch (TimeoutException e) { return java.util.Optional.empty(); }
+        catch (ExecutionException e) { throw e.getCause() instanceof Exception x ? x : e; }
+    }
+    /** Marks end of input in {@link #readWithin}. */
+    public static final JsonNode EOF = com.fasterxml.jackson.databind.node.MissingNode.getInstance();
     public void close() { timer.shutdownNow(); }
 }

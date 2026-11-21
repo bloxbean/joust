@@ -1,0 +1,133 @@
+{
+  "frames" : [ {
+    "client" : {
+      "id" : 1,
+      "method" : "initialize",
+      "params" : {
+        "restoring" : false,
+        "protocol" : [ 1 ],
+        "build" : {
+          "snapshot" : "/snapshots/bank",
+          "digest" : "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "clock" : {
+          "zeroSlot" : 0,
+          "zeroTimeMs" : 1795146252000,
+          "slotLengthMs" : 1000
+        },
+        "network" : {
+          "networkId" : 0,
+          "protocolMagic" : 42,
+          "mainnet" : false
+        },
+        "time" : {
+          "settlementSlots" : 2,
+          "maxTtlSlots" : 900,
+          "maxNowAheadSlots" : 900
+        },
+        "limits" : {
+          "readsPerCall" : 256,
+          "readBytesPerCall" : 33554432,
+          "callDeadlineMs" : 60000
+        }
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : 1,
+      "error" : {
+        "code" : -32602,
+        "message" : "launch fingerprint differs from digest",
+        "data" : {
+          "kind" : "bad",
+          "code" : "stageMismatch",
+          "message" : "launch fingerprint differs from digest",
+          "retryAtSlot" : null,
+          "sites" : [ ]
+        }
+      }
+    }
+  }, {
+    "client" : {
+      "id" : 2,
+      "method" : "initialize",
+      "params" : {
+        "restoring" : false,
+        "protocol" : [ 1 ],
+        "build" : {
+          "snapshot" : "/snapshots/bank",
+          "digest" : "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "clock" : {
+          "zeroSlot" : 0,
+          "zeroTimeMs" : 1795146252000,
+          "slotLengthMs" : 1000
+        },
+        "network" : {
+          "networkId" : 0,
+          "protocolMagic" : 42,
+          "mainnet" : false
+        },
+        "time" : {
+          "settlementSlots" : 2,
+          "maxTtlSlots" : 900,
+          "maxNowAheadSlots" : 900
+        },
+        "limits" : {
+          "readsPerCall" : 256,
+          "readBytesPerCall" : 33554432,
+          "callDeadlineMs" : 60000
+        }
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : 2,
+      "result" : {
+        "protocol" : 1,
+        "fingerprint" : "1111111111111111111111111111111111111111111111111111111111111111",
+        "network" : {
+          "networkId" : 0,
+          "protocolMagic" : 42,
+          "mainnet" : false
+        },
+        "capabilities" : [ "views", "objects", "quorum" ],
+        "reads" : [ "utxos", "output", "tip", "protocolParams", "script", "stakeRegistration" ],
+        "versions" : {
+          "build" : null,
+          "engine" : {
+            "joust" : "0.1.0-pre2",
+            "ccl" : null,
+            "julc" : null,
+            "vmProvider" : "Java",
+            "vmVersion" : null
+          }
+        },
+        "contracts" : [ {
+          "name" : "org.julclang.state.examples.bank.Bank",
+          "scriptHashes" : {
+            "spend" : "0fc627f60492e1009acd8c946366166a9be6cf0d9bef7bd4a02692cd",
+            "mint" : "0fc627f60492e1009acd8c946366166a9be6cf0d9bef7bd4a02692cd"
+          },
+          "served" : true
+        } ]
+      }
+    }
+  }, {
+    "client" : {
+      "id" : 3,
+      "method" : "describe",
+      "params" : {
+        "contract" : "org.julclang.state.examples.bank.Bank"
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "violation" : "malformedFrame",
+    "raw" : "Content-Length: 9\r\n\r\n{\"id\":3,}"
+  } ]
+}
