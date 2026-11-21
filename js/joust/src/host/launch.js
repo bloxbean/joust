@@ -24,9 +24,10 @@ export function snapshot(launch, build) {
     throw failure('bad', 'request', 'expected snapshot and digest');
   const { root, runtime, closure } = launch;
   if (realpathSync(build.snapshot) !== root) throw failure('bad', 'stageMismatch', 'snapshot differs from project root');
-  const files = [join(root, 'build/joust/contracts.json'), ...['joust-runtime.js', 'joust-runtime.js.wasm'].map(n => join(runtime, 'engine', n))];
-  const bytes = files.map(p => {
-    const file = inside(root, p);
+  // Named by their real paths, as the protocol says and as the closure's files are (#154 review M2-11).
+  const files = [join(root, 'build/joust/contracts.json'), ...['joust-runtime.js', 'joust-runtime.js.wasm'].map(n => join(runtime, 'engine', n))]
+    .map(p => inside(root, p));
+  const bytes = files.map(file => {
     if (!statSync(file).isFile()) throw failure('bad', 'stageMismatch', 'expected regular snapshot file');
     return readFileSync(file);
   });

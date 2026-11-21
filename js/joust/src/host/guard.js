@@ -1,6 +1,7 @@
 // Install before loading the runtime, including in its worker. These are accidental-I/O
 // guards for trusted project code (ADR-0022 I1/I10), not a security boundary for hostile JS.
-// Not covered: the raw handles and bindings beneath these APIs (process.stdout._handle,
+// Not covered: the raw handles and bindings beneath these APIs (process.stdout._handle, a net.Socket opened on fd 1
+// when stdout is a pipe (#154 review M2-12; the client's strict frame parser catches stray bytes),
 // internalBinding through --expose-internals, node:wasi's preopened directories, which nothing in the host uses).
 import fs from 'node:fs';
 import net from 'node:net';
