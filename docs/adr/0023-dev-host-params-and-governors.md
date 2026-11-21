@@ -38,14 +38,14 @@ parameterized contract's script hash, address and policy are not in the build: t
 | F2 | The governor script is **attached to the transaction** (a witness), and its `signers` become required signers; `Call.applyAuthorization` adds the zero withdrawal and the script | `Authorization.java:8-27`; `Call.java:129-134` at `d529bfd0` |
 | F3 | The described dispatcher refuses `@AuthorizedBy` on a keyed call | `DescribedContract.java:185` at `d529bfd0` |
 | F4 | A contract's `@Params` record is encoded from `x-joust.params` (with a fidelity check) and applied as **one** Data argument; a plain JuLC validator's `@Param` fields are applied **one Data argument each, in order**. Application is JuLC's `Program.applyParams`. An applied contract script over 15,000 bytes is refused. The contract's address is a script base address (payment and stake the script) when `stakeSelf`, else an enterprise address | `DescribedContract.java:103-106`; `StateContractHandle.java:149-153`, `:177-191`; `ValidatorScripts.java:91-104` at `d529bfd0` |
-| F5 | JuLC encodes Data as plutus-core does: non-empty lists and constructor fields are **indefinite** arrays (`9f … ff`), empty ones `80`; byte strings over 64 bytes are indefinite strings of 64-byte chunks. The same decoded value in another CBOR form gives another applied hash (the Codex review on #157 reproduced four policies from two Treasury encodings) | JuLC `PlutusDataCborEncoder.java:31-35`, `:102-112`, `:161-175` |
+| F5 | JuLC encodes Data as plutus-core does: non-empty lists and constructor fields are **indefinite** arrays (`9f … ff`), empty ones `80`; byte strings over 64 bytes are indefinite strings of 64-byte chunks. The same decoded value in another CBOR form gives another applied hash (the Codex review on #157 reproduced four policies from two Treasury encodings) | JuLC `julc-core/src/main/java/org/julclang/core/cbor/PlutusDataCborEncoder.java:31-35`, `:102-112`, `:161-175` at tag `v0.1.0-pre21-rc1` (re-verified at the JuLC release JOUST then pins, an M4a entry gate) |
 | F6 | A script's `cborHex` in JOUST's artifacts is a CBOR byte string **of** a CBOR byte string of the flat program. The ledger's hash is `blake2b_224(0x03 ‖ S)`, where `S` is the inner CBOR byte string (the outer wrapper removed); hashing the outer or the bare flat bytes gives other hashes (reproduced on `fixtures/m3/treasury-governor/017-freeze.json`'s Guardian) | #157 review X1; `fixtures/m3/treasury-governor/017-freeze.json` |
-| F7 | Governors are plain JuLC validators. Gradle writes them as **generated** resources `META-INF/plutus/<SimpleName>.plutus.json` (`cborHex`, empty `hash` when parameterized, `params` such as `"owner:byte[]"`; reproduce with `./gradlew :examples:treasury:classes`), resolved by `ValidatorScripts` beside the defining class, detecting ambiguity; the npm toolchain writes `build/joust/validators.json` (`[{name, purpose, script, params}]`, with the package) | `ValidatorScripts.java:27-54`, `:138-155`; `js/joust/src/build.js:7`, `:165-176` at `d529bfd0` |
+| F7 | Governors are plain JuLC validators. Gradle writes them as **generated** resources `META-INF/plutus/<SimpleName>.plutus.json` (`cborHex`, empty `hash` when parameterized, `params` such as `"owner:byte[]"`; reproduce with `./gradlew :examples:treasury:classes`), resolved by `ValidatorScripts` beside the defining class, detecting ambiguity; the npm toolchain writes `build/joust/validators.json` (`[{name, purpose, script, scriptHash, built, params}]`, with the package) | `ValidatorScripts.java:27-54`, `:138-155`; `js/joust/src/build.js:7`, `:165-176` at `d529bfd0` |
 | F8 | The example: `Treasury`'s `@Params record Config(Credential guardian, BigInteger maxPayout)`; `freeze` is `@AuthorizedBy("params.guardian")` with no `Ctx`, `@SignedBy` or `@Quorum`. `Guardian` is a `@WithdrawValidator` with `@Param byte[] owner`, approving when the purpose is Rewarding and `owner` signed. The recorded `freeze` has a V3 governor witness, a zero withdrawal from `f0‖hash`, and redeemers at `(spend,1)` and `(reward,0)` | `Treasury.java:31`, `:73`; `Guardian.java:17-26`; `fixtures/m3/treasury-governor/017-freeze.json` |
 | F9 | A body's required signers: the caller's key **only when** the method uses `Ctx` or `@SignedBy`; then every extra signer (co-signers, governor signers), deduplicated. The payer still witnesses its own inputs | `StateInstance.java:199-207`; `DescribedContract.java:310-313` at `d529bfd0` |
 | F10 | JOUST's page verifier, for a governor call: verifiable only when the credential is in the deployment's params; exactly one script credential; instance actions only; the governor's hash equals the params' credential; exactly one Rewarding redeemer **at the governor's withdrawal index**, equal to `Approvals[Approval(policy, instance, tag)]`. It does **not** examine a Rewarding redeemer at another reward index | `verify.js:124-192`, `:485-509`, `:515-536` at `d529bfd0` |
 | F11 | The page's governor registration check: one pure registration of exactly the governor's script credential, the protocol deposit, wallet-only inputs and outputs, no withdrawals, mint or redeemers; it counts Plutus witness scripts and **allows an absent TTL** | `governors.js:56-114`; `ledger.js:101` at `d529bfd0` |
-| F12 | Generated clients take the params record (`deploy(runtime, Config, …)`, `at(runtime, Config, instanceId)`) and an `Authorization` argument for `@AuthorizedBy` methods | `ClientGenerator.java:731`, `:758`; `TreasuryClient` (generated) |
+| F12 | Generated clients take the params record (`deploy(runtime, Config, …)`, `at(runtime, Config, instanceId)`) and an `Authorization` argument for `@AuthorizedBy` methods | `ClientGenerator.java:99-106` (`contract(runtime, P params)`, `policyIdFor`), `:120-121` (`deploy`), `:179` (`at`), `:731`, `:758` (`Authorization`); `TreasuryClient` (generated) |
 | F13 | The JVM host's adapter refuses `@Params`, looks contracts up without params, and accepts extra accounts only for `@Quorum`; `Contracts.code` returns the contract-wide `params` before any method's `authorizedBy`, so Treasury's `freeze` reports `params` today | `ServedContract.java:69-70`, `:117`, `:147-149`, `:258`; `Contracts.java:37-42`, `:78`, `:94` at `4335773d` |
 | F14 | The npm host fingerprints and reads `contracts.json` and the two engine files only, not `validators.json` | `js/joust/src/host/launch.js:32-51` at `4335773d` |
 | F15 | ADR-0022 D8 excludes live out-refs across the whole session; ADR-0022 D11's persisted keyed operation is `{designated, contract, method, instance, key, attempts}`, with no policy | `Reservations.java` (`prepare`, `avoids`); `KeyedOperation.java:8-26`, `:40-45` at `4335773d` |
@@ -67,6 +67,11 @@ signing (D13). New here:
 - **T15. Extra signers:** governor signers or co-signers smuggling a required signer the user does not expect.
 - **T16. Wrong governor artifact:** two validators with one simple name, or an npm manifest changed after
   `initialize` (F7, F14).
+
+**Accepted liveness limit** (Y12): Conway requires a withdrawal to equal the reward account's whole balance, and
+anyone can credit a registered account (a proposal's deposit return, a treasury withdrawal naming it). A governor
+whose account holds a balance makes every zero withdrawal fail at the ledger, so its calls fail (closed) until the
+governor's owner sweeps the account outside the dev host. ADR-0022's shared verifiers share this property.
 
 **Trust assumption (unchanged in kind):** a governor is project code, like the contract. JOUST cannot verify that it
 lists only the approvals its rules grant or refuses certificates (ADR-0009's obligations); the client shows which
@@ -93,7 +98,9 @@ whose capability the host lacks. Capability strings are distinct so a client see
 codec's exact range or decimal strings). Absent `params` for a parameterized contract is `unsupported`, code `params`
 (today's answer, so old clients see no change); present but not encoding exactly is `bad`, code `params`.
 - **No session state:** the session never remembers params; two values are two deployments.
-- **Identity:** listings, caches and decoded views are keyed by the **applied policy**. **Reservations are not:**
+- **Identity:** listings, caches, decoded views and **MerkleMap mirrors, their per-reservation overlays and the
+  `mapsStale` scope** (Y10) are keyed by the **applied policy**; a restored non-keyed map transaction carries no
+  `params`, so its `mapsStale` scope is the policy its body spends or mints under. **Reservations are not:**
   ADR-0022 D8's out-ref exclusion stays session-wide, so two parameterizations can never reserve the same payer
   input or collateral (F15). ADR-0022 D11's persisted `operation` gains **`policy`** (the applied policy) for a
   parameterized contract; a retry whose request params give another policy is `bad`, code `operation`.
@@ -106,7 +113,17 @@ codec's exact range or decimal strings). Absent `params` for a parameterized con
   unchanged and without `params`: its reservation is of out-refs, which D8 already excludes session-wide. A later
   retry is compared with its own request's params.
 - `deployment`'s result adds `params` (the Data, CBOR hex, D3's encoding) and the **applied** `scriptHashes` (`spend`,
-  `mint`, `stake`) beside `unapplied`; the client requires `params` to equal its own bytes.
+  `mint`, `stake`) beside `unapplied`; the client requires `params` to equal its own bytes. **`deployment.governors`
+  stays empty in protocol 1** (Y2): governors are named per call (D4), never pinned in a deployment; a client
+  treats a non-empty list as a protocol violation.
+- **`initialize` and `describe` under `params`** (Y2): a host advertising `params` reports a parameterized contract
+  with its `unapplied` template hash and `parameterized: true` instead of `unsupported: "params"` (a host without
+  the capability keeps today's entry); `describe` gives each method of such a contract the status its own code gives
+  (a plain method is `served: true`; an `@AuthorizedBy` method follows D7). The contract-wide `params` code no longer
+  masks a method's own code once `params` is served (F13).
+- **Fields that need a capability** (Y1): a client sends `params` only after `initialize` advertised `params`, and
+  `governor`, `operation.policy` and a restore entry's `params` only after the matching capability; an older host
+  refuses unknown fields (`bad/request`), so these answers are not `unsupported` there.
 
 ### D3. The client anchors on its own application, byte for byte (amends ADR-0022 D13 rule 2)
 
@@ -142,12 +159,32 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
   `validators.json` entry. The Gradle resource must say `PlutusScriptV3`; a `validators.json` entry carries no
   language field (F7), and the format **implies Plutus V3** (the toolchain emits nothing else); both must have
   purpose `withdraw` (`bad`, code `governor`, otherwise), and D5 checks the witness's language independently.
-- **The npm fingerprint is versioned** (amends ADR-0022 D3/D4; X17): `initialize`'s `build` gains
-  `fingerprintVersion`. Version **1** (absent means 1: every protocol-1 client today) is ADR-0022's three files;
+- **The npm fingerprint is versioned** (amends ADR-0022 D3/D4; X17, Y1): `initialize`'s `build` gains
+  `fingerprintVersion`, **npm only** (the JVM host's digest already covers its whole class path, so it has no version
+  2; it keeps refusing the field as an unknown `build` key, `bad/request`, and a client never sends it there).
+  Hosts that ship this ADR advertise capability **`fingerprint:2`** in every `initialize` answer. Because the field
+  travels in the first request, before any capability is known, the client decides from the installed package it
+  already resolves before launch (ADR-0022 D3): it sends `fingerprintVersion: 2` only when the resolved
+  `@julclang/joust` package's own `package.json` version is at or above the release that ships M4c; an older host
+  would refuse it with `bad/request`, and a client that nevertheless receives that answer starts a fresh host process
+  without the field (a failed `initialize` ends the session's usefulness; nothing is retried in place). Version **1** (absent means 1: every protocol-1 client today) is ADR-0022's three files;
   version **2** adds `validators.json` when present, in the same line format after `contracts.json`. The host
   computes the digest the client asked for; under version 1 it serves no script governors (`authorizedBy:script`
   absent), so an old client keeps working, unchanged, on a project with the manifest. The host loads the manifest
-  eagerly at `initialize` (version 2), so later changes on disk never reach the running session.
+  eagerly at `initialize` (version 2), so later changes on disk never reach the running session. **The client's half**
+  (Y13): it sends script-governor calls, `prerequisites.governors` and governor `publish` only in a version-2 session;
+  it computes its D5 anchors from the same `validators.json` bytes it digested; and it treats a version-1 (or
+  version-less) `initialize` answer that advertises `authorizedBy:script` as a protocol violation.
+- **The client resolves the same artifact by a written rule** (T16; Y3), independently of the host:
+  - **Gradle:** locate `<package path>/<SimpleName>.class` in the **first** snapshot class-path entry, in ordinal
+    order, that holds it; read `META-INF/plutus/<SimpleName>.plutus.json` **from that same entry**. Refuse (`governor`)
+    when that entry holds another class with the same simple name, the resource is missing, `type` is not
+    `PlutusScriptV3`, `purpose` is not `withdraw`, or its `params` list differs from `governor.params` in arity or in
+    the declared types.
+  - **npm:** exactly one `validators.json` entry with that `{package, name}` (more than one, or none, is refused), with
+    purpose `withdraw` and a `params` list matching `governor.params` as above.
+  The host applies the same rule (ValidatorScripts resolves beside the defining class and refuses ambiguity, F7), and
+  the kit has a refusal vector for each clause (D8).
 - **`params`**: its `@Param` values in declaration order, as JSON of their declared types (`byte[]` hex, `BigInteger`
   integer or decimal string, `boolean` JSON boolean only, `PlutusData` CBOR hex), each encoded and applied as D3 says.
   Wrong arity or type is `bad`, code `governor`.
@@ -163,7 +200,10 @@ A final transaction above the ledger's size limit is `refusal`, code `txSize`.
 
 **The JVM path** (F12, F13; ADR-0022 D16): `ServedContract` gains params-aware dispatch through the generated
 client's params entry points (`deploy(runtime, params, …)`, `at(runtime, params, instance)`, and the params-taking
-lookups and reads), the params record decoded from JSON by the generated codec; and it builds the `Authorization`
+lookups and reads), the params record decoded from JSON by the adapter's reflective codec (`JsonValues` in
+`julc-state-serve`), which keeps a map's order as given: the JVM path therefore normalizes typed maps (RFC 8949
+length-first order) and refuses duplicates, as D3 step 1 requires, **before** `deploy`/`at` apply the record through
+`PlutusDataAdapter` (which keeps that order); and it builds the `Authorization`
 argument (F12): `Authorization.key(WalletAccount)` for a key credential, `Authorization.script(reward, applied
 governor, Approvals, signers as WalletAccounts)` for a script. The **HTTP prepare service is unchanged**: it keeps
 refusing `@Params` (R3) and `@AuthorizedBy`, with its current answers, and a test pins that.
@@ -198,8 +238,11 @@ claims, or claims without their withdrawal, is refused.
 contract's, the output verifier's or the map verifier's; **exactly one** V3 script in the witness set hashes to it
 (missing or reference-only is refused); no other script but those ADR-0022 D13 allows. Instance actions only.
 
-**Registration** (D6): a governor's registration is accepted only in ADR-0022 D14's `stakeRegistration` shape for
-the governor's hash, **with the mandatory upper bound** (stricter than the page's check, F11).
+**Registration** (D6; Y11): a governor's registration is accepted only as a **pure legacy (kind 0) stake registration**
+of the governor's credential, in ADR-0022 D14's `stakeRegistration` shape, **with the mandatory upper bound**, and
+with **no redeemers, witness scripts, collateral or reference inputs** (a Conway kind-7 registration of a script
+credential needs the governor's own Certifying witness, which ADR-0009 D3 obliges a governor to refuse, so it could
+never validate). The host's governor overload builds kind 0. This is stricter than the page's check (F11).
 
 ### D6. Prerequisites and publication for governors (amends ADR-0022 D14)
 
@@ -230,6 +273,9 @@ Observable behaviour:
 | a key-credential call on a host without `authorizedBy:key` | `unsupported/authorizedBy` ("key credentials") |
 | a script-credential call on a host without `authorizedBy:script` | `unsupported/authorizedBy` ("script governors") |
 | an npm client initializing with fingerprint version 1 (or none) on a project with `validators.json` | the version-1 digest; no `authorizedBy:script`; every other call as today |
+| a client sends `fingerprintVersion` to a host that does not ship this ADR (any M1–M3 host), or to the JVM host | `bad/request` at `initialize`; the client starts a fresh host process without the field (D4) |
+| a client sends `params`, `governor` or `operation.policy` to a host without the capability | `bad/request` (strict field lists); clients send them only after the capability (D2) |
+| `initialize` on a host with `params`, a parameterized contract | `unapplied` hash and `parameterized: true`, no `unsupported` (D2) |
 | `describe` of an `@AuthorizedBy` method | `served: true` when either credential branch is served; the call entry adds `authorizedBy: [{field, branches}]` so a client knows which branch its params will need |
 
 ### D8. Verification and vectors
@@ -239,7 +285,7 @@ Observable behaviour:
   type, nested records, lists, **maps given out of order** (normalized) and with a duplicate key (refused), raw
   `PlutusData` not in normal form (refused), byte strings of 64 and 65 bytes, integers at 2^64 ± 1; applied contracts
   whose decoded outer `cborHex` is **15,000 bytes (accepted) and 15,001 bytes (`refusal/scriptSize`)**. Generated by JuLC's `applyParams` and checked **independently** by Aiken's implementation
-  (`com.bloxbean.cardano.aiken.AikenScriptUtil.applyParamToScript`, `aiken-java-binding` over Aiken's Rust code) and
+  (`com.bloxbean.cardano.aiken.AikenScriptUtil.applyParamToScript`, `aiken-java-binding 0.1.0` over Aiken's Rust code) and
   by the kit's own applier, written against the Plutus and flat specifications. Any disagreement blocks M4a. Malformed
   params (wrong type, `boolean` given as `1`, unsafe JSON numbers, wrong arity) each have a vector with its code.
 - **Mutations** (recomputed hashes, one targeted rule each, proven by disabling it): other params (definite-array
@@ -263,6 +309,12 @@ Observable behaviour:
   (fingerprint version 1) and a new host on a project with the manifest (initializes, no `authorizedBy:script`); two
   packages with a `Guardian` (the Gradle qualified selector works; ambiguity fails closed).
 - **Differential:** the JVM host (through generated clients) and the Node host agree byte for byte on every M4 vector.
+- **Governor artifact resolution** (Y3): a refusal vector for each clause of D4's client rule (a second class with the
+  same simple name in the first entry, missing resource, wrong `type`, wrong `purpose`, `params` arity and type; npm:
+  duplicate and missing `{package, name}`), and a positive where a later class-path entry holds a different class of
+  the same name (the first entry wins).
+- **Capability gating** (Y1, Y2): a new client against an M3 host (the field-gating rows of D7), and `initialize`/
+  `describe` of Treasury with and without `params`.
 
 ### D9. Milestones (ADR-0022 §8 numbering continues)
 
@@ -281,7 +333,7 @@ Observable behaviour:
 | I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, its V3 script in the witness set, and exactly one `Approvals` naming this policy, instance and action at that withdrawal's pointer; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
 | I19 | The body's required signers equal exactly D5's signer set | D5 | M4b/M4c mutations, payer ≠ owner |
 | I20 | Reservations exclude out-refs across all parameterizations in a session; a keyed operation retried or restored with params giving another policy is refused; other pending transactions restore as under ADR-0022 | D2 | identity tests |
-| I21 | A client that sends no fingerprint version initializes exactly as under ADR-0022 on every project | D4, D7 | old-client vector |
+| I21 | A client that sends no fingerprint version gets the same digest and the same contract entries as under ADR-0022 on every project, and no capability whose calls it could issue changes their answers (a host with `params` reports `parameterized` only where ADR-0022 reported `unsupported:"params"`) | D2, D4, D7 | old-client vector |
 
 ## 5. Alternatives considered
 
@@ -305,7 +357,10 @@ Observable behaviour:
 
 ## 7. Compatibility
 
-Additive: new capabilities, optional fields and codes. A client that never sends `params` sees today's
+Additive for old clients: new capabilities and codes, and fields an old client never sends. A **new** client
+against an M1–M3 host must not send the new fields: each is gated by a capability (D2) or, for
+`fingerprintVersion`, by the installed package version (D4), because shipped hosts refuse unknown fields
+(`bad/request`). A client that never sends `params` sees today's
 `unsupported/params`; a host without a capability answers `unsupported/authorizedBy` as today (D7). The npm
 fingerprint is versioned (D4): a client that sends no `fingerprintVersion` gets ADR-0022's digest on every project,
 including one with `validators.json`, and no script governors (I21). A restore entry may carry `params` (D2).
@@ -348,3 +403,17 @@ including one with `validators.json`, and no script governors (I21). A restore e
   parameterized keyed operations only; other entries restore by ADR-0022 D8's path), D8 (positive restarts of a
   pending governor registration and a pending reference-script publication), I20; the §6 carryover now says
   fingerprint version 2.
+- **r5** (2026-11-21, responds to the independent design and security review of `85f4c3cc`; design changes
+  requested, security approved):
+  - Y1 → D4 (`fingerprintVersion` npm-only, decided from the installed package's version, capability `fingerprint:2`,
+    fresh process on `bad/request`), D2 (fields sent only after their capability), D7 (new-client rows), §7;
+  - Y2 → D2 (`initialize` reports `parameterized: true` under `params`; `describe` follows each method's code;
+    `deployment.governors` stays empty), D7, I21 restated;
+  - Y3 → D4 (the client's artifact rule for Gradle and npm, with its refusals), D8 (a vector per clause);
+  - Y4 → F5 (JuLC path and tag), F7 (`scriptHash`, `built`), F12 (the params entry points), D4 (the JVM path's
+    reflective codec normalizes maps before `deploy`/`at`), D8 (Aiken binding version);
+  - Y10 → D2 (mirrors, overlays and `mapsStale` keyed by the applied policy; restored entries by the body's policy);
+  - Y11 → D5 (kind-0 registration with no redeemers, scripts, collateral or reference inputs);
+  - Y12 → §2 (the withdraw-zero liveness limit and its recovery);
+  - Y13 → D4 (the client's half of the version-2 binding);
+  - Y5–Y9 left for M4a's entry review (listed in the PR reply).
