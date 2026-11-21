@@ -389,9 +389,10 @@ export async function verifyPrepared(o) {
   // Other parties are paid only from what the script releases beyond its payouts and its claimed sends to the wallet:
   // neither may hide the wallet's own funds, or the script's release to it, going elsewhere (review r4, Critical). This
   // is the rule that protects the wallet: each continuation's value is exact on chain, so what the body does not pay
-  // others or the fee comes back to the wallet. A claimed send output is subtracted whole, the minimum ADA the wallet
-  // put in a token send included (the page cannot tell it from lovelace the script sends): a method that sends
-  // tokens to the caller and pays released lovelace to others should give the send its own minimum ADA.
+  // others or the fee comes back to the wallet. A claimed send output is subtracted whole, including what the wallet
+  // added to bring a send below its minimum ADA up to it (the page cannot tell that from lovelace the script sends): a
+  // method that sends the caller less than the minimum ADA and pays released lovelace to others should give the send
+  // its own minimum ADA.
   const released = new Map(targetValue);
   add(released, continuation, -1n);
   add(released, minted);

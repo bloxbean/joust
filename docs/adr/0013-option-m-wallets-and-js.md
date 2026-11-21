@@ -320,11 +320,13 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
       subtracted, as tagged payouts are, from what others may receive. That bound is what protects the wallet: every
       continuation's value is exact on chain, so value the body does not pay to others or as the fee comes back to
       the wallet. The net outflow below is unchanged.
-    - **Known limitation** (claimed sends): the whole claimed output is subtracted, including the minimum ADA the
-      wallet adds to a send of tokens, because the page cannot tell it from lovelace the script sends. So a call that
-      sends tokens to the caller and pays lovelace the script releases to others (a fee to a third party, say) is
-      refused unless the send carries its own minimum ADA from the script (`Assets.lovelace(min)` with the tokens).
-      Transactions without the output verifier's withdrawal are verified as before;
+    - **Known limitation** (claimed sends): the whole claimed output is subtracted, including the lovelace the
+      wallet adds to bring a send to the caller up to the output's minimum ADA (the runtime tops up any send below its
+      min-UTxO floor: a token send without lovelace, or a small lovelace send), because the page cannot tell it from
+      lovelace the script sends. So a call with such a send that also pays lovelace the script releases to others (a
+      fee to a third party, say) is refused unless the send carries at least its own minimum ADA from the script
+      (`Assets.lovelace(min)` with the tokens). Transactions without the output verifier's withdrawal are verified
+      as before;
     - no output pays the wallet's payment key at an address the wallet does not use (another stake key).
   - **The transaction balances:** inputs plus mint equal outputs plus fee. An unbalanced transaction is not worth a
     signature: the e2e test found a tampering that added an unfunded output.

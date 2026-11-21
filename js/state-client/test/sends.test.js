@@ -325,3 +325,67 @@ test('collect: the rewards sent to the wallet are accepted; claimed on its chang
   refused(await verify(evil), /others receive 10000000 lovelace, more than the 0 of rewards withdrawn beyond the claimed sends to the wallet/, 'the stranger paid from the rewards');
   refused(await verify(await build(honest, [depositData(0n, rewardRefOf(policy), 1n)])), /a deposit claim in a reward collection/, 'a deposit');
 });
+
+// ---------------------------------------------------------- a composition whose calls pin two output verifiers
+
+// The recorded Locker unlock composed with a copy of itself under a second policy and a second output verifier (as when a
+// contract deployed by an older JOUST release is composed with a newer one); each call sends 150 GOLD + 3 ADA, released by
+// its instance, to the caller. Each verifier checks distinct outputs only within its own registry, and each contract reads
+// only its own verifier's: one wallet output claimed in both registries would satisfy both sends.
+async function twoVerifiers() {
+  const r = recorded(LOCKER);
+  const base = inputsOf(r);
+  const refA = parseTx(r.cbor).inputs.find((i) => !base.wallet.utxos.has(i));
+  const refB = `${'dd'.repeat(32)}#0`;
+  const PA = base.deployment.policy;
+  const PB = 'ab'.repeat(28);
+  const SENT = 3_000_000n;
+  const unit = PA + base.call.instance;
+  const swap = (m) => new Map([...m].map(([k, v]) => [k === unit ? PB + base.call.instance : k, v]));
+  const addrB = enterpriseAddress({ type: 'script', hash: PB }, 0);
+  const chainA = chainOf(r.x, (ref, u) => (ref === refA ? { ...u, value: plus(u.value, 'lovelace', SENT) } : u));
+  const uA = await chainA.utxo(refA);
+  const chain = { ...chainA, utxo: async (ref) => (ref === refB ? { address: addrB, value: swap(uA.value), referenceScriptHash: null } : chainA.utxo(ref)) };
+  const depB = { ...base.deployment, policy: PB, address: addrB, outputVerifier: { rewardAddress: rewardAddressOf('ff'.repeat(28), 0), referenceScripts: [] } };
+  const steps = [{ description: r.description, deployment: base.deployment, call: base.call }, { description: r.description, deployment: depB, call: base.call }];
+  // The recorded body with B's instance input added.
+  const t = CSL.Transaction.from_hex(r.cbor);
+  const ins = t.body().inputs();
+  ins.add(CSL.TransactionInput.new(CSL.TransactionHash.from_hex('dd'.repeat(32)), 0));
+  const b0 = t.body();
+  const nb = CSL.TransactionBody.new_tx_body(ins, b0.outputs(), b0.fee());
+  for (const [g, s] of [['ttl_bignum', 'set_ttl'], ['collateral', 'set_collateral'], ['collateral_return', 'set_collateral_return'],
+    ['total_collateral', 'set_total_collateral'], ['required_signers', 'set_required_signers'], ['reference_inputs', 'set_reference_inputs'],
+    ['withdrawals', 'set_withdrawals'], ['script_data_hash', 'set_script_data_hash'], ['network_id', 'set_network_id'],
+    ['validity_start_interval_bignum', 'set_validity_start_interval_bignum']]) {
+    const v = b0[g]();
+    if (v) nb[s](v);
+  }
+  const withB = CSL.Transaction.new(nb, t.witness_set(), t.auxiliary_data()).to_hex();
+  // Recorded outputs: [A's continuation, A's send (150 GOLD + the wallet's minimum ADA), change]. Withdrawals in ledger
+  // order: 0 the map verifier, 1 A's output verifier, 2 B's.
+  const build = (outs, claimA, claimB) => editTx(withB, r.x, {
+    outputs: (cur) => outs(cur.map(partsOf)).map(cslOutput),
+    withdrawals: (w) => {
+      w.insert(CSL.RewardAddress.from_address(CSL.Address.from_bech32(depB.outputVerifier.rewardAddress)), CSL.BigNum.zero());
+      return w;
+    },
+    redeemers: (rds) => {
+      const spend = rds.find((x) => x.tag === 'spend');
+      return [...rds.map((x) => (x.tag === 'reward' && x.index === 1 ? { ...x, dataHex: claimsHex([[claimA, refA]]) } : x)),
+        { ...spend, index: 2 }, { tag: 'reward', index: 2, dataHex: claimsHex([[claimB, refB]]) }];
+    },
+  });
+  const send = (s) => ({ ...s, value: plus(s.value, 'lovelace', SENT - s.value.get('lovelace')) });
+  const outputs = (third) => ([cA, s, ch]) => [cA, { ...cA, address: addrB, value: swap(cA.value) }, send(s), { ...send(s), address: third ?? s.address },
+    { ...ch, value: plus(ch.value, 'lovelace', s.value.get('lovelace')) }];
+  return { steps, wallet: base.wallet, chain, build, outputs };
+}
+
+test('composition with two output verifiers: a send each is accepted; one wallet output claimed in both registries is refused', async () => {
+  const w = await twoVerifiers();
+  const verify = (txHex) => verifyComposed({ steps: w.steps, wallet: w.wallet, chain: w.chain, txHex });
+  accepted(await verify(await w.build(w.outputs(), 2, 3)), 'one send output per call');
+  // Output 2 claimed for A in A's registry and for B in B's (it covers both sends on chain); B's send paid to a stranger.
+  refused(await verify(await w.build(w.outputs(STRANGER), 2, 2)), /output 2 is claimed in two output verifiers' registries/, 'a shared send output');
+});

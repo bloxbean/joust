@@ -862,9 +862,14 @@ direct `Tx` building, gated by S3.
     pinned verifiers, signers, validity, fee, collateral, balance, the wallet's outflow at most the calls' payments
     plus the fee, and what others receive at most what the scripts release. Sends claimed at wallet outputs are
     subtracted from what others may receive, as ADR-0013 §9.2 states for one call (each claim's `by` the target of a
-    call pinning that output verifier). A receiver credits every deposit claimed on its continuation, whatever its
-    `by`, so each deposit claim must come from the target of a composed call that declares deposits (its validator
-    checks its claims exactly) and land on the continuation of a composed call that receives them.
+    call pinning that output verifier). An output is claimed in at most one registry: when the calls pin different
+    output verifiers (deployments of different releases), each verifier checks distinct outputs only within its own
+    redeemer and each contract reads only its own verifier's, so one output claimed in two registries would deliver
+    two sends; it is refused. The known limitation of ADR-0013 §9.2 crosses calls: the wallet's top-up of any call's
+    send to the caller counts against what all the calls release to others. A receiver credits every deposit claimed
+    on its continuation, whatever its `by`, so each deposit claim must come from the target of a composed call that
+    declares deposits (its validator checks its claims exactly) and land on the continuation of a composed call that
+    receives them.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.
     Deployments that deposit or receive now pin it.
   - Spending calls only for now (no creations in a composition).
@@ -1003,7 +1008,8 @@ direct `Tx` building, gated by S3.
     - **A collection** withdraws exactly the balance from the script's credential with the page's `Rewards` redeemer
       (and the output verifier's zero withdrawal, when there are sends). Others receive at most what was withdrawn
       beyond the handler's sends claimed at wallet outputs (each claim's `by` is `RewardRef(policy)`, I37; the
-      claims are decoded and checked as ADR-0013 §9.2 states; no deposit claims).
+      claims are decoded and checked as ADR-0013 §9.2 states; no deposit claims). As there, the wallet's top-up of a
+      send to it below the minimum ADA counts against what others may receive of the rewards.
     - **Both:** the wallet's inputs only; the pinned reference scripts only; the wallet loses at most the fee;
       bounded collateral and validity; signers are the wallet's and the named co-signers.
   - **I5:** all 11 tamperings of a delegation (a delegation to another pool among them) and all 10 of a reward

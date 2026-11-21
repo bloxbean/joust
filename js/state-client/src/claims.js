@@ -99,22 +99,30 @@ export function outputRegistry(tx, verifier, problems) {
  * The outputs at a wallet address that the claims of {@code registries} ([{ registry, owners }]) name ({@code
  * indexes}) and their summed value ({@code value}): the scripts' sends to the wallet, so not value others may be paid
  * from. Each claim's `by` must be one of its registry's {@code owners} (the contract inputs the body spends whose sends
- * the claims deliver); a claim for anything else is a problem.
+ * the claims deliver); a claim for anything else is a problem. An output may be claimed in one registry only: each
+ * output verifier checks distinct outputs within its own redeemer and each contract reads only its own verifier's, so
+ * one output claimed in two registries (calls pinning different verifiers) would deliver two sends, at any address.
  */
 export function claimedSends(tx, registries, isWallet, problems) {
   const indexes = new Set();
   const value = new Map();
-  for (const { registry, owners } of registries) {
+  const claimedIn = new Map();     // every claimed output (at any address) -> the registry naming it
+  registries.forEach(({ registry, owners }, r) => {
     for (const { output, by } of registry?.claims ?? []) {
       if (!owners.includes(by)) {
         problems.push(`a send claimed for ${by}, not a contract input the transaction spends`);
         continue;
       }
+      if (claimedIn.has(output) && claimedIn.get(output) !== r) {
+        problems.push(`output ${output} is claimed in two output verifiers' registries`);
+        continue;
+      }
+      claimedIn.set(output, r);
       const out = tx.outputs[output];
-      if (!isWallet(out.address) || indexes.has(output)) continue;
+      if (!isWallet(out.address)) continue;
       indexes.add(output);
       for (const [unit, q] of out.value) value.set(unit, (value.get(unit) ?? 0n) + q);
     }
-  }
+  });
   return { indexes, value };
 }
