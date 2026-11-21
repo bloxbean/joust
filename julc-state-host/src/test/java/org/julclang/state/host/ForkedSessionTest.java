@@ -145,7 +145,14 @@ class ForkedSessionTest {
         int cancelled = ++id;
         var reply = call(writer, reader, cancelled, "prepare", r.params(), r::answer, cancelled);
         assertEquals(-32800, reply.at("/error/code").asInt(), reply::toString);
-        var again = success(call(writer, reader, ++id, "prepare", r.params(), r::answer, null));
+        // A cancelled execution may still be unwinding: the protocol answers bad/busy until it has; retry as a client does.
+        JsonNode next = null;
+        for (int attempt = 0; attempt < 50; attempt++) {
+            next = call(writer, reader, ++id, "prepare", r.params(), r::answer, null);
+            if (!"busy".equals(next.at("/error/data/code").asText())) break;
+            Thread.sleep(100);
+        }
+        var again = success(next);
         assertEquals(r.fixture().required("unsignedTx"), again.at("/prepared/cbor"));
     }
 
