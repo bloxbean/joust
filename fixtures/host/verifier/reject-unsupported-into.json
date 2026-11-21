@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "notVerifiable" ],
-  "mutation" : "unsupported-into"
+  "mutation" : "unsupported-into",
+  "check" : "notVerifiable/classify"
 }

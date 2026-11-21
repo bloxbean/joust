@@ -1783,5 +1783,6 @@
     }
   },
   "violations" : [ "redeemer" ],
-  "mutation" : "extra-redeemer"
+  "mutation" : "extra-redeemer",
+  "check" : "redeemer/purpose"
 }

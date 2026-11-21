@@ -1830,5 +1830,6 @@
     }
   },
   "violations" : [ "holderLovelace" ],
-  "mutation" : "reference-above-maximum"
+  "mutation" : "reference-above-maximum",
+  "check" : "holderLovelace/range"
 }

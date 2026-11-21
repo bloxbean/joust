@@ -1937,5 +1937,6 @@
     }
   },
   "violations" : [ "netOutflow" ],
-  "mutation" : "payout-hides-wallet-loss"
+  "mutation" : "payout-hides-wallet-loss",
+  "check" : "netOutflow/third"
 }

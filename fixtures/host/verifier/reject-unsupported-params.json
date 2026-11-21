@@ -1778,5 +1778,6 @@
     }
   },
   "violations" : [ "notVerifiable" ],
-  "mutation" : "unsupported-params"
+  "mutation" : "unsupported-params",
+  "check" : "notVerifiable/classify"
 }

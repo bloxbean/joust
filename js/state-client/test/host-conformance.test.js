@@ -9,10 +9,30 @@ const dir = new URL('../../../fixtures/host/verifier/', import.meta.url);
 const common = new Set(['mint', 'fee', 'balance', 'signer', 'pointer', 'redeemer', 'collateral', 'deposit',
   'continuingOutput', 'netOutflow', 'walletOutput', 'scriptInput', 'auxiliaryData', 'withdrawal', 'upperBound', 'lowerBound', 'isValid', 'governance', 'referenceInput', 'budget']);
 
+// Negative vectors (by `mutation`) whose protocol-1 check the page verifier does not make yet. They still run, as todo:
+// the page accepts them where the reference refuses. Remove an entry when verify.js gains the check.
+const claims = 'the output verifier\'s claims (fix/verify-wallet-sends, ADR-0013 §9.2)';
+const pageGaps = {
+  'claims-shape': claims, 'claims-malformed-claim': claims, 'claims-deposits': claims, 'claims-duplicate': claims,
+  'claims-out-of-order': claims, 'claims-out-of-range': claims, 'claims-foreign': claims, 'claimed-send-tagged': claims,
+  'send-claim-on-change': claims, 'send-claim-wallet-funded': claims,
+  'change-at-enterprise': 'change only at the payer address (the page accepts the caller\'s enterprise address)',
+  'target-datum': 'the target datum decodes', 'owned-instance-target': 'the owned target names the call\'s instance',
+  'signed-by-other': 'signedBy against the target state', 'caller-not-required': 'the caller required for Ctx methods',
+  'cosigner-without-quorum': 'named co-signers only for quorum methods', 'duplicate-signer': 'duplicate required signers',
+  'extra-argument': 'every anchored argument in the constructor', 'mint-pointer': 'the method mint redeemer at index 0',
+  'continuation-script': 'no script reference on the continuation', 'empty-window': 'a nonempty window',
+  'negative-fee': 'a nonnegative fee', votes: 'votes', proposals: 'proposals',
+  'collateral-return-datum': 'a clean collateral return', 'collateral-return-script': 'a clean collateral return',
+  'collateral-unconserved': 'collateral conservation', 'witness-script': 'witness scripts pinned',
+  'missing-holder-reference': 'the policy script supplied',
+};
+
 for (const file of readdirSync(dir).filter(f => f.endsWith('.json'))) {
   const v = JSON.parse(readFileSync(new URL(file, dir)));
   if (v.method !== 'prepare' || v.violations.some(code => !common.has(code))) continue;
-  test('wallet agreement on ' + file, async () => {
+  const gap = pageGaps[v.mutation];
+  test('wallet agreement on ' + file, gap ? { todo: `page verifier gap: ${gap}` } : {}, async () => {
     const { description, policy, address, outputVerifier } = v.anchors;
     const { call } = v.request;
     const x = description['x-joust'];

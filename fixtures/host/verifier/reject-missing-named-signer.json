@@ -1740,5 +1740,6 @@
     }
   },
   "violations" : [ "signer" ],
-  "mutation" : "missing-named-signer"
+  "mutation" : "missing-named-signer",
+  "check" : "signer/named"
 }

@@ -1834,5 +1834,6 @@
     }
   },
   "violations" : [ "deposit" ],
-  "mutation" : "registration-deposit"
+  "mutation" : "registration-deposit",
+  "check" : "deposit/registration"
 }

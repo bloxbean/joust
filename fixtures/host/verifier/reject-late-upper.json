@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "upperBound" ],
-  "mutation" : "late-upper"
+  "mutation" : "late-upper",
+  "check" : "upperBound/window"
 }

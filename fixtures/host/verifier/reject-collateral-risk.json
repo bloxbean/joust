@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "collateral" ],
-  "mutation" : "collateral-risk"
+  "mutation" : "collateral-risk",
+  "check" : "collateral/limit"
 }
