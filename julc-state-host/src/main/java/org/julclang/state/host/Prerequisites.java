@@ -54,20 +54,22 @@ final class Prerequisites {
         }
         if (withdraw && checkRegistration)
             component("stakeRegistration", handle.rewardAddress(), handle.policyId(), registered(handle.policyId()), null);
-        if (sends) {
-            var v = handle.runtime().outputVerifier();
-            addresses.put("outputVerifier", v.holder()).put("outputVerifierReward", v.rewardAddress());
-            hashes.put("outputVerifier", v.hash());
-            boolean script = reference("outputVerifier", v.holder(), v.hash());
-            if (checkRegistration) {
-                Boolean registration = registered(v.hash());
-                if (!script && Boolean.FALSE.equals(registration)) {
-                    component("verifier", v.holder(), v.hash(), false, v);
-                } else {
-                    component("referenceScript", v.holder(), v.hash(), script, v);
-                    component("stakeRegistration", v.rewardAddress(), v.hash(), registration, v);
-                    if (script && Boolean.TRUE.equals(registration)) satisfied.add("verifier:" + v.hash());
-                }
+        if (sends) verifier("outputVerifier", handle.runtime().outputVerifier(), checkRegistration);
+        if (contract.maps()) verifier("mapVerifier", handle.runtime().mapVerifier(), checkRegistration);
+    }
+
+    private void verifier(String label, VerifierHandle v, boolean checkRegistration) {
+        deployment.withObject("/addresses").put(label, v.holder()).put(label + "Reward", v.rewardAddress());
+        deployment.withObject("/scriptHashes").put(label, v.hash());
+        boolean script = reference(label, v.holder(), v.hash());
+        if (checkRegistration) {
+            Boolean registration = registered(v.hash());
+            if (!script && Boolean.FALSE.equals(registration)) {
+                component("verifier", v.holder(), v.hash(), false, v);
+            } else {
+                component("referenceScript", v.holder(), v.hash(), script, v);
+                component("stakeRegistration", v.rewardAddress(), v.hash(), registration, v);
+                if (script && Boolean.TRUE.equals(registration)) satisfied.add("verifier:" + v.hash());
             }
         }
     }

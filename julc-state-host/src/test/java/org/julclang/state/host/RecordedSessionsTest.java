@@ -34,7 +34,7 @@ class RecordedSessionsTest {
     }
     static ObjectNode record(String name) throws Exception {
         boolean bank = name.equals("bank");
-        var first = recording(bank ? "Bank-publish-1" : "registry-019-release");
+        var first = recording(bank ? "Bank-publish-1" : name.equals("maps") ? "token-003-mint" : "registry-019-release");
         var params = first.required("params");
         String contract = (bank ? params : params.required("call")).required("contract").textValue();
         var entry = M1bTest.entry(Class.forName(contract+"Client"));
@@ -46,9 +46,11 @@ class RecordedSessionsTest {
                 bad.withObject("/build").put("digest","0".repeat(64));
                 error("bad","stageMismatch",c.rpc("initialize",bad));
             }
+            if (name.equals("maps")) hello.put("restoring",true);
             success(c.rpc("initialize",hello));
             success(c.rpc("describe",obj().put("contract",contract)));
-            if (!bank) keyed(c,first);
+            if (name.equals("maps")) maps(c,first);
+            else if (!bank) keyed(c,first);
             else bank(c,first,contract);
             success(c.rpc("shutdown",obj()));
             c.send(obj().put("method","exit"));
@@ -67,6 +69,31 @@ class RecordedSessionsTest {
             }
             return obj().set("frames",c.frames);
         }
+    }
+
+    private static void maps(Recorder c, JsonNode recording) throws Exception {
+        var p = recording.required("params");
+        long now = p.required("now").asLong();
+        var previous = recording("token-002-mint").required("expected");
+        var restore = obj().put("complete",true);
+        restore.putArray("transactions").addObject().put("state","prepared").set("cbor",previous.required("cbor"));
+        var ids = success(c.rpc("restore",restore)).required("reservations");
+        error("refusal","mapsStale",c.rpc("prepare",p));
+        var settled = obj().put("reservation",ids.get(0).asText()).put("status","confirmed").put("slot",now-3).put("tip",now);
+        settled.set("txHash",previous.required("txHash"));
+        assertEquals("confirmed",success(c.rpc("settled",settled)).required("state").asText());
+        error("refusal","mapsStale",c.rpc("prepare",p));
+        success(c.rpc("reset",obj().put("now",now)));
+        var next = success(c.rpc("prepare",p,answers(recording))).required("prepared");
+        assertEquals(recording.at("/expected/cbor"),next.required("cbor"));
+        settled.put("status","discarded").remove("slot");
+        error("bad","conflict",c.rpc("settled",settled));
+        error("refusal","mapsStale",c.rpc("prepare",p));
+        settled.set("reservation",next.required("reservation"));
+        settled.set("txHash",next.required("txHash"));
+        success(c.rpc("settled",settled));
+        success(c.rpc("reset",obj().put("now",now)));
+        assertEquals(next.required("cbor"),success(c.rpc("prepare",p,answers(recording))).at("/prepared/cbor"));
     }
 
     private static void keyed(Recorder c, JsonNode recording) throws Exception {
@@ -202,7 +229,7 @@ class RecordedSessionsTest {
     }
 
     @Test void liveSessionsMatchTheShippedScripts() throws Exception {
-        for (String name : List.of("bank","keyed")) {
+        for (String name : List.of("bank","keyed","maps")) {
             var recorded = record(name);
             var expected = JSON.readTree(SESSIONS.resolve(name+".json").toFile());
             // Installed artifact version strings vary by release and package metadata.
@@ -214,6 +241,6 @@ class RecordedSessionsTest {
         }
     }
     public static void main(String[] args) throws Exception {
-        for (String name : List.of("bank","keyed")) write(SESSIONS.resolve(name+".json"),record(name));
+        for (String name : List.of("bank","keyed","maps")) write(SESSIONS.resolve(name+".json"),record(name));
     }
 }

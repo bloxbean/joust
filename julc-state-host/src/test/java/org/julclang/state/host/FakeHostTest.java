@@ -35,7 +35,7 @@ class FakeHostTest {
     }
 
     @Test @org.junit.jupiter.api.Timeout(30) void replaysBothSessionsWithClientChosenIds() throws Exception {
-        for (String name : java.util.List.of("bank","keyed")) {
+        for (String name : java.util.List.of("bank","keyed","maps")) {
             var p = start(name);
             try {
                 var reader = new Frames.Reader(p.getInputStream());

@@ -55,6 +55,28 @@
             {
               "type": "object",
               "properties": {
+                "kind": {"const": "assetHistory"},
+                "unit": {"type": "string", "pattern": "^[0-9a-f]{56}(?:[0-9a-f]{2}){0,32}$"},
+                "cursor": {"type": "string", "minLength": 1}
+              },
+              "required": ["kind", "unit"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {"kind": {"const": "redeemers"}, "txHash": {"$ref": "#/$defs/hash32"}},
+              "required": ["kind", "txHash"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {"kind": {"const": "datum"}, "hash": {"$ref": "#/$defs/hash32"}},
+              "required": ["kind", "hash"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
                 "kind": {"const": "stakeRegistration"},
                 "credential": {"type": "string", "pattern": "^[0-9a-f]{56}$"}
               },
@@ -91,6 +113,54 @@
       },
       "required": ["tx_hash", "output_index", "address", "amount"],
       "additionalProperties": false
+    },
+    "hash32": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "negative": {
+      "type": "object",
+      "properties": {
+        "tip": {"$ref": "#/$defs/chainPoint"},
+        "failed": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"], "additionalProperties": false},
+        "absent": {"const": true}, "unsupported": {"const": true}
+      },
+      "required": ["tip"],
+      "oneOf": [{"required": ["failed"]}, {"required": ["absent"]}, {"required": ["unsupported"]}],
+      "additionalProperties": false
+    },
+    "assetHistory": {
+      "oneOf": [{"$ref": "#/$defs/negative"}, {
+        "type": "object",
+        "properties": {
+          "tip": {"$ref": "#/$defs/chainPoint"}, "more": {"type": "string", "minLength": 1},
+          "value": {"type": "array", "items": {
+            "type": "object", "properties": {"txHash": {"$ref": "#/$defs/hash32"}, "point": {"$ref": "#/$defs/chainPoint"}},
+            "required": ["txHash", "point"], "additionalProperties": false
+          }}
+        },
+        "required": ["tip", "value"], "additionalProperties": false
+      }]
+    },
+    "redeemers": {
+      "oneOf": [{"$ref": "#/$defs/negative"}, {
+        "type": "object",
+        "properties": {
+          "tip": {"$ref": "#/$defs/chainPoint"},
+          "value": {"type": "array", "items": {
+            "type": "object", "properties": {
+              "purpose": {"enum": ["spend", "mint", "cert", "reward", "voting", "proposing"]},
+              "index": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+              "scriptHash": {"type": "string", "pattern": "^[0-9a-f]{56}$"}, "dataHash": {"$ref": "#/$defs/hash32"}
+            },
+            "required": ["purpose", "index", "scriptHash", "dataHash"], "additionalProperties": false
+          }}
+        },
+        "required": ["tip", "value"], "additionalProperties": false
+      }]
+    },
+    "datum": {
+      "oneOf": [{"$ref": "#/$defs/negative"}, {
+        "type": "object", "properties": {"tip": {"$ref": "#/$defs/chainPoint"}, "value": {"type": "string", "pattern": "^(?:[0-9a-f]{2})+$"}},
+        "required": ["tip", "value"], "additionalProperties": false
+      }]
     },
     "utxos": {
       "oneOf": [
@@ -331,6 +401,7 @@
             {"$ref": "#/$defs/tip"},
             {"$ref": "#/$defs/protocolParams"},
             {"$ref": "#/$defs/script"},
+            {"$ref": "#/$defs/assetHistory"}, {"$ref": "#/$defs/redeemers"}, {"$ref": "#/$defs/datum"},
             {"$ref": "#/$defs/stakeRegistration"}
           ]
         }

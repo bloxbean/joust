@@ -31,3 +31,15 @@ For M3a, record Registry alone on a fresh DevKit with Yaci Store, then regenerat
 The recorder persists each designation before prepare. It publishes Registry, deploys its instance and heads, inserts two keys through the same predecessor, records the cooldown and future-start relink, removes one key and retires the other. The fresh-chain replay uses an assumption until the live recordings exist. The five offline signing fixtures reconstruct a small chain from `fixtures/m3/registry`. Guild's Hero and Item use plain owned storage and have no keyed list. The Bank transcript and earlier signing vectors are independent of these recordings.
 
 The M1b `unsupported-keyed.json` preserves the pre-keyed reply. A host advertising `keyed` replays those same request bytes against the D11 outcome in `keyed-needs-designated.json`.
+
+## Map workflow
+
+Start an isolated fresh DevKit with `store.transaction.save-cbor=true` and restart Yaci Store after setting it. The recorder checks the running Store's transaction CBOR endpoint, publishes Token and MapVerifier, registers the credential, creates the token, mints, restarts with the unsigned mint in its journal, settles, transfers, reads an existing balance and mints again.
+
+```sh
+./gradlew :julc-state-host:test -PdevnetOnly -PjoustHostFixtures=maps --tests '*DevKitHostTest.recordHostVectors'
+./gradlew :julc-state-host:recordClientConformance
+./gradlew :julc-state-host:check :julc-state-host:nodeHostConformance -PnoDevnet
+```
+
+The fresh-chain replay skips until `Token-init.json` exists. Offline signing vectors reconstruct bounded calls from M0 Token mint 0002 and the M3 Token and Locker snapshots. Their history answers use the earlier transactions' witness bytes and their recorded build tips as reconstructed inclusion points. The historical M1b `unsupported-maps.json` request now reaches prerequisite discovery on a host advertising maps. The compatibility test supplies an unsupported UTxO read and checks its typed result.

@@ -309,16 +309,25 @@ public final class MerkleSupport {
     /** The JVM's prover: an {@code MpfTrie} over a content-addressed node store (every past root stays readable). */
     public static final class TrieProver implements Prover {
         private final NodeStore store;
-        private final Runnable rebuild;
+        private final java.util.function.Consumer<byte[]> rebuild;
 
         public TrieProver(NodeStore store) {
-            this(store, null);
+            this(store, (Runnable) null);
         }
 
         /** {@code rebuild}: run once when a root is missing from the store (rebuilding from the chain, §13.12 M4). */
         public TrieProver(NodeStore store, Runnable rebuild) {
+            this(store, rebuild == null ? null : root -> rebuild.run());
+        }
+
+        private TrieProver(NodeStore store, java.util.function.Consumer<byte[]> rebuild) {
             this.store = store;
             this.rebuild = rebuild;
+        }
+
+        /** Loads and checks the specific missing root through a caller-supplied history reader. */
+        public static TrieProver withHistory(NodeStore store, java.util.function.Consumer<byte[]> rebuild) {
+            return new TrieProver(store, rebuild);
         }
 
         private boolean rebuilt;
@@ -352,7 +361,7 @@ public final class MerkleSupport {
             // A root the store lacks: rebuild this map from the chain once (the history is checked, not trusted).
             if (store.get(root) == null && rebuild != null && !rebuilt) {
                 rebuilt = true;
-                rebuild.run();
+                rebuild.accept(root);
             }
             // An MpfTrie over a store missing this root's nodes answers "absent" for everything: refuse instead.
             if (store.get(root) == null) {

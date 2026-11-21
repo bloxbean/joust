@@ -12,6 +12,7 @@ import org.julclang.state.examples.devkit.DevKit;
 import org.julclang.state.examples.dex.DexClient;
 import org.julclang.state.examples.bank.BankClient;
 import org.julclang.state.examples.registry.RegistryClient;
+import org.julclang.state.examples.token.TokenClient;
 import org.julclang.state.host.fixture.HostCouncilClient;
 import org.julclang.state.runtime.SlotChainTime;
 import org.junit.jupiter.api.*;
@@ -36,7 +37,7 @@ class DevKitHostTest {
         final ArrayNode evidence = JSON.createArrayNode();
         final boolean recording;
         final long magic;
-        Path journal;
+        Path journal, mapJournal;
         long highWaterMark;
 
         Node(boolean recording) throws Exception {
@@ -82,6 +83,38 @@ class DevKitHostTest {
                                 assertTrue(r.isSuccessful(), r::getResponse);
                                 for (var u : r.getValue()) values.add(JSON.valueToTree(u));
                                 if (r.getValue().size() < 100) break;
+                            }
+                        }
+                        case "assetHistory" -> {
+                            int page = Integer.parseInt(q.path("cursor").asText("1"));
+                            var r = backend.getAssetService().getTransactions(str(q,"unit"),100,page,OrderEnum.asc);
+                            if (r.code() == 404) a.put("absent",true);
+                            else {
+                                assertTrue(r.isSuccessful(), r::getResponse);
+                                var list = a.putArray("value");
+                                for (var t : r.getValue()) {
+                                    var block = backend.getBlockService().getBlockByNumber(java.math.BigInteger.valueOf(t.getBlockHeight()));
+                                    assertTrue(block.isSuccessful(), block::getResponse);
+                                    var b = block.getValue();
+                                    list.addObject().put("txHash", t.getTxHash()).putObject("point")
+                                            .put("slot",b.getSlot()).put("height",b.getHeight()).put("hash",b.getHash());
+                                }
+                                if (r.getValue().size() == 100) a.put("more",Integer.toString(page+1));
+                            }
+                        }
+                        case "redeemers" -> {
+                            var r = backend.getTransactionService().getTransactionRedeemers(str(q,"txHash"));
+                            assertTrue(r.isSuccessful(), "Yaci Store must serve redeemers; enable store.transaction.save-cbor=true");
+                            var list = a.putArray("value");
+                            for (var red : r.getValue()) list.addObject().put("purpose",red.getPurpose().name().toLowerCase(Locale.ROOT))
+                                    .put("index",red.getTxIndex()).put("dataHash",red.getRedeemerDataHash()).put("scriptHash",red.getScriptHash());
+                        }
+                        case "datum" -> {
+                            var r = backend.getScriptService().getScriptDatumCbor(str(q,"hash"));
+                            if (r.code()==404) a.put("absent",true);
+                            else {
+                                assertTrue(r.isSuccessful(),r::getResponse);
+                                a.put("value",r.getValue().getCbor());
                             }
                         }
                         case "stakeRegistration" -> a.put("unsupported", true);
@@ -194,8 +227,8 @@ class DevKitHostTest {
                 var query = obj().put("contract", name).put("now",clock.tipSlot());
                 var missing = success(c.rpc("prerequisites",query,this::answer));
                 if (fresh) assertFalse(missing.isEmpty(), "expected a fresh chain");
-                if (fresh && clientClass == DexClient.class) {
-                    assertEquals(3, missing.size(), "fresh Dex reference, verifier reference and unknown registration");
+                if (fresh && (clientClass == DexClient.class || clientClass == TokenClient.class)) {
+                    assertEquals(3, missing.size(), "fresh contract reference, verifier reference and unknown registration");
                     assertEquals("referenceScript", str(missing.get(0),"kind"));
                     assertEquals("referenceScript", str(missing.get(1),"kind"));
                     assertEquals("unknown", str(missing.get(2),"present"));
@@ -212,6 +245,10 @@ class DevKitHostTest {
                         assertion.putObject("evidence").put("txHash",str(built,"txHash")).put("slot",slot);
                     }
                     missing = success(c.rpc("prerequisites",query.put("now",clock.tipSlot()),this::answer));
+                }
+                if (clientClass == TokenClient.class) {
+                    token(c,init,entry,name);
+                    return;
                 }
                 if (clientClass == RegistryClient.class) {
                     registry(c,init,name);
@@ -275,6 +312,54 @@ class DevKitHostTest {
             }
         }
 
+        void token(Client c, ObjectNode init, Path entry, String contract) throws Exception {
+            var created = build(c,init,"Token-init","prepare",params(call(contract,"init","create",obj())));
+            submit(c,created);
+            String instance = str(created,"instance");
+            // Probe actual transaction CBOR on this Store; configuration files may describe a different deployment.
+            var request = HttpRequest.newBuilder(URI.create(DevKit.STORE_URL+"txs/"+str(created,"txHash")+"/cbor"))
+                    .timeout(Duration.ofSeconds(5)).GET().build();
+            try (var http = HttpClient.newHttpClient()) {
+                var response = http.send(request,HttpResponse.BodyHandlers.ofByteArray());
+                assertEquals(200,response.statusCode(),"Token recording requires Yaci Store store.transaction.save-cbor=true");
+                byte[] bytes = response.body();
+                if (response.headers().firstValue("Content-Type").orElse("").contains("json"))
+                    bytes = HexFormat.of().parseHex(str(JSON.readTree(bytes),"cbor"));
+                // Native Yaci Store can return just the encoded body. Full-transaction mode and
+                // the Blockfrost API can return the enclosing transaction, with the same body id.
+                String bodyHash = HexFormat.of().formatHex(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(bytes));
+                if (!str(created,"txHash").equals(bodyHash))
+                    assertEquals(str(created,"txHash"),TransactionUtil.getTxHash(bytes),"Store served different transaction CBOR");
+            }
+            var mint = call(contract,"action","mint",obj().put("to",key(payer)).put("amount","100")).put("instance",instance);
+            var pending = build(c,init,"Token-mint","prepare",params(mint));
+            var saved = obj().put("complete",true);
+            saved.putArray("transactions").addObject().put("state","prepared").set("cbor",pending.required("cbor"));
+            ClientVectors.write(mapJournal,saved);
+            Files.writeString(mapJournal.resolveSibling("map-high-water"),
+                    Long.toString(Math.addExact(pending.required("validTo").asLong(),2)));
+            c.close();
+            try (var restarted = new Client(new Handshake(List.of(entry)))) {
+                success(restarted.rpc("initialize",init.deepCopy().put("restoring",true)));
+                for (var assertion : evidence) success(restarted.rpc("registered",assertion));
+                var restore = JSON.readTree(mapJournal.toFile());
+                var id = success(restarted.rpc("restore",restore)).at("/reservations/0");
+                error("refusal","mapsStale",restarted.rpc("prepare",params(mint)));
+                ObjectNode imported = pending.deepCopy();
+                imported.set("reservation",id);
+                submit(restarted,imported);
+                success(restarted.rpc("reset",obj().put("now",clock.tipSlot())));
+                var transfer = call(contract,"action","transfer",obj().put("to",key(extra)).put("amount","10")).put("instance",instance);
+                submit(restarted,build(restarted,init,"Token-transfer","prepare",params(transfer)));
+                var view = obj().put("contract",contract).put("instance",instance).put("view","balanceOf").put("now",clock.tipSlot());
+                view.putObject("args").put("holder",key(payer));
+                assertEquals("90",success(restarted.rpc("view",view,this::answer)).required("value").asText());
+                // Each portable vector starts cold. Include all the history read by the independent replay.
+                success(restarted.rpc("reset",obj().put("now",clock.tipSlot())));
+                submit(restarted,build(restarted,init,"Token-mint-again","prepare",params(mint)));
+            }
+        }
+
         ObjectNode designate(ObjectNode call) throws Exception {
             var listing = answer(obj().put("kind","utxos").put("address",payer.baseAddress())).required("value");
             // Choose and persist before asking, including an operation that might be refused without a body.
@@ -331,16 +416,21 @@ class DevKitHostTest {
         Assumptions.assumeTrue(Boolean.getBoolean("joust.host.record"), "enable -PjoustHostFixtures on a fresh chain");
         assertTrue(DevKit.isReachable());
         var node = new Node(true);
-        if (!Boolean.getBoolean("joust.host.keyedOnly")) {
-            node.workflow(DexClient.class,true);
-            node.workflow(HostCouncilClient.class,false);
-            node.workflow(BankClient.class,false);
-            node.vectors.putAll(HostVectorsTest.unsupportedVectors(node.initialize(counter()), node.clock.tipSlot(),
-                    node.window().required("ttlSlots").asLong(), node.payer.baseAddress()));
-            node.vectors.put("Dex-combined-reconstructed", HostVectorsTest.combinedPublication());
+        if (Boolean.getBoolean("joust.host.mapsOnly")) {
+            node.mapJournal = directory.resolve("maps.json");
+            node.workflow(TokenClient.class,true);
+        } else {
+            if (!Boolean.getBoolean("joust.host.keyedOnly")) {
+                node.workflow(DexClient.class,true);
+                node.workflow(HostCouncilClient.class,false);
+                node.workflow(BankClient.class,false);
+                node.vectors.putAll(HostVectorsTest.unsupportedVectors(node.initialize(counter()), node.clock.tipSlot(),
+                        node.window().required("ttlSlots").asLong(), node.payer.baseAddress()));
+                node.vectors.put("Dex-combined-reconstructed", HostVectorsTest.combinedPublication());
+            }
+            node.journal = directory.resolve("operation.json");
+            node.workflow(RegistryClient.class,true);
         }
-        node.journal = directory.resolve("operation.json");
-        node.workflow(RegistryClient.class,true);
         Files.createDirectories(HostVectorsTest.DIRECTORY);
         for (var v : node.vectors.entrySet())
             JSON.writerWithDefaultPrettyPrinter().writeValue(HostVectorsTest.DIRECTORY.resolve(v.getKey()+".json").toFile(),v.getValue());

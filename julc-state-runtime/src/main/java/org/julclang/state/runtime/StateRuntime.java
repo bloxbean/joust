@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Everything a generated client needs to talk to a network: backend, optional script evaluator, network id, clock,
@@ -32,6 +33,7 @@ public final class StateRuntime {
     private volatile com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
     private final String mapStorePath;
     private final MerkleSupport.Prover mapProver;
+    private final Function<String, MerkleSupport.Prover> unitProver;
     private final Consumer<BuiltTx> onBuilt;
     private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts;
     private final java.util.List<Relay> relays;
@@ -61,6 +63,7 @@ public final class StateRuntime {
         this.mapStore = b.mapStore;               // null: the default store, opened when a map contract first needs it
         this.mapStorePath = b.mapStorePath;
         this.mapProver = b.mapProver;
+        this.unitProver = b.unitProver;
         this.onBuilt = b.onBuilt;
         this.referenceScripts = Map.copyOf(b.referenceScripts);
         this.relays = b.relays.isEmpty() ? java.util.List.of(Relay.of(b.backend)) : java.util.List.copyOf(b.relays);
@@ -238,6 +241,7 @@ public final class StateRuntime {
      * is rebuilt from that unit's chain history first (ADR-0015 §13.12 M4).
      */
     public MerkleSupport.Prover mapProver(String unit) {
+        if (unitProver != null) return unitProver.apply(unit);
         if (mapProver != null) return mapProver;
         return new MerkleSupport.TrieProver(mapStore(), () -> {
             int n = MapHistory.rebuild(this, unit);
@@ -268,6 +272,7 @@ public final class StateRuntime {
         private com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
         private String mapStorePath;
         private MerkleSupport.Prover mapProver;
+        private Function<String, MerkleSupport.Prover> unitProver;
         private Consumer<BuiltTx> onBuilt;
         private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts = new HashMap<>();
         private final java.util.List<Relay> relays = new java.util.ArrayList<>();
@@ -311,6 +316,11 @@ public final class StateRuntime {
         public Builder mapStorePath(String path) { this.mapStorePath = path; return this; }
         /** Map proofs from elsewhere: the runtime engine's caller supplies them (ADR-0015 §13.12 M1). */
         public Builder mapProver(MerkleSupport.Prover prover) { this.mapProver = prover; return this; }
+        /** Supply the prover for a particular token, including its history source. */
+        public Builder unitProver(Function<String, MerkleSupport.Prover> prover) {
+            unitProver = prover;
+            return this;
+        }
 
         /**
          * A known reference script output (a deployment's pin, ADR-0013 D2): contracts whose script hash it carries use it
