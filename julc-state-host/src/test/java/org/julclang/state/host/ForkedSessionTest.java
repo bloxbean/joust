@@ -60,8 +60,21 @@ class ForkedSessionTest {
         entries.addFirst(old);
         error("bad","stageMismatch",hello(root,entries,fingerprint));
         error("unsupported","runtimeVersion",hello(root,entries,Launch.scan(root,entries).fingerprint()));
+        entries.removeFirst();
+        // #151 review SB2: every recorded M1b vector (publications, owned and quorum calls, refusals) under the trace too.
+        int vectors = 0;
+        try (var files = Files.list(HostVectorsTest.DIRECTORY)) {
+            for (var f : files.filter(v -> v.toString().endsWith(".json")).sorted().toList()) {
+                success(hello(root, entries, fingerprint, JSON.readTree(f.toFile())));
+                vectors++;
+            }
+        }
+        assertTrue(vectors >= 20, "the recorded host vectors");
     }
     JsonNode hello(Path root, List<Path> entries, String fingerprint) throws Exception {
+        return hello(root, entries, fingerprint, null);
+    }
+    JsonNode hello(Path root, List<Path> entries, String fingerprint, JsonNode vector) throws Exception {
         var dir = Files.createTempDirectory(temp,"working");
         var home = Files.createTempDirectory(temp, "home");
         var tmp = Files.createTempDirectory(temp, "tmp");
@@ -89,11 +102,15 @@ class ForkedSessionTest {
             var writer = new Frames.Writer(child.getOutputStream());
             var p = init();
             p.withObject("/build").put("snapshot",root.toString()).put("digest",fingerprint);
+            if (vector != null) for (String key : List.of("network", "clock", "time", "limits")) p.set(key, vector.required(key));
             assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","initialize").put("id",1).set("params",p))));
             var reader = new Frames.Reader(child.getInputStream());
             byte[] reply = reader.next();
             assertNotNull(reply, () -> diagnostics.toString());
-            if (JSON.readTree(reply).has("result")) serve(writer, reader);
+            if (JSON.readTree(reply).has("result")) {
+                if (vector == null) serve(writer, reader);
+                else replay(writer, reader, vector);
+            }
             assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("method","exit"))));
             assertTrue(child.waitFor(5,TimeUnit.SECONDS));
             assertEquals(0,child.exitValue(),Files.readString(diagnostics));
@@ -147,6 +164,23 @@ class ForkedSessionTest {
         assertEquals(-32800, reply.at("/error/code").asInt(), reply::toString);
         var again = success(call(writer, reader, ++id, "prepare", r.params(), r::answer, null));
         assertEquals(r.fixture().required("unsignedTx"), again.at("/prepared/cbor"));
+    }
+
+    /** A recorded host vector (HostVectorsTest): its assertions, its call with its recorded answers, its outcome. */
+    private static void replay(Frames.Writer writer, Frames.Reader reader, JsonNode v) throws Exception {
+        int id = 1;
+        for (var assertion : v.required("initialSession").required("registered"))
+            success(call(writer, reader, ++id, "registered", assertion, q -> { throw new AssertionError(q.toString()); }, null));
+        var reads = v.required("reads").elements();
+        var response = call(writer, reader, ++id, str(v, "method"), v.required("params"), q -> {
+            assertTrue(reads.hasNext(), q::toString);
+            var pair = reads.next();
+            assertEquals(pair.required("request"), q);
+            return pair.required("answer");
+        }, null);
+        var expected = v.required("expected");
+        if (v.has("feature")) error("unsupported", str(expected, "code"), response);
+        else assertEquals(expected.required("cbor"), success(response).at("/prepared/cbor"));
     }
 
     /** One forward call, answering its reverse reads; with {@code cancel}, cancels it at its first read instead. */
