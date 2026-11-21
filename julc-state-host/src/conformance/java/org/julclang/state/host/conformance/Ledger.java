@@ -50,6 +50,10 @@ final class Ledger {
         plan.put("scriptDataHash", b.containsKey(11) ? b.get(11).bytes() : null);
         plan.put("auxiliaryDataHash", b.containsKey(7) ? b.get(7).bytes() : null);
         plan.put("certificates",set(4).size());
+        if (b.containsKey(5)) { // A reward account at most once: two decoders could otherwise keep different amounts.
+            var accounts = new HashSet<String>();
+            for (int i = 0; i < b.get(5).items.size(); i += 2) require(b.get(5).major == 5 && accounts.add(b.get(5).items.get(i).bytes()));
+        }
         plan.put("withdrawals", b.containsKey(5) ? b.get(5).items.size()/2 : 0);
         plan.put("votes", b.containsKey(19));
         plan.put("proposals", set(20).size());

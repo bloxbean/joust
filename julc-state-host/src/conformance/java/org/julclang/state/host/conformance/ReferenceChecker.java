@@ -81,6 +81,11 @@ public final class ReferenceChecker {
     void test(String site, boolean ok) {
         if (!ok && enabled(site)) problems.add(site.substring(0, site.indexOf('/')));
     }
+    /**
+     * One conjunct of a check, {@code <site>#<part>}: true when it holds or is disabled. A disabled part (or an accounting
+     * term guarded by {@link #enabled}) is a mutant of the reference for VerifierVectorsTest's mutation test.
+     */
+    boolean holds(String part, boolean ok) { return ok || !enabled(part); }
     boolean enabled(String site) {
         int slash = site.indexOf('/');
         if (slash <= 0) throw new IllegalStateException("site id without a check name");
@@ -95,7 +100,8 @@ public final class ReferenceChecker {
         test("network/body", plan.get("networkId").isNull() || valueOf(network).equals(plan.get("networkId").bigIntegerValue()));
         test("scriptIntegrity/hash",Objects.equals(ledger.scriptIntegrity(pp),plan.get("scriptDataHash").textValue()));
         test("isValid/flag",plan.get("isValid").booleanValue());
-        test("auxiliaryData/present", !plan.get("auxiliaryData").booleanValue() && plan.get("auxiliaryDataHash").isNull());
+        test("auxiliaryData/present", holds("auxiliaryData/present#data",!plan.get("auxiliaryData").booleanValue()) &&
+                holds("auxiliaryData/present#hash",plan.get("auxiliaryDataHash").isNull()));
         test("governance/votes", !ledger.b.containsKey(19));
         test("governance/proposals", !ledger.b.containsKey(20));
         test("governance/treasury", !ledger.b.containsKey(21));
@@ -124,20 +130,21 @@ public final class ReferenceChecker {
         if (publish) publication();
         else new CallRules(this).check();
         var balance = new HashMap<>(consumed);
-        add(balance,minted,1);
+        if (enabled("balance/conserved#mint")) add(balance,minted,1);
         for (var o : plan.required("outputs")) {
             test("network/output",network(o.required("address").asText()) == network);
             var amount = value(o.required("value"));
             test("balance/nonNegative",amount.values().stream().allMatch(n -> n.signum() >= 0));
             add(balance,amount,-1);
         }
-        balance.merge("lovelace",n(plan,"fee").add(deposit).negate(),BigInteger::add);
+        balance.merge("lovelace",(enabled("balance/conserved#fee") ? n(plan,"fee") : ZERO).add(enabled("balance/conserved#deposit") ? deposit : ZERO).negate(),BigInteger::add);
         test("balance/conserved",zero(balance));
     }
 
     private boolean classify() {
-        boolean knownContract = description.at("/preamble/title").asText().equals(call.required("contract").asText()) &&
-                !x.hasNonNull("params") && !description.required("definitions").has("org.julclang.state.api.MerkleMap");
+        boolean knownContract = holds("notVerifiable/classify#contract",description.at("/preamble/title").asText().equals(call.required("contract").asText())) &&
+                holds("notVerifiable/classify#params",!x.hasNonNull("params")) &&
+                holds("notVerifiable/classify#maps",!description.required("definitions").has("org.julclang.state.api.MerkleMap"));
         if (publish) return knownContract;
         if (!"prepare".equals(v.required("method").textValue()) ||
                 !Set.of("init","action","destroy","ownedInit","ownedAction","ownedDestroy").contains(kind)) return false;
@@ -148,11 +155,18 @@ public final class ReferenceChecker {
         var p = meta.path("policies");
         var recipe = meta.path("recipe");
         boolean keyedInit = kind.equals("init") && !x.path("keyed").isEmpty();
-        return knownContract && !keyedInit && !p.path("batched").asBoolean() && !p.path("into").asBoolean() && !p.hasNonNull("admits") &&
-                !p.hasNonNull("migrateTo") && !p.path("receives").asBoolean() && p.path("authorizedBy").isEmpty() &&
-                !meta.at("/returns/deposits").asBoolean() && (!meta.path("needsService").asBoolean() || recipe.isObject()) &&
-                recipe.path("reads").isEmpty() && (!creation || !p.hasNonNull("quorum")) &&
-                (!meta.at("/returns/sends").asBoolean() || anchors.path("outputVerifier").hasNonNull("hash"));
+        return knownContract && holds("notVerifiable/classify#keyed",!keyedInit) &&
+                holds("notVerifiable/classify#batched",!p.path("batched").asBoolean()) &&
+                holds("notVerifiable/classify#into",!p.path("into").asBoolean()) &&
+                holds("notVerifiable/classify#admits",!p.hasNonNull("admits")) &&
+                holds("notVerifiable/classify#migrateTo",!p.hasNonNull("migrateTo")) &&
+                holds("notVerifiable/classify#receives",!p.path("receives").asBoolean()) &&
+                holds("notVerifiable/classify#authorizedBy",p.path("authorizedBy").isEmpty()) &&
+                holds("notVerifiable/classify#deposits",!meta.at("/returns/deposits").asBoolean()) &&
+                holds("notVerifiable/classify#service",!meta.path("needsService").asBoolean() || recipe.isObject()) &&
+                holds("notVerifiable/classify#reads",recipe.path("reads").isEmpty()) &&
+                holds("notVerifiable/classify#quorumCreation",!creation || !p.hasNonNull("quorum")) &&
+                holds("notVerifiable/classify#verifierAnchor",!meta.at("/returns/sends").asBoolean() || anchors.path("outputVerifier").hasNonNull("hash"));
     }
 
     private void inputs(JsonNode resolved) {
@@ -189,23 +203,25 @@ public final class ReferenceChecker {
             boolean shared = addr.equals(verifier.path("address").textValue()) && Objects.equals(hash,verifier.path("hash").textValue()) && hash != null;
             boolean instance = address.equals(addr) && call.hasNonNull("instance") &&
                     ONE.equals(utxoValue(u).get(policy + call.get("instance").asText()));
-            test("referenceInput/allowed", !publish && (holder || shared || instance));
+            test("referenceInput/allowed", holds("referenceInput/allowed#call",!publish) && holds("referenceInput/allowed#pinned",holder || shared || instance));
             if (holder || shared) scripts.add(hash);
         }
-        if (!publish && resolvedAll) test("referenceInput/scripts",scripts.contains(policy) &&
-                (!ledger.b.containsKey(5) || scripts.contains(anchors.at("/outputVerifier/hash").asText())));
+        if (!publish && resolvedAll) test("referenceInput/scripts",holds("referenceInput/scripts#policy",scripts.contains(policy)) &&
+                holds("referenceInput/scripts#verifier",!ledger.b.containsKey(5) || scripts.contains(anchors.at("/outputVerifier/hash").asText())));
     }
 
     private void envelope() {
         var upper = plan.required("validTo");
         var lower = plan.required("validFrom");
         BigInteger now = n(req,"now"), ttl = n(req,"ttlSlots");
-        test("upperBound/window",upper.isIntegralNumber() && upper.bigIntegerValue().compareTo(now)>0 &&
-                upper.bigIntegerValue().compareTo(now.add(ttl))<=0 &&
-                (lower.isNull() || upper.bigIntegerValue().compareTo(lower.bigIntegerValue())>0));
+        test("upperBound/window",holds("upperBound/window#present",upper.isIntegralNumber()) &&
+                holds("upperBound/window#afterNow",upper.bigIntegerValue().compareTo(now)>0) &&
+                holds("upperBound/window#withinTtl",upper.bigIntegerValue().compareTo(now.add(ttl))<=0) &&
+                holds("upperBound/window#nonempty",lower.isNull() || upper.bigIntegerValue().compareTo(lower.bigIntegerValue())>0));
         if (!publish && (meta.path("ctx").asBoolean() || !meta.at("/policies/validBefore").isEmpty() ||
                 !meta.at("/policies/validAfter").isEmpty()))
-            test("lowerBound/context",lower.isIntegralNumber() && lower.bigIntegerValue().compareTo(now)>=0);
+            test("lowerBound/context",holds("lowerBound/context#present",lower.isIntegralNumber()) &&
+                    holds("lowerBound/context#notBefore",lower.bigIntegerValue().compareTo(now)>=0));
 
         var required = strings(plan.required("requiredSigners"));
         var named = new HashSet<>(strings(call.path("cosigners")));
@@ -217,25 +233,29 @@ public final class ReferenceChecker {
         test("signer/named", required.containsAll(named));
         test("signer/cosigners", quorum || named.isEmpty());
         test("signer/caller", !callerRequired || required.contains(caller));
-        test("signer/form", required.size()==new HashSet<>(required).size() && required.stream().allMatch(k -> k.matches("[0-9a-f]{56}")));
+        test("signer/form", holds("signer/form#distinct",required.size()==new HashSet<>(required).size()) &&
+                holds("signer/form#keyHash",required.stream().allMatch(k -> k.matches("[0-9a-f]{56}"))));
         var witnesses = new HashSet<>(required);
         if (!walletRefs.isEmpty() || !plan.required("collateral").isEmpty()) witnesses.add(caller);
         var claims = strings(prepared.required("signers"));
-        test("planMismatch/signers",claims.size()==witnesses.size() && witnesses.containsAll(claims) && new HashSet<>(claims).equals(witnesses));
+        test("planMismatch/signers",holds("planMismatch/signers#set",new HashSet<>(claims).equals(witnesses)) &&
+                holds("planMismatch/signers#distinct",claims.size()==witnesses.size()));
 
         BigInteger mem = ZERO, steps = ZERO;
         for (var r : plan.required("redeemers")) {
             mem = mem.add(n(r,"mem"));
             steps = steps.add(n(r,"steps"));
-            test("budget/units", n(r,"mem").signum()>=0 && n(r,"steps").signum()>=0);
+            test("budget/units", holds("budget/units#mem",n(r,"mem").signum()>=0) && holds("budget/units#steps",n(r,"steps").signum()>=0));
         }
-        test("budget/total",mem.compareTo(n(pp,"max_tx_ex_mem"))<=0 && steps.compareTo(n(pp,"max_tx_ex_steps"))<=0);
+        test("budget/total",holds("budget/total#mem",mem.compareTo(n(pp,"max_tx_ex_mem"))<=0) &&
+                holds("budget/total#steps",steps.compareTo(n(pp,"max_tx_ex_steps"))<=0));
         var exFee = new BigDecimal(mem).multiply(new BigDecimal(pp.required("price_mem").asText()))
                 .add(new BigDecimal(steps).multiply(new BigDecimal(pp.required("price_step").asText())))
                 .setScale(0,RoundingMode.CEILING).toBigIntegerExact();
         // Normative (dev-host-1.md rule 3): floor(1.2 x (min_fee_a x (size + 200) + min_fee_b + ceil(execution fee))) + 500,000.
-        var cap = n(pp,"min_fee_a").multiply(valueOf(ledger.length+200L)).add(n(pp,"min_fee_b")).add(exFee)
-                .multiply(valueOf(12)).divide(TEN).add(valueOf(500_000));
+        var cap = n(pp,"min_fee_a").multiply(valueOf(ledger.length+(enabled("fee/derived#sizeMargin") ? 200L : 0L)))
+                .add(enabled("fee/derived#minFeeB") ? n(pp,"min_fee_b") : ZERO).add(enabled("fee/derived#executionFee") ? exFee : ZERO)
+                .multiply(valueOf(enabled("fee/derived#factor") ? 12 : 10)).divide(TEN).add(valueOf(enabled("fee/derived#margin") ? 500_000 : 0));
         test("fee/sign", n(plan,"fee").signum()>=0);
         test("fee/derived", n(plan,"fee").compareTo(cap)<=0);
         test("fee/max", n(plan,"fee").compareTo(n(v,"maxFee"))<=0);
@@ -250,7 +270,8 @@ public final class ReferenceChecker {
             test("collateral/none",plan.required("redeemers").isEmpty());
             return;
         }
-        test("collateral/present", !refs.isEmpty() && ret.isObject() && !total.isNull() && !publish);
+        test("collateral/present", holds("collateral/present#inputs",!refs.isEmpty()) && holds("collateral/present#return",ret.isObject()) &&
+                holds("collateral/present#total",!total.isNull()) && holds("collateral/present#call",!publish));
         if (!ret.isObject() || total.isNull()) return;
         var amounts = new HashMap<String,BigInteger>();
         for (String ref : refs) {
@@ -261,12 +282,13 @@ public final class ReferenceChecker {
         String addr = ret.required("address").asText();
         // wallet() also fixes the return's network: the exact payer address, or the caller's enterprise address on it.
         test("collateral/returnAddress",wallet(addr));
-        test("collateral/returnClean",clean(ret));
-        test("collateral/limit",n(plan,"totalCollateral").signum()>=0 && n(plan,"totalCollateral").compareTo(valueOf(5_000_000))<=0);
+        test("collateral/returnClean",clean("collateral/returnClean",ret));
+        test("collateral/limit",holds("collateral/limit#nonNegative",n(plan,"totalCollateral").signum()>=0) &&
+                holds("collateral/limit#max",n(plan,"totalCollateral").compareTo(valueOf(5_000_000))<=0));
         var returned = value(ret.required("value"));
         test("collateral/returnNonNegative",returned.values().stream().allMatch(n -> n.signum()>=0));
         add(amounts,returned,-1);
-        amounts.merge("lovelace",n(plan,"totalCollateral").negate(),BigInteger::add);
+        if (enabled("collateral/conserved#total")) amounts.merge("lovelace",n(plan,"totalCollateral").negate(),BigInteger::add);
         test("collateral/conserved",zero(amounts));
     }
 
@@ -290,8 +312,8 @@ public final class ReferenceChecker {
             deposit = deposit.add(money);
             if (!registration) continue;
             boolean pure = (k==0 && cert.array().size()==2 || k==7 && cert.array().size()==3);
-            test("certificate/shape",pure && cert.at(1).array().size()==2 && cert.at(1).at(0).uint()==1 &&
-                    cert.at(1).at(1).bytes().equals(prerequisiteHash()));
+            test("certificate/shape",holds("certificate/shape#pure",pure) && holds("certificate/shape#credentialForm",cert.at(1).array().size()==2) &&
+                    holds("certificate/shape#script",cert.at(1).at(0).uint()==1) && holds("certificate/shape#anchored",cert.at(1).at(1).bytes().equals(prerequisiteHash())));
             if (k==7) test("deposit/registration",money.equals(n(pp,"key_deposit")));
         }
     }
@@ -300,12 +322,13 @@ public final class ReferenceChecker {
         if (ws == null) return;
         require(ws.major==5);
         String reward = "f" + Integer.toHexString(network) + anchors.at("/outputVerifier/hash").asText();
-        test("withdrawal/allowed",!publish && meta.at("/returns/sends").asBoolean() && ws.items.size()==2);
+        test("withdrawal/allowed",holds("withdrawal/allowed#call",!publish) && holds("withdrawal/allowed#sends",meta.at("/returns/sends").asBoolean()) &&
+                holds("withdrawal/allowed#single",ws.items.size()==2));
         for (int i=0;i<ws.items.size();i+=2) {
             var coin = ws.items.get(i+1).integer();
             test("withdrawal/account",ws.items.get(i).bytes().equals(reward));
             test("withdrawal/amount",coin.signum()==0);
-            consumed.merge("lovelace",coin,BigInteger::add);
+            if (enabled("balance/conserved#withdrawals")) consumed.merge("lovelace",coin,BigInteger::add);
         }
     }
 
@@ -321,13 +344,14 @@ public final class ReferenceChecker {
         String language = (shared ? verifier : anchors).required("language").textValue();
         boolean holder = !kind.equals("stakeRegistration");
         boolean registration = !kind.equals("referenceScript");
-        test("publicationShape/kind",Set.of("stakeRegistration","referenceScript","verifier").contains(kind) &&
-                (shared ? sends : hash.equals(policy) && !kind.equals("verifier") && (!registration || withdraw)));
+        test("publicationShape/kind",holds("publicationShape/kind#known",Set.of("stakeRegistration","referenceScript","verifier").contains(kind)) &&
+                (shared ? holds("publicationShape/kind#sends",sends) : holds("publicationShape/kind#policy",hash.equals(policy)) &&
+                        holds("publicationShape/kind#verifierShared",!kind.equals("verifier")) && holds("publicationShape/kind#withdraw",!registration || withdraw)));
         String target = shared ? verifier.required("address").textValue() : address;
         var node = v.required("node");
         if (holder) {
             var present = node.path("scriptsAt").path(target);
-            test("publicationPresence/holder",present.isArray() && !strings(present).contains(hash));
+            test("publicationPresence/holder",holds("publicationPresence/holder#queried",present.isArray()) && holds("publicationPresence/holder#absent",!strings(present).contains(hash)));
         }
         if (registration) {
             var status = node.path("registrations").path(hash);
@@ -339,7 +363,7 @@ public final class ReferenceChecker {
         for (int i=0;i<ledger.outputs.size();i++) {
             var o = plan.required("outputs").get(i);
             if (!o.required("hasScript").asBoolean()) {
-                test("publicationShape/change",payer.equals(o.required("address").asText()) && clean(o));
+                test("publicationShape/change",holds("publicationShape/change#payer",payer.equals(o.required("address").asText())) && clean("publicationShape/change",o));
                 continue;
             }
             count++;
@@ -348,19 +372,29 @@ public final class ReferenceChecker {
             require(script.array().size()==2);
             String bytes = script.at(1).bytes();
             var prefixed = HEX.parseHex("03"+bytes);
-            test("publicationShape/holder",target.equals(o.required("address").asText()) && "PlutusScriptV3".equals(language) && script.at(0).uint()==3 &&
-                    digest(224,prefixed,0,prefixed.length).equals(hash) && o.get("datum").isNull() && o.get("datumHash").isNull() &&
-                    o.required("value").size()==1);
+            test("publicationShape/holder",holds("publicationShape/holder#target",target.equals(o.required("address").asText())) &&
+                    holds("publicationShape/holder#anchoredLanguage","PlutusScriptV3".equals(language)) && holds("publicationShape/holder#language",script.at(0).uint()==3) &&
+                    holds("publicationShape/holder#hash",digest(224,prefixed,0,prefixed.length).equals(hash)) &&
+                    holds("publicationShape/holder#datum",o.get("datum").isNull()) && holds("publicationShape/holder#datumHash",o.get("datumHash").isNull()) &&
+                    holds("publicationShape/holder#lovelaceOnly",o.required("value").size()==1));
             var holderCoin = n(o.required("value"),"lovelace");
             var min = n(pp,"coins_per_utxo_size").multiply(valueOf(160L + raw.end - raw.start));
-            test("holderLovelace/range",holderCoin.compareTo(min)>=0 && holderCoin.compareTo(min.add(valueOf(1_000_000)))<=0);
+            test("holderLovelace/range",holds("holderLovelace/range#min",holderCoin.compareTo(min)>=0) &&
+                    holds("holderLovelace/range#max",holderCoin.compareTo(min.add(valueOf(1_000_000)))<=0));
         }
         test("publicationShape/count",count==(holder ? 1 : 0));
         // With wallet-only inputs and payer-only change, conservation bounds loss by the fee, checked holder and deposit.
     }
 
-    boolean wallet(String addr) { return payer.equals(addr) || caller.equals(paymentKey(addr)) && (addressBytes(addr)[0]>>>4 & 15)==6 && network(addr)==network; }
-    static boolean clean(JsonNode o) { return o.get("datum").isNull() && o.get("datumHash").isNull() && !o.get("hasScript").booleanValue(); }
+    /** The payer's exact address, or the caller's payment key in an enterprise address on the selected network. */
+    boolean wallet(String addr) {
+        return payer.equals(addr) || holds("wallet/address#key",caller.equals(paymentKey(addr))) &&
+                holds("wallet/address#enterprise",(addressBytes(addr)[0]>>>4 & 15)==6) && holds("wallet/address#network",network(addr)==network);
+    }
+    boolean clean(String site,JsonNode o) {
+        return holds(site+"#datum",o.get("datum").isNull()) && holds(site+"#datumHash",o.get("datumHash").isNull()) &&
+                holds(site+"#script",!o.get("hasScript").booleanValue());
+    }
     static byte[] addressBytes(String addr) { return new Address(addr).getBytes(); }
     static int network(String addr) { return addressBytes(addr)[0]&15; }
     static String paymentKey(String addr) {
