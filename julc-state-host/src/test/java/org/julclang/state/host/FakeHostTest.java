@@ -75,6 +75,20 @@ class FakeHostTest {
         } finally { p.destroyForcibly(); }
     }
 
+    @Test @org.junit.jupiter.api.Timeout(30) void aClientThatStaysOpenAfterExitFails() throws Exception {
+        var p = start("keyed");
+        try {
+            var reader = new Frames.Reader(p.getInputStream());
+            var writer = new Frames.Writer(p.getOutputStream());
+            for (var f : JSON.readTree(RecordedSessionsTest.SESSIONS.resolve("keyed.json").toFile()).required("frames")) {
+                if (f.has("client")) assertTrue(writer.write(JSON.writeValueAsBytes(f.required("client"))));
+                else assertEquals(f.required("host"),JSON.readTree(reader.next()));
+            }
+            assertTrue(p.waitFor(10,TimeUnit.SECONDS));
+            assertEquals(4,p.exitValue());
+        } finally { p.destroyForcibly(); }
+    }
+
     /**
      * DC4: each scripted host fault. A client that stops (closes its end, after any tolerated frame) passes with exit 0;
      * one that sends another frame fails with exit 3.

@@ -400,6 +400,153 @@ public final class MutationVectors {
                 e.claim(p -> p.put("txHash",canonical));
             }),
 
+            // ---- DC7, DC8: one vector per conjunct and accounting term (VerifierVectorsTest.everyPartDecidesSomeVector)
+            new Case("aux-without-hash",SPEND,"auxiliaryData/present",e -> e.swap(e.ledger.tx.at(3),"d90103a100a1016178")),
+            new Case("aux-hash-without-data",SPEND,"auxiliaryData/present",e -> e.body(7,"5820"+"12".repeat(32))),
+            new Case("expired-window",SPEND,"upperBound/window",e -> e.body(3,uint(e.now()))),
+            new Case("steps-over-limit",SPEND,"budget/total",e -> e.swap(e.rvalue(0).at(1).at(1),uint(e.v.at("/protocolParams/max_tx_ex_steps").asLong()+1))),
+            new Case("negative-steps",SPEND,"budget/units",e -> e.swap(e.rvalue(0).at(1).at(1),"20")),
+            new Case("short-signer",QUORUM,"signer/form",e -> {
+                String shortKey="ef".repeat(27);
+                var required=new ArrayList<String>();
+                e.ledger.set(14).forEach(k -> required.add(k.bytes()));
+                e.body(14,"d90102"+head(4,required.size()+1)+String.join("",required.stream().map(k -> "581c"+k).toList())+"581b"+shortKey);
+                e.v.withObject("/request/call").withArray("cosigners").add(shortKey);
+                e.claim(p -> p.withArray("signers").add(shortKey));
+            }),
+            new Case("signers-claim-other-key",SPEND,"planMismatch/signers",e -> e.claim(p -> p.putArray("signers").add(OTHER))),
+            new Case("signers-claim-repeated",SPEND,"planMismatch/signers",e -> e.claim(p -> p.putArray("signers").add(e.caller()).add(e.caller()))),
+            new Case("collateral-without-inputs",SPEND,"collateral/present",e -> {
+                e.body(13,null);
+                e.body(17,uint(0));
+                e.swap(e.val(e.ledger.b.get(16)),uint(0));
+            }),
+            new Case("collateral-without-total",SPEND,"collateral/present",e -> e.body(17,null)),
+            new Case("publication-collateral",PUB,"collateral/present",e -> {
+                String ref=e.ledger.plan.at("/inputs/0").asText();
+                long in=e.amount(ref,"lovelace");
+                e.body(13,"d9010281825820"+ref.substring(0,64)+uint(Long.parseLong(ref.substring(65))));
+                e.body(16,"82"+e.addr(e.out(1)).raw()+uint(in-1_000_000));
+                e.body(17,uint(1_000_000));
+            }),
+            new Case("negative-collateral-total",DEX,"collateral/limit",e -> {
+                long total=e.ledger.b.get(17).integer().longValueExact();
+                var coin=e.val(e.ledger.b.get(16));
+                e.swap(coin,uint(coin.integer().longValueExact()+total+1));
+                e.body(17,"20");
+            }),
+            new Case("collateral-return-inline-datum",SPEND,"collateral/returnClean",e -> {
+                var ret=e.ledger.b.get(16);
+                e.swap(ret,"a3"+"00"+ret.at(0).raw()+"01"+ret.at(1).raw()+"02"+"8201d81843d87980");
+            }),
+            new Case("collateral-return-enterprise-network",SPEND,"collateral/returnAddress",
+                    e -> e.swap(e.addr(e.ledger.b.get(16)),bytes("61"+e.caller()))),
+            new Case("wallet-script-reference",SPEND,"walletOutput/script",e -> {
+                var out=e.out(1);
+                e.swap(out,"a2"+"00"+out.at(0).raw()+"01"+out.at(1).raw());
+                e.field(e.out(1),3,"d81846820343010203");
+            }),
+            new Case("call-withdrawal-without-sends",SPEND,"withdrawal/allowed",e -> {
+                // The verifier's script is supplied, so only the withdrawal itself is unwarranted.
+                var verifier=e.v.at("/anchors/outputVerifier");
+                var holder=e.v.withObject("/resolved").putObject("ee".repeat(32)+"#0").put("tx_hash","ee".repeat(32)).put("output_index",0)
+                        .put("address",verifier.required("address").asText());
+                holder.putArray("amount").addObject().put("unit","lovelace").put("quantity",10_000_000);
+                holder.putNull("data_hash").putNull("inline_datum").put("reference_script_hash",verifier.required("hash").asText());
+                var refs=e.ledger.b.get(18).tagged(258);
+                e.body(18,"d90102"+head(4,refs.items.size()+1)+refs.raw().substring(2)+"825820"+"ee".repeat(32)+"00");
+                e.body(5,"a1581df0"+verifier.required("hash").asText()+"00");
+            }),
+            new Case("missing-verifier-reference",DEX,"referenceInput/scripts",e -> {
+                var refs=e.ledger.b.get(18).tagged(258);
+                String shared=e.v.at("/anchors/outputVerifier/address").asText();
+                var kept=new StringBuilder();
+                int n=0;
+                for (var r : refs.items) {
+                    String ref=r.at(0).bytes()+"#"+r.at(1).uint();
+                    if (!shared.equals(e.resolved(ref).required("address").asText())) { kept.append(r.raw()); n++; }
+                }
+                e.body(18,"d90102"+head(4,n)+kept);
+            }),
+            new Case("credential-form",REG,"certificate/shape",e -> e.cert("8200"+"8301581c"+e.hash()+"00")),
+            new Case("publication-change-datum",PUB,"publicationShape/change",e -> {
+                var out=e.out(1);
+                e.swap(out,"a3"+"00"+out.at(0).raw()+"01"+out.at(1).raw()+"02"+"8201d81843d87980");
+            }),
+            new Case("publication-change-datum-hash",PUB,"publicationShape/change",e -> {
+                var out=e.out(1);
+                e.swap(out,"83"+out.at(0).raw()+out.at(1).raw()+"5820"+"12".repeat(32));
+            }),
+            new Case("holder-inline-datum",PUB,"publicationShape/holder",e -> e.field(e.out(0),2,"8201d81843d87980")),
+            new Case("anchored-language",PUB,"publicationShape/holder",e -> e.v.withObject("/anchors/outputVerifier").put("language","PlutusScriptV2")),
+            new Case("holder-not-queried",PUB,"publicationPresence/holder",
+                    e -> e.v.withObject("/node/scriptsAt").remove(e.v.at("/anchors/outputVerifier/address").asText())),
+            new Case("unknown-publication-kind",PUB,"publicationShape/kind",e -> e.v.withObject("/request").put("prerequisite","other:"+e.hash())),
+            new Case("foreign-script-publication","Dex-publish-1","publicationShape/kind",e -> {
+                // A reference script that is neither the contract's nor the shared verifier's, published as asked.
+                String script="01020304";
+                byte[] b=HEX.parseHex("03"+script);
+                String hash=Cbor.digest(224,b,0,b.length);
+                var holder=e.out(0);
+                long before=e.coin(0).integer().longValueExact();
+                e.field(holder,3,"d818"+bytes("8203"+bytes(script)));
+                var raw=e.out(0);
+                long min=e.v.at("/protocolParams/coins_per_utxo_size").asLong()*(160L+raw.end-raw.start);
+                e.swap(e.coin(0),uint(min));
+                e.coin(1,before-min);
+                e.v.withObject("/request").put("prerequisite","referenceScript:"+hash);
+                long fee=e.fee(), cap=e.feeCap()-1_000; // the smaller body has a smaller fee cap
+                if (fee>cap) { e.body(2,uint(cap)); e.coin(1,fee-e.fee()); }
+            }),
+            new Case("registration-without-withdraw",REG,"publicationShape/kind",e -> {
+                String policy=e.v.at("/anchors/policy").asText();
+                e.v.withObject("/request").put("prerequisite","stakeRegistration:"+policy);
+                e.v.withObject("/node/registrations").put(policy,false);
+                e.cert("82008201581c"+policy);
+            }),
+            new Case("verifier-of-own-script","Dex-publish-1","publicationShape/kind",e -> {
+                // The contract's own script published and registered as if it were a shared verifier.
+                String policy=e.v.at("/anchors/policy").asText();
+                e.v.withObject("/request").put("prerequisite","verifier:"+policy);
+                e.v.withObject("/node/registrations").put(policy,false);
+                e.v.withObject("/anchors/description/x-joust").withArray("purposes").addObject().put("purpose","withdraw");
+                e.cert("82008201581c"+policy);
+                e.coin(1,-e.v.at("/protocolParams/key_deposit").asLong());
+            }),
+            new Case("unsupported-contract-title",SPEND,"notVerifiable/classify",e -> e.v.withObject("/anchors/description/preamble").put("title","org.example.Other")),
+            new Case("unsupported-reads",DEX,"notVerifiable/classify",e -> e.method().withObject("/recipe").withArray("reads").add("other")),
+            new Case("unsupported-quorum-creation",BANK,"notVerifiable/classify",e -> e.method().withObject("/policies").putObject("quorum").put("threshold",2)),
+            new Case("action-burns-other-token","quorum-caller","mint/action",e -> {
+                // The target also holds another instance's token, which the method (it has no mint) burns.
+                String unit=e.v.at("/anchors/policy").asText()+"ff".repeat(32);
+                e.resolved(e.target()).withArray("amount").addObject().put("unit",unit).put("quantity",1);
+                e.body(9,"a1581c"+unit.substring(0,56)+"a15820"+unit.substring(56)+"20");
+            }),
+            new Case("burn-other-variant","owned-destroy","redeemer/mintRedeemer",
+                    e -> e.swap(e.rvalue(1).at(0),e.recordedRedeemer("owned-init",1))),
+            new Case("by-action-other-variant",DEX,"redeemer/mintRedeemer",e -> e.swap(e.rvalue(1).at(0),e.recordedRedeemer("Dex-init",1))),
+            new Case("missing-spend-redeemer",SPEND,"redeemer/count",e -> e.dropRedeemer(0)),
+            new Case("missing-reward-redeemer",DEX,"redeemer/count",e -> { e.sendToPayer(); e.dropRedeemer(3); }),
+            new Case("payment-diverted",OWNED,"netOutflow/third",e -> {
+                // The caller's 3 ADA leaves the continuation for a stranger; the wallet's own outflow is unchanged.
+                long paid=e.v.at("/request/call/pay/lovelace").asLong();
+                e.coin(0,-paid);
+                e.outputs(List.of(e.out(0).raw(),e.out(1).raw(),"82581d60"+OTHER+uint(paid)));
+            }),
+            new Case("payment-diverted-lovelace",DEX,"netOutflow/third",e -> {
+                e.coin(0,-2_000_000);
+                e.outputs(List.of(e.out(0).raw(),e.out(1).raw(),e.out(2).raw(),"82581d60"+OTHER+uint(2_000_000)));
+            }),
+            new Case("payout-to-third-party","owned-destroy",null,e -> e.address(0,"60"+OTHER)),
+            new Case("send-to-third-party",DEX,null,e -> {
+                // The send pays another party exactly what the script releases (1.5 ADA and the minted LP).
+                lovelaceSend(e);
+                long send=e.coin(1).integer().longValueExact();
+                e.coin(1,(RELEASE-PAID_IN)-send);
+                e.coin(2,send-(RELEASE-PAID_IN));
+                e.address(1,"60"+OTHER);
+            }),
+
             // ---- SC2: unreadable or ambiguous bodies. The hash is the received body slice's.
             new Case("malformed-duplicate-body-key",SPEND,"malformed",e -> {
                 var body=e.ledger.body;
@@ -417,6 +564,10 @@ public final class MutationVectors {
             new Case("malformed-indefinite-bytes",SPEND,"malformed",e -> {
                 var id=e.ledger.b.get(0).tagged(258).items.getFirst().at(0);
                 e.raw(e.splice(id,"5f"+id.raw()+"ff"));
+            }),
+            new Case("malformed-duplicate-withdrawal",DEX,"malformed",e -> {
+                var ws=e.ledger.b.get(5);
+                e.raw(e.splice(ws,head(5,ws.items.size()/2+1)+ws.raw().substring(2)+ws.items.get(0).raw()+ws.items.get(1).raw()));
             }),
             new Case("malformed-witness-key",SPEND,"malformed",e -> {
                 var w=e.ledger.tx.at(1);
@@ -488,6 +639,18 @@ public final class MutationVectors {
         void addRedeemer(int tag) {
             var rs=redeemers();
             swap(rs,head(5,rs.items.size()/2+1)+rs.raw().substring(2)+"82"+uint(tag)+"00"+rs.items.get(1).raw());
+        }
+        ObjectNode method() {
+            for (var group : List.of("creations","actions"))
+                for (var m : v.at("/anchors/description/x-joust").path(group))
+                    if (m.required("name").equals(v.at("/request/call/method")) && m.required("kind").equals(v.at("/request/call/kind"))) return (ObjectNode)m;
+            throw new IllegalArgumentException("no anchored method");
+        }
+        /** Another recording's redeemer data for a purpose tag: a well-formed value of the same schema. */
+        String recordedRedeemer(String name,int tag) {
+            var other=recorded(name).tx.at(1).fields().get(5);
+            for (int i=0;i<other.items.size();i+=2) if (other.items.get(i).at(0).uint()==tag) return other.items.get(i+1).at(0).raw();
+            throw new IllegalArgumentException("no redeemer");
         }
         void sendToPayer() { address(1,HEX.formatHex(ReferenceChecker.addressBytes(payer()))); }
         /** Replace the output verifier's claims, keeping its (empty) deposits. */

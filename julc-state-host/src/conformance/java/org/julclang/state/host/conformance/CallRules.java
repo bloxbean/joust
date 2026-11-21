@@ -62,8 +62,9 @@ final class CallRules {
                 c.test("pointer/mint",index==0);
                 try {
                     var decoded = codec.decode(schema("mint"),data(r.required("data").asText()));
-                    c.test("redeemer/mintRedeemer", c.destroy ? "BurnInstance".equals(decoded.path("$variant").textValue()) && decoded.size()==1 :
-                            "ByAction".equals(decoded.path("$variant").textValue()) && Objects.equals(c.spent,ref(decoded.required("by"))));
+                    c.test("redeemer/mintRedeemer", c.destroy ? c.holds("redeemer/mintRedeemer#burn","BurnInstance".equals(decoded.path("$variant").textValue()) && decoded.size()==1) :
+                            c.holds("redeemer/mintRedeemer#byAction","ByAction".equals(decoded.path("$variant").textValue())) &&
+                                    c.holds("redeemer/mintRedeemer#byTarget",!decoded.has("by") || Objects.equals(c.spent,ref(decoded.required("by")))));
                 } catch (RuntimeException e) { c.test("redeemer/mintRedeemer",false); }
             } else if (tag.equals("reward") && meta.at("/returns/sends").asBoolean() && c.ledger.b.containsKey(5)) {
                 // The single withdrawal is the zero one withdrawal/account pins to the output verifier.
@@ -71,12 +72,13 @@ final class CallRules {
                 outputClaims(r.required("data").asText());
             } else c.test("redeemer/purpose",false);
         }
-        c.test("redeemer/count", counts.getOrDefault("spend",0)==(c.creation ? 0 : 1) &&
-                counts.getOrDefault("mint",0)==(c.creation || c.destroy || byAction ? 1 : 0) &&
-                counts.getOrDefault("reward",0)==(c.ledger.b.containsKey(5) && meta.at("/returns/sends").asBoolean() ? 1 : 0));
-        if (c.creation || c.destroy) c.test("mint/instance",c.token != null && c.minted.size()==1 &&
-                (c.creation ? ONE : ONE.negate()).equals(c.minted.get(c.token)));
-        else c.test("mint/action",c.minted.isEmpty() || byAction && c.minted.keySet().stream().allMatch(u -> u.startsWith(c.policy) && !u.equals(c.token)));
+        c.test("redeemer/count", c.holds("redeemer/count#spend",counts.getOrDefault("spend",0)==(c.creation ? 0 : 1)) &&
+                c.holds("redeemer/count#mint",counts.getOrDefault("mint",0)==(c.creation || c.destroy || byAction ? 1 : 0)) &&
+                c.holds("redeemer/count#reward",counts.getOrDefault("reward",0)==(c.ledger.b.containsKey(5) && meta.at("/returns/sends").asBoolean() ? 1 : 0)));
+        if (c.creation || c.destroy) c.test("mint/instance",c.holds("mint/instance#token",c.token != null) && c.holds("mint/instance#single",c.minted.size()==1) &&
+                c.holds("mint/instance#quantity",(c.creation ? ONE : ONE.negate()).equals(c.minted.get(c.token))));
+        else c.test("mint/action",c.minted.isEmpty() || c.holds("mint/action#method",byAction) && c.minted.keySet().stream().allMatch(u ->
+                c.holds("mint/action#policy",u.startsWith(c.policy)) && c.holds("mint/action#notThread",!u.equals(c.token))));
         outputs();
     }
 
@@ -126,7 +128,8 @@ final class CallRules {
                     case "seed" -> {
                         var seed = decoded.required("seed");
                         int i = n(seed,"index").intValueExact();
-                        c.test("redeemer/seed",c.creation && c.walletRefs.contains(ref(seed)) && i>=0 && i<=65535);
+                        c.test("redeemer/seed",c.holds("redeemer/seed#creation",c.creation) && c.holds("redeemer/seed#walletInput",c.walletRefs.contains(ref(seed))) &&
+                                c.holds("redeemer/seed#index",i>=0 && i<=65535));
                         byte[] bytes = HEX.parseHex(seed.required("txId").asText()+String.format("%04x",i));
                         String id = (c.owned ? "4f" : "")+digest(c.owned ? 224 : 256,bytes,0,bytes.length);
                         c.token = c.policy+id;
@@ -192,12 +195,15 @@ final class CallRules {
             var amount = value(o.required("value"));
             String addr = o.required("address").asText();
             for (String unit : amount.keySet()) if (unit.startsWith(c.policy) && !unit.equals(c.token))
-                c.test("continuingOutput/otherToken",meta.at("/returns/mint").asBoolean() && c.minted.getOrDefault(unit,ZERO).signum()>0);
+                c.test("continuingOutput/otherToken",c.holds("continuingOutput/otherToken#mintMethod",meta.at("/returns/mint").asBoolean()) &&
+                        c.holds("continuingOutput/otherToken#minted",c.minted.getOrDefault(unit,ZERO).signum()>0));
             if (c.token != null && amount.containsKey(c.token))
-                c.test("continuingOutput/thread",!c.destroy && addr.equals(c.address) && ONE.equals(amount.get(c.token)));
+                c.test("continuingOutput/thread",c.holds("continuingOutput/thread#notDestroy",!c.destroy) && c.holds("continuingOutput/thread#address",addr.equals(c.address)) &&
+                        c.holds("continuingOutput/thread#single",ONE.equals(amount.get(c.token))));
             if (c.wallet(addr)) {
                 boolean claim = claims && claimed.contains(i);
-                c.test("walletOutput/script",!o.get("hasScript").booleanValue() && o.get("datumHash").isNull());
+                c.test("walletOutput/script",c.holds("walletOutput/script#script",!o.get("hasScript").booleanValue()) &&
+                        c.holds("walletOutput/script#datumHash",o.get("datumHash").isNull()));
                 if (!o.get("datum").isNull()) {
                     boolean ok = false;
                     try {
@@ -213,7 +219,7 @@ final class CallRules {
                 // go elsewhere while the wallet's own change stands in for the send. No min-ADA slack: as the page
                 // verifier (fix/verify-wallet-sends), the third-party bound alone protects the wallet.
                 if (claim) add(sends,amount,1);
-                add(back,amount,1);
+                if (c.enabled("netOutflow/wallet#back")) add(back,amount,1);
             } else if (addr.equals(c.address) && c.token!=null && ONE.equals(amount.get(c.token))) {
                 continuations++;
                 add(continuation,amount,1);
@@ -224,22 +230,26 @@ final class CallRules {
                 } catch (RuntimeException e) { c.test("continuingOutput/datum",false); }
             } else {
                 c.test("walletOutput/foreignKey",!c.caller.equals(paymentKey(addr)));
-                add(third,amount,1);
+                if (c.enabled("netOutflow/third#receipts")) add(third,amount,1);
             }
         }
-        c.test("continuingOutput/thread",continuations==(c.destroy ? 0 : 1));
-        var net = new HashMap<>(c.walletIn);
+        c.test("continuingOutput/thread",c.holds("continuingOutput/thread#count",continuations==(c.destroy ? 0 : 1)));
+        // DC7: every accounting term is switchable, so the mutation test sees a client that drops one.
+        var net = c.enabled("netOutflow/wallet#walletIn") ? new HashMap<>(c.walletIn) : new HashMap<String,BigInteger>();
         add(net,back,-1);
         var created = continuation.getOrDefault("lovelace",ZERO);
-        if (c.creation) c.test("deposit/creation",created.compareTo(payment.add(n(c.x,"minAda")))<=0);
-        var allowed = new HashMap<>(offer);
-        allowed.put("lovelace",n(c.plan,"fee").add(c.creation ? created : payment));
+        if (c.creation) c.test("deposit/creation",created.compareTo((c.enabled("deposit/creation#payment") ? payment : ZERO)
+                .add(c.enabled("deposit/creation#minAda") ? n(c.x,"minAda") : ZERO))<=0);
+        var allowed = c.enabled("netOutflow/wallet#offer") ? new HashMap<>(offer) : new HashMap<String,BigInteger>();
+        allowed.put("lovelace",(c.enabled("netOutflow/wallet#fee") ? n(c.plan,"fee") : ZERO)
+                .add(c.creation ? (c.enabled("netOutflow/wallet#creation") ? created : ZERO) : (c.enabled("netOutflow/wallet#payment") ? payment : ZERO)));
         c.test("netOutflow/wallet",within(net,allowed));
-        var released = new HashMap<>(c.targetValue);
-        add(released,continuation,-1);
-        add(released,c.minted,1);
-        add(released,tagged,-1);
-        add(released,sends,-1);
+        // What the script releases: the target's value, less the continuation, plus mint, less what it pays the wallet.
+        var released = c.enabled("netOutflow/third#target") ? new HashMap<>(c.targetValue) : new HashMap<String,BigInteger>();
+        if (c.enabled("netOutflow/third#continuation")) add(released,continuation,-1);
+        if (c.enabled("netOutflow/third#mint")) add(released,c.minted,1);
+        if (c.enabled("netOutflow/third#tagged")) add(released,tagged,-1);
+        add(released,sends,-1); // switched by netOutflow/claims
         c.test("netOutflow/third",within(third,released));
     }
     private static boolean within(Map<String,BigInteger> received,Map<String,BigInteger> allowed) {

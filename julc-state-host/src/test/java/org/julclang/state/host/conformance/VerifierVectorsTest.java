@@ -91,6 +91,59 @@ class VerifierVectorsTest {
     }
 
     /**
+     * DC7: the conjuncts of the checks ({@code <site>#<part>}, ReferenceChecker.holds) and the accounting terms of the
+     * outflow, balance, collateral and fee rules (guarded by ReferenceChecker.enabled), read from the sources.
+     */
+    static Set<String> parts() throws Exception {
+        var parts = new TreeSet<String>();
+        for (String file : List.of("ReferenceChecker.java","CallRules.java")) {
+            String source = Files.readString(SOURCES.resolve(file));
+            Pattern.compile("\"([a-z][A-Za-z]*/[a-z][A-Za-z]*#[a-z][A-Za-z]*)\"").matcher(source).results().forEach(r -> parts.add(r.group(1)));
+            // clean(site, output) names three parts of its site.
+            Pattern.compile("clean\\(\"([a-z][A-Za-z]*/[a-z][A-Za-z]*)\"").matcher(source).results()
+                    .forEach(r -> List.of("datum","datumHash","script").forEach(k -> parts.add(r.group(1)+"#"+k)));
+        }
+        return parts;
+    }
+
+    /**
+     * Mutants no body can tell apart from the reference: dropping the part changes no verdict, because another check
+     * refuses every body it would refuse. Each says why. A listed part that some vector starts to decide fails the test.
+     */
+    static final Map<String,String> EQUIVALENT = Map.ofEntries(
+            Map.entry("balance/conserved#withdrawals", "withdrawal/amount admits only zero withdrawals, so the term is always 0"),
+            Map.entry("continuingOutput/otherToken#mintMethod", "a contract token beyond the target's needs a mint, which mint/action#method refuses in a method without mint"),
+            Map.entry("continuingOutput/thread#address", "the one thread token away from the contract address leaves no continuation (#count)"),
+            Map.entry("continuingOutput/thread#count", "with the token in another output #address refuses; with none, the token was burnt (mint/action, mint/instance)"),
+            Map.entry("continuingOutput/thread#notDestroy", "a destroy burns the token (mint/instance), so no output holds it"),
+            Map.entry("continuingOutput/thread#single", "one thread token exists: mint/instance#single and the balance allow no second"),
+            Map.entry("lowerBound/context#present", "a missing bound reads as 0, which #notBefore refuses"),
+            Map.entry("upperBound/window#present", "a missing bound reads as 0, which #afterNow refuses"),
+            Map.entry("mint/action#notThread", "minting the thread token again gives the continuation two (continuingOutput/thread)"),
+            Map.entry("mint/instance#quantity", "a creation minting two thread tokens leaves no single-token continuation; a destroy burning two cannot balance"),
+            Map.entry("mint/instance#token", "the token derives from the seed; without a decoded seed the redeemer checks refuse"),
+            Map.entry("notVerifiable/classify#verifierAnchor", "without the anchored verifier hash the withdrawal and its script cannot match (withdrawal/account, referenceInput/scripts)"),
+            Map.entry("publicationShape/change#script", "an output with a script reference is checked as a holder (publicationShape/holder, #count, holderLovelace)"),
+            Map.entry("redeemer/seed#creation", "only creation constructors carry a seed in a description the kit anchors"),
+            Map.entry("redeemer/seed#index", "#walletInput requires a spent wallet input, whose index is below 65,536 in any transaction"),
+            Map.entry("withdrawal/allowed#call", "a publication has no method, so no sends (#sends)"),
+            Map.entry("withdrawal/allowed#single", "a second withdrawal needs another reward account, which withdrawal/account refuses"));
+
+    @TestFactory List<DynamicTest> everyPartDecidesSomeVector() throws Exception {
+        var parts = parts();
+        assertTrue(parts.containsAll(EQUIVALENT.keySet()),"stale EQUIVALENT entry");
+        var vectors = new ArrayList<JsonNode>();
+        try (var files = Files.list(DIR)) { for (var f : files.sorted().toList()) vectors.add(JSON.readTree(f.toFile())); }
+        var verdicts = vectors.stream().map(v -> ReferenceChecker.check(v).isEmpty()).toList();
+        return parts.stream().map(part -> DynamicTest.dynamicTest(part,() -> {
+            long flipped = java.util.stream.IntStream.range(0,vectors.size())
+                    .filter(i -> ReferenceChecker.check(vectors.get(i),Set.of(part)).isEmpty()!=verdicts.get(i)).count();
+            if (EQUIVALENT.containsKey(part)) assertEquals(0,flipped,part+" decides vectors now: remove it from EQUIVALENT");
+            else assertTrue(flipped>0,"no vector depends on "+part);
+        })).toList();
+    }
+
+    /**
      * DC5: the generator recommits witness sets with the checker's own scriptIntegrity. CCL's ScriptDataHashGenerator,
      * which re-serializes the decoded redeemers and datums, must agree for every vector CCL can read.
      */
@@ -117,7 +170,7 @@ class VerifierVectorsTest {
         }
         // CCL refuses negative integers where the ledger has unsigned ones, and the malformed bodies.
         assertEquals(Set.of("reject-malformed-duplicate-body-key.json","reject-malformed-trailing-bytes.json",
-                "reject-negative-budget.json","reject-negative-fee.json"),unreadable);
+                "reject-negative-budget.json","reject-negative-collateral-total.json","reject-negative-fee.json","reject-negative-steps.json"),unreadable);
         assertTrue(agreed > 100,"agreed "+agreed);
     }
 

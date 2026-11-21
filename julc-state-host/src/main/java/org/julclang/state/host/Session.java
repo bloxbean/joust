@@ -294,6 +294,11 @@ final class Session implements Transport.Handler {
         var amount = pay.has("lovelace") ? (BigInteger) JsonValues.fromJson(pay.get("lovelace"), BigInteger.class, "pay.lovelace") : BigInteger.ZERO;
         var handle = c.adapter().handle(runtime);
         new Prerequisites(c, handle, reads, reservations, true).requireReady();
+        // A field the call kind does not take is refused, not ignored (final review F-B4).
+        if (kind.equals("init") && !request.path("instance").isMissingNode() && !request.get("instance").isNull())
+            throw bad("init takes no instance");
+        if (!kind.startsWith("owned") && !request.path("object").isMissingNode() && !request.get("object").isNull())
+            throw bad(kind + " takes no object");
         String instance = kind.equals("init") ? null : instance(request);
         String object = kind.startsWith("owned") ? request.path("object").textValue() : null;
         String spent = null;
