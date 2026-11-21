@@ -744,6 +744,18 @@ public final class MutationVectors {
             String root = e.mapClaim().at(6).bytes();
             e.swap(datum,datum.raw().replace(root,"ab".repeat(32)));
         }));
+        // Owned-object maps (Armory vaults, #160 Q1): the claim's owner is the creation's seed or the object input.
+        cases.add(new Case("owned-map-owner-instance","armory-0002-openVault","mapClaims/claim", e -> {
+            String unit = e.v.at("/anchors/policy").asText()+e.call("instance");
+            String ref = null;
+            for (var r : e.ledger.plan.required("referenceInputs")) {
+                var u = e.resolved(r.asText());
+                for (var a : u.required("amount")) if (unit.equals(a.required("unit").asText())) ref = r.asText();
+            }
+            e.swap(e.mapClaim().at(1), e.outRef(Objects.requireNonNull(ref, "no instance reference input")));
+        }));
+        cases.add(new Case("owned-map-owner-wallet","armory-0004-stash","mapClaims/claim",
+                e -> e.swap(e.mapClaim().at(1), e.outRef(e.walletInput()))));
         cases.add(new Case("map-no-claims",token,"mapClaims/count", e -> e.swap(e.rewardData(0).tagged(121).at(0),"80")));
         cases.add(new Case("map-claims-decode",token,"mapClaims/decode", e -> e.swap(e.rewardData(0),"d87980")));
         cases.add(new Case("map-creation-root","token-001-create","mapClaims/creationRoot", e -> {

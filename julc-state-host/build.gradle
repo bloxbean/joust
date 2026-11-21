@@ -38,6 +38,7 @@ dependencies {
     testImplementation project(':examples:escrow')
     testImplementation project(':examples:token')
     testImplementation project(':examples:locker')
+    testImplementation project(':examples:guild')
     testImplementation project(':examples:bank')
     testImplementation project(':examples:treasury')
     testImplementation project(':examples:devkit')

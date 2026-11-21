@@ -23,7 +23,7 @@ final class ClientVectors {
             "HostCouncil-init", "HostCouncil-publish-1", "destroy-events", "owned-action", "owned-destroy",
             "owned-init", "quorum-caller", "quorum-two", "owned-quorum-caller", "owned-quorum-two", "owned-events-caller",
             "owned-destroy-events", "dapp-0003", "dapp-0034", "permuted",
-            "locker-003-unlock", "token-m0-mint", "token-001-create", "token-002-mint", "token-003-mint", "token-004-transfer",
+            "locker-003-unlock", "guild-003-recruit", "guild-004-levelUp", "guild-016-levelUp", "guild-017-retire", "armory-0002-openVault", "armory-0003-stash", "armory-0004-stash", "armory-0005-take", "armory-0009-closeVault", "token-m0-mint", "token-001-create", "token-002-mint", "token-003-mint", "token-004-transfer",
             "registry-001-init", "registry-005-upgrade", "registry-017-claim", "registry-019-release", "registry-021-retire"));
         for (String name : HostVectorsTest.REGISTRY) if (!name.equals("Registry-cooldown") && Files.exists(HOST.resolve(name+".json"))) names.add(name);
         for (String name : HostVectorsTest.TOKEN) if (Files.exists(HOST.resolve(name+".json"))) names.add(name);
@@ -32,6 +32,17 @@ final class ClientVectors {
 
     static ObjectNode recording(String name) throws Exception {
         if (name.startsWith("locker-")) return MapRecording.record("locker", name.substring(7));
+        if (name.startsWith("guild-")) return MapRecording.record("guild", name.substring(6));
+        if (name.equals("armory-0002-openVault")) return MapRecording.m0Armory("0002-Armory.openVault", "ownedInit", "openVault", null, obj());
+        if (name.equals("armory-0003-stash")) return MapRecording.m0Armory("0003-Armory.stash", "ownedAction", "stash",
+                "4f758a26a38373a933e85945755e99bc91eb14f7693c63d4b4b57d58f1", obj().put("item", "73776f7264").put("count", "3"));
+        // A vault that already holds items: the host rebuilds its map from the object unit's history.
+        if (name.equals("armory-0004-stash")) return MapRecording.m0Armory("0004-Armory.stash", "ownedAction", "stash",
+                "4f758a26a38373a933e85945755e99bc91eb14f7693c63d4b4b57d58f1", obj().put("item", "67656d").put("count", "5"));
+        if (name.equals("armory-0005-take")) return MapRecording.m0Armory("0005-Armory.take", "ownedAction", "take",
+                "4f758a26a38373a933e85945755e99bc91eb14f7693c63d4b4b57d58f1", obj().put("item", "73776f7264").put("count", "1"));
+        if (name.equals("armory-0009-closeVault")) return MapRecording.m0Armory("0009-Armory.closeVault", "ownedDestroy", "closeVault",
+                "4f0a81624693bb86c3f2641262ae53cef5fc56483dc44eb8a0f0aedd50", obj());
         if (name.equals("token-m0-mint")) return MapRecording.firstM0Mint();
         if (name.startsWith("token-")) return MapRecording.record("token", name.substring(6));
         if (name.startsWith("registry-")) return RegistryRecording.record(name.substring("registry-".length()));
@@ -126,8 +137,8 @@ final class ClientVectors {
         }));
         assertFalse(reads.hasNext());
         assertEquals(v.at("/expected/cbor"), result.at("/prepared/cbor"));
-        if (call.has("operation") || name.startsWith("locker-") || name.startsWith("token-")) vector.set("clock", v.required("clock"));
-        if (name.startsWith("registry-") || name.startsWith("locker-") || name.startsWith("token-") || name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
+        if (call.has("operation") || name.startsWith("locker-") || name.startsWith("guild-") || name.startsWith("armory-") || name.startsWith("token-")) vector.set("clock", v.required("clock"));
+        if (name.startsWith("registry-") || name.startsWith("locker-") || name.startsWith("guild-") || name.startsWith("armory-") || name.startsWith("token-") || name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
         vector.set("result", result);
         vector.putArray("violations");
         return vector;

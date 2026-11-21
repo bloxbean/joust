@@ -24,8 +24,8 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     root = install();
     const src = join(root, 'contracts');
     mkdirSync(src);
-    for (const name of ['Counter', 'Bank', 'Dex', 'HostCouncil', 'HostClub', 'Registry', 'Token', 'Locker', 'Treasury', 'Pool']) {
-      const dir = name.toLowerCase();
+    for (const name of ['Counter', 'Bank', 'Dex', 'HostCouncil', 'HostClub', 'Registry', 'Token', 'Locker', 'Guild', 'Armory', 'Treasury', 'Pool']) {
+      const dir = name === 'Armory' ? 'guild' : name.toLowerCase();
       const folder = name.startsWith('Host') ? 'julc-state-host/src/test/java/org/julclang/state/host/fixture'
         : 'examples/' + dir + '/src/main/java/org/julclang/state/examples/' + dir;
       cpSync(join(repo, folder, name + '.java'), join(src, name + '.java'));
@@ -291,7 +291,7 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       }
     } finally { await peer.close(); }
   });
-  for (const name of readdirSync(join(path, 'verifier')).filter(f => (f.startsWith('registry-') || f.startsWith('token-') || f.startsWith('locker-'))).map(f => f.slice(0,-5))) {
+  for (const name of readdirSync(join(path, 'verifier')).filter(f => (f.startsWith('registry-') || f.startsWith('token-') || f.startsWith('locker-') || f.startsWith('guild-') || f.startsWith('armory-'))).map(f => f.slice(0,-5))) {
     it('checks the live ' + name + ' result and isolated mutations', async () => {
       const v = fixture('verifier/' + name);
       start(contracts.filter(c => JSON.parse(c.description).preamble.title === v.request.call.contract));
