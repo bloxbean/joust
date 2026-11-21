@@ -1834,5 +1834,6 @@
     }
   },
   "violations" : [ "publicationPresence" ],
-  "mutation" : "already-registered"
+  "mutation" : "already-registered",
+  "check" : "publicationPresence/registration"
 }

@@ -13,7 +13,12 @@ import static org.julclang.state.host.conformance.Ledger.JSON;
 public final class ReferenceChecker {
     public static List<String> check(JsonNode vector) { return check(vector, Set.of()); }
 
-    // Package-private test seam for proving that a negative vector isolates its named rule.
+    /**
+     * Package-private test seam. Each check has a stable site id {@code <code>/<check>} (for example
+     * {@code publicationShape/change}); {@code disabled} names codes (every site of the code) or single sites. A site id
+     * passed to {@link #enabled} instead names a rule that changes the accounting rather than refusing by itself. The
+     * public checker always runs every check.
+     */
     static List<String> check(JsonNode vector, Set<String> disabled) {
         try {
             var c = new ReferenceChecker(vector, disabled);
@@ -73,30 +78,41 @@ public final class ReferenceChecker {
         minted = value(plan.required("mint"));
     }
 
-    void test(String code, boolean ok) {
-        if (!disabled.contains(code) && !ok) problems.add(code);
+    void test(String site, boolean ok) {
+        if (!ok && enabled(site)) problems.add(site.substring(0, site.indexOf('/')));
+    }
+    boolean enabled(String site) {
+        int slash = site.indexOf('/');
+        if (slash <= 0) throw new IllegalStateException("site id without a check name");
+        return !disabled.contains(site) && !disabled.contains(site.substring(0, slash));
     }
     private void verify() {
-        test("bodyHash", ledger.body.digest(256).equals(prepared.required("txHash").textValue()));
-        test("planMismatch", equal(plan, prepared.required("plan")) &&
-                equal(plan.get("validFrom"),prepared.required("validFrom")) && equal(plan.get("validTo"),prepared.required("validTo")));
-        test("network", network >= 0 && network <= 1 && network(payer)==network &&
-                (plan.get("networkId").isNull() || valueOf(network).equals(plan.get("networkId").bigIntegerValue())));
-        test("scriptIntegrity",Objects.equals(ledger.scriptIntegrity(pp),plan.get("scriptDataHash").textValue()));
-        test("isValid",plan.get("isValid").booleanValue());
-        test("auxiliaryData", !plan.get("auxiliaryData").booleanValue() && plan.get("auxiliaryDataHash").isNull());
-        test("governance", Collections.disjoint(ledger.b.keySet(),Set.of(19,20,21,22)));
+        test("bodyHash/digest", ledger.body.digest(256).equals(prepared.required("txHash").textValue()));
+        test("planMismatch/plan", equal(plan, prepared.required("plan")));
+        test("planMismatch/validFrom", equal(plan.get("validFrom"),prepared.required("validFrom")));
+        test("planMismatch/validTo", equal(plan.get("validTo"),prepared.required("validTo")));
+        test("network/client", network >= 0 && network <= 1 && network(payer)==network);
+        test("network/body", plan.get("networkId").isNull() || valueOf(network).equals(plan.get("networkId").bigIntegerValue()));
+        test("scriptIntegrity/hash",Objects.equals(ledger.scriptIntegrity(pp),plan.get("scriptDataHash").textValue()));
+        test("isValid/flag",plan.get("isValid").booleanValue());
+        test("auxiliaryData/present", !plan.get("auxiliaryData").booleanValue() && plan.get("auxiliaryDataHash").isNull());
+        test("governance/votes", !ledger.b.containsKey(19));
+        test("governance/proposals", !ledger.b.containsKey(20));
+        test("governance/treasury", !ledger.b.containsKey(21));
+        test("governance/donation", !ledger.b.containsKey(22));
         if (!classify()) {
-            test("notVerifiable", false);
-            if (!disabled.contains("notVerifiable") || meta==null) return;
+            test("notVerifiable/classify", false);
+            if (enabled("notVerifiable/classify") || meta==null) return;
         }
         if (!creation && !publish) token = policy + call.required(owned ? "object" : "instance").textValue();
         var resolved = v.required("resolved");
-        for (String field : List.of("inputs","referenceInputs","collateral")) {
+        for (var pair : List.of(List.of("inputs","unresolvedInput/spending"),List.of("referenceInputs","unresolvedInput/reference"),
+                List.of("collateral","unresolvedInput/collateral"))) {
+            String field = pair.get(0), site = pair.get(1);
             for (String ref : strings(plan.required(field))) {
                 var u = resolved.path(ref);
                 if (!u.isObject() || !ref.equals(u.path("tx_hash").asText()+"#"+u.path("output_index").asText())) {
-                    test("unresolvedInput",false);
+                    test(site,false);
                     if (!field.equals("referenceInputs")) return; // No independently resolved value to balance.
                 }
             }
@@ -110,13 +126,13 @@ public final class ReferenceChecker {
         var balance = new HashMap<>(consumed);
         add(balance,minted,1);
         for (var o : plan.required("outputs")) {
-            test("network",network(o.required("address").asText()) == network);
+            test("network/output",network(o.required("address").asText()) == network);
             var amount = value(o.required("value"));
-            test("balance",amount.values().stream().allMatch(n -> n.signum() >= 0));
+            test("balance/nonNegative",amount.values().stream().allMatch(n -> n.signum() >= 0));
             add(balance,amount,-1);
         }
         balance.merge("lovelace",n(plan,"fee").add(deposit).negate(),BigInteger::add);
-        test("balance",zero(balance));
+        test("balance/conserved",zero(balance));
     }
 
     private boolean classify() {
@@ -152,16 +168,16 @@ public final class ReferenceChecker {
                 spent = ref;
                 target = u;
                 targetValue.putAll(amount);
-            } else test("scriptInput",false);
+            } else test("scriptInput/foreign",false);
         }
-        if (!publish && !creation) test("scriptInput",spent != null);
+        if (!publish && !creation) test("scriptInput/target",spent != null);
         var scripts = new HashSet<String>();
         var inline = ledger.tx.at(1).fields().get(7);
         if (inline != null) for (var script : inline.set()) {
             byte[] bytes = HEX.parseHex("03"+script.bytes());
             scripts.add(digest(224,bytes,0,bytes.length));
         }
-        test("referenceInput",scripts.stream().allMatch(h -> h.equals(policy) || h.equals(anchors.at("/outputVerifier/hash").textValue())));
+        test("referenceInput/witnessScript",scripts.stream().allMatch(h -> h.equals(policy) || h.equals(anchors.at("/outputVerifier/hash").textValue())));
         boolean resolvedAll = true;
         for (String ref : strings(plan.required("referenceInputs"))) {
             var u = resolved.path(ref);
@@ -173,10 +189,10 @@ public final class ReferenceChecker {
             boolean shared = addr.equals(verifier.path("address").textValue()) && Objects.equals(hash,verifier.path("hash").textValue()) && hash != null;
             boolean instance = address.equals(addr) && call.hasNonNull("instance") &&
                     ONE.equals(utxoValue(u).get(policy + call.get("instance").asText()));
-            test("referenceInput", !publish && (holder || shared || instance));
+            test("referenceInput/allowed", !publish && (holder || shared || instance));
             if (holder || shared) scripts.add(hash);
         }
-        if (!publish && resolvedAll) test("referenceInput",scripts.contains(policy) &&
+        if (!publish && resolvedAll) test("referenceInput/scripts",scripts.contains(policy) &&
                 (!ledger.b.containsKey(5) || scripts.contains(anchors.at("/outputVerifier/hash").asText())));
     }
 
@@ -184,12 +200,12 @@ public final class ReferenceChecker {
         var upper = plan.required("validTo");
         var lower = plan.required("validFrom");
         BigInteger now = n(req,"now"), ttl = n(req,"ttlSlots");
-        test("upperBound",upper.isIntegralNumber() && upper.bigIntegerValue().compareTo(now)>0 &&
+        test("upperBound/window",upper.isIntegralNumber() && upper.bigIntegerValue().compareTo(now)>0 &&
                 upper.bigIntegerValue().compareTo(now.add(ttl))<=0 &&
                 (lower.isNull() || upper.bigIntegerValue().compareTo(lower.bigIntegerValue())>0));
         if (!publish && (meta.path("ctx").asBoolean() || !meta.at("/policies/validBefore").isEmpty() ||
                 !meta.at("/policies/validAfter").isEmpty()))
-            test("lowerBound",lower.isIntegralNumber() && lower.bigIntegerValue().compareTo(now)>=0);
+            test("lowerBound/context",lower.isIntegralNumber() && lower.bigIntegerValue().compareTo(now)>=0);
 
         var required = strings(plan.required("requiredSigners"));
         var named = new HashSet<>(strings(call.path("cosigners")));
@@ -197,27 +213,32 @@ public final class ReferenceChecker {
         allowed.add(caller);
         boolean quorum = !publish && meta.path("policies").hasNonNull("quorum");
         boolean callerRequired = !publish && (quorum || meta.path("ctx").asBoolean() || !meta.at("/policies/signedBy").isEmpty());
-        test("signer", allowed.containsAll(required) && required.containsAll(named) &&
-                (quorum || named.isEmpty()) && (!callerRequired || required.contains(caller)) &&
-                required.size()==new HashSet<>(required).size() && required.stream().allMatch(k -> k.matches("[0-9a-f]{56}")));
+        test("signer/allowed", allowed.containsAll(required));
+        test("signer/named", required.containsAll(named));
+        test("signer/cosigners", quorum || named.isEmpty());
+        test("signer/caller", !callerRequired || required.contains(caller));
+        test("signer/form", required.size()==new HashSet<>(required).size() && required.stream().allMatch(k -> k.matches("[0-9a-f]{56}")));
         var witnesses = new HashSet<>(required);
         if (!walletRefs.isEmpty() || !plan.required("collateral").isEmpty()) witnesses.add(caller);
         var claims = strings(prepared.required("signers"));
-        test("planMismatch",claims.size()==witnesses.size() && witnesses.containsAll(claims) && new HashSet<>(claims).equals(witnesses));
+        test("planMismatch/signers",claims.size()==witnesses.size() && witnesses.containsAll(claims) && new HashSet<>(claims).equals(witnesses));
 
         BigInteger mem = ZERO, steps = ZERO;
         for (var r : plan.required("redeemers")) {
             mem = mem.add(n(r,"mem"));
             steps = steps.add(n(r,"steps"));
-            test("budget", n(r,"mem").signum()>=0 && n(r,"steps").signum()>=0);
+            test("budget/units", n(r,"mem").signum()>=0 && n(r,"steps").signum()>=0);
         }
-        test("budget",mem.compareTo(n(pp,"max_tx_ex_mem"))<=0 && steps.compareTo(n(pp,"max_tx_ex_steps"))<=0);
+        test("budget/total",mem.compareTo(n(pp,"max_tx_ex_mem"))<=0 && steps.compareTo(n(pp,"max_tx_ex_steps"))<=0);
         var exFee = new BigDecimal(mem).multiply(new BigDecimal(pp.required("price_mem").asText()))
                 .add(new BigDecimal(steps).multiply(new BigDecimal(pp.required("price_step").asText())))
                 .setScale(0,RoundingMode.CEILING).toBigIntegerExact();
+        // Normative (dev-host-1.md rule 3): floor(1.2 x (min_fee_a x (size + 200) + min_fee_b + ceil(execution fee))) + 500,000.
         var cap = n(pp,"min_fee_a").multiply(valueOf(ledger.length+200L)).add(n(pp,"min_fee_b")).add(exFee)
                 .multiply(valueOf(12)).divide(TEN).add(valueOf(500_000));
-        test("fee", n(plan,"fee").signum()>=0 && n(plan,"fee").compareTo(cap.min(n(v,"maxFee")))<=0);
+        test("fee/sign", n(plan,"fee").signum()>=0);
+        test("fee/derived", n(plan,"fee").compareTo(cap)<=0);
+        test("fee/max", n(plan,"fee").compareTo(n(v,"maxFee"))<=0);
         collateral();
     }
 
@@ -226,26 +247,27 @@ public final class ReferenceChecker {
         var ret = plan.required("collateralReturn");
         var total = plan.required("totalCollateral");
         if (refs.isEmpty() && ret.isNull() && total.isNull()) {
-            test("collateral",plan.required("redeemers").isEmpty());
+            test("collateral/none",plan.required("redeemers").isEmpty());
             return;
         }
-        test("collateral", !refs.isEmpty() && ret.isObject() && !total.isNull() && !publish);
+        test("collateral/present", !refs.isEmpty() && ret.isObject() && !total.isNull() && !publish);
         if (!ret.isObject() || total.isNull()) return;
         var amounts = new HashMap<String,BigInteger>();
         for (String ref : refs) {
             var u = v.required("resolved").required(ref);
-            test("collateral",wallet(u.required("address").asText()));
+            test("collateral/owner",wallet(u.required("address").asText()));
             add(amounts,utxoValue(u),1);
         }
         String addr = ret.required("address").asText();
-        test("network", network(addr)==network);
-        test("collateral",wallet(addr) && clean(ret) && n(plan,"totalCollateral").signum()>=0 &&
-                n(plan,"totalCollateral").compareTo(valueOf(5_000_000))<=0);
+        // wallet() also fixes the return's network: the exact payer address, or the caller's enterprise address on it.
+        test("collateral/returnAddress",wallet(addr));
+        test("collateral/returnClean",clean(ret));
+        test("collateral/limit",n(plan,"totalCollateral").signum()>=0 && n(plan,"totalCollateral").compareTo(valueOf(5_000_000))<=0);
         var returned = value(ret.required("value"));
-        test("collateral",returned.values().stream().allMatch(n -> n.signum()>=0));
+        test("collateral/returnNonNegative",returned.values().stream().allMatch(n -> n.signum()>=0));
         add(amounts,returned,-1);
         amounts.merge("lovelace",n(plan,"totalCollateral").negate(),BigInteger::add);
-        test("collateral",zero(amounts));
+        test("collateral/conserved",zero(amounts));
     }
 
     private String prerequisiteKind() { return req.required("prerequisite").asText().split(":",2)[0]; }
@@ -254,7 +276,7 @@ public final class ReferenceChecker {
     private void certificates() {
         var certs = ledger.set(4);
         boolean registration = publish && Set.of("stakeRegistration","verifier").contains(prerequisiteKind());
-        test("certificate",certs.size()==(registration ? 1 : 0));
+        test("certificate/count",certs.size()==(registration ? 1 : 0));
         for (var cert : certs) {
             int k = cert.at(0).uint();
             // Ledger value even for rejected certificates, including explicitly stated deposits and refunds.
@@ -268,9 +290,9 @@ public final class ReferenceChecker {
             deposit = deposit.add(money);
             if (!registration) continue;
             boolean pure = (k==0 && cert.array().size()==2 || k==7 && cert.array().size()==3);
-            test("certificate",pure && cert.at(1).array().size()==2 && cert.at(1).at(0).uint()==1 &&
+            test("certificate/shape",pure && cert.at(1).array().size()==2 && cert.at(1).at(0).uint()==1 &&
                     cert.at(1).at(1).bytes().equals(prerequisiteHash()));
-            if (k==7) test("deposit",money.equals(n(pp,"key_deposit")));
+            if (k==7) test("deposit/registration",money.equals(n(pp,"key_deposit")));
         }
     }
     private void withdrawals() {
@@ -278,10 +300,11 @@ public final class ReferenceChecker {
         if (ws == null) return;
         require(ws.major==5);
         String reward = "f" + Integer.toHexString(network) + anchors.at("/outputVerifier/hash").asText();
-        test("withdrawal",!publish && meta.at("/returns/sends").asBoolean() && ws.items.size()==2);
+        test("withdrawal/allowed",!publish && meta.at("/returns/sends").asBoolean() && ws.items.size()==2);
         for (int i=0;i<ws.items.size();i+=2) {
             var coin = ws.items.get(i+1).integer();
-            test("withdrawal",ws.items.get(i).bytes().equals(reward) && coin.signum()==0);
+            test("withdrawal/account",ws.items.get(i).bytes().equals(reward));
+            test("withdrawal/amount",coin.signum()==0);
             consumed.merge("lovelace",coin,BigInteger::add);
         }
     }
@@ -298,25 +321,25 @@ public final class ReferenceChecker {
         String language = (shared ? verifier : anchors).required("language").textValue();
         boolean holder = !kind.equals("stakeRegistration");
         boolean registration = !kind.equals("referenceScript");
-        test("publicationShape",Set.of("stakeRegistration","referenceScript","verifier").contains(kind) &&
+        test("publicationShape/kind",Set.of("stakeRegistration","referenceScript","verifier").contains(kind) &&
                 (shared ? sends : hash.equals(policy) && !kind.equals("verifier") && (!registration || withdraw)));
         String target = shared ? verifier.required("address").textValue() : address;
         var node = v.required("node");
         if (holder) {
             var present = node.path("scriptsAt").path(target);
-            test("publicationPresence",present.isArray() && !strings(present).contains(hash));
+            test("publicationPresence/holder",present.isArray() && !strings(present).contains(hash));
         }
         if (registration) {
             var status = node.path("registrations").path(hash);
-            test("publicationPresence",status.isBoolean() && !status.booleanValue() || !kind.equals("verifier") && status.isTextual() && status.asText().equals("unknown"));
+            test("publicationPresence/registration",status.isBoolean() && !status.booleanValue() || !kind.equals("verifier") && status.isTextual() && status.asText().equals("unknown"));
         }
-        test("mint",minted.isEmpty());
-        test("redeemer",plan.required("redeemers").isEmpty());
+        test("mint/publication",minted.isEmpty());
+        test("redeemer/publication",plan.required("redeemers").isEmpty());
         int count = 0;
         for (int i=0;i<ledger.outputs.size();i++) {
             var o = plan.required("outputs").get(i);
             if (!o.required("hasScript").asBoolean()) {
-                test("publicationShape",payer.equals(o.required("address").asText()) && clean(o));
+                test("publicationShape/change",payer.equals(o.required("address").asText()) && clean(o));
                 continue;
             }
             count++;
@@ -325,14 +348,14 @@ public final class ReferenceChecker {
             require(script.array().size()==2);
             String bytes = script.at(1).bytes();
             var prefixed = HEX.parseHex("03"+bytes);
-            test("publicationShape",target.equals(o.required("address").asText()) && "PlutusScriptV3".equals(language) && script.at(0).uint()==3 &&
+            test("publicationShape/holder",target.equals(o.required("address").asText()) && "PlutusScriptV3".equals(language) && script.at(0).uint()==3 &&
                     digest(224,prefixed,0,prefixed.length).equals(hash) && o.get("datum").isNull() && o.get("datumHash").isNull() &&
                     o.required("value").size()==1);
             var holderCoin = n(o.required("value"),"lovelace");
             var min = n(pp,"coins_per_utxo_size").multiply(valueOf(160L + raw.end - raw.start));
-            test("holderLovelace",holderCoin.compareTo(min)>=0 && holderCoin.compareTo(min.add(valueOf(1_000_000)))<=0);
+            test("holderLovelace/range",holderCoin.compareTo(min)>=0 && holderCoin.compareTo(min.add(valueOf(1_000_000)))<=0);
         }
-        test("publicationShape",count==(holder ? 1 : 0));
+        test("publicationShape/count",count==(holder ? 1 : 0));
         // With wallet-only inputs and payer-only change, conservation bounds loss by the fee, checked holder and deposit.
     }
 

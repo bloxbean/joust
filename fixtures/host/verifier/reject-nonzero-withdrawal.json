@@ -1952,5 +1952,6 @@
     }
   },
   "violations" : [ "withdrawal" ],
-  "mutation" : "nonzero-withdrawal"
+  "mutation" : "nonzero-withdrawal",
+  "check" : "withdrawal/amount"
 }

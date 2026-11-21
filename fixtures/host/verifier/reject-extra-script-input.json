@@ -613,7 +613,7 @@
         "quantity" : 2000000
       } ],
       "data_hash" : null,
-      "inline_datum" : "d8799f00581c7de2e6873b4c5c5fe1192331bdb678e247bcebcd240253195a7fee84ff",
+      "inline_datum" : null,
       "reference_script_hash" : null
     }
   },
@@ -1789,5 +1789,6 @@
     }
   },
   "violations" : [ "scriptInput" ],
-  "mutation" : "extra-script-input"
+  "mutation" : "extra-script-input",
+  "check" : "scriptInput/foreign"
 }

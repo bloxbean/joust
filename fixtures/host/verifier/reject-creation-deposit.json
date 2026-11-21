@@ -1915,5 +1915,6 @@
     }
   },
   "violations" : [ "deposit" ],
-  "mutation" : "creation-deposit"
+  "mutation" : "creation-deposit",
+  "check" : "deposit/creation"
 }

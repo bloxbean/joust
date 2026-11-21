@@ -77,7 +77,11 @@ final class Ledger {
         }
         sorted.values().forEach(redeemers::add);
     }
-    /** Bind the checked witness data to the body the wallet would sign. M1 scripts are Plutus V3. */
+    /**
+     * Bind the checked witness data to the body the wallet would sign. M1 scripts are Plutus V3, so the V3 language view
+     * is always hashed in. A body with datums but no redeemers (which M1 never builds) gets that view too and so fails
+     * closed rather than matching the ledger's datums-only form.
+     */
     String scriptIntegrity(JsonNode params) {
         var w = tx.at(1).fields();
         if (!w.containsKey(5) && !w.containsKey(4)) return null;

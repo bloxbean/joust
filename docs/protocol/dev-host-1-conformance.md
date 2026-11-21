@@ -31,15 +31,36 @@ java -XX:+DisplayVMOutputToStderr -Xlog:disable -Xlog:all=warning:stderr --enabl
   -cp "$lib/*" org.julclang.state.host.conformance.FakeHost --stdio sessions/bank.json
 ```
 
-Omitting the session path selects the bundled Bank session. Start another process with `sessions/keyed.json` for the keyed refusal. Each `frames` entry contains a single `client` or `host` message, in wire order. Feed the client its recorded chain answers when it receives each reverse request. The Bank recording includes a failed digest check, successful handshake, description and deployment, missing prerequisite, publication and settlement, prepare, view, listing, cancellation, late reverse answer, shutdown and exit.
+Omitting the session path selects the bundled Bank session. Start another process with `sessions/keyed.json` for the keyed refusal. Each `frames` entry contains a single `client` or `host` message, in wire order. Feed the client its recorded chain answers when it receives each reverse request. The Bank recording includes a failed digest check, successful handshake, description and deployment, missing prerequisite, publication and settlement, prepare, view, listing, cancellation, late reverse answer, shutdown and exit. After the last recorded frame the client may close its end or stay idle. A further frame within one second fails the run (exit 3).
+
+The recorded sessions prove transport behaviour only. Passing them says nothing about D13: a client that never inspects `prepared` passes both. Feed each `prepared` result you receive to your verifier and compare it with its vector: the session's publication result is `verifier/Bank-publish-1.json` and its prepare result is `verifier/Bank-init.json`.
 
 Object key order and JSON whitespace are immaterial. Array order, params, error or result envelopes, and reverse IDs must match. A client may choose a string or integer forward ID. The fake host correlates its response and the cancel notification with that actual ID. Snapshot paths and fingerprints in the transcripts are fixed test identities. Use the recorded values for this scripted launch. The recorder normalizes these two machine-dependent fields after capturing real frames. The live regression also allows installed engine version strings to vary across releases.
 
 Both peers use the host's D2 frame codec. The header limit is 1,024 bytes, the UTF-8 body limit is 4,194,304 bytes in either direction, and a partial frame has ten seconds from its first byte. A mismatch, partial EOF, invalid UTF-8 or malformed frame produces a single-line diagnostic on stderr and a nonzero exit. An idle peer may wait indefinitely between frames.
 
+### Host faults
+
+Each `sessions/violation-*.json` replays a prefix of the Bank recording and ends with one `violation` entry, a transport fault of the host's that the client must treat as a protocol violation (protocol 1 "Launch and framing"). The client must discard any in-flight result, report the violation and stop: close its end (or kill the process) without sending another frame. The fake host then exits 0. Another frame exits 3, and a client that is still connected after five seconds exits 4. Check the client's reported violation in your harness.
+
+| Session | Fault | Client state |
+| --- | --- | --- |
+| `violation-unsolicited-response` | A response with an ID the client never sent. | describe outstanding |
+| `violation-duplicate-response` | A second response to the already answered initialize. | describe outstanding |
+| `violation-stray-bytes` | Unframed bytes on stdout. | describe outstanding |
+| `violation-malformed-frame` | A well-framed body that is not JSON. | describe outstanding |
+| `violation-oversized-frame` | A header announcing a body above 4,194,304 bytes. | describe outstanding |
+| `violation-eof-during-call` | The host's output ends. | describe outstanding |
+| `violation-reverse-outside-call` | A `chain/read` after shutdown's response, where no call can run. The client may still send `exit` (the entry's `tolerate`), but must not answer the read. | after shutdown |
+
 ## Check a signing decision
 
-Read each `verifier/*.json` and compare the client's violation codes with `violations`. A positive has an empty list. Every negative names its base in `source` and its edit in `mutation`. All examples carry complete inputs. Only `result` comes from the host. Assemble the rest in the client:
+Read each `verifier/*.json` and run the client's verifier on it. The pass criterion is normative:
+
+- A vector with an empty `violations` list (a positive) must be accepted.
+- A vector with a nonempty list (a negative) must be refused, and the reasons the client reports must include its code (the single entry of `violations`), or the client's own check id that a documented mapping assigns to that code. Extra codes are allowed: a stricter client may refuse a negative for more than one reason.
+
+The recorded positives are named after their recording. A derived positive (`accept-*`) and every negative (`reject-*`) name their base in `source` and their edit in `mutation`. A negative also names, in `check`, the one D13 check that alone refuses it (`<code>/<check>`, below); with that check disabled the reference accepts it. `malformed` negatives have no `check`. All examples carry complete inputs. Only `result` comes from the host. Assemble the rest in the client:
 
 | Field | Origin and use |
 | --- | --- |
@@ -53,9 +74,15 @@ Read each `verifier/*.json` and compare the client's violation codes with `viola
 
 The checker slices the received CBOR, hashes the body and reads the ledger fields independently of the host builder. It binds the checked redeemers and datums to the body's script-data hash using the client's V3 cost model. Input order for the plan follows the wire. Spend pointers use transaction ID and numeric output index in ledger order. Compare `dapp-0003` and `dapp-0034` for the same method at pointers 0 and 1. The method constructor comes from the anchored description in both cases.
 
+Rule 1 says to hash the received body bytes and never a re-encoding: `accept-indefinite-body`, `accept-nonminimal-integers` and `accept-untagged-sets` carry valid non-canonical bodies (an indefinite-length body map and outputs array, non-minimal integer heads, sets as plain arrays) with their correct hash, and `reject-reencoded-hash` claims the hash of the canonical re-encoding for non-canonical bytes. A client that decodes and re-encodes the body fails all four. The `malformed` negatives are bodies two decoders can read differently: duplicate body keys, a duplicate input or redeemer, trailing bytes, an indefinite byte string and an unknown witness key. Refuse them rather than keep the first or last duplicate.
+
 The signing verdict authenticates the compared plan, bounds and signer set. The latter also includes the payment key needed to spend the payer's inputs, even on a body with no explicit required signers. The checker uses no host prediction in its decision. A UI using predicted state, events, sends or payouts to authorize a signature must derive its displayed effects independently. In particular, a tagged output reveals what was paid, including minimum-ADA padding. The pre-padding amount owed can require running the contract's transition.
 
-### Stable violation codes
+For sends the checker decodes the output verifier's OutputClaims redeemer and counts every claimed wallet output as the script's release, never the wallet's change (rule 6). `accept-send-releases-lovelace` restates Dex's addLiquidity so that its claimed send to the caller also carries 1.5 ADA the instance releases. `reject-send-claim-on-change` re-points the claim at the payer's change, which covers the send with the wallet's own LP tokens, and pays the release to a stranger. Without the claims rule (`netOutflow/claims`) the reference accepts it, and so would every validator. `reject-send-claim-wallet-funded` is the variant that keeps the claimed output but funds it from the wallet.
+
+The fee cap is normative (rule 3): ⌊1.2 × (min_fee_a × (S + 200) + min_fee_b + E)⌋ + 500,000, with S the received transaction's byte length and E the exact execution fee rounded up. `accept-fee-at-derived-cap` pays exactly the cap and `reject-fee-above-derived-cap` one lovelace more, both under a raised `maxFee`. `reject-fee-above-maximum` exceeds only `maxFee`.
+
+### Stable violation codes and check ids
 
 | Code | Failed check |
 | --- | --- |
@@ -77,6 +104,26 @@ The signing verdict authenticates the compared plan, bounds and signer set. The 
 | `balance`, `netOutflow` | Per-unit conservation or nonnegativity fails, or wallet loss/third-party receipts exceed the authorized amounts. |
 | `publicationShape`, `publicationPresence`, `holderLovelace` | Publication target, script, holder structure or payer change fails, independent absence evidence fails, or holder value is outside the inclusive minimum through minimum + 1,000,000. |
 
+Each check of the reference has a stable id `<code>/<check>`. The vectors' `check` fields use them, and a client may map its own check ids onto them.
+
+| Code | Checks |
+| --- | --- |
+| `bodyHash`, `scriptIntegrity`, `isValid`, `auxiliaryData` | `digest`; `hash`; `flag`; `present` |
+| `planMismatch` | `plan`, `validFrom`, `validTo`, `signers`, `creationId` |
+| `notVerifiable` | `classify` (method outside the M1 set), `field` (a constructor field the checker does not know) |
+| `network` | `client` (selected network and payer), `body`, `output` |
+| `unresolvedInput`, `scriptInput`, `referenceInput` | `spending`, `reference`, `collateral`; `foreign`, `target`, `datum`, `ownedInstance`; `allowed`, `scripts`, `witnessScript` |
+| `collateral` | `none`, `present`, `owner`, `returnAddress`, `returnClean`, `returnNonNegative`, `limit`, `conserved` |
+| `certificate`, `deposit`, `withdrawal`, `governance` | `count`, `shape`; `registration`, `creation`; `allowed`, `account`, `amount`; `votes`, `proposals`, `treasury`, `donation` |
+| `mint`, `signer` | `instance`, `action`, `publication`; `allowed`, `named`, `cosigners`, `caller`, `form`, `signedBy` |
+| `upperBound`, `lowerBound`, `budget`, `fee` | `window`; `context`; `units`, `total`; `sign`, `derived`, `max` |
+| `redeemer`, `pointer` | `decode`, `constructor`, `argument`, `args`, `ctxCaller`, `ctxReceived`, `assetsIn`, `instance`, `seed`, `mintRedeemer`, `purpose`, `count`, `publication`, `claimsShape`, `claimsOrder`, `claimsBy`; `method`, `mint`, `reward` |
+| `continuingOutput`, `walletOutput` | `thread`, `datum`, `script`, `instance`, `otherToken`; `script`, `tag`, `claimedTag`, `change`, `foreignKey` |
+| `balance`, `netOutflow` | `nonNegative`, `conserved`; `wallet`, `third`, `claims` (the claims accounting of rule 6) |
+| `publicationShape`, `publicationPresence`, `holderLovelace` | `kind`, `change`, `holder`, `count`; `holder`, `registration`; `range` |
+
+Every check but three has a vector of its own. `network/client`, `scriptInput/target` and `redeemer/publication` refuse only bodies that another check refuses too (the payer's change or collateral return on the wrong network; the spend pointer and redeemer count; the collateral a redeemer needs).
+
 ### Reproduce the recordings
 
 From the JOUST checkout run:
@@ -87,7 +134,9 @@ From the JOUST checkout run:
 (cd js/state-client && npm ci && npm test)
 ```
 
-`ClientVectors` drives the actual framed host with M1b's recorded answers and the two historical M0 prepares. It also reverses the payer set and resolves the inputs selected by that build. `MutationVectors` edits individual ledger items or client evidence. When isolating a rule it updates change, deposits, witness commitments, hash and matching host claims as appropriate. `VerifierVectorsTest` recreates every negative, checks the hash independently, and reruns the oracle with just the target rule disabled. The public checker always enables every rule. `RecordedSessionsTest` regenerates and compares both sessions. The Node wallet differential exercises the intersection of the two verifiers' rules, using the same fee ceiling and sent window.
+`ClientVectors` drives the actual framed host with M1b's recorded answers and the two historical M0 prepares. It also reverses the payer set and resolves the inputs selected by that build. `MutationVectors` edits individual ledger items or client evidence. When isolating a check it updates change, deposits, witness commitments, hash and matching host claims as appropriate, and keeps a body's own encoding unless the edit changes it. `VerifierVectorsTest` recreates every derived vector, checks the hash with CCL (which also hashes the received body bytes), and reruns the oracle with just the target check disabled. Its `everyCheckDecidesSomeVector` reads the check ids from the checker's sources, requires a vector for each (except the three above), and disables each check in turn: one of its vectors must then change verdict. The public checker always enables every check. `RecordedSessionsTest` regenerates and compares both sessions and derives the `violation-*` sessions from the Bank recording; `FakeHostTest` drives each with a client that stops and one that continues. The Node wallet differential exercises the intersection of the two verifiers' rules, using the same fee ceiling and sent window. Its todo list names the vectors whose check the page verifier does not make yet.
+
+The checker shares some code with the host, so "independent" is partial: the script-data hash takes the language view from CCL's `CostModelUtil` and `CostMdls` (the functions the host's builder uses), and argument and datum checks use the runtime's `SchemaCodec` and julc-core's Plutus data codec. The body walker, ledger projection, hashing and every D13 rule are the checker's own. The classifier resolves the host's runtime graph, although the checker needs only Jackson, Bouncy Castle, CCL, julc-core and `SchemaCodec`.
 
 ### Exercise the npm host
 
@@ -108,7 +157,8 @@ The task builds the conformance classifier and runs its reference checker on the
 | Scenario | Executable coverage |
 | --- | --- |
 | I1 stdout pollution, native and inherited descriptors, termination | `BootstrapTest.applicationOutputAndTermination` and `bootstrappedFdOneIsStderrEvenForEarlierReferencesAndNativeCode`. |
-| I2 frames, sizes, failed writes and stalls | `TransportTest.cappedHeaderAndMultibyteBody`, `invalidUtf8Terminates`, `incompleteFrameTimesOutFromFirstByte`, `oversizedResultAndFailedWriteNeverCommit`. `FakeHostTest` checks the client-facing replay process. |
+| I2 frames, sizes, failed writes and stalls | `TransportTest.cappedHeaderAndMultibyteBody`, `invalidUtf8Terminates`, `incompleteFrameTimesOutFromFirstByte`, `oversizedResultAndFailedWriteNeverCommit`. `FakeHostTest` checks the client-facing replay process, a frame after the recording, and each scripted host fault (`scriptedViolationsRequireTheClientToStop`). |
+| Client transport obligations (unsolicited or second response, reverse request outside a call, stray bytes, malformed or oversized frame, EOF during a call) | The `violation-*` sessions, for a client under test. |
 | Unknown response ID | `ClientConformanceTest.unsolicitedReverseIdCannotAnswerAnOutstandingPrepareRead`. The fake additionally rejects a mismatched ID in a recorded reverse answer. |
 | Late reverse answer after cancellation and forward ID reuse | `TransportTest.controlWinsDuringReadAndExecutionDrains`, including a stale answer during the following generation. The Bank transcript includes a late answer. |
 | Read count/byte cap, inconsistent answers, decreasing point | `ReadsTest.everyChunkCountsAndMustKeepItsChainPoint`, `addressReferenceDuplicatesAndScriptHashAreChecked` and `separateLookupsAgreeAndTipsCannotMoveBackwards`. |

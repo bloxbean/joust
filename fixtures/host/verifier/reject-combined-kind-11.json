@@ -1822,5 +1822,6 @@
     }
   },
   "violations" : [ "certificate" ],
-  "mutation" : "combined-kind-11"
+  "mutation" : "combined-kind-11",
+  "check" : "certificate/shape"
 }

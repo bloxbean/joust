@@ -8,122 +8,186 @@ import java.util.function.Consumer;
 import static org.julclang.state.host.conformance.Cbor.HEX;
 import static org.julclang.state.host.conformance.Ledger.JSON;
 
-/** Byte-preserving surgery on recorded bodies. Update the accounting counterpart when moving value. */
+/**
+ * Byte-preserving surgery on recorded bodies. Update the accounting counterpart when moving value. Each negative names
+ * the one check ({@code <code>/<check>}, ReferenceChecker's site id) that refuses it; with that check disabled the
+ * reference accepts it. {@code malformed} vectors are unreadable bodies. A case without a site is a derived positive.
+ */
 public final class MutationVectors {
     static final Path DIR = Path.of(System.getProperty("joust.host.vectors","../fixtures/host")).resolve("verifier");
-    record Case(String name,String source,String rule,Consumer<Edit> change) {}
+    record Case(String name,String source,String site,Consumer<Edit> change) {
+        String code() { return site==null ? null : site.contains("/") ? site.substring(0,site.indexOf('/')) : site; }
+        String file() { return (site==null ? "accept-" : "reject-")+name+".json"; }
+    }
     static final String PUB="Dex-publish-2", REG="Dex-publish-3", BOTH="Dex-combined-reconstructed",
-            SPEND="dapp-0003", DEX="Dex-addLiquidity", QUORUM="quorum-two";
-    static final String OTHER="ab".repeat(28);
+            SPEND="dapp-0003", DEX="Dex-addLiquidity", QUORUM="quorum-two", BANK="Bank-init", OWNED="owned-action";
+    static final String OTHER="ab".repeat(28), ELSEWHERE="cd".repeat(32);
+    static final long RELEASE=101_500_000, PAID_IN=100_000_000;
+
     static List<Case> cases() {
         var cases = new ArrayList<Case>();
         for (String source : List.of(PUB,BOTH)) {
             String prefix = source.equals(PUB) ? "reference-" : "combined-";
-            cases.add(new Case(prefix+"wrong-script",source,"publicationShape", e -> {
+            cases.add(new Case(prefix+"wrong-script",source,"publicationShape/holder", e -> {
                 var s=e.out(0).fields().get(3);
                 e.swap(s,s.raw().substring(0,s.raw().length()-2)+"ef");
             }));
-            cases.add(new Case(prefix+"wrong-target",source,"publicationShape",e -> e.address(0,"70"+OTHER)));
-            cases.add(new Case(prefix+"above-maximum",source,"holderLovelace",e -> e.transfer(0,1,1)));
-            cases.add(new Case(prefix+"below-minimum",source,"holderLovelace",e -> e.transfer(0,1,-1_000_001)));
+            cases.add(new Case(prefix+"wrong-target",source,"publicationShape/holder",e -> e.address(0,"70"+OTHER)));
+            cases.add(new Case(prefix+"above-maximum",source,"holderLovelace/range",e -> e.transfer(0,1,1)));
+            cases.add(new Case(prefix+"below-minimum",source,"holderLovelace/range",e -> e.transfer(0,1,-1_000_001)));
         }
         for (String source : List.of(REG,BOTH)) {
             String prefix=source.equals(REG) ? "registration-" : "combined-";
-            cases.add(new Case(prefix+"credential",source,"certificate",e -> e.cert("8200"+"8201581c"+OTHER)));
-            cases.add(new Case(prefix+"key-credential",source,"certificate",e -> e.cert("82008200581c"+e.hash())));
-            cases.add(new Case(prefix+"deposit",source,"deposit",e -> {
+            cases.add(new Case(prefix+"credential",source,"certificate/shape",e -> e.cert("8200"+"8201581c"+OTHER)));
+            cases.add(new Case(prefix+"key-credential",source,"certificate/shape",e -> e.cert("82008200581c"+e.hash())));
+            cases.add(new Case(prefix+"deposit",source,"deposit/registration",e -> {
                 e.cert("83078201581c"+e.hash()+uint(2_000_001));
                 e.coin(e.ledger.outputs.size()-1,-1);
             }));
-            for (int k : List.of(11,12,13)) cases.add(new Case(prefix+"kind-"+k,source,"certificate",e -> {
+            for (int k : List.of(11,12,13)) cases.add(new Case(prefix+"kind-"+k,source,"certificate/shape",e -> {
                 String pool="581c"+OTHER, drep="8102";
                 e.cert((k==13 ? "85" : "84")+uint(k)+"8201581c"+e.hash()+
                         (k==12 ? "" : pool)+(k==11 ? "" : drep)+uint(2_000_000));
             }));
         }
         cases.addAll(List.of(
-            new Case("holder-language",PUB,"publicationShape",e -> {
+            // ---- publications (D13 publication shapes, D14)
+            new Case("holder-language",PUB,"publicationShape/holder",e -> {
                 var script=e.out(0).fields().get(3).tagged(24);
                 String encoded=script.bytes();
                 // Language occupies the second byte of [language, script].
                 e.swap(script,script.raw().substring(0,script.raw().length()-encoded.length())+
                         encoded.substring(0,2)+"02"+encoded.substring(4));
             }),
-            new Case("holder-datum",PUB,"publicationShape",e -> e.field(e.out(0),2,"82005820"+"12".repeat(32))),
-            new Case("holder-asset",PUB,"publicationShape",e -> {
+            new Case("holder-datum",PUB,"publicationShape/holder",e -> e.field(e.out(0),2,"82005820"+"12".repeat(32))),
+            new Case("holder-asset",PUB,"publicationShape/holder",e -> {
                 String asset="a1581c"+OTHER+"a1410101";
                 var coin=e.coin(0);
                 e.swap(coin,"82"+coin.raw()+asset);
                 e.input(0).withArray("amount").addObject().put("unit",OTHER+"01").put("quantity",1);
             }),
-            new Case("already-published",PUB,"publicationPresence",e -> e.v.withObject("/node/scriptsAt")
+            new Case("publication-change-to-stranger",PUB,"publicationShape/change",e -> e.address(1,"60"+OTHER)),
+            new Case("publication-kind",BOTH,"publicationShape/kind",e -> {
+                // The client's description has no method that sends, so no contract needs the shared verifier.
+                for (String group : List.of("creations","actions","purposes"))
+                    for (var m : e.v.at("/anchors/description/x-joust").path(group)) ((ObjectNode)m).withObject("/returns").put("sends",false);
+            }),
+            new Case("stake-registration-holder",REG,"publicationShape/count",e -> {
+                // The verifier's holder output from its own reference-script publication.
+                var holder=e.recorded(PUB).outputs.getFirst();
+                e.coin(0,-holder.fields().get(1).integer().longValueExact());
+                e.outputs(List.of(holder.raw(),e.out(0).raw()));
+            }),
+            new Case("two-holders",PUB,"publicationShape/count",e -> {
+                long coin=e.coin(0).integer().longValueExact();
+                e.coin(1,-coin);
+                e.outputs(List.of(e.out(0).raw(),e.out(0).raw(),e.out(1).raw()));
+            }),
+            new Case("already-published",PUB,"publicationPresence/holder",e -> e.v.withObject("/node/scriptsAt")
                     .withArray(e.v.at("/anchors/outputVerifier/address").asText()).add(e.hash())),
-            new Case("already-registered",REG,"publicationPresence",e -> e.v.withObject("/node/registrations").put(e.hash(),true)),
-            new Case("creation-deposit","Bank-init","deposit",e -> e.transfer(0,1,1)),
-            new Case("metadata",PUB,"auxiliaryData",e -> {
+            new Case("already-registered",REG,"publicationPresence/registration",e -> e.v.withObject("/node/registrations").put(e.hash(),true)),
+            new Case("combined-unknown-registration",BOTH,"publicationPresence/registration",
+                    e -> e.v.withObject("/node/registrations").put(e.hash(),"unknown")),
+            new Case("publication-mint",PUB,"mint/publication",e -> {
+                e.body(9,"a1581c"+OTHER+"a1410101");
+                var coin=e.coin(1);
+                e.swap(coin,"82"+coin.raw()+"a1581c"+OTHER+"a1410101");
+            }),
+            new Case("publication-withdrawal",PUB,"withdrawal/allowed",
+                    e -> e.body(5,"a1581df0"+e.v.at("/anchors/outputVerifier/hash").asText()+"00")),
+            new Case("publication-reference-input",PUB,"referenceInput/allowed",e -> {
+                String holder=e.v.at("/node/scriptsAt").fieldNames().next(); // the Dex holder at the contract address
+                String ref=null;
+                for (var u : e.v.required("resolved")) if (holder.equals(u.path("address").asText()) && u.hasNonNull("reference_script_hash"))
+                    ref=u.required("tx_hash").asText()+"#"+u.required("output_index").asText();
+                e.body(18,"d9010281825820"+Objects.requireNonNull(ref).substring(0,64)+uint(Long.parseLong(ref.substring(65))));
+            }),
+            new Case("publication-foreign-signer",PUB,"signer/allowed",e -> e.signers(List.of(OTHER))),
+            new Case("extra-certificate",PUB,"certificate/count",e -> {
+                e.cert("82008201581c"+OTHER);
+                e.coin(1,-2_000_000);
+            }),
+            new Case("creation-deposit",BANK,"deposit/creation",e -> e.transfer(0,1,1)),
+            new Case("metadata",PUB,"auxiliaryData/present",e -> {
                 String aux="d90103a100a1016178";
                 e.field(e.ledger.body,7,"5820"+Cbor.read(HEX.parseHex(aux)).digest(256));
                 e.swap(e.ledger.tx.at(3),aux);
             }),
-            new Case("action-metadata",SPEND,"auxiliaryData",e -> {
+            new Case("action-metadata",SPEND,"auxiliaryData/present",e -> {
                 String aux="d90103a100a1016178";
                 e.body(7,"5820"+Cbor.read(HEX.parseHex(aux)).digest(256));
                 e.swap(e.ledger.tx.at(3),aux);
             }),
-            new Case("missing-lower","owned-action","lowerBound",e -> e.body(8,null)),
-            new Case("backdated","owned-action","lowerBound",e -> e.body(8,uint(e.v.at("/request/now").asLong()-1))),
-            new Case("no-upper",SPEND,"upperBound",e -> e.body(3,null)),
-            new Case("late-upper",SPEND,"upperBound",e -> e.body(3,uint(e.v.at("/request/now").asLong()+21))),
-            new Case("unbalanced",SPEND,"balance",e -> e.coin(1,1)),
-            new Case("unbalanced-asset",DEX,"balance",e -> {
-                var tokens=e.out(1).at(1).at(1).items.get(1);
-                var quantity=tokens.items.get(1);
-                e.swap(quantity,uint(quantity.integer().longValueExact()+1));
+            new Case("body-network",PUB,"network/body",e -> e.body(15,"01")),
+
+            // ---- envelope: window, signers, claims, budget, fee (rules 3, 4, 7, 8)
+            new Case("missing-lower",OWNED,"lowerBound/context",e -> e.body(8,null)),
+            new Case("backdated",OWNED,"lowerBound/context",e -> e.body(8,uint(e.now()-1))),
+            new Case("no-upper",SPEND,"upperBound/window",e -> e.body(3,null)),
+            new Case("late-upper",SPEND,"upperBound/window",e -> e.body(3,uint(e.now()+21))),
+            new Case("empty-window",OWNED,"upperBound/window",e -> { e.body(8,uint(e.now()+5)); e.body(3,uint(e.now()+5)); }),
+            new Case("missing-named-signer",QUORUM,"signer/named",e -> e.signers(List.of(e.caller()))),
+            new Case("extra-signer",SPEND,"signer/allowed",e -> e.signers(List.of(OTHER))),
+            new Case("cosigner-without-quorum",SPEND,"signer/cosigners",e -> {
+                e.v.withObject("/request/call").putArray("cosigners").add(OTHER);
+                e.signers(List.of(OTHER));
             }),
-            new Case("payout-hides-wallet-loss","owned-destroy","netOutflow",e -> {
-                // Wallet net is still positive because of the tagged close payout. That payout is already spoken for.
-                e.coin(1,-2_000_000);
-                var outputs=e.ledger.b.get(1);
-                e.swap(outputs,"83"+outputs.at(0).raw()+outputs.at(1).raw()+"82581d60"+OTHER+uint(2_000_000));
+            new Case("caller-not-required",OWNED,"signer/caller",e -> e.body(14,null)),
+            new Case("duplicate-signer",OWNED,"signer/form",e -> e.signers(List.of(e.caller(),e.caller()))),
+            new Case("tx-hash",SPEND,"bodyHash/digest",e -> e.claim(p -> p.put("txHash","00".repeat(32)))),
+            new Case("shown-plan",SPEND,"planMismatch/plan",e -> e.claim(p -> p.withObject("/plan").put("fee","1"))),
+            new Case("valid-from-claim",OWNED,"planMismatch/validFrom",e -> e.claim(p -> p.put("validFrom",e.now()+1))),
+            new Case("valid-to-claim",SPEND,"planMismatch/validTo",e -> e.claim(p -> p.put("validTo",p.required("validTo").asLong()-1))),
+            new Case("signers-claim",SPEND,"planMismatch/signers",e -> e.claim(p -> p.putArray("signers"))),
+            new Case("creation-wrong-instance",BANK,"planMismatch/creationId",e -> e.claim(p -> p.put("instance","00".repeat(32)))),
+            new Case("budget",SPEND,"budget/total",e -> e.swap(e.rvalue(0).at(1).at(0),uint(e.v.at("/protocolParams/max_tx_ex_mem").asLong()+1))),
+            new Case("negative-budget",SPEND,"budget/units",e -> e.swap(e.rvalue(0).at(1).at(0),"20")),
+            new Case("fee-above-derived-cap",SPEND,"fee/derived",e -> {
+                e.v.put("maxFee","100000000");
+                long fee=e.fee();
+                e.body(2,uint(e.feeCap()+1));
+                e.coin(1,fee-e.fee());
             }),
-            new Case("missing-named-signer",QUORUM,"signer",e -> e.signers(List.of(e.caller()))),
-            new Case("extra-signer",SPEND,"signer",e -> e.signers(List.of(OTHER))),
-            new Case("extra-certificate",PUB,"certificate",e -> {
-                e.cert("82008201581c"+OTHER);
-                e.coin(1,-2_000_000);
+            new Case("fee-above-maximum",SPEND,"fee/max",e -> e.v.put("maxFee",String.valueOf(e.fee()-1))),
+            new Case("negative-fee",SPEND,"fee/sign",e -> {
+                long fee=e.fee();
+                e.body(2,"20");
+                e.coin(1,fee+1);
             }),
-            new Case("nonzero-withdrawal",DEX,"withdrawal",e -> {
-                var ws=e.ledger.b.get(5);
-                e.swap(ws.items.get(1),"01");
-                e.coin(2,1);
+            new Case("invalid-transaction",SPEND,"isValid/flag",e -> e.swap(e.ledger.tx.at(2),"f4")),
+            new Case("votes",SPEND,"governance/votes",e -> e.body(19,"a0")),
+            new Case("proposals",SPEND,"governance/proposals",e -> e.body(20,"d9010280")),
+            new Case("treasury",SPEND,"governance/treasury",e -> e.body(21,uint(100))),
+            new Case("donation",SPEND,"governance/donation",e -> e.body(22,uint(1))),
+            new Case("script-data-hash",SPEND,"scriptIntegrity/hash",e -> { e.keepIntegrity=true; e.body(11,"5820"+"9a".repeat(32)); }),
+            new Case("service-only",SPEND,"notVerifiable/classify",e -> {
+                for (var a : e.v.at("/anchors/description/x-joust/actions"))
+                    if (a.required("name").equals(e.v.at("/request/call/method")))
+                        ((ObjectNode)a).withObject("/policies").put("batched",true);
             }),
-            new Case("unpinned-withdrawal",DEX,"withdrawal",e -> e.body(5,"a1581df0"+OTHER+"00")),
-            new Case("foreign-mint",DEX,"mint",e -> {
-                e.swap(e.ledger.b.get(9).items.getFirst(),"581c"+OTHER);
-                var assets=e.out(1).at(1).at(1);
-                e.swap(assets.items.getFirst(),"581c"+OTHER);
-            }),
-            new Case("extra-script-input",SPEND,"scriptInput",e -> {
-                var extra=e.input(0).deepCopy().put("tx_hash","ff".repeat(32)).put("output_index",0);
-                extra.putArray("amount").addObject().put("unit","lovelace").put("quantity",2_000_000);
-                e.v.withObject("/resolved").set("ff".repeat(32)+"#0",extra);
-                var inputs=e.ledger.set(0);
-                var encoded=new StringBuilder(head(4,inputs.size()+1));
-                inputs.forEach(i -> encoded.append(i.raw()));
-                e.body(0,"d90102"+encoded+"825820"+"ff".repeat(32)+"00");
-                e.coin(1,2_000_000);
-            }),
-            new Case("unknown-reference",SPEND,"referenceInput",e -> {
-                var original=e.ledger.set(18).getFirst();
+
+            // ---- inputs, references, collateral (rule 3)
+            new Case("unknown-input",SPEND,"unresolvedInput/reference",e -> e.v.withObject("/resolved").remove(e.ledger.plan.at("/referenceInputs/0").asText())),
+            new Case("unresolved-spending",SPEND,"unresolvedInput/spending",e -> e.v.withObject("/resolved").remove(e.ledger.plan.at("/inputs/0").asText())),
+            new Case("unresolved-collateral",DEX,"unresolvedInput/collateral",e -> e.v.withObject("/resolved").remove(e.ledger.plan.at("/collateral/0").asText())),
+            new Case("extra-script-input",SPEND,"scriptInput/foreign",e -> e.extraScriptInput()),
+            new Case("creation-script-input",BANK,"scriptInput/foreign",e -> e.extraScriptInput()),
+            new Case("owned-instance-target",OWNED,"scriptInput/ownedInstance",e -> e.targetDatum(e.call("instance"),ELSEWHERE)),
+            new Case("target-datum",OWNED,"scriptInput/datum",e -> e.resolved(e.target()).put("inline_datum","00")),
+            new Case("signed-by-other",OWNED,"signer/signedBy",e -> e.targetDatum(e.caller(),OTHER)),
+            new Case("unknown-reference",SPEND,"referenceInput/allowed",e -> {
+                // A second reference input the client cannot place: neither a pinned holder nor the target.
+                var refs=e.ledger.set(18);
                 String old=e.ledger.plan.at("/referenceInputs/0").asText();
                 var u=(ObjectNode)e.v.required("resolved").required(old).deepCopy();
-                u.put("tx_hash","cd".repeat(32)).putNull("reference_script_hash");
-                e.v.withObject("/resolved").set("cd".repeat(32)+"#"+u.required("output_index").asText(),u);
-                e.swap(original.at(0),"5820"+"cd".repeat(32));
+                u.put("tx_hash",ELSEWHERE).putNull("reference_script_hash");
+                e.v.withObject("/resolved").set(ELSEWHERE+"#"+u.required("output_index").asText(),u);
+                e.body(18,"d90102"+head(4,refs.size()+1)+e.ledger.b.get(18).tagged(258).raw().substring(2)+
+                        "825820"+ELSEWHERE+uint(u.required("output_index").asLong()));
             }),
-            new Case("budget",SPEND,"budget",e -> e.swap(e.redeemers().items.get(1).at(1).at(0),
-                    uint(e.v.at("/protocolParams/max_tx_ex_mem").asLong()+1))),
-            new Case("foreign-collateral",SPEND,"collateral",e -> {
+            new Case("missing-holder-reference",SPEND,"referenceInput/scripts",e -> e.body(18,null)),
+            new Case("witness-script",SPEND,"referenceInput/witnessScript",e -> e.field(e.ledger.tx.at(1),7,"d90102814401020304")),
+            new Case("foreign-collateral",SPEND,"collateral/owner",e -> {
                 var original=e.ledger.set(13).getFirst();
                 var ref=e.ledger.plan.at("/collateral/0").asText();
                 var u=e.v.withObject("/resolved").required(ref).deepCopy();
@@ -131,56 +195,236 @@ public final class MutationVectors {
                 e.v.withObject("/resolved").set("aa".repeat(32)+"#"+u.required("output_index").asText(),u);
                 e.swap(original.at(0),"5820"+"aa".repeat(32));
             }),
-            new Case("collateral-elsewhere",SPEND,"collateral",e -> {
-                var ret=e.ledger.b.get(16);
-                e.swap(ret.major==4 ? ret.at(0) : ret.fields().get(0),"581d60"+OTHER);
+            new Case("no-collateral",SPEND,"collateral/none",e -> { e.body(13,null); e.body(16,null); e.body(17,null); }),
+            new Case("collateral-no-return",SPEND,"collateral/present",e -> e.body(16,null)),
+            new Case("collateral-elsewhere",SPEND,"collateral/returnAddress",e -> e.swap(e.addr(e.ledger.b.get(16)),"581d60"+OTHER)),
+            new Case("collateral-return-network",SPEND,"collateral/returnAddress",e -> {
+                var a=e.addr(e.ledger.b.get(16));
+                e.swap(a,bytes("01"+a.bytes().substring(2)));
             }),
-            new Case("collateral-risk",SPEND,"collateral",e -> {
+            new Case("collateral-return-datum",SPEND,"collateral/returnClean",e -> {
+                var ret=e.ledger.b.get(16);
+                e.swap(ret,"83"+ret.at(0).raw()+ret.at(1).raw()+"5820"+"12".repeat(32));
+            }),
+            new Case("collateral-return-script",SPEND,"collateral/returnClean",e -> {
+                var ret=e.ledger.b.get(16);
+                e.swap(ret,"a3"+"00"+ret.at(0).raw()+"01"+ret.at(1).raw()+"03"+"d81846820343010203");
+            }),
+            new Case("collateral-risk",SPEND,"collateral/limit",e -> {
                 long delta=5_000_001-e.ledger.b.get(17).integer().longValueExact();
                 e.body(17,uint(5_000_001));
-                var ret=e.ledger.b.get(16);
-                var coin=ret.major==4 ? ret.at(1) : ret.fields().get(1);
+                var coin=e.val(e.ledger.b.get(16));
                 e.swap(coin,uint(coin.integer().longValueExact()-delta));
             }),
-            new Case("network-output","owned-destroy","network",e -> e.address(0,"61"+OTHER)),
-            new Case("body-network",PUB,"network",e -> e.body(15,"01")),
-            new Case("swapped-constructor",SPEND,"redeemer",e -> {
-                var d=e.redeemers().items.get(1).at(0);
+            new Case("collateral-negative-return",DEX,"collateral/returnNonNegative",e -> {
+                var ref=e.ledger.plan.at("/collateral/0").asText();
+                e.lovelace(ref,2_000_000);
+                e.swap(e.val(e.ledger.b.get(16)),"20");
+                e.body(17,uint(2_000_001));
+            }),
+            new Case("collateral-unconserved",SPEND,"collateral/conserved",e -> {
+                var coin=e.val(e.ledger.b.get(16));
+                e.swap(coin,uint(coin.integer().longValueExact()+1));
+            }),
+
+            // ---- certificates and withdrawals in calls (rule 4)
+            new Case("action-vote-delegation",SPEND,"certificate/count",e -> {
+                String stake=HEX.formatHex(ReferenceChecker.addressBytes(e.payer()),29,57);
+                e.cert("83098200581c"+stake+"8102");
+            }),
+            new Case("nonzero-withdrawal",DEX,"withdrawal/amount",e -> {
+                var ws=e.ledger.b.get(5);
+                e.swap(ws.items.get(1),"01");
+                e.coin(2,1);
+            }),
+            new Case("unpinned-withdrawal",DEX,"withdrawal/account",e -> e.body(5,"a1581df0"+OTHER+"00")),
+
+            // ---- mint and redeemers (rule 5)
+            new Case("foreign-mint",DEX,"mint/action",e -> {
+                e.swap(e.ledger.b.get(9).items.getFirst(),"581c"+OTHER);
+                var assets=e.out(1).at(1).at(1);
+                e.swap(assets.items.getFirst(),"581c"+OTHER);
+            }),
+            new Case("creation-extra-mint",BANK,"mint/instance",e -> {
+                var mint=e.ledger.b.get(9);
+                e.body(9,"a2"+mint.raw().substring(2)+"581c"+OTHER+"a1410101");
+                var coin=e.coin(1);
+                e.swap(coin,"82"+coin.raw()+"a1581c"+OTHER+"a1410101");
+            }),
+            new Case("swapped-constructor",SPEND,"redeemer/constructor",e -> {
+                var d=e.rvalue(0).at(0);
                 e.swap(d,"d87a"+d.items.getFirst().raw());
             }),
-            new Case("wrong-argument",QUORUM,"redeemer",e -> e.swap(e.redeemers().items.get(1).at(0).items.getFirst().at(0),uint(43))),
-            new Case("shifted-pointer",SPEND,"pointer",e -> e.swap(e.redeemers().items.getFirst().at(1),"01")),
-            new Case("extra-redeemer",SPEND,"redeemer",e -> {
-                var rs=e.redeemers();
-                e.swap(rs,"a2"+rs.items.getFirst().raw()+rs.items.get(1).raw()+"820200"+rs.items.get(1).raw());
+            new Case("undecodable-redeemer",SPEND,"redeemer/decode",e -> e.swap(e.rvalue(0).at(0),"00")),
+            new Case("wrong-argument",QUORUM,"redeemer/argument",e -> e.swap(e.rvalue(0).at(0).items.getFirst().at(0),uint(43))),
+            new Case("ctx-other-caller",BANK,"redeemer/ctxCaller",e -> e.replaceIn(e.rvalue(1).at(0),e.caller(),OTHER)),
+            new Case("ctx-received",DEX,"redeemer/ctxReceived",e -> e.replaceIn(e.rvalue(0).at(0),"1a05f5e100","1a05f5e101")),
+            new Case("assets-in",DEX,"redeemer/assetsIn",e -> {
+                var d=e.rvalue(0).at(0);
+                String raw=d.raw();
+                int at=raw.lastIndexOf("1a000186a0");
+                e.swap(d,raw.substring(0,at)+"1a000186a1"+raw.substring(at+10));
             }),
-            new Case("tx-hash",SPEND,"bodyHash",e -> {}),
-            new Case("shown-plan",SPEND,"planMismatch",e -> {}),
-            new Case("unknown-input",SPEND,"unresolvedInput",e -> e.v.withObject("/resolved").remove(e.ledger.plan.at("/referenceInputs/0").asText())),
-            new Case("excess-fee",SPEND,"fee",e -> {
-                e.body(2,uint(e.ledger.b.get(2).integer().longValueExact()+3_000_000));
-                e.coin(1,-3_000_000);
+            new Case("open-instance","owned-init","redeemer/instance",e -> e.replaceIn(e.rvalue(1).at(0),"5820"+e.call("instance"),"5820"+ELSEWHERE)),
+            new Case("seed-not-spent",BANK,"redeemer/seed",e -> {
+                // The derived instance follows the named seed everywhere, so only the seed's spending is wrong.
+                String id=e.prepared().required("instance").asText();
+                var seed=e.rvalue(1).at(0).items.getFirst().at(0);
+                int index=seed.items.getFirst().at(1).uint();
+                e.swap(seed,"d8799f5820"+ELSEWHERE+uint(index)+"ff");
+                byte[] b=HEX.parseHex(ELSEWHERE+"%04x".formatted(index));
+                String derived=Cbor.digest(256,b,0,b.length);
+                e.swap(e.ledger.b.get(9),e.ledger.b.get(9).raw().replace(id,derived));
+                e.swap(e.out(0),e.out(0).raw().replace(id,derived));
+                e.claim(p -> p.put("instance",derived));
             }),
-            new Case("invalid-transaction",SPEND,"isValid",e -> e.swap(e.ledger.tx.at(2),"f4")),
-            new Case("treasury",SPEND,"governance",e -> e.body(21,uint(100))),
-            new Case("script-data-hash",SPEND,"scriptIntegrity",e -> e.body(11,"5820"+"9a".repeat(32))),
-            new Case("service-only",SPEND,"notVerifiable",e -> {
+            new Case("unknown-field",BANK,"notVerifiable/field",e -> {
+                for (var d : e.v.at("/anchors/description/definitions")) for (var alt : d.path("anyOf"))
+                    if (alt.path("title").asText().equals("CreateInstance"))
+                        for (var f : alt.path("fields")) if (f.path("title").asText().equals("ctx")) ((ObjectNode)f).put("title","context");
+            }),
+            new Case("extra-argument",SPEND,"redeemer/args",e -> {
                 for (var a : e.v.at("/anchors/description/x-joust/actions"))
                     if (a.required("name").equals(e.v.at("/request/call/method")))
-                        ((ObjectNode)a).withObject("/policies").put("batched",true);
+                        ((ObjectNode)a).withArray("args").addObject().put("name","extra").put("type","BigInteger").putObject("schema").put("dataType","integer");
             }),
-            new Case("wallet-datum",SPEND,"walletOutput",e -> {
+            new Case("shifted-pointer",SPEND,"pointer/method",e -> e.swap(e.rkey(0).at(1),"01")),
+            new Case("mint-pointer",DEX,"pointer/mint",e -> e.swap(e.rkey(1).at(1),"01")),
+            new Case("reward-pointer",DEX,"pointer/reward",e -> e.swap(e.rkey(3).at(1),"01")),
+            new Case("by-action-target",DEX,"redeemer/mintRedeemer",e -> e.swap(e.rvalue(1).at(0),"d87b9fd8799f5820"+ELSEWHERE+"00ffff")),
+            new Case("burn-variant","owned-destroy","redeemer/mintRedeemer",e -> e.swap(e.rvalue(1).at(0),"d87980")),
+            new Case("missing-mint-redeemer",DEX,"redeemer/count",e -> e.dropRedeemer(1)),
+            new Case("extra-redeemer",SPEND,"redeemer/purpose",e -> e.addRedeemer(2)),
+            new Case("voting-redeemer",SPEND,"redeemer/purpose",e -> e.addRedeemer(4)),
+            new Case("proposing-redeemer",SPEND,"redeemer/purpose",e -> e.addRedeemer(5)),
+
+            // ---- outputs, balance and outflow (rule 6)
+            new Case("network-output","owned-destroy","network/output",e -> e.address(0,"61"+OTHER)),
+            new Case("unbalanced",SPEND,"balance/conserved",e -> e.coin(1,1)),
+            new Case("unbalanced-asset",DEX,"balance/conserved",e -> {
+                var tokens=e.out(1).at(1).at(1).items.get(1);
+                var quantity=tokens.items.get(1);
+                e.swap(quantity,uint(quantity.integer().longValueExact()+1));
+            }),
+            new Case("negative-output",SPEND,"balance/nonNegative",e -> {
+                var coin=e.coin(1);
+                e.swap(coin,"82"+uint(coin.integer().longValueExact()-2_000_000)+"a1581c"+OTHER+"a1410120");
+                e.outputs(List.of(e.out(0).raw(),e.out(1).raw(),"82"+e.addr(e.out(1)).raw()+"82"+uint(2_000_000)+"a1581c"+OTHER+"a1410101"));
+            }),
+            new Case("wrong-continuation",SPEND,"continuingOutput/datum",e -> e.swap(e.out(0).fields().get(2),"8201d8184100")),
+            new Case("continuation-script",SPEND,"continuingOutput/script",e -> e.field(e.out(0),3,"d81846820343010203")),
+            new Case("continuation-instance",OWNED,"continuingOutput/instance",e -> e.replaceIn(e.out(0).fields().get(2),"5820"+e.call("instance"),"5820"+ELSEWHERE)),
+            new Case("thread-to-stranger",SPEND,"continuingOutput/thread",e -> e.address(0,"70"+OTHER)),
+            new Case("other-contract-token",DEX,"continuingOutput/otherToken",e -> {
+                // Another instance's thread token held by the wallet (its input is not the collateral) moves.
+                String unit=e.v.at("/anchors/policy").asText()+"ff".repeat(32);
+                e.resolved(e.walletInput()).withArray("amount").addObject().put("unit",unit).put("quantity",1);
+                var coin=e.coin(2);
+                e.swap(coin,"82"+coin.raw()+"a1581c"+unit.substring(0,56)+"a15820"+unit.substring(56)+"01");
+            }),
+            new Case("wallet-datum",SPEND,"walletOutput/script",e -> {
                 var out=e.out(1);
                 e.swap(out,"83"+out.at(0).raw()+out.at(1).raw()+"5820"+"ab".repeat(32));
             }),
-            new Case("net-outflow",SPEND,"netOutflow",e -> e.transfer(0,1,1)),
-            new Case("wrong-continuation",SPEND,"continuingOutput",e -> {
-                var d=e.out(0).fields().get(2);
-                e.swap(d,"8201d8184100");
+            new Case("payout-tag-other-ref","quorum-caller","walletOutput/tag",
+                    e -> e.swap(e.out(1).fields().get(2),"8201d818"+bytes("d8799f5820"+ELSEWHERE+"00ff"))),
+            new Case("payout-foreign-stake-key","owned-destroy","walletOutput/foreignKey",
+                    e -> e.address(0,"00"+e.caller()+"cd".repeat(28))),
+            new Case("change-at-enterprise",SPEND,"walletOutput/change",e -> e.address(1,"60"+e.caller())),
+            new Case("net-outflow",SPEND,"netOutflow/wallet",e -> e.transfer(0,1,1)),
+            new Case("payout-hides-wallet-loss","owned-destroy","netOutflow/third",e -> {
+                // Wallet net is still positive because of the tagged close payout. That payout is already spoken for.
+                e.coin(1,-2_000_000);
+                e.outputs(List.of(e.out(0).raw(),e.out(1).raw(),"82581d60"+OTHER+uint(2_000_000)));
+            }),
+
+            // ---- the output verifier's claims (SC1): a send's claimed wallet output is the script's release
+            new Case("send-releases-lovelace",DEX,null,MutationVectors::lovelaceSend),
+            new Case("send-claim-on-change",DEX,"netOutflow/claims",e -> {
+                // The claim names the payer's change, which covers the send with the wallet's own LP tokens; the minted
+                // LP and the 1.5 ADA the script releases go to a stranger. Every validator would pass it.
+                lovelaceSend(e);
+                String lp=e.minted();
+                e.resolved(e.walletInput()).withArray("amount").addObject().put("unit",lp).put("quantity",PAID_IN);
+                long send=e.coin(1).integer().longValueExact();
+                var change=e.coin(2);
+                e.swap(change,"82"+uint(change.integer().longValueExact()+send-(RELEASE-PAID_IN))+e.lp(lp,PAID_IN));
+                e.outputs(List.of(e.out(0).raw(),e.out(2).raw(),"82581d60"+OTHER+"82"+uint(RELEASE-PAID_IN)+e.lp(lp,PAID_IN)));
+                e.claims("9fd8799f01"+e.outRef(e.target())+"ffff");
+            }),
+            new Case("send-claim-wallet-funded",DEX,"netOutflow/claims",e -> {
+                // The claimed send output keeps its place but is funded by the wallet's own LP; the minted LP and the
+                // released lovelace go to a stranger (security review SC1's probe).
+                String lp=e.minted();
+                e.lovelace(e.target(),e.amount(e.target(),"lovelace")+RELEASE);
+                e.resolved(e.walletInput()).withArray("amount").addObject().put("unit",lp).put("quantity",PAID_IN);
+                e.coin(2,PAID_IN-5_000);
+                e.body(2,uint(e.fee()+5_000));
+                e.outputs(List.of(e.out(0).raw(),e.out(1).raw(),e.out(2).raw(),"82581d60"+OTHER+"82"+uint(RELEASE-PAID_IN)+e.lp(lp,PAID_IN)));
+            }),
+            // Without valid claims no output is the script's: these sends go to the payer's own address, so only the
+            // claim set is wrong.
+            new Case("claims-shape",DEX,"redeemer/claimsShape",e -> { e.sendToPayer(); e.swap(e.rvalue(3).at(0),"d8799f80ff"); }),
+            new Case("claims-malformed-claim",DEX,"redeemer/claimsShape",e -> { e.sendToPayer(); e.swap(e.rvalue(3).at(0),"d8799f9fd8799f01ffff80ff"); }),
+            new Case("claims-deposits",DEX,"redeemer/claimsShape",e -> { e.sendToPayer(); e.swap(e.rvalue(3).at(0),
+                    "d8799f9fd8799f01"+e.outRef(e.target())+"ffff9fd8799f01"+e.outRef(e.target())+"a140a1401a000f4240ffffff"); }),
+            new Case("claims-duplicate",DEX,"redeemer/claimsOrder",e -> e.claims("9f"+("d8799f01"+e.outRef(e.target())+"ff").repeat(2)+"ff")),
+            new Case("claims-out-of-order",DEX,"redeemer/claimsOrder",
+                    e -> e.claims("9fd8799f01"+e.outRef(e.target())+"ffd8799f00"+e.outRef(e.target())+"ffff")),
+            new Case("claims-out-of-range",DEX,"redeemer/claimsOrder",
+                    e -> e.claims("9fd8799f01"+e.outRef(e.target())+"ffd8799f09"+e.outRef(e.target())+"ffff")),
+            new Case("claims-foreign",DEX,"redeemer/claimsBy",e -> e.claims("9fd8799f01d8799f5820"+ELSEWHERE+"00ffffff")),
+            new Case("claimed-send-tagged",DEX,"walletOutput/claimedTag",e -> {
+                var out=e.out(1);
+                e.swap(out,"a3"+"00"+out.at(0).raw()+"01"+out.at(1).raw()+"02"+"8201d818"+bytes(e.outRef(e.target())));
+            }),
+
+            // ---- DC2: rule 1 hashes the received body. Non-canonical encodings are accepted with their own hash.
+            new Case("indefinite-body",SPEND,null,MutationVectors::indefiniteBody),
+            new Case("nonminimal-integers",SPEND,null,e -> {
+                e.body(2,"1b"+"%016x".formatted(e.fee()));
+                e.body(3,"1b"+"%016x".formatted(e.ledger.b.get(3).integer().longValueExact()));
+            }),
+            new Case("untagged-sets",SPEND,null,e -> {
+                for (int k : List.of(0,13,18)) e.body(k,e.ledger.b.get(k).tagged(258).raw());
+            }),
+            new Case("fee-at-derived-cap",SPEND,null,e -> {
+                e.v.put("maxFee","100000000");
+                long fee=e.fee();
+                e.body(2,uint(e.feeCap()));
+                e.coin(1,fee-e.fee());
+            }),
+            new Case("reencoded-hash",SPEND,"bodyHash/digest",e -> {
+                String canonical=e.prepared().required("txHash").asText();
+                indefiniteBody(e);
+                e.claim(p -> p.put("txHash",canonical));
+            }),
+
+            // ---- SC2: unreadable or ambiguous bodies. The hash is the received body slice's.
+            new Case("malformed-duplicate-body-key",SPEND,"malformed",e -> {
+                var body=e.ledger.body;
+                e.raw(e.splice(body,head(5,body.items.size()/2+1)+body.raw().substring(2)+"02"+uint(1)));
+            }),
+            new Case("malformed-duplicate-input",SPEND,"malformed",e -> {
+                var in=e.ledger.b.get(0).tagged(258);
+                e.raw(e.splice(in,head(4,in.items.size()+1)+in.raw().substring(2)+in.items.getFirst().raw()));
+            }),
+            new Case("malformed-duplicate-redeemer",SPEND,"malformed",e -> {
+                var rs=e.redeemers();
+                e.raw(e.splice(rs,head(5,rs.items.size()/2+1)+rs.raw().substring(2)+rs.items.get(0).raw()+rs.items.get(1).raw()));
+            }),
+            new Case("malformed-trailing-bytes",SPEND,"malformed",e -> e.raw(e.ledger.tx.raw()+"00",e.ledger.body.digest(256))),
+            new Case("malformed-indefinite-bytes",SPEND,"malformed",e -> {
+                var id=e.ledger.b.get(0).tagged(258).items.getFirst().at(0);
+                e.raw(e.splice(id,"5f"+id.raw()+"ff"));
+            }),
+            new Case("malformed-witness-key",SPEND,"malformed",e -> {
+                var w=e.ledger.tx.at(1);
+                e.raw(e.splice(w,head(5,w.items.size()/2+1)+"01"+"d9010281"+"8200581c"+OTHER+w.raw().substring(2)));
             })
         ));
         for (String feature : List.of("params","keyed","maps","authorizedBy","deposits","into","admits","receives","migrateTo","needsService")) {
-            cases.add(new Case("unsupported-"+feature,feature.equals("keyed") ? "Bank-init" : SPEND,"notVerifiable", e -> {
+            cases.add(new Case("unsupported-"+feature,feature.equals("keyed") ? BANK : SPEND,"notVerifiable/classify", e -> {
                 var desc=e.v.withObject("/anchors/description");
                 var x=desc.withObject("/x-joust");
                 ObjectNode method=null;
@@ -203,29 +447,129 @@ public final class MutationVectors {
         return cases;
     }
 
+    /** Dex-addLiquidity restated so that the call also releases 1.5 ADA through its claimed send to the caller. */
+    static void lovelaceSend(Edit e) {
+        e.lovelace(e.target(),e.amount(e.target(),"lovelace")+RELEASE);
+        e.coin(1,RELEASE-PAID_IN);
+        e.coin(2,PAID_IN);
+    }
+    static void indefiniteBody(Edit e) {
+        var outs=e.ledger.b.get(1);
+        e.swap(outs,"9f"+outs.raw().substring(2)+"ff");
+        e.swap(e.ledger.body,"bf"+e.ledger.body.raw().substring(2)+"ff");
+    }
+
     static final class Edit {
         final ObjectNode v;
         Ledger ledger;
+        boolean keepIntegrity;
+        String raw, rawHash;
+        final List<Consumer<ObjectNode>> claims = new ArrayList<>();
         Edit(ObjectNode vector) { v=vector; ledger=new Ledger(v.at("/result/prepared/cbor").asText()); }
         Cbor out(int i) { return ledger.outputs.get(i); }
+        Cbor addr(Cbor out) { return out.major==4 ? out.at(0) : out.fields().get(0); }
+        Cbor val(Cbor out) { return out.major==4 ? out.at(1) : out.fields().get(1); }
         Cbor redeemers() { return ledger.tx.at(1).fields().get(5); }
+        /** The redeemer map's key and value for a purpose tag (one redeemer per tag in these bodies). */
+        Cbor rkey(int tag) { return redeemers().items.get(rindex(tag)); }
+        Cbor rvalue(int tag) { return redeemers().items.get(rindex(tag)+1); }
+        private int rindex(int tag) {
+            var rs=redeemers();
+            for (int i=0;i<rs.items.size();i+=2) if (rs.items.get(i).at(0).uint()==tag) return i;
+            throw new IllegalArgumentException("no redeemer with tag "+tag);
+        }
+        void dropRedeemer(int tag) {
+            var rs=redeemers();
+            int at=rindex(tag);
+            var buf=new StringBuilder(head(5,rs.items.size()/2-1));
+            for (int i=0;i<rs.items.size();i+=2) if (i!=at) buf.append(rs.items.get(i).raw()).append(rs.items.get(i+1).raw());
+            swap(rs,buf.toString());
+        }
+        void addRedeemer(int tag) {
+            var rs=redeemers();
+            swap(rs,head(5,rs.items.size()/2+1)+rs.raw().substring(2)+"82"+uint(tag)+"00"+rs.items.get(1).raw());
+        }
+        void sendToPayer() { address(1,HEX.formatHex(ReferenceChecker.addressBytes(payer()))); }
+        /** Replace the output verifier's claims, keeping its (empty) deposits. */
+        void claims(String list) { swap(rvalue(3).at(0),"d8799f"+list+"80ff"); }
+        ObjectNode prepared() { return v.withObject("/result/prepared"); }
         ObjectNode input(int i) { return (ObjectNode)v.required("resolved").required(ledger.plan.required("inputs").get(i).asText()); }
-        String caller() { return ReferenceChecker.paymentKey(v.at("/request/call/address").asText()); }
+        ObjectNode resolved(String ref) { return (ObjectNode)v.required("resolved").required(ref); }
+        String payer() { var r=v.required("request"); return (r.has("call") ? r.required("call") : r).required("address").asText(); }
+        String caller() { return ReferenceChecker.paymentKey(payer()); }
+        String call(String field) { return v.at("/request/call").required(field).asText(); }
         String hash() { return v.at("/request/prerequisite").asText().split(":")[1]; }
+        long now() { return v.at("/request/now").asLong(); }
+        long fee() { return ledger.b.get(2).integer().longValueExact(); }
+        String minted() { return ledger.plan.required("mint").fieldNames().next(); }
+        String lp(String unit,long q) { return "a1581c"+unit.substring(0,56)+"a1"+bytes(unit.substring(56))+uint(q); }
+        String target() { return ref(a -> a.equals(v.at("/anchors/address").asText())); }
+        String walletInput() { return ref(a -> a.equals(payer())); }
+        private String ref(java.util.function.Predicate<String> address) {
+            for (var r : ledger.plan.required("inputs")) if (address.test(resolved(r.asText()).required("address").asText())) return r.asText();
+            throw new IllegalArgumentException("no such input");
+        }
+        /** TxOutRef(txId, index) as Plutus data. */
+        String outRef(String ref) { return "d8799f5820"+ref.substring(0,64)+uint(Long.parseLong(ref.substring(65)))+"ff"; }
+        long amount(String ref,String unit) {
+            for (var a : resolved(ref).required("amount")) if (a.required("unit").asText().equals(unit)) return a.required("quantity").asLong();
+            return 0;
+        }
+        void lovelace(String ref,long quantity) {
+            for (var a : resolved(ref).withArray("amount")) if (a.required("unit").asText().equals("lovelace")) ((ObjectNode)a).put("quantity",quantity);
+        }
+        void targetDatum(String from,String to) {
+            var u=resolved(target());
+            String datum=u.required("inline_datum").asText();
+            if (datum.indexOf(from)<0 || datum.indexOf(from)!=datum.lastIndexOf(from)) throw new IllegalArgumentException("ambiguous datum edit");
+            u.put("inline_datum",datum.replace(from,to));
+        }
+        void replaceIn(Cbor item,String from,String to) {
+            String r=item.raw();
+            if (r.indexOf(from)<0 || r.indexOf(from)!=r.lastIndexOf(from)) throw new IllegalArgumentException("ambiguous edit");
+            swap(item,r.replace(from,to));
+        }
+        /** The fee cap of dev-host-1.md rule 3 for this body's size and budgets. */
+        long feeCap() {
+            var pp=v.required("protocolParams");
+            var exFee=java.math.BigDecimal.ZERO;
+            for (var r : ledger.plan.required("redeemers"))
+                exFee=exFee.add(new java.math.BigDecimal(r.required("mem").asText()).multiply(new java.math.BigDecimal(pp.required("price_mem").asText())))
+                        .add(new java.math.BigDecimal(r.required("steps").asText()).multiply(new java.math.BigDecimal(pp.required("price_step").asText())));
+            long ex=exFee.setScale(0,java.math.RoundingMode.CEILING).longValueExact();
+            long base=pp.required("min_fee_a").asLong()*(ledger.length+200L)+pp.required("min_fee_b").asLong()+ex;
+            return base*12/10+500_000;
+        }
+        Ledger recorded(String name) throws RuntimeException {
+            try { return new Ledger(JSON.readTree(DIR.resolve(name+".json").toFile()).at("/result/prepared/cbor").asText()); }
+            catch (java.io.IOException ex) { throw new java.io.UncheckedIOException(ex); }
+        }
+        void extraScriptInput() {
+            var extra=input(0).deepCopy().put("tx_hash","ff".repeat(32)).put("output_index",0).put("address",v.at("/anchors/address").asText());
+            extra.putNull("inline_datum");
+            extra.putArray("amount").addObject().put("unit","lovelace").put("quantity",2_000_000);
+            v.withObject("/resolved").set("ff".repeat(32)+"#0",extra);
+            var inputs=ledger.set(0);
+            var encoded=new StringBuilder(head(4,inputs.size()+1));
+            inputs.forEach(i -> encoded.append(i.raw()));
+            body(0,"d90102"+encoded+"825820"+"ff".repeat(32)+"00");
+            coin(1,2_000_000);
+        }
         Cbor coin(int i) {
-            var out=out(i);
-            var value=out.major==4 ? out.at(1) : out.fields().get(1);
+            var value=val(out(i));
             return value.major==4 ? value.at(0) : value;
         }
         void coin(int i,long delta) { var old=coin(i); swap(old,uint(old.integer().longValueExact()+delta)); }
         void transfer(int a,int b,long change) { coin(a,change); coin(b,-change); }
-        void address(int i,String bytes) { var out=out(i); swap(out.major==4 ? out.at(0) : out.fields().get(0),"581d"+bytes); }
+        void address(int i,String bytes) { swap(addr(out(i)),bytes(bytes)); }
+        void outputs(List<String> raws) { body(1,head(4,raws.size())+String.join("",raws)); }
         void cert(String hex) { body(4,"d9010281"+hex); }
         void signers(List<String> keys) {
             body(14,"d90102"+head(4,keys.size())+String.join("",keys.stream().map(k -> "581c"+k).toList()));
             var claimed=v.withObject("/result/prepared").putArray("signers").add(caller());
-            keys.stream().filter(k -> !k.equals(caller())).forEach(claimed::add);
+            keys.stream().distinct().filter(k -> !k.equals(caller())).forEach(claimed::add);
         }
+        void claim(Consumer<ObjectNode> change) { claims.add(change); }
         void body(int key,String hex) { field(ledger.body,key,hex); }
         void field(Cbor obj,int key,String hex) {
             var pairs=new TreeMap<Integer,String>();
@@ -235,14 +579,19 @@ public final class MutationVectors {
             pairs.forEach((k,value) -> buf.append(uint(k)).append(value));
             swap(obj,buf.toString());
         }
-        void swap(Cbor item,String hex) {
+        void swap(Cbor item,String hex) { ledger=new Ledger(splice(item,hex)); }
+        String splice(Cbor item,String hex) {
             if (item.source!=ledger.tx.source) throw new IllegalArgumentException("stale edit offset");
             var original=ledger.tx.raw();
-            ledger=new Ledger(original.substring(0,2*item.start)+hex+original.substring(2*item.end));
+            return original.substring(0,2*item.start)+hex+original.substring(2*item.end);
         }
+        /** An unreadable body: kept as bytes, with the hash of its received body slice. */
+        void raw(String hex) { raw(hex,Cbor.read(HEX.parseHex(hex)).items.getFirst().digest(256)); }
+        void raw(String hex,String bodyHash) { raw=hex; rawHash=bodyHash; }
     }
+    static String bytes(String hex) { return head(2,hex.length()/2)+hex; }
     private static String uint(long n) { return head(0,n); }
-    private static String head(int major,long n) {
+    static String head(int major,long n) {
         if (n<0) throw new IllegalArgumentException("negative size");
         if (n<24) return "%02x".formatted(major*32+n);
         int ai=n<256 ? 24 : n<65536 ? 25 : n<=0xffffffffL ? 26 : 27;
@@ -251,23 +600,32 @@ public final class MutationVectors {
     static ObjectNode generate(Case mutation) throws Exception {
         var e=new Edit((ObjectNode)JSON.readTree(DIR.resolve(mutation.source+".json").toFile()));
         mutation.change.accept(e);
-        if (e.ledger.b.containsKey(11) && !mutation.name.equals("script-data-hash"))
-            e.body(11,"5820"+e.ledger.scriptIntegrity(e.v.required("protocolParams")));
-        var prepared=e.v.withObject("/result/prepared");
-        prepared.put("cbor",e.ledger.tx.raw()).put("txHash",e.ledger.body.digest(256));
-        prepared.set("plan",e.ledger.plan);
-        for (String key : List.of("validFrom","validTo")) prepared.set(key,e.ledger.plan.get(key));
-        if (mutation.name.equals("tx-hash")) prepared.put("txHash","00".repeat(32));
-        if (mutation.name.equals("shown-plan")) prepared.withObject("/plan").put("fee","1");
-        e.v.put("mutation",mutation.name).putArray("violations").add(mutation.rule);
+        var prepared=e.prepared();
+        if (e.raw!=null) prepared.put("cbor",e.raw).put("txHash",e.rawHash);
+        else {
+            // Recommit a changed witness set; an unchanged commitment keeps the body's own encoding.
+            if (e.ledger.b.containsKey(11) && !e.keepIntegrity) {
+                String integrity=e.ledger.scriptIntegrity(e.v.required("protocolParams"));
+                if (!integrity.equals(e.ledger.b.get(11).bytes())) e.body(11,"5820"+integrity);
+            }
+            prepared.put("cbor",e.ledger.tx.raw()).put("txHash",e.ledger.body.digest(256));
+            prepared.set("plan",e.ledger.plan);
+            for (String key : List.of("validFrom","validTo")) prepared.set(key,e.ledger.plan.get(key));
+        }
+        e.claims.forEach(c -> c.accept(prepared));
+        e.v.put("mutation",mutation.name);
+        if (mutation.site!=null && mutation.site.contains("/")) e.v.put("check",mutation.site);
+        var violations=e.v.putArray("violations");
+        if (mutation.site!=null) violations.add(mutation.code());
         return e.v;
     }
+    static List<String> expected(Case mutation) { return mutation.site==null ? List.of() : List.of(mutation.code()); }
     public static void main(String[] args) throws Exception {
         for (var mutation : cases()) {
             var vector=generate(mutation);
-            Files.writeString(DIR.resolve("reject-"+mutation.name+".json"),JSON.writerWithDefaultPrettyPrinter().writeValueAsString(vector)+"\n");
+            Files.writeString(DIR.resolve(mutation.file()),JSON.writerWithDefaultPrettyPrinter().writeValueAsString(vector)+"\n");
             var got=ReferenceChecker.check(vector);
-            if (!got.equals(List.of(mutation.rule))) throw new AssertionError(mutation.name+" gave "+got);
+            if (!got.equals(expected(mutation))) throw new AssertionError(mutation.name+" gave "+got);
         }
     }
 }

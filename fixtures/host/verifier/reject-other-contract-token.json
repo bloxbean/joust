@@ -1,23 +1,22 @@
 {
-  "source" : "dapp-0003",
+  "source" : "Dex-addLiquidity",
   "method" : "prepare",
   "request" : {
-    "now" : 234490,
+    "now" : 1852,
     "ttlSlots" : 20,
     "call" : {
-      "contract" : "org.julclang.state.examples.counter.Counter",
+      "contract" : "org.julclang.state.examples.dex.Dex",
       "kind" : "action",
-      "method" : "increment",
-      "instance" : "e02f7a967be3e148140344958294b0a61c7df76c40ae376139743d66d04dba47",
-      "object" : null,
+      "method" : "addLiquidity",
+      "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
       "args" : {
-        "by" : "3"
+        "tokenIn" : "100000"
       },
+      "instance" : "d612fb46600416d13286bdccbdb479cc4063fec269105fd429e4a508c19829ff",
       "pay" : {
-        "lovelace" : "0",
-        "assets" : [ ]
-      },
-      "address" : "addr_test1qp779e588dx9chlpry3nr0dk0r3y008te5jqy5cetfl7apqxuhc22kvk9xfyaq2tfrjdcxydljcskah7j5lch3ka5yjsvul6wp"
+        "lovelace" : "100000000",
+        "assets" : [ [ "7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb60", [ [ "4d3142", "100000" ] ] ] ]
+      }
     }
   },
   "networkId" : 0,
@@ -25,8 +24,8 @@
   "anchors" : {
     "description" : {
       "preamble" : {
-        "title" : "org.julclang.state.examples.counter.Counter",
-        "description" : "JOUST contract Counter (ADR-0013 D3)",
+        "title" : "org.julclang.state.examples.dex.Dex",
+        "description" : "JOUST contract Dex (ADR-0013 D3)",
         "version" : "0.0.0",
         "plutusVersion" : "v3",
         "compiler" : {
@@ -34,88 +33,100 @@
         }
       },
       "validators" : [ {
-        "title" : "CounterValidator.mint",
+        "title" : "DexValidator.mint",
         "redeemer" : {
           "title" : "redeemer",
           "schema" : {
-            "$ref" : "#/definitions/org.julclang.state.examples.counter.CounterValidator.Lifecycle"
+            "$ref" : "#/definitions/org.julclang.state.examples.dex.DexValidator.Lifecycle"
           }
         }
       }, {
-        "title" : "CounterValidator.spend",
+        "title" : "DexValidator.spend",
         "datum" : {
           "title" : "datum",
           "schema" : {
-            "$ref" : "#/definitions/org.julclang.state.examples.counter.Counter.State"
+            "$ref" : "#/definitions/org.julclang.state.examples.dex.Dex.Pool"
           }
         },
         "redeemer" : {
           "title" : "redeemer",
           "schema" : {
-            "$ref" : "#/definitions/org.julclang.state.examples.counter.CounterValidator.Calls"
+            "$ref" : "#/definitions/org.julclang.state.examples.dex.DexValidator.Calls"
           }
         }
       } ],
       "x-joust" : {
         "version" : 2,
-        "contract" : "Counter",
-        "package" : "org.julclang.state.examples.counter",
-        "validator" : "CounterValidator",
-        "client" : "CounterClient",
+        "contract" : "Dex",
+        "package" : "org.julclang.state.examples.dex",
+        "validator" : "DexValidator",
+        "client" : "DexClient",
         "state" : {
-          "$ref" : "#/definitions/org.julclang.state.examples.counter.Counter.State"
+          "$ref" : "#/definitions/org.julclang.state.examples.dex.Dex.Pool"
         },
         "stakeSelf" : false,
-        "minAda" : 2200000,
-        "maxDatumBytes" : 128,
-        "assetAware" : false,
+        "minAda" : 3400000,
+        "maxDatumBytes" : 256,
+        "assetAware" : true,
         "owned" : [ ],
         "creations" : [ {
-          "name" : "init",
+          "name" : "open",
           "kind" : "init",
           "redeemer" : {
             "purpose" : "mint",
             "constructor" : "CreateInstance",
             "index" : 0
           },
-          "args" : [ ],
+          "args" : [ {
+            "name" : "tokenPolicy",
+            "type" : "byte[]",
+            "schema" : {
+              "dataType" : "bytes"
+            }
+          }, {
+            "name" : "tokenName",
+            "type" : "byte[]",
+            "schema" : {
+              "dataType" : "bytes"
+            }
+          } ],
           "ctx" : true,
           "payable" : false,
           "takesAssets" : false,
           "needsService" : false,
           "recipe" : {
-            "transition" : "init",
-            "redeemerFields" : [ "seed", "ctx" ],
-            "target" : "org.julclang.state.examples.counter.Counter.State",
+            "transition" : "open",
+            "redeemerFields" : [ "seed", "tokenPolicy", "tokenName", "ctx" ],
+            "target" : "org.julclang.state.examples.dex.Dex.Pool",
             "shared" : false,
             "signers" : [ ],
             "validAfter" : [ ],
             "validBefore" : [ ],
             "params" : false,
             "reads" : [ ],
-            "transitionArgs" : [ ],
+            "transitionArgs" : [ "$funds", "tokenPolicy", "tokenName" ],
             "stepEvents" : false
           }
         } ],
         "actions" : [ {
-          "name" : "increment",
+          "name" : "addLiquidity",
           "kind" : "action",
           "redeemer" : {
             "purpose" : "spend",
-            "constructor" : "Increment",
+            "constructor" : "AddLiquidity",
             "index" : 0
           },
-          "fields" : [ "by" ],
+          "fields" : [ "tokenIn", "ctx", "assetsIn" ],
           "args" : [ {
-            "name" : "by",
+            "name" : "tokenIn",
             "type" : "BigInteger",
             "schema" : {
               "dataType" : "integer"
             }
           } ],
-          "ctx" : false,
-          "payable" : false,
-          "takesAssets" : false,
+          "ctx" : true,
+          "payable" : true,
+          "takesAssets" : true,
           "policies" : {
             "signedBy" : [ ],
             "validAfter" : [ ],
@@ -131,42 +142,48 @@
           },
           "returns" : {
             "state" : true,
-            "payouts" : false,
-            "sends" : false,
-            "mint" : false,
-            "accepted" : false,
+            "payouts" : true,
+            "sends" : true,
+            "mint" : true,
+            "accepted" : true,
             "events" : false,
             "deposits" : false
           },
-          "needsService" : false,
+          "needsService" : true,
           "recipe" : {
-            "transition" : "increment",
-            "redeemerFields" : [ "by" ],
-            "target" : "org.julclang.state.examples.counter.Counter.State",
+            "transition" : "addLiquidity",
+            "redeemerFields" : [ "tokenIn", "ctx", "assetsIn" ],
+            "target" : "org.julclang.state.examples.dex.Dex.Pool",
             "shared" : false,
             "signers" : [ ],
             "validAfter" : [ ],
             "validBefore" : [ ],
             "params" : false,
             "reads" : [ ],
-            "transitionArgs" : [ "by" ],
+            "transitionArgs" : [ "$funds", "tokenIn" ],
             "stepEvents" : false
           }
         }, {
-          "name" : "reset",
+          "name" : "removeLiquidity",
           "kind" : "action",
           "redeemer" : {
             "purpose" : "spend",
-            "constructor" : "Reset",
+            "constructor" : "RemoveLiquidity",
             "index" : 1
           },
-          "fields" : [ ],
-          "args" : [ ],
-          "ctx" : false,
-          "payable" : false,
-          "takesAssets" : false,
+          "fields" : [ "lp", "ctx", "assetsIn" ],
+          "args" : [ {
+            "name" : "lp",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          } ],
+          "ctx" : true,
+          "payable" : true,
+          "takesAssets" : true,
           "policies" : {
-            "signedBy" : [ "owner" ],
+            "signedBy" : [ ],
             "validAfter" : [ ],
             "validBefore" : [ ],
             "quorum" : null,
@@ -180,28 +197,141 @@
           },
           "returns" : {
             "state" : true,
-            "payouts" : false,
-            "sends" : false,
-            "mint" : false,
-            "accepted" : false,
+            "payouts" : true,
+            "sends" : true,
+            "mint" : true,
+            "accepted" : true,
             "events" : false,
             "deposits" : false
           },
-          "needsService" : false,
+          "needsService" : true,
           "recipe" : {
-            "transition" : "reset",
-            "redeemerFields" : [ ],
-            "target" : "org.julclang.state.examples.counter.Counter.State",
+            "transition" : "removeLiquidity",
+            "redeemerFields" : [ "lp", "ctx", "assetsIn" ],
+            "target" : "org.julclang.state.examples.dex.Dex.Pool",
             "shared" : false,
-            "signers" : [ {
-              "field" : "owner",
-              "index" : 1
-            } ],
+            "signers" : [ ],
             "validAfter" : [ ],
             "validBefore" : [ ],
             "params" : false,
             "reads" : [ ],
-            "transitionArgs" : [ ],
+            "transitionArgs" : [ "$funds", "lp" ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "swapAdaForToken",
+          "kind" : "action",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "SwapAdaForToken",
+            "index" : 2
+          },
+          "fields" : [ "minOut", "ctx", "assetsIn" ],
+          "args" : [ {
+            "name" : "minOut",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          } ],
+          "ctx" : true,
+          "payable" : true,
+          "takesAssets" : true,
+          "policies" : {
+            "signedBy" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : null,
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : true,
+            "payouts" : true,
+            "sends" : true,
+            "mint" : true,
+            "accepted" : true,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : true,
+          "recipe" : {
+            "transition" : "swapAdaForToken",
+            "redeemerFields" : [ "minOut", "ctx", "assetsIn" ],
+            "target" : "org.julclang.state.examples.dex.Dex.Pool",
+            "shared" : false,
+            "signers" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "$funds", "minOut" ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "swapTokenForAda",
+          "kind" : "action",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "SwapTokenForAda",
+            "index" : 3
+          },
+          "fields" : [ "tokenIn", "minOut", "ctx", "assetsIn" ],
+          "args" : [ {
+            "name" : "tokenIn",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          }, {
+            "name" : "minOut",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          } ],
+          "ctx" : true,
+          "payable" : true,
+          "takesAssets" : true,
+          "policies" : {
+            "signedBy" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : null,
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : true,
+            "payouts" : true,
+            "sends" : true,
+            "mint" : true,
+            "accepted" : true,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : true,
+          "recipe" : {
+            "transition" : "swapTokenForAda",
+            "redeemerFields" : [ "tokenIn", "minOut", "ctx", "assetsIn" ],
+            "target" : "org.julclang.state.examples.dex.Dex.Pool",
+            "shared" : false,
+            "signers" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "$funds", "tokenIn", "minOut" ],
             "stepEvents" : false
           }
         }, {
@@ -210,7 +340,7 @@
           "redeemer" : {
             "purpose" : "spend",
             "constructor" : "Close",
-            "index" : 2
+            "index" : 4
           },
           "fields" : [ "ctx" ],
           "args" : [ ],
@@ -218,7 +348,7 @@
           "payable" : false,
           "takesAssets" : false,
           "policies" : {
-            "signedBy" : [ "owner" ],
+            "signedBy" : [ "admin" ],
             "validAfter" : [ ],
             "validBefore" : [ ],
             "quorum" : null,
@@ -233,13 +363,13 @@
           "returns" : {
             "state" : false,
             "payouts" : true,
-            "sends" : false,
+            "sends" : true,
             "mint" : false,
             "accepted" : false,
             "events" : false,
             "deposits" : false
           },
-          "needsService" : false,
+          "needsService" : true,
           "recipe" : {
             "transition" : "close",
             "redeemerFields" : [ "ctx" ],
@@ -247,22 +377,22 @@
               "constructor" : "BurnInstance",
               "index" : 1
             },
-            "target" : "org.julclang.state.examples.counter.Counter.State",
+            "target" : "org.julclang.state.examples.dex.Dex.Pool",
             "shared" : false,
             "signers" : [ {
-              "field" : "owner",
-              "index" : 1
+              "field" : "admin",
+              "index" : 0
             } ],
             "validAfter" : [ ],
             "validBefore" : [ ],
             "params" : false,
             "reads" : [ ],
-            "transitionArgs" : [ ],
+            "transitionArgs" : [ "$funds" ],
             "stepEvents" : false
           }
         } ],
         "views" : [ {
-          "name" : "count",
+          "name" : "lpSupply",
           "returns" : {
             "dataType" : "integer"
           },
@@ -313,25 +443,119 @@
             } ]
           } ]
         },
-        "org.julclang.state.examples.counter.CounterValidator.Calls" : {
+        "org.julclang.state.examples.dex.DexValidator.Calls" : {
           "title" : "Calls",
           "anyOf" : [ {
-            "title" : "Increment",
+            "title" : "AddLiquidity",
             "dataType" : "constructor",
             "index" : 0,
             "fields" : [ {
-              "title" : "by",
+              "title" : "tokenIn",
               "dataType" : "integer"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            }, {
+              "title" : "assetsIn",
+              "dataType" : "map",
+              "keys" : {
+                "dataType" : "bytes"
+              },
+              "values" : {
+                "dataType" : "map",
+                "keys" : {
+                  "dataType" : "bytes"
+                },
+                "values" : {
+                  "dataType" : "integer"
+                }
+              }
             } ]
           }, {
-            "title" : "Reset",
+            "title" : "RemoveLiquidity",
             "dataType" : "constructor",
             "index" : 1,
-            "fields" : [ ]
+            "fields" : [ {
+              "title" : "lp",
+              "dataType" : "integer"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            }, {
+              "title" : "assetsIn",
+              "dataType" : "map",
+              "keys" : {
+                "dataType" : "bytes"
+              },
+              "values" : {
+                "dataType" : "map",
+                "keys" : {
+                  "dataType" : "bytes"
+                },
+                "values" : {
+                  "dataType" : "integer"
+                }
+              }
+            } ]
+          }, {
+            "title" : "SwapAdaForToken",
+            "dataType" : "constructor",
+            "index" : 2,
+            "fields" : [ {
+              "title" : "minOut",
+              "dataType" : "integer"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            }, {
+              "title" : "assetsIn",
+              "dataType" : "map",
+              "keys" : {
+                "dataType" : "bytes"
+              },
+              "values" : {
+                "dataType" : "map",
+                "keys" : {
+                  "dataType" : "bytes"
+                },
+                "values" : {
+                  "dataType" : "integer"
+                }
+              }
+            } ]
+          }, {
+            "title" : "SwapTokenForAda",
+            "dataType" : "constructor",
+            "index" : 3,
+            "fields" : [ {
+              "title" : "tokenIn",
+              "dataType" : "integer"
+            }, {
+              "title" : "minOut",
+              "dataType" : "integer"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            }, {
+              "title" : "assetsIn",
+              "dataType" : "map",
+              "keys" : {
+                "dataType" : "bytes"
+              },
+              "values" : {
+                "dataType" : "map",
+                "keys" : {
+                  "dataType" : "bytes"
+                },
+                "values" : {
+                  "dataType" : "integer"
+                }
+              }
+            } ]
           }, {
             "title" : "Close",
             "dataType" : "constructor",
-            "index" : 2,
+            "index" : 4,
             "fields" : [ {
               "title" : "ctx",
               "$ref" : "#/definitions/org.julclang.state.api.Ctx"
@@ -353,7 +577,7 @@
             } ]
           } ]
         },
-        "org.julclang.state.examples.counter.CounterValidator.Lifecycle" : {
+        "org.julclang.state.examples.dex.DexValidator.Lifecycle" : {
           "title" : "Lifecycle",
           "anyOf" : [ {
             "title" : "CreateInstance",
@@ -363,6 +587,12 @@
               "title" : "seed",
               "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
             }, {
+              "title" : "tokenPolicy",
+              "dataType" : "bytes"
+            }, {
+              "title" : "tokenName",
+              "dataType" : "bytes"
+            }, {
               "title" : "ctx",
               "$ref" : "#/definitions/org.julclang.state.api.Ctx"
             } ]
@@ -371,28 +601,45 @@
             "dataType" : "constructor",
             "index" : 1,
             "fields" : [ ]
+          }, {
+            "title" : "ByAction",
+            "dataType" : "constructor",
+            "index" : 2,
+            "fields" : [ {
+              "title" : "by",
+              "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
+            } ]
           } ]
         },
-        "org.julclang.state.examples.counter.Counter.State" : {
-          "title" : "State",
+        "org.julclang.state.examples.dex.Dex.Pool" : {
+          "title" : "Pool",
           "anyOf" : [ {
-            "title" : "State",
+            "title" : "Pool",
             "dataType" : "constructor",
             "index" : 0,
             "fields" : [ {
-              "title" : "count",
-              "dataType" : "integer"
-            }, {
-              "title" : "owner",
+              "title" : "admin",
               "dataType" : "bytes"
+            }, {
+              "title" : "tokenPolicy",
+              "dataType" : "bytes"
+            }, {
+              "title" : "tokenName",
+              "dataType" : "bytes"
+            }, {
+              "title" : "lpName",
+              "dataType" : "bytes"
+            }, {
+              "title" : "lpSupply",
+              "dataType" : "integer"
             } ]
           } ]
         }
       }
     },
     "language" : "PlutusScriptV3",
-    "policy" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823",
-    "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
+    "policy" : "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065",
+    "address" : "addr_test1wzzuwthpcpkgtky26cz67z77zw7m943q8e3njddwjx4yqega8wk95",
     "outputVerifier" : {
       "language" : "PlutusScriptV3",
       "hash" : "393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021",
@@ -400,205 +647,94 @@
     }
   },
   "resolved" : {
-    "1db17ca916de6ec917e86370e6dd0cd446d68150accd783a1dce30a8d292fbf6#0" : {
-      "tx_hash" : "1db17ca916de6ec917e86370e6dd0cd446d68150accd783a1dce30a8d292fbf6",
+    "6cc66b6e27e32e2c85bfef3c4ab13261a7657f04585b4ffa02936f035c0e8ff8#0" : {
+      "tx_hash" : "6cc66b6e27e32e2c85bfef3c4ab13261a7657f04585b4ffa02936f035c0e8ff8",
       "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
+      "address" : "addr_test1wzzuwthpcpkgtky26cz67z77zw7m943q8e3njddwjx4yqega8wk95",
       "amount" : [ {
         "unit" : "lovelace",
-        "quantity" : 26222120
+        "quantity" : 54625020
       } ],
       "data_hash" : null,
       "inline_datum" : null,
-      "reference_script_hash" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823"
+      "reference_script_hash" : "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065"
     },
-    "c396973b61ce1bc84d8cba25fd146e7e24d7472b101b6c01dca39780978ed02d#0" : {
-      "tx_hash" : "c396973b61ce1bc84d8cba25fd146e7e24d7472b101b6c01dca39780978ed02d",
+    "d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e#0" : {
+      "tx_hash" : "d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e",
       "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
+      "address" : "addr_test1wzzuwthpcpkgtky26cz67z77zw7m943q8e3njddwjx4yqega8wk95",
       "amount" : [ {
         "unit" : "lovelace",
-        "quantity" : 2200000
+        "quantity" : 3400000
       }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823aba097d678e7a390ed8522c28c3c34b1f328c27286d74df4be6ba37b68f71d3e",
-        "quantity" : 1
-      } ],
-      "data_hash" : "45f6e6f57594f3f92776f0779e76cf3fec9cb1c4d7fff9627d3b2e756d735e98",
-      "inline_datum" : "d8799f0d581c76a10289e7f191a8e977b722829b9173bc0a467e2700301f6d2f738cff",
-      "reference_script_hash" : null
-    },
-    "75fa4bd39d6254116674044405d63b02aa89a47751d26876b6ef6e292bd77216#0" : {
-      "tx_hash" : "75fa4bd39d6254116674044405d63b02aa89a47751d26876b6ef6e292bd77216",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823ed703b9c360f7a5951af5b80b5f52a18b66403ee212b80c2e9e9c39a6d44cacf",
-        "quantity" : 1
-      } ],
-      "data_hash" : "7373c757d6eba00801b65e8a07b232c4f1224887f46190dac831bc33f21627b1",
-      "inline_datum" : "d8799f0d581c6b27ad9fd254a51f531595db8df2aaeb302890a75eba115c2dfd4699ff",
-      "reference_script_hash" : null
-    },
-    "c49b06eff18a30a89e63028d450a3fac9951643bc31221f4835ff3d370c47665#0" : {
-      "tx_hash" : "c49b06eff18a30a89e63028d450a3fac9951643bc31221f4835ff3d370c47665",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823553ea375d95a4813d118bce4fde85d0992ffcc6d19e369dc8df72e4e5362696d",
-        "quantity" : 1
-      } ],
-      "data_hash" : "841dde0a1ab45331b06b5065026d15c0a8096dfcdfbfd2447037bd339afaf64b",
-      "inline_datum" : "d8799f0d581c755a013cf02f04d251ec3ed8aa5c197d04aedf2a08e90fee626c8f17ff",
-      "reference_script_hash" : null
-    },
-    "0894d0ad132d8b8e5137986afdf275c7df634b3a2999bdb00e3893a21433ff54#0" : {
-      "tx_hash" : "0894d0ad132d8b8e5137986afdf275c7df634b3a2999bdb00e3893a21433ff54",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e128236df51fff69ea3e02cf29dbfa9cda7223f891ae961d568617f2ffe00adf7c45e2",
-        "quantity" : 1
-      } ],
-      "data_hash" : "485c7db40ca040cd68940e6a6bb8f0ec70b3e7cc59de4bcacc09023bcb51ad47",
-      "inline_datum" : "d8799f0d581c3a863347f8f01d1ea3de8077c982a15d2ab15328701e537b70b27f32ff",
-      "reference_script_hash" : null
-    },
-    "24357332d1979d46b29fc0c079ba56542bbd007d37cf0f0bd649a120f3e32e33#0" : {
-      "tx_hash" : "24357332d1979d46b29fc0c079ba56542bbd007d37cf0f0bd649a120f3e32e33",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e128231eaa315368cf3b38a512480946764479235b450b180eec99c3ac04abc0c83f3a",
-        "quantity" : 1
-      } ],
-      "data_hash" : "dce97b6175209bfadbee4bf1c5af8361a8b92bba9b6f5da00cdc13d7ea238326",
-      "inline_datum" : "d8799f0d581cb8fad62b3265cc0ace79f63ffd0c1102c082f56e55a9246730e4a496ff",
-      "reference_script_hash" : null
-    },
-    "5dd0650c46b686bf602fde9bead6fa4cc82d1bbbabad3ee71fe7e0091e753e80#0" : {
-      "tx_hash" : "5dd0650c46b686bf602fde9bead6fa4cc82d1bbbabad3ee71fe7e0091e753e80",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823bc0d94f1b2b17bd40a833cbe552956f2b00646a9826e40fc7c27f89d99c499ca",
-        "quantity" : 1
-      } ],
-      "data_hash" : "2419161d50adae2f08cce72407382bd9f50c6c1d5c64d87f753eafdcd5b0c532",
-      "inline_datum" : "d8799f0d581c7374995d64a576e3f9b056ac86c5a82131c15f58a0bc07c6c2ec7397ff",
-      "reference_script_hash" : null
-    },
-    "633af029f47928b167762093469c34195adc6fcafed23ddf724b0a5f9d1c7a32#0" : {
-      "tx_hash" : "633af029f47928b167762093469c34195adc6fcafed23ddf724b0a5f9d1c7a32",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e128231cfc626ffe191c2e6f17bfb8402c634be8ec5fa80bdfbc8547a2da95724246b4",
-        "quantity" : 1
-      } ],
-      "data_hash" : "41c4412bd6b626775032b80daaeb7a634281e6ecaacdbeb37771d4f1b50b3e65",
-      "inline_datum" : "d8799f0d581cbf203cf38219d4d94b4983495c8b3715e104f50751ec7fe47de2f07bff",
-      "reference_script_hash" : null
-    },
-    "25de9f379e57525f4483b1c1cb9ba2824f40193b9f5e16902ce8d1155fb183cb#0" : {
-      "tx_hash" : "25de9f379e57525f4483b1c1cb9ba2824f40193b9f5e16902ce8d1155fb183cb",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e1282324443c5f57d2ef0d956195a424a0a285c7d796d598f97e024b0b04f69b975f17",
-        "quantity" : 1
-      } ],
-      "data_hash" : "f7b5fa43765f042500c6f04726f101617d584367008f34ed1452c71e20cb4fdd",
-      "inline_datum" : "d8799f0d581cd82e870cfb04e1f1f412952a8af2d37a1d763175b674cdbad6701dc3ff",
-      "reference_script_hash" : null
-    },
-    "3a18a67feb03d7f6ef757a08943fb058c160443da2945825bf7e5a86d634ac6b#0" : {
-      "tx_hash" : "3a18a67feb03d7f6ef757a08943fb058c160443da2945825bf7e5a86d634ac6b",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e128236e395b7e30b5f311d88993d0f378c92bc2b4fe0db90c0b3deb677b1242ac4b00",
-        "quantity" : 1
-      } ],
-      "data_hash" : "ee8a4f572920f1e3c10641c1d0b880a03cc647c84144958bdb4e6b82f3b9b33d",
-      "inline_datum" : "d8799f0d581c26e457b005123acf8a5252e6e2338c5513f525c9d50e2ba2d65b197aff",
-      "reference_script_hash" : null
-    },
-    "5ec6c1596c40665fc4d2aec41d7097ad97e19276e68fa8cbf1f90c1244a74e61#0" : {
-      "tx_hash" : "5ec6c1596c40665fc4d2aec41d7097ad97e19276e68fa8cbf1f90c1244a74e61",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e128236b8fd92682095eb21d1fd390d9de20350ffd5eb6effe76e21b983fe9dffecd90",
-        "quantity" : 1
-      } ],
-      "data_hash" : "db6dbade947e59dd9eb5acc1d04f05673e75b2e5b565b6aa3e2730067c75cad9",
-      "inline_datum" : "d8799f0d581cdabd23dbd0f06b80e1629e793d70c62904d56d81501ed5987ee6e2fbff",
-      "reference_script_hash" : null
-    },
-    "d36d366d8af6a535fd354661c9364fb4b1a469681fde6523c802465b5e81c139#0" : {
-      "tx_hash" : "d36d366d8af6a535fd354661c9364fb4b1a469681fde6523c802465b5e81c139",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823b46d3fb9fbeca3584260a66c809d9727f9ed1850e002d6abc5cbdf09acaa7861",
-        "quantity" : 1
-      } ],
-      "data_hash" : "1d7625cd69d9fd835dae298076e75b9ee548bf32da24ac98ace5e80fd39bbfd2",
-      "inline_datum" : "d8799f0d581cbdb4e037be92d1645e8e7f046c39b7aef4c4197fbde7d00ca2c137c9ff",
-      "reference_script_hash" : null
-    },
-    "c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb63972#0" : {
-      "tx_hash" : "c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb63972",
-      "output_index" : 0,
-      "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 2200000
-      }, {
-        "unit" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823e02f7a967be3e148140344958294b0a61c7df76c40ae376139743d66d04dba47",
+        "unit" : "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065d612fb46600416d13286bdccbdb479cc4063fec269105fd429e4a508c19829ff",
         "quantity" : 1
       } ],
       "data_hash" : null,
-      "inline_datum" : "d8799f00581c7de2e6873b4c5c5fe1192331bdb678e247bcebcd240253195a7fee84ff",
+      "inline_datum" : "d8799f581ca6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8581c7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb60434d3142581cf2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b00ff",
       "reference_script_hash" : null
     },
-    "c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb63972#1" : {
-      "tx_hash" : "c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb63972",
-      "output_index" : 1,
-      "address" : "addr_test1qp779e588dx9chlpry3nr0dk0r3y008te5jqy5cetfl7apqxuhc22kvk9xfyaq2tfrjdcxydljcskah7j5lch3ka5yjsvul6wp",
+    "e42ab8fabf92b01ce0756ec17de771f2146d3ec3efc6adbd66d7635bf82ad29c#0" : {
+      "tx_hash" : "e42ab8fabf92b01ce0756ec17de771f2146d3ec3efc6adbd66d7635bf82ad29c",
+      "output_index" : 0,
+      "address" : "addr_test1wqunc2mhs52mr20rsg9cn8ggn836aemt9dkzwqmzqhqyqggfphfcq",
       "amount" : [ {
         "unit" : "lovelace",
-        "quantity" : 297496348
+        "quantity" : 8667490
+      } ],
+      "data_hash" : null,
+      "inline_datum" : null,
+      "reference_script_hash" : "393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021"
+    },
+    "0f6749c88ed69b09fbad6dc60d006c4a3d89419e43fd66faa32a5eeb02363303#0" : {
+      "tx_hash" : "0f6749c88ed69b09fbad6dc60d006c4a3d89419e43fd66faa32a5eeb02363303",
+      "output_index" : 0,
+      "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 27828383
+      } ],
+      "data_hash" : null,
+      "inline_datum" : null,
+      "reference_script_hash" : null
+    },
+    "4dfda360c0b2861feef99f379661b9594c4a7f30914279ad6709f133cf43e504#0" : {
+      "tx_hash" : "4dfda360c0b2861feef99f379661b9594c4a7f30914279ad6709f133cf43e504",
+      "output_index" : 0,
+      "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 1150770
+      }, {
+        "unit" : "7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb604d3142",
+        "quantity" : 100000
+      }, {
+        "unit" : "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "quantity" : 1
+      } ],
+      "data_hash" : null,
+      "inline_datum" : null,
+      "reference_script_hash" : null
+    },
+    "4dfda360c0b2861feef99f379661b9594c4a7f30914279ad6709f133cf43e504#1" : {
+      "tx_hash" : "4dfda360c0b2861feef99f379661b9594c4a7f30914279ad6709f133cf43e504",
+      "output_index" : 1,
+      "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 443335992
+      } ],
+      "data_hash" : null,
+      "inline_datum" : null,
+      "reference_script_hash" : null
+    },
+    "d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e#1" : {
+      "tx_hash" : "d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e",
+      "output_index" : 1,
+      "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 37281831
       } ],
       "data_hash" : null,
       "inline_datum" : null,
@@ -607,8 +743,12 @@
   },
   "node" : {
     "scriptsAt" : {
-      "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p" : [ "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823" ],
-      "addr_test1qp779e588dx9chlpry3nr0dk0r3y008te5jqy5cetfl7apqxuhc22kvk9xfyaq2tfrjdcxydljcskah7j5lch3ka5yjsvul6wp" : [ ]
+      "addr_test1wzzuwthpcpkgtky26cz67z77zw7m943q8e3njddwjx4yqega8wk95" : [ "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065" ],
+      "addr_test1wqunc2mhs52mr20rsg9cn8ggn836aemt9dkzwqmzqhqyqggfphfcq" : [ "393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021" ],
+      "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p" : [ ]
+    },
+    "registrations" : {
+      "393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021" : "unknown"
     }
   },
   "protocolParams" : {
@@ -1697,47 +1837,60 @@
   "result" : {
     "prepared" : {
       "plan" : {
-        "inputs" : [ "c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb63972#0", "c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb63972#1" ],
-        "referenceInputs" : [ "1db17ca916de6ec917e86370e6dd0cd446d68150accd783a1dce30a8d292fbf6#0" ],
-        "collateral" : [ "c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb63972#1" ],
+        "inputs" : [ "d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e#0", "4dfda360c0b2861feef99f379661b9594c4a7f30914279ad6709f133cf43e504#0", "4dfda360c0b2861feef99f379661b9594c4a7f30914279ad6709f133cf43e504#1" ],
+        "referenceInputs" : [ "6cc66b6e27e32e2c85bfef3c4ab13261a7657f04585b4ffa02936f035c0e8ff8#0", "e42ab8fabf92b01ce0756ec17de771f2146d3ec3efc6adbd66d7635bf82ad29c#0" ],
+        "collateral" : [ "0f6749c88ed69b09fbad6dc60d006c4a3d89419e43fd66faa32a5eeb02363303#0" ],
         "outputs" : [ {
-          "address" : "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p",
+          "address" : "addr_test1wzzuwthpcpkgtky26cz67z77zw7m943q8e3njddwjx4yqega8wk95",
           "value" : {
-            "lovelace" : "2200000",
-            "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823e02f7a967be3e148140344958294b0a61c7df76c40ae376139743d66d04dba47" : "1"
+            "lovelace" : "103400000",
+            "7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb604d3142" : "100000",
+            "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065d612fb46600416d13286bdccbdb479cc4063fec269105fd429e4a508c19829ff" : "1"
           },
-          "datum" : "d8799f03581c7de2e6873b4c5c5fe1192331bdb678e247bcebcd240253195a7fee84ff",
+          "datum" : "d8799f581ca6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8581c7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb60434d3142581cf2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b1a05f5e100ff",
           "datumHash" : null,
           "hasScript" : false
         }, {
-          "address" : "addr_test1qp779e588dx9chlpry3nr0dk0r3y008te5jqy5cetfl7apqxuhc22kvk9xfyaq2tfrjdcxydljcskah7j5lch3ka5yjsvul6wp",
+          "address" : "addr_test1vzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7qjsfdt5",
           "value" : {
-            "lovelace" : "294204329"
+            "lovelace" : "1142150",
+            "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065f2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b" : "100000000"
+          },
+          "datum" : null,
+          "datumHash" : null,
+          "hasScript" : false
+        }, {
+          "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+          "value" : {
+            "lovelace" : "342830862",
+            "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" : "1"
           },
           "datum" : null,
           "datumHash" : null,
           "hasScript" : false
         } ],
         "collateralReturn" : {
-          "address" : "addr_test1qp779e588dx9chlpry3nr0dk0r3y008te5jqy5cetfl7apqxuhc22kvk9xfyaq2tfrjdcxydljcskah7j5lch3ka5yjsvul6wp",
+          "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
           "value" : {
-            "lovelace" : "297058319"
+            "lovelace" : "27057758"
           },
           "datum" : null,
           "datumHash" : null,
           "hasScript" : false
         },
-        "totalCollateral" : "438029",
-        "mint" : { },
-        "requiredSigners" : [ ],
-        "validFrom" : null,
-        "validTo" : 234510,
+        "totalCollateral" : "770625",
+        "mint" : {
+          "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065f2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b" : "100000000"
+        },
+        "requiredSigners" : [ "a6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8" ],
+        "validFrom" : 1852,
+        "validTo" : 1872,
         "networkId" : null,
-        "fee" : "3292019",
-        "scriptDataHash" : "c9ecb508b9ac9bdd34a01d03db8aecc99e58d01396e2bfb9a586bca15d9b973a",
+        "fee" : "513750",
+        "scriptDataHash" : "f8e6dbbedde8931e99d5823f28fb55c16d509048f49548ba2b93567350616d7b",
         "auxiliaryDataHash" : null,
         "certificates" : 0,
-        "withdrawals" : 0,
+        "withdrawals" : 1,
         "votes" : false,
         "proposals" : 0,
         "donation" : null,
@@ -1746,36 +1899,63 @@
         "isValid" : true,
         "redeemers" : [ {
           "tag" : "spend",
+          "index" : 2,
+          "data" : "d8799f1a000186a0d8799f581ca6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf81a05f5e100001b000001a1f72a41401b000001a1f72a8f60ffa1581c7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb60a1434d31421a000186a0ff",
+          "mem" : "894786",
+          "steps" : "287470022"
+        }, {
+          "tag" : "mint",
           "index" : 0,
-          "data" : "d8799f03ff",
-          "mem" : "242667",
-          "steps" : "81816654"
+          "data" : "d87b9fd8799f5820d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e00ffff",
+          "mem" : "169174",
+          "steps" : "52336513"
+        }, {
+          "tag" : "reward",
+          "index" : 0,
+          "data" : "d8799f9fd8799f01d8799f5820d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e00ffffff80ff",
+          "mem" : "61957",
+          "steps" : "15956467"
         } ]
       },
       "reservation" : "1",
-      "cbor" : "84a900d9010282825820c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb6397200825820c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb63972010182a300581d70c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e1282301821a002191c0a1581cc3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823a15820e02f7a967be3e148140344958294b0a61c7df76c40ae376139743d66d04dba4701028201d8185823d8799f03581c7de2e6873b4c5c5fe1192331bdb678e247bcebcd240253195a7fee84ff825839007de2e6873b4c5c5fe1192331bdb678e247bcebcd240253195a7fee8406e5f0a5599629924e814b48e4dc188dfcb10b76fe953f8bc6dda1251a118933a9021a00323b73031a0003940e0b5820c9ecb508b9ac9bdd34a01d03db8aecc99e58d01396e2bfb9a586bca15d9b973a0dd9010281825820c8698b49338b3e32b1fc43f4a2f557009ebc16f08e1c8a1275aa47ebfbb639720110825839007de2e6873b4c5c5fe1192331bdb678e247bcebcd240253195a7fee8406e5f0a5599629924e814b48e4dc188dfcb10b76fe953f8bc6dda1251a11b4c00f111a0006af0d12d90102818258201db17ca916de6ec917e86370e6dd0cd446d68150accd783a1dce30a8d292fbf600a105a182000082d8799f03ff821a0003b3eb1a04e06c4ef5f6",
-      "txHash" : "103d22c7d16d92eaa25a4c471ce57a7322d130a3cdc77fab4912009f5343d872",
-      "validTo" : 234510,
-      "validFrom" : null,
-      "signers" : [ "7de2e6873b4c5c5fe1192331bdb678e247bcebcd240253195a7fee84" ]
+      "cbor" : "84ad00d9010283825820d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e008258204dfda360c0b2861feef99f379661b9594c4a7f30914279ad6709f133cf43e504008258204dfda360c0b2861feef99f379661b9594c4a7f30914279ad6709f133cf43e504010183a300581d7085c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa406501821a0629c240a2581c7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb60a1434d31421a000186a0581c85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065a15820d612fb46600416d13286bdccbdb479cc4063fec269105fd429e4a508c19829ff01028201d8185867d8799f581ca6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8581c7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb60434d3142581cf2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b1a05f5e100ff82581d60a6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8821a00116d86a1581c85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065a1581cf2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b1a05f5e10082583900a6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8c1e103177850651e099e5ec0df6a29e71e3ba2df1991f0865443cce0821a146f2f0ea1581c85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065a15820ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff01021a0007d6d60319075005a1581df0393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021000819073c09a1581c85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065a1581cf2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b1a05f5e1000b5820f8e6dbbedde8931e99d5823f28fb55c16d509048f49548ba2b93567350616d7b0dd90102818258200f6749c88ed69b09fbad6dc60d006c4a3d89419e43fd66faa32a5eeb02363303000ed9010281581ca6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf81082583900a6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8c1e103177850651e099e5ec0df6a29e71e3ba2df1991f0865443cce01a019cde5e111a000bc24112d90102828258206cc66b6e27e32e2c85bfef3c4ab13261a7657f04585b4ffa02936f035c0e8ff800825820e42ab8fabf92b01ce0756ec17de771f2146d3ec3efc6adbd66d7635bf82ad29c00a105a382000282d8799f1a000186a0d8799f581ca6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf81a05f5e100001b000001a1f72a41401b000001a1f72a8f60ffa1581c7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb60a1434d31421a000186a0ff821a000da7421a112271c682010082d87b9fd8799f5820d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e00ffff821a000294d61a031e978182030082d8799f9fd8799f01d8799f5820d3cfb3bbd4924c50bbe9596f24affa4b484da3d283f4428f2f87f2410adb202e00ffffff80ff8219f2051a00f379f3f5f6",
+      "txHash" : "fbbd9bd3f95af096d370648cd96ce36ba685693c17a67826dd603e057f197958",
+      "validTo" : 1872,
+      "validFrom" : 1852,
+      "signers" : [ "a6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8" ]
     },
     "predicted" : {
       "state" : {
-        "type" : "State",
+        "type" : "Pool",
         "value" : {
-          "count" : "3",
-          "owner" : "7de2e6873b4c5c5fe1192331bdb678e247bcebcd240253195a7fee84"
+          "admin" : "a6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8",
+          "tokenPolicy" : "7c00c30bbf8e229274aaa417ad164940d3295b5fbb5b1f333325bb60",
+          "tokenName" : "4d3142",
+          "lpName" : "f2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b",
+          "lpSupply" : "100000000"
         },
         "predicted" : true,
         "index" : 0,
-        "instance" : "e02f7a967be3e148140344958294b0a61c7df76c40ae376139743d66d04dba47"
+        "instance" : "d612fb46600416d13286bdccbdb479cc4063fec269105fd429e4a508c19829ff"
       },
       "objects" : [ ],
       "events" : [ ],
       "payouts" : [ ],
-      "sends" : [ ]
+      "sends" : [ {
+        "predicted" : true,
+        "index" : 1,
+        "address" : "addr_test1vzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7qjsfdt5",
+        "value" : {
+          "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065f2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b" : "100000000",
+          "lovelace" : "1142150"
+        },
+        "owed" : {
+          "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065f2c3a111c535d45084eacbe8df078d75e02562267f518ad36a62355b" : "100000000"
+        }
+      } ]
     }
   },
-  "violations" : [ "fee" ],
-  "mutation" : "excess-fee"
+  "violations" : [ "continuingOutput" ],
+  "mutation" : "other-contract-token",
+  "check" : "continuingOutput/otherToken"
 }

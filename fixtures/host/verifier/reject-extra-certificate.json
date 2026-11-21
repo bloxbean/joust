@@ -1830,5 +1830,6 @@
     }
   },
   "violations" : [ "certificate" ],
-  "mutation" : "extra-certificate"
+  "mutation" : "extra-certificate",
+  "check" : "certificate/count"
 }

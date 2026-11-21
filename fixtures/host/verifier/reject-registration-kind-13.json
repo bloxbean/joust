@@ -1834,5 +1834,6 @@
     }
   },
   "violations" : [ "certificate" ],
-  "mutation" : "registration-kind-13"
+  "mutation" : "registration-kind-13",
+  "check" : "certificate/shape"
 }

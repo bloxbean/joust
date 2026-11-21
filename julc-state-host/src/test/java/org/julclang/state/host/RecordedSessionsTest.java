@@ -115,7 +115,56 @@ class RecordedSessionsTest {
             assertEquals(expected,JSON.readTree(JSON.writeValueAsBytes(recorded)));
         }
     }
+    /**
+     * DC4: the Bank recording cut at a point where the client must not speak, then one transport fault of the host's.
+     * Every fault but one comes while describe is outstanding; the reverse request comes after shutdown's response,
+     * where no call can run (the client may still send exit).
+     */
+    static Map<String,ObjectNode> violations(JsonNode bank) {
+        var frames = bank.required("frames");
+        int describe = -1, shutdown = -1, initialized = -1;
+        for (int i=0;i<frames.size();i++) {
+            var f = frames.get(i);
+            if ("describe".equals(f.at("/client/method").textValue())) describe = i;
+            if ("shutdown".equals(f.at("/client/method").textValue())) shutdown = i+1;
+            if (initialized<0 && f.at("/host").has("result") && "initialize".equals(frames.get(i-1).at("/client/method").textValue())) initialized = i;
+        }
+        var read = frames.get(describe+3).required("host"); // deployment's first chain/read
+        var out = new LinkedHashMap<String,ObjectNode>();
+        out.put("unsolicited-response",cut(frames,describe,obj().put("violation","unsolicitedResponse")
+                .set("frame",obj().put("jsonrpc","2.0").put("id","unsolicited").set("result",obj()))));
+        out.put("duplicate-response",cut(frames,describe,obj().put("violation","duplicateResponse").put("again",true)
+                .set("frame",frames.get(initialized).required("host"))));
+        out.put("stray-bytes",cut(frames,describe,obj().put("violation","strayBytes").put("raw","stray output\n")));
+        out.put("malformed-frame",cut(frames,describe,obj().put("violation","malformedFrame").put("raw","Content-Length: 9\r\n\r\n{\"id\":3,}")));
+        out.put("oversized-frame",cut(frames,describe,obj().put("violation","oversizedFrame").put("raw","Content-Length: 4194305\r\n\r\n")));
+        out.put("eof-during-call",cut(frames,describe,obj().put("violation","eofDuringCall").put("eof",true)));
+        var reverse = obj().put("violation","reverseOutsideCall");
+        reverse.set("frame",obj().put("jsonrpc","2.0").put("id","99.1").put("method","chain/read").set("params",read.required("params")));
+        reverse.putArray("tolerate").add(frames.get(shutdown+1).required("client"));
+        out.put("reverse-outside-call",cut(frames,shutdown,reverse));
+        return out;
+    }
+    private static ObjectNode cut(JsonNode frames,int last,ObjectNode violation) {
+        var session = obj();
+        var kept = session.putArray("frames");
+        for (int i=0;i<=last;i++) kept.add(frames.get(i));
+        kept.add(violation);
+        return session;
+    }
+    @Test void violationSessionsFollowTheBankRecording() throws Exception {
+        var bank = JSON.readTree(SESSIONS.resolve("bank.json").toFile());
+        var derived = violations(bank);
+        try (var files = Files.list(SESSIONS)) {
+            assertEquals(new TreeSet<>(derived.keySet().stream().map(n -> "violation-"+n+".json").toList()),
+                    new TreeSet<>(files.map(f -> f.getFileName().toString()).filter(n -> n.startsWith("violation-")).toList()));
+        }
+        for (var e : derived.entrySet())
+            assertEquals(JSON.readTree(SESSIONS.resolve("violation-"+e.getKey()+".json").toFile()),JSON.readTree(JSON.writeValueAsBytes(e.getValue())),e.getKey());
+    }
     public static void main(String[] args) throws Exception {
         for (String name : List.of("bank","keyed")) write(SESSIONS.resolve(name+".json"),record(name));
+        for (var e : violations(JSON.readTree(SESSIONS.resolve("bank.json").toFile())).entrySet())
+            write(SESSIONS.resolve("violation-"+e.getKey()+".json"),e.getValue());
     }
 }

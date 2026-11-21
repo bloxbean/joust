@@ -28,7 +28,7 @@ class ClientConformanceTest {
 
     @Test void noUnexercisedVectors() throws Exception {
         try (var files = Files.list(DIRECTORY)) {
-            var names = files.map(p -> p.getFileName().toString()).filter(n -> !n.startsWith("reject-")).toList();
+            var names = files.map(p -> p.getFileName().toString()).filter(n -> !n.startsWith("reject-") && !n.startsWith("accept-")).toList();
             assertEquals(new TreeSet<>(CASES.stream().map(n -> n+".json").toList()),new TreeSet<>(names));
         }
     }
