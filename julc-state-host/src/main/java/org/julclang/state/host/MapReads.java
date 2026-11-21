@@ -9,6 +9,8 @@ import static org.julclang.state.host.Wire.obj;
 
 /** Protocol-1 map history, acquired inside the current call's read generation and budget. */
 record MapReads(Reads reads) {
+    /** A redeemer datum's upper bound: four times today's 16 KiB maximum transaction size. */
+    static final int MAX_REDEEMER_BYTES = 64 * 1024;
     List<String> history(String unit) {
         var txs = new LinkedHashSet<String>();
         var cursors = new HashSet<String>();
@@ -66,6 +68,9 @@ record MapReads(Reads reads) {
                 if (!purpose.equals("reward") || !script.equals(verifier)) continue;
                 var datum = reads.mapAnswer("datum", obj().put("hash", hash)).path("value");
                 if (!datum.isTextual() || datum.textValue().isEmpty()) throw inconsistent("missing map redeemer datum");
+                // A redeemer lives inside a transaction, so it is never larger than one (16 KiB today); bound it well
+                // above that so one answer cannot make the claim replay quadratic (#160 final review F-M1).
+                if (datum.textValue().length() > 2 * MAX_REDEEMER_BYTES) throw inconsistent("map redeemer datum larger than a transaction");
                 try {
                     byte[] bytes = HexFormat.of().parseHex(datum.textValue());
                     if (!hash.equals(HexFormat.of().formatHex(Blake2bUtil.blake2bHash256(bytes))))
