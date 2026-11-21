@@ -212,6 +212,9 @@ final class Reservations implements ClaimStore {
             known = true;
             expected.putAll(e.operation.attempts());
             if (e.state == State.discarded) continue; // An identical re-prepare can have the same body hash.
+            // An attempt that expired before it was ever acknowledged as handed out (neither its own record nor this
+            // one lists it) cannot land and was never signed: it does not hold the operation (#156 review K2).
+            if (e.state == State.expired && supplied == null && !e.operation.attempts().containsKey(e.body.hash)) continue;
             expected.put(e.body.hash,e.body.to);
             if (supplied == null || supplied != e.body.to) throw KeyedOperation.mismatch();
             pending |= e.live();
@@ -366,7 +369,11 @@ final class Reservations implements ClaimStore {
                 if (e.state != state || !Objects.equals(e.slot, slot)) throw conflict();
                 if (!Objects.equals(e.operation, op)) {
                     // A rewind can re-import our prepared result after the client handed it out.
-                    if (e.operation == null || !e.operation.handedOut(b.hash,b.to).equals(op)) throw KeyedOperation.mismatch();
+                    // The client's record may know later attempts (#156 review K1): same identity, and every attempt
+                    // the entry knew (now including this one) with the same deadline; the fuller record is kept.
+                    var known = e.operation == null ? null : e.operation.handedOut(b.hash,b.to);
+                    if (known == null || op == null || !known.identity().equals(op.identity())
+                            || !op.attempts().entrySet().containsAll(known.attempts().entrySet())) throw KeyedOperation.mismatch();
                     e = new Entry(e.id,b,state,slot,op);
                     staged.put(e.id,e);
                 }

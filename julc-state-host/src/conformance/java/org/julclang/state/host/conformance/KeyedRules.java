@@ -262,6 +262,8 @@ final class KeyedRules {
         } catch (Exception e) { throw new IllegalArgumentException("invalid predecessor output",e); }
         contribution = contribution.add(topUp(n,anchor.coin));
     }
+    // The method's Ctx time window is not compared with the body's validity here: the validator enforces it on
+    // chain, and the body's bounds are checked against the client's own window by the call rules (#156 K6).
     private void checkCtx(JsonNode decoded) {
         // D6/Yaci Store resolves outputs without transaction CBOR. Balance binds at most one unknown.
         var ctx = decoded.path("ctx");

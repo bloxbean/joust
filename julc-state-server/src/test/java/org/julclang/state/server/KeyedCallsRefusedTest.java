@@ -27,13 +27,15 @@ class KeyedCallsRefusedTest {
         String address = new Account(Networks.testnet()).baseAddress();
         String contract = "org.julclang.state.examples.registry.Registry";
         String instance = "00".repeat(32);
-        for (String[] call : new String[][] {{"keyedAction", "change"}, {"keyedRemove", "release"}, {"keyedRetire", "retire"}}) {
+        for (String[] call : new String[][] {{"keyedInit", "grant"}, {"keyedAction", "change"}, {"keyedRemove", "release"}, {"keyedRetire", "retire"}}) {
             var req = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
                     .put("contract", contract).put("kind", call[0]).put("method", call[1])
                     .put("instance", instance).put("object", "6b6579").put("address", address);
             req.putObject("args");
             var e = assertThrows(BadRequest.class, () -> server.prepare(req), call[0]);
-            assertEquals("unknown kind " + call[0], e.getMessage());
+            // keyedInit fails the service's method lookup first (it lists no keyed creation), as before M3.
+            if (call[0].equals("keyedInit")) assertEquals(contract + " has no keyedInit grant", e.getMessage());
+            else assertEquals("unknown kind " + call[0], e.getMessage());
         }
     }
 }
