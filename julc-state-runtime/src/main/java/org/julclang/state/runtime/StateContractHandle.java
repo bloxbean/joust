@@ -222,10 +222,12 @@ public final class StateContractHandle<S> {
      */
     public Utxo findReferenceScript() {
         if (runtime.hostedCall()) return runtime.hostedReference(address, policyId);
-        if (referenceScript != null) return referenceScript;
+        // As VerifierHandle.find: a scoped call neither reads nor fills the cross-call cache (ADR-0022 D8).
+        boolean scoped = runtime.callScope() != null;
+        if (!scoped && referenceScript != null) return referenceScript;
         var pinned = runtime.referenceScript(policyId);
         if (pinned != null && pinned.getAddress() != null && pinned.getAddress().equals(address)) {
-            referenceScript = pinned;
+            if (!scoped) referenceScript = pinned;
             return pinned;
         }
         try {
@@ -234,7 +236,7 @@ public final class StateContractHandle<S> {
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (policyId.equalsIgnoreCase(u.getReferenceScriptHash())) {
-                        referenceScript = u;
+                        if (!scoped) referenceScript = u;
                         return u;
                     }
                 }
@@ -528,17 +530,35 @@ public final class StateContractHandle<S> {
             // A wallet's prepared creation in a keyed contract: the page's designated input is the seed (ADR-0016 D11).
             if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
             var store = runtime.claimStore();
-            for (int page = 1; ; page++) {
+            if (store instanceof JvmClaimStore) {
+                // The default store: the first page, as always.
                 var free = r.getValue().stream().filter(u -> Designation.pickable(store, u, own)).toList();
                 if (!free.isEmpty()) {
                     return free.stream().filter(u -> u.getAmount().size() == 1).findFirst().orElse(free.getFirst());
                 }
-                if (store instanceof JvmClaimStore || r.getValue().size() < 50) break;
-                r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, page + 1);
-                if (!r.isSuccessful()) throw new JoustException("deploy: cannot read the caller's UTxOs: " + r.getResponse());
-                if (r.getValue() == null || r.getValue().isEmpty()) break;
+            } else {
+                // A session store (the dev host) may reserve inputs: apply the same rule to the first 50 eligible
+                // inputs in provider order, across pages, so the seed (and the instance id and bytes) does not depend
+                // on where reserved inputs fall (#145 Codex review 5).
+                Utxo mixed = null;
+                int eligible = 0;
+                for (int page = 1; ; page++) {
+                    for (Utxo u : r.getValue()) {
+                        if (!Designation.pickable(store, u, own)) continue;
+                        if (u.getAmount().size() == 1) return u;
+                        if (mixed == null) mixed = u;
+                        if (++eligible == 50) return mixed;
+                    }
+                    if (r.getValue().size() < 50) break;
+                    r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, page + 1);
+                    if (!r.isSuccessful()) throw new JoustException("deploy: cannot read the caller's UTxOs: " + r.getResponse());
+                    if (r.getValue() == null || r.getValue().isEmpty()) break;
+                }
+                if (mixed != null) return mixed;
             }
-            throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
+            throw new JoustException(store instanceof JvmClaimStore
+                    ? "deploy: every UTxO of the caller is designated by a keyed operation"
+                    : "deploy: every UTxO of the caller is designated or reserved by a pending transaction");
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {

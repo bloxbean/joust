@@ -37,15 +37,28 @@ public final class JsonValues {
     static final int MAX_DEPTH = 32;
     static final int MAX_ITEMS = 1024;
 
-    /** Propagate a record constructor's or accessor's call abort to its host. */
-    public static final JsonValues TYPED = new JsonValues(true);
-    /** Report record reflection failures as bad values, as the HTTP service has always done. */
-    public static final JsonValues BAD_VALUES = new JsonValues(false);
+    /**
+     * The dev host's codec (ADR-0022): propagates a record constructor's or accessor's call abort, and reads the wire
+     * strictly: a JSON number must be a safe integer (|n| at most 2^53 - 1, as the JavaScript codec's
+     * {@code Number.isSafeInteger}; larger values are decimal strings), and a {@code String} argument's bytes must be
+     * well-formed UTF-8, so the contract never receives other bytes than the client sent (#145 Codex review 3, 4).
+     */
+    public static final JsonValues TYPED = new JsonValues(true, true);
+    /**
+     * The HTTP service's codec, as it has always behaved: record reflection failures are bad values, a JSON number up
+     * to 2^53 in magnitude is accepted, and malformed UTF-8 is decoded with replacement characters.
+     */
+    public static final JsonValues BAD_VALUES = new JsonValues(false, false);
+
+    /** The largest integer a JSON number may carry on the strict wire (JavaScript's Number.MAX_SAFE_INTEGER). */
+    static final long MAX_SAFE_INTEGER = (1L << 53) - 1;
 
     private final boolean propagateAborts;
+    private final boolean strict;
 
-    private JsonValues(boolean propagateAborts) {
+    private JsonValues(boolean propagateAborts, boolean strict) {
         this.propagateAborts = propagateAborts;
+        this.strict = strict;
     }
 
     public static final class BadValue extends RuntimeException {
@@ -69,14 +82,14 @@ public final class JsonValues {
         if (json == null || json.isMissingNode()) throw new BadValue(path + ": missing");
         Class<?> raw = rawOf(type);
         if (raw == BigInteger.class) return integer(json, path);
-        if (raw == long.class || raw == Long.class) return integer(json, path).longValueExact();
-        if (raw == int.class || raw == Integer.class) return integer(json, path).intValueExact();
+        if (raw == long.class || raw == Long.class) return strict ? exact(integer(json, path), path, true) : integer(json, path).longValueExact();
+        if (raw == int.class || raw == Integer.class) return strict ? (int) exact(integer(json, path), path, false) : integer(json, path).intValueExact();
         if (raw == boolean.class || raw == Boolean.class) {
             if (!json.isBoolean()) throw new BadValue(path + ": not a boolean");
             return json.booleanValue();
         }
         if (raw == byte[].class) return hex(json, path);
-        if (raw == String.class) return new String(hex(json, path), StandardCharsets.UTF_8);
+        if (raw == String.class) return string(hex(json, path), path);
         if (PlutusData.class.isAssignableFrom(raw)) {
             try {
                 return PlutusDataCborDecoder.decode(hex(json, path));
@@ -146,10 +159,34 @@ public final class JsonValues {
         }
     }
 
-    private static BigInteger integer(JsonNode json, String path) {
+    private BigInteger integer(JsonNode json, String path) {
         if (json.isTextual() && json.asText().matches("-?[0-9]{1,200}")) return new BigInteger(json.asText());
-        if (json.isIntegralNumber() && json.canConvertToLong() && Math.abs(json.longValue()) <= (1L << 53)) return BigInteger.valueOf(json.longValue());
-        throw new BadValue(path + ": not an integer");
+        if (json.isIntegralNumber() && json.canConvertToLong()) {
+            long n = json.longValue();
+            // Strict bounds compare directly: Math.abs(Long.MIN_VALUE) is negative.
+            boolean inRange = strict ? n >= -MAX_SAFE_INTEGER && n <= MAX_SAFE_INTEGER
+                    : Math.abs(n) <= (1L << 53);   // the HTTP service's bound, unchanged (it admits Long.MIN_VALUE)
+            if (inRange) return BigInteger.valueOf(n);
+        }
+        throw new BadValue(path + ": not an integer" + (strict && json.isNumber() ? " (beyond 2^53 - 1, send a decimal string)" : ""));
+    }
+
+    // A value out of the Java type's range is a bad value, not an internal ArithmeticException.
+    private static long exact(BigInteger n, String path, boolean isLong) {
+        if (n.bitLength() > (isLong ? 63 : 31)) throw new BadValue(path + ": out of range for " + (isLong ? "long" : "int"));
+        return n.longValue();
+    }
+
+    private String string(byte[] bytes, String path) {
+        if (!strict) return new String(bytes, StandardCharsets.UTF_8);
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        } catch (java.nio.charset.CharacterCodingException e) {
+            throw new BadValue(path + ": not well-formed UTF-8");
+        }
     }
 
     private static byte[] hex(JsonNode json, String path) {

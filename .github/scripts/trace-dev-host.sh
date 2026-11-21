@@ -5,4 +5,6 @@ trace=$1
 shift
 exec sudo -n /usr/bin/unshare --net -- /usr/bin/setpriv --reuid="$(id -u)" --regid="$(id -g)" --clear-groups \
     --no-new-privs /usr/bin/env -i HOME="$HOME" PATH="$PATH" LANG="${LANG:-C}" \
-    /usr/bin/strace -f -s 80 -e trace=read,connect,socket,execve,openat -o "$trace" -- "$@"
+    /usr/bin/strace -f -s 80 \
+    -e trace=read,connect,socket,socketpair,bind,listen,accept,accept4,execve,execveat,fork,vfork,clone,clone3,openat,open,creat,mkdir,mkdirat,unlink,unlinkat,rename,renameat,renameat2,truncate,link,linkat,symlink,symlinkat \
+    -o "$trace" -- "$@"

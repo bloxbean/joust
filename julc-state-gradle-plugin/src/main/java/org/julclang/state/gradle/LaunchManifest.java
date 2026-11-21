@@ -24,7 +24,11 @@ record LaunchManifest(List<Map<String, Object>> entries, String digest) {
                         Path child = it.next();
                         if (Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) continue;
                         if (!Files.isRegularFile(child, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Non-regular file: " + child);
-                        hashes.put(path.relativize(child).toString().replace(File.separatorChar, '/'), hash(child));
+                        String name = path.relativize(child).toString().replace(File.separatorChar, '/');
+                        // As the host (dev-host-1 initialize): a control character could make two contents digest alike.
+                        if (name.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7f))
+                            throw new IOException("Control character in a class path file name: " + child);
+                        hashes.put(name, hash(child));
                     }
                 }
                 hashes.forEach((name, hash) -> line(fingerprint, hash, ordinal, "dir", name));

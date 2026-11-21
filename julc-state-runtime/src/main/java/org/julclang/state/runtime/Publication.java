@@ -15,7 +15,17 @@ final class Publication {
         var wallet = WalletAccount.of(address, runtime.network());
         var ctx = Designation.builder(runtime, null).compose(tx.from(address))
                 .feePayer(address).additionalSignersCount(1).validTo(validTo);
-        var claimed = Designation.build(runtime.claimStore(), address, null, ctx::build);
+        Designation.Claimed claimed;
+        try {
+            claimed = Designation.build(runtime.claimStore(), address, null, ctx::build);
+        } catch (ReservedInputException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            if (e instanceof CallAbort) throw e;
+            // A wallet that cannot pay is the runtime's refusal, as in a prepare (#151 review DB3); the cause is kept,
+            // so a read failure or a control event below it still decides the host's answer.
+            throw new SubmitException("publish prerequisite: could not build the transaction: " + e.getMessage(), e);
+        }
         var built = TxRunner.exportPrepared(runtime, "publish prerequisite", claimed, validTo);
         return new PreparedTx(runtime, built, List.of(wallet.paymentKeyHash()), null, "publish prerequisite");
     }
