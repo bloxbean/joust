@@ -29,6 +29,10 @@ record Launch(String fingerprint, List<String> descriptions) {
                                 .map(entry::relativize).map(Path::toString).map(s -> s.replace(File.separatorChar, '/'))
                                 .sorted((a,b) -> Arrays.compareUnsigned(utf8(a), utf8(b))).toList();
                         for (String name : files) {
+                            // The digest's lines are newline-separated: a control character in a name could make two
+                            // directory contents digest alike (#149 review SA1).
+                            if (name.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7f))
+                                throw new IOException("control character in a class path file name");
                             Path file = entry.resolve(name);
                             if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) throw new IOException("non-regular entry " + name);
                             line(digest, i, "dir", name, file);
