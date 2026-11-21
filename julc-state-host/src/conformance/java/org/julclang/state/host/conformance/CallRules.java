@@ -194,7 +194,10 @@ final class CallRules {
             var o = outputs.get(i);
             var amount = value(o.required("value"));
             String addr = o.required("address").asText();
-            for (String unit : amount.keySet()) if (unit.startsWith(c.policy) && !unit.equals(c.token))
+            // F-C1: the continuation and third parties may hold another unit of the policy only as this call's own
+            // positive mint. Wallet outputs are exempt: the net-outflow bound already limits what the wallet loses of any
+            // unit, so a contract token the wallet holds (LP after a partial removeLiquidity) may return in its change.
+            if (!c.wallet(addr)) for (String unit : amount.keySet()) if (unit.startsWith(c.policy) && !unit.equals(c.token))
                 c.test("continuingOutput/otherToken",c.holds("continuingOutput/otherToken#mintMethod",meta.at("/returns/mint").asBoolean()) &&
                         c.holds("continuingOutput/otherToken#minted",c.minted.getOrDefault(unit,ZERO).signum()>0));
             if (c.token != null && amount.containsKey(c.token))
