@@ -77,6 +77,11 @@ class HostVectorsTest {
             return pair.required("answer");
         });
         assertFalse(reads.hasNext(), "unused recorded read");
+        checkOutcome(v, response);
+    }
+
+    /** The vector's recorded outcome against a host's response (here, and in the traced forked session). */
+    static void checkOutcome(JsonNode v, JsonNode response) throws Exception {
         var expected = v.required("expected");
         if (expected.has("kind")) {
             if (!v.has("feature")) {

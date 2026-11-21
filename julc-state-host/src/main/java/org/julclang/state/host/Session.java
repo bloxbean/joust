@@ -253,6 +253,8 @@ final class Session implements Transport.Handler {
         if (method.equals("prerequisites")) return new Transport.Reply(prerequisites.missing());
         var part = prerequisites.next(str(p, "prerequisite"));
         if (part == null) return new Transport.Reply(NullNode.instance);
+        if (reservations.publishing(part.id()))
+            throw HostError.refusal("pending", "a publication of " + part.id() + " is still pending; settle it first");
         var built = prerequisites.publish(part, payer, ceiling);
         return prepared(built, obj(), reads, ceiling, part.registration(), null);
     }
@@ -269,10 +271,15 @@ final class Session implements Transport.Handler {
         catch (JoustException e) { throw bad("invalid caller address"); }
     }
 
+    /** A body holds at most this many co-signers' required signatures (dev-host-1 `prepare`, both hosts). */
+    static final int MAX_COSIGNERS = 64;
+
     private Account[] signers(WalletAccount wallet, JsonNode request, boolean quorum) {
         JsonNode signers = request.path("cosigners");
         if (!signers.isMissingNode() && !signers.isArray()) throw bad("expected co-signer array");
         if (!quorum && !signers.isEmpty()) throw bad("plain calls take no co-signers");
+        // Each co-signer builds an account (milliseconds of key generation): bound the list before any work (#151 SB1).
+        if (signers.size() > MAX_COSIGNERS) throw bad("at most " + MAX_COSIGNERS + " co-signers");
         var accounts = new LinkedHashMap<String, Account>();
         for (JsonNode signer : signers) {
             String hash = signer.asText("");
@@ -373,6 +380,8 @@ final class Session implements Transport.Handler {
                 throw HostError.refusal("window", "keyed validity interval exceeds the requested limits");
             ceiling = end;
         }
+        BodyBalance.checkCall(built.transaction().getBody(),
+                Set.of(handle.rewardAddress(), handle.runtime().outputVerifier().rewardAddress()), handle.policyId());
         return prepared(built, out, reads, ceiling, null, operation);
     }
 

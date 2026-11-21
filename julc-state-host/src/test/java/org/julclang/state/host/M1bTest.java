@@ -303,4 +303,59 @@ class M1bTest {
             assertEquals("Closed", result.at("/predicted/events/0/value/$variant").asText());
         }
     }
+
+    /** #151 review DB1, DB4: one publication per prerequisite while it is live; an id foreign to the contract is bad. */
+    @Test void aPendingPublicationIsNotBuiltTwice() throws Exception {
+        try (var ch = new Chain(DexClient.class)) {
+            var h = ch.handle;
+            ch.holder(h.address(), h.policyId(), "ef", h.script().getCborHex());
+            ch.registered = false;
+            var first = ch.missing().required(0);
+            assertEquals("verifier", str(first, "kind"));
+            var built = ch.rpc("publish", ch.publish(first)).required("prepared");
+            var again = ch.peer.rpc("publish", ch.publish(first), ch::answer);
+            error("refusal", "pending", again);
+            assertTrue(again.at("/error/message").asText().contains(str(first, "id")), again::toString);
+            error("bad", "request", ch.peer.rpc("publish",
+                    ch.query().put("address", ch.payer).put("ttlSlots", 13).put("prerequisite", "referenceScript:" + "00".repeat(28)), ch::answer));
+            ch.discard(built);
+            success(ch.peer.rpc("publish", ch.publish(first), ch::answer));
+        }
+    }
+
+    /** #151 review SB1: the co-signer list is bounded before any account is built. */
+    @Test void tooManyCosignersAreBad() throws Exception {
+        try (var ch = new Chain(HostCouncilClient.class)) {
+            var call = ch.call("action", "vote", obj().put("n", "42").put("to", ch.key));
+            var keys = call.withObject("/call").put("instance", "ac".repeat(32)).putArray("cosigners");
+            for (int i = 0; i <= Session.MAX_COSIGNERS; i++) keys.add("%056x".formatted(i + 1));
+            error("bad", "request", ch.peer.rpc("prepare", call, ch::answer));
+        }
+    }
+
+    /**
+     * #151 review DB2: an owned spend names the instance its holding datum names, and its object input is refused as
+     * pending while a prepared body holds it, before any build (the runtime's own reservation check reads differently).
+     */
+    @Test void ownedSpendsCheckTheirInstanceAndReservation() throws Exception {
+        ReplayTest.Recording r = null;
+        try (var files = Files.list(ReplayTest.FIXTURES.resolve("dapp"))) {
+            for (var file : files.sorted().toList())
+                if (JSON.readTree(file.toFile()).at("/call/kind").asText().equals("ownedAction")) { r = ReplayTest.Recording.read(file); break; }
+        }
+        assertNotNull(r, "an owned recording");
+        var entry = entry(org.julclang.state.examples.bank.BankClient.class);
+        try (var c = new Client(new Handshake(List.of(entry)))) {
+            success(c.rpc("initialize", init(entry)));
+            var foreign = r.params().deepCopy();
+            foreign.withObject("/call").put("instance", "00".repeat(32));
+            var wrong = c.rpc("prepare", foreign, r::answer);
+            error("bad", "request", wrong);
+            assertTrue(wrong.at("/error/message").asText().contains("does not belong"), wrong::toString);
+            success(c.rpc("prepare", r.params(), r::answer));
+            var twice = c.rpc("prepare", r.params(), r::answer);
+            error("refusal", "pending", twice);
+            assertTrue(twice.at("/error/message").asText().startsWith("reserved input "), twice::toString);
+        }
+    }
 }
