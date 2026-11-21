@@ -6,31 +6,37 @@ const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 // The JVM host's Jackson parser refuses a document nested more than this many levels, and so ends the session.
 export const MAX_DEPTH = 1000;
 
-// JSON.parse validates the grammar. Visit the structural tokens separately because JSON.parse
-// otherwise silently replaces duplicate keys (including keys with different escape spellings).
-// The same scan bounds the nesting depth before JSON.parse recurses (#154 review M2-2).
-function message(text) {
-  const tokens = [...text.matchAll(/"(?:[^"\\]|\\.)*"\s*:?|[{}\[\]]/g)].map(m => m[0]);
-  let depth = 0;
-  for (const token of tokens) {
-    if (token === '{' || token === '[') {
-      if (++depth > MAX_DEPTH) throw Error('JSON nested more than ' + MAX_DEPTH + ' levels');
-    } else if (token === ']' || token === '}') depth--;
-  }
-  const msg = JSON.parse(text, (key, value, context) =>
-    typeof value === 'number' && (!Number.isSafeInteger(value) || !/^-?\d+$/.test(context.source)) ? JSON.rawJSON(context.source) : value);
+// JSON.parse validates the grammar; scan() bounds the nesting depth (#154 review M2-2) and refuses duplicate keys.
+// One linear pass (#154 final review F-N1, review r2 M2-13): a complete string token, optionally a key, a structural
+// character, or a lone quote (an unterminated string, refused at once: retrying the string alternative at every later
+// quote would be quadratic). No token array is kept.
+const TOKEN = /"(?:[^"\\]|\\.)*"\s*:?|[{}\[\]]|"/g;
+function scan(text) {
   const stack = [];
-  for (const token of tokens) {
-    if (token === '{') stack.push(new Set());
-    else if (token === '[') stack.push(null);
-    else if (token === ']' || token === '}') stack.pop();
+  TOKEN.lastIndex = 0;
+  for (let m; (m = TOKEN.exec(text)) !== null; ) {
+    const token = m[0];
+    if (token === '"') throw Error('unterminated JSON string');
+    if (token === '{' || token === '[') {
+      if (stack.length >= MAX_DEPTH) throw Error('JSON nested more than ' + MAX_DEPTH + ' levels');
+      stack.push(token === '{' ? new Set() : null);
+    } else if (token === ']' || token === '}') stack.pop();
     else if (token.endsWith(':')) {
-      const key = JSON.parse(token.slice(0, -1));
       const keys = stack.at(-1);
+      if (!keys) throw Error('malformed JSON');
+      const key = JSON.parse(token.slice(0, -1));
       if (keys.has(key)) throw Error('duplicate JSON key');
       keys.add(key);
     }
   }
+}
+
+function message(text) {
+  // Depth and duplicate keys before JSON.parse recurses, which otherwise also silently replaces duplicate keys
+  // (including keys with different escape spellings).
+  scan(text);
+  const msg = JSON.parse(text, (key, value, context) =>
+    typeof value === 'number' && (!Number.isSafeInteger(value) || !/^-?\d+$/.test(context.source)) ? JSON.rawJSON(context.source) : value);
   if (msg?.jsonrpc !== '2.0' || Array.isArray(msg)) throw Error('expected a JSON-RPC 2.0 object');
   const integer = v => Number.isSafeInteger(v) || (JSON.isRawJSON(v) && /^-?\d+$/.test(v.rawJSON));
   const id = v => typeof v === 'string' || integer(v);

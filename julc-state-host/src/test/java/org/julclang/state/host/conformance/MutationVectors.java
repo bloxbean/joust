@@ -15,9 +15,17 @@ import static org.julclang.state.host.conformance.Ledger.JSON;
  */
 public final class MutationVectors {
     static final Path DIR = Path.of(System.getProperty("joust.host.vectors","../fixtures/host")).resolve("verifier");
-    record Case(String name,String source,String site,Consumer<Edit> change) {
-        String code() { return site==null ? null : site.contains("/") ? site.substring(0,site.indexOf('/')) : site; }
+    /**
+     * {@code refusedBy}, when not empty, lists every check that refuses the body (site among them) in the checker's
+     * order: a body that only a pair of checks decides together, each refusing it alone (#153 DC10).
+     */
+    record Case(String name,String source,String site,List<String> refusedBy,Consumer<Edit> change) {
+        Case(String name,String source,String site,Consumer<Edit> change) { this(name,source,site,List.of(),change); }
+        String code() { return site==null ? null : code(site); }
+        static String code(String site) { return site.contains("/") ? site.substring(0,site.indexOf('/')) : site; }
         String file() { return (site==null ? "accept-" : "reject-")+name+".json"; }
+        /** The checks that refuse the body; with all of them disabled the reference accepts it. */
+        List<String> sites() { return !refusedBy.isEmpty() ? refusedBy : site==null ? List.of() : List.of(site); }
     }
     static final String PUB="Dex-publish-2", REG="Dex-publish-3", BOTH="Dex-combined-reconstructed",
             SPEND="dapp-0003", DEX="Dex-addLiquidity", QUORUM="quorum-two", BANK="Bank-init", OWNED="owned-action";
@@ -315,12 +323,32 @@ public final class MutationVectors {
             new Case("continuation-script",SPEND,"continuingOutput/script",e -> e.field(e.out(0),3,"d81846820343010203")),
             new Case("continuation-instance",OWNED,"continuingOutput/instance",e -> e.replaceIn(e.out(0).fields().get(2),"5820"+e.call("instance"),"5820"+ELSEWHERE)),
             new Case("thread-to-stranger",SPEND,"continuingOutput/thread",e -> e.address(0,"70"+OTHER)),
-            new Case("other-contract-token",DEX,"continuingOutput/otherToken",e -> {
-                // Another instance's thread token held by the wallet (its input is not the collateral) moves.
+            new Case("contract-token-to-stranger",DEX,"continuingOutput/otherToken",e -> {
+                // F-C1: the pool also holds another instance's token, which the body pays to a stranger with 2 ADA the
+                // pool releases. The third-party bound allows the release; only this check keeps the token.
                 String unit=e.v.at("/anchors/policy").asText()+"ff".repeat(32);
-                e.resolved(e.walletInput()).withArray("amount").addObject().put("unit",unit).put("quantity",1);
-                var coin=e.coin(2);
-                e.swap(coin,"82"+coin.raw()+"a1581c"+unit.substring(0,56)+"a15820"+unit.substring(56)+"01");
+                long coin=2_000_000, pool=e.amount(e.target(),"lovelace");
+                // The release must cover the caller's payment kept in the continuation and the claimed send's lovelace.
+                long release=e.coin(0).integer().longValueExact()-pool+e.coin(1).integer().longValueExact()+coin;
+                e.resolved(e.target()).withArray("amount").addObject().put("unit",unit).put("quantity",1);
+                e.lovelace(e.target(),pool+release);
+                e.coin(2,release-coin);
+                e.outputs(List.of(e.out(0).raw(),e.out(1).raw(),e.out(2).raw(),
+                        "82581d60"+OTHER+"82"+uint(coin)+"a1581c"+unit.substring(0,56)+"a15820"+unit.substring(56)+"01"));
+            }),
+            new Case("partial-remove-liquidity",DEX,null,MutationVectors::partialRemoveLiquidity),
+            new Case("action-burns-thread",DEX,"continuingOutput/thread",List.of("mint/action","continuingOutput/thread"),e -> {
+                // DC10: the action burns the thread token and leaves no continuation; the pool's lovelace less the claimed
+                // send goes to a stranger, the payment and offered tokens back to the change. Only mint/action#notThread
+                // and continuingOutput/thread#count refuse it, each alone.
+                String policy=e.v.at("/anchors/policy").asText(), lp=e.minted();
+                long third=e.amount(e.target(),"lovelace")-e.coin(1).integer().longValueExact();
+                long kept=e.coin(0).integer().longValueExact()-third;
+                var change=e.out(2);
+                e.outputs(List.of("82581d60"+OTHER+uint(third),e.out(1).raw(),
+                        "82"+e.addr(change).raw()+"82"+uint(e.coin(2).integer().longValueExact()+kept)+e.offered()));
+                e.body(9,"a1581c"+policy+"a2"+bytes(lp.substring(56))+uint(e.ledger.plan.at("/mint").required(lp).asLong())+
+                        bytes(e.call("instance"))+"20");
             }),
             new Case("wallet-datum",SPEND,"walletOutput/script",e -> {
                 var out=e.out(1);
@@ -737,6 +765,59 @@ public final class MutationVectors {
         e.coin(1,RELEASE-PAID_IN);
         e.coin(2,PAID_IN);
     }
+    /**
+     * F-C1: Dex-addLiquidity restated as the honest partial removeLiquidity that follows it. The caller's wallet input
+     * holds the 100M LP minted there; the call burns 40M of it, receives 40% of the pool (a tagged 40 ADA payout and a
+     * claimed send of the tokens with the wallet's minimum ADA), and the remaining 60M LP return in the change.
+     */
+    static void partialRemoveLiquidity(Edit e) {
+        String policy=e.v.at("/anchors/policy").asText(), lp=e.minted(), lpName=lp.substring(56), target=e.target();
+        var before=e.ledger.plan.at("/outputs/0"); // the pool after addLiquidity: the target here
+        var asset=e.v.at("/request/call/pay/assets/0");
+        String tokenPolicy=asset.required(0).asText(), tokenName=asset.at("/1/0/0").asText();
+        long held=PAID_IN, burn=40_000_000, deposit=e.amount(target,"lovelace");
+        long poolCoin=before.at("/value/lovelace").asLong(), poolTokens=before.required("value").required(tokenPolicy+tokenName).asLong();
+        long adaOut=(poolCoin-deposit)*burn/held, tokenOut=poolTokens*burn/held; // Dex.removeLiquidity, ctx.balance excludes the deposit
+        var call=e.v.withObject("/request/call");
+        call.put("method","removeLiquidity");
+        call.putObject("args").put("lp",Long.toString(burn));
+        call.putObject("pay").put("lovelace","0").putArray("assets").addArray().add(policy).addArray().addArray().add(lpName).add(Long.toString(burn));
+        var pool=e.resolved(target).put("inline_datum",before.required("datum").asText()).putArray("amount");
+        before.required("value").fields().forEachRemaining(u -> pool.addObject().put("unit",u.getKey()).put("quantity",u.getValue().asLong()));
+        long walletInCoin=e.amount(e.walletInput(),"lovelace");
+        var wallet=e.resolved(e.walletInput()).putArray("amount");
+        wallet.addObject().put("unit","lovelace").put("quantity",walletInCoin);
+        wallet.addObject().put("unit",lp).put("quantity",held);
+        // RemoveLiquidity(lp, Ctx(caller, received 0, balance, validFrom, validTo), assetsIn)
+        var redeemer=e.rvalue(0).at(0);
+        var ctx=redeemer.items.getFirst().at(1).items.getFirst();
+        e.swap(redeemer,"d87a9f"+uint(burn)+"d8799f"+ctx.at(0).raw()+"00"+uint(poolCoin-deposit)+ctx.at(3).raw()+ctx.at(4).raw()+"ff"+
+                e.lp(lp,burn)+"ff");
+        e.body(9,"a1581c"+policy+"a1"+bytes(lpName)+head(1,burn-1));
+        String datum=before.required("datum").asText(), supply=uint(held);
+        if (!datum.endsWith(supply+"ff")) throw new IllegalArgumentException("unexpected pool datum");
+        String next=datum.substring(0,datum.length()-supply.length()-2)+uint(held-burn)+"ff";
+        long sendCoin=e.coin(1).integer().longValueExact(), fee=e.fee();
+        String enterprise="60"+e.caller();
+        String thread="581c"+policy+"a1"+bytes(e.call("instance"))+"01";
+        String tokens="581c"+tokenPolicy+"a1"+bytes(tokenName);
+        long walletCoin=0;
+        for (var r : e.ledger.plan.required("inputs")) if (e.resolved(r.asText()).required("address").asText().equals(e.payer()))
+            walletCoin+=e.amount(r.asText(),"lovelace");
+        e.outputs(List.of(
+                "a3"+"00"+e.addr(e.out(0)).raw()+"01"+"82"+uint(poolCoin-adaOut)+"a2"+tokens+uint(poolTokens-tokenOut)+thread+"02"+"8201d818"+bytes(next),
+                "82"+bytes(enterprise)+"82"+uint(sendCoin)+"a1"+tokens+uint(tokenOut), // the claimed send, with the wallet's minimum ADA
+                "a3"+"00"+bytes(enterprise)+"01"+uint(adaOut)+"02"+"8201d818"+bytes(e.outRef(target)), // the tagged payout
+                "82"+e.addr(e.out(2)).raw()+"82"+uint(walletCoin-fee-sendCoin)+e.lp(lp,held-burn))); // change, with the LP left
+        var predicted=e.v.withObject("/result/predicted");
+        predicted.withObject("/state/value").put("lpSupply",Long.toString(held-burn));
+        var payout=predicted.putArray("payouts").addObject().put("predicted",true).put("index",2).put("address",e.v.at("/result/prepared/plan/outputs/1/address").asText());
+        payout.putObject("value").put("lovelace",Long.toString(adaOut));
+        payout.putObject("owed").put("lovelace",Long.toString(adaOut));
+        var send=(ObjectNode)predicted.withArray("sends").get(0);
+        send.putObject("value").put(tokenPolicy+tokenName,Long.toString(tokenOut)).put("lovelace",Long.toString(sendCoin));
+        send.putObject("owed").put(tokenPolicy+tokenName,Long.toString(tokenOut));
+    }
     static void indefiniteBody(Edit e) {
         var outs=e.ledger.b.get(1);
         e.swap(outs,"9f"+outs.raw().substring(2)+"ff");
@@ -798,6 +879,11 @@ public final class MutationVectors {
         long now() { return v.at("/request/now").asLong(); }
         long fee() { return ledger.b.get(2).integer().longValueExact(); }
         String minted() { return ledger.plan.required("mint").fieldNames().next(); }
+        /** The call's offered assets as a CBOR multi-asset map (one policy, one name, as in Dex-addLiquidity). */
+        String offered() {
+            var a=v.at("/request/call/pay/assets/0");
+            return "a1581c"+a.required(0).asText()+"a1"+bytes(a.at("/1/0/0").asText())+uint(a.at("/1/0/1").asLong());
+        }
         String lp(String unit,long q) { return "a1581c"+unit.substring(0,56)+"a1"+bytes(unit.substring(56))+uint(q); }
         String target() { return ref(a -> a.equals(v.at("/anchors/address").asText())); }
         String walletInput() { return ref(a -> a.equals(payer())); }
@@ -987,11 +1073,15 @@ public final class MutationVectors {
         e.claims.forEach(c -> c.accept(prepared));
         e.v.put("mutation",mutation.name);
         if (mutation.site!=null && mutation.site.contains("/")) e.v.put("check",mutation.site);
+        if (!mutation.refusedBy.isEmpty()) {
+            var also=e.v.putArray("also");
+            mutation.refusedBy.stream().filter(s -> !s.equals(mutation.site)).forEach(also::add);
+        }
         var violations=e.v.putArray("violations");
-        if (mutation.site!=null) violations.add(mutation.code());
+        expected(mutation).forEach(violations::add);
         return e.v;
     }
-    static List<String> expected(Case mutation) { return mutation.site==null ? List.of() : List.of(mutation.code()); }
+    static List<String> expected(Case mutation) { return mutation.sites().stream().map(Case::code).toList(); }
     public static void main(String[] args) throws Exception {
         for (var mutation : cases()) {
             var vector=generate(mutation);
