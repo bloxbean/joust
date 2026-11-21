@@ -59,7 +59,7 @@ Hash the concatenation with SHA-256. The host computes this fingerprint from its
 | describe | contract (fully qualified name) | description, messages (null for Java), calls with method, kind and either served:true or an unsupported code |
 | deployment | now, contract | addresses, policies, scriptHashes, referenceScripts, governors |
 | prerequisites | now, contract | ordered array of missing components |
-| publish | now, ttlSlots, contract, prerequisite (ID), address | {prepared} or null if satisfied |
+| publish | now, ttlSlots, contract, prerequisite (ID), address | {prepared} or null if satisfied; refusal pending while a live transaction already publishes it or a component of it |
 | registered | credential, evidence | empty object |
 | prepare | now, ttlSlots, call | prepared and predicted |
 | view | now, contract, instance, view, args | {value} |
@@ -75,9 +75,9 @@ Hash the concatenation with SHA-256. The host computes this fingerprint from its
 
 The nested call accepts contract, kind, method, instance, object, args, pay, address and cosigners. Arguments use the description's JSON encoding. A missing pay means zero. Plain calls allow an empty co-signer list. Obtain wallet inputs through the caller address's reverse read. Caller-supplied walletUtxos or other extra fields are errors.
 
-Serve init, action, destroy, ownedInit, ownedAction and ownedDestroy. Owned spends name the current instance in the object's holding datum. A quorum call takes optional `cosigners`, an array of lowercase 28-byte payment key hashes. The host uses enterprise wallet addresses on the session network and includes the caller once in the body's required signers, even when the method has no Ctx. A SignedBy field must equal the caller. Other methods accept only absent or empty cosigners. Refuse keyed calls with `keyed`, map contracts with `maps`, parameterized contracts with `params`, governor-authorized calls with `authorizedBy` and calls outside the wallet's verifiable set with `unverifiable`. This includes batched calls, moves, admissions, migrations and deposits. A served send pins the output verifier in deployment.
+Serve init, action, destroy, ownedInit, ownedAction and ownedDestroy. Owned spends name the current instance in the object's holding datum. A quorum call takes optional `cosigners`, an array of at most 64 lowercase 28-byte payment key hashes (more is `bad`). The host uses enterprise wallet addresses on the session network and includes the caller once in the body's required signers, even when the method has no Ctx. A SignedBy field must equal the caller. Other methods accept only absent or empty cosigners. Refuse keyed calls with `keyed`, map contracts with `maps`, parameterized contracts with `params`, governor-authorized calls with `authorizedBy` and calls outside the wallet's verifiable set with `unverifiable`. This includes batched calls, moves, admissions, migrations and deposits. A served send pins the output verifier in deployment.
 
-Before reserving or returning a prepared transaction (including a publication), the host checks output quantities and per-unit value conservation against the call's chain reads. A negative output or a mismatch returns `internal/unbalanced`. The client independently verifies the body before signing (D13).
+Before reserving or returning a prepared transaction (including a publication), the host checks output quantities and per-unit value conservation against the call's chain reads. A negative output or a mismatch returns `internal/unbalanced`, as does a call body with a certificate, a withdrawal that is not a zero one from the contract's or a shared verifier's reward account, or a mint under another policy. The client independently verifies the body before signing (D13).
 
 `prepared` contains reservation, cbor, txHash, validFrom, validTo, signers and plan. A creation includes its new `instance` or `object`. The `predicted` object contains the following projections. Each item has `predicted: true`.
 
@@ -180,7 +180,7 @@ Each terminal error has a numeric JSON-RPC code, a diagnostic message, and data 
 | --- | --- | --- |
 | bad | −32602 | request, method, contract, busy, network, nowDecreased, nowImplausible, tooLarge, readLimit, stageMismatch, unknownReservation, conflict, notExpired, unbounded, restoreClosed, listingGone |
 | refusal | −32001 | require, runtime, pending, window, prerequisite, reconcile, deepRollback, expiredOnArrival, cooldown |
-| unsupported | −32003 | protocol, runtimeVersion, params, keyed, maps, m1b, authorizedBy, unverifiable, notYet, read:&lt;kind or service.method&gt; |
+| unsupported | −32003 | protocol, runtimeVersion, params, keyed, maps, authorizedBy, unverifiable, read:&lt;kind or service.method&gt; |
 | internal | −32603 (−32800 for cancelled) | readFailed, inconsistentRead, chainMoved, unbalanced, evaluator, tooDeep, cancelled, deadline, transport, internal, need |
 
 The draft 2020-12 schemas describe message envelopes and method payloads. For successful forward results and reverse answers select the matching definition using the outstanding request. The read schema's per-kind definitions constrain the result. Ordering, cross-message checks, byte limits, hashes and ledger semantics are normative above. [Methods](dev-host-1/methods.schema.json), [results](dev-host-1/results.schema.json), [reads](dev-host-1/reads.schema.json), [errors](dev-host-1/error.schema.json).

@@ -538,7 +538,9 @@ public final class StateContractHandle<S> {
                 if (!r.isSuccessful()) throw new JoustException("deploy: cannot read the caller's UTxOs: " + r.getResponse());
                 if (r.getValue() == null || r.getValue().isEmpty()) break;
             }
-            throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
+            throw new JoustException(store instanceof JvmClaimStore
+                    ? "deploy: every UTxO of the caller is designated by a keyed operation"
+                    : "deploy: every UTxO of the caller is designated or reserved by a pending transaction");
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {

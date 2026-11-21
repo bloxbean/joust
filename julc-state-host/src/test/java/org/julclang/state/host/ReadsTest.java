@@ -24,9 +24,10 @@ class ReadsTest {
         n.set("tip",point(tip));
         return n.set("value",v);
     }
+    static final String TOKEN = "ab".repeat(28) + "74";
     static ObjectNode output(int index) {
         var n = obj().put("tx_hash",HASH).put("output_index",index).put("address",ADDRESS);
-        n.putArray("amount").addObject().put("unit",index % 2 == 0 ? "token" : "lovelace").put("quantity",1);
+        n.putArray("amount").addObject().put("unit",index % 2 == 0 ? TOKEN : "lovelace").put("quantity",1);
         return n;
     }
     static Reads reads(Function<ObjectNode, JsonNode> peer, long count, long bytes) {
@@ -52,8 +53,8 @@ class ReadsTest {
         }).getUtxoService();
         assertEquals(6,b.getUtxos(ADDRESS,1,1).getValue().getFirst().getOutputIndex());
         assertEquals(3,b.getUtxos(ADDRESS,1,2).getValue().getFirst().getOutputIndex());
-        assertEquals(0,b.getUtxos(ADDRESS,"token",1,2).getValue().getFirst().getOutputIndex());
-        assertTrue(b.getUtxos(ADDRESS,"token",1,3).getValue().isEmpty());
+        assertEquals(0,b.getUtxos(ADDRESS,TOKEN,1,2).getValue().getFirst().getOutputIndex());
+        assertTrue(b.getUtxos(ADDRESS,TOKEN,1,3).getValue().isEmpty());
         assertEquals(List.of(obj().put("kind","utxos").put("address",ADDRESS),
                 obj().put("kind","utxos").put("address",ADDRESS).put("cursor","next")), requests);
     }
@@ -92,6 +93,12 @@ class ReadsTest {
         amounts.remove(2);
         ((ObjectNode) amounts.get(0)).put("quantity", 0.4);
         failure("internal", "inconsistentRead", () -> backend(q -> value(first, 10)).getUtxoService().getTxOutput(HASH, 0));
+        // #151 review SB4: one spelling per asset; another spelling of the same unit is not a second key.
+        ((ObjectNode) amounts.get(0)).put("quantity", 1);
+        for (String spelling : List.of(TOKEN.toUpperCase(), "0x" + TOKEN, "token", "ab".repeat(28) + "00".repeat(33))) {
+            ((ObjectNode) amounts.get(0)).put("unit", spelling);
+            failure("internal", "inconsistentRead", () -> backend(q -> value(first, 10)).getUtxoService().getTxOutput(HASH, 0));
+        }
     }
     @Test void separateLookupsAgreeAndTipsCannotMoveBackwards() throws Exception {
         for (boolean rollback : List.of(true,false)) {

@@ -164,6 +164,9 @@ final class Reads {
         snapshot.utxos.put(address, values);
     }
 
+    private static final java.util.regex.Pattern CANONICAL_UNIT =
+            java.util.regex.Pattern.compile("lovelace|[0-9a-f]{56}(?:[0-9a-f]{2}){0,32}");
+
     private Utxo checkOutput(JsonNode n, String address, String wanted) {
         var index = n.path("output_index");
         if (!index.isIntegralNumber() || !index.canConvertToInt() || index.intValue() < 0
@@ -175,7 +178,10 @@ final class Reads {
             var quantity = asset.path("quantity");
             boolean integral = quantity.isIntegralNumber() && quantity.bigIntegerValue().signum() >= 0;
             boolean decimal = quantity.isTextual() && quantity.textValue().matches("[0-9]+");
-            if (!unit.isTextual() || unit.textValue().isEmpty() || !units.add(unit.textValue()) || !(integral || decimal))
+            // One spelling per asset (#151 review SB4): lovelace, or a lowercase policy id with a token name of at
+            // most 32 bytes, so no two strings name one asset and every lookup by unit agrees with the balance check.
+            if (!unit.isTextual() || !CANONICAL_UNIT.matcher(unit.textValue()).matches() || !units.add(unit.textValue())
+                    || !(integral || decimal))
                 throw inconsistent("invalid or duplicate output amount");
         }
         Utxo u;
