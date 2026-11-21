@@ -243,7 +243,10 @@ For a single call, `verifyPrepared` refuses:
   minted by a creation; any mint under another policy;
 - anything but exactly one continuation of the instance or object, with an inline datum that decodes;
 - a transaction that does not balance; a wallet losing more than its payment plus the fee (plus the minimum ADA of a
-  new UTxO); others receiving more than the script releases;
+  new UTxO); others receiving more than the script releases beyond its payouts and sends to the wallet. An output the
+  output verifier's claims name for a send at a wallet address is the script's send, not the wallet's change: it does
+  not count as coming back to the wallet (except the minimum ADA the wallet may add to it), and a malformed claim set,
+  an output claimed twice, or a claim for another input is refused;
 - a fee above the protocol's for this size and budget (times 1.2, plus `feeMargin`) or above `maxFee`; execution
   budgets above the protocol's limits;
 - collateral that is not the wallet's, not returned to the wallet, or above `maxCollateral`;

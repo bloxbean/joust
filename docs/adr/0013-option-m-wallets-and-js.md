@@ -306,13 +306,24 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
     - wallet outputs carry no datum, except a payout tag naming the target;
     - exactly one continuation (none for a destroy), decoded for display;
     - outputs to other parties are allowed and listed in the review, but only up to what the script releases
-      (the target's value, less the continuation, plus the mint) beyond its tagged payouts to the wallet. A payout to
-      the wallet can thus never hide the wallet's own funds going elsewhere (r4);
+      (the target's value, less the continuation, plus the mint) beyond its tagged payouts to the wallet and its
+      claimed sends to the wallet (below). A payout to the wallet can thus never hide the wallet's own funds going
+      elsewhere (r4);
+    - **claimed sends** (ADR-0007 D5): when the transaction withdraws zero from the deployment's pinned output
+      verifier, the page decodes that withdrawal's `OutputClaims` redeemer (its Reward redeemer, by the withdrawal's
+      ledger index). Every claim must name a distinct output in strictly increasing order and, as `by`, the target
+      the transaction spends; anything else (another shape, a malformed claim, an output twice or out of range,
+      another `by`) is refused, and so is a claimed output that also carries the payout tag. On chain a send to the
+      wallet accepts any output at its address that covers it, so a claim could name the wallet's own change: every
+      claimed output at a wallet address is the script's send to the wallet, never its change. It is excluded from
+      what comes back to the wallet in the net outflow below (the wallet may add to each such output at most its
+      ledger minimum, `(160 + size) × coinsPerUTxOByte`, as a token send needs), and it is subtracted, as tagged
+      payouts are, from what others may receive. Calls without sends are unaffected;
     - no output pays the wallet's payment key at an address the wallet does not use (another stake key).
   - **The transaction balances:** inputs plus mint equal outputs plus fee. An unbalanced transaction is not worth a
     signature: the e2e test found a tampering that added an unfunded output.
   - **The wallet's net outflow** is at most the fee plus the payment (for a creation, plus the new UTxO, itself at
-    most the payment plus `minAda`), for every asset.
+    most the payment plus `minAda`), for every asset, counting claimed send outputs as not returned (above).
   - **Validity:** at most 15 minutes from now, where now is the chain's tip and, when the deployment gives the slot
     clock (`slotConfig`), also the page's own clock. A call that reads `Ctx` must start within 2 minutes before now:
     `ctx.validFrom` is the contract's "now" and may not be backdated (r4).

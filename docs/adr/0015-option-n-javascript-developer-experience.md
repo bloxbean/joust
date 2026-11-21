@@ -860,7 +860,9 @@ direct `Tx` building, gated by S3.
     a minting method's own tokens), its continuation and datum.
   - It checks the transaction as a whole: inputs only the wallet's and the calls' targets, withdrawals only to the
     pinned verifiers, signers, validity, fee, collateral, balance, the wallet's outflow at most the calls' payments
-    plus the fee, and what others receive at most what the scripts release.
+    plus the fee, and what others receive at most what the scripts release. Sends claimed at wallet outputs count as
+    ADR-0013 §9.2 states for one call (each claim's `by` the target of a call pinning that output verifier): they
+    are not the wallet's change in its outflow and not available to others.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.
     Deployments that deposit or receive now pin it.
   - Spending calls only for now (no creations in a composition).
@@ -997,7 +999,10 @@ direct `Tx` building, gated by S3.
     - **A delegation** is one stake delegation of the script's own credential to the page's pool, with the handler's
       Cert redeemer.
     - **A collection** withdraws exactly the balance from the script's credential with the page's `Rewards` redeemer
-      (and the output verifier's zero withdrawal, when there are sends). Others receive at most what was withdrawn.
+      (and the output verifier's zero withdrawal, when there are sends). Others receive at most what was withdrawn
+      beyond the handler's sends claimed at wallet outputs (each claim's `by` is `RewardRef(policy)`, I37; the
+      claims are decoded and checked as ADR-0013 §9.2 states), and those outputs do not count as the wallet's
+      change in what it loses.
     - **Both:** the wallet's inputs only; the pinned reference scripts only; the wallet loses at most the fee;
       bounded collateral and validity; signers are the wallet's and the named co-signers.
   - **I5:** all 11 tamperings of a delegation (a delegation to another pool among them) and all 10 of a reward

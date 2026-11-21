@@ -11,6 +11,7 @@ import {
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
+import { claimedSends } from './claims.js';
 
 /**
  * @param o.steps  [{ description, deployment, call: { kind, meta, args, pay, instance, object } }] in composition order
@@ -237,7 +238,14 @@ export async function verifyComposed(o) {
   const back = new Map();
   const tagged = new Map();
   const third = new Map();
-  for (const out of tx.outputs) {
+  // Wallet outputs the output verifiers' claims name (each for a target spent by a call pinning that verifier; ADR-0007
+  // D5): the scripts' sends to the wallet, never its change.
+  const claimed = claimedSends(tx, calls.map((k) => ({
+    verifier: k.deployment.outputVerifier,
+    owners: calls.filter((x) => x.targetRef && x.deployment.outputVerifier?.rewardAddress === k.deployment.outputVerifier?.rewardAddress)
+      .map((x) => x.targetRef),
+  })), isWallet, chain.params, problems);
+  for (const [index, out] of tx.outputs.entries()) {
     const value = out.value;
     const bech = out.address;
     const k = calls.find((x) => !DESTROYS.has(x.call.kind) && bech === x.deployment.address && value.get(x.targetUnit) === 1n);
@@ -269,6 +277,7 @@ export async function verifyComposed(o) {
       if (out.hasScriptRef || out.datumHash) problems.push('a wallet output with a script or datum hash');
       const isTagged = out.datum && tags.some((t) => dataEqual(out.datum, t));
       if (out.datum && !isTagged) problems.push('a wallet output with a datum');
+      if (isTagged && claimed.indexes.has(index)) problems.push('a claimed send output that carries a payout tag');
       const pkh = paymentKeyHashOf(out.address);
       add(back, value);
       if (isTagged) add(tagged, value);
@@ -302,17 +311,21 @@ export async function verifyComposed(o) {
     }
   }
 
-  // The wallet loses at most the calls' payments and the fee, and no token it does not pay.
+  // The wallet loses at most the calls' payments and the fee, and no token it does not pay. Its claimed send outputs
+  // do not count as coming back (they are what the scripts send it), except the minimum ADA it may add to each.
   const net = new Map(spent);
   add(net, back, -1n);
-  const allowed = fee + calls.reduce((s, k) => s + k.pay.lovelace, 0n);
+  const lost = new Map(net);       // what it loses of its own: its claimed send outputs are not its change
+  add(lost, claimed.value);
+  const sends = claimed.indexes.size ? ' (its claimed send outputs are the scripts\', not its change)' : '';
+  const allowed = fee + calls.reduce((s, k) => s + k.pay.lovelace, 0n) + claimed.topUp;
   const offered = new Map();
   for (const k of calls) for (const [p, assets] of k.pay.assets) for (const [n, q] of assets) offered.set(p + n, (offered.get(p + n) ?? 0n) + BigInt(q));
-  for (const [unit, q] of net) {
-    if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)`);
-    if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}`);
+  for (const [unit, q] of lost) {
+    if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)${sends}`);
+    if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}${sends}`);
   }
-  // Others receive only what the scripts release beyond their payouts to the wallet, over all calls.
+  // Others receive only what the scripts release beyond their payouts and claimed sends to the wallet, over all calls.
   const released = new Map();
   for (const k of calls) {
     add(released, k.targetValue);
@@ -320,8 +333,8 @@ export async function verifyComposed(o) {
   }
   add(released, minted);
   for (const [unit, q] of third) {
-    const free = (released.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n);
-    if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the scripts release to them`);
+    const free = (released.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
+    if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the scripts release to them${sends}`);
   }
   report.fee = fee;
   report.walletNet = net.get('lovelace') ?? 0n;
