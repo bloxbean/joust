@@ -12,11 +12,11 @@ import java.util.*;
  * Scripted, bidirectional stdio peer. Requests may choose their own forward JSON-RPC IDs. A session may end with one
  * {@code violation} entry (a transport fault of the host's); the client must then stop: close its end without another
  * frame (exit 0), apart from the frames the entry tolerates. Another frame exits 3, no end of input within
- * {@link #STOP_MILLIS} exits 4. After the last recorded frame of an honest session the client may close its end or stay
- * idle, and a further frame within {@link #IDLE_MILLIS} exits 3. Any other mismatch exits 2.
+ * {@link #STOP_MILLIS} exits 4. An honest session ends with the client's exit notification, after which the client must
+ * close its end too: a further frame exits 3, still open after {@link #STOP_MILLIS} exits 4. Any other mismatch exits 2.
  */
 public final class FakeHost {
-    static final long STOP_MILLIS = 5_000, IDLE_MILLIS = 1_000;
+    static final long STOP_MILLIS = 5_000;
 
     public static void main(String[] args) {
         int status;
@@ -68,8 +68,13 @@ public final class FakeHost {
                     expected.path("method").asText("reverse answer")+")");
         }
         if (!outstanding.isEmpty()) throw new IOException("incomplete transcript");
-        var extra = io.readWithin(IDLE_MILLIS);
-        if (extra.isPresent() && extra.get()!=TranscriptFrames.EOF) {
+        // DC9: after exit the client closes; any frame instead fails, however late (within the bound).
+        var extra = io.readWithin(STOP_MILLIS);
+        if (extra.isEmpty()) {
+            System.err.println("client did not close after the end of the recording");
+            return 4;
+        }
+        if (extra.get()!=TranscriptFrames.EOF) {
             System.err.println("client frame after the end of the recording ("+extra.get().path("method").asText("response")+")");
             return 3;
         }
