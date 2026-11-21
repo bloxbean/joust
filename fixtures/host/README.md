@@ -34,13 +34,7 @@ The M1b `unsupported-keyed.json` preserves the pre-keyed reply. A host advertisi
 
 ## Map workflow
 
-Start an isolated fresh DevKit whose Yaci Store keeps transaction CBOR. That takes **both**
-`store.transaction.save-cbor=true` and `store.cardano.return-tx-body-cbor=true`: `save-cbor` alone stores nothing,
-silently. On Yaci DevKit 0.12, yaci-cli rewrites `/app/store/config/application.properties` whenever it starts Store,
-so put the two lines in `/app/store/config/joust/application.properties` inside the `yaci-cli` container (Spring
-Boot also loads `config/*/application.properties`), then restart Store
-(`POST localhost:10000/local-cluster/api/admin/yaci-store/stop`, then `.../start`) and reset the devnet. Check
-`GET localhost:8080/api/v1/txs/<hash>/cbor` answers 200 for a new transaction. The recorder checks the running Store's transaction CBOR endpoint, publishes Token and MapVerifier, registers the credential, creates the token, mints, restarts with the unsigned mint in its journal, settles, transfers, reads an existing balance and mints again.
+Start an isolated fresh DevKit with its default Yaci Store configuration. The map reads need no transaction CBOR: `redeemers` comes from Store's `/txs/{hash}/redeemers` and `datum` (the redeemer data included) from `/scripts/datum/{hash}/cbor`, both served by Store's script store, which is on by default, with `store.transaction.save-cbor` off. The recorder publishes Token and MapVerifier, registers the credential, creates the token, mints, restarts with the unsigned mint in its journal, settles, transfers, reads an existing balance and mints again.
 
 ```sh
 ./gradlew :julc-state-host:test -PdevnetOnly -PjoustHostFixtures=maps --tests '*DevKitHostTest.recordHostVectors'

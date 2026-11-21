@@ -104,7 +104,7 @@ class DevKitHostTest {
                         }
                         case "redeemers" -> {
                             var r = backend.getTransactionService().getTransactionRedeemers(str(q,"txHash"));
-                            assertTrue(r.isSuccessful(), "Yaci Store must serve redeemers; enable store.transaction.save-cbor=true");
+                            assertTrue(r.isSuccessful(), () -> "Yaci Store must serve /txs/{hash}/redeemers (its script store, on by default): " + r.getResponse());
                             var list = a.putArray("value");
                             for (var red : r.getValue()) list.addObject().put("purpose",red.getPurpose().name().toLowerCase(Locale.ROOT))
                                     .put("index",red.getTxIndex()).put("dataHash",red.getRedeemerDataHash()).put("scriptHash",red.getScriptHash());
@@ -316,21 +316,6 @@ class DevKitHostTest {
             var created = build(c,init,"Token-init","prepare",params(call(contract,"init","create",obj())));
             submit(c,created);
             String instance = str(created,"instance");
-            // Probe actual transaction CBOR on this Store; configuration files may describe a different deployment.
-            var request = HttpRequest.newBuilder(URI.create(DevKit.STORE_URL+"txs/"+str(created,"txHash")+"/cbor"))
-                    .timeout(Duration.ofSeconds(5)).GET().build();
-            try (var http = HttpClient.newHttpClient()) {
-                var response = http.send(request,HttpResponse.BodyHandlers.ofByteArray());
-                assertEquals(200,response.statusCode(),"Token recording requires Yaci Store store.transaction.save-cbor=true");
-                byte[] bytes = response.body();
-                if (response.headers().firstValue("Content-Type").orElse("").contains("json"))
-                    bytes = HexFormat.of().parseHex(str(JSON.readTree(bytes),"cbor"));
-                // Native Yaci Store can return just the encoded body. Full-transaction mode and
-                // the Blockfrost API can return the enclosing transaction, with the same body id.
-                String bodyHash = HexFormat.of().formatHex(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(bytes));
-                if (!str(created,"txHash").equals(bodyHash))
-                    assertEquals(str(created,"txHash"),TransactionUtil.getTxHash(bytes),"Store served different transaction CBOR");
-            }
             var mint = call(contract,"action","mint",obj().put("to",key(payer)).put("amount","100")).put("instance",instance);
             var pending = build(c,init,"Token-mint","prepare",params(mint));
             var saved = obj().put("complete",true);
@@ -406,10 +391,16 @@ class DevKitHostTest {
 
     }
 
-    @Test void freshChainDeployment() throws Exception {
+    @Test void freshChainDeployment(@org.junit.jupiter.api.io.TempDir Path directory) throws Exception {
         Assumptions.assumeTrue(Boolean.getBoolean("joust.host.e2e"), "enable -PjoustHostE2e on a fresh chain");
         assertTrue(DevKit.isReachable());
-        new Node(false).workflow(DexClient.class, true);
+        var node = new Node(false);
+        node.workflow(DexClient.class, true);
+        // Map contracts too (M3b), on the same fresh chain: Dex publishes neither Token nor the MapVerifier. CI's DevKit
+        // is the released one with Store's default configuration, so this also shows that the map history reads need
+        // no transaction CBOR.
+        node.mapJournal = directory.resolve("maps.json");
+        node.workflow(TokenClient.class, true);
     }
 
     @Test void recordHostVectors(@org.junit.jupiter.api.io.TempDir Path directory) throws Exception {
