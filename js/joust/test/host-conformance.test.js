@@ -59,7 +59,9 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     check(v, result);
     for (const negative of mutations.filter(m => m.source === name)) {
       assert.equal(negative.method, v.method);
-      assert.deepEqual(negative.request, v.request);
+      // A negative that changes the request itself (cosigners on a plain call, say; #153 r2) cannot be applied to this
+      // host's live result; the kit checks it against the client directly (ClientConformanceTest, state-client).
+      if (!isDeepStrictEqual(negative.request, v.request)) continue;
       // Apply only the signing mutation to the live result. The reservation and each
       // unmodified field still come from this host. Independent client evidence is in the vector.
       const prepared = { ...result.prepared };
