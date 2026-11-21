@@ -40,13 +40,16 @@ final class Effects {
             objects.addObject().put("predicted", true).put("effect", "removed").put("object", object);
 
         for (var p : prepared.payouts()) {
-            for (int i = 0; i < outputs.size(); i++) {
+            boolean found = false;
+            for (int i = 0; i < outputs.size() && !found; i++) {
                 var o = outputs.get(i);
                 if (p.address().equals(o.path("address").asText()) && p.tagCbor().equals(o.path("datum").textValue())) {
                     payment(payouts, i, o).putObject("owed").put("lovelace", p.owed().toString());
-                    break;
+                    found = true;
                 }
             }
+            // As for sends: a payout the build recorded must be in the body (final review F-B1).
+            if (!found) throw new IllegalStateException("a recorded payout has no output in the body");
         }
         sends(prepared, plan, outputs, spent, sends);
         if (meta.at("/returns/events").asBoolean()) events(c, meta, plan, spent, events);
