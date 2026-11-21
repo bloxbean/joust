@@ -62,6 +62,11 @@ final class TxRunner {
         final java.util.Map<String, java.util.Map<String, BigInteger>> spareAssets = new java.util.HashMap<>();
         /** Inputs spent without a redeemer (seeds, designated inputs, asset inputs), by reference, as collected (T1). */
         final java.util.Map<String, Utxo> regularInputs = new java.util.LinkedHashMap<>();
+        /**
+         * The address each regular input was collected from (R7): the caller's base address for an asset input (it was
+         * listed there), else the provider's {@code Utxo.address}, possibly null (then {@code returnSurplus} refuses).
+         */
+        final java.util.Map<String, String> regularOwners = new java.util.HashMap<>();
         /** The native assets each caller's calls pay from its own inputs, by base address and unit (T1). */
         final java.util.Map<String, java.util.Map<String, BigInteger>> paidAssets = new java.util.HashMap<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
@@ -201,7 +206,9 @@ final class TxRunner {
         if (c != null && !c.inputs.add(u.getTxHash() + "#" + u.getOutputIndex())) {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
-        if (c != null && redeemer == null) c.regularInputs.putIfAbsent(Designation.ref(u), u);
+        if (c != null && redeemer == null && c.regularInputs.putIfAbsent(Designation.ref(u), u) == null) {
+            if (u.getAddress() != null) c.regularOwners.put(Designation.ref(u), u.getAddress());
+        }
         return redeemer == null ? tx.collectFrom(java.util.List.of(u)) : tx.collectFrom(u, redeemer);
     }
 
@@ -239,6 +246,9 @@ final class TxRunner {
      * AssetTx.returnSurplus}; T1): a prepared transaction may take nothing else from that address.
      */
     java.util.Map<String, org.julclang.ledger.Value> coCallers = java.util.Map.of();
+
+    /** The composition has callers or co-signers other than the payer: its body is checked by {@link #checkCoCallers} (R8). */
+    boolean otherCallers;
 
     String submit(Tx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
                   java.util.List<ExpectedPayout> payouts, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts,
@@ -290,6 +300,9 @@ final class TxRunner {
         try {
             rt.built(what, signed, false);
 
+            // A composition with other callers (key accounts the runtime signs for): it takes from each only what its
+            // calls pay in (R8). Read only then, so other submissions read nothing more.
+            if (otherCallers) checkCoCallers(signed, resolveInputs(rt, signed), caller.baseAddress(), coCallers, what);
             verify(signed, expected, what);
             for (ExpectedState e : extraExpected) verify(signed, e, what);
             verifyPayouts(signed, payouts, what);
@@ -808,7 +821,12 @@ final class TxRunner {
         var net = new java.util.LinkedHashMap<String, java.util.Map<String, BigInteger>>();
         for (var in : t.getBody().getInputs()) {
             Utxo u = spends.get(in);
-            if (u == null || u.getAddress() == null || u.getAddress().equals(payer)) continue;
+            if (u == null || u.getAddress() == null) {
+                // Fail closed (R7): an input whose owner is unknown could be a co-caller's.
+                throw new JoustException(what + ": cannot tell whose input " + in.getTransactionId() + "#" + in.getIndex()
+                        + " is (the provider gave no address); refused");
+            }
+            if (u.getAddress().equals(payer)) continue;
             var cred = com.bloxbean.cardano.client.address.AddressProvider.getPaymentCredential(
                     new com.bloxbean.cardano.client.address.Address(u.getAddress()));
             if (cred.isEmpty() || cred.get().getType() != com.bloxbean.cardano.client.address.CredentialType.Key) continue;
@@ -821,14 +839,15 @@ final class TxRunner {
             var m = net.get(o.getAddress());
             if (m == null) continue;
             for (var a : com.bloxbean.cardano.client.api.util.ValueUtil.toAmountList(o.getValue())) {
-                m.merge(a.getUnit(), a.getQuantity().negate(), BigInteger::add);
+                m.merge(com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(a.getUnit()), a.getQuantity().negate(), BigInteger::add);
             }
         }
         for (var e : net.entrySet()) {
             var allowed = new java.util.HashMap<String, BigInteger>();
             var v = paid.get(e.getKey());
             if (v != null) {
-                org.julclang.state.api.Assets.read(v).forEach((p, ts) -> ts.forEach((n, q) -> allowed.put(p.isEmpty() ? "lovelace" : p + n, q)));
+                org.julclang.state.api.Assets.read(v).forEach((p, ts) -> ts.forEach((n, q) -> allowed.put(
+                        p.isEmpty() ? "lovelace" : com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(p + n), q)));
             }
             for (var u : e.getValue().entrySet()) {
                 if (u.getValue().compareTo(allowed.getOrDefault(u.getKey(), BigInteger.ZERO)) > 0) {

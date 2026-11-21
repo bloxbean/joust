@@ -477,10 +477,12 @@ class WalletAssetChangeTest {
         var built = new AtomicReference<Transaction>();
         var rt = observed(f, new SnapshotBackend(f.snapshot), built);
         var dex = DexClient.at(rt, f.instance);
-        // The snapshot backend submits nothing: the composition fails after the build, which the observer saw.
-        assertThrows(RuntimeException.class, () -> Compose.of(rt, keyA)
+        // The snapshot backend submits nothing: the composition fails after the build, which the observer saw. It fails
+        // at submission, past the checks of the signed body (the co-caller check included, R8).
+        var e = assertThrows(RuntimeException.class, () -> Compose.of(rt, keyA)
                 .add(() -> dex.addLiquidity(keyB, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
                 .submit());
+        assertFalse(String.valueOf(e.getMessage()).contains("refused"), () -> "refused before submission: " + e.getMessage());
         assertNotNull(built.get(), "built");
         assertReturned(f, built.get().getBody(), keyA.baseAddress(), keyB.baseAddress());
     }

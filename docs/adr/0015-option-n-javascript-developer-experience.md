@@ -838,13 +838,14 @@ direct `Tx` building, gated by S3.
     whose tokens sit on a UTxO the selection does not pick then gets a negative token quantity in its change (the node
     rejects it, "expected word"). Now the runtime collects asset UTxOs for wallets too, and never collects a UTxO twice.
     The funding pick reuses an asset input, and each later call in a composition first counts what the inputs it
-    already spends hold. It never takes a UTxO with a reference script or a datum, nor one another keyed operation
-    holds. Like every plain selection (`Designation`), it does not skip a UTxO an earlier, still-open prepare claims:
+    already spends hold. It never takes a UTxO with a reference script or a datum hash, nor one another keyed operation
+    holds; an inline datum at a key address is spendable as is, so tokens sent to a wallet with one can be paid in. Like every plain selection (`Designation`), it does not skip a UTxO an earlier, still-open prepare claims:
     two such bodies conflict and at most one lands.
   - **A caller that is not the payer** (a composition's co-caller, wallet or key account) gets back, at its own address,
     what its collected inputs hold beyond the assets it pays in: one output with their lovelace and other tokens. The
     payer funds the lovelace paid in and the fee. Before #152 a key co-caller's surplus went to the payer's change
-    (the runtime signed for it). A prepared body may take nothing else from a co-caller's address.
+    (the runtime signed for it). A body, prepared or submitted, may take nothing else from a co-caller's address, and
+    an input whose provider gives no address is refused rather than assumed to be the payer's.
   - **Every body handed to a wallet** (`PreparedTx`, a prepared publication) must balance per unit (`BodyBalance`):
     inputs + mint + withdrawals + certificate refunds = outputs + fee + certificate deposits + proposal deposits +
     donation. No quantity may be negative, zero (an asset) or outside the ledger's range, and no input may appear

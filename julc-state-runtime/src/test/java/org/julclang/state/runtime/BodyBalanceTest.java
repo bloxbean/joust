@@ -167,6 +167,17 @@ class BodyBalanceTest {
         assertTrue(e.getMessage().contains("1000000 lovelace"), e::getMessage);
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 50), outTo(a, 4_800_000, 50)));
         assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, "test"));
+        // R8: an output unit in another spelling is the same unit.
+        var upper = out(10_000_000, 0);
+        upper.getValue().getMultiAssets().add(MultiAsset.builder().policyId(POLICY.toUpperCase())
+                .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.valueOf(60))))).build());
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, upper, outTo(a, 4_800_000, 40)));
+        TxRunner.checkCoCallers(t, spends, a, paid, "test");
+        // R7: a spent input without an address is refused, whoever it may belong to.
+        var anonymous = utxo(null, "aa", 10_000_000, 100);
+        var unknown = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, Map.of(IN_A, anonymous, IN_B, spends.get(IN_B)),
+                a, paid, "test"));
+        assertTrue(unknown.getMessage().contains("cannot tell whose input"), unknown::getMessage);
     }
 
     static TransactionOutput outTo(String address, long lovelace, long tokens) {

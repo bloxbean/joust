@@ -2,6 +2,7 @@ package org.julclang.state.runtime;
 
 import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.api.model.Amount;
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.common.model.Networks;
 import com.bloxbean.cardano.client.quicktx.Tx;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -70,18 +72,56 @@ class AssetCollectionTest {
     }
 
     @Test
-    void aUtxoWithAReferenceScriptOrADatumIsNeverCollected() {
-        // T2: spending it would consume a deployment's script (or a datum someone reads).
+    void aUtxoWithAReferenceScriptOrADatumHashIsNeverCollected() {
+        // T2: spending it would consume a deployment's script, or need a datum the wallet does not supply. An inline
+        // datum at a key address is spendable as is (R9): tokens a contract sent the wallet with one can be paid in.
         var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
         var script = utxo(wallet.baseAddress(), "aa", 20_000_000, 100);
         script.setReferenceScriptHash("11".repeat(28));
-        var datum = utxo(wallet.baseAddress(), "bb", 20_000_000, 100);
-        datum.setInlineDatum("d87980");
-        var plain = utxo(wallet.baseAddress(), "cc", 2_000_000, 100);
-        snapshot.utxos.put(wallet.baseAddress(), List.of(script, datum, plain));
-        assertEquals(List.of(plain), collect(wallet, 100, null));
+        var hash = utxo(wallet.baseAddress(), "bb", 20_000_000, 100);
+        hash.setDataHash("22".repeat(32));
+        var inline = utxo(wallet.baseAddress(), "cc", 2_000_000, 100);
+        inline.setInlineDatum("d87980");
+        snapshot.utxos.put(wallet.baseAddress(), List.of(script, hash, inline));
+        assertEquals(List.of(inline), collect(wallet, 100, null));
         var e = assertThrows(RequireException.class, () -> collect(wallet, 101, null));
-        assertTrue(e.getMessage().contains("2 holding it carry a reference script or a datum"), e::getMessage);
+        assertTrue(e.getMessage().contains("2 holding it carry a reference script or a datum hash"), e::getMessage);
+    }
+
+    @Test
+    void aCoCallersSurplusIsReturnedByTheAddressItWasCollectedFrom() {
+        // R7: the provider gives no address; collectAssets knows it listed the UTxO at the caller's address.
+        snapshot.protocolParams = pp();
+        String payer = new Account(Networks.testnet()).baseAddress();
+        var b = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var unaddressed = utxo(null, "aa", 5_000_000, 100);
+        snapshot.utxos.put(b.baseAddress(), List.of(unaddressed));
+        var cap = new TxRunner.Capture();
+        TxRunner.CAPTURE.set(cap);
+        try {
+            collect(b, 60, null);
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        var paid = AssetTx.returnSurplus(rt, cap, payer);
+        assertEquals(Map.of(b.baseAddress(), Assets.of(new byte[28], new byte[]{1}, BigInteger.valueOf(60))), paid);
+        // A seed without an address: whose it is cannot be told, so the composition is refused, not paid to the payer.
+        var seeded = new TxRunner.Capture();
+        TxRunner.CAPTURE.set(seeded);
+        try {
+            TxRunner.collect(seeded.tx, utxo(null, "bb", 5_000_000, 0), null);
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        var e = assertThrows(JoustException.class, () -> AssetTx.returnSurplus(rt, seeded, payer));
+        assertTrue(e.getMessage().contains("cannot tell whose input"), e::getMessage);
+    }
+
+    static ProtocolParams pp() {
+        var p = new ProtocolParams();
+        p.setCoinsPerUtxoSize("4310");
+        p.setKeyDeposit("2000000");
+        return p;
     }
 
     @Test

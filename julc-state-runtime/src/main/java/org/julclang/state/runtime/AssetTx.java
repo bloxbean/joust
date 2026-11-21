@@ -282,8 +282,9 @@ final class AssetTx {
      * (the creation's {@code alreadyIn} seed; in a composition, another call's seed, a designated input, or what an
      * earlier call collected) counts first, less what earlier calls took from it.
      * <p>
-     * Selection: never a UTxO with a reference script or a datum (spending one would consume a deployment's script; T2),
-     * nor one another keyed operation designates or holds ({@link Designation#pickable}; R2). Like every plain
+     * Selection: never a UTxO with a reference script (spending it would consume a deployment's script; T2) or a datum
+     * hash (unspendable without its datum); an inline datum at a key address is fine (R9). Nor
+     * one another keyed operation designates or holds ({@link Designation#pickable}; R2). Like every plain
      * transaction's selection (Designation), it does not skip inputs an earlier, still-unexpired prepared transaction
      * of this JVM claims (T4): the lovelace selection of the same body would reuse them anyway; two such bodies
      * conflict and at most one lands, so nothing is lost, and a page prepares again after the first settles.
@@ -311,7 +312,9 @@ final class AssetTx {
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (counted.contains(key(u)) || !holdsAny(u, missing)) continue;
-                    if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null
+                    // An inline datum at a key address is spendable as is (R9): tokens a contract sends a wallet with one
+                    // can be paid in. A datum hash needs its datum, a reference script would be consumed: not those.
+                    if (u.getReferenceScriptHash() != null || u.getDataHash() != null
                             || !Designation.pickable(u, TxRunner.currentOperation())) {
                         passedOver++;
                         continue;
@@ -326,6 +329,7 @@ final class AssetTx {
                             cap.inputs.add(ref);
                             cap.assetInputs.add(ref);
                             cap.regularInputs.putIfAbsent(ref, u);
+                            cap.regularOwners.put(ref, caller.baseAddress());   // listed there (R7)
                         }
                     }
                     draw(missing, spare);
@@ -338,7 +342,7 @@ final class AssetTx {
         if (!missing.isEmpty()) {
             throw new RequireException(what + ": the caller's base address does not hold " + missing
                     + (passedOver == 0 ? "" : " in UTxOs it may spend (" + passedOver + " holding it carry a reference"
-                    + " script or a datum, or are held by a keyed operation)"));
+                    + " script or a datum hash, or are held by a keyed operation)"));
         }
         if (cap != null) {
             var paid = cap.paidAssets.computeIfAbsent(caller.baseAddress(), k -> new java.util.HashMap<>());
@@ -373,9 +377,15 @@ final class AssetTx {
      */
     static Map<String, Value> returnSurplus(org.julclang.state.runtime.StateRuntime rt, TxRunner.Capture cap, String payer) {
         var held = new LinkedHashMap<String, Value>();
-        for (Utxo u : cap.regularInputs.values()) {
-            if (u.getAddress() == null || u.getAddress().equals(payer)) continue;
-            held.merge(u.getAddress(), valueOf(u), Assets::add);
+        for (var e : cap.regularInputs.entrySet()) {
+            String owner = cap.regularOwners.get(e.getKey());
+            if (owner == null) {
+                // Fail closed (R7): its surplus would go to the payer's change unnoticed.
+                throw new JoustException("composition: cannot tell whose input " + e.getKey() + " is (the provider gave no"
+                        + " address); refused");
+            }
+            if (owner.equals(payer)) continue;
+            held.merge(owner, valueOf(e.getValue()), Assets::add);
         }
         var paid = new LinkedHashMap<String, Value>();
         if (held.isEmpty()) return paid;
