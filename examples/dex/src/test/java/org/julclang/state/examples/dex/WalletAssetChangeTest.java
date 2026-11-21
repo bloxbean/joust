@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.ledger.Value;
 import org.julclang.state.api.Assets;
 import org.julclang.state.examples.devkit.DevKit;
+import org.julclang.state.runtime.BodyBalance;
 import org.julclang.state.runtime.Compose;
 import org.julclang.state.runtime.PreparedTx;
 import org.julclang.state.runtime.StateRuntime;
@@ -71,6 +72,38 @@ class WalletAssetChangeTest {
         // The token UTxO's 1.15 ADA cannot pay the fee: the 443 ADA UTxO is selected too.
         assertTrue(body.getInputs().contains(new TransactionInput(TOKEN.getTransactionId(), 1)), body.getInputs()::toString);
         assertEquals(List.of(), body.getOutputs().getLast().getValue().getMultiAssets(), "no M1B left in the change");
+    }
+
+    /**
+     * The body the unfixed runtime built for this recording (the dev host's {@code expected}, hash {@code 970e50fa…},
+     * rejected by the node), against the recorded reads: the runtime's final check refuses it, for its -100,000 M1B
+     * change and, with that entry removed, for the M1B payment no input funds.
+     */
+    @Test
+    void theRecordedBrokenBodyIsRefused() throws Exception {
+        JsonNode vector = recording();
+        assertEquals("970e50fab071805fd97b0563e8a377de702db06a4088fbe12101a3479834817a", vector.at("/expected/txHash").asText());
+        var outputs = new HashMap<String, Utxo>();
+        com.bloxbean.cardano.client.api.model.ProtocolParams pp = null;
+        for (JsonNode r : vector.required("reads")) {
+            switch (r.at("/request/kind").asText()) {
+                case "output" -> outputs.put(r.at("/request/ref").asText(), JSON.treeToValue(r.at("/answer/value"), Utxo.class));
+                case "protocolParams" -> pp = JSON.treeToValue(r.at("/answer/value"), com.bloxbean.cardano.client.api.model.ProtocolParams.class);
+                default -> { }
+            }
+        }
+        var body = com.bloxbean.cardano.client.transaction.spec.Transaction.deserialize(
+                HexFormat.of().parseHex(vector.at("/expected/cbor").asText())).getBody();
+        assertFalse(body.getInputs().contains(TOKEN), "the broken body never spent the M1B UTxO");
+        Function<TransactionInput, Utxo> resolve = in -> outputs.get(in.getTransactionId() + "#" + in.getIndex());
+        var params = pp;
+        var e = assertThrows(BodyBalance.UnbalancedException.class, () -> BodyBalance.check(body, resolve, params, "addLiquidity"));
+        assertTrue(e.getMessage().contains("negative quantity of 44f1f6e6"), e::getMessage);
+
+        // Without the negative entry every output is non-negative, but no spent input holds the M1B paid in.
+        body.getOutputs().getLast().getValue().getMultiAssets().clear();
+        e = assertThrows(BodyBalance.UnbalancedException.class, () -> BodyBalance.check(body, resolve, params, "addLiquidity"));
+        assertTrue(e.getMessage().contains("value is not conserved") && e.getMessage().contains("44f1f6e6"), e::getMessage);
     }
 
     @TestFactory

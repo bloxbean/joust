@@ -338,7 +338,8 @@ final class TxRunner {
 
     /**
      * Hands a prepared transaction without a validity bound (a reference-script or verifier publication) to the caller:
-     * observers see it first ({@code onBuilt}: diagnostic only, what they keep is not tracked). Returned, its inputs
+     * observers see it first ({@code onBuilt}: diagnostic only, what they keep is not tracked), then it must balance per
+     * unit ({@link BodyBalance}, #152). Returned, its inputs
      * stay claimed for {@link #UNBOUNDED_CLAIM_MS} (a bookkeeping bound, not proof it cannot land); not returned (anything
      * thrown, an {@code Error} included), nothing escaped and the claim ends at once (F71, F77).
      */
@@ -346,6 +347,7 @@ final class TxRunner {
         boolean returned = false;
         try {
             rt.built(what, claimed.tx(), true);
+            checkBalance(rt, claimed.tx(), resolveInputs(rt, claimed.tx()), what);
             returned = true;
             return claimed.tx();
         } finally {
@@ -637,12 +639,15 @@ final class TxRunner {
         boolean returned = false;
         try {
             rt.built(what, unsigned, true);
+            // Resolved once: the per-unit balance (#152) and the keys whose inputs the transaction spends.
+            var spends = resolveInputs(rt, unsigned);
+            checkBalance(rt, unsigned, spends, what);
             verify(unsigned, expected, what);
             for (ExpectedState e : extraExpected) verify(unsigned, e, what);
             verifyPayouts(unsigned, payouts, what);
             verifySends(unsigned, sends, what);
             // Every key whose UTxO the transaction spends (or takes as collateral) must sign too (review r3).
-            for (byte[] owner : inputOwners(unsigned)) needed.putIfAbsent(HexUtil.encodeHexString(owner), owner);
+            for (byte[] owner : inputOwners(spends)) needed.putIfAbsent(HexUtil.encodeHexString(owner), owner);
             var prepared = new PreparedTx(rt, unsigned, new java.util.ArrayList<>(needed.values()), window, what);
             returned = true;
             return prepared;
@@ -724,24 +729,51 @@ final class TxRunner {
     }
 
     /** The payment key hashes owning the transaction's spent and collateral inputs (those at key addresses). */
-    private java.util.List<byte[]> inputOwners(Transaction t) {
+    private static java.util.List<byte[]> inputOwners(java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> spends) {
         var out = new java.util.ArrayList<byte[]>();
+        for (Utxo u : spends.values()) {
+            var cred = com.bloxbean.cardano.client.address.AddressProvider.getPaymentCredential(
+                    new com.bloxbean.cardano.client.address.Address(u.getAddress()));
+            if (cred.isPresent() && cred.get().getType() == com.bloxbean.cardano.client.address.CredentialType.Key) {
+                out.add(cred.get().getBytes());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The outputs {@code t} spends and takes as collateral, in body order, from the backend (the chain reads the build
+     * used); an input it cannot resolve is missing.
+     */
+    static java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> resolveInputs(StateRuntime rt, Transaction t) {
+        var out = new java.util.LinkedHashMap<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo>();
         var refs = new java.util.ArrayList<com.bloxbean.cardano.client.transaction.spec.TransactionInput>(t.getBody().getInputs());
         if (t.getBody().getCollateral() != null) refs.addAll(t.getBody().getCollateral());
         for (var in : refs) {
+            if (out.containsKey(in)) continue;
             try {
                 var r = rt.backend().getUtxoService().getTxOutput(in.getTransactionId(), in.getIndex());
-                if (!r.isSuccessful() || r.getValue() == null) continue;
-                var cred = com.bloxbean.cardano.client.address.AddressProvider.getPaymentCredential(
-                        new com.bloxbean.cardano.client.address.Address(r.getValue().getAddress()));
-                if (cred.isPresent() && cred.get().getType() == com.bloxbean.cardano.client.address.CredentialType.Key) {
-                    out.add(cred.get().getBytes());
-                }
+                if (r.isSuccessful() && r.getValue() != null) out.put(in, r.getValue());
             } catch (Exception e) {
                 throw new JoustException("cannot resolve input " + in.getTransactionId() + "#" + in.getIndex(), e);
             }
         }
         return out;
+    }
+
+    /**
+     * Refuses a body that does not balance per unit ({@link BodyBalance}, #152): after the observers saw it (onBuilt
+     * observes every built transaction), before it is handed out.
+     */
+    static void checkBalance(StateRuntime rt, Transaction t,
+                             java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> spends, String what) {
+        com.bloxbean.cardano.client.api.model.ProtocolParams pp;
+        try {
+            pp = rt.backend().getEpochService().getProtocolParameters().getValue();
+        } catch (Exception e) {
+            throw new JoustException(what + ": cannot read the protocol parameters", e);
+        }
+        BodyBalance.check(t.getBody(), spends::get, pp, what);
     }
 
     /** Submits a signed transaction and waits for it (a {@link PreparedTx} after the wallets signed). */

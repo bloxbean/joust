@@ -5,6 +5,7 @@ import com.bloxbean.cardano.client.api.model.Amount;
 import com.bloxbean.cardano.client.api.model.Result;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.backend.api.BackendService;
+import com.bloxbean.cardano.client.backend.api.EpochService;
 import com.bloxbean.cardano.client.backend.api.UtxoService;
 import com.bloxbean.cardano.client.common.model.Networks;
 import com.bloxbean.cardano.client.transaction.spec.Transaction;
@@ -43,6 +44,13 @@ class KeyedSeriesTest {
         BackendService backend() {
             UtxoService utxos = (UtxoService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{UtxoService.class},
                     (p, m, a) -> {
+                        if (m.getName().equals("getTxOutput")) {
+                            synchronized (this) {
+                                for (Utxo u : wallet) if (Designation.ref(u).equals(a[0] + "#" + a[1])) return Result.success("ok").withValue(u);
+                                for (Utxo u : script) if (Designation.ref(u).equals(a[0] + "#" + a[1])) return Result.success("ok").withValue(u);
+                            }
+                            return Result.error("not found");
+                        }
                         if (!m.getName().equals("getUtxos")) throw new UnsupportedOperationException(m.getName());
                         reads.incrementAndGet();
                         List<Utxo> out = new ArrayList<>();
@@ -62,9 +70,20 @@ class KeyedSeriesTest {
                         }
                         return Result.success("ok").withValue(out);
                     });
+            // The protocol parameters a body's balance check reads (#152).
+            EpochService epochs = (EpochService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{EpochService.class},
+                    (p, m, a) -> {
+                        if (!m.getName().equals("getProtocolParameters") || a != null && a.length > 0) {
+                            throw new UnsupportedOperationException(m.getName());
+                        }
+                        var pp = new com.bloxbean.cardano.client.api.model.ProtocolParams();
+                        pp.setKeyDeposit("2000000");
+                        return Result.success("ok").withValue(pp);
+                    });
             return (BackendService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{BackendService.class},
                     (p, m, a) -> {
                         if (m.getName().equals("getUtxoService")) return utxos;
+                        if (m.getName().equals("getEpochService")) return epochs;
                         throw new UnsupportedOperationException(m.getName());
                     });
         }
@@ -103,6 +122,15 @@ class KeyedSeriesTest {
         amounts.addAll(List.of(more));
         u.setAmount(amounts);
         return u;
+    }
+
+    /** Spends {@code u} (lovelace only) into one output at {@code to}, less a fee of 1. */
+    static Transaction balanced(Utxo u, String to) {
+        var t = spending(u);
+        t.getBody().getOutputs().add(com.bloxbean.cardano.client.transaction.spec.TransactionOutput.builder().address(to)
+                .value(com.bloxbean.cardano.client.transaction.spec.Value.builder()
+                        .coin(u.getAmount().getFirst().getQuantity().subtract(BigInteger.ONE)).build()).build());
+        return t;
     }
 
     static Transaction spending(Utxo... inputs) {
@@ -749,9 +777,10 @@ class KeyedSeriesTest {
         var claimed = Designation.build(a, null, () -> spending(u));
         assertThrows(AssertionError.class, () -> TxRunner.exportPrepared(rt, "publish", claimed));
         assertFalse(Designation.isClaimed(Designation.ref(u)), "released");
-        // Returned: claimed for the fixed bound.
+        // Returned: claimed for the fixed bound. Returned only balanced (#152): the input resolves, its value is paid out.
+        chain.wallet.add(u);
         var ok = StateRuntime.builder(chain.backend()).chainTime(chain.time()).network(Networks.testnet()).build();
-        var again = Designation.build(a, null, () -> spending(u));
+        var again = Designation.build(a, null, () -> balanced(u, a));
         assertNotNull(TxRunner.exportPrepared(ok, "publish", again));
         assertTrue(Designation.isClaimed(Designation.ref(u)));
         again.claim().release();
