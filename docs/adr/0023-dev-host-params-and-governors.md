@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r6). Design only.
+**Status:** Proposed (r7). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -39,9 +39,9 @@ parameterized contract's script hash, address and policy are not in the build: t
 | F3 | The described dispatcher refuses `@AuthorizedBy` on a keyed call | `DescribedContract.java:185` at `d529bfd0` |
 | F4 | A contract's `@Params` record is encoded from `x-joust.params` (with a fidelity check) and applied as **one** Data argument; a plain JuLC validator's `@Param` fields are applied **one Data argument each, in order**. Application is JuLC's `Program.applyParams`. An applied contract script over 15,000 bytes is refused. The contract's address is a script base address (payment and stake the script) when `stakeSelf`, else an enterprise address | `DescribedContract.java:103-106`; `StateContractHandle.java:149-153`, `:177-191`; `ValidatorScripts.java:91-104` at `d529bfd0` |
 | F5 | JuLC encodes Data as plutus-core does: non-empty lists and constructor fields are **indefinite** arrays (`9f … ff`), empty ones `80`; byte strings over 64 bytes are indefinite strings of 64-byte chunks. The same decoded value in another CBOR form gives another applied hash (the Codex review on #157 reproduced four policies from two Treasury encodings) | JuLC `julc-core/src/main/java/org/julclang/core/cbor/PlutusDataCborEncoder.java:31-35`, `:102-112`, `:161-175` at tag `v0.1.0-pre21-rc1` (re-verified at the JuLC release JOUST then pins, an M4a entry gate) |
-| F6 | A script's `cborHex` in JOUST's artifacts is a CBOR byte string **of** a CBOR byte string of the flat program. The ledger's hash is `blake2b_224(0x03 ‖ S)`, where `S` is the inner CBOR byte string (the outer wrapper removed); hashing the outer or the bare flat bytes gives other hashes (reproduced on `fixtures/m3/treasury-governor/017-freeze.json`'s Guardian) | #157 review X1; `fixtures/m3/treasury-governor/017-freeze.json` |
+| F6 | A script's `cborHex` in JOUST's artifacts is a CBOR byte string **of** a CBOR byte string of the flat program. The ledger's hash is `blake2b_224(0x03 ‖ S)`, where `S` is the inner CBOR byte string (the outer wrapper removed); hashing the outer or the bare flat bytes gives other hashes (reproduced on `fixtures/m3/treasury-governor/017-freeze.json`'s Guardian) | #157 review X1; `fixtures/m3/treasury-governor/017-freeze.json` (fixtures at `d529bfd0`; the JuLC 0.1.0-pre22 / CCL 0.8.0-pre8 re-recording in #148 moves Guardian's hash and the spend redeemer's index, so the vectors are regenerated at M4a's entry) |
 | F7 | Governors are plain JuLC validators. Gradle writes them as **generated** resources `META-INF/plutus/<SimpleName>.plutus.json` (`cborHex`, empty `hash` when parameterized, `params` such as `"owner:byte[]"`; reproduce with `./gradlew :examples:treasury:classes`), resolved by `ValidatorScripts` beside the defining class, detecting ambiguity; the npm toolchain writes `build/joust/validators.json` (`[{name, purpose, script, scriptHash, built, params}]`, with the package) | `ValidatorScripts.java:27-54`, `:138-155`; `js/joust/src/build.js:7`, `:165-176` at `d529bfd0` |
-| F8 | The example: `Treasury`'s `@Params record Config(Credential guardian, BigInteger maxPayout)`; `freeze` is `@AuthorizedBy("params.guardian")` with no `Ctx`, `@SignedBy` or `@Quorum`. `Guardian` is a `@WithdrawValidator` with `@Param byte[] owner`, approving when the purpose is Rewarding and `owner` signed. The recorded `freeze` has a V3 governor witness, a zero withdrawal from `f0‖hash`, and redeemers at `(spend,1)` and `(reward,0)` | `Treasury.java:31`, `:73`; `Guardian.java:17-26`; `fixtures/m3/treasury-governor/017-freeze.json` |
+| F8 | The example: `Treasury`'s `@Params record Config(Credential guardian, BigInteger maxPayout)`; `freeze` is `@AuthorizedBy("params.guardian")` with no `Ctx`, `@SignedBy` or `@Quorum`. `Guardian` is a `@WithdrawValidator` with `@Param byte[] owner`, approving when the purpose is Rewarding and `owner` signed. The recorded `freeze` has a V3 governor witness, a zero withdrawal from `f0‖hash`, and redeemers at `(spend,1)` and `(reward,0)` | `Treasury.java:31`, `:73`; `Guardian.java:17-26`; `fixtures/m3/treasury-governor/017-freeze.json` (fixtures at `d529bfd0`; the JuLC 0.1.0-pre22 / CCL 0.8.0-pre8 re-recording in #148 moves Guardian's hash and the spend redeemer's index, so the vectors are regenerated at M4a's entry) |
 | F9 | A body's required signers: the caller's key **only when** the method uses `Ctx` or `@SignedBy`; then every extra signer (co-signers, governor signers), deduplicated. The payer still witnesses its own inputs | `StateInstance.java:199-207`; `DescribedContract.java:310-313` at `d529bfd0` |
 | F10 | JOUST's page verifier, for a governor call: verifiable only when the credential is in the deployment's params; exactly one script credential; instance actions only; the governor's hash equals the params' credential; exactly one Rewarding redeemer **at the governor's withdrawal index**, equal to `Approvals[Approval(policy, instance, tag)]`. It does **not** examine a Rewarding redeemer at another reward index | `verify.js:124-192`, `:485-509`, `:515-536` at `d529bfd0` |
 | F11 | The page's governor registration check: one pure registration of exactly the governor's script credential, the protocol deposit, wallet-only inputs and outputs, no withdrawals, mint or redeemers; it counts Plutus witness scripts and **allows an absent TTL** | `governors.js:56-114`; `ledger.js:101` at `d529bfd0` |
@@ -131,14 +131,16 @@ codec's exact range or decimal strings). Absent `params` for a parameterized con
 For a parameterized contract (and for a governor, D4) the client must, from the verified snapshot only:
 1. **Encode** the params from the description it read into Data, in **plutus-core's encoding** (F5): constructor tag
    forms as the ledger's (121–127, 1280–1400, then 102 with an explicit index), non-empty lists and constructor fields
-   as indefinite arrays and empty ones as `80`, integers in the shortest form (tags 2/3 beyond 64 bits), byte strings
-   over 64 bytes as indefinite strings of 64-byte chunks, and **map entries sorted** by their keys' encodings in RFC
+   as indefinite arrays and empty ones as `80`, integers in the shortest form (tags 2/3 beyond 64 bits, a bignum magnitude over 64 bytes chunked like a byte
+   string), byte strings over 64 bytes as indefinite strings of 64-byte chunks, maps as **definite-length** maps with
+   their **entries sorted** by their keys' encodings in RFC
    8949 length-first order, duplicates refused (as `SchemaCodec` normalizes typed maps, F17). A value given as raw
    `PlutusData` CBOR hex must already be in this form, or it is refused (`bad`, code `params`): neither host
    re-normalizes raw Data. A contract's `@Params` record is **one** value; a plain validator's `@Param`s are **one
    value each, in declaration order** (F4).
 2. **Apply:** take the unapplied `cborHex` (F6), remove the outer CBOR byte string to get `S`, decode `S`'s payload as
-   a flat program, and build `[[f p1] … pn]`, each `pi` a Data constant of step 1's bytes, keeping the program's
+   a flat program (builtin function tags are opaque to the client: it copies the term bytes it does not need to
+   understand, so a script using builtins an oracle cannot name still applies byte for byte), and build `[[f p1] … pn]`, each `pi` a Data constant of step 1's bytes, keeping the program's
    version; flat-encode it (with flat's padding) and wrap it as one CBOR byte string `S'`.
 3. **Hash:** `blake2b_224(0x03 ‖ S')`. Refuse an applied contract script whose **outer `cborHex`, decoded**, exceeds
    15,000 bytes, as the runtime measures it (F4; an `S'` of 14,998 bytes wraps to 15,001 and is refused): `refusal`,
@@ -173,9 +175,11 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
   computes the digest the client asked for; under version 1 it serves no script governors (`authorizedBy:script`
   absent), so an old client keeps working, unchanged, on a project with the manifest. The host loads the manifest
   eagerly at `initialize` (version 2), so later changes on disk never reach the running session. **The client's half**
-  (Y13): it sends script-governor calls, `prerequisites.governors` and governor `publish` only in a version-2 session;
+  (Y13), **npm sessions only** (the JVM host has no fingerprint version and keeps its single digest, F-Y2): it sends
+  script-governor calls, `prerequisites.governors` and governor `publish` only in a version-2 session;
   it computes its D5 anchors from the same `validators.json` bytes it digested; and it treats a version-1 (or
-  version-less) `initialize` answer that advertises `authorizedBy:script` as a protocol violation.
+  version-less) npm `initialize` answer that advertises `authorizedBy:script` as a protocol violation. `fingerprint:2`
+  is informational: it tells a client that sent no version that a version-2 session is available on this host.
 - **The client resolves the same artifact by a written rule** (T16; Y3), independently of the host:
   - **Gradle:** locate `<package path>/<SimpleName>.class` in the **first** snapshot class-path entry, in ordinal
     order, that holds it; read `META-INF/plutus/<SimpleName>.plutus.json` **from that same entry**. Refuse (`governor`)
@@ -222,7 +226,9 @@ a named co-signer; co-signers are allowed only for `@Quorum` or to supply that k
 **Withdrawals and Rewarding redeemers** (T13, T14, F10). The allowed withdrawals are exactly: the governor's (script
 calls), the output verifier's (methods that send, ADR-0022 D13), the map verifier's (map calls, ADR-0022 M3). Each is
 compared by its **full reward-account bytes** (header with the session's network tag, then the hash), appears once,
-and withdraws zero. Their pointers are their indices in the body's ledger-ordered withdrawals; **every** pointer has
+and withdraws zero. Their pointers are their indices in the withdrawals sorted in the ledger's order (Haskell's `Ord` on the reward
+account: network tag, then script credentials before key credentials, then the hash bytes), computed by the client
+independently of the order the body's CBOR map happens to use (F-Y6); **every** pointer has
 exactly one Rewarding redeemer, **decoded by purpose against its own type** (X13):
 - the governor's: `Approvals` with **exactly one** `Approval(policy, target, action)` (the applied policy, the
   instance's token name, the method's redeemer constructor index from the client's description);
@@ -323,7 +329,7 @@ Observable behaviour:
 
 | Milestone | Scope | Entry | Exit |
 |---|---|---|---|
-| **M4a** | `@Params` contracts on both hosts (D2, D3, D4's JVM path for params), application vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved; the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths) | application vectors agree across JuLC, Aiken and the kit; Treasury's non-governed calls served and checked on both hosts; I16, I20 |
+| **M4a** | `@Params` contracts on both hosts (D2, D3, D4's JVM path for params), application vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved; the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths); and from the Fable final review: F-Y1 (an application vector for an asset-aware script such as Stall, with an oracle for scripts Aiken's binding cannot decode), F-Y5 (F7 and D4's artifact rule re-verified at the JuLC and CCL versions JOUST then pins, recorded with the vectors) | application vectors agree across JuLC, Aiken (or the stated oracle) and the kit; Treasury's non-governed calls served and checked on both hosts; the old-client and capability-gating vectors (D7, D8) pass; I16, I20, I21 |
 | **M4b** | Key-credential `@AuthorizedBy` (D4, D5 signers) | M4a | key vectors and mutations on both hosts; capability `authorizedBy:key`; I17, I19 |
 | **M4c** | Plutus governors (D4, D5, D6) and fingerprint version 2 with capability `fingerprint:2` (D4) | M4b | Treasury + Guardian recorded on a fresh DevKit (registration, `freeze`, payer ≠ owner); every D5/D8 mutation rejected with its code; capability `authorizedBy:script`; I18, I19 |
 
@@ -369,6 +375,12 @@ fingerprint is versioned (D4): a client that sends no `fingerprintVersion` gets 
 including one with `validators.json`, and no script governors (I21). A restore entry may carry `params` (D2).
 
 ## 8. Open questions
+
+- **Q5. Governor registration and Conway's deprecations** (F-Y7): D5 accepts only the legacy kind-0 stake registration,
+  which the Conway CDDL marks for deprecation, and the deposit it pays cannot be reclaimed through the dev host (no
+  deregistration path is served). Options when kind 0 goes: a kind-7 registration with the governor's Certifying
+  witness (needs governors to approve their own registration, against ADR-0009 D3 today), or registration outside the
+  dev host. Lean: decide with ADR-0009's next revision.
 
 - **Q2. Native-script governors** (F16): later, when a runtime path builds them.
 - **Q3. Governor discovery.** Should `describe` list the snapshot's plain validators (qualified name, purpose, params)?
@@ -423,3 +435,7 @@ including one with `validators.json`, and no script governors (I21). A restore e
 - **r6** (2026-11-21, responds to the design and security round-2 review of `289ff3be`, both approved): Y14 →
   D4 (`fingerprint:2` ships with M4c), D9 (M4c scope), D2 (each gated field names its capability), I21 restated
   exactly; Y15 → status line, D9 M4a entry lists the deferred Y5–Y9; Y11 → D8 (registration mutation vectors).
+- **r7** (2026-11-22, responds to the Fable final review of `05ea594b`, approved with P3s): F-Y1 → D3 step 2 (opaque
+  builtin tags), D9 M4a entry (asset-aware vector, oracle); F-Y2 → D4 (the client's half is npm-only; `fingerprint:2`
+  informational); F-Y3 → D9 M4a exit (I21 and the gating vectors); F-Y4 → F6, F8 (pins and the re-recording); F-Y5 →
+  D9 M4a entry; F-Y6 → D5 (pointer order defined independently of the wire order); F-Y7 → Q5; F-Y8 → D3 step 1.
