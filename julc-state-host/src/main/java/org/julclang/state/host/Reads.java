@@ -184,7 +184,9 @@ final class Reads {
         try { u = JSON.convertValue(n, Utxo.class); }
         catch (IllegalArgumentException e) { throw inconsistent("malformed output"); }
         String ref = Snapshot.ref(u.getTxHash(), u.getOutputIndex());
-        checkAddress(u.getAddress(), network);
+        // An answer's address is the client's evidence: invalid or foreign is an inconsistent read (D6; final review F-B1).
+        try { checkAddress(u.getAddress(), network); }
+        catch (HostError e) { throw inconsistent("output address is invalid or belongs to another network"); }
         if (address != null && !address.equals(u.getAddress()) || wanted != null && !wanted.equals(ref))
             throw inconsistent("output address or reference differs from the query");
         // Some providers omit the redundant data_hash on output lookup. Compare it
@@ -227,11 +229,16 @@ final class Reads {
         String type = v.path("type").asText("");
         if (!Set.of("PlutusScriptV1", "PlutusScriptV2", "PlutusScriptV3").contains(type)) throw inconsistent("unknown script language");
         snapshot.scripts.put(hash, new Snapshot.Script(type, v.path("cborHex").asText("")));
+        boolean verified = false;
         try {
             var script = local.getScriptService().getPlutusScript(hash).getValue();
-            if (HexFormat.of().formatHex(script.getScriptHash()).equals(hash)) return;
-        } catch (Exception ignored) {}
-        throw inconsistent("script hash mismatch");
+            verified = HexFormat.of().formatHex(script.getScriptHash()).equals(hash);
+        } catch (Exception ignored) {
+        } finally {
+            // The entry is checked through the snapshot itself; it leaves again unless it hashes (final review F-B2).
+            if (!verified) snapshot.scripts.remove(hash);
+        }
+        if (!verified) throw inconsistent("script hash mismatch");
     }
 
     Optional<Boolean> stakeRegistration(String credential) {
@@ -261,7 +268,8 @@ final class Reads {
                 || !tip.path("hash").asText("").matches("[0-9a-f]{64}")) throw inconsistent("invalid chain point");
         String hash = tip.get("hash").textValue();
         if (slot.longValue() < greatestTip || height.longValue() < lastHeight
-                || slot.longValue() == greatestTip && !hash.equals(lastHash))
+                || slot.longValue() == greatestTip && !hash.equals(lastHash)
+                || height.longValue() == lastHeight && slot.longValue() != greatestTip)   // final review F-B3
             throw HostError.internal("chainMoved", "chain point rolled back or was replaced");
         int variants = 0;
         for (String k : List.of("value", "absent", "unsupported", "failed")) if (a.has(k)) variants++;

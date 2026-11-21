@@ -169,4 +169,25 @@ class ReadsTest {
         assertEquals(System.identityHashCode(service), service.hashCode());
         assertTrue(service.toString().contains("UtxoService"));
     }
+
+    /** Final review F-B1: an answer's foreign-network address is an inconsistent read, not a bad request. */
+    @Test void aForeignNetworkAddressInAnAnswerIsAnInconsistentRead() {
+        var mainnet = com.bloxbean.cardano.client.address.AddressProvider.getEntAddress(
+                com.bloxbean.cardano.client.address.Credential.fromKey(new byte[28]),
+                com.bloxbean.cardano.client.common.model.Networks.mainnet()).toBech32();
+        var o = output(1).put("address", mainnet);
+        failure("internal", "inconsistentRead", () -> backend(q -> value(o, 10)).getUtxoService().getTxOutput(HASH, 1));
+    }
+
+    /** Final review F-B3: a later slot at the same height is a replaced block. */
+    @Test void aLaterSlotAtTheSameHeightIsAChainMove() throws Exception {
+        int[] n = {0};
+        var b = backend(q -> {
+            if (n[0]++ == 0) return value(JSON.createArrayNode(), 10);
+            var a = value(output(1), 10);
+            return a.set("tip", obj().put("hash", "b".repeat(64)).put("height", 10).put("slot", 11));
+        });
+        b.getUtxoService().getUtxos(ADDRESS, 10, 1);
+        failure("internal", "chainMoved", () -> b.getUtxoService().getTxOutput(HASH, 1));
+    }
 }
