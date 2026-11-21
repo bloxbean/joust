@@ -86,8 +86,8 @@ class RecordedSessionsTest {
         assertEquals(Set.of("updated","removed"),Set.of(effects.get(0).required("effect").asText(),effects.get(1).required("effect").asText()));
         var built = result.required("prepared");
         assertTrue(built.required("validFrom").asLong()>p.required("now").asLong());
-        // A handed-out attempt cannot disappear from the client's persisted record.
-        error("bad","operation",c.rpc("prepare",p,answers));
+        // A live attempt the record does not list yet (awaiting approval) holds the operation: pending (final review F-K3).
+        error("refusal","pending",c.rpc("prepare",p,answers));
         var attempts = call.withObject("/operation").withArray("attempts");
         attempts.addObject().setAll(((ObjectNode)built).deepCopy().retain("txHash","validTo"));
         error("refusal","pending",c.rpc("prepare",p,answers));

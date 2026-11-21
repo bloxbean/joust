@@ -37,5 +37,15 @@ class KeyedCallsRefusedTest {
             if (call[0].equals("keyedInit")) assertEquals(contract + " has no keyedInit grant", e.getMessage());
             else assertEquals("unknown kind " + call[0], e.getMessage());
         }
+        // The keyed refusal precedes the payment checks (final review F-K5): a payment to the non-payable change, or a
+        // negative one, gets the same answer, still a 400 before any chain read.
+        for (String lovelace : new String[] {"1000000", "-1"}) {
+            var req = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
+                    .put("contract", contract).put("kind", "keyedAction").put("method", "change")
+                    .put("instance", instance).put("object", "6b6579").put("address", address);
+            req.putObject("args");
+            req.putObject("pay").put("lovelace", lovelace);
+            assertEquals("unknown kind keyedAction", assertThrows(BadRequest.class, () -> server.prepare(req)).getMessage());
+        }
     }
 }

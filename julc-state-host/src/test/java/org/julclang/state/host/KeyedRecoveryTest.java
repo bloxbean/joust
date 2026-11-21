@@ -74,4 +74,48 @@ class KeyedRecoveryTest {
         table2.observe(500);
         assertEquals("operation", assertThrows(HostError.class, () -> table2.checkOperation(op0, true, 500, null)).code);
     }
+
+    /** F-K3: a repeat prepare while an unsigned, unlisted attempt is live answers pending, not a record error. */
+    @Test void aRepeatWhileAnUnsignedAttemptIsLiveIsPending() throws Exception {
+        var b1 = Reservations.Body.decode(cbor(1, 40, 100), 0);
+        var table = new Reservations(2, false, 0);
+        var op0 = KeyedOperation.parse(op(Map.of()));
+        table.commit(table.prepare(b1, 50, op0));
+        assertEquals("pending", assertThrows(HostError.class, () -> table.checkOperation(op0, true, 60, null)).code);
+        table.observe(103);                                     // expired unsigned (K2): the retry goes through
+        table.checkOperation(op0, true, 103, null);
+    }
+
+    /**
+     * F-K1: attempt A expires unsigned, the retry B is prepared with the unchanged record, and the devnet is rewound.
+     * Restoring B with the client's record ([] while unsigned, [B] once handed out) succeeds whether A stays expired
+     * (tip at or above A's validTo) or is revived (below it); a revived A stays reserved until discarded or expired.
+     */
+    @Test void restoreSkipsAnUnacknowledgedAttemptAcrossBothRewinds() throws Exception {
+        String c1 = cbor(1, 40, 100), c2 = cbor(2, 103, 200);
+        var b1 = Reservations.Body.decode(c1, 0);
+        var b2 = Reservations.Body.decode(c2, 0);
+        for (long rewound : new long[] {150, 90}) {
+            for (boolean handedOut : new boolean[] {false, true}) {
+                var table = new Reservations(2, false, 0);
+                var op0 = KeyedOperation.parse(op(Map.of()));
+                table.checkOperation(op0, true, 50, null);
+                table.commit(table.prepare(b1, 50, op0));
+                table.observe(103);                             // A expires before it was handed out
+                table.checkOperation(op0, true, 103, null);
+                table.commit(table.prepare(b2, 103, op0));
+                table.rewind(rewound);
+                var record = op(handedOut ? Map.of(b2.hash(), 200L) : Map.of());
+                var restore = obj().put("complete", true);
+                restore.putArray("transactions").addObject().put("state", "prepared").put("cbor", c2).set("operation", record);
+                var reply = table.restore(restore);
+                reply.commit().run();
+                table.allowBuild();                             // reconciled: the session is not wedged
+                assertTrue(table.avoids(D), rewound+" "+handedOut);
+                var next = KeyedOperation.parse(record);
+                // B is live either way, so a further retry waits.
+                assertEquals("pending", assertThrows(HostError.class, () -> table.checkOperation(next, true, rewound, null)).code);
+            }
+        }
+    }
 }

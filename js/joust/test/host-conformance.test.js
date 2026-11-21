@@ -335,6 +335,26 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       assert.equal((await peer.rpc('prepare', p)).error.data.code, 'deepRollback');
     } finally { await peer.close(); }
   });
+  it('restores a retry past an unacknowledged attempt after either rewind (final review F-K1)', async () => {
+    // A: the recorded removal, prepared and expired before it was handed out. B: a retry (the late-start variant)
+    // with the unchanged record. After a rewind at or above A's validTo A stays expired; below it A is revived.
+    const a = fixture('verifier/registry-019-release'), b = fixture('verifier/reject-keyed-late-start');
+    const operation = structuredClone(a.request.call.operation);
+    const A = a.result.prepared, B = b.result.prepared;
+    for (const rewound of [A.validTo + 3, A.validTo - 1]) {
+      start(contracts);
+      try {
+        await initialize({ clock: a.clock, restoring: true });
+        const first = await peer.rpc('restore', { transactions: [{ cbor: A.cbor, operation, state: 'prepared' }], complete: true });
+        assert.ok(first.result, JSON.stringify(first.error));
+        const reservation = first.result.reservations[0];
+        assert.equal((await peer.rpc('settled', { reservation, txHash: A.txHash, status: 'expired', tip: A.validTo + 3 })).result.state, 'expired');
+        assert.deepEqual((await peer.rpc('reset', { now: a.request.now, rewound: { tip: rewound } })).result, {});
+        const retry = await peer.rpc('restore', { transactions: [{ cbor: B.cbor, operation, state: 'prepared' }], complete: true });
+        assert.ok(retry.result, `${rewound}: ${JSON.stringify(retry.error)}`);
+      } finally { await peer.close(); }
+    }
+  });
   it('replays the fresh DevKit keyed workflow', { skip: !names.includes('Registry-init') && 'requires fresh DevKit recording' }, () => {
     for (const n of ['Registry-init', 'Registry-grant-62', 'Registry-grant-61', 'Registry-cooldown', 'Registry-remove', 'Registry-retire'])
       assert.ok(names.includes(n), n);

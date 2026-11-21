@@ -3259,12 +3259,12 @@
       "jsonrpc" : "2.0",
       "id" : 6,
       "error" : {
-        "code" : -32602,
-        "message" : "operation differs from the call or its attempt history",
+        "code" : -32001,
+        "message" : "a previous attempt or an input is still reserved",
         "data" : {
-          "kind" : "bad",
-          "code" : "operation",
-          "message" : "operation differs from the call or its attempt history",
+          "kind" : "refusal",
+          "code" : "pending",
+          "message" : "a previous attempt or an input is still reserved",
           "retryAtSlot" : null,
           "sites" : [ ]
         }
