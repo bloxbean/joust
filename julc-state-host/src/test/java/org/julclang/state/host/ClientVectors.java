@@ -23,7 +23,7 @@ final class ClientVectors {
             "HostCouncil-init", "HostCouncil-publish-1", "destroy-events", "owned-action", "owned-destroy",
             "owned-init", "quorum-caller", "quorum-two", "owned-quorum-caller", "owned-quorum-two", "owned-events-caller",
             "owned-destroy-events", "dapp-0003", "dapp-0034", "permuted",
-            "locker-003-unlock", "guild-003-recruit", "guild-004-levelUp", "guild-016-levelUp", "guild-017-retire", "armory-0002-openVault", "armory-0003-stash", "armory-0004-stash", "armory-0005-take", "armory-0009-closeVault", "token-m0-mint", "token-001-create", "token-002-mint", "token-003-mint", "token-004-transfer",
+            "locker-003-unlock", "guild-003-recruit", "guild-004-levelUp", "guild-016-levelUp", "guild-017-retire", "armory-0002-openVault", "armory-0003-stash", "armory-0004-stash", "armory-0005-take", "armory-0009-closeVault", "safes-0010-openSafe", "token-m0-mint", "token-001-create", "token-002-mint", "token-003-mint", "token-004-transfer",
             "registry-001-init", "registry-005-upgrade", "registry-017-claim", "registry-019-release", "registry-021-retire"));
         for (String name : HostVectorsTest.REGISTRY) if (!name.equals("Registry-cooldown") && Files.exists(HOST.resolve(name+".json"))) names.add(name);
         for (String name : HostVectorsTest.TOKEN) if (Files.exists(HOST.resolve(name+".json"))) names.add(name);
@@ -41,6 +41,14 @@ final class ClientVectors {
                 "4f758a26a38373a933e85945755e99bc91eb14f7693c63d4b4b57d58f1", obj().put("item", "67656d").put("count", "5"));
         if (name.equals("armory-0005-take")) return MapRecording.m0Armory("0005-Armory.take", "ownedAction", "take",
                 "4f758a26a38373a933e85945755e99bc91eb14f7693c63d4b4b57d58f1", obj().put("item", "73776f7264").put("count", "1"));
+        // A creation that writes into its map: Safes.openSafe notes the deposited token.
+        if (name.equals("safes-0010-openSafe")) {
+            String policy = "6aec60280bff70ee029fa04e37424ed140d7a322b9891b0e2547eb5a";
+            var pay = obj().put("lovelace", "0");
+            pay.putArray("assets").addArray().add(policy).addArray().addArray().add("474f4c44").add("70");
+            return MapRecording.m0Owned("locker", org.julclang.state.examples.locker.SafesClient.class, "0010-Safes.openSafe", "ownedInit",
+                    "openSafe", null, obj().put("tokenPolicy", policy).put("tokenName", "474f4c44").put("qty", "70"), pay);
+        }
         if (name.equals("armory-0009-closeVault")) return MapRecording.m0Armory("0009-Armory.closeVault", "ownedDestroy", "closeVault",
                 "4f0a81624693bb86c3f2641262ae53cef5fc56483dc44eb8a0f0aedd50", obj());
         if (name.equals("token-m0-mint")) return MapRecording.firstM0Mint();
@@ -137,8 +145,8 @@ final class ClientVectors {
         }));
         assertFalse(reads.hasNext());
         assertEquals(v.at("/expected/cbor"), result.at("/prepared/cbor"));
-        if (call.has("operation") || name.startsWith("locker-") || name.startsWith("guild-") || name.startsWith("armory-") || name.startsWith("token-")) vector.set("clock", v.required("clock"));
-        if (name.startsWith("registry-") || name.startsWith("locker-") || name.startsWith("guild-") || name.startsWith("armory-") || name.startsWith("token-") || name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
+        if (call.has("operation") || name.startsWith("locker-") || name.startsWith("guild-") || name.startsWith("armory-") || name.startsWith("safes-") || name.startsWith("token-")) vector.set("clock", v.required("clock"));
+        if (name.startsWith("registry-") || name.startsWith("locker-") || name.startsWith("guild-") || name.startsWith("armory-") || name.startsWith("safes-") || name.startsWith("token-") || name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
         vector.set("result", result);
         vector.putArray("violations");
         return vector;

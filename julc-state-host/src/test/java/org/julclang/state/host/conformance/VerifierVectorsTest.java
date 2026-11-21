@@ -33,8 +33,7 @@ class VerifierVectorsTest {
             Map.entry("mapClaims/encoding", "the typed MapClaims conversion itself refuses extra fields and other alternatives (mapClaims/decode)"));
 
     /** Checks with no vector yet and no proof that another check decides their bodies: follow-ups. */
-    static final Map<String,String> UNCOVERED_CHECKS = Map.of(
-            "mapClaims/destroyWrites", "armory-0009-closeVault is a map destroy, but a write in its claim also breaks the claim's proof unless both roots are recomputed with a new MPF proof");
+    static final Map<String,String> UNCOVERED_CHECKS = Map.of();
 
     @TestFactory List<DynamicTest> isolatedRejections() {
         return cases().stream().map(m -> DynamicTest.dynamicTest(m.name(), () -> {
@@ -167,8 +166,7 @@ class VerifierVectorsTest {
             "continuingOutput/keyedInsert#signedKey", "needs a recorded insert of a signed-key type (Registry's Ballot cast)",
             "deposit/keyedHead#maxTop", "needs a head output whose minimum exceeds minAda by 10 ADA (over 2,300 bytes)",
             "keyedLink/relink#width", "needs a client clock giving link times outside 33 to 64 bits, with every Ctx and linkedAt re-derived",
-            "notVerifiable/keyedCall#payment", "needs a recorded keyed call to a non-payable method without Ctx (Registry's change or recover)",
-            "mapDatum/root#pending", "needs a map datum with pending reads or writes that still decodes");
+            "notVerifiable/keyedCall#payment", "needs a recorded keyed call to a non-payable method without Ctx (Registry's change or recover)");
 
     /**
      * DC10: equivalent parts whose reasons cite each other. Single-part mutation cannot see such a pair, so dropping both

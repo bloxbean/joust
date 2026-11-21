@@ -143,7 +143,13 @@ final class MapRecording {
      * witnesses, at that recording's build tip.
      */
     static ObjectNode m0Armory(String file, String kind, String method, String object, ObjectNode args) throws Exception {
-        var dir = ReplayTest.FIXTURES.resolve("guild");
+        return m0Owned("guild", org.julclang.state.examples.guild.ArmoryClient.class, file, kind, method, object, args, null);
+    }
+
+    /** As {@link #m0Armory}, for any owned-map contract of an M0 group, with an optional payment. */
+    static ObjectNode m0Owned(String group, Class<?> client, String file, String kind, String method, String object,
+                              ObjectNode args, ObjectNode pay) throws Exception {
+        var dir = ReplayTest.FIXTURES.resolve(group);
         var f = org.julclang.state.examples.devkit.Fixtures.read(dir.resolve(file + ".json"));
         var s = org.julclang.state.examples.devkit.Fixtures.snapshot(f);
         for (var read : f.path("reads")) {
@@ -168,7 +174,6 @@ final class MapRecording {
             if (read.path("method").asText().equals("getTransaction") && v.hasNonNull("slot")) here = included.get(read.at("/args/0").asText());
         }
         if (s.tip != null) here = obj().put("slot", s.tip.getSlot()).put("height", s.tip.getHeight()).put("hash", s.tip.getHash());
-        var client = org.julclang.state.examples.guild.ArmoryClient.class;
         var spec = (org.julclang.state.runtime.ContractSpec<?>)client.getField("SPEC").get(null);
         String policy = HexFormat.of().formatHex(ValidatorScripts.load(spec.validatorClass()).getScriptHash());
         String verifier = HexFormat.of().formatHex(ValidatorScripts.load(MapVerifier.class).getScriptHash());
@@ -180,6 +185,18 @@ final class MapRecording {
         s.assetUtxos.values().forEach(extra::addAll);
         for (var u : extra) if (known.add(u.getTxHash()+"#"+u.getOutputIndex()))
             s.utxos.computeIfAbsent(u.getAddress(), ignored -> new ArrayList<>()).add(u);
+        // A shared verifier's holder this recording never listed (M0 needed no prerequisite check): take the group's
+        // earlier listing of that address, so the host sees the same published script.
+        try (var files = Files.list(dir)) {
+            for (var path : files.sorted().toList()) {
+                if (path.getFileName().toString().equals(file + ".json")) break;
+                var earlier = org.julclang.state.examples.devkit.Fixtures.snapshot(org.julclang.state.examples.devkit.Fixtures.read(path));
+                earlier.utxos.forEach((address, list) -> {
+                    if (address.startsWith("addr_test1w") && list.stream().anyMatch(u -> u.getReferenceScriptHash() != null)
+                            && !s.utxos.containsKey(address)) s.utxos.put(address, new ArrayList<>(list));
+                });
+            }
+        }
         String payer = null, instance = null;
         for (var e : s.utxos.entrySet()) {
             if (e.getKey().startsWith("addr_test1q")) payer = e.getKey();
@@ -190,10 +207,11 @@ final class MapRecording {
         if (instance == null && object != null) for (var l : s.utxos.values()) for (var u : l)
             if (u.getAmount().stream().anyMatch(a -> a.getUnit().equals(policy + object)) && u.getInlineDatum() != null
                     && u.getInlineDatum().startsWith("d8799f5820")) instance = u.getInlineDatum().substring(10, 74);
-        var call = obj().put("contract", "org.julclang.state.examples.guild.Armory").put("kind", kind).put("method", method)
+        var call = obj().put("contract", client.getName().replaceFirst("Client$", "")).put("kind", kind).put("method", method)
                 .put("address", Objects.requireNonNull(payer)).put("instance", Objects.requireNonNull(instance));
         if (object != null) call.put("object", object);
         call.set("args", args);
+        if (pay != null) call.set("pay", pay);
         // The history of any unit: the earlier transactions that carry it, at their build tips.
         record Past(String hash, JsonNode point, Set<String> units, JsonNode redeemers) {}
         var past = new ArrayList<Past>();
@@ -211,7 +229,7 @@ final class MapRecording {
                 if (tx.getBody().getMint() != null)
                     for (var m : tx.getBody().getMint()) for (var a : m.getAssets()) units.add(m.getPolicyId() + a.getNameAsHex().replace("0x", ""));
                 var list = JSON.createArrayNode();
-                if (tx.getWitnessSet().getRedeemers() != null) for (var red : tx.getWitnessSet().getRedeemers()) {
+                if (tx.getWitnessSet() != null && tx.getWitnessSet().getRedeemers() != null) for (var red : tx.getWitnessSet().getRedeemers()) {
                     String purpose = red.getTag().name().toLowerCase(Locale.ROOT);
                     byte[] bytes = red.getData().serializeToBytes();
                     String h = HexFormat.of().formatHex(Blake2bUtil.blake2bHash256(bytes));
@@ -257,6 +275,6 @@ final class MapRecording {
                 case "datum" -> a.put("value", Objects.requireNonNull(data.get(str(q,"hash"))));
                 default -> r.answer(q);
             };
-        }, null).put("provenance", "Bounded reconstruction of M0 Armory " + file);
+        }, null).put("provenance", "Bounded reconstruction of M0 " + group + " " + file);
     }
 }

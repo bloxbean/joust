@@ -784,6 +784,31 @@ public final class MutationVectors {
         }));
         cases.add(new Case("owned-map-owner-wallet","armory-0004-stash","mapClaims/claim",
                 e -> e.swap(e.mapClaim().at(1), e.outRef(e.walletInput()))));
+        // Q7: a destroy whose claim writes (an insert into the vault's empty map, with its new root recomputed), and a
+        // continuation whose map still lists a pending read at the right root.
+        cases.add(new Case("map-destroy-write","armory-0009-closeVault","mapClaims/destroyWrites", e -> {
+            org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
+            var claims = org.julclang.clientlib.PlutusDataAdapter.convert(org.julclang.clientlib.PlutusDataAdapter.toClientLib(
+                    CallRules.data(e.rewardData(0).raw())), org.julclang.state.api.mpf.MapClaims.class);
+            var c = claims.claims().head();
+            byte[] key = HEX.parseHex("73776f7264"), value = HEX.parseHex("01");
+            var empty = org.julclang.core.types.JulcList.<org.julclang.state.api.mpf.ProofStep>empty();
+            var write = new org.julclang.state.api.mpf.WriteProof(new org.julclang.state.api.MapEntry(key, false, new byte[0]),
+                    new org.julclang.state.api.MapEntry(key, true, value), empty);
+            byte[] root = org.julclang.state.api.mpf.Mpf.insert(c.oldRoot(), key, value, empty);
+            var claim = new org.julclang.state.api.mpf.MapClaim(c.policy(), c.owner(), c.field(), c.oldRoot(), c.reads(),
+                    org.julclang.core.types.JulcList.of(write), root);
+            var encoded = org.julclang.clientlib.PlutusDataAdapter.convert(new org.julclang.state.api.mpf.MapClaims(org.julclang.core.types.JulcList.of(claim)));
+            e.swap(e.rewardData(0), encoded.serializeToHex());
+        }));
+        cases.add(new Case("map-pending-read","armory-0004-stash","mapDatum/root", e -> {
+            String root = e.mapClaim().at(6).bytes();
+            for (int i = 0; i < e.ledger.outputs.size(); i++) {
+                String datum = e.ledger.plan.at("/outputs/"+i+"/datum").asText("");
+                if (datum.contains("5820"+root+"8080"))
+                    e.outDatum(i, datum.replace("5820"+root+"8080", "5820"+root+"9fd8799f4161d87a804101ffff"+"80"));
+            }
+        }));
         cases.add(new Case("map-no-claims",token,"mapClaims/count", e -> e.swap(e.rewardData(0).tagged(121).at(0),"80")));
         cases.add(new Case("map-claims-decode",token,"mapClaims/decode", e -> e.swap(e.rewardData(0),"d87980")));
         cases.add(new Case("map-creation-root","token-001-create","mapClaims/creationRoot", e -> {
