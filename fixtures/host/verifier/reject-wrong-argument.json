@@ -1740,5 +1740,6 @@
     }
   },
   "violations" : [ "redeemer" ],
-  "mutation" : "wrong-argument"
+  "mutation" : "wrong-argument",
+  "check" : "redeemer/argument"
 }

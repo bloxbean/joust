@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "signer" ],
-  "mutation" : "extra-signer"
+  "mutation" : "extra-signer",
+  "check" : "signer/allowed"
 }

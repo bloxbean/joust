@@ -215,15 +215,17 @@ class ForkedSessionTest {
                 if (!serving) continue;
                 // #150 review SA6: no socket of any kind, no process, no file created, removed, renamed or opened
                 // for writing. Threads (clone with CLONE_THREAD) are the JVM's own and allowed.
-                boolean opened = (line.contains(" openat(") || line.contains(" open(")) && (line.contains("O_WRONLY")
+                boolean opened = (line.contains(" openat(") || line.contains(" openat2(") || line.contains(" open(")) && (line.contains("O_WRONLY")
                         || line.contains("O_RDWR") || line.contains("O_CREAT") || line.contains("O_TRUNC"));
                 boolean process = line.matches(".* (fork|vfork|execve|execveat)\\(.*")
                         || line.matches(".* clone3?\\(.*") && !line.contains("CLONE_THREAD");
-                boolean socket = line.matches(".* (connect|socket|socketpair|bind|listen|accept4?)\\(.*");
-                boolean files = line.matches(".* (creat|mkdirat?|unlinkat?|renameat2?|rename|truncate|linkat?|symlinkat?)\\(.*");
+                boolean socket = line.matches(".* (connect|socket|socketpair|bind|listen|accept4?|sendto|sendmsg)\\(.*");
+                // #150 final review F-C1: also rmdir, ftruncate, the chmod family, utimensat and mknod.
+                boolean files = line.matches(".* (creat|mkdirat?|rmdir|unlinkat?|renameat2?|rename|f?truncate|linkat?|symlinkat?|f?chmod(at)?|utimensat|mknod(at)?)\\(.*");
                 // The JVM's own perf-data file (/tmp/hsperfdata_<user>/<pid>, created before serving and removed at
                 // exit) is the one recorded exception (dev-host-1 I10; #150 review SA7).
-                if (line.contains("/hsperfdata_")) continue;
+                // Only its removal is exempt: any other operation on the perf-data path still fails (#150 review SA8).
+                if (line.matches(".* unlink(at)?\\(.*\"/tmp/hsperfdata_[^/\"]+/[0-9]+\".*") && !socket && !process && !opened) continue;
                 assertFalse(opened || process || socket || files, line);
             }
         }

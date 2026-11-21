@@ -3762,5 +3762,6 @@
     }
   },
   "violations" : [ "keyedWindow" ],
-  "mutation" : "keyed-empty"
+  "mutation" : "keyed-empty",
+  "check" : "keyedWindow/bounds"
 }

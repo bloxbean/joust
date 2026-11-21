@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "balance" ],
-  "mutation" : "unbalanced"
+  "mutation" : "unbalanced",
+  "check" : "balance/conserved"
 }

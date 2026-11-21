@@ -1765,5 +1765,6 @@
     }
   },
   "violations" : [ "unresolvedInput" ],
-  "mutation" : "unknown-input"
+  "mutation" : "unknown-input",
+  "check" : "unresolvedInput/reference"
 }

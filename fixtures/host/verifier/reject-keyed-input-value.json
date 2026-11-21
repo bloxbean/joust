@@ -3939,5 +3939,6 @@
     }
   },
   "violations" : [ "keyedInputValue" ],
-  "mutation" : "keyed-input-value"
+  "mutation" : "keyed-input-value",
+  "check" : "keyedInputValue/balance"
 }

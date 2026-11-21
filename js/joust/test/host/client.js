@@ -21,11 +21,20 @@ export function install() {
   return root;
 }
 
+// The host's JavaScript closure, which the npm fingerprint covers with the build and the engine (dev-host-1, npm host).
+export const closure = [
+  ...['bin/joust-host.js', 'package.json', ...['frames', 'guard', 'launch', 'resolve', 'transport', 'worker'].map(n => 'src/host/' + n + '.js')]
+    .map(f => 'node_modules/@julclang/joust/' + f),
+  ...['package.json', 'src/service.js', 'src/host-service.js', 'src/exnref.js'].map(f => 'node_modules/@julclang/joust-runtime/' + f),
+];
+
+/** Writes the bundle when entries are given, and returns the build the client sends: its digest from the files now. */
 export function bundle(root, entries) {
-  writeFileSync(join(root, 'build/joust/contracts.json'), JSON.stringify(entries));
+  if (entries) writeFileSync(join(root, 'build/joust/contracts.json'), JSON.stringify(entries));
   const dir = 'node_modules/@julclang/joust-runtime/engine/';
   const sha = b => createHash('sha256').update(b).digest('hex');
-  const paths = ['build/joust/contracts.json', dir + 'joust-runtime.js', dir + 'joust-runtime.js.wasm'];
+  const paths = ['build/joust/contracts.json', dir + 'joust-runtime.js', dir + 'joust-runtime.js.wasm', ...closure]
+    .sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
   return { snapshot: root, digest: sha(paths.map(p => sha(readFileSync(join(root, p))) + ' 0 dir ' + p + '\n').join('')) };
 }
 

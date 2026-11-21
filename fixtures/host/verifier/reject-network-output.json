@@ -1929,5 +1929,6 @@
     }
   },
   "violations" : [ "network" ],
-  "mutation" : "network-output"
+  "mutation" : "network-output",
+  "check" : "network/output"
 }

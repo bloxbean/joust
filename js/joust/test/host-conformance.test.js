@@ -24,9 +24,9 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     root = install();
     const src = join(root, 'contracts');
     mkdirSync(src);
-    for (const name of ['Counter', 'Bank', 'Dex', 'HostCouncil', 'Registry', 'Token', 'Treasury', 'Pool']) {
+    for (const name of ['Counter', 'Bank', 'Dex', 'HostCouncil', 'HostClub', 'Registry', 'Token', 'Treasury', 'Pool']) {
       const dir = name.toLowerCase();
-      const folder = name === 'HostCouncil' ? 'julc-state-host/src/test/java/org/julclang/state/host/fixture'
+      const folder = name.startsWith('Host') ? 'julc-state-host/src/test/java/org/julclang/state/host/fixture'
         : 'examples/' + dir + '/src/main/java/org/julclang/state/examples/' + dir;
       cpSync(join(repo, folder, name + '.java'), join(src, name + '.java'));
     }
@@ -59,7 +59,9 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     check(v, result);
     for (const negative of mutations.filter(m => m.source === name)) {
       assert.equal(negative.method, v.method);
-      assert.deepEqual(negative.request, v.request);
+      // A negative that changes the request itself (cosigners on a plain call, say; #153 r2) cannot be applied to this
+      // host's live result; the kit checks it against the client directly (ClientConformanceTest, state-client).
+      if (!isDeepStrictEqual(negative.request, v.request)) continue;
       // Apply only the signing mutation to the live result. The reservation and each
       // unmodified field still come from this host. Independent client evidence is in the vector.
       const prepared = { ...result.prepared };
@@ -163,6 +165,19 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
         tip: set.answer.tip, failed: { message: 'provider failed' } }));
       assert.equal(failed.error.data.code, 'readFailed');
     } finally { await peer.close(); }
+  });
+  it('answers CBOR nested past the engine stack as tooDeep, as the JVM host does, then ends the session', async () => {
+    const v = fixture('owned-action');
+    const { call } = v.params;
+    start(contracts.filter(c => JSON.parse(c.description).preamble.title === call.contract));
+    try {
+      await initialize({});
+      const deep = await peer.rpc('decode', { contract: call.contract, datum: '81'.repeat(100_000) + '00' });
+      assert.equal(deep.error?.data.kind, 'internal', JSON.stringify(deep));
+      assert.equal(deep.error.data.code, 'tooDeep');
+      await assert.rejects(peer.receive(), /unexpected host EOF/);
+    } finally { await peer.close(); }
+    assert.equal(peer.child.exitCode, 1);
   });
   it('returns structured source sites for the refusing contract from its verified build bundle', async () => {
     const v = m0(history.find(f => f.startsWith('0003-')));

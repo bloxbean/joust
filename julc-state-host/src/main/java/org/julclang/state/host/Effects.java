@@ -53,13 +53,16 @@ final class Effects {
         });
 
         for (var p : prepared.payouts()) {
-            for (int i = 0; i < outputs.size(); i++) {
+            boolean found = false;
+            for (int i = 0; i < outputs.size() && !found; i++) {
                 var o = outputs.get(i);
                 if (p.address().equals(o.path("address").asText()) && p.tagCbor().equals(o.path("datum").textValue())) {
                     payment(payouts, i, o).putObject("owed").put("lovelace", p.owed().toString());
-                    break;
+                    found = true;
                 }
             }
+            // As for sends: a payout the build recorded must be in the body (final review F-B1).
+            if (!found) throw new IllegalStateException("a recorded payout has no output in the body");
         }
         sends(prepared, plan, outputs, spent, sends);
         if (meta.at("/returns/events").asBoolean()) events(c, meta, plan, spent, events);
@@ -70,7 +73,11 @@ final class Effects {
         if (prepared.sends().isEmpty()) return;
         var metadata = new HashMap<Integer, PreparedTx.Send>();
         prepared.sends().forEach(s -> metadata.put(s.index(), s));
-        // M1 permits only the output verifier's zero withdrawal on a send. Its reward pointer is 0.
+        // M1 permits only the output verifier's zero withdrawal on a send (BodyBalance.checkCall), so its reward
+        // pointer is 0. A body with another withdrawal fails closed here until the pointer is located (#151 DB7).
+        var withdrawals = prepared.transaction().getBody().getWithdrawals();
+        if (withdrawals == null || withdrawals.size() != 1)
+            throw new IllegalStateException("a send needs exactly the output verifier's withdrawal");
         for (var r : plan.required("redeemers")) {
             if (!"reward".equals(r.path("tag").asText()) || r.required("index").asInt() != 0) continue;
             var claims = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(ContractDatums.parse(str(r, "data"))),

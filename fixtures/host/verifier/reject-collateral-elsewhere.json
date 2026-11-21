@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "collateral" ],
-  "mutation" : "collateral-elsewhere"
+  "mutation" : "collateral-elsewhere",
+  "check" : "collateral/returnAddress"
 }

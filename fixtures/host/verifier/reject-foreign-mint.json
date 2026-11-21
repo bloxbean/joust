@@ -1952,5 +1952,6 @@
     }
   },
   "violations" : [ "mint" ],
-  "mutation" : "foreign-mint"
+  "mutation" : "foreign-mint",
+  "check" : "mint/action"
 }

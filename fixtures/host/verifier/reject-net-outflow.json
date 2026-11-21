@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "netOutflow" ],
-  "mutation" : "net-outflow"
+  "mutation" : "net-outflow",
+  "check" : "netOutflow/wallet"
 }

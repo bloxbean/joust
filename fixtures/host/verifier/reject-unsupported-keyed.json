@@ -1918,5 +1918,6 @@
     }
   },
   "violations" : [ "notVerifiable" ],
-  "mutation" : "unsupported-keyed"
+  "mutation" : "unsupported-keyed",
+  "check" : "notVerifiable/classify"
 }

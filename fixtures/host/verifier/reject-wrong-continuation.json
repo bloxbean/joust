@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "continuingOutput" ],
-  "mutation" : "wrong-continuation"
+  "mutation" : "wrong-continuation",
+  "check" : "continuingOutput/datum"
 }

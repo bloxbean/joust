@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "notVerifiable" ],
-  "mutation" : "unsupported-deposits"
+  "mutation" : "unsupported-deposits",
+  "check" : "notVerifiable/classify"
 }

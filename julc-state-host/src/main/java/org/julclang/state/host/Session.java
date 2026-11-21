@@ -332,6 +332,12 @@ final class Session implements Transport.Handler {
             whileLive.accept(() -> reservations.checkOperation(operation, unspent, reads.greatestTip, unit));
         }
         new Prerequisites(c, handle, reads, reservations, true).requireReady();
+        // A field the call kind does not take is refused, not ignored (final review F-B4).
+        if (kind.equals("init") && !request.path("instance").isMissingNode() && !request.get("instance").isNull())
+            throw bad("init takes no instance");
+        // A keyed call names its key as object (D11).
+        if (!kind.startsWith("owned") && !keyed && !request.path("object").isMissingNode() && !request.get("object").isNull())
+            throw bad(kind + " takes no object");
         String instance = kind.equals("init") ? null : instance(request);
         String object = (kind.startsWith("owned") || keyed) ? request.path("object").textValue() : null;
         String spent = null;

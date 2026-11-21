@@ -1924,5 +1924,6 @@
     }
   },
   "violations" : [ "lowerBound" ],
-  "mutation" : "missing-lower"
+  "mutation" : "missing-lower",
+  "check" : "lowerBound/context"
 }

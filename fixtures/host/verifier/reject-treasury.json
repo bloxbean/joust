@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "governance" ],
-  "mutation" : "treasury"
+  "mutation" : "treasury",
+  "check" : "governance/treasury"
 }

@@ -17,7 +17,8 @@ public final class HostApi {
             return new Result(null);
         }
         String response = session.execute(request.frame(), request.setup(),
-                params -> reverse(JSString.of(params)).asString(), () -> live().asBoolean());
+                params -> reverse(JSString.of(params)).asString(), () -> live().asBoolean(), () -> claim().asBoolean(),
+                HostApi::release);
         return new Result(response);
     }
 
@@ -26,4 +27,10 @@ public final class HostApi {
 
     @JS("return globalThis.joustHostLive();")
     private static native JSBoolean live();
+
+    @JS("return globalThis.joustHostClaim();")
+    private static native JSBoolean claim();
+
+    @JS("globalThis.joustHostRelease();")
+    private static native void release();
 }

@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "budget" ],
-  "mutation" : "budget"
+  "mutation" : "budget",
+  "check" : "budget/total"
 }

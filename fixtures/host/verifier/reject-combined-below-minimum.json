@@ -1822,5 +1822,6 @@
     }
   },
   "violations" : [ "holderLovelace" ],
-  "mutation" : "combined-below-minimum"
+  "mutation" : "combined-below-minimum",
+  "check" : "holderLovelace/range"
 }

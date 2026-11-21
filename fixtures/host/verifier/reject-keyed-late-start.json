@@ -3939,5 +3939,6 @@
     }
   },
   "violations" : [ "keyedWindow" ],
-  "mutation" : "keyed-late-start"
+  "mutation" : "keyed-late-start",
+  "check" : "keyedWindow/bounds"
 }

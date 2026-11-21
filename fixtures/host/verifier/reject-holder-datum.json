@@ -1830,5 +1830,6 @@
     }
   },
   "violations" : [ "publicationShape" ],
-  "mutation" : "holder-datum"
+  "mutation" : "holder-datum",
+  "check" : "publicationShape/holder"
 }

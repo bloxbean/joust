@@ -3939,5 +3939,6 @@
     }
   },
   "violations" : [ "keyedWindow" ],
-  "mutation" : "keyed-widened"
+  "mutation" : "keyed-widened",
+  "check" : "keyedWindow/bounds"
 }

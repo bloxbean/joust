@@ -1830,5 +1830,6 @@
     }
   },
   "violations" : [ "publicationPresence" ],
-  "mutation" : "already-published"
+  "mutation" : "already-published",
+  "check" : "publicationPresence/holder"
 }

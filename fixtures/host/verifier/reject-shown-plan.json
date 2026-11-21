@@ -1777,5 +1777,6 @@
     }
   },
   "violations" : [ "planMismatch" ],
-  "mutation" : "shown-plan"
+  "mutation" : "shown-plan",
+  "check" : "planMismatch/plan"
 }
