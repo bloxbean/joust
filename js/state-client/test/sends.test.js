@@ -269,6 +269,10 @@ test('composition: a deposit by a wallet input, or by a call that declares none,
   // Into the change: not a receiving call's continuation.
   refused(await w.verify(await w.build({ deposits: [depositData(2n, w.stall, 1n, w.memo)] })),
     /a deposit into output 2, not the continuation of a composed call that receives/, 'a deposit into the change');
+  // Into the Stall's own continuation: a composed call's continuation, but one that receives nothing (design r2 W7).
+  // The Pot's continuation first, so the deposit (output 1) is in order and lands on the Stall's.
+  refused(await w.verify(await w.build({ deposits: [depositData(1n, w.stall, 1n, w.memo)], edit: ([s, p, ...rest]) => [p, s, ...rest] })),
+    /a deposit into output 1, not the continuation of a composed call that receives/, 'a deposit into a non-receiving continuation');
 });
 
 // ------------------------------------------------------------------------- a @Withdraw handler's sends (collect)
