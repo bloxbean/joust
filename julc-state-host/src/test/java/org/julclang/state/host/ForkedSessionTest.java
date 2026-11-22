@@ -106,8 +106,9 @@ class ForkedSessionTest {
     }
 
     /**
-     * #150 review SA5: everything the in-process replay covers, under the OS-level observation: all 23 plain recordings
-     * (each prepared, checked byte for byte and discarded), a contract refusal, a failed read and a cancellation.
+     * #150 review SA5: everything the in-process replay covers, under the OS-level observation: every plain recording (18
+     * since the JuLC 0.1.0-pre22 re-recording; each prepared, checked byte for byte and discarded), a contract refusal, a
+     * failed read and a cancellation.
      */
     private static void serve(Frames.Writer writer, Frames.Reader reader) throws Exception {
         int id = 1;
@@ -125,7 +126,7 @@ class ForkedSessionTest {
                 prepared++;
             }
         }
-        assertEquals(23, prepared, "ADR-0022 §9 plain recordings");
+        assertEquals(18, prepared, "ADR-0022 §9 plain recordings (ReplayTest.plainPrepares)");
         var r = IntegrationTest.record();
         // An earlier recording: reset the session's floor for now (reservations are kept).
         success(call(writer, reader, ++id, "reset", obj().put("now", r.point().required("slot").asLong()), r::answer, null));

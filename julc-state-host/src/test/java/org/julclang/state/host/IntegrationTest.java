@@ -69,7 +69,7 @@ class IntegrationTest {
         }
     }
     @Test void timedEscrowUsesSessionGenesisAndSentNow() throws Exception {
-        var file = ReplayTest.FIXTURES.resolveSibling("m3").resolve("escrow/001-open.json");
+        var file = ReplayTest.m3("escrow", "open");
         var vector = JSON.readTree(file.toFile());
         var snapshot = Snapshot.fromJson(vector.required("snapshot").toString());
         long tip = snapshot.tip.getSlot(), now = tip + 2;
