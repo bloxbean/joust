@@ -18,7 +18,8 @@ import static org.julclang.state.host.Wire.*;
 class ReadsTest {
     static final String ADDRESS = "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p";
     static final String HASH = "a".repeat(64);
-    static ObjectNode point(long slot) { return obj().put("hash", HASH).put("height", slot).put("slot", slot); }
+    // One block per slot: a block hash names one chain point.
+    static ObjectNode point(long slot) { return obj().put("hash", "%064x".formatted(slot)).put("height", slot).put("slot", slot); }
     static ObjectNode value(JsonNode v, long tip) {
         var n = obj();
         n.set("tip",point(tip));
@@ -162,7 +163,7 @@ class ReadsTest {
         var requests = new AtomicInteger();
         var b = backend(q -> { requests.incrementAndGet(); return value(point(12),12); });
         assertEquals(12,b.getBlockService().getLatestBlock().getValue().getSlot());
-        assertEquals(HASH,b.getBlockService().getLatestBlock().getValue().getHash());
+        assertEquals(point(12).get("hash").textValue(),b.getBlockService().getLatestBlock().getValue().getHash());
         assertEquals(1,requests.get());
     }
 
@@ -209,11 +210,88 @@ class ReadsTest {
         failure("internal", "inconsistentRead", () -> Reads.backend(() -> first).getUtxoService().getUtxos(ADDRESS, 10, 1));
         assertTrue(table.avoids("spend"));
         assertTrue(table.avoids("collateral"));
+        // Nor is a failed or unsupported continuation at another point: it ends the call before the chunk check.
+        for (var outcome : List.of("failed", "unsupported")) {
+            var reads = new Reads(req -> {
+                if (!req.has("cursor")) return new Call.Answer(obj().set("result", value(JSON.createArrayNode(), 199).put("more", "next")), 128);
+                var a = obj();
+                a.set("tip", point(204));
+                if (outcome.equals("failed")) a.putObject("failed").put("message", "provider disconnected");
+                else a.put("unsupported", true);
+                return new Call.Answer(obj().set("result", a), 128);
+            }, 199, 20, 10, 8192, 0, table::observe);
+            assertThrows(Error.class, () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+            assertTrue(table.avoids("spend"), outcome);
+            assertTrue(table.avoids("collateral"), outcome);
+        }
         // An accepted answer at the same point does release them.
         var accepted = new Reads(req -> new Call.Answer(obj().set("result", value(JSON.createArrayNode(), 204)), 128),
                 199, 20, 10, 8192, 0, table::observe);
         assertDoesNotThrow(() -> Reads.backend(() -> accepted).getUtxoService().getUtxos(ADDRESS, 10, 1));
         assertFalse(table.avoids("spend"));
         assertFalse(table.avoids("collateral"));
+    }
+    @Test void hashesAreJsonStrings() {
+        var table = new Reservations(3, false, 0);
+        table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
+        // A 64-digit number's text matches the hex pattern; the wire schema's hash is a string.
+        var numeric = new java.math.BigInteger("1".repeat(64));
+        var reads = new Reads(req -> {
+            var a = obj().put("absent", true);
+            a.putObject("tip").put("hash", numeric).put("height", 204).put("slot", 204);
+            return new Call.Answer(obj().set("result", a), 128);
+        }, 199, 20, 10, 8192, 0, table::observe);
+        failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getTxOutput(HASH, 0));
+        assertTrue(table.avoids("spend"));
+        assertTrue(table.avoids("collateral"));
+        var output = output(0).put("tx_hash", numeric);
+        failure("internal", "inconsistentRead", () -> backend(q -> value(JSON.createArrayNode().add(output), 10))
+                .getUtxoService().getUtxos(ADDRESS, 10, 1));
+    }
+    @Test void nullableOutputFieldsKeepTheirWireFormat() {
+        var table = new Reservations(3, false, 0);
+        table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
+        for (var bad : List.<ObjectNode>of(output(0).put("data_hash", "unknown"), output(0).put("reference_script_hash", "x"),
+                output(0).put("inline_datum", "abc"), output(0).put("data_hash", 1))) {
+            var reads = new Reads(req -> new Call.Answer(obj().set("result", value(JSON.createArrayNode().add(bad), 204)), 128),
+                    199, 20, 10, 8192, 0, table::observe);
+            failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+            assertTrue(table.avoids("spend"), bad::toString);
+            assertTrue(table.avoids("collateral"), bad::toString);
+        }
+        var ok = output(0).put("data_hash", "c".repeat(64)).put("reference_script_hash", "d".repeat(56)).putNull("inline_datum");
+        assertDoesNotThrow(() -> backend(q -> value(JSON.createArrayNode().add(ok), 10)).getUtxoService().getUtxos(ADDRESS, 10, 1));
+    }
+    @Test void aBlockHashNamesOnePoint() {
+        var table = new Reservations(3, false, 0);
+        table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
+        var reads = new Reads(req -> {
+            var a = req.path("kind").asText().equals("utxos") ? value(JSON.createArrayNode(), 199) : obj().put("absent", true);
+            a.set("tip", obj().put("hash", HASH).put("height", req.path("kind").asText().equals("utxos") ? 50 : 51)
+                    .put("slot", req.path("kind").asText().equals("utxos") ? 199 : 204));
+            return new Call.Answer(obj().set("result", a), 128);
+        }, 199, 20, 10, 8192, 0, table::observe);
+        var b = Reads.backend(() -> reads).getUtxoService();
+        assertDoesNotThrow(() -> b.getUtxos(ADDRESS, 10, 1));
+        failure("internal", "chainMoved", () -> b.getTxOutput(HASH, 0));
+        assertTrue(table.avoids("spend"));
+        assertTrue(table.avoids("collateral"));
+    }
+    @Test void inlineDatumHexOfEitherCaseIsOneDatum() throws Exception {
+        var listed = output(0).put("inline_datum", "41AB");
+        var looked = output(0).put("inline_datum", "41ab");
+        var b = backend(q -> q.path("kind").asText().equals("utxos") ? value(JSON.createArrayNode().add(listed), 10) : value(looked, 10))
+                .getUtxoService();
+        assertEquals(1, b.getUtxos(ADDRESS, 10, 1).getValue().size());
+        assertEquals("41ab", b.getTxOutput(HASH, 0).getValue().getInlineDatum());
+    }
+    @Test void aMisspelledContinuationIsRefusedNotTheEnd() {
+        var table = new Reservations(3, false, 0);
+        table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
+        var reads = new Reads(req -> new Call.Answer(obj().set("result",
+                value(JSON.createArrayNode().add(output(0)), 204).put("cursor", "page2")), 128), 199, 20, 10, 8192, 0, table::observe);
+        failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+        assertTrue(table.avoids("spend"));
+        assertTrue(table.avoids("collateral"));
     }
 }

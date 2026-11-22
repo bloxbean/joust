@@ -33,6 +33,8 @@ final class Reads {
     private final LongConsumer observe;
     private long count, bytes, lastHeight = -1;
     private String lastHash;
+    private final Set<String> seenHashes = new HashSet<>();
+    private static final Set<String> RESULT_FIELDS = Set.of("tip", "value", "absent", "unsupported", "failed", "more");
     long greatestTip = -1;
     private final Snapshot snapshot = new Snapshot();
     private final SnapshotBackend local = new SnapshotBackend(snapshot);
@@ -192,7 +194,9 @@ final class Reads {
     private Utxo checkOutput(JsonNode n, String address, String wanted) {
         var index = n.path("output_index");
         if (!index.isIntegralNumber() || !index.canConvertToInt() || index.intValue() < 0
-                || !n.path("tx_hash").asText("").matches("[0-9a-f]{64}") || !n.path("amount").isArray())
+                || !hex64(n.path("tx_hash")) || !n.path("amount").isArray()
+                || !optional(n, "data_hash", "[0-9a-f]{64}") || !optional(n, "reference_script_hash", "[0-9a-f]{56}")
+                || !optional(n, "inline_datum", "(?:[a-fA-F0-9]{2})+"))
             throw inconsistent("malformed output");
         var units = new HashSet<String>();
         for (var asset : n.get("amount")) {
@@ -218,6 +222,8 @@ final class Reads {
         // Some providers omit the redundant data_hash on output lookup. Compare it
         // by deriving the hash from the exact inline datum bytes in both projections.
         if (u.getInlineDatum() != null) {
+            // The schema allows either case; one spelling, so two answers with the same bytes agree (sameOutput).
+            u.setInlineDatum(u.getInlineDatum().toLowerCase(Locale.ROOT));
             String hash;
             try {
                 hash = HexFormat.of().formatHex(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(
@@ -293,12 +299,21 @@ final class Reads {
         JsonNode tip = a.path("tip"), slot = tip.path("slot"), height = tip.path("height");
         if (!slot.isIntegralNumber() || !slot.canConvertToLong() || slot.longValue() < 0
                 || !height.isIntegralNumber() || !height.canConvertToLong() || height.longValue() < 0
-                || !tip.path("hash").asText("").matches("[0-9a-f]{64}")) throw inconsistent("invalid chain point");
+                || !hex64(tip.path("hash"))) throw inconsistent("invalid chain point");
         String hash = tip.get("hash").textValue();
         if (slot.longValue() < greatestTip || height.longValue() < lastHeight
                 || slot.longValue() == greatestTip && !hash.equals(lastHash)
-                || height.longValue() == lastHeight && slot.longValue() != greatestTip)   // final review F-B3
+                || height.longValue() == lastHeight && slot.longValue() != greatestTip   // final review F-B3
+                || !hash.equals(lastHash) && seenHashes.contains(hash)
+                || hash.equals(lastHash) && (slot.longValue() != greatestTip || height.longValue() != lastHeight))
+            // A block hash names one point: seen again at another slot or height, an answer contradicts the call's
+            // evidence and must not advance reservations (#149 Codex fix review).
             throw HostError.internal("chainMoved", "chain point rolled back or was replaced");
+        seenHashes.add(hash);
+        // The schema's closed result: a misspelled continuation (cursor for more) would end a listing early (#149 Codex).
+        for (var names = a.fieldNames(); names.hasNext(); ) {
+            if (!RESULT_FIELDS.contains(names.next())) throw inconsistent("unknown read result field");
+        }
         int variants = 0;
         for (String k : List.of("value", "absent", "unsupported", "failed")) if (a.has(k)) variants++;
         if (variants != 1 || a.path("value").isNull()
@@ -309,19 +324,24 @@ final class Reads {
         lastHeight = height.longValue();
         greatestTip = slot.longValue();
         if (now - greatestTip > ahead) throw HostError.bad("nowImplausible", "now is too far ahead of the observed tip");
+        // A failed or unsupported outcome ends the call, before any kind's checks (a utxos continuation's chain point
+        // among them): its tip is not evidence for the reservation table (#149 Codex fix review).
         if (a.has("failed")) {
             if (!a.path("failed").path("message").isTextual()) throw inconsistent("invalid read failure");
-            accepted();
             throw new ReadFailed(kind, "", a.get("failed").get("message").textValue());
         }
-        if (a.has("unsupported") && !kind.equals("stakeRegistration")) {
-            accepted();
-            throw new Unsupported(kind);
-        }
+        if (a.has("unsupported") && !kind.equals("stakeRegistration")) throw new Unsupported(kind);
         return a;
     }
     // D8: a tip reaches the reservation table only from a read the host accepted, after its kind's own checks
-    // (one chain point across chunks, output and script evidence). A rejected answer releases nothing (#149 Codex).
+    // (one chain point across chunks, output and script evidence). A refused answer releases nothing (#149 Codex).
     void accepted() { observe.accept(greatestTip); }
+    // A JSON string of 64 lowercase hex digits: a 64-digit number's text matches too (#149 Codex fix review).
+    static boolean hex64(JsonNode n) { return n.isTextual() && n.textValue().matches("[0-9a-f]{64}"); }
+    // The wire schema's nullable output fields: absent, null, or a string of the field's format.
+    private static boolean optional(JsonNode n, String field, String pattern) {
+        var v = n.path(field);
+        return v.isMissingNode() || v.isNull() || v.isTextual() && v.textValue().matches(pattern);
+    }
     private static HostError inconsistent(String reason) { return HostError.internal("inconsistentRead", reason); }
 }

@@ -26,7 +26,7 @@ record MapReads(Reads reads) {
             var items = page.path("value");
             if (!items.isArray()) throw inconsistent("expected ordered asset history");
             for (var item : items) {
-                String tx = item.path("txHash").asText("");
+                String tx = text(item.path("txHash"));
                 var block = item.path("point");
                 if (!tx.matches("[0-9a-f]{64}") || !txs.add(tx) || !chainPoint(block)
                         || !atOrBefore(block, point) || previous != null && !atOrBefore(previous, block))
@@ -44,7 +44,7 @@ record MapReads(Reads reads) {
     private static boolean chainPoint(JsonNode p) {
         for (String f : List.of("slot", "height"))
             if (!p.path(f).isIntegralNumber() || !p.path(f).canConvertToLong() || p.get(f).longValue() < 0) return false;
-        return p.path("hash").asText("").matches("[0-9a-f]{64}");
+        return Reads.hex64(p.path("hash"));
     }
 
     private static boolean atOrBefore(JsonNode a, JsonNode b) {
@@ -61,7 +61,7 @@ record MapReads(Reads reads) {
             for (var r : rs) {
                 String purpose = r.path("purpose").asText("");
                 var index = r.path("index");
-                String script = r.path("scriptHash").asText(""), hash = r.path("dataHash").asText("");
+                String script = text(r.path("scriptHash")), hash = text(r.path("dataHash"));
                 if (!Set.of("spend","mint","cert","reward","voting","proposing").contains(purpose)
                         || !index.isIntegralNumber() || !index.canConvertToInt() || index.intValue() < 0
                         || !pointers.add(purpose + index) || !hash.matches("[0-9a-f]{64}") || !script.matches("[0-9a-f]{56}"))
@@ -84,6 +84,9 @@ record MapReads(Reads reads) {
         catch (RuntimeException e) { throw inconsistent("malformed or inconsistent map history claim"); }
         reads.accepted();   // the redeemers and datums replayed
     }
+
+    // A JSON string's text, else "" (which no hash pattern matches): a number's digits must not pass as hex.
+    private static String text(JsonNode n) { return n.isTextual() ? n.textValue() : ""; }
 
     static HostError inconsistent(String message) { return HostError.internal("inconsistentRead", message); }
 }

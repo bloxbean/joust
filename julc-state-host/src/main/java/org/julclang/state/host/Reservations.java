@@ -314,10 +314,18 @@ final class Reservations implements ClaimStore {
         assertions.clear();
         // Keep publication provenance: rewind downgrades final entries below, and re-confirmation can teach again.
         entries.replaceAll((id, e) -> switch (e.state) {
-            case expired -> e.body.to > tip ? e.as(State.prepared, null) : e;
             case confirmed, shallow -> e.slot > tip ? e.as(State.prepared, null) : e.as(State.shallow, e.slot);
             default -> e;
         });
+        // One body, one live reservation: an expired entry rearms only when no other entry of its body is live, and
+        // of several such tombstones only the latest, so restore finds the one that holds the body (#149 Codex).
+        var live = new HashSet<String>();
+        for (var e : entries.values()) if (e.live()) live.add(e.body.hash);
+        var rearmed = new HashMap<String, String>();
+        for (var e : entries.values()) {
+            if (e.state == State.expired && e.body.to > tip && !live.contains(e.body.hash)) rearmed.put(e.body.hash, e.id);
+        }
+        entries.replaceAll((id, e) -> id.equals(rearmed.get(e.body.hash)) ? e.as(State.prepared, null) : e);
         reconcile = true;
     }
 
@@ -332,9 +340,10 @@ final class Reservations implements ClaimStore {
         if (!p.path("transactions").isArray()) throw bad("transactions must be an array");
         var staged = new LinkedHashMap<>(entries);
         var restoredMaps = new HashMap<String, MapWithdrawal.Restored>();
-        // The live bodies, indexed by hash: finding a restored body's entry takes no scan of the table (#149 Codex).
+        // The live bodies, indexed by hash (rewind keeps at most one per body): finding a restored body's entry takes no
+        // scan of the table (#149 Codex).
         var live = new HashMap<String, Entry>();
-        for (var e : staged.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
+        if (!p.get("transactions").isEmpty()) for (var e : staged.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
         var out = obj();
         var ids = out.putArray("reservations");
         for (var t : p.get("transactions")) {
