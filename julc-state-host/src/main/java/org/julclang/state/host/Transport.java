@@ -6,6 +6,7 @@ import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import static org.julclang.state.host.Wire.*;
 
@@ -24,6 +25,10 @@ final class Transport {
     private final Consumer<String> exit;
     private final Handler handler;
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
+    // A frame write can block (the client stopped reading) while it holds the monitor that the timer's deadline and the
+    // input thread's cancel and exit need. This watchdog takes no lock and ends the session on a stalled write (#149 Codex).
+    private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
+    private final AtomicBoolean exited = new AtomicBoolean();
     private Call active;
     private long generation;
     private volatile boolean stopped;
@@ -41,6 +46,14 @@ final class Transport {
             long start = reader.startedAt();
             if (start != 0 && System.nanoTime() - start >= Frames.STALL_NANOS) stop("stalled frame");
         }, 50, 50, TimeUnit.MILLISECONDS);
+        watchdog.scheduleAtFixedRate(() -> {
+            long since = writer.writingSince();
+            if (since != 0 && System.nanoTime() - since >= Frames.STALL_NANOS) {
+                stopped = true;
+                exitOnce("stalled protocol write");
+                watchdog.shutdown();
+            }
+        }, 50, 50, TimeUnit.MILLISECONDS);
         try {
             byte[] body;
             while (!stopped && (body = reader.next()) != null) {
@@ -54,6 +67,7 @@ final class Transport {
             stop("invalid or incomplete UTF-8 JSON frame");
         } finally {
             timer.shutdownNow();
+            watchdog.shutdownNow();
         }
     }
 
@@ -61,8 +75,12 @@ final class Transport {
         if (!stopped) {
             stopped = true;
             if (active != null) active.abandon(HostError.internal("transport", "session closed"));
-            exit.accept(why);
+            exitOnce(why);
         }
+    }
+
+    private void exitOnce(String why) {
+        if (exited.compareAndSet(false, true)) exit.accept(why);
     }
 
     synchronized void accept(JsonNode msg, int bytes) throws Frames.Violation {
