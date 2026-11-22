@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r13). Design only.
+**Status:** Proposed (r14). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -197,6 +197,14 @@ is `unsupported`, code `params` (protocol 1's answer); present but outside the d
   contract**; a present record whose name no longer re-derives the body's policy (renamed, or now parameterized) is
   retired, by the legacy-record rule above, **before** the catalog-name comparison runs (X52), keeping the
   designated-input and attempt checks. So no legacy record ever makes a restore batch fail for a name change.
+- **The same body already held (rewind and replay)** (X54): after a rewind the host may already hold, live, the
+  body a restore entry carries, with its operation record. ADR-0022's merge refuses an incoming entry whose record
+  differs, an absent one included (`Reservations.restore`, `:387-397` at `2ffaf41b`), which would keep the fence up
+  for a journal that merely omits the record. In a protocol-2 session: when an incoming entry has the same body
+  hash, state and slot as a held live entry and **omits** `operation`, the host keeps the held entry as it is (its
+  operation, attempts and reservation id) and applies the restored-body discard guard above to it; an incoming
+  entry that **carries** a record merges as ADR-0022 merges it (same identity, a superset of attempts), and any
+  other difference (state, slot, or a record of another identity) is refused as today.
 - Every other entry (an ordinary call, a reference-script publication, a stake or governor registration) is restored
   by ADR-0022 D8's existing path, unchanged and without `params`: its reservation is of out-refs, which D8 already
   excludes session-wide. A later retry is compared with its own request's params.
@@ -250,7 +258,10 @@ applies them, so the JVM's reflective codec and the engine's schema codec can ne
 - **booleans:** JSON `true` / `false` only;
 - **lists, maps and records:** at most 1,024 items or entries each, nesting at most 32 levels; map entries as D3 step 1
   normalizes them;
-- **raw `PlutusData`:** CBOR hex in D3's normal form, within the same byte-string limit.
+- **raw `PlutusData`:** CBOR hex in D3's normal form, within the same byte-string limit, with **every constructor
+  index, at any depth, at most 2^63 − 1** (X55): JuLC's CBOR decoder accepts larger (unsigned) indices, which the
+  engine would apply, while the generated-client path narrows each index with `longValueExact()` in JuLC's
+  `PlutusDataAdapter` and refuses it, so without the cap one host would derive a policy and the other refuse.
 
 A value outside the domain is `bad`, code `params` (`governor` for a governor's params), with the same code and path
 on both hosts. The domain is part of the protocol-2 schemas, and D8's boundary vectors pin it. (The same mismatch for
@@ -476,6 +487,8 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | a parameterized contract whose description lacks `"formats": 1` (built before M4a, or reaching an unformatted representation) | `initialize` and `describe` entries `unsupported: "params"`, requests `unsupported/params` ("rebuild"), on both hosts, while marked contracts in the same session are served (D2, D2a) |
 | a `@Quorum` call of a kind outside the protocol-2 list | `unsupported` on both hosts (D5) |
 | an `int32`/`int64` value out of range, or a `utf8` value that is not well-formed UTF-8 | `bad/params`, the same path on both hosts (D2a) |
+| raw `PlutusData` with a constructor index above 2^63 − 1 at any depth | `bad/params` on both hosts (D2a) |
+| a restore entry omitting `operation` for a body the host already holds live, with the same state and slot | the held entry kept (operation, attempts, reservation id); the discard guard applies; the batch completes (D2) |
 | a key-credential call on a host without `authorizedBy:key` | `unsupported/authorizedBy` ("key credentials") |
 | a script-credential call on a host without `authorizedBy:script` | `unsupported/authorizedBy` ("script governors") |
 | an npm client initializing with fingerprint version 1 (or none) on a project with `validators.json` | the version-1 digest; no `authorizedBy:script`; every other call as today |
@@ -500,7 +513,9 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   nesting of 32 and 33 levels; 2147483648 and 9223372036854775808 in a `BigInteger` component (accepted, same
   bytes on both hosts) and in `int` and `long` components (refused, `bad/params`); `ff` in a `String` component
   (refused) and in a `byte[]` component (accepted); a multi-byte UTF-8 string in a `String` component (accepted,
-  same bytes). Each refusal has the same code and path on both hosts. **Formats (X30, X35, X43, X44):** a nested
+  same bytes); raw `PlutusData` `deployment` params with a nested constructor index of 2^63 − 1 (accepted, the same
+  policy on both hosts) and 2^63 (`bad/params` on both, X55). Each refusal has the same code and path on both
+  hosts. **Formats (X30, X35, X43, X44):** a nested
   record's `int` component carries `format`; `Optional<Long>` and `List<Integer>` elements at 2^63 and 2^31
   (refused on both hosts) and at the type's maximum (accepted, same bytes); a params record reaching a `short` or
   `Byte` gets no marker and a processor warning; one protocol-2 session with a **marked and an unmarked**
@@ -545,6 +560,10 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   digest (`stageMismatch`), and changed **after** it (the running session keeps its loaded bytes); an old client
   (fingerprint version 1) and a new host on a project with the manifest (initializes, no `authorizedBy:script`); two
   packages with a `Guardian` (the Gradle qualified selector works; ambiguity fails closed).
+- **Rewind and replay (X54), M4a:** prepare a keyed operation, hand it out, rewind, then restore a journal entry with
+  the same body, state and slot but no `operation`: reconciliation completes, the held entry keeps its operation,
+  attempts and reservation id, `discarded` is refused, and its inputs and keyed token stay held until final
+  inclusion or margin-qualified expiry; the same replay carrying a record of another identity is refused as today.
 - **Keyed restore (X22, X23, X27, X28, X40, X47), M4a:** a **protocol-1-to-2 restart**: a pending keyed operation
   recorded by an M3 client (no `policy`, `template` or `params`), its contract gaining `@Params` under the same name
   before the restart (retired: attempts, inputs and keyed tokens held, the restore completes); the same restart with
@@ -611,9 +630,9 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | I17 | A key-credential call is accepted only if the credential's key, from the client's own params, is a required signer that is the caller or a named co-signer | D4, D5 | M4b vectors |
 | I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, its V3 script in the witness set, and exactly one `Approvals` naming this policy, instance and action at that withdrawal's pointer; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
 | I19 | The body's required signers equal exactly D5's signer set | D5 | M4b/M4c mutations, payer ≠ owner |
-| I20 | Reservations exclude out-refs across all parameterizations in a session; operations are identified by `{designated, policy, method, instance, key}`; a keyed operation is retried only when R holds for its request's params; every restored body with keyed tokens is never discarded and keeps its out-refs and keyed tokens until final inclusion or margin-qualified expiry; other pending transactions restore as under ADR-0022 | D2 | identity and keyed-restore tests |
+| I20 | Reservations exclude out-refs across all parameterizations in a session; operations are identified by `{designated, policy, method, instance, key}`; a keyed operation is retried only when R holds for its request's params; every restored body with keyed tokens is never discarded and keeps its out-refs and keyed tokens until final inclusion or margin-qualified expiry; a recordless replay of a body the host already holds live keeps the held entry; other pending transactions restore as under ADR-0022 | D2 | identity, keyed-restore and rewind-and-replay tests |
 | I21 | A protocol-1 session with a host that ships this ADR is indistinguishable from one with an M3 host: apart from `fingerprint` and `versions` (checked against the launch), every reply field, the capability list and every error code (per-method precedence included) equal the final M3b host's, every reply validates against the unmodified `dev-host-1` schemas, and a client that sends no fingerprint version gets ADR-0022's digest on every project | D1, D2, D4, D7 | legacy-session (differential) and old-client vectors |
-| I22 | Both hosts accept exactly D2a's input domain for `params` and governor params, formats included, refusing the rest with the same code and path; neither serves, advertises or describes as served a parameterized contract whose description lacks the `formats` marker | D2, D2a | input-domain boundary and format vectors; mixed marked/unmarked session |
+| I22 | Both hosts accept exactly D2a's input domain for `params` and governor params, formats and the raw-Data constructor-index cap included, refusing the rest with the same code and path; neither serves, advertises or describes as served a parameterized contract whose description lacks the `formats` marker | D2, D2a | input-domain boundary and format vectors; mixed marked/unmarked session |
 | I23 | A `@Quorum` call is accepted only if at least `threshold` distinct required signers are in `keys`, both read by the client from its own params or from the input record of the object whose method runs (by call kind; `removed` for `keyedRemove`); both hosts prepare exactly the protocol-2 quorum call kinds | D5 | quorum-eligibility vectors (instance, owned, keyed, removal), through both dispatchers |
 
 ## 5. Alternatives considered
@@ -814,3 +833,8 @@ host's bodies already satisfy it.
     no longer re-derives the policy), D8;
   - X53 (a crash between marker and lock removal) → D4 (an outstanding `.joust-build` disqualifies script
     governors on host and client), D8.
+- **r14** (2026-11-22, responds to Codex review of `c47909cf`, which confirmed X51–X53; its two findings are X54–X55):
+  - X54 (a recordless replay of a held body after a rewind failed the merge) → D2 (same body, state and slot without
+    a record keeps the held entry, under the discard guard), D7, D8 (rewind-and-replay vector);
+  - X55 (raw Data constructor indices above 2^63 − 1) → D2a (cap at any depth in the shared prevalidation), D7, D8
+    (differential at 2^63 − 1 and 2^63).
