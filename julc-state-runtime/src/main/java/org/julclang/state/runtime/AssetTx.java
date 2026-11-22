@@ -304,10 +304,9 @@ final class AssetTx {
         want.forEach((p, ts) -> ts.forEach((n, q) -> missing.put(p + n, q)));
         var picked = new ArrayList<Utxo>();
         try {
-            for (int page = 1; page < 20 && !missing.isEmpty(); page++) {
-                var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 100, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                for (Utxo u : r.getValue()) {
+            var walk = new Pages(contract.runtime, caller.baseAddress(), 100, 19);
+            for (var list = missing.isEmpty() ? null : walk.next(); list != null; list = missing.isEmpty() ? null : walk.next()) {
+                for (Utxo u : list) {
                     if (contract.runtime.claimStore().avoids(Designation.ref(u))) continue;
                     if (alreadyIn != null && u.getTxHash().equals(alreadyIn.getTxHash())
                             && u.getOutputIndex() == alreadyIn.getOutputIndex()) continue;

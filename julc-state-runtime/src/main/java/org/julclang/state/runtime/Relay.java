@@ -51,6 +51,18 @@ public interface Relay {
         };
     }
 
+    /**
+     * As {@link #classify}, for a submission that is not a keyed attempt: an answer without a status (code 0) that gives
+     * a reason is the node's refusal, as before #145. Some services report one that way (GraphQL), and a plain call's
+     * contention retries rest on it (#145 Fable F1). A keyed attempt keeps the strict rule.
+     */
+    static Outcome classifyPlain(com.bloxbean.cardano.client.api.model.Result<?> r) {
+        if (r != null && !r.isSuccessful() && r.code() == 0 && r.getResponse() != null && !r.getResponse().isBlank()) {
+            return Outcome.rejected(r.getResponse());
+        }
+        return classify(r);
+    }
+
     /** A submit endpoint's answer as an {@link Outcome} (see {@link #of}). */
     static Outcome classify(com.bloxbean.cardano.client.api.model.Result<?> r) {
         if (r == null) return Outcome.unknown("no answer");
