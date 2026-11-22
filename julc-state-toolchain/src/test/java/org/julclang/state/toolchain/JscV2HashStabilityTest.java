@@ -1,6 +1,7 @@
 package org.julclang.state.toolchain;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -343,7 +345,10 @@ class JscV2HashStabilityTest {
         return e;
     }
 
+    // About 12 builds of each of the 72 examples. JuLC 0.1.0-pre22 compiles about 1.8x slower than pre21, so this test
+    // takes about 7.5 minutes locally and more than 10 on CI: it gets its own limit instead of the 10-minute default.
     @Test
+    @Timeout(value = 20, unit = TimeUnit.MINUTES)
     void behaviourNeutralEdits_leaveEveryScriptHash() throws Exception {
         var table = new StringBuilder();
         int checked = 0;
