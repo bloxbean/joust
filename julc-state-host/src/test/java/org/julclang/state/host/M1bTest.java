@@ -228,7 +228,7 @@ class M1bTest {
     }
 
     @Test void swapSendIsLocatedByItsClaimAndCarriesTheMinimumTopUp() throws Exception {
-        var file = ReplayTest.FIXTURES.resolveSibling("m3").resolve("dex/003-swapAdaForToken.json");
+        var file = ReplayTest.m3("dex", "swapAdaForToken");
         var vector = JSON.readTree(file.toFile());
         var snapshot = Snapshot.fromJson(vector.required("snapshot").toString());
         // M3 pins the holders by out-ref and supplies the pool by unit. Construct D6's complete address answers.
