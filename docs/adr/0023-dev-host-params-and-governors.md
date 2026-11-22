@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r16). Design only.
+**Status:** Proposed (r17). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -213,16 +213,29 @@ is `unsupported`, code `params` (protocol 1's answer); present but outside the d
   an identity before it accepts a deadline for the other body (`Reservations.restore`, `:362-377` at `2ffaf41b`), so
   today the batch fails in either order. In a protocol-2 session, when one entry has no record and another entry's
   `attempts` name its body hash, the host applies three checks to the recordless body: the named deadline equals its
-  `validTo`; it spends the record's designated input; and it passes D2's **body-to-policy check against the
-  record's `policy`** (it spends or mints keyed tokens under that policy, X57). **All three pass (a link):** the
+  `validTo`; it spends the record's designated input; and it passes D2's **body-to-policy check against the naming
+  record's policy** (it spends or mints keyed tokens under that policy, X57). That policy is the record's `policy`
+  for a parameterized contract; for a record **without** `policy` (an unparameterized contract, or any protocol-1
+  record) it is the policy D2's catalog-to-body check establishes for the naming entry itself, the catalog hash of
+  the contract its record names, provided that check passes for the naming body (X60). If no policy can be
+  established that way, the link fails. **All three pass (a link):** the
   recordless body is treated as **an attempt of that operation**: both entries keep their own reservations (out-refs
   and keyed tokens), the restored-body discard guard applies to both, and the operation stays live and retryable
   under R, in whichever order they arrive. **Any check fails (retirement, X58):** the record is inconsistent with the
   body its own history names: that operation is **retired** (above; a retry of it is `bad/operation`), the
   recordless body is held **independently** under the discard guard with no identity inferred for it, and the
-  restore still completes, in either order. A later replay carrying the recordless body's own record is then
-  merged by ADR-0022's rules against that record alone. When **both** entries carry records, ADR-0022's identity-conflict
-  check applies unchanged.
+  restore still completes, in either order. When **both** entries carry records, ADR-0022's identity-conflict check
+  applies unchanged.
+- **A later replay attaches a held body's own record** (X61). ADR-0022's merge refuses an incoming record for a held
+  entry that has none (`Reservations.restore`, `:394-396` at `2ffaf41b`: the held operation is null), which would
+  fence reconciliation exactly where D2 holds bodies recordless. In a protocol-2 session, when a held live entry has
+  no record and an incoming entry has the same body hash, state and slot and carries one, the host checks that
+  record **against the body**: it spends the record's designated input, its keyed tokens are under the record's
+  policy (as established above), and any deadline the record gives for that body's own hash equals its `validTo`.
+  If the checks pass, the record is **attached to the existing entry**: the same reservation id, the discard guard
+  still applying, and the operation live under R (or retired, if R fails). If they fail, the record is not attached
+  and its operation is retired; the entry stays held recordless under the guard. Either way the batch completes, and
+  an operation retired earlier (B above) stays retired.
 - Every other entry (an ordinary call, a reference-script publication, a stake or governor registration) is restored
   by ADR-0022 D8's existing path, unchanged and without `params`: its reservation is of out-refs, which D8 already
   excludes session-wide. A later retry is compared with its own request's params.
@@ -450,6 +463,17 @@ signers authorize the call:
   - **the evaluator** is the client's own (IntelliAda can use JuLC's VM; npm clients the engine's evaluator). It may
     share an implementation with the host; the independence that matters is of its inputs, cost models and budgets,
     which the host never supplies. D8's evaluation vectors pin its results.
+  - **the bytes it evaluates are the bytes received** (X59): the evaluator is given the transaction exactly as
+    received, never a decoded and re-encoded copy, since a script's `TxInfo` (its transaction id above all) is
+    derived from those bytes and a valid body can re-encode differently. **Implementation defect to fix in M4c:** the
+    engine's `Offline.evaluate` decodes the transaction (`Transaction.deserialize`,
+    `julc-state-runtime-wasm/.../wasm/Offline.java:56` at `2ffaf41b`) and evaluates `tx.serialize()` (`:81`); it must
+    pass the received bytes to `JulcTransactionEvaluator.evaluateTx`, keeping the decoded copy for input
+    resolution only. The JVM host's own evaluation (`Session.java:169`, `:211`) runs inside QuickTx while it
+    builds, on a provisional body whose budgets and integrity hash are not yet final, to compute those budgets;
+    that is the host's build step, not D5's check, and it is unchanged. A JVM client evaluates through
+    `JulcTransactionEvaluator.evaluateTx(bytes, utxos)`, which takes bytes, and must pass the received ones; M4c's
+    entry confirms that JuLC derives `TxInfo.id` from the bytes it is given.
   This applies to script-governor calls only. Every other call, key-credential `@AuthorizedBy` calls and M1–M3 calls
   included, keeps ADR-0022 D13's structural checks, so ADR-0022 D13 itself is unchanged apart from naming governor
   calls as the exception. An honest host evaluates what it builds (ADR-0022 D6a), so an honest body always passes.
@@ -521,6 +545,7 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | an `int32`/`int64` value out of range, or a `utf8` value that is not well-formed UTF-8 | `bad/params`, the same path on both hosts (D2a) |
 | raw `PlutusData` with a constructor index above 2^63 − 1 at any depth | `bad/params` on both hosts (D2a) |
 | a restore entry without `operation` whose body another entry's `attempts` name, and which has that `validTo`, spends that record's designated input and holds keyed tokens under its `policy` | a link: both restored as attempts of that operation, under the discard guard, the operation retryable, in either order (D2) |
+| a later restore entry carrying a record for a body the host holds live without one (same hash, state and slot) | the record checked against the body and attached to the existing entry (same id, discard guard kept); an inconsistent record is not attached and its operation retired; the batch completes (D2) |
 | the same, but any of those three checks fails | retirement: the naming record's operation retired (retry `bad/operation`), the recordless body held independently under the discard guard, the batch completes, in either order (D2) |
 | a restore entry omitting `operation` for a body the host already holds live, with the same state and slot | the held entry kept (operation, attempts, reservation id); the discard guard applies; the batch completes (D2) |
 | a key-credential call on a host without `authorizedBy:key` | `unsupported/authorizedBy` ("key credentials") |
@@ -579,7 +604,10 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   whose declared units are lowered below what the script needs, with the integrity hash recomputed (refused); declared
   units above the protocol's per-transaction limit (refused); a host whose reads disagree with the client's node on a
   spent input's datum (the client evaluates with its node's answer); and a key-credential `freeze` and an M3 call
-  (not evaluated: structural checks only, as ADR-0022).
+  (not evaluated: structural checks only, as ADR-0022); and **a valid body whose CBOR re-encodes differently**
+  (for example an indefinite-length list where the encoder writes a definite one) with a governor that checks its
+  own transaction id against a value in its redeemer: the client's evaluation, on the received bytes, sees the
+  received body's hash and accepts; an evaluation of the re-encoded bytes would refuse (X59).
 - **Quorum eligibility (X21, X29):** a 2-of-3 Treasury council `pay` whose required signers are the caller (a member) and
   an outsider: signer-set equality holds and the checker refuses `quorum`; the same with two members (positive); a
   duplicate member key counted once (refused). For an **owned** `@Quorum` call whose owned record's council differs
@@ -608,7 +636,11 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   orders, both reservations guarded, a retry of B `bad/operation`); with the correct deadline and designated input
   but A's keyed tokens under **another policy** than B's (X57: completes in both orders, B retired, A held
   independently; a later replay of A's own record merges against it); and with both records present but of
-  different identities (refused, as today).
+  different identities (refused, as today); an **unparameterized** keyed contract, unchanged, with A recordless and
+  B's protocol-1-shaped record (no `policy`) naming A, in both orders (a link, B live, X60); and, after the
+  different-policy case retired B, a **later restore batch** replaying A with its own record (attached to A's
+  existing entry: the same reservation id, the discard guard still applying, A's operation live; B still retired,
+  X61).
 - **Rewind and replay (X54), M4a:** prepare a keyed operation, hand it out, rewind, then restore a journal entry with
   the same body, state and slot but no `operation`: reconciliation completes, the held entry keeps its operation,
   attempts and reservation id, `discarded` is refused, and its inputs and keyed token stay held until final
@@ -669,7 +701,7 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 |---|---|---|---|
 | **M4a** | Protocol 2 and its schemas (D1); `@Params` contracts on both hosts (D2, D2a, D3, D4's JVM path for params); keyed restore with `operation.template` and retired operations (D2); the `@Quorum` eligibility count and quorum-kind parity (D5); the processor's params `formats` marker (D2a); application, input-domain and format vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved; the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit; the final M3b host and its `dev-host-1` schemas pinned as the protocol-1 oracle (X46); and, from r9, owned and keyed `@Quorum` fixture contracts whose object council differs from the parent's), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths); and from the Fable final review: F-Y1 (an application vector for an asset-aware script such as Stall, with an oracle for scripts Aiken's binding cannot decode), F-Y5 (F7 and D4's artifact rule re-verified at the JuLC and CCL versions JOUST then pins, recorded with the vectors) | application vectors agree across JuLC, Aiken (or the stated oracle) and the kit; the input-domain boundary vectors give the same answer on both hosts; Treasury's non-governed calls served and checked on both hosts, including the quorum-eligibility vectors; the legacy-session, old-client and capability-gating vectors (D7, D8) pass; the keyed-restore vectors pass; I16, I20, I21, I22, I23 |
 | **M4b** | Key-credential `@AuthorizedBy` (D4, D5 signers) | M4a | key vectors and mutations on both hosts, **including the non-caller key-holder positive** (X26); capability `authorizedBy:key`; I17, I19 |
-| **M4c** | Plutus governors (D4, D5, D6), the client's phase-2 evaluation of governor calls (D5, Q6 (a)), fingerprint version 2 with capability `fingerprint:2` and the lock-file binding (D4), and the npm build writing or emptying `validators.json` (D4, F21) | M4b; the reference checker's evaluator and its pinned cost models chosen and recorded with the vectors | Treasury + Guardian recorded on a fresh DevKit (registration, `freeze`, payer ≠ owner); every D5/D8 mutation rejected with its code, **the evaluation vectors included**; the stale-manifest vectors pass; capability `authorizedBy:script`; I18, I19, I24 |
+| **M4c** | Plutus governors (D4, D5, D6), the client's phase-2 evaluation of governor calls (D5, Q6 (a)), with the engine's `Offline.evaluate` fixed to evaluate the received bytes (D5, X59), fingerprint version 2 with capability `fingerprint:2` and the lock-file binding (D4), and the npm build writing or emptying `validators.json` (D4, F21) | M4b; the reference checker's evaluator and its pinned cost models chosen and recorded with the vectors | Treasury + Guardian recorded on a fresh DevKit (registration, `freeze`, payer ≠ owner); every D5/D8 mutation rejected with its code, **the evaluation vectors included**, the re-encoding vector among them (the evaluator receives the transaction bytes as received, on both client paths); the stale-manifest vectors pass; capability `authorizedBy:script`; I18, I19, I24 |
 
 ## 4. Invariants
 
@@ -679,11 +711,11 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | I17 | A key-credential call is accepted only if the credential's key, from the client's own params, is a required signer that is the caller or a named co-signer | D4, D5 | M4b vectors |
 | I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, its V3 script in the witness set, and exactly one `Approvals` naming this policy, instance and action at that withdrawal's pointer; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
 | I19 | The body's required signers equal exactly D5's signer set | D5 | M4b/M4c mutations, payer ≠ owner |
-| I20 | Reservations exclude out-refs across all parameterizations in a session; operations are identified by `{designated, policy, method, instance, key}`; a keyed operation is retried only when R holds for its request's params; every restored body with keyed tokens is never discarded and keeps its out-refs and keyed tokens until final inclusion or margin-qualified expiry; a recordless replay of a body the host already holds live keeps the held entry; a recordless body named in another entry's attempts restores as an attempt of that operation only when its deadline, designated input and policy match the naming record, and otherwise the naming operation is retired and the body held independently, in either order; other pending transactions restore as under ADR-0022 | D2 | identity, keyed-restore and rewind-and-replay tests |
+| I20 | Reservations exclude out-refs across all parameterizations in a session; operations are identified by `{designated, policy, method, instance, key}`; a keyed operation is retried only when R holds for its request's params; every restored body with keyed tokens is never discarded and keeps its out-refs and keyed tokens until final inclusion or margin-qualified expiry; a recordless replay of a body the host already holds live keeps the held entry; a recordless body named in another entry's attempts restores as an attempt of that operation only when its deadline, designated input and policy match the naming record, and otherwise the naming operation is retired and the body held independently, in either order; a later record for a held recordless body is attached to its existing entry when it matches the body; other pending transactions restore as under ADR-0022 | D2 | identity, keyed-restore and rewind-and-replay tests |
 | I21 | A protocol-1 session with a host that ships this ADR is indistinguishable from one with an M3 host: apart from `fingerprint` and `versions` (checked against the launch), every reply field, the capability list and every error code (per-method precedence included) equal the final M3b host's, every reply validates against the unmodified `dev-host-1` schemas, and a client that sends no fingerprint version gets ADR-0022's digest on every project | D1, D2, D4, D7 | legacy-session (differential) and old-client vectors |
 | I22 | Both hosts accept exactly D2a's input domain for `params` and governor params, formats and the raw-Data constructor-index cap included, refusing the rest with the same code and path; neither serves, advertises or describes as served a parameterized contract whose description lacks the `formats` marker | D2, D2a | input-domain boundary and format vectors; mixed marked/unmarked session |
 | I23 | A `@Quorum` call is accepted only if at least `threshold` distinct required signers are in `keys`, both read by the client from its own params or from the input record of the object whose method runs (by call kind; `removed` for `keyedRemove`); both hosts prepare exactly the protocol-2 quorum call kinds | D5 | quorum-eligibility vectors (instance, owned, keyed, removal), through both dispatchers |
-| I24 | A script-governor call is signed or exported only after the client's own phase-2 evaluation of the exact transaction passes, with inputs resolved through its own node, its node's cost models, and each redeemer's declared units as its budget; other calls keep ADR-0022 D13's structural checks | D5 | M4c evaluation vectors |
+| I24 | A script-governor call is signed or exported only after the client's own phase-2 evaluation of the exact transaction, as received, passes, with inputs resolved through its own node, its node's cost models, and each redeemer's declared units as its budget; other calls keep ADR-0022 D13's structural checks | D5 | M4c evaluation vectors |
 
 ## 5. Alternatives considered
 
@@ -905,3 +937,12 @@ ADR-0022 host serves, so it changes nothing for existing calls.
     on mismatch, the body held independently), D7, D8, I20;
   - X58 (D7 and I20 omitted the designated-input condition) → D7 (link and retirement rows), D8 (correct deadline,
     missing designated input), I20.
+- **r17** (2026-11-23, responds to Codex review of `64e114f5`, which found Q6 (a) consistent across the sections;
+  its three findings are X59–X61):
+  - X59 (the npm evaluator re-encodes the body) → D5 (the evaluator receives the bytes as received; the engine's
+    `Offline.evaluate` re-encoding named as an M4c implementation defect; the JVM host's build-time evaluation
+    unaffected), D8 (re-encoding vector), D9 (M4c scope and exit), I24;
+  - X60 (no policy to compare for unparameterized records) → D2 (the policy from D2's catalog-to-body check on the
+    naming entry), D8 (unparameterized A/B, both orders);
+  - X61 (a later replay of a held body's record was refused) → D2 (the record is checked against the body and
+    attached to the existing entry), D7, D8 (a later restore batch), I20.
