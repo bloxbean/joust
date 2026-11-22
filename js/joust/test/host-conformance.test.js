@@ -368,7 +368,9 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       assert.ok(m.result, JSON.stringify(m.error));
       assert.equal(m.result.prepared.txHash, v.hash);
       assert.equal(m.result.prepared.cbor, v.cbor);
-      if ([3, 34].includes(v.seq)) verify('dapp-' + String(v.seq).padStart(4, '0'), m.result);
+      // A dApp call with a signing vector of its own (dapp-NNNN in verifier/) is also checked against it.
+      const signing = 'dapp-' + String(v.seq).padStart(4, '0');
+      if (existsSync(join(path, 'verifier', signing + '.json'))) verify(signing, m.result);
     } finally { await peer.close(); }
   });
 });
