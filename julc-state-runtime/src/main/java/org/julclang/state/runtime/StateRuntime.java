@@ -155,9 +155,10 @@ public final class StateRuntime {
 
     /**
      * Where this runtime keeps the claims of what it builds and its designated inputs (ADR-0022 D8): the builder's
-     * store, by default {@link ClaimStore#jvm()} (this JVM's, expiring by the machine clock, as before).
+     * store, by default this JVM's (expiring by the machine clock, as before). Internal: the default store is shared by
+     * every runtime of the JVM, so it is not handed out (#145 Codex review); a host keeps the store it gave the builder.
      */
-    public ClaimStore claimStore() { return claimStore; }
+    ClaimStore claimStore() { return claimStore; }
     public int maxRetries() { return maxRetries; }
     public Duration confirmTimeout() { return confirmTimeout; }
     /**
@@ -280,7 +281,7 @@ public final class StateRuntime {
         private long topUpAllowance = 10_000_000L;
         private Duration relayTimeout = Duration.ofSeconds(60);
         private long settlementSlots = 2;
-        private ClaimStore claimStore = ClaimStore.jvm();
+        private ClaimStore claimStore = JvmClaimStore.INSTANCE;
 
         private Builder(BackendService backend) {
             this.backend = backend;
@@ -384,7 +385,7 @@ public final class StateRuntime {
 
         /**
          * Where the runtime keeps the claims of the transactions it builds, its designated inputs and how they expire
-         * (ADR-0022 D8). Default {@link ClaimStore#jvm()}: this JVM's static claims, released by the machine clock
+         * (ADR-0022 D8). Default: this JVM's static claims, released by the machine clock
          * (ADR-0016 D7, unchanged). Only ever set here: a runtime never discovers a store by itself.
          */
         public Builder claimStore(ClaimStore store) {

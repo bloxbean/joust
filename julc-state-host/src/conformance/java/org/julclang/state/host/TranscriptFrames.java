@@ -27,7 +27,11 @@ public final class TranscriptFrames implements AutoCloseable {
     public JsonNode read() throws Exception {
         var bytes = reader.next();
         if (bytes == null) throw new EOFException("expected client frame");
-        return json.readTree(StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString());
+        var frame = json.readTree(StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString());
+        // An empty or whitespace-only body parses to Jackson's MissingNode: a frame without a JSON-RPC object, never
+        // the end of input (#153 Codex review).
+        if (frame == null || !frame.isObject()) throw new IOException("client frame is not a JSON object");
+        return frame;
     }
     public void write(JsonNode frame) throws IOException {
         if (!writer.write(json.writeValueAsBytes(frame))) throw new IOException("failed to deliver host frame");
@@ -50,7 +54,7 @@ public final class TranscriptFrames implements AutoCloseable {
         catch (TimeoutException e) { return java.util.Optional.empty(); }
         catch (ExecutionException e) { throw e.getCause() instanceof Exception x ? x : e; }
     }
-    /** Marks end of input in {@link #readWithin}. */
-    public static final JsonNode EOF = com.fasterxml.jackson.databind.node.MissingNode.getInstance();
+    /** Marks end of input in {@link #readWithin}: an instance of its own, compared by identity, never a parsed frame. */
+    public static final JsonNode EOF = new com.fasterxml.jackson.databind.node.ObjectNode(com.fasterxml.jackson.databind.node.JsonNodeFactory.instance);
     public void close() { timer.shutdownNow(); }
 }

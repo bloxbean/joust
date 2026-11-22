@@ -35,14 +35,17 @@ const pageGaps = {
   'keyed-designated-record': 'the designated input equals the persisted operation record\'s',
   'keyed-signed-by': 'signedBy against the keyed target\'s state',
   'map-verifier-reference': 'the map verifier script supplied',
+  // #153 Codex review: the kit refuses these two; the page does not yet (bloxbean/joust#162).
+  'claimed-third-party-tagged': claims, 'owned-destroy-wrong-parent': 'the owned target names the call\'s instance',
+  // #156 Codex review: keyed change at the caller's enterprise address (protocol rule 6); keyed.js counts that address
+  // as the wallet's (bloxbean/joust#162).
+  'keyed-change-at-enterprise': 'keyed change at the payer\'s address',
 };
 
 // Positive vectors (by `mutation`) the page verifier still refuses: protocol 1 accepts them. Each must still be refused
 // with exactly the named problem, so an entry fails once verify.js is fixed and has to be removed.
 // bloxbean/joust#164: verify.js applies "another token of the contract" to wallet outputs too (#153 F-C1).
-const pageFalseRefusals = {
-  'partial-remove-liquidity': 'an output carries another token of the contract',
-};
+const pageFalseRefusals = {};
 
 for (const file of readdirSync(dir).filter(f => f.endsWith('.json'))) {
   const v = JSON.parse(readFileSync(new URL(file, dir)));

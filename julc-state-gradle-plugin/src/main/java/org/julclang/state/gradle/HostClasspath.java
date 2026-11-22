@@ -68,22 +68,106 @@ final class HostClasspath {
         c.getAttributes().attribute(Category.CATEGORY_ATTRIBUTE, project.getObjects().named(Category.class, Category.LIBRARY));
     }
 
+    /** The class the host loads from julc-vm itself (Session.initialize): some launch entry must provide it. */
+    private static final String VM_PROVIDER = "org/julclang/vm/JulcVmProvider.class";
+
     private static List<File> extraJars(Configuration runtime, Set<File> application, Configuration host,
                                         Configuration metadata, String version) {
         var selected = applicationComponents(runtime, application);
         var tools = toolJars(host, version);
+        var owners = artifactOwners(runtime);
         var extra = new ArrayList<File>();
         for (String name : TOOLS) {
             if (!tools.containsKey(name)) throw new GradleException("Missing joustHost jar: " + name);
             String appVersion = selected.putIfAbsent(GROUP + ":" + name, version);
-            if (appVersion == null) extra.add(tools.get(name));
-            else if (!version.equals(appVersion)) {
+            if (appVersion != null && !version.equals(appVersion)) {
                 throw new GradleException((name.equals(SERVE) ? "incompatible adapter" : "incompatible host")
                         + ": application selected " + name + ":" + appVersion + ", plugin requires " + version);
             }
+            // The launch order is the application's files, then the extra jars: an application entry with any of the
+            // tool's classes wins class lookup for it, whatever configuration put it there. Such an entry must be the
+            // tool's own binary (the plugin's resolved jar, or the expected component's artifact); only one that is
+            // replaces the tool jar, so a sources jar or a partial copy never stands in for it (#150 Codex reviews).
+            File tool = tools.get(name);
+            Set<String> classes = classEntries(tool);
+            String expected = GROUP + ":" + name + ":" + version;
+            boolean provided = false;
+            for (File file : application) {
+                if (!overlaps(file, classes)) continue;
+                String owner = owners.get(file);
+                if (!sameFile(file, tool) && !expected.equals(owner)) {
+                    throw new GradleException((name.equals(SERVE) ? "incompatible adapter" : "incompatible host")
+                            + ": " + file + " on the application classpath provides " + name + " classes"
+                            + (owner == null ? " from no verifiable component" : " from " + owner)
+                            + ", plugin requires " + expected);
+                }
+                provided = true;
+            }
+            if (!provided) extra.add(tool);
         }
         checkRuntimeDependencies(metadata, selected, version);
+        // The metadata check sees components, not classes: a classifier-only julc-vm satisfies it but cannot run.
+        if (application.stream().noneMatch(f -> hasEntry(f, VM_PROVIDER))) {
+            throw new GradleException("Unsatisfied runtime dependency of the host: org.julclang:julc-vm provides no"
+                    + " " + VM_PROVIDER.replace('/', '.').replace(".class", "") + " on the application classpath");
+        }
         return extra;
+    }
+
+    private static boolean sameFile(File a, File b) {
+        try {
+            return java.nio.file.Files.isSameFile(a.toPath(), b.toPath());
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
+    /** The class files of jar {@code file}. */
+    private static Set<String> classEntries(File file) {
+        var out = new HashSet<String>();
+        try (var zip = new java.util.zip.ZipFile(file)) {
+            zip.stream().map(java.util.zip.ZipEntry::getName).filter(n -> n.endsWith(".class") && !n.endsWith("module-info.class")
+                    && !n.startsWith("META-INF/")).forEach(out::add);
+        } catch (java.io.IOException e) {
+            throw new GradleException("Cannot read joustHost jar " + file, e);
+        }
+        return out;
+    }
+
+    /** Whether the jar or class directory {@code file} has any of {@code classes}. */
+    private static boolean overlaps(File file, Set<String> classes) {
+        if (file.isDirectory()) {
+            for (String c : classes) if (new File(file, c).isFile()) return true;
+            return false;
+        }
+        if (!file.isFile()) return false;
+        try (var zip = new java.util.zip.ZipFile(file)) {
+            return zip.stream().anyMatch(e -> classes.contains(e.getName()));
+        } catch (java.io.IOException e) {
+            return false;   // not a jar: LaunchManifest refuses it when it scans the entries
+        }
+    }
+
+    /** Each resolved artifact of {@code runtime}, by file: its component as group:module:version. */
+    private static Map<File, String> artifactOwners(Configuration runtime) {
+        var owners = new HashMap<File, String>();
+        for (var artifact : runtime.getIncoming().getArtifacts().getArtifacts()) {
+            if (artifact.getId().getComponentIdentifier() instanceof ModuleComponentIdentifier id) {
+                owners.put(artifact.getFile(), id.getGroup() + ":" + id.getModule() + ":" + id.getVersion());
+            }
+        }
+        return owners;
+    }
+
+    /** Whether the jar or class directory {@code file} has {@code entry}. */
+    private static boolean hasEntry(File file, String entry) {
+        if (file.isDirectory()) return new File(file, entry).isFile();
+        if (!file.isFile()) return false;
+        try (var zip = new java.util.zip.ZipFile(file)) {
+            return zip.getEntry(entry) != null;
+        } catch (java.io.IOException e) {
+            return false;   // not a jar: LaunchManifest refuses it when it scans the entries
+        }
     }
 
     private static Map<String, String> applicationComponents(Configuration runtime, Set<File> application) {

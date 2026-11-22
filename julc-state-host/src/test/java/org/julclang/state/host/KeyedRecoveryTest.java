@@ -118,4 +118,103 @@ class KeyedRecoveryTest {
             }
         }
     }
+
+    static ObjectNode discard(Reservations.Entry e, long tip) {
+        return obj().put("reservation", e.id()).put("txHash", e.body().hash()).put("status", "discarded").put("tip", tip);
+    }
+
+    /**
+     * #156 Codex review: the retry's wallet read can be past the first attempt's validTo + settlementSlots, which expires
+     * it first; the handoff the retry acknowledges still counts, so a rewind that revives the attempt cannot let a
+     * discard release inputs the signed body spends.
+     */
+    @Test void aRetryAcknowledgesAnAttemptThatExpiredBeforeIt() throws Exception {
+        var b1 = Reservations.Body.decode(cbor(1, 40, 100), 0);
+        var table = new Reservations(2, false, 0);
+        var e1 = table.prepare(b1, 50, KeyedOperation.parse(op(Map.of())));
+        table.commit(e1);
+        table.observe(500);                                     // the retry's read: A1 expires before the check
+        table.checkOperation(KeyedOperation.parse(op(Map.of(b1.hash(), 100L))), true, 500, null);
+        table.rewind(90);                                       // A1 is prepared again
+        assertEquals("conflict", assertThrows(HostError.class, () -> table.settled(discard(e1, 90), Runnable::run)).code);
+    }
+
+    /** #156 Codex review: the acknowledgement is taken before any chain read, so a failed read cannot lose it. */
+    @Test void theAcknowledgementNeedsNoChainRead() throws Exception {
+        var b1 = Reservations.Body.decode(cbor(1, 40, 100), 0);
+        var table = new Reservations(2, false, 0);
+        var e1 = table.prepare(b1, 50, KeyedOperation.parse(op(Map.of())));
+        table.commit(e1);
+        table.acknowledge(KeyedOperation.parse(op(Map.of(b1.hash(), 100L))));   // the retry's wallet read then fails
+        assertEquals("conflict", assertThrows(HostError.class, () -> table.settled(discard(e1, 60), Runnable::run)).code);
+        // Only a matching deadline acknowledges.
+        var table2 = new Reservations(2, false, 0);
+        var e2 = table2.prepare(b1, 50, KeyedOperation.parse(op(Map.of())));
+        table2.commit(e2);
+        table2.acknowledge(KeyedOperation.parse(op(Map.of(b1.hash(), 99L))));
+        table2.settled(discard(e2, 60), Runnable::run).commit().run();
+    }
+
+    /**
+     * #156 Codex review: one restore batch whose retry B lists A as handed out while A's own record does not is refused
+     * in either order (the protocol journals one record per operation); across batches the fuller record is kept on
+     * the earlier entry, so A cannot be discarded.
+     */
+    @Test void contradictoryRecordsAreRefusedInEitherOrder() throws Exception {
+        String c1 = cbor(1, 40, 100), c2 = cbor(2, 103, 200);
+        var b1 = Reservations.Body.decode(c1, 0);
+        var fuller = op(Map.of(b1.hash(), 100L));
+        var empty = op(Map.of());
+        for (boolean bFirst : new boolean[] {true, false}) {
+            var table = new Reservations(2, true, 0);
+            var restore = obj().put("complete", true);
+            var txs = restore.putArray("transactions");
+            if (bFirst) txs.addObject().put("state", "prepared").put("cbor", c2).set("operation", fuller);
+            txs.addObject().put("state", "prepared").put("cbor", c1).set("operation", empty);
+            if (!bFirst) txs.addObject().put("state", "prepared").put("cbor", c2).set("operation", fuller);
+            assertEquals("operation", assertThrows(HostError.class, () -> table.restore(restore)).code, "B first: " + bFirst);
+        }
+        // Across batches, A (empty record) then B (A handed out): A takes B's record.
+        var table = new Reservations(2, true, 0);
+        var first = obj().put("complete", false);
+        first.putArray("transactions").addObject().put("state", "prepared").put("cbor", c1).set("operation", empty);
+        var r1 = table.restore(first);
+        r1.commit().run();
+        var second = obj().put("complete", true);
+        second.putArray("transactions").addObject().put("state", "prepared").put("cbor", c2).set("operation", fuller);
+        table.restore(second).commit().run();
+        String a = r1.value().get("reservations").get(0).asText();
+        var discardA = obj().put("reservation", a).put("txHash", b1.hash()).put("status", "discarded").put("tip", 60);
+        assertEquals("conflict", assertThrows(HostError.class, () -> table.settled(discardA, Runnable::run)).code);
+        // The other order across batches is refused.
+        var table2 = new Reservations(2, true, 0);
+        var firstB = obj().put("complete", false);
+        firstB.putArray("transactions").addObject().put("state", "prepared").put("cbor", c2).set("operation", fuller);
+        table2.restore(firstB).commit().run();
+        var secondA = obj().put("complete", true);
+        secondA.putArray("transactions").addObject().put("state", "prepared").put("cbor", c1).set("operation", empty);
+        assertEquals("operation", assertThrows(HostError.class, () -> table2.restore(secondA)).code);
+    }
+
+    /**
+     * #156 Codex review: an insert whose key a live reservation mints may still be rolled back, so the runtime asks the
+     * store before reporting the key taken for good; it is held until the reservation settles.
+     */
+    @Test void aLiveInsertHoldsItsKeyedToken() throws Exception {
+        String policy = "ab".repeat(28), name = "4b" + "cd".repeat(28);
+        var mint = new ArrayList<MultiAsset>(List.of(MultiAsset.builder().policyId(policy)
+                .assets(new ArrayList<>(List.of(new Asset("0x" + name, BigInteger.ONE)))).build()));
+        var body = TransactionBody.builder()
+                .inputs(new ArrayList<>(List.of(new TransactionInput("aa".repeat(32), 0))))
+                .outputs(new ArrayList<>()).fee(BigInteger.ONE).ttl(100).validityStartInterval(40).mint(mint).build();
+        String c = Transaction.builder().body(body).witnessSet(new TransactionWitnessSet()).build().serializeToHex();
+        var b = Reservations.Body.decode(c, 0);
+        var table = new Reservations(2, false, 0);
+        var e = table.prepare(b, 50, KeyedOperation.parse(op(Map.of())));
+        table.commit(e);
+        assertTrue(table.reservesToken(policy + name));
+        assertFalse(table.reservesToken(policy + "4b" + "ef".repeat(28)));
+        table.settled(discard(e, 60), Runnable::run).commit().run();
+        assertFalse(table.reservesToken(policy + name), "released with its reservation");
+    }
 }

@@ -284,6 +284,16 @@ final class CallRules {
                     c.test("continuingOutput/instance",!c.owned || call.required("instance").equals(d.required("instance")));
                 } catch (RuntimeException e) { c.test("continuingOutput/datum",false); }
             } else {
+                // Rule 6 for every claimed output, whoever receives it: a claimed send carries no payout tag (#153 Codex
+                // review: the wallet branch alone checked it).
+                if (claimed.contains(i) && !o.get("datum").isNull()) {
+                    boolean tag = false;
+                    try {
+                        var t = codec.decode(codec.definition("org.julclang.ledger.TxOutRef"),data(o.get("datum").asText()));
+                        tag = ref(t).equals(c.spent);
+                    } catch (RuntimeException ignored) { /* not a payout tag */ }
+                    c.test("walletOutput/claimedTag",!tag);
+                }
                 c.test("walletOutput/foreignKey",!c.caller.equals(paymentKey(addr)));
                 if (c.enabled("netOutflow/third#receipts")) add(third,amount,1);
             }

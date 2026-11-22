@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.state.runtime.snapshot.*;
 import java.lang.reflect.*;
+import java.math.BigInteger;
 import java.util.*;
 import java.util.function.LongConsumer;
 import java.util.function.Supplier;
@@ -40,6 +41,21 @@ final class Reads {
     private final SnapshotBackend local = new SnapshotBackend(snapshot);
     private final Map<String, Optional<Boolean>> registration = new HashMap<>();
     private final Set<String> queriedOutputs = new HashSet<>();
+
+    /**
+     * Contract policies whose reserved-name tokens are unique, each with whether it is keyed: instances, objects and
+     * intents in every contract (ADR-0007 D3), keyed objects (0x4B) only in keyed ones (ADR-0016 I44).
+     */
+    private Map<String, Boolean> uniquePolicies = Map.of();
+
+    /**
+     * Refuse, before its tip counts, a listing that holds a unique token of one of {@code policies} twice or in a quantity
+     * other than one: such an answer contradicts itself (#151 Codex review).
+     */
+    Reads uniqueTokens(Map<String, Boolean> policies) {
+        uniquePolicies = Map.copyOf(policies);
+        return this;
+    }
 
     Reads(Peer peer, long now, long ahead, long maxCount, long maxBytes, int network, LongConsumer observe) {
         this.peer = peer;
@@ -184,8 +200,21 @@ final class Reads {
             if (a.has("more") && (cursor == null || cursor.isEmpty() || !cursors.add(cursor)))
                 throw inconsistent("invalid chunk cursor");
         } while (cursor != null);
+        var unique = new HashSet<String>();
+        for (var u : values) for (var a : u.getAmount()) {
+            String unit = a.getUnit();
+            if (unit.length() < 56) continue;
+            Boolean keyed = uniquePolicies.get(unit.substring(0, 56));
+            if (keyed == null || !reservedName(unit.substring(56), keyed)) continue;
+            if (!BigInteger.ONE.equals(a.getQuantity()) || !unique.add(unit)) throw inconsistent("the listing holds a unique token twice");
+        }
         snapshot.utxos.put(address, values);
         accepted();   // every chunk at one chain point
+    }
+
+    /** ADR-0007 D3: an instance (32 bytes), owned object (29, 0x4F) or intent (29, 0x49) name; a keyed object's (29, 0x4B) only in a keyed contract (ADR-0016 I44). */
+    static boolean reservedName(String hex, boolean keyed) {
+        return hex.length() == 64 || hex.length() == 58 && (hex.startsWith("4f") || hex.startsWith("49") || keyed && hex.startsWith("4b"));
     }
 
     private static final java.util.regex.Pattern CANONICAL_UNIT =

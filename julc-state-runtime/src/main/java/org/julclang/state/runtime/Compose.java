@@ -96,6 +96,7 @@ public final class Compose {
         if (prepare && !(payer instanceof WalletAccount)) throw new JoustException("prepare(): the payer must be a WalletAccount");
         if (outer != null) {
             refuseDesignatedOutsidePrepare("a nested composition");
+            outer.requireStore(runtime, "a nested composition");
             // Nested in another composition: the calls join the outer transaction, which submits them all (or none).
             String saved = outer.group;
             if (sharedSigners && saved == null) outer.group = "composed calls #" + System.identityHashCode(this);
@@ -107,6 +108,7 @@ public final class Compose {
                     try {
                         call.run();
                     } catch (RuntimeException e) {
+                        if (TxRunner.endsComposition(e)) throw e;   // sent, or refused: never run the rest (#145 Codex)
                         if (first == null) first = e;
                     }
                 }
@@ -137,11 +139,13 @@ public final class Compose {
         // the pass then runs again with the deposits the first try found (ADR-0011 D3).
         var probe = new TxRunner.Capture();
         probe.designated = designated;
+        probe.store = runtime.claimStore();
         probe.walletOnly = prepare;
         RuntimeException failed = runTolerant(probe);
         if (failed != null && !probe.deposits.isEmpty()) {
             var again = new TxRunner.Capture();
             again.designated = designated;
+            again.store = runtime.claimStore();
             again.walletOnly = prepare;
             again.known = List.copyOf(probe.deposits);
             failed = runTolerant(again);
@@ -182,6 +186,7 @@ public final class Compose {
         // Pass 2: every call in the common window, into one transaction.
         var cap = new TxRunner.Capture();
         cap.designated = designated;
+        cap.store = runtime.claimStore();
         cap.walletOnly = prepare;
         cap.forced = window;
         cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
@@ -266,6 +271,7 @@ public final class Compose {
                 try {
                     call.run();
                 } catch (RuntimeException e) {
+                    if (TxRunner.endsComposition(e)) throw e;   // sent, or refused: never run the rest (#145 Codex)
                     if (first == null) first = e;
                 }
             }

@@ -169,6 +169,17 @@ class VerifierVectorsTest {
             "notVerifiable/keyedCall#payment", "needs a recorded keyed call to a non-payable method without Ctx (Registry's change or recover)");
 
     /**
+     * Parts only a positive in which a script releases value to a third party can decide. No M1 recording has one: the
+     * former accept-payout-to-third-party and accept-send-to-third-party redirected payments the contract pins to the
+     * owner or the caller, so they failed on chain and a client checking recipients had to refuse them (#153 Codex
+     * review). A client dropping one of these parts is stricter, never weaker. Once a recorded release to another party
+     * (an Escrow release, a Token mint to another holder) is a source, its positive decides them and the entry must go.
+     */
+    static final Map<String,String> NEEDS_POSITIVE = Map.of(
+            "netOutflow/third#target", "what the target releases to a third party",
+            "netOutflow/third#mint", "what a mint releases to a third party");
+
+    /**
      * DC10: equivalent parts whose reasons cite each other. Single-part mutation cannot see such a pair, so dropping both
      * must change some vector's verdict.
      */
@@ -186,10 +197,27 @@ class VerifierVectorsTest {
         })).toList();
     }
 
+    /**
+     * #153 Codex review: a client that picks the spend pointer from the call kind alone passes vectors whose target always
+     * sorts first. The corpus has the same plain method with its target at ledger index 0 and at 1.
+     */
+    @Test void theSameMethodSpendsAtBothPointers() throws Exception {
+        var indexes = new TreeSet<Integer>();
+        try (var files = Files.list(DIR)) {
+            for (var f : files.sorted().toList()) {
+                var v = JSON.readTree(f.toFile());
+                if (!v.path("violations").isEmpty() || !"increment".equals(v.at("/request/call/method").asText())) continue;
+                for (var r : v.at("/result/prepared/plan/redeemers")) if (r.path("tag").asText().equals("spend")) indexes.add(r.required("index").intValue());
+            }
+        }
+        assertEquals(new TreeSet<>(List.of(0,1)),indexes);
+    }
+
     @TestFactory List<DynamicTest> everyPartDecidesSomeVector() throws Exception {
         var parts = parts();
         assertTrue(parts.containsAll(EQUIVALENT.keySet()),"stale EQUIVALENT entry");
         assertTrue(parts.containsAll(UNCOVERED.keySet()),"stale UNCOVERED entry");
+        assertTrue(parts.containsAll(NEEDS_POSITIVE.keySet()),"stale NEEDS_POSITIVE entry");
         var vectors = new ArrayList<JsonNode>();
         try (var files = Files.list(DIR)) { for (var f : files.sorted().toList()) vectors.add(JSON.readTree(f.toFile())); }
         var verdicts = vectors.stream().map(v -> ReferenceChecker.check(v).isEmpty()).toList();
@@ -198,6 +226,7 @@ class VerifierVectorsTest {
                     .filter(i -> ReferenceChecker.check(vectors.get(i),Set.of(part)).isEmpty()!=verdicts.get(i)).count();
             if (EQUIVALENT.containsKey(part)) assertEquals(0,flipped,part+" decides vectors now: remove it from EQUIVALENT");
             else if (UNCOVERED.containsKey(part)) assertEquals(0,flipped,part+" decides vectors now: remove it from UNCOVERED");
+            else if (NEEDS_POSITIVE.containsKey(part)) assertEquals(0,flipped,part+" decides vectors now: remove it from NEEDS_POSITIVE");
             else assertTrue(flipped>0,"no vector depends on "+part);
         })).toList();
     }

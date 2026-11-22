@@ -75,6 +75,23 @@ class FakeHostTest {
         } finally { p.destroyForcibly(); }
     }
 
+    /** #153 Codex review: an empty frame after exit is a frame, not the end of input, even with stdin left open. */
+    @Test @org.junit.jupiter.api.Timeout(30) void anEmptyFrameAfterExitIsNotAClose() throws Exception {
+        var p = start("keyed");
+        try {
+            var reader = new Frames.Reader(p.getInputStream());
+            var writer = new Frames.Writer(p.getOutputStream());
+            for (var f : JSON.readTree(RecordedSessionsTest.SESSIONS.resolve("keyed.json").toFile()).required("frames")) {
+                if (f.has("client")) assertTrue(writer.write(JSON.writeValueAsBytes(f.required("client"))));
+                else assertEquals(f.required("host"),JSON.readTree(reader.next()));
+            }
+            assertTrue(writer.write(new byte[0]));
+            assertTrue(p.waitFor(10,TimeUnit.SECONDS));
+            assertNotEquals(0,p.exitValue(),"an empty frame passed as the client's close");
+            assertNotEquals(4,p.exitValue(),"the empty frame was not seen");
+        } finally { p.destroyForcibly(); }
+    }
+
     @Test @org.junit.jupiter.api.Timeout(30) void aClientThatStaysOpenAfterExitFails() throws Exception {
         var p = start("keyed");
         try {
