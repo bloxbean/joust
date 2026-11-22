@@ -158,7 +158,7 @@ cp julc-state-toolchain/build/wasm/{joust-toolchain.js,joust-toolchain.js.wasm,p
 ./gradlew :julc-state-host:nodeHostConformance
 ```
 
-The task builds the conformance classifier and runs its reference checker on the npm host's actual results. The client builds the fixture contracts through the npm compiler, replays the Bank and keyed sessions in wire order, exercises every host vector and reconstructs the 34 eligible M0 calls. It checks complete unsigned bytes and body hashes. The machine-dependent snapshot identity, engine versions and named-view capability are normalized. The harness checks that each negative uses its positive's request and applies its changes to the live result or the independent client evidence. The reference checker must report the recorded violations.
+The task builds the conformance classifier and runs its reference checker on the npm host's actual results. The client builds the fixture contracts through the npm compiler, replays the Bank and keyed sessions in wire order, exercises every host vector and reconstructs every eligible M0 call, checking each that has a signing vector (`dapp-0003`, `dapp-0015`) against it. It checks complete unsigned bytes and body hashes. The machine-dependent snapshot identity, engine versions and named-view capability are normalized. The harness checks that each negative uses its positive's request and applies its changes to the live result or the independent client evidence. The reference checker must report the recorded violations.
 
 ### ADR-0022 §9 adversarial coverage
 
