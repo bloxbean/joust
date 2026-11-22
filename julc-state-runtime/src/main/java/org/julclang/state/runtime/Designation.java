@@ -424,6 +424,7 @@ final class Designation {
                 final List<Utxo> eligible = new ArrayList<>();
                 int next;
                 boolean finished;
+                String lastFirst;   // the previous raw page's first input: a provider that ignores the page repeats it
             }
             private final Map<Query, Pages> pages = new java.util.HashMap<>();
 
@@ -440,6 +441,14 @@ final class Designation {
                 Pages cursor = pages.computeIfAbsent(new Query(address, size, order), key -> new Pages());
                 while (!cursor.finished && cursor.eligible.size() < end) {
                     var raw = all.getPage(address, size, cursor.next, order);
+                    // A repeated page is the end of the answer, checked before filtering: a page every input of which
+                    // is reserved would otherwise be read again and again under the payer's lock (#145 Codex).
+                    String first = raw.isEmpty() ? null : ref(raw.get(0));
+                    if (first != null && first.equals(cursor.lastFirst)) {
+                        cursor.finished = true;
+                        break;
+                    }
+                    cursor.lastFirst = first;
                     cursor.eligible.addAll(free(store, raw, ownRef, owner));
                     cursor.next++;
                     cursor.finished = raw.size() < size;

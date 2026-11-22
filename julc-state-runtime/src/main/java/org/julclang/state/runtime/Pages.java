@@ -37,7 +37,15 @@ final class Pages {
     List<Utxo> next() throws ApiException {
         if (done || page >= limit) return null;
         page++;
-        List<Utxo> list = answer(rt.backend().getUtxoService().getUtxos(address, count, page));
+        Result<List<Utxo>> r;
+        try {
+            r = rt.backend().getUtxoService().getUtxos(address, count, page);
+        } catch (ApiException | RuntimeException e) {
+            // A provider that throws (an I/O failure) is a failed page too: scoped, never a partial answer (#145 Codex).
+            if (scoped) throw new ReadFailed("utxos", address, TxRunner.rootMessage(e));
+            throw e;
+        }
+        List<Utxo> list = answer(r);
         if (list == null || list.isEmpty()) {
             done = true;
             return null;
