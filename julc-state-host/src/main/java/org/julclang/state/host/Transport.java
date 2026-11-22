@@ -43,12 +43,16 @@ final class Transport {
 
     void run() {
         timer.scheduleAtFixedRate(() -> {
+            long now = System.nanoTime();   // the clock first, as for writes: a finished frame never looks stalled
             long start = reader.startedAt();
-            if (start != 0 && System.nanoTime() - start >= Frames.STALL_NANOS) stop("stalled frame");
+            if (start != 0 && now - start >= Frames.STALL_NANOS) stop("stalled frame");
         }, 50, 50, TimeUnit.MILLISECONDS);
         watchdog.scheduleAtFixedRate(() -> {
+            // The clock first: a write still in progress after this sample started before it, so a stale sample of
+            // a write that has since finished can never look overdue (#149 Codex fix review).
+            long now = System.nanoTime();
             long since = writer.writingSince();
-            if (since != 0 && System.nanoTime() - since >= Frames.STALL_NANOS) {
+            if (since != 0 && now - since >= Frames.STALL_NANOS) {
                 stopped = true;
                 exitOnce("stalled protocol write");
                 watchdog.shutdown();

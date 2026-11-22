@@ -184,4 +184,29 @@ class ReservationsTest {
         // Nothing is staged by a refused or an uncommitted batch.
         decoded.inputs().forEach(ref -> assertTrue(fresh.avoids(ref)));
     }
+    @Test void aRearmedTombstoneNeverHidesTheLiveReservationOfItsBody() throws Exception {
+        String cbor = IntegrationTest.record().fixture().get("unsignedTx").asText();
+        var b = Reservations.Body.decode(cbor, 0);
+        long to = b.to();
+        var t = new Reservations(3, false, 0);
+        var first = t.prepare(b, to - 10);
+        t.commit(first);
+        t.observe(to + 4);                       // expired: 4 > margin 3
+        t.rewind(to + 1);                        // still past its upper bound: stays expired
+        var p = obj().put("complete", true);
+        p.putArray("transactions").addObject().put("state", "shallow").put("slot", to - 1).put("cbor", cbor);
+        var restored = t.restore(p);
+        restored.commit().run();
+        String second = restored.value().at("/reservations/0").asText();
+        assertNotEquals(first.id(), second);
+        t.rewind(to - 1);                        // the tombstone could land again, but the body is held by the shallow entry
+        var again = t.restore(p);
+        assertEquals(second, again.value().at("/reservations/0").asText());
+        var prepared = obj().put("complete", true);
+        prepared.putArray("transactions").addObject().put("state", "prepared").put("cbor", cbor);
+        code("conflict", () -> t.restore(prepared));
+        // Late settlement of the old reservation is still told apart.
+        var late = obj().put("reservation", first.id()).put("txHash", b.hash()).put("status", "discarded").put("tip", to - 1);
+        code("conflict", () -> t.settled(late, Runnable::run));
+    }
 }
