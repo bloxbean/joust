@@ -345,7 +345,7 @@ final class TxRunner {
                 byte[] cbor = serialised(signed, what);   // before it may have been sent: a failure here sent nothing
                 submitted = true;   // the node may have it from here, unless it answers with a definite rejection
                 try {
-                    sendToNode(cbor, txHash, what, false);
+                    sendToNode(cbor, txHash, what);
                 } catch (SubmitException e) {
                     submitted = false;
                     throw e;
@@ -363,7 +363,7 @@ final class TxRunner {
                 handedOut = true;
                 deliver(rt.relays(), cbor, txHash, what, rt.relayTimeout());
             }
-            logQuietly(rt, what + ": submitted " + txHash);
+            logAfterSend(rt, what + ": submitted " + txHash, txHash, what);
             awaitInclusion(txHash, what);
             submitted = false;   // on chain: its inputs are spent, the claim can end
             return txHash;
@@ -426,12 +426,19 @@ final class TxRunner {
         }
     }
 
-    /** The runtime's log after something was handed to the node: a failing consumer must not lose the outcome or hash. */
-    static void logQuietly(StateRuntime rt, String message) {
+    /**
+     * The runtime's log after something was handed to the node: a failing consumer must not lose the outcome or hash. A
+     * consumer that throws is ignored; one that ends the call ({@link CallAbort}: a host's deadline or cancellation) ends
+     * it pending, with the hash and the abort as its cause, as a confirmation read would (#145 Codex).
+     */
+    static void logAfterSend(StateRuntime rt, String message, String txHash, String what) {
         try {
             rt.log(message);
         } catch (RuntimeException ignored) {
             // a failing log consumer is not the transaction's outcome (#145 Codex open item 2)
+        } catch (Error e) {
+            if (!(e instanceof CallAbort)) throw e;
+            throw new PendingTransactionException(txHash, what + ": submitted, but the call was ended (" + e.getMessage() + ")", e);
         }
     }
 
@@ -494,16 +501,16 @@ final class TxRunner {
     /**
      * Hands {@code cbor} to the node. Only a definite answer is a rejection ({@link SubmitException}); anything else,
      * a {@link CallAbort} included, may have reached the node: the outcome is pending, with the hash (#145 Codex).
-     * {@code strict}: the keyed rule (R-C10), where an answer without a status is unknown. A plain submission also takes
-     * an answer without a status that gives a reason as a rejection, as before #145: a service that reports the node's
-     * refusal that way (GraphQL) keeps its contention retries (#145 Fable F1).
+     * An answer without a status is unknown, whatever its text: a status-less service reports a lost reply the same way
+     * as a refusal, and taking it for a refusal could let a call run again on the state its first transaction advanced
+     * (#145 Codex). Such a backend loses its contention retries; the builder documents it.
      */
-    private void sendToNode(byte[] cbor, String txHash, String what, boolean strict) {
+    private void sendToNode(byte[] cbor, String txHash, String what) {
         try {
             var r = rt.backend().getTransactionService().submitTransaction(cbor);
             // Only a definite answer is a rejection (Relay.classify, as for keyed attempts): a gateway's 5xx or a
             // timeout may hide an accepted transaction, so it is pending, never rebuilt (#145 Codex).
-            var o = strict ? Relay.classify(r) : Relay.classifyPlain(r);
+            var o = Relay.classify(r);
             if (o.answer() == Relay.Answer.REJECTED) {
                 throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
             }
@@ -855,8 +862,8 @@ final class TxRunner {
         }
         byte[] cbor = serialised(signed, what);
         String txHash = TransactionUtil.getTxHash(signed);
-        sendToNode(cbor, txHash, what, false);
-        logQuietly(rt, what + ": submitted " + txHash);
+        sendToNode(cbor, txHash, what);
+        logAfterSend(rt, what + ": submitted " + txHash, txHash, what);
         awaitInclusion(txHash, what);
         return txHash;
     }
@@ -866,8 +873,12 @@ final class TxRunner {
         rt.requireUnscopedSubmission();
         Capture cap = CAPTURE.get();
         // A prerequisite published inside a composition (a reference script, a verifier, a registration) goes first:
-        // refused before anything is selected or sent when its runtime is not the composition's (#145 Codex).
-        if (cap != null) cap.requireStore(rt, what);
+        // refused before anything is selected or sent when its runtime is not the composition's, or when the composition
+        // was already refused and a callback caught it (#145 Codex).
+        if (cap != null) {
+            cap.rethrowRefusal();
+            cap.requireStore(rt, what);
+        }
         if (payer instanceof WalletAccount || (cap != null && cap.walletOnly)) {
             throw new JoustException(what + ": needs a key-holding account to pay and sign; publish reference scripts and"
                     + " the verifiers before wallet users call the contract (ADR-0013)");
@@ -894,6 +905,10 @@ final class TxRunner {
             return submitPlain(built.tx(), what, submitted);
         } catch (PendingTransactionException e) {
             pending = true;
+            // Inside a composition, latched before any callback sees it: a callback that catches it must not let a later
+            // pass publish the prerequisite again with other inputs (#145 Codex).
+            Capture cap = CAPTURE.get();
+            if (cap != null) cap.refuse(e);
             throw e;
         } finally {
             // A pending publication may still land: it has no validity bound, so its inputs stay claimed for a while. So
@@ -917,7 +932,7 @@ final class TxRunner {
         byte[] cbor = serialised(signed, what);
         submitted[0] = true;   // the node may have it from here, unless it answers with a definite rejection
         try {
-            sendToNode(cbor, txHash, what, false);
+            sendToNode(cbor, txHash, what);
         } catch (SubmitException e) {
             submitted[0] = false;
             throw e;

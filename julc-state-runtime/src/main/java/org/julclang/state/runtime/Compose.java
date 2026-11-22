@@ -111,6 +111,7 @@ public final class Compose {
                         if (TxRunner.endsComposition(e)) throw e;   // sent, or refused: never run the rest (#145 Codex)
                         if (first == null) first = e;
                     }
+                    outer.rethrowRefusal();   // a refusal the call caught: no later call runs (#145 Codex)
                 }
             } finally {
                 outer.group = saved;
@@ -265,6 +266,7 @@ public final class Compose {
                     if (TxRunner.endsComposition(e)) throw e;   // sent, or refused: never run the rest (#145 Codex)
                     if (first == null) first = e;
                 }
+                cap.rethrowRefusal();   // a refusal the call caught: no later call runs, and none publishes (#145 Codex)
             }
         } finally {
             TxRunner.CAPTURE.remove();
@@ -278,7 +280,10 @@ public final class Compose {
     private void run(TxRunner.Capture cap) {
         TxRunner.CAPTURE.set(cap);
         try {
-            for (Runnable call : calls) call.run();
+            for (Runnable call : calls) {
+                call.run();
+                cap.rethrowRefusal();
+            }
         } finally {
             TxRunner.CAPTURE.remove();
         }
