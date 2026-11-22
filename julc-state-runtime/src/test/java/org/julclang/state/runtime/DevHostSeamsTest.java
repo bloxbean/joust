@@ -370,6 +370,32 @@ class DevHostSeamsTest {
         checkAssetCollection(wallet, JvmClaimStore.INSTANCE, false);
     }
 
+    @Test
+    void hostedAssetCollectionReadsTheWholeWalletListing() {
+        // #151 Codex review: a hosted payment read only pages 1-19 of 100, so a sole token input at 1,901 was "not held".
+        var chain = new Chain();
+        chain.paged = true;
+        var payer = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var rt = runtime(chain, b -> b.claimStore(new HostStore()));
+        var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        for (int i = 0; i < 1_900; i++) chain.wallet.add(utxo(payer.baseAddress(), 2_000_000));
+        var last = utxo(payer.baseAddress(), 9_000_000, new Amount("00".repeat(28) + "01", BigInteger.ONE));
+        chain.wallet.add(last);
+        var collected = new ArrayList<Utxo>();
+        var tx = new Tx() {
+            @Override
+            public Tx collectFrom(List<Utxo> inputs) {
+                collected.addAll(inputs);
+                return this;
+            }
+        };
+        rt.inScope(CallScope.hosted(10), () -> {
+            AssetTx.collectAssets(tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
+            return null;
+        });
+        assertEquals(List.of(last), collected);
+    }
+
     private void checkAssetCollection(Account payer, ClaimStore store, boolean collects) {
         var chain = new Chain();
         var rt = runtime(chain, b -> b.claimStore(store));

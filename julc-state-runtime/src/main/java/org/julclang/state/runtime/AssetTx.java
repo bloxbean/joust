@@ -305,9 +305,14 @@ final class AssetTx {
         var missing = new java.util.HashMap<String, BigInteger>();
         want.forEach((p, ts) -> ts.forEach((n, q) -> missing.put(p + n, q)));
         var picked = new ArrayList<Utxo>();
+        // A hosted call owns the complete call-local listing (ADR-0022 D6): read all of it, bounded by the host's read
+        // limits, rather than the first 19 pages of 100 (#151 Codex review).
+        boolean hosted = contract.runtime.hostedCall();
+        int pages = hosted ? 1 : 19;
+        int size = hosted ? Integer.MAX_VALUE : 100;
         try {
-            for (int page = 1; page < 20 && !missing.isEmpty(); page++) {
-                var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 100, page);
+            for (int page = 1; page <= pages && !missing.isEmpty(); page++) {
+                var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), size, page);
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (contract.runtime.claimStore().avoids(Designation.ref(u))) continue;

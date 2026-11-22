@@ -5,6 +5,7 @@ import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.address.AddressProvider;
 import com.bloxbean.cardano.client.address.Credential;
 import com.fasterxml.jackson.databind.node.NullNode;
+import com.bloxbean.cardano.client.transaction.spec.TransactionBody;
 import com.bloxbean.cardano.client.backend.api.*;
 import com.bloxbean.cardano.client.common.model.Network;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -268,25 +269,33 @@ final class Session implements Transport.Handler {
         var pay = request.has("pay") ? fields(request.get("pay"), "lovelace", "assets") : obj();
         if (pay.has("assets") && !pay.get("assets").isArray()) throw bad("expected pay.assets array");
         var amount = pay.has("lovelace") ? (BigInteger) JsonValues.fromJson(pay.get("lovelace"), BigInteger.class, "pay.lovelace") : BigInteger.ZERO;
-        var handle = c.adapter().handle(runtime);
-        new Prerequisites(c, handle, reads, reservations, true).requireReady();
-        // A field the call kind does not take is refused, not ignored (final review F-B4).
+        // A field the call kind does not take is refused, not ignored (final review F-B4), before any chain read. Only
+        // an owned spend names an object; an ownedInit derives its new one (#151 Codex review).
         if (kind.equals("init") && !request.path("instance").isMissingNode() && !request.get("instance").isNull())
             throw bad("init takes no instance");
-        if (!kind.startsWith("owned") && !request.path("object").isMissingNode() && !request.get("object").isNull())
+        boolean ownedSpend = kind.equals("ownedAction") || kind.equals("ownedDestroy");
+        if (!ownedSpend && !request.path("object").isMissingNode() && !request.get("object").isNull())
             throw bad(kind + " takes no object");
         String instance = kind.equals("init") ? null : instance(request);
-        String object = kind.startsWith("owned") ? request.path("object").textValue() : null;
+        String object = ownedSpend ? request.path("object").textValue() : null;
+        if (ownedSpend && (object == null || !object.matches("4f[0-9a-f]{56}"))) throw bad("invalid owned object id");
+        var handle = c.adapter().handle(runtime);
+        new Prerequisites(c, handle, reads, reservations, true).requireReady();
         String spent = null;
-        if (kind.equals("ownedAction") || kind.equals("ownedDestroy")) {
-            if (object == null || !object.matches("4f[0-9a-f]{56}")) throw bad("invalid owned object id");
+        if (ownedSpend) {
+            // The object's token is unique: an answer holding it twice (or with a quantity other than one) contradicts
+            // itself, and the runtime would take whichever comes first (#151 Codex review).
             var datums = new ContractDatums(c);
+            String unit = c.hash() + object;
+            int holdings = 0;
             for (var u : reads.outputs(handle.address())) {
-                if (u.getAmount().stream().noneMatch(a -> a.getUnit().equals(c.hash() + object))) continue;
+                var amounts = u.getAmount().stream().filter(a -> a.getUnit().equals(unit)).toList();
+                if (amounts.isEmpty()) continue;
+                if (++holdings > 1 || amounts.size() != 1 || !BigInteger.ONE.equals(amounts.get(0).getQuantity()))
+                    throw HostError.internal("inconsistentRead", "the listing holds object " + object + " more than once");
                 var item = datums.recognize(u);
                 if (!instance.equals(item.path("instance").textValue())) throw bad("object does not belong to instance");
                 spent = str(item, "ref");
-                break;
             }
         } else if (instance != null) {
             var target = handle.at(instance).utxo();
@@ -314,6 +323,7 @@ final class Session implements Transport.Handler {
         if (end > ceiling) throw HostError.refusal("window", "upper bound exceeds the call ceiling");
         var tx = built.transaction();
         reads.checkBalance(tx.getBody());
+        requireUnreservedReferences(tx.getBody(), reservations);
         var entry = reservations.prepare(Reservations.Body.of(tx, built.txHash(), network.getNetworkId()), reads.greatestTip);
         var result = out.withObject("/prepared").put("reservation", entry.id()).put("cbor", built.cbor())
                 .put("txHash", built.txHash()).put("validTo", end);
@@ -322,6 +332,20 @@ final class Session implements Transport.Handler {
         result.set("signers", JSON.valueToTree(built.requiredSigners()));
         if (!result.has("plan")) result.set("plan", JSON.valueToTree(built.plan()));
         return new Transport.Reply(out, () -> reservations.commit(entry, credential));
+    }
+
+    /**
+     * A body must not read state a live reservation intends to spend: it would be built against a version that may be
+     * gone when it lands (#151 Codex review: a withdrawal referencing the bank a pending setPaused spends). Bodies that
+     * only read the same input stay independent, since a reference reserves nothing.
+     */
+    static void requireUnreservedReferences(TransactionBody body, Reservations reservations) {
+        if (body.getReferenceInputs() == null) return;
+        for (var in : body.getReferenceInputs()) {
+            String ref = in.getTransactionId().toLowerCase(Locale.ROOT) + "#" + in.getIndex();
+            if (reservations.avoids(ref))
+                throw HostError.refusal("pending", "reference input " + ref + " is spent by a pending transaction");
+        }
     }
 
     private void checkAddressArguments(JsonNode n) {
