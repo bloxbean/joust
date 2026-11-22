@@ -339,7 +339,9 @@ final class AssetTx {
         if (!missing.isEmpty()) {
             throw new RequireException(what + ": the caller's base address does not hold " + missing);
         }
-        tx.collectFrom(picked);
+        // Through TxRunner.collect, so a composition counts them as spent: the payout funding pick then skips them
+        // rather than adding one twice (#151 Codex review).
+        for (Utxo u : picked) TxRunner.collect(tx, u, null);
     }
 
     /** Reserved token kinds (ADR-0007 D3): instance, object, intent. */

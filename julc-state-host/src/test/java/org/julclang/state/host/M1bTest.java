@@ -391,22 +391,27 @@ class M1bTest {
 
     /** #151 Codex review: a listing holding one object's token twice contradicts itself; never take the first. */
     @Test void anObjectHeldTwiceIsAnInconsistentRead() throws Exception {
-        var r = bankCall("ownedAction");
-        String object = r.params().at("/call/object").asText();
-        for (var e : new ArrayList<>(r.snapshot().utxos.entrySet())) {
-            var list = new ArrayList<>(e.getValue());
-            for (var u : e.getValue()) {
-                if (u.getAmount().stream().noneMatch(a -> a.getUnit().endsWith(object))) continue;
-                var stale = JSON.convertValue(JSON.valueToTree(u), Utxo.class);
-                stale.setTxHash("ab".repeat(32));
-                list.add(0, stale);
+        // Both provider orders, the stale copy naming another instance: the listing is refused, never its first holding.
+        for (boolean staleFirst : List.of(true, false)) {
+            var r = bankCall("ownedAction");
+            String object = r.params().at("/call/object").asText();
+            for (var e : new ArrayList<>(r.snapshot().utxos.entrySet())) {
+                var list = new ArrayList<>(e.getValue());
+                for (var u : e.getValue()) {
+                    if (u.getAmount().stream().noneMatch(a -> a.getUnit().endsWith(object))) continue;
+                    var stale = JSON.convertValue(JSON.valueToTree(u), Utxo.class);
+                    stale.setTxHash("ab".repeat(32));
+                    if (stale.getInlineDatum() != null) stale.setInlineDatum(stale.getInlineDatum().replace(
+                            r.params().at("/call/instance").asText(), "00".repeat(32)));
+                    if (staleFirst) list.add(0, stale); else list.add(stale);
+                }
+                r.snapshot().utxos.put(e.getKey(), list);
             }
-            r.snapshot().utxos.put(e.getKey(), list);
-        }
-        var entry = entry(org.julclang.state.examples.bank.BankClient.class);
-        try (var c = new Client(new Handshake(List.of(entry)))) {
-            success(c.rpc("initialize", init(entry)));
-            error("internal", "inconsistentRead", c.rpc("prepare", r.params(), r::answer));
+            var entry = entry(org.julclang.state.examples.bank.BankClient.class);
+            try (var c = new Client(new Handshake(List.of(entry)))) {
+                success(c.rpc("initialize", init(entry)));
+                error("internal", "inconsistentRead", c.rpc("prepare", r.params(), r::answer));
+            }
         }
     }
 }

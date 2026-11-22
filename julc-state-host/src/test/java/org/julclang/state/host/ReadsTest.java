@@ -231,6 +231,37 @@ class ReadsTest {
         assertFalse(table.avoids("spend"));
         assertFalse(table.avoids("collateral"));
     }
+    /** #151 Codex review: a listing holding a contract's unique token twice is refused before its tip counts. */
+    @Test void aListingHoldingAUniqueTokenTwiceReleasesNoReservation() {
+        String policy = "cd".repeat(28), object = policy + "4f" + "11".repeat(28);
+        java.util.function.IntFunction<ObjectNode> holding = i -> {
+            var n = obj().put("tx_hash", "%064x".formatted(i)).put("output_index", 0).put("address", ADDRESS);
+            n.putArray("amount").addObject().put("unit", object).put("quantity", 1);
+            return n;
+        };
+        for (var answer : List.of(JSON.createArrayNode().add(holding.apply(1)).add(holding.apply(2)),
+                JSON.createArrayNode().add(holding.apply(2)).add(holding.apply(1)),
+                JSON.createArrayNode().add(holding.apply(1).put("tx_hash", "%064x".formatted(3))
+                        .set("amount", JSON.createArrayNode().add(obj().put("unit", object).put("quantity", 2)))))) {
+            var table = new Reservations(3, false, 0);
+            table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of(), 0, 200), 190));
+            var reads = new Reads(req -> new Call.Answer(obj().set("result", value(answer, 204)), 128),
+                    199, 20, 10, 8192, 0, table::observe).uniqueTokens(Set.of(policy));
+            failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+            assertTrue(table.avoids("spend"), answer::toString);
+        }
+        // Another policy's tokens, and a fungible name of this one, may repeat.
+        var table = new Reservations(3, false, 0);
+        var fungible = JSON.createArrayNode();
+        for (int i = 1; i <= 2; i++) {
+            var n = holding.apply(i);
+            ((ObjectNode) n.withArray("amount").get(0)).put("unit", policy + "74");
+            fungible.add(n);
+        }
+        var reads = new Reads(req -> new Call.Answer(obj().set("result", value(fungible, 204)), 128),
+                199, 20, 10, 8192, 0, table::observe).uniqueTokens(Set.of(policy));
+        assertDoesNotThrow(() -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+    }
     @Test void hashesAreJsonStrings() {
         var table = new Reservations(3, false, 0);
         table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
