@@ -735,42 +735,95 @@ public final class DescribedContract {
                                 PlutusData shared, PlutusData args, PlutusData ctx) {
         if (!layout.hasMaps() || target == NONE) {
             var r = fn.run(transition, target, shared, args, ctx);
+            r.raise();
             if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
             return r.step();
         }
         var known = new java.util.LinkedHashMap<String, List<org.julclang.state.api.MapEntry>>();
+        var witnessed = new java.util.HashSet<String>();
         for (int idx : layout.maps()) {
             var m = layout.map(target, idx);
-            var list = known.computeIfAbsent(HexFormat.of().formatHex(m.root()), k -> new ArrayList<>());
-            for (var e : m.reads()) list.add(e);
+            String root = HexFormat.of().formatHex(m.root());
+            var list = known.computeIfAbsent(root, k -> new ArrayList<>());
+            for (var e : m.reads()) {
+                list.add(e);
+                witnessed.add(root + " " + HexFormat.of().formatHex(e.key()));
+            }
         }
-        for (int round = 1; round <= MAX_READ_ROUNDS; round++) {
+        java.util.function.Function<java.util.Map<String, List<org.julclang.state.api.MapEntry>>, TransitionFn.Run> runWith = k -> {
             var reads = new ArrayList<JulcList<org.julclang.state.api.MapEntry>>();
             for (int idx : layout.maps()) {
-                var list = known.get(HexFormat.of().formatHex(layout.map(target, idx).root()));
+                var list = k.getOrDefault(HexFormat.of().formatHex(layout.map(target, idx).root()), List.of());
                 JulcList<org.julclang.state.api.MapEntry> l = JulcList.empty();
                 for (int i = list.size() - 1; i >= 0; i--) l = l.prepend(list.get(i));
                 reads.add(l);
             }
-            var r = fn.run(transition, layout.opened(target, reads), shared, args, ctx);
+            return fn.run(transition, layout.opened(target, reads), shared, args, ctx);
+        };
+        for (int round = 1; round <= MAX_READ_ROUNDS; round++) {
+            var r = runWith.apply(known);
             boolean fresh = false;
-            for (String t : r.traces()) {
-                if (!t.startsWith("joust:read ")) continue;
-                String[] p = t.split(" ");
-                String root = p[1];
-                String key = p.length > 2 ? p[2] : "";
-                var list = known.computeIfAbsent(root, k -> new ArrayList<>());
-                if (list.stream().anyMatch(e -> HexFormat.of().formatHex(e.key()).equals(key))) continue;
-                list.add(org.julclang.state.api.MerkleMaps.read(HexFormat.of().parseHex(root), HexFormat.of().parseHex(key)));
+            for (String[] read : reads(r.traces())) {
+                var list = known.computeIfAbsent(read[0], k -> new ArrayList<>());
+                if (list.stream().anyMatch(e -> HexFormat.of().formatHex(e.key()).equals(read[1]))) continue;
+                // Tentative: recorded only if the final run's path reaches it (below).
+                list.add(org.julclang.state.runtime.MerkleSupport.peeking(() -> org.julclang.state.api.MerkleMaps.read(
+                        HexFormat.of().parseHex(read[0]), HexFormat.of().parseHex(read[1]))));
                 fresh = true;
             }
             if (!fresh) {
+                if (prune(known, witnessed, runWith)) r = runWith.apply(known);
+                r.raise();
                 if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
+                // The final run's reads join the withdrawal, in discovery order (the JVM host records exactly these).
+                for (var e : known.entrySet()) {
+                    for (var entry : e.getValue()) {
+                        String key = HexFormat.of().formatHex(entry.key());
+                        if (!witnessed.contains(e.getKey() + " " + key))
+                            org.julclang.state.api.MerkleMaps.read(HexFormat.of().parseHex(e.getKey()), entry.key());
+                    }
+                }
                 return r.step();
             }
         }
         throw new org.julclang.state.api.RequireException(transition + ": more than " + MAX_READ_ROUNDS
                 + " rounds of MerkleMap reads (ADR-0015 D3)");
+    }
+
+    /** The {@code joust:read} reports of a run's traces: {root hex, key hex}. */
+    static List<String[]> reads(List<String> traces) {
+        var out = new ArrayList<String[]>();
+        for (String t : traces) {
+            if (!t.startsWith("joust:read ")) continue;
+            String[] p = t.split(" ");
+            out.add(new String[] {p[1], p.length > 2 ? p[2] : ""});
+        }
+        return out;
+    }
+
+    /**
+     * Drops from {@code known} each discovered read (not one {@code witnessed} with the target) that the run's path does
+     * not reach: without it, a run that still looks the key up reports it, and a run that does not is unchanged by it. A
+     * key read under an earlier round's absent answer may be off the final path; its proof must not enter the signed
+     * claims (#160 Codex review). True if any read was dropped.
+     */
+    static boolean prune(java.util.Map<String, List<org.julclang.state.api.MapEntry>> known, java.util.Set<String> witnessed,
+                         java.util.function.Function<java.util.Map<String, List<org.julclang.state.api.MapEntry>>, TransitionFn.Run> runWith) {
+        boolean dropped = false;
+        for (var e : known.entrySet()) {
+            var list = e.getValue();
+            for (int i = list.size() - 1; i >= 0; i--) {
+                var entry = list.get(i);
+                String key = HexFormat.of().formatHex(entry.key());
+                if (witnessed.contains(e.getKey() + " " + key)) continue;
+                list.remove(i);
+                boolean reached = reads(runWith.apply(known).traces()).stream()
+                        .anyMatch(r -> r[0].equals(e.getKey()) && r[1].equals(key));
+                if (reached) list.add(i, entry);
+                else dropped = true;
+            }
+        }
+        return dropped;
     }
 
     /** The round limit of read discovery (ADR-0015 D3). */

@@ -111,6 +111,7 @@ public final class EngineSession {
             public PlutusData apply(String method, PlutusData target,
                     PlutusData shared, PlutusData args, PlutusData ctx) {
                 var run = run(method, target, shared, args, ctx);
+                run.raise();
                 if (run.step() == null) throw new RequireException(run.refusal());
                 return run.step();
             }
@@ -121,8 +122,12 @@ public final class EngineSession {
                     case STEP, REFUSAL -> result.run(); // Includes map-read discovery traces, also on a tentative refusal.
                     // A failing transition is the contract's own failure, as a Java exception is on the JVM host. The
                     // JVM runs the method without a budget: an exhausted one has no JVM counterpart (#154 review M2-5).
-                    case ERROR -> throw HostError.internal("internal", "transition failed: " + result.run().refusal());
-                    case BUDGET -> throw HostError.internal("evaluator", result.run().refusal());
+                    // Raised by discovery once the run's traces report no unknown read: a key it answered as absent
+                    // may change its path, as the JVM's would (#160 Codex review).
+                    case ERROR -> new Run(null, result.run().refusal(), result.run().traces(),
+                            HostError.internal("internal", "transition failed: " + result.run().refusal()));
+                    case BUDGET -> new Run(null, result.run().refusal(), result.run().traces(),
+                            HostError.internal("evaluator", result.run().refusal()));
                 };
             }
         }, true);

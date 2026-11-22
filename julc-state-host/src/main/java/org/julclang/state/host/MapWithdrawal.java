@@ -20,6 +20,23 @@ final class MapWithdrawal {
 
     record Restored(String claimsCbor, Set<String> policies) {}
 
+    /**
+     * The contracts a body touches by their tokens: a token at its own policy's script address (a state or owned-object
+     * continuation) or minted or burned (a lifecycle). A user token of another map contract in wallet change does not
+     * fence that contract (#160 Codex review).
+     */
+    static Set<String> bodyPolicies(Transaction tx) {
+        var out = new HashSet<String>();
+        for (var o : tx.getBody().getOutputs()) {
+            var payment = new Address(o.getAddress()).getPaymentCredential();
+            if (payment.isEmpty() || payment.get().getType() != com.bloxbean.cardano.client.address.CredentialType.Script) continue;
+            String script = HexFormat.of().formatHex(payment.get().getBytes());
+            for (var asset : o.getValue().getMultiAssets()) if (asset.getPolicyId().equals(script)) out.add(script);
+        }
+        if (tx.getBody().getMint() != null) for (var asset : tx.getBody().getMint()) out.add(asset.getPolicyId());
+        return out;
+    }
+
     static Restored restored(Transaction tx, String reward, Contracts catalog) {
         if (reward == null) return null;
         int index = pointer(tx, reward);
@@ -32,11 +49,7 @@ final class MapWithdrawal {
             for (var claim : claims.claims()) policies.add(HexFormat.of().formatHex(claim.policy()));
             // The hash identifies the body. Even a damaged journal witness must not remove
             // a fence for a real map token that body returns or burns.
-            var bodyPolicies = new HashSet<String>();
-            for (var out : tx.getBody().getOutputs())
-                for (var asset : out.getValue().getMultiAssets()) bodyPolicies.add(asset.getPolicyId());
-            if (tx.getBody().getMint() != null)
-                for (var asset : tx.getBody().getMint()) bodyPolicies.add(asset.getPolicyId());
+            var bodyPolicies = bodyPolicies(tx);
             for (var c : catalog.all().values()) if (c.maps() && bodyPolicies.contains(c.hash())) policies.add(c.hash());
             return new Restored(r.getData().serializeToHex(), Set.copyOf(policies));
         }

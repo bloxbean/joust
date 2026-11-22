@@ -22,7 +22,7 @@ record MapReads(Reads reads) {
             var page = reads.mapAnswer("assetHistory", request);
             if (point != null && !point.equals(page.get("tip"))) throw inconsistent("history chunks have different tips");
             point = page.get("tip");
-            if (page.has("absent") && cursor == null) { reads.accepted(); return List.of(); }
+            if (page.has("absent") && cursor == null) return List.of();
             var items = page.path("value");
             if (!items.isArray()) throw inconsistent("expected ordered asset history");
             for (var item : items) {
@@ -37,7 +37,8 @@ record MapReads(Reads reads) {
             if (page.has("more") && (cursor == null || cursor.isEmpty() || !cursors.add(cursor)))
                 throw inconsistent("invalid history cursor");
         } while (cursor != null);
-        reads.accepted();   // every page at one chain point, ordered (#149 Codex: only accepted reads advance reservations)
+        // Every page at one chain point, ordered. Its tip counts only once the rebuild reaches the needed root (#149,
+        // #160 Codex: only accepted reads advance reservations).
         return List.copyOf(txs);
     }
 
@@ -53,11 +54,20 @@ record MapReads(Reads reads) {
     }
 
     void rebuild(String unit, String verifier, NodeStore store) {
+        rebuild(unit, verifier, store, () -> true);
+    }
+
+    /**
+     * As above; {@code reached}: whether the replay reached the root the call needs. Checked before the answers' tip
+     * counts, so an incomplete history cannot advance reservations (#160 Codex review).
+     */
+    void rebuild(String unit, String verifier, NodeStore store, java.util.function.BooleanSupplier reached) {
         var withdrawals = new ArrayList<byte[]>();
         for (String tx : history(unit)) {
             var rs = reads.mapAnswer("redeemers", obj().put("txHash", tx)).path("value");
             if (!rs.isArray()) throw inconsistent("missing redeemers for history transaction");
             var pointers = new HashSet<String>();
+            boolean verified = false;
             for (var r : rs) {
                 String purpose = r.path("purpose").asText("");
                 var index = r.path("index");
@@ -67,6 +77,10 @@ record MapReads(Reads reads) {
                         || !pointers.add(purpose + index) || !hash.matches("[0-9a-f]{64}") || !script.matches("[0-9a-f]{56}"))
                     throw inconsistent("invalid transaction redeemer");
                 if (!purpose.equals("reward") || !script.equals(verifier)) continue;
+                // One reward account, one withdrawal: a second redeemer for the map verifier in one transaction
+                // contradicts the ledger, and would replay one datum twice (#160 Codex review).
+                if (verified) throw inconsistent("two map verifier withdrawals in one history transaction");
+                verified = true;
                 var datum = reads.mapAnswer("datum", obj().put("hash", hash)).path("value");
                 if (!datum.isTextual() || datum.textValue().isEmpty()) throw inconsistent("missing map redeemer datum");
                 // A redeemer lives inside a transaction, so it is never larger than one (16 KiB today); bound it well
@@ -82,7 +96,8 @@ record MapReads(Reads reads) {
         }
         try { MapHistory.replay(store, withdrawals); }
         catch (RuntimeException e) { throw inconsistent("malformed or inconsistent map history claim"); }
-        reads.accepted();   // the redeemers and datums replayed
+        if (!reached.getAsBoolean()) throw inconsistent("history does not reach the input datum root");
+        reads.accepted();   // the redeemers and datums replayed, up to the root the call needs
     }
 
     // A JSON string's text, else "" (which no hash pattern matches): a number's digits must not pass as hex.

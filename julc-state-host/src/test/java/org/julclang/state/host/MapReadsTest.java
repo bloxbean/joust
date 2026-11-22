@@ -26,6 +26,8 @@ class MapReadsTest {
             var batch = obj().put("complete", false);
             var item = batch.putArray("transactions").addObject().put("state", "prepared").put("cbor", original);
             var first = Client.success(client.rpc("restore", batch));
+            // #160 Codex: an ordinary reset between batches keeps the journaled claims of the live reservation.
+            Client.success(client.rpc("reset", obj().put("now", 0)));
             batch.put("complete", true);
             item.put("cbor", HexFormat.of().formatHex(changed));
             Client.error("bad", "conflict", client.rpc("restore", batch));
@@ -38,7 +40,8 @@ class MapReadsTest {
     @Test void badHistoryCannotSupplyAProofForTheSpentRoot() throws Exception {
         var recording = MapRecording.record("token", MapRecording.m3("token", "mint-2"));
         var original = RecordedSessionsTest.answers(recording);
-        for (String fault : List.of("duplicate", "future", "omitted", "missingRedeemer", "missingDatum", "hash", "unavailable", "failed")) {
+        for (String fault : List.of("duplicate", "future", "omitted", "missingRedeemer", "missingDatum", "hash", "unavailable", "failed",
+                "duplicateVerifier")) {
             var result = HostVectorsTest.run(recording, q -> {
                 ObjectNode a = original.apply(q).deepCopy();
                 switch (str(q,"kind")) {
@@ -51,6 +54,15 @@ class MapReadsTest {
                     case "redeemers" -> {
                         if (fault.equals("missingRedeemer")) { a.remove("value"); a.put("absent",true); }
                         if (fault.equals("unavailable")) { a.remove("value"); a.put("unsupported",true); }
+                        if (fault.equals("duplicateVerifier")) {   // #160 Codex: a second verifier entry, the same datum
+                            var rs = a.withArray("value");
+                            for (int i = 0; i < rs.size(); i++) if (rs.get(i).path("purpose").asText().equals("reward")) {
+                                var copy = ((ObjectNode) rs.get(i)).deepCopy();
+                                copy.put("index", rs.get(i).path("index").intValue() + 7);
+                                rs.add(copy);
+                                break;
+                            }
+                        }
                     }
                     case "datum" -> {
                         if (fault.equals("hash")) a.put("value","00");

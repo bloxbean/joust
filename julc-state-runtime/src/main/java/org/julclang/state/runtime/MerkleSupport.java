@@ -67,10 +67,27 @@ public final class MerkleSupport {
         return readCache.computeIfAbsent(hex(root) + ":" + hex(key), k -> prover.read(root, key));
     }
 
+    private static final ThreadLocal<Boolean> PEEKING = new ThreadLocal<>();
+
+    /**
+     * Runs {@code body} with lookups answered but not recorded: a tentative discovery run may read keys the final run
+     * never reaches, and only the final run's reads join the withdrawal (#160 Codex review).
+     */
+    public static <T> T peeking(Supplier<T> body) {
+        Boolean previous = PEEKING.get();
+        PEEKING.set(Boolean.TRUE);
+        try {
+            return body.get();
+        } finally {
+            if (previous == null) PEEKING.remove();
+            else PEEKING.set(previous);
+        }
+    }
+
     /** Runs {@code body} with lookups outside the read set served from the mirror and recorded. */
     public <T> T run(Supplier<T> body) {
         return MerkleMaps.withReads((root, key) -> {
-            readsByRoot.computeIfAbsent(hex(root), r -> new LinkedHashSet<>()).add(hex(key));
+            if (!Boolean.TRUE.equals(PEEKING.get())) readsByRoot.computeIfAbsent(hex(root), r -> new LinkedHashSet<>()).add(hex(key));
             return readProof(root, key).entry();
         }, body);
     }

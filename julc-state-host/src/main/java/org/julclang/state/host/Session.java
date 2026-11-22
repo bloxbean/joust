@@ -170,8 +170,8 @@ final class Session implements Transport.Handler {
                 .evaluator((tx, utxos) -> evaluating.get().evaluateTx(tx, utxos))
                 .claimStore(table).settlementSlots(config.margin).mapStore(store)
                 .unitProver(unit -> MerkleSupport.TrieProver.withHistory(store, root -> {
-                    new MapReads(reading.get()).rebuild(unit, runtime.mapVerifier().hash(), mapOverlay.get().historyStore());
-                    if (store.get(root) == null) throw MapReads.inconsistent("history does not reach the input datum root");
+                    new MapReads(reading.get()).rebuild(unit, runtime.mapVerifier().hash(), mapOverlay.get().historyStore(),
+                            () -> store.get(root) != null);
                 })).build();
     }
 

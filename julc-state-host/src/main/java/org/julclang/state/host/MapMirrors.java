@@ -94,7 +94,11 @@ final class MapMirrors {
     }
 
     void reset(Collection<Reservations.Entry> entries) {
-        restored.clear();
+        // A live restored reservation keeps its journaled claims across a reset between restore batches: a later batch
+        // is still compared with them (#160 Codex review).
+        var live = new HashSet<String>();
+        for (var entry : entries) if (entry.live()) live.add(entry.id());
+        restored.keySet().retainAll(live);
         confirmed.clear();
         promoted.clear();
         staged.clear();
