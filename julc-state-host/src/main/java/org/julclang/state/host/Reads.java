@@ -100,6 +100,7 @@ final class Reads {
                         if (snapshot.outputs.containsKey(ref)) throw inconsistent("known output reported absent");
                         snapshot.absent.add(ref);
                     } else checkOutput(v, null, ref);
+                    accepted();
                 }
                 target = local.getUtxoService();
             }
@@ -115,6 +116,7 @@ final class Reads {
                     var v = a.path("value");
                     if (!v.equals(a.get("tip"))) throw inconsistent("tip value differs from its chain point");
                     snapshot.tip = JSON.convertValue(v, Block.class);
+                    accepted();
                 }
                 target = local.getBlockService();
             }
@@ -129,6 +131,7 @@ final class Reads {
                     if (CostModelUtil.getCostModelFromProtocolParams(snapshot.protocolParams, Language.PLUTUS_V3)
                             .filter(model -> model.getCosts().length > 0).isEmpty())
                         throw HostError.internal("evaluator", "missing Plutus V3 cost model");
+                    accepted();
                 }
                 target = local.getEpochService();
             }
@@ -176,6 +179,7 @@ final class Reads {
                 throw inconsistent("invalid chunk cursor");
         } while (cursor != null);
         snapshot.utxos.put(address, values);
+        accepted();   // every chunk at one chain point
     }
 
     private static final java.util.regex.Pattern CANONICAL_UNIT =
@@ -243,7 +247,7 @@ final class Reads {
 
     private void script(String hash) {
         var v = value("script", "hash", hash);
-        if (v == null) { absentScripts.add(hash); return; }
+        if (v == null) { absentScripts.add(hash); accepted(); return; }
         String type = v.path("type").asText("");
         if (!Set.of("PlutusScriptV1", "PlutusScriptV2", "PlutusScriptV3").contains(type)) throw inconsistent("unknown script language");
         snapshot.scripts.put(hash, new Snapshot.Script(type, v.path("cborHex").asText("")));
@@ -257,14 +261,16 @@ final class Reads {
             if (!verified) snapshot.scripts.remove(hash);
         }
         if (!verified) throw inconsistent("script hash mismatch");
+        accepted();
     }
 
     Optional<Boolean> stakeRegistration(String credential) {
         return registration.computeIfAbsent(credential, k -> {
             var a = answer("stakeRegistration", obj().put("credential", k));
-            if (a.has("unsupported")) return Optional.empty();
+            if (a.has("unsupported")) { accepted(); return Optional.empty(); }
             var flag = a.path("value").path("registered");
             if (!flag.isBoolean()) throw inconsistent("invalid registration");
+            accepted();
             return Optional.of(flag.booleanValue());
         });
     }
@@ -298,14 +304,20 @@ final class Reads {
         lastHash = hash;
         lastHeight = height.longValue();
         greatestTip = slot.longValue();
-        observe.accept(greatestTip);
         if (now - greatestTip > ahead) throw HostError.bad("nowImplausible", "now is too far ahead of the observed tip");
         if (a.has("failed")) {
             if (!a.path("failed").path("message").isTextual()) throw inconsistent("invalid read failure");
+            accepted();
             throw new ReadFailed(kind, "", a.get("failed").get("message").textValue());
         }
-        if (a.has("unsupported") && !kind.equals("stakeRegistration")) throw new Unsupported(kind);
+        if (a.has("unsupported") && !kind.equals("stakeRegistration")) {
+            accepted();
+            throw new Unsupported(kind);
+        }
         return a;
     }
+    // D8: a tip reaches the reservation table only from a read the host accepted, after its kind's own checks
+    // (one chain point across chunks, output and script evidence). A rejected answer releases nothing (#149 Codex).
+    private void accepted() { observe.accept(greatestTip); }
     private static HostError inconsistent(String reason) { return HostError.internal("inconsistentRead", reason); }
 }

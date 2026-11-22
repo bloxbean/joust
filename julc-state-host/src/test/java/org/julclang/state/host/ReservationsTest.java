@@ -163,4 +163,25 @@ class ReservationsTest {
         String unbounded = HexFormat.of().formatHex(tx.serialize());
         code("unbounded",() -> Reservations.Body.decode(unbounded, 0));
     }
+    @Test void restoreFindsALiveBodyFromAnEarlierBatchOrTheSameOne() throws Exception {
+        String cbor = IntegrationTest.record().fixture().get("unsignedTx").asText();
+        var decoded = Reservations.Body.decode(cbor, 0);
+        var fresh = new Reservations(10, true, 0);
+        var p = obj().put("complete", false);
+        var txs = p.putArray("transactions");
+        txs.addObject().put("state", "shallow").put("slot", decoded.to() - 1).put("cbor", cbor);
+        txs.addObject().put("state", "shallow").put("slot", decoded.to() - 1).put("cbor", cbor);
+        var first = fresh.restore(p);
+        assertEquals(first.value().at("/reservations/0"), first.value().at("/reservations/1"));
+        first.commit().run();
+        // A later batch finds the committed entry; a different state for it, in a batch, is a conflict.
+        var later = obj().put("complete", false);
+        later.putArray("transactions").addObject().put("state", "prepared").put("cbor", cbor);
+        code("conflict", () -> fresh.restore(later));
+        txs.remove(1);
+        var repeat = fresh.restore(p);
+        assertEquals(first.value().at("/reservations/0"), repeat.value().at("/reservations/0"));
+        // Nothing is staged by a refused or an uncommitted batch.
+        decoded.inputs().forEach(ref -> assertTrue(fresh.avoids(ref)));
+    }
 }
