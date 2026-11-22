@@ -12,7 +12,7 @@
         },
         "clock" : {
           "zeroSlot" : 0,
-          "zeroTimeMs" : 1795146252000,
+          "zeroTimeMs" : 1795339145000,
           "slotLengthMs" : 1000
         },
         "network" : {
@@ -62,7 +62,7 @@
         },
         "clock" : {
           "zeroSlot" : 0,
-          "zeroTimeMs" : 1795146252000,
+          "zeroTimeMs" : 1795339145000,
           "slotLengthMs" : 1000
         },
         "network" : {
@@ -110,8 +110,8 @@
         "contracts" : [ {
           "name" : "org.julclang.state.examples.bank.Bank",
           "scriptHashes" : {
-            "spend" : "0fc627f60492e1009acd8c946366166a9be6cf0d9bef7bd4a02692cd",
-            "mint" : "0fc627f60492e1009acd8c946366166a9be6cf0d9bef7bd4a02692cd"
+            "spend" : "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671",
+            "mint" : "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671"
           },
           "served" : true
         } ]
@@ -155,8 +155,8 @@
         "contracts" : [ {
           "name" : "org.julclang.state.examples.bank.Bank",
           "scriptHashes" : {
-            "spend" : "0fc627f60492e1009acd8c946366166a9be6cf0d9bef7bd4a02692cd",
-            "mint" : "0fc627f60492e1009acd8c946366166a9be6cf0d9bef7bd4a02692cd"
+            "spend" : "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671",
+            "mint" : "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671"
           },
           "served" : true
         } ]

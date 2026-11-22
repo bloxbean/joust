@@ -72,7 +72,7 @@ for (const file of readdirSync(dir).filter(f => f.endsWith('.json'))) {
     else if (falseRefusal) assert.deepEqual([...new Set(problems)], [falseRefusal],
       `the page's refusal of ${v.mutation} changed: remove it from pageFalseRefusals once it is accepted`);
     else assert.equal(problems.length === 0, v.violations.length === 0, problems.join('; '));
-    if (file === 'dapp-0003.json' || file === 'dapp-0034.json') {
+    if (file === 'dapp-0003.json' || file === 'dapp-0015.json') {
       assert.ok(report.targetRef);
       assert.equal(report.redeemer.by, BigInt(call.args.by));
     }
