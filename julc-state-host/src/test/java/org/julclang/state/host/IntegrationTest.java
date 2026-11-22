@@ -157,6 +157,18 @@ class IntegrationTest {
             error("bad","request",c.rpc("prepare",req));
         }
     }
+    @Test void paymentAssetsOfAnotherShapeAreRefusedBeforeAnyRead() throws Exception {
+        var r = record();
+        try (var c = session()) {
+            success(c.rpc("initialize",init()));
+            for (var shape : List.<JsonNode>of(obj(), JSON.nullNode(), JSON.getNodeFactory().textNode("[]"))) {
+                var req = r.params().deepCopy();
+                req.withObject("/call").withObject("/pay").set("assets", shape);
+                error("bad","request",c.rpc("prepare",req));   // c.rpc fails on any chain read
+            }
+            assertEquals(r.fixture().get("txHash"),success(c.rpc("prepare",r.params(),r::answer)).at("/prepared/txHash"));
+        }
+    }
     @Test void prepareHasNoFileOrSocketIo(@TempDir Path dir) throws Exception {
         var r = record();
         try (var c = session(); var recording = new Recording()) {
