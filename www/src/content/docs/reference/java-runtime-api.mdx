@@ -81,7 +81,7 @@ Contracts with keyed types (ADR-0016) get, per keyed type `T`, `<t>List()`, `<t>
 | `maxRetries(int)` | 3 | Rebuilds after the node rejected a call because the state moved |
 | `confirmTimeout(Duration)` | 90 seconds | Wait for a submitted transaction to appear on chain |
 | `address(byte[] pkh, String bech32)` | none | Pay this key hash at this address instead of its enterprise address |
-| `claimStore(ClaimStore)` | `ClaimStore.jvm()` | Where the runtime keeps the claims of what it builds and how they expire; the default is the JVM's static store, released by the machine clock |
+| `claimStore(ClaimStore)` | the JVM's store | Where the runtime keeps the claims of what it builds and how they expire; the default is the JVM's static store, released by the machine clock, which the runtime does not hand out |
 | `log(Consumer<String>)` | no-op | Progress messages |
 | `onBuilt(Consumer<BuiltTx>)` | none | Called with every transaction built, before it is submitted or returned |
 | `referenceScript(Utxo)` | none | A known reference-script output; contracts with that script hash use it instead of scanning their address |

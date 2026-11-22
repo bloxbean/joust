@@ -63,7 +63,7 @@ class DevHostSeamsTest {
         assertArrayEquals(new long[]{60, 900}, rt.pageLimits());
         assertEquals(1_000, rt.chainTime().tipSlot(), "the provider's tip");
         assertSame(rt.chainTime(), rt.chainTime(), "the builder's clock itself");
-        assertSame(ClaimStore.jvm(), rt.claimStore(), "the JVM's store by default");
+        assertSame(JvmClaimStore.INSTANCE, rt.claimStore(), "the JVM's store by default");
     }
 
     @Test
@@ -240,7 +240,7 @@ class DevHostSeamsTest {
         var d = Designation.reserve(rt, payer, "test", Set.of());
         try {
             assertTrue(Designation.isDesignated(d.ref()), "in the static store, as before");
-            assertTrue(ClaimStore.jvm().isDesignated(d.ref()));
+            assertTrue(JvmClaimStore.INSTANCE.isDesignated(d.ref()));
         } finally {
             d.release();
         }
@@ -384,7 +384,7 @@ class DevHostSeamsTest {
 
     @Test
     void releasingADesignationCancelsItsTimerAndAcquisitionHandlesElapsedExpiry() throws Exception {
-        ClaimStore store = ClaimStore.jvm();
+        ClaimStore store = JvmClaimStore.INSTANCE;
         String renewed = hash() + "#0";
         String elapsed = hash() + "#0";
         try {
@@ -506,6 +506,33 @@ class DevHostSeamsTest {
     }
 
     @Test
+    void anInputHasOneKey_forEverySpellingCclSerialisesToTheSameBytes() throws Exception {
+        // CCL serialises an id through HexUtil.decodeHexString: a leading 0x is dropped and any Unicode hex digit is
+        // read (Character.digit). Every such spelling is the same ledger input, so it has one reservation key (#145 Codex).
+        String lower = "ab".repeat(32);
+        var canonical = new TransactionInput(lower, 0);
+        String fullwidth = lower.replace('a', 'ａ').replace('b', 'ｂ');   // fullwidth a and b
+        for (String spelling : List.of("0x" + lower, "0x" + lower.toUpperCase(java.util.Locale.ROOT), fullwidth)) {
+            var in = new TransactionInput(spelling, 0);
+            assertEquals(canonical.serialize(), in.serialize(), spelling + " serialises as the same input");
+            assertEquals(Designation.ref(canonical), Designation.ref(in), spelling);
+            var u = utxo(new Account(Networks.testnet()).baseAddress(), 5_000_000);
+            u.setTxHash(spelling);
+            assertEquals(Designation.ref(canonical), Designation.ref(u), spelling);
+            var store = new HostStore();
+            store.avoid.add(Designation.ref(canonical));
+            assertFalse(Designation.pickable(store, u, null), spelling + ": the reservation holds it");
+            // The final body check (spent inputs and collateral) uses the same key.
+            var body = spending(u);
+            body.getBody().setCollateral(new ArrayList<>(List.of(new TransactionInput(spelling, 0))));
+            var other = new HostStore();
+            other.avoid.add(Designation.ref(canonical));
+            assertThrows(ReservedInputException.class,
+                    () -> Designation.build(other, u.getAddress(), null, () -> body), spelling + ": refused at the final check");
+        }
+    }
+
+    @Test
     void aScopedCallFindsVerifiersAndReferenceScriptsAfresh() {
         var chain = new Chain();
         var rt = runtime(chain, b -> b);
@@ -528,6 +555,126 @@ class DevHostSeamsTest {
         assertNotNull(v.reference());
         chain.script.clear();
         assertNotNull(v.reference(), "an unscoped hit is cached");
+    }
+
+    @Test
+    void aScopedCallUsesAPinnedReferenceScriptOnlyWhileTheAnswerShowsIt() {
+        // Builder.referenceScript pins a UTxO; a rollback after the runtime was built may remove it (#145 Codex review).
+        var chain = new Chain();
+        var probe = runtime(chain, b -> b);
+        var spec = ContractSpec.described("test", "4100", 0, 0, 0, false);
+        String holder = probe.outputVerifier().holder(), vhash = probe.outputVerifier().hash();
+        String address = new StateContractHandle<>(probe, spec).address(), policy = new StateContractHandle<>(probe, spec).policyId();
+        var vpin = utxo(holder, 30_000_000);
+        vpin.setReferenceScriptHash(vhash);
+        var cpin = utxo(address, 30_000_000);
+        cpin.setReferenceScriptHash(policy);
+        var rt = runtime(chain, b -> b.referenceScript(vpin).referenceScript(cpin));
+        var v = rt.outputVerifier();
+        var contract = new StateContractHandle<>(rt, spec);
+        assertNull(rt.inScope(CallScope.at(10), v::reference), "the pinned verifier is not on chain in this answer");
+        assertNull(rt.inScope(CallScope.at(10), contract::findReferenceScript), "nor the pinned reference script");
+        var vother = utxo(holder, 30_000_000);
+        vother.setReferenceScriptHash(vhash);
+        var cother = utxo(address, 30_000_000);
+        cother.setReferenceScriptHash(policy);
+        chain.script.addAll(List.of(vother, cother, vpin, cpin));
+        assertEquals(Designation.ref(vpin), Designation.ref(rt.inScope(CallScope.at(11), v::reference)), "the pin, once shown");
+        assertEquals(Designation.ref(cpin), Designation.ref(rt.inScope(CallScope.at(11), contract::findReferenceScript)));
+        chain.script.removeAll(List.of(vpin, cpin));
+        assertEquals(Designation.ref(vother), Designation.ref(rt.inScope(CallScope.at(12), v::reference)), "else the answer's own");
+        assertEquals(Designation.ref(cother), Designation.ref(rt.inScope(CallScope.at(12), contract::findReferenceScript)));
+        chain.script.clear();
+        assertSame(vpin, v.reference(), "unscoped callers trust the pin, as before");
+        assertSame(cpin, contract.findReferenceScript());
+    }
+
+    @Test
+    void theJvmsStoreIsNotHandedOut() throws Exception {
+        // The default store is shared by every runtime of the JVM: handing it out would let one runtime's caller end
+        // another's claims or designations (#145 Codex review). A host keeps the store it gave the builder.
+        for (var m : ClaimStore.class.getMethods()) {
+            assertFalse(java.lang.reflect.Modifier.isStatic(m.getModifiers()) && ClaimStore.class.isAssignableFrom(m.getReturnType()),
+                    "no public static accessor: " + m);
+        }
+        assertFalse(java.lang.reflect.Modifier.isPublic(StateRuntime.class.getDeclaredMethod("claimStore").getModifiers()),
+                "the runtime's store is internal");
+        assertFalse(java.lang.reflect.Modifier.isPublic(JvmClaimStore.class.getModifiers()));
+    }
+
+    @Test
+    void aCompositionRefusesACallOfARuntimeWithAnotherStore() {
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var hostStore = new HostStore();
+        var hosted = runtime(chain, b -> b.claimStore(hostStore));
+        var plain = runtime(chain, b -> b);
+        java.util.function.Function<StateRuntime, Runnable> call = rt -> () ->
+                new TxRunner(rt).submit(TxRunner.newTx(), payer, null, new byte[0][], null, List.of(), null, "a call");
+        for (var pair : List.of(List.of(plain, hosted), List.of(hosted, plain))) {
+            var e = assertThrows(JoustException.class, () -> Compose.of(pair.get(0), payer).add(call.apply(pair.get(1))).submit());
+            assertTrue(e.getMessage().contains("another claim store"), e.getMessage());
+            var nested = assertThrows(JoustException.class, () -> Compose.of(pair.get(0), payer)
+                    .add(() -> Compose.of(pair.get(1), payer).add(() -> fail("never runs")).submit()).submit());
+            assertTrue(nested.getMessage().contains("a nested composition belongs to a runtime with another claim store"), nested.getMessage());
+        }
+        // Two runtimes on the JVM's store share its reservations: composing them is allowed, as before.
+        var other = runtime(chain, b -> b);
+        var e = assertThrows(RuntimeException.class, () -> Compose.of(plain, payer).add(call.apply(other)).submit());
+        assertFalse(String.valueOf(e.getMessage()).contains("another claim store"), "gets as far as building: " + e.getMessage());
+        assertTrue(hostStore.claims.isEmpty() && hostStore.designated.isEmpty(), "nothing claimed in the host's store");
+    }
+
+    /** A node that accepts every transaction, and a confirmation read that ends the call. */
+    static com.bloxbean.cardano.client.backend.api.BackendService acceptingThenFailing(Chain chain, Error onConfirm,
+                                                                                       java.util.concurrent.atomic.AtomicInteger submitted) {
+        var base = chain.backend();
+        var txs = (com.bloxbean.cardano.client.backend.api.TransactionService) java.lang.reflect.Proxy.newProxyInstance(
+                DevHostSeamsTest.class.getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.TransactionService.class},
+                (p, m, a) -> switch (m.getName()) {
+                    case "submitTransaction" -> {
+                        submitted.incrementAndGet();
+                        yield com.bloxbean.cardano.client.api.model.Result.success("ok").withValue("h");
+                    }
+                    case "getTransaction" -> throw onConfirm;
+                    default -> throw new UnsupportedOperationException(m.getName());
+                });
+        return (com.bloxbean.cardano.client.backend.api.BackendService) java.lang.reflect.Proxy.newProxyInstance(
+                DevHostSeamsTest.class.getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.BackendService.class},
+                (p, m, a) -> m.getName().equals("getTransactionService") ? txs : m.invoke(base, a));
+    }
+
+    @Test
+    void aConfirmationReadThatEndsTheCall_leavesTheSubmittedTransactionPending_withItsInputsClaimed() {
+        // The node took the transaction; the first confirmation read failed (a host's ReadFailed). The transaction may
+        // land: the outcome is pending with its hash, the read failure its cause, and its inputs stay claimed (#145 Codex).
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var u = utxo(payer.baseAddress(), 30_000_000);
+        var failed = new ReadFailed("transaction", "h", "503");
+        var submitted = new java.util.concurrent.atomic.AtomicInteger();
+        var store = new HostStore();
+        var rt = StateRuntime.builder(acceptingThenFailing(chain, failed, submitted)).chainTime(chain.time())
+                .network(Networks.testnet()).claimStore(store).build();
+        var built = Designation.build(store, payer.baseAddress(), null, () -> spending(u));
+        var e = assertThrows(PendingTransactionException.class, () -> new TxRunner(rt).submitPlain(built, "publish"));
+        assertSame(failed, e.getCause());
+        assertEquals(com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(built.tx()), e.txHash());
+        assertEquals(1, submitted.get());
+        assertTrue(store.claims.contains(built.claim()), "still claimed");
+        assertEquals(Long.MAX_VALUE, store.expiries.get(built.claim()).untilSlot(), "until the unbounded publication's bound");
+        // A signed transaction submitted from a wallet's witnesses: the same pending outcome, with the hash.
+        var signed = assertThrows(PendingTransactionException.class, () -> new TxRunner(rt).submitSigned(spending(u), "submit"));
+        assertSame(failed, signed.getCause());
+        assertEquals(2, submitted.get());
+        // Any other Error after the node took it still keeps the claim (it may land); the Error itself is rethrown.
+        var oom = new OutOfMemoryError("test");
+        var store2 = new HostStore();
+        var rt2 = StateRuntime.builder(acceptingThenFailing(chain, oom, submitted)).chainTime(chain.time())
+                .network(Networks.testnet()).claimStore(store2).build();
+        var built2 = Designation.build(store2, payer.baseAddress(), null, () -> spending(u));
+        assertSame(oom, assertThrows(OutOfMemoryError.class, () -> new TxRunner(rt2).submitPlain(built2, "publish")));
+        assertTrue(store2.claims.contains(built2.claim()) && store2.expiries.containsKey(built2.claim()), "still claimed");
     }
 
     @Test

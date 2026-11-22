@@ -123,24 +123,31 @@ public final class VerifierHandle {
         boolean scoped = runtime.callScope() != null;
         if (!scoped && reference != null) return reference;
         var pinned = runtime.referenceScript(hash);
-        if (pinned != null && holder.equals(pinned.getAddress())) {
-            if (!scoped) reference = pinned;
+        if (pinned != null && !holder.equals(pinned.getAddress())) pinned = null;
+        if (pinned != null && !scoped) {
+            reference = pinned;
             return pinned;
         }
+        // A scoped call trusts only this call's answers: a pin is used once the answer shows it (a rollback may have
+        // removed it since the runtime was built; #145 Codex review), else the answer's own reference script.
+        Utxo first = null;
         try {
             var r = runtime.backend().getUtxoService().getUtxos(holder, 20, 1);
             if (r.isSuccessful() && r.getValue() != null) {
                 for (Utxo u : r.getValue()) {
-                    if (hash.equalsIgnoreCase(u.getReferenceScriptHash())) {
+                    if (!hash.equalsIgnoreCase(u.getReferenceScriptHash())) continue;
+                    if (pinned == null) {
                         if (!scoped) reference = u;
                         return u;
                     }
+                    if (Designation.ref(u).equals(Designation.ref(pinned))) return u;
+                    if (first == null) first = u;
                 }
             }
         } catch (Exception e) {
             throw new JoustException("cannot look up the " + label, e);
         }
-        return null;
+        return first;
     }
 
     private BigInteger deposit() {
