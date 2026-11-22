@@ -137,8 +137,9 @@ public final class VerifierHandle {
         // removed it since the runtime was built; #145 Codex review), else the answer's own reference script.
         Utxo first = null;
         try {
-            // The first page, as always; looking for a pin, every page until the answer runs out (#145 Codex).
-            for (int page = 1; page == 1 || pinned != null && page <= PIN_PAGES; page++) {
+            // Unscoped, the first page, as always; a scoped call, or one looking for a pin, every page until the answer runs
+            // out: absence must be the answer's, not a page cut (#145 Codex).
+            for (int page = 1; page == 1 || (scoped || pinned != null) && page <= PIN_PAGES; page++) {
                 var r = runtime.backend().getUtxoService().getUtxos(holder, 20, page);
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {

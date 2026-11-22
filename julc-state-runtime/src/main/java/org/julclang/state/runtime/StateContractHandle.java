@@ -235,8 +235,9 @@ public final class StateContractHandle<S> {
         // removed it since the runtime was built; #145 Codex review), else the answer's own reference script.
         Utxo first = null;
         try {
-            // 19 pages, as always; looking for a pin, every page until the answer runs out (#145 Codex).
-            for (int page = 1; page < 20 || pinned != null && page <= VerifierHandle.PIN_PAGES; page++) {
+            // Unscoped, 19 pages, as always; a scoped call, or one looking for a pin, every page until the answer runs out:
+            // absence must be the answer's, not a page cut (#145 Codex).
+            for (int page = 1; page < 20 || (scoped || pinned != null) && page <= VerifierHandle.PIN_PAGES; page++) {
                 var r = runtime.backend().getUtxoService().getUtxos(address, 100, page);
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {

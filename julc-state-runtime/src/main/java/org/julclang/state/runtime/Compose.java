@@ -108,6 +108,7 @@ public final class Compose {
                     try {
                         call.run();
                     } catch (RuntimeException e) {
+                        if (TxRunner.endsComposition(e)) throw e;   // sent, or refused: never run the rest (#145 Codex)
                         if (first == null) first = e;
                     }
                 }
@@ -259,6 +260,7 @@ public final class Compose {
                 try {
                     call.run();
                 } catch (RuntimeException e) {
+                    if (TxRunner.endsComposition(e)) throw e;   // sent, or refused: never run the rest (#145 Codex)
                     if (first == null) first = e;
                 }
             }
