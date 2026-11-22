@@ -10,6 +10,13 @@ import static org.julclang.state.host.Wire.*;
 
 /** Verified descriptions and the generated entry points they describe (D4/D5/D16). */
 record Contracts(Map<String, Contract> all) {
+    /** Every catalogued contract's policy (its script hash), for the unique-token check of Reads. */
+    Set<String> policies() {
+        var out = new HashSet<String>();
+        for (var c : all.values()) if (c.hash() != null) out.add(c.hash());
+        return out;
+    }
+
     record Contract(String name, JsonNode description, ContractSpec<?> spec, ServedContract adapter,
                     String hash, String unsupported) {
         JsonNode meta(String kind, String method) {

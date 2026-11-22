@@ -160,7 +160,8 @@ final class Session implements Transport.Handler {
             runtime.chainTime().slotToPosixMs(now + ttl);
         } catch (ArithmeticException overflow) { throw bad("call window exceeds the clock range"); }
         var reads = new Reads(params -> execution.reverse("chain/read", params), now, limits.ahead, limits.reads,
-                limits.bytes, network.getNetworkId(), tip -> execution.whileLive(() -> reservations.observe(tip)));
+                limits.bytes, network.getNetworkId(), tip -> execution.whileLive(() -> reservations.observe(tip)))
+                .uniqueTokens(contracts.policies());
         reading.set(reads);
         evaluating.set(new JulcTransactionEvaluator(new DefaultUtxoSupplier(backend.getUtxoService()),
                 new DefaultProtocolParamsSupplier(backend.getEpochService()), new DefaultScriptSupplier(backend.getScriptService()),
@@ -287,13 +288,15 @@ final class Session implements Transport.Handler {
             // itself, and the runtime would take whichever comes first (#151 Codex review).
             var datums = new ContractDatums(c);
             String unit = c.hash() + object;
-            int holdings = 0;
+            // Reads refuses a listing holding the token twice before its tip counts; this only finds the one holding.
+            com.bloxbean.cardano.client.api.model.Utxo holding = null;
             for (var u : reads.outputs(handle.address())) {
-                var amounts = u.getAmount().stream().filter(a -> a.getUnit().equals(unit)).toList();
-                if (amounts.isEmpty()) continue;
-                if (++holdings > 1 || amounts.size() != 1 || !BigInteger.ONE.equals(amounts.get(0).getQuantity()))
-                    throw HostError.internal("inconsistentRead", "the listing holds object " + object + " more than once");
-                var item = datums.recognize(u);
+                if (u.getAmount().stream().noneMatch(a -> a.getUnit().equals(unit))) continue;
+                if (holding != null) throw HostError.internal("inconsistentRead", "the listing holds object " + object + " more than once");
+                holding = u;
+            }
+            if (holding != null) {
+                var item = datums.recognize(holding);
                 if (!instance.equals(item.path("instance").textValue())) throw bad("object does not belong to instance");
                 spent = str(item, "ref");
             }

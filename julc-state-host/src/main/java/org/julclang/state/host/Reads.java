@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.state.runtime.snapshot.*;
 import java.lang.reflect.*;
+import java.math.BigInteger;
 import java.util.*;
 import java.util.function.LongConsumer;
 import java.util.function.Supplier;
@@ -35,6 +36,18 @@ final class Reads {
     private final Set<String> absentScripts = new HashSet<>();
     private final Map<String, Optional<Boolean>> registration = new HashMap<>();
     private final Set<String> queriedOutputs = new HashSet<>();
+
+    /** Contract policies whose reserved-name tokens (instances, objects, intents, keyed) are unique (ADR-0007 D3). */
+    private Set<String> uniquePolicies = Set.of();
+
+    /**
+     * Refuse, before its tip counts, a listing that holds a unique token of one of {@code policies} twice or in a quantity
+     * other than one: such an answer contradicts itself (#151 Codex review).
+     */
+    Reads uniqueTokens(Set<String> policies) {
+        uniquePolicies = Set.copyOf(policies);
+        return this;
+    }
 
     Reads(Peer peer, long now, long ahead, long maxCount, long maxBytes, int network, LongConsumer observe) {
         this.peer = peer;
@@ -180,8 +193,19 @@ final class Reads {
             if (a.has("more") && (cursor == null || cursor.isEmpty() || !cursors.add(cursor)))
                 throw inconsistent("invalid chunk cursor");
         } while (cursor != null);
+        var unique = new HashSet<String>();
+        for (var u : values) for (var a : u.getAmount()) {
+            String unit = a.getUnit();
+            if (unit.length() < 56 || !uniquePolicies.contains(unit.substring(0, 56)) || !reservedName(unit.substring(56))) continue;
+            if (!BigInteger.ONE.equals(a.getQuantity()) || !unique.add(unit)) throw inconsistent("the listing holds a unique token twice");
+        }
         snapshot.utxos.put(address, values);
         accepted();   // every chunk at one chain point
+    }
+
+    /** ADR-0007 D3: an instance (32 bytes), owned object (29, 0x4F), intent (29, 0x49) or keyed object (29, 0x4B) name. */
+    static boolean reservedName(String hex) {
+        return hex.length() == 64 || hex.length() == 58 && (hex.startsWith("4f") || hex.startsWith("49") || hex.startsWith("4b"));
     }
 
     private static final java.util.regex.Pattern CANONICAL_UNIT =
