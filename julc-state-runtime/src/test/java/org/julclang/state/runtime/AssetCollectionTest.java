@@ -384,4 +384,72 @@ class AssetCollectionTest {
         snapshot.utxos.put(wallet.baseAddress(), list);
         assertEquals(Designation.ref(plain), Designation.ref(contract.pickSeedFor(wallet)));
     }
+
+    // ---------------------------------------------------------------- #165 Codex round 5
+
+    @Test
+    void aSeedOnThe21stPageIsFound() {
+        // 1,000 UTxOs carrying reference scripts (20 pages of 50), then an ordinary one on page 21.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var list = new ArrayList<Utxo>();
+        for (int i = 0; i < 1_000; i++) {
+            var u = utxo(wallet.baseAddress(), "00", 5_000_000, 0);
+            u.setTxHash(String.format("%064x", 10_000 + i));
+            u.setReferenceScriptHash("11".repeat(28));
+            list.add(u);
+        }
+        var plain = utxo(wallet.baseAddress(), "f2", 5_000_000, 0);
+        list.add(plain);
+        snapshot.utxos.put(wallet.baseAddress(), list);
+        assertEquals(Designation.ref(plain), Designation.ref(contract.pickSeedFor(wallet)));
+    }
+
+    @Test
+    void aPaymentTokenOnThe20thPageIsCollected() {
+        // 1,900 lovelace-only UTxOs (19 pages of 100), then the token on page 20.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var list = new ArrayList<Utxo>();
+        for (int i = 0; i < 1_900; i++) {
+            var u = utxo(wallet.baseAddress(), "00", 2_000_000, 0);
+            u.setTxHash(String.format("%064x", 20_000 + i));
+            list.add(u);
+        }
+        var token = utxo(wallet.baseAddress(), "f3", 2_000_000, 100);
+        list.add(token);
+        snapshot.utxos.put(wallet.baseAddress(), list);
+        assertEquals(List.of(token), collect(wallet, 100, null));
+    }
+
+    @Test
+    void aPageTheProviderFailsIsAnErrorNotTheEnd() {
+        // Page 1 full, without the token and without a seed (each carries a reference script), page 2 unanswered: not
+        // "the wallet does not hold it", nor "no UTxO".
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var page1 = new ArrayList<Utxo>();
+        for (int i = 0; i < 100; i++) {
+            var u = utxo(wallet.baseAddress(), "00", 2_000_000, 0);
+            u.setReferenceScriptHash("11".repeat(28));
+            u.setTxHash(String.format("%064x", 30_000 + i));
+            page1.add(u);
+        }
+        var failing = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
+                (proxy, m, args) -> {
+                    if (m.getName().equals("getUtxos") && args.length == 3) {
+                        return (Integer) args[2] == 1 ? com.bloxbean.cardano.client.api.model.Result.success("ok").withValue(page1)
+                                : com.bloxbean.cardano.client.api.model.Result.error("503");
+                    }
+                    throw new UnsupportedOperationException(m.getName());
+                });
+        var backend = (com.bloxbean.cardano.client.backend.api.BackendService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.BackendService.class},
+                (proxy, m, args) -> m.getName().equals("getUtxoService") ? failing : m.invoke(this.backend, args));
+        var failingRt = StateRuntime.builder(backend).network(Networks.testnet()).chainTime(new SlotChainTime(0, 0, 1000, backend)).build();
+        var handle = new StateContractHandle<>(failingRt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        var e = assertThrows(JoustException.class, () -> AssetTx.collectAssets(new Collecting(), handle, wallet,
+                Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null));
+        assertTrue(e.getMessage().contains("cannot read page 2"), e::getMessage);
+        var s = assertThrows(JoustException.class, () -> handle.pickSeedFor(wallet));
+        assertTrue(s.getMessage().contains("cannot read page 2"), s::getMessage);
+    }
 }

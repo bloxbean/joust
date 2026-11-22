@@ -318,9 +318,18 @@ final class AssetTx {
         var picked = new ArrayList<Utxo>();
         int passedOver = 0;
         try {
-            for (int page = 1; page < 20 && !missing.isEmpty(); page++) {
+            // Every page until the payment is covered or the listing ends (#165 Codex round 5); a page the provider
+            // fails to answer is an error, not the end.
+            for (int page = 1; !missing.isEmpty(); page++) {
+                if (page > StateContractHandle.MAX_PAGES) {
+                    throw new JoustException(what + ": the caller's listing has more than " + StateContractHandle.MAX_PAGES + " pages");
+                }
                 var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 100, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                if (!r.isSuccessful()) {
+                    if (page == 1) break;   // as before: nothing listed (RequireException below)
+                    throw new JoustException(what + ": cannot read page " + page + " of the caller's UTxOs: " + r.getResponse());
+                }
+                if (r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (counted.contains(key(u)) || !holdsAny(u, missing)) continue;
                     String ref = Designation.ref(u);
@@ -351,6 +360,8 @@ final class AssetTx {
                     if (missing.isEmpty()) break;
                 }
             }
+        } catch (JoustException e) {
+            throw e;
         } catch (Exception e) {
             throw new JoustException(what + ": cannot read the caller's UTxOs", e);
         }

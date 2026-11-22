@@ -81,3 +81,40 @@ test('the DevKit wallet leaves out a UTxO carrying a reference script and report
   assert.equal(seen[0].datumHash, '66'.repeat(32));
   assert.ok(mine);
 });
+
+test('an inline datum 00 survives the CIP-30 encoding, and a keyed operation does not designate it', async () => {
+  const { designatedFor } = await import('../src/client.js');
+  const u = unspentOutput(unspentOutputCbor({ ref: 'dd'.repeat(32) + '#0', address, value: new Map([['lovelace', 7_000_000n]]), inlineDatum: '00' }));
+  assert.equal(u.inlineDatum, '00');
+  const wallet = { change: address, addresses: [address], utxos: new Map([['dd'.repeat(32) + '#0', u]]) };
+  assert.equal(designatedFor(wallet), null);
+});
+
+test('Ogmios: a native reference script is seen, and the DevKit wallet leaves its UTxO out', async () => {
+  const { ogmiosProvider } = await import('../src/providers.js');
+  const { chainOf } = await import('../src/chain.js');
+  const { devWallet } = await import('../src/devwallet.js');
+  // A native script (RequireSignature of a key hash): its CBOR, as Ogmios gives it.
+  const native = Serialization.NativeScript.fromCore({ __type: Cardano.ScriptType.Native, kind: Cardano.NativeScriptKind.RequireSignature,
+    keyHash: '77'.repeat(28) });
+  const nativeCbor = native.toCbor();
+  let mine;
+  const out = (id, ada, extra = {}) => ({ transaction: { id: id.repeat(32) }, index: 0, address: mine, value: { ada: { lovelace: ada } }, ...extra });
+  const fetchImpl = async (_url, init) => {
+    const { method, id } = JSON.parse(init.body);
+    const result = method === 'queryLedgerState/utxo'
+      ? [out('ee', 7_000_000, { script: { language: 'native', json: {}, cbor: nativeCbor } }),
+        out('ef', 7_000_000, { script: { language: 'native', json: {} } }),
+        out('f0', 6_000_000)]
+      : null;
+    return { status: 200, text: async () => JSON.stringify({ jsonrpc: '2.0', id, result }) };
+  };
+  const provider = ogmiosProvider('http://ogmios.test', { fetchImpl });
+  const wallet = devWallet({ chain: chainOf(provider) });
+  mine = wallet.address;
+  const listed = await provider.utxos(mine);
+  assert.equal(listed[0].referenceScriptHash, Serialization.Script.fromCore(native.toCore()).hash());
+  assert.equal(listed[1].hasReferenceScript, true);
+  const seen = (await wallet.getUtxos()).map(unspentOutput).map((u) => u.ref);
+  assert.deepEqual(seen, ['f0'.repeat(32) + '#0']);
+});

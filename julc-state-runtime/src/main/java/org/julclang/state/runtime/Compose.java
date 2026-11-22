@@ -192,6 +192,12 @@ public final class Compose {
         // What the calls collected at a caller's address other than the payer's, less what they pay in, goes back there
         // (T1): the payer's change would take it otherwise.
         var coCallers = AssetTx.returnSurplus(runtime, cap, payer.baseAddress());
+        // Every output index the calls computed (state outputs, sends, deposits' claims, returns) counts on cap.outputs:
+        // it must be the outputs the calls really added, or one of those indices is wrong (#165 Opus P3-2).
+        if (cap.tx instanceof TxRunner.RecordingTx r && r.outputs != cap.outputs) {
+            throw new JoustException("composition: the calls added " + r.outputs + " outputs but counted " + cap.outputs
+                    + " (an output index would be wrong); refused");
+        }
         if (!sharedSigners) {
             for (var e : cap.signerCalls.entrySet()) {
                 if (e.getValue().size() > 1) {

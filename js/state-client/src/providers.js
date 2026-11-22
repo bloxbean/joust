@@ -19,7 +19,8 @@
 //   redeemers(txHash)         (optional) a transaction's redeemers: [{ purpose: spend | mint | cert | reward | ..., data }]
 //                             (data: hex CBOR)
 //
-// Utxo: { txHash, index, address, value: [{ unit, quantity }], datumHash, inlineDatum, referenceScriptHash }
+// Utxo: { txHash, index, address, value: [{ unit, quantity }], datumHash, inlineDatum, referenceScriptHash,
+//   hasReferenceScript? (true when it carries one; Ogmios may give a script whose hash is not computed here) }
 //   unit "lovelace" or policy ++ asset name (hex); quantity a decimal string; absent fields null.
 
 import { blake2b } from '@noble/hashes/blake2.js';
@@ -323,9 +324,13 @@ export function ogmiosProvider(url, { fetchImpl } = {}) {
     if (u.script && version[u.script.language]) {
       referenceScriptHash = plutusScriptHash(u.script.cbor, version[u.script.language]);
       scripts.set(referenceScriptHash, u.script.cbor);
+    } else if (u.script?.cbor) {
+      // A native script's hash: blake2b-224 of 0x00 ++ its CBOR (#165 Codex round 5).
+      referenceScriptHash = plutusScriptHash(u.script.cbor, 0);
     }
+    // Whether the output carries a reference script at all, also when its hash cannot be told (#165 Codex round 5).
     return { txHash: u.transaction.id, index: u.index, address: u.address, value,
-      datumHash: u.datumHash ?? null, inlineDatum: u.datum ?? null, referenceScriptHash };
+      datumHash: u.datumHash ?? null, inlineDatum: u.datum ?? null, referenceScriptHash, hasReferenceScript: !!u.script };
   };
   const byRef = async (ref) => {
     const [id, index] = ref.split('#');

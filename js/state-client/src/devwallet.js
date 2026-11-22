@@ -55,7 +55,8 @@ export function devWallet({ chain, mnemonic = DEVKIT_MNEMONIC, index = 0, networ
     async getUtxos() {
       // Only the script's hash is known, not the script: a UTxO carrying one is left out rather than shown without it,
       // so nothing spends it for funding or tokens (#165 Codex round 4).
-      return (await chain.utxosAt(bech32)).filter((u) => !u.referenceScriptHash).map((u) => unspentOutputCbor(u));
+      return (await chain.utxosAt(bech32)).filter((u) => !(u.referenceScriptHash || u.hasReferenceScript))
+        .map((u) => unspentOutputCbor(u));
     },
     async getBalance() {
       const total = new Map();

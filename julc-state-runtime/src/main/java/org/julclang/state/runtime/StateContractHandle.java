@@ -509,6 +509,9 @@ public final class StateContractHandle<S> {
         return seed;
     }
 
+    /** A bound on the pages of one listing read: a provider that never ends is refused, not followed forever. */
+    static final int MAX_PAGES = 10_000;
+
     private Utxo seedFrom(Account caller) {
         try {
             // Prefer a pure-ADA UTxO; any UTxO works, but never a keyed operation's designated input (ADR-0016 D7).
@@ -518,10 +521,15 @@ public final class StateContractHandle<S> {
             var cap = TxRunner.capture();
             Utxo first = null;
             boolean any = false;
-            // Every page until a pure-ADA seed (#165 Codex round 4): the first ones may all be excluded.
-            for (int page = 1; page <= 20; page++) {
+            // Every page until a pure-ADA seed or the listing's end (#165 Codex rounds 4, 5): the first ones may all be
+            // excluded. A page the provider fails to answer is an error, not the end.
+            for (int page = 1; page <= MAX_PAGES; page++) {
                 var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                if (!r.isSuccessful()) {
+                    if (page == 1) break;   // as before: no UTxO to use (some providers answer an empty address so)
+                    throw new JoustException("deploy: cannot read page " + page + " of the caller's UTxOs: " + r.getResponse());
+                }
+                if (r.getValue() == null || r.getValue().isEmpty()) break;
                 any = true;
                 for (Utxo u : r.getValue()) {
                     // Never one carrying a reference script (#165 Codex round 3): spending it would consume a script.
@@ -532,6 +540,7 @@ public final class StateContractHandle<S> {
                     if (first == null) first = u;
                 }
                 if (r.getValue().size() < 50) break;
+                if (page == MAX_PAGES) throw new JoustException("deploy: the caller's listing has more than " + MAX_PAGES + " pages");
             }
             if (!any) throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
             // F-W3: a creation after a call that paid assets from the caller's only UTxO finds none; in the other order
