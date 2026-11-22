@@ -184,6 +184,10 @@ final class KeyedRules {
             c.test("continuingOutput/keyedInsert",c.holds("continuingOutput/keyedInsert#node",n.kind.equals("node")) &&
                     c.holds("continuingOutput/keyedInsert#keyLength",n.key.length()>=2 && n.key.length()/2<=type.required("maxKeyBytes").intValue()) &&
                     c.holds("continuingOutput/keyedInsert#signedKey",!type.required("signedKey").asBoolean() || n.key.equals(c.caller)) &&
+                    // The mint validator reads the key's signature from the body's required signers, not the payer's
+                    // witness (#156 Codex review).
+                    c.holds("continuingOutput/keyedInsert#signedKeySigner",!type.required("signedKey").asBoolean()
+                            || signers().contains(n.key)) &&
                     c.holds("continuingOutput/keyedInsert#next",n.datum.required("next").equals(anchor.datum.required("next"))) &&
                     c.holds("continuingOutput/keyedInsert#afterAnchor",n.key.compareTo(anchor.key)>0) &&
                     c.holds("continuingOutput/keyedInsert#beforeNext",next(anchor).isEmpty() || n.key.compareTo(next(anchor))<0));
@@ -313,5 +317,11 @@ final class KeyedRules {
             var free = e.getKey().equals("lovelace") && c.enabled("netOutflow/keyedThird#released") ? released : ZERO;
             c.test("netOutflow/keyedThird",e.getValue().compareTo(free.subtract(c.enabled("netOutflow/keyedThird#tagged") ? tagged.getOrDefault(e.getKey(),ZERO) : ZERO).max(ZERO))<=0);
         }
+    }
+
+    private Set<String> signers() {
+        var out = new HashSet<String>();
+        for (var k : c.plan.required("requiredSigners")) out.add(k.asText());
+        return out;
     }
 }

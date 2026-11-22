@@ -217,4 +217,35 @@ class KeyedRecoveryTest {
         table.settled(discard(e, 60), Runnable::run).commit().run();
         assertFalse(table.reservesToken(policy + name), "released with its reservation");
     }
+
+    /**
+     * #156 Codex review, round 2: A expires unsigned, the retry B is handed out, and a rewind revives A. The client's
+     * record lists only B; restoring A first or B first both reconcile, and neither attempt can then be discarded.
+     */
+    @Test void aRevivedUnsignedAttemptRestoresInEitherOrder() throws Exception {
+        String c1 = cbor(1, 40, 100), c2 = cbor(2, 103, 200);
+        var b1 = Reservations.Body.decode(c1, 0);
+        var b2 = Reservations.Body.decode(c2, 0);
+        for (boolean aFirst : new boolean[] {true, false}) {
+            var table = new Reservations(2, false, 0);
+            var op0 = KeyedOperation.parse(op(Map.of()));
+            var e1 = table.prepare(b1, 50, op0);
+            table.commit(e1);
+            table.observe(103);                                 // A expires before it was handed out
+            table.checkOperation(op0, true, 103, null);
+            var e2 = table.prepare(b2, 103, op0);
+            table.commit(e2);                                   // B is handed out (the host learns it on restore)
+            table.rewind(90);                                   // A is live again
+            var record = op(Map.of(b2.hash(), 200L));
+            var restore = obj().put("complete", true);
+            var txs = restore.putArray("transactions");
+            if (aFirst) txs.addObject().put("state", "prepared").put("cbor", c1).set("operation", record);
+            txs.addObject().put("state", "prepared").put("cbor", c2).set("operation", record);
+            if (!aFirst) txs.addObject().put("state", "prepared").put("cbor", c1).set("operation", record);
+            table.restore(restore).commit().run();
+            table.allowBuild();
+            assertEquals("conflict", assertThrows(HostError.class, () -> table.settled(discard(e2, 95), Runnable::run)).code,
+                    "A first: " + aFirst);
+        }
+    }
 }

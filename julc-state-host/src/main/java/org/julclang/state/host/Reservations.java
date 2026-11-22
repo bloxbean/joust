@@ -389,7 +389,10 @@ final class Reservations implements ClaimStore {
                     // A rewind can re-import our prepared result after the client handed it out.
                     // The client's record may know later attempts (#156 review K1): same identity, and every attempt
                     // the entry knew (now including this one) with the same deadline; the fuller record is kept.
-                    var known = e.operation == null ? null : e.operation.handedOut(b.hash,b.to);
+                    // Only what the entry acknowledged (a retry's record, or its own inclusion) is required: an attempt
+                    // revived by a rewind before it was handed out is not part of the history (#156 Codex review).
+                    var known = e.operation == null ? null
+                            : e.state == State.shallow ? e.operation.handedOut(b.hash,b.to) : e.operation;
                     if (known == null || op == null || !known.identity().equals(op.identity())
                             || !op.attempts().entrySet().containsAll(known.attempts().entrySet())) throw KeyedOperation.mismatch();
                     e = new Entry(e.id,b,state,slot,op);
