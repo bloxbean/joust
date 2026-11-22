@@ -62,8 +62,12 @@ class RecordedSessionsTest {
                     build.put("snapshot","/snapshots/"+name);
                     if (digest.equals(build.get("digest").textValue())) build.put("digest","1".repeat(64));
                 }
-                if (f.at("/host/result").has("fingerprint"))
+                if (f.at("/host/result").has("fingerprint")) {
+                    // The host's answer must be the digest computed for this snapshot before it becomes the portable
+                    // identity: a client refuses any other (D13), so a wrong one must not be recorded away (#153 Codex review).
+                    assertEquals(digest, f.at("/host/result/fingerprint").textValue(), "the host's fingerprint for "+name);
                     ((ObjectNode)f.at("/host/result")).put("fingerprint","1".repeat(64));
+                }
             }
             return obj().set("frames",c.frames);
         }

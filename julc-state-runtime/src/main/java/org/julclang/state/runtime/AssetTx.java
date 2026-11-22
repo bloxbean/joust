@@ -284,7 +284,7 @@ final class AssetTx {
         // and its later fee selection only asks for lovelace. The fee input need not hold the tokens.
         // Only the default JVM claim store keeps the wallet shortcut; the dev host's store (ADR-0022 M1b) collects the
         // wallet's asset inputs, as the shortcut can leave negative token change. Issue #152 tracks the default path.
-        if (caller instanceof WalletAccount && contract.runtime.claimStore() == ClaimStore.jvm()) return;
+        if (caller instanceof WalletAccount && contract.runtime.claimStore() == JvmClaimStore.INSTANCE) return;
         // The seed of a creation is already an input: count what it holds, never collect it twice.
         if (alreadyIn != null) {
             for (Amount a : alreadyIn.getAmount()) {
@@ -305,12 +305,22 @@ final class AssetTx {
         var missing = new java.util.HashMap<String, BigInteger>();
         want.forEach((p, ts) -> ts.forEach((n, q) -> missing.put(p + n, q)));
         var picked = new ArrayList<Utxo>();
+        // A hosted call owns the complete call-local listing (ADR-0022 D6): read all of it, bounded by the host's read
+        // limits, rather than the first 19 pages of 100 (#151 Codex review).
+        boolean hosted = contract.runtime.hostedCall();
+        int pages = hosted ? 1 : 19;
+        int size = hosted ? Integer.MAX_VALUE : 100;
         try {
-            for (int page = 1; page < 20 && !missing.isEmpty(); page++) {
-                var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 100, page);
+            for (int page = 1; page <= pages && !missing.isEmpty(); page++) {
+                var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), size, page);
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                var cap = TxRunner.CAPTURE.get();
                 for (Utxo u : r.getValue()) {
                     if (contract.runtime.claimStore().avoids(Designation.ref(u))) continue;
+                    // Never a published script (spending it ends what references it), never an input an earlier call
+                    // of the composition already spends (#151 Codex re-review).
+                    if (u.getReferenceScriptHash() != null) continue;
+                    if (cap != null && cap.inputs.contains(Designation.ref(u))) continue;
                     if (alreadyIn != null && u.getTxHash().equals(alreadyIn.getTxHash())
                             && u.getOutputIndex() == alreadyIn.getOutputIndex()) continue;
                     boolean useful = false;
@@ -334,7 +344,9 @@ final class AssetTx {
         if (!missing.isEmpty()) {
             throw new RequireException(what + ": the caller's base address does not hold " + missing);
         }
-        tx.collectFrom(picked);
+        // Through TxRunner.collect, so a composition counts them as spent: the payout funding pick then skips them
+        // rather than adding one twice (#151 Codex review).
+        for (Utxo u : picked) TxRunner.collect(tx, u, null);
     }
 
     /** Reserved token kinds (ADR-0007 D3): instance, object, intent. */

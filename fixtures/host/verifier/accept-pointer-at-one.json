@@ -1,17 +1,23 @@
 {
-  "source" : "owned-destroy",
+  "source" : "dapp-0003",
   "method" : "prepare",
   "request" : {
-    "now" : 1882,
+    "now" : 39618,
     "ttlSlots" : 20,
     "call" : {
-      "contract" : "org.julclang.state.examples.bank.Bank",
-      "kind" : "ownedDestroy",
-      "method" : "close",
-      "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
-      "args" : { },
-      "instance" : "dc161c1e18134acd75fef3cdf8926e873571fa252056e57880aa5099cefb7963",
-      "object" : "4f7ee8821833f5c4f8c3989f73173e4f5e79c953dc5533ba6c812f632b"
+      "contract" : "org.julclang.state.examples.counter.Counter",
+      "kind" : "action",
+      "method" : "increment",
+      "instance" : "bb67ba0e75be6af2bb5e3be0a59129320b88c6f6dfcb0993a8d1a2fe08efff66",
+      "object" : null,
+      "args" : {
+        "by" : "3"
+      },
+      "pay" : {
+        "lovelace" : "0",
+        "assets" : [ ]
+      },
+      "address" : "addr_test1qqgdzxp950m234e9m73ev5ydaq0s6y3rrxg8xudf466022vumuphxlrupnjqt0jpl34pyvrpr2sxrmcq4mm2xstrmx8snvqcx6"
     }
   },
   "networkId" : 0,
@@ -19,8 +25,8 @@
   "anchors" : {
     "description" : {
       "preamble" : {
-        "title" : "org.julclang.state.examples.bank.Bank",
-        "description" : "JOUST contract Bank (ADR-0013 D3)",
+        "title" : "org.julclang.state.examples.counter.Counter",
+        "description" : "JOUST contract Counter (ADR-0013 D3)",
         "version" : "0.0.0",
         "plutusVersion" : "v3",
         "compiler" : {
@@ -28,57 +34,42 @@
         }
       },
       "validators" : [ {
-        "title" : "BankValidator.mint",
+        "title" : "CounterValidator.mint",
         "redeemer" : {
           "title" : "redeemer",
           "schema" : {
-            "$ref" : "#/definitions/org.julclang.state.examples.bank.BankValidator.Lifecycle"
+            "$ref" : "#/definitions/org.julclang.state.examples.counter.CounterValidator.Lifecycle"
           }
         }
       }, {
-        "title" : "BankValidator.spend",
+        "title" : "CounterValidator.spend",
         "datum" : {
           "title" : "datum",
           "schema" : {
-            "title" : "Datum",
-            "description" : "The state (instance tokens) or an owned object's Holding (0x4f tokens)",
-            "anyOf" : [ {
-              "$ref" : "#/definitions/org.julclang.state.examples.bank.Bank.State"
-            }, {
-              "$ref" : "#/definitions/org.julclang.state.examples.bank.BankValidator.Holding"
-            } ]
+            "$ref" : "#/definitions/org.julclang.state.examples.counter.Counter.State"
           }
         },
         "redeemer" : {
           "title" : "redeemer",
           "schema" : {
-            "$ref" : "#/definitions/org.julclang.state.examples.bank.BankValidator.Calls"
+            "$ref" : "#/definitions/org.julclang.state.examples.counter.CounterValidator.Calls"
           }
         }
       } ],
       "x-joust" : {
         "version" : 2,
-        "contract" : "Bank",
-        "package" : "org.julclang.state.examples.bank",
-        "validator" : "BankValidator",
-        "client" : "BankClient",
+        "contract" : "Counter",
+        "package" : "org.julclang.state.examples.counter",
+        "validator" : "CounterValidator",
+        "client" : "CounterClient",
         "state" : {
-          "$ref" : "#/definitions/org.julclang.state.examples.bank.Bank.State"
+          "$ref" : "#/definitions/org.julclang.state.examples.counter.Counter.State"
         },
         "stakeSelf" : false,
-        "minAda" : 2300000,
-        "maxDatumBytes" : 160,
+        "minAda" : 2200000,
+        "maxDatumBytes" : 128,
         "assetAware" : false,
-        "owned" : [ {
-          "type" : "org.julclang.state.examples.bank.Bank.Account",
-          "simple" : "Account",
-          "lookup" : "account",
-          "holding" : {
-            "$ref" : "#/definitions/org.julclang.state.examples.bank.BankValidator.Holding"
-          },
-          "tag" : 0,
-          "multi" : false
-        } ],
+        "owned" : [ ],
         "creations" : [ {
           "name" : "init",
           "kind" : "init",
@@ -87,49 +78,16 @@
             "constructor" : "CreateInstance",
             "index" : 0
           },
-          "args" : [ {
-            "name" : "withdrawLimit",
-            "type" : "BigInteger",
-            "schema" : {
-              "dataType" : "integer"
-            }
-          } ],
+          "args" : [ ],
           "ctx" : true,
           "payable" : false,
           "takesAssets" : false,
           "needsService" : false,
           "recipe" : {
             "transition" : "init",
-            "redeemerFields" : [ "seed", "withdrawLimit", "ctx" ],
-            "target" : "org.julclang.state.examples.bank.Bank.State",
+            "redeemerFields" : [ "seed", "ctx" ],
+            "target" : "org.julclang.state.examples.counter.Counter.State",
             "shared" : false,
-            "signers" : [ ],
-            "validAfter" : [ ],
-            "validBefore" : [ ],
-            "params" : false,
-            "reads" : [ ],
-            "transitionArgs" : [ "withdrawLimit" ],
-            "stepEvents" : false
-          }
-        }, {
-          "name" : "open",
-          "kind" : "ownedInit",
-          "redeemer" : {
-            "purpose" : "mint",
-            "constructor" : "Open",
-            "index" : 2
-          },
-          "args" : [ ],
-          "ctx" : true,
-          "payable" : true,
-          "takesAssets" : false,
-          "owned" : "org.julclang.state.examples.bank.Bank.Account",
-          "needsService" : false,
-          "recipe" : {
-            "transition" : "open",
-            "redeemerFields" : [ "seed", "instance", "ctx" ],
-            "target" : "org.julclang.state.examples.bank.Bank.Account",
-            "shared" : true,
             "signers" : [ ],
             "validAfter" : [ ],
             "validBefore" : [ ],
@@ -140,85 +98,16 @@
           }
         } ],
         "actions" : [ {
-          "name" : "setPaused",
+          "name" : "increment",
           "kind" : "action",
           "redeemer" : {
             "purpose" : "spend",
-            "constructor" : "SetPaused",
+            "constructor" : "Increment",
             "index" : 0
           },
-          "fields" : [ "paused" ],
+          "fields" : [ "by" ],
           "args" : [ {
-            "name" : "paused",
-            "type" : "boolean",
-            "schema" : {
-              "title" : "Bool",
-              "anyOf" : [ {
-                "title" : "False",
-                "dataType" : "constructor",
-                "index" : 0,
-                "fields" : [ ]
-              }, {
-                "title" : "True",
-                "dataType" : "constructor",
-                "index" : 1,
-                "fields" : [ ]
-              } ]
-            }
-          } ],
-          "ctx" : false,
-          "payable" : false,
-          "takesAssets" : false,
-          "policies" : {
-            "signedBy" : [ "admin" ],
-            "validAfter" : [ ],
-            "validBefore" : [ ],
-            "quorum" : null,
-            "authorizedBy" : [ ],
-            "shared" : false,
-            "into" : false,
-            "admits" : null,
-            "receives" : false,
-            "batched" : false,
-            "migrateTo" : null
-          },
-          "returns" : {
-            "state" : true,
-            "payouts" : false,
-            "sends" : false,
-            "mint" : false,
-            "accepted" : false,
-            "events" : false,
-            "deposits" : false
-          },
-          "needsService" : false,
-          "recipe" : {
-            "transition" : "setPaused",
-            "redeemerFields" : [ "paused" ],
-            "target" : "org.julclang.state.examples.bank.Bank.State",
-            "shared" : false,
-            "signers" : [ {
-              "field" : "admin",
-              "index" : 0
-            } ],
-            "validAfter" : [ ],
-            "validBefore" : [ ],
-            "params" : false,
-            "reads" : [ ],
-            "transitionArgs" : [ "paused" ],
-            "stepEvents" : false
-          }
-        }, {
-          "name" : "setLimit",
-          "kind" : "action",
-          "redeemer" : {
-            "purpose" : "spend",
-            "constructor" : "SetLimit",
-            "index" : 1
-          },
-          "fields" : [ "withdrawLimit" ],
-          "args" : [ {
-            "name" : "withdrawLimit",
+            "name" : "by",
             "type" : "BigInteger",
             "schema" : {
               "dataType" : "integer"
@@ -228,7 +117,7 @@
           "payable" : false,
           "takesAssets" : false,
           "policies" : {
-            "signedBy" : [ "admin" ],
+            "signedBy" : [ ],
             "validAfter" : [ ],
             "validBefore" : [ ],
             "quorum" : null,
@@ -251,35 +140,31 @@
           },
           "needsService" : false,
           "recipe" : {
-            "transition" : "setLimit",
-            "redeemerFields" : [ "withdrawLimit" ],
-            "target" : "org.julclang.state.examples.bank.Bank.State",
+            "transition" : "increment",
+            "redeemerFields" : [ "by" ],
+            "target" : "org.julclang.state.examples.counter.Counter.State",
             "shared" : false,
-            "signers" : [ {
-              "field" : "admin",
-              "index" : 0
-            } ],
+            "signers" : [ ],
             "validAfter" : [ ],
             "validBefore" : [ ],
             "params" : false,
             "reads" : [ ],
-            "transitionArgs" : [ "withdrawLimit" ],
+            "transitionArgs" : [ "by" ],
             "stepEvents" : false
           }
         }, {
-          "name" : "deposit",
-          "kind" : "ownedAction",
+          "name" : "reset",
+          "kind" : "action",
           "redeemer" : {
             "purpose" : "spend",
-            "constructor" : "Deposit",
-            "index" : 2
+            "constructor" : "Reset",
+            "index" : 1
           },
-          "fields" : [ "ctx" ],
+          "fields" : [ ],
           "args" : [ ],
-          "ctx" : true,
-          "payable" : true,
+          "ctx" : false,
+          "payable" : false,
           "takesAssets" : false,
-          "owned" : "org.julclang.state.examples.bank.Bank.Account",
           "policies" : {
             "signedBy" : [ "owner" ],
             "validAfter" : [ ],
@@ -304,13 +189,13 @@
           },
           "needsService" : false,
           "recipe" : {
-            "transition" : "deposit",
-            "redeemerFields" : [ "ctx" ],
-            "target" : "org.julclang.state.examples.bank.Bank.Account",
+            "transition" : "reset",
+            "redeemerFields" : [ ],
+            "target" : "org.julclang.state.examples.counter.Counter.State",
             "shared" : false,
             "signers" : [ {
               "field" : "owner",
-              "index" : 0
+              "index" : 1
             } ],
             "validAfter" : [ ],
             "validBefore" : [ ],
@@ -320,78 +205,18 @@
             "stepEvents" : false
           }
         }, {
-          "name" : "withdraw",
-          "kind" : "ownedAction",
-          "redeemer" : {
-            "purpose" : "spend",
-            "constructor" : "Withdraw",
-            "index" : 3
-          },
-          "fields" : [ "amount", "ctx" ],
-          "args" : [ {
-            "name" : "amount",
-            "type" : "BigInteger",
-            "schema" : {
-              "dataType" : "integer"
-            }
-          } ],
-          "ctx" : true,
-          "payable" : false,
-          "takesAssets" : false,
-          "owned" : "org.julclang.state.examples.bank.Bank.Account",
-          "policies" : {
-            "signedBy" : [ "owner" ],
-            "validAfter" : [ ],
-            "validBefore" : [ ],
-            "quorum" : null,
-            "authorizedBy" : [ ],
-            "shared" : true,
-            "into" : false,
-            "admits" : null,
-            "receives" : false,
-            "batched" : false,
-            "migrateTo" : null
-          },
-          "returns" : {
-            "state" : true,
-            "payouts" : true,
-            "sends" : false,
-            "mint" : false,
-            "accepted" : false,
-            "events" : false,
-            "deposits" : false
-          },
-          "needsService" : false,
-          "recipe" : {
-            "transition" : "withdraw",
-            "redeemerFields" : [ "amount", "ctx" ],
-            "target" : "org.julclang.state.examples.bank.Bank.Account",
-            "shared" : true,
-            "signers" : [ {
-              "field" : "owner",
-              "index" : 0
-            } ],
-            "validAfter" : [ ],
-            "validBefore" : [ ],
-            "params" : false,
-            "reads" : [ ],
-            "transitionArgs" : [ "amount" ],
-            "stepEvents" : false
-          }
-        }, {
           "name" : "close",
-          "kind" : "ownedDestroy",
+          "kind" : "destroy",
           "redeemer" : {
             "purpose" : "spend",
             "constructor" : "Close",
-            "index" : 4
+            "index" : 2
           },
           "fields" : [ "ctx" ],
           "args" : [ ],
           "ctx" : true,
           "payable" : false,
           "takesAssets" : false,
-          "owned" : "org.julclang.state.examples.bank.Bank.Account",
           "policies" : {
             "signedBy" : [ "owner" ],
             "validAfter" : [ ],
@@ -422,11 +247,11 @@
               "constructor" : "BurnInstance",
               "index" : 1
             },
-            "target" : "org.julclang.state.examples.bank.Bank.Account",
+            "target" : "org.julclang.state.examples.counter.Counter.State",
             "shared" : false,
             "signers" : [ {
               "field" : "owner",
-              "index" : 0
+              "index" : 1
             } ],
             "validAfter" : [ ],
             "validBefore" : [ ],
@@ -437,20 +262,9 @@
           }
         } ],
         "views" : [ {
-          "name" : "paused",
+          "name" : "count",
           "returns" : {
-            "title" : "Bool",
-            "anyOf" : [ {
-              "title" : "False",
-              "dataType" : "constructor",
-              "index" : 0,
-              "fields" : [ ]
-            }, {
-              "title" : "True",
-              "dataType" : "constructor",
-              "index" : 1,
-              "fields" : [ ]
-            } ]
+            "dataType" : "integer"
           },
           "args" : [ ]
         } ],
@@ -499,57 +313,25 @@
             } ]
           } ]
         },
-        "org.julclang.state.examples.bank.BankValidator.Calls" : {
+        "org.julclang.state.examples.counter.CounterValidator.Calls" : {
           "title" : "Calls",
           "anyOf" : [ {
-            "title" : "SetPaused",
+            "title" : "Increment",
             "dataType" : "constructor",
             "index" : 0,
             "fields" : [ {
-              "title" : "paused",
-              "anyOf" : [ {
-                "title" : "False",
-                "dataType" : "constructor",
-                "index" : 0,
-                "fields" : [ ]
-              }, {
-                "title" : "True",
-                "dataType" : "constructor",
-                "index" : 1,
-                "fields" : [ ]
-              } ]
+              "title" : "by",
+              "dataType" : "integer"
             } ]
           }, {
-            "title" : "SetLimit",
+            "title" : "Reset",
             "dataType" : "constructor",
             "index" : 1,
-            "fields" : [ {
-              "title" : "withdrawLimit",
-              "dataType" : "integer"
-            } ]
-          }, {
-            "title" : "Deposit",
-            "dataType" : "constructor",
-            "index" : 2,
-            "fields" : [ {
-              "title" : "ctx",
-              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
-            } ]
-          }, {
-            "title" : "Withdraw",
-            "dataType" : "constructor",
-            "index" : 3,
-            "fields" : [ {
-              "title" : "amount",
-              "dataType" : "integer"
-            }, {
-              "title" : "ctx",
-              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
-            } ]
+            "fields" : [ ]
           }, {
             "title" : "Close",
             "dataType" : "constructor",
-            "index" : 4,
+            "index" : 2,
             "fields" : [ {
               "title" : "ctx",
               "$ref" : "#/definitions/org.julclang.state.api.Ctx"
@@ -571,7 +353,7 @@
             } ]
           } ]
         },
-        "org.julclang.state.examples.bank.BankValidator.Lifecycle" : {
+        "org.julclang.state.examples.counter.CounterValidator.Lifecycle" : {
           "title" : "Lifecycle",
           "anyOf" : [ {
             "title" : "CreateInstance",
@@ -581,9 +363,6 @@
               "title" : "seed",
               "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
             }, {
-              "title" : "withdrawLimit",
-              "dataType" : "integer"
-            }, {
               "title" : "ctx",
               "$ref" : "#/definitions/org.julclang.state.api.Ctx"
             } ]
@@ -592,85 +371,28 @@
             "dataType" : "constructor",
             "index" : 1,
             "fields" : [ ]
-          }, {
-            "title" : "Open",
-            "dataType" : "constructor",
-            "index" : 2,
-            "fields" : [ {
-              "title" : "seed",
-              "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
-            }, {
-              "title" : "instance",
-              "dataType" : "bytes"
-            }, {
-              "title" : "ctx",
-              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
-            } ]
           } ]
         },
-        "org.julclang.state.examples.bank.Bank.State" : {
+        "org.julclang.state.examples.counter.Counter.State" : {
           "title" : "State",
           "anyOf" : [ {
             "title" : "State",
             "dataType" : "constructor",
             "index" : 0,
             "fields" : [ {
-              "title" : "admin",
-              "dataType" : "bytes"
-            }, {
-              "title" : "paused",
-              "anyOf" : [ {
-                "title" : "False",
-                "dataType" : "constructor",
-                "index" : 0,
-                "fields" : [ ]
-              }, {
-                "title" : "True",
-                "dataType" : "constructor",
-                "index" : 1,
-                "fields" : [ ]
-              } ]
-            }, {
-              "title" : "withdrawLimit",
+              "title" : "count",
               "dataType" : "integer"
-            } ]
-          } ]
-        },
-        "org.julclang.state.examples.bank.Bank.Account" : {
-          "title" : "Account",
-          "anyOf" : [ {
-            "title" : "Account",
-            "dataType" : "constructor",
-            "index" : 0,
-            "fields" : [ {
+            }, {
               "title" : "owner",
               "dataType" : "bytes"
-            }, {
-              "title" : "balance",
-              "dataType" : "integer"
-            } ]
-          } ]
-        },
-        "org.julclang.state.examples.bank.BankValidator.Holding" : {
-          "title" : "Holding",
-          "anyOf" : [ {
-            "title" : "Holding",
-            "dataType" : "constructor",
-            "index" : 0,
-            "fields" : [ {
-              "title" : "instance",
-              "dataType" : "bytes"
-            }, {
-              "title" : "value",
-              "$ref" : "#/definitions/org.julclang.state.examples.bank.Bank.Account"
             } ]
           } ]
         }
       }
     },
     "language" : "PlutusScriptV3",
-    "policy" : "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671",
-    "address" : "addr_test1wrp6e300jwk22nphnklqx5j0wsj57qjcrfv4djf05xkuvug25n5yy",
+    "policy" : "f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cb",
+    "address" : "addr_test1wr6xg9hc04rzyfgwca25l3vrh50e634l9hsy2gwwmhh6tjc8rc89f",
     "outputVerifier" : {
       "language" : "PlutusScriptV3",
       "hash" : "dd15fe5da434a91d00aa7f3a6891b77a59cfd4e442506d47189b703d",
@@ -678,79 +400,70 @@
     }
   },
   "resolved" : {
-    "659ecb42a26b6a91c4e84854d96a279c8bd23c92cdd7a6889ea29be2bfb484c0#0" : {
-      "tx_hash" : "659ecb42a26b6a91c4e84854d96a279c8bd23c92cdd7a6889ea29be2bfb484c0",
+    "8238b1f5c3ddef22b13ed897a258ce33a2c9cc4309e9573e6d3394d470cdb15e#0" : {
+      "tx_hash" : "8238b1f5c3ddef22b13ed897a258ce33a2c9cc4309e9573e6d3394d470cdb15e",
       "output_index" : 0,
-      "address" : "addr_test1wrp6e300jwk22nphnklqx5j0wsj57qjcrfv4djf05xkuvug25n5yy",
+      "address" : "addr_test1wr6xg9hc04rzyfgwca25l3vrh50e634l9hsy2gwwmhh6tjc8rc89f",
       "amount" : [ {
         "unit" : "lovelace",
-        "quantity" : 29252050
+        "quantity" : 20334660
       } ],
       "data_hash" : null,
       "inline_datum" : null,
-      "reference_script_hash" : "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671"
+      "reference_script_hash" : "f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cb"
     },
-    "e549db71adc9c22706e18591d4ae4f4dcb0994f09639fc92d0d812c62acb9de9#0" : {
-      "tx_hash" : "e549db71adc9c22706e18591d4ae4f4dcb0994f09639fc92d0d812c62acb9de9",
+    "9ce3083e46ef9d3e16627f8bbe8ce21ba9ae7ed5ac77c2ee74e78eed85385137#0" : {
+      "tx_hash" : "9ce3083e46ef9d3e16627f8bbe8ce21ba9ae7ed5ac77c2ee74e78eed85385137",
       "output_index" : 0,
-      "address" : "addr_test1wrp6e300jwk22nphnklqx5j0wsj57qjcrfv4djf05xkuvug25n5yy",
+      "address" : "addr_test1wr6xg9hc04rzyfgwca25l3vrh50e634l9hsy2gwwmhh6tjc8rc89f",
       "amount" : [ {
         "unit" : "lovelace",
-        "quantity" : 2300000
+        "quantity" : 2200000
       }, {
-        "unit" : "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671dc161c1e18134acd75fef3cdf8926e873571fa252056e57880aa5099cefb7963",
+        "unit" : "f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cb4b51377ae2eea10afdf11584e1f9dfd806ceed5ca3e5fe26fd97a2e855332444",
         "quantity" : 1
       } ],
-      "data_hash" : "214e9b43f2f90710684fdebfdf478a3df06cb938898ea4fd61cacfb00594045b",
-      "inline_datum" : "d8799f581c1446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94ded879801a01c9c380ff",
+      "data_hash" : "7096ef2305be9d31efa51652e6a4e6453fa2a81285260f2d3b543ce9489f83ff",
+      "inline_datum" : "d8799f0d581ce6e8f3b682974ad213e0ffb809525ac1c61bf0ad540c615f8fd0f331ff",
       "reference_script_hash" : null
     },
-    "f8d5e7dc2813c3c01938957dd44dcc3746f446ba734984546c27fc6265177533#0" : {
-      "tx_hash" : "f8d5e7dc2813c3c01938957dd44dcc3746f446ba734984546c27fc6265177533",
+    "0b53eff7cafe490a15068f47ebf319d5824192e0ccb10b61b874340bd478fea0#0" : {
+      "tx_hash" : "0b53eff7cafe490a15068f47ebf319d5824192e0ccb10b61b874340bd478fea0",
       "output_index" : 0,
-      "address" : "addr_test1wrp6e300jwk22nphnklqx5j0wsj57qjcrfv4djf05xkuvug25n5yy",
+      "address" : "addr_test1wr6xg9hc04rzyfgwca25l3vrh50e634l9hsy2gwwmhh6tjc8rc89f",
       "amount" : [ {
         "unit" : "lovelace",
-        "quantity" : 25300000
+        "quantity" : 2200000
       }, {
-        "unit" : "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc6714f7ee8821833f5c4f8c3989f73173e4f5e79c953dc5533ba6c812f632b",
+        "unit" : "f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cb04b446a677633ad5215e78897e7a460dee9425570cfd407aaf5eef8abee73a1a",
+        "quantity" : 1
+      } ],
+      "data_hash" : "0d98a7a44c62b4eeb6253cb54fa86d049ebf65b54eda5b9b4cd6cf651cf6c20e",
+      "inline_datum" : "d8799f03581cd85f3e98cee75c09eef7c06c2a15442ec938171f173ba2f82b1db278ff",
+      "reference_script_hash" : null
+    },
+    "2c1388a942636dbaf8efb0401085cc308c26361b0c94d4aeec97367996fb2554#0" : {
+      "tx_hash" : "2c1388a942636dbaf8efb0401085cc308c26361b0c94d4aeec97367996fb2554",
+      "output_index" : 0,
+      "address" : "addr_test1wr6xg9hc04rzyfgwca25l3vrh50e634l9hsy2gwwmhh6tjc8rc89f",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 2200000
+      }, {
+        "unit" : "f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cbbb67ba0e75be6af2bb5e3be0a59129320b88c6f6dfcb0993a8d1a2fe08efff66",
         "quantity" : 1
       } ],
       "data_hash" : null,
-      "inline_datum" : "d8799f5820dc161c1e18134acd75fef3cdf8926e873571fa252056e57880aa5099cefb7963d8799f581c1446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94de1a015ef3c0ffff",
+      "inline_datum" : "d8799f00581c10d11825a3f6a8d725dfa396508de81f0d122319907371a9aeb4f529ff",
       "reference_script_hash" : null
     },
-    "e549db71adc9c22706e18591d4ae4f4dcb0994f09639fc92d0d812c62acb9de9#1" : {
-      "tx_hash" : "e549db71adc9c22706e18591d4ae4f4dcb0994f09639fc92d0d812c62acb9de9",
+    "0000000000000000000000000000000000000000000000000000000000000000#1" : {
+      "tx_hash" : "0000000000000000000000000000000000000000000000000000000000000000",
       "output_index" : 1,
-      "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
+      "address" : "addr_test1qqgdzxp950m234e9m73ev5ydaq0s6y3rrxg8xudf466022vumuphxlrupnjqt0jpl34pyvrpr2sxrmcq4mm2xstrmx8snvqcx6",
       "amount" : [ {
         "unit" : "lovelace",
-        "quantity" : 6860918
-      } ],
-      "data_hash" : null,
-      "inline_datum" : null,
-      "reference_script_hash" : null
-    },
-    "6f44d5698ad56a60132bcde3a94d2d222a21c06c40633b54d9e4a70abcb84551#1" : {
-      "tx_hash" : "6f44d5698ad56a60132bcde3a94d2d222a21c06c40633b54d9e4a70abcb84551",
-      "output_index" : 1,
-      "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 318199065
-      } ],
-      "data_hash" : null,
-      "inline_datum" : null,
-      "reference_script_hash" : null
-    },
-    "f8d5e7dc2813c3c01938957dd44dcc3746f446ba734984546c27fc6265177533#1" : {
-      "tx_hash" : "f8d5e7dc2813c3c01938957dd44dcc3746f446ba734984546c27fc6265177533",
-      "output_index" : 1,
-      "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
-      "amount" : [ {
-        "unit" : "lovelace",
-        "quantity" : 4722553
+        "quantity" : 297518932
       } ],
       "data_hash" : null,
       "inline_datum" : null,
@@ -759,8 +472,8 @@
   },
   "node" : {
     "scriptsAt" : {
-      "addr_test1wrp6e300jwk22nphnklqx5j0wsj57qjcrfv4djf05xkuvug25n5yy" : [ "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671" ],
-      "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0" : [ ]
+      "addr_test1wr6xg9hc04rzyfgwca25l3vrh50e634l9hsy2gwwmhh6tjc8rc89f" : [ "f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cb" ],
+      "addr_test1qqgdzxp950m234e9m73ev5ydaq0s6y3rrxg8xudf466022vumuphxlrupnjqt0jpl34pyvrpr2sxrmcq4mm2xstrmx8snvqcx6" : [ ]
     }
   },
   "protocolParams" : {
@@ -1849,45 +1562,44 @@
   "result" : {
     "prepared" : {
       "plan" : {
-        "inputs" : [ "f8d5e7dc2813c3c01938957dd44dcc3746f446ba734984546c27fc6265177533#0", "6f44d5698ad56a60132bcde3a94d2d222a21c06c40633b54d9e4a70abcb84551#1" ],
-        "referenceInputs" : [ "659ecb42a26b6a91c4e84854d96a279c8bd23c92cdd7a6889ea29be2bfb484c0#0" ],
-        "collateral" : [ "e549db71adc9c22706e18591d4ae4f4dcb0994f09639fc92d0d812c62acb9de9#1" ],
+        "inputs" : [ "0000000000000000000000000000000000000000000000000000000000000000#1", "2c1388a942636dbaf8efb0401085cc308c26361b0c94d4aeec97367996fb2554#0" ],
+        "referenceInputs" : [ "8238b1f5c3ddef22b13ed897a258ce33a2c9cc4309e9573e6d3394d470cdb15e#0" ],
+        "collateral" : [ "0000000000000000000000000000000000000000000000000000000000000000#1" ],
         "outputs" : [ {
-          "address" : "addr_test1vz46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cw5nyuy",
+          "address" : "addr_test1wr6xg9hc04rzyfgwca25l3vrh50e634l9hsy2gwwmhh6tjc8rc89f",
           "value" : {
-            "lovelace" : "25300000"
+            "lovelace" : "2200000",
+            "f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cbbb67ba0e75be6af2bb5e3be0a59129320b88c6f6dfcb0993a8d1a2fe08efff66" : "1"
           },
-          "datum" : "d8799f5820f8d5e7dc2813c3c01938957dd44dcc3746f446ba734984546c27fc626517753300ff",
+          "datum" : "d8799f03581c10d11825a3f6a8d725dfa396508de81f0d122319907371a9aeb4f529ff",
           "datumHash" : null,
           "hasScript" : false
         }, {
-          "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
+          "address" : "addr_test1qqgdzxp950m234e9m73ev5ydaq0s6y3rrxg8xudf466022vumuphxlrupnjqt0jpl34pyvrpr2sxrmcq4mm2xstrmx8snvqcx6",
           "value" : {
-            "lovelace" : "317880789"
+            "lovelace" : "297249014"
           },
           "datum" : null,
           "datumHash" : null,
           "hasScript" : false
         } ],
         "collateralReturn" : {
-          "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
+          "address" : "addr_test1qqgdzxp950m234e9m73ev5ydaq0s6y3rrxg8xudf466022vumuphxlrupnjqt0jpl34pyvrpr2sxrmcq4mm2xstrmx8snvqcx6",
           "value" : {
-            "lovelace" : "6383504"
+            "lovelace" : "297114055"
           },
           "datum" : null,
           "datumHash" : null,
           "hasScript" : false
         },
-        "totalCollateral" : "477414",
-        "mint" : {
-          "c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc6714f7ee8821833f5c4f8c3989f73173e4f5e79c953dc5533ba6c812f632b" : "-1"
-        },
-        "requiredSigners" : [ "1446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94de" ],
-        "validFrom" : 1882,
-        "validTo" : 1902,
+        "totalCollateral" : "404877",
+        "mint" : { },
+        "requiredSigners" : [ ],
+        "validFrom" : null,
+        "validTo" : 39638,
         "networkId" : null,
-        "fee" : "318276",
-        "scriptDataHash" : "d56943bd676db6a164ff8d62661ecfd7f0785552c5aa759db6162caf0e782400",
+        "fee" : "269918",
+        "scriptDataHash" : "df72a079c015d991746f4ee90b3aadf919f88aa293b046580f5a68378cb57fb1",
         "auxiliaryDataHash" : null,
         "certificates" : 0,
         "withdrawals" : 0,
@@ -1900,46 +1612,35 @@
         "redeemers" : [ {
           "tag" : "spend",
           "index" : 1,
-          "data" : "d87d9fd8799f581c1446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94de001a01820c201b000001a202aa06b81b000001a202aa54d8ffff",
-          "mem" : "306680",
-          "steps" : "94465193"
-        }, {
-          "tag" : "mint",
-          "index" : 0,
-          "data" : "d87a80",
-          "mem" : "64188",
-          "steps" : "17841960"
+          "data" : "d8799f03ff",
+          "mem" : "220667",
+          "steps" : "78296654"
         } ]
       },
       "reservation" : "1",
-      "cbor" : "84ac00d9010282825820f8d5e7dc2813c3c01938957dd44dcc3746f446ba734984546c27fc6265177533008258206f44d5698ad56a60132bcde3a94d2d222a21c06c40633b54d9e4a70abcb84551010182a300581d60abababababababababababababababababababababababababababab011a01820c20028201d8185827d8799f5820f8d5e7dc2813c3c01938957dd44dcc3746f446ba734984546c27fc626517753300ff825839001446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94deb7d9f8f088c335d2a3ceef4e685333dde81ad59daa73dcfe08214cc41a12f279d5021a0004db440319076e0819075a09a1581cc3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671a1581d4f7ee8821833f5c4f8c3989f73173e4f5e79c953dc5533ba6c812f632b200b5820d56943bd676db6a164ff8d62661ecfd7f0785552c5aa759db6162caf0e7824000dd9010281825820e549db71adc9c22706e18591d4ae4f4dcb0994f09639fc92d0d812c62acb9de9010ed9010281581c1446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94de10825839001446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94deb7d9f8f088c335d2a3ceef4e685333dde81ad59daa73dcfe08214cc41a00616790111a000748e612d9010281825820659ecb42a26b6a91c4e84854d96a279c8bd23c92cdd7a6889ea29be2bfb484c000a105a282000182d87d9fd8799f581c1446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94de001a01820c201b000001a202aa06b81b000001a202aa54d8ffff821a0004adf81a05a16ca982010082d87a808219fabc1a01103f28f5f6",
-      "txHash" : "6f65aace0f57e54148ada2d1c5bedb321fa608198ffcdc92c9dc311c9450f5cb",
-      "validTo" : 1902,
-      "validFrom" : 1882,
-      "signers" : [ "1446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94de" ]
+      "cbor" : "84a900d90102828258200000000000000000000000000000000000000000000000000000000000000000018258202c1388a942636dbaf8efb0401085cc308c26361b0c94d4aeec97367996fb2554000182a300581d70f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cb01821a002191c0a1581cf46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cba15820bb67ba0e75be6af2bb5e3be0a59129320b88c6f6dfcb0993a8d1a2fe08efff6601028201d8185823d8799f03581c10d11825a3f6a8d725dfa396508de81f0d122319907371a9aeb4f529ff8258390010d11825a3f6a8d725dfa396508de81f0d122319907371a9aeb4f5299cdf03737c7c0ce405be41fc6a1230611aa061ef00aef6a34163d98f1a11b7a8f6021a00041e5e03199ad60b5820df72a079c015d991746f4ee90b3aadf919f88aa293b046580f5a68378cb57fb10dd9010281825820000000000000000000000000000000000000000000000000000000000000000001108258390010d11825a3f6a8d725dfa396508de81f0d122319907371a9aeb4f5299cdf03737c7c0ce405be41fc6a1230611aa061ef00aef6a34163d98f1a11b599c7111a00062d8d12d90102818258208238b1f5c3ddef22b13ed897a258ce33a2c9cc4309e9573e6d3394d470cdb15e00a105a182000182d8799f03ff821a00035dfb1a04aab64ef5f6",
+      "txHash" : "cdb1093e5ac761be707efc41a1e25fac638e7eda2b2c696bb42f03f92be2fac7",
+      "validTo" : 39638,
+      "validFrom" : null,
+      "signers" : [ "10d11825a3f6a8d725dfa396508de81f0d122319907371a9aeb4f529" ]
     },
     "predicted" : {
-      "state" : null,
-      "objects" : [ {
-        "predicted" : true,
-        "effect" : "removed",
-        "object" : "4f7ee8821833f5c4f8c3989f73173e4f5e79c953dc5533ba6c812f632b"
-      } ],
-      "events" : [ ],
-      "payouts" : [ {
+      "state" : {
+        "type" : "State",
+        "value" : {
+          "count" : "3",
+          "owner" : "10d11825a3f6a8d725dfa396508de81f0d122319907371a9aeb4f529"
+        },
         "predicted" : true,
         "index" : 0,
-        "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
-        "value" : {
-          "lovelace" : "25300000"
-        },
-        "owed" : {
-          "lovelace" : "25300000"
-        }
-      } ],
+        "instance" : "bb67ba0e75be6af2bb5e3be0a59129320b88c6f6dfcb0993a8d1a2fe08efff66"
+      },
+      "objects" : [ ],
+      "events" : [ ],
+      "payouts" : [ ],
       "sends" : [ ]
     }
   },
   "violations" : [ ],
-  "mutation" : "payout-to-third-party"
+  "mutation" : "pointer-at-one"
 }

@@ -15,6 +15,17 @@ import static org.junit.jupiter.api.Assertions.*;
 class LaunchManifestTest {
     @TempDir Path temp;
 
+    @Test void theScriptedClientRefusesASpecialFileBeforeCopying(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+        var fifo = dir.resolve("stale.jar");
+        assertEquals(0, new ProcessBuilder("mkfifo", fifo.toString()).inheritIO().start().waitFor());
+        var copy = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { SnapshotClient.copyJar(fifo, dir.resolve("0.jar")); return "copied"; }
+            catch (java.io.IOException e) { return e.getMessage(); }
+        });
+        // A FIFO without a writer would block the copy for ever: refused at once instead (#150 Codex review).
+        assertTrue(copy.get(10, java.util.concurrent.TimeUnit.SECONDS).contains("not a regular file"));
+    }
     @Test void globalOrdinalsAndUnsignedUtf8Ordering() throws Exception {
         var dir = Files.createDirectory(temp.resolve("classes"));
         var jar = temp.resolve("local.jar");

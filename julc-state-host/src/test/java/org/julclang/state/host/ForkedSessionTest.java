@@ -216,6 +216,16 @@ class ForkedSessionTest {
         return frame;
     }
 
+    /**
+     * A syscall that creates, removes, renames, links, truncates or changes a file, its mode, times or extended
+     * attributes (#150 review F-C1; xattrs: #150 Codex re-review). Each optional
+     * {@code at} suffix is grouped on its own: {@code mkdirat?} matched {@code mkdira} but not {@code mkdir} (#150 Codex).
+     */
+    static boolean mutatesFiles(String line) {
+        return line.matches(".* (creat|mkdir(at)?|rmdir|unlink(at)?|rename(at2?)?|f?truncate|link(at)?|symlink(at)?"
+                + "|f?chmod(at)?|utimensat|mknod(at)?|[lf]?setxattr|[lf]?removexattr)\\(.*");
+    }
+
     // The first stdin read marks the serving interval, after the JVM's own launch and perf-data setup.
     private static void checkTrace(Path log) throws IOException {
         boolean serving = false;
@@ -232,7 +242,7 @@ class ForkedSessionTest {
                         || line.matches(".* clone3?\\(.*") && !line.contains("CLONE_THREAD");
                 boolean socket = line.matches(".* (connect|socket|socketpair|bind|listen|accept4?|sendto|sendmsg)\\(.*");
                 // #150 final review F-C1: also rmdir, ftruncate, the chmod family, utimensat and mknod.
-                boolean files = line.matches(".* (creat|mkdirat?|rmdir|unlinkat?|renameat2?|rename|f?truncate|linkat?|symlinkat?|f?chmod(at)?|utimensat|mknod(at)?)\\(.*");
+                boolean files = mutatesFiles(line);
                 // The JVM's own perf-data file (/tmp/hsperfdata_<user>/<pid>, created before serving and removed at
                 // exit) is the one recorded exception (dev-host-1 I10; #150 review SA7).
                 // Only its removal is exempt: any other operation on the perf-data path still fails (#150 review SA8).
