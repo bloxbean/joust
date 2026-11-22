@@ -841,7 +841,7 @@ direct `Tx` building, gated by S3.
     already spends hold. It never takes a UTxO with a reference script, nor one another keyed operation holds. It also
     skips a UTxO with a datum hash: at a key address the ledger needs no datum, so this is a conservative choice, as
     cardano-client-lib's selection makes. An inline datum at a key address is spendable as is, so tokens sent to a
-    wallet with one can be paid in. A creation's seed is never an input the composition already spends: a creation
+    wallet with one can be paid in (also when the provider gives the inline datum's hash beside it, as Yaci Store does). A creation's seed is never an input the composition already spends: a creation
     after a call that paid assets from the caller's only UTxO is refused, while the other order works (the seed is
     counted for the payment). Like every plain selection (`Designation`), it does not skip a UTxO an earlier, still-open prepare claims:
     two such bodies conflict and at most one lands.
@@ -849,12 +849,18 @@ direct `Tx` building, gated by S3.
     what its collected inputs hold beyond the assets it pays in: one output with their lovelace and other tokens. The
     payer funds the lovelace paid in and the fee. Before #152 a key co-caller's surplus went to the payer's change
     (the runtime signed for it). A body, prepared or submitted, may take nothing else from a co-caller's address, and
-    an input whose provider gives no address is refused rather than assumed to be the payer's.
+    an input whose provider gives no address is refused rather than assumed to be the payer's. Only plain outputs
+    count as a co-caller's return: a payout or a send to it is owed by a contract and cannot cover a short return.
+    The collateral is the payer's: every collateral input and the collateral return are at the payer's address. A
+    return above the ledger's maximum value size (inputs with many unrelated tokens) is refused, not split.
   - **Every body handed to a wallet** (`PreparedTx`, a prepared publication, the engine's governor stake
     registration) must balance per unit (`BodyBalance`):
     inputs + mint + withdrawals + certificate refunds = outputs + fee + certificate deposits + proposal deposits +
     donation. No quantity may be negative, zero (an asset) or outside the ledger's range, and no input may appear
-    twice. Otherwise the body is refused. This is the runtime's self-check against bodies the ledger would reject. It
+    twice; nor a map key twice (two withdrawals from one reward account, a policy or an asset name listed twice in a
+    value), which the bytes would keep once. The checks read a copy decoded from the body's bytes, which is what the
+    wallet gets: an observer (`onBuilt`) that keeps the built object cannot change it. Otherwise the body is
+    refused. This is the runtime's self-check against bodies the ledger would reject. It
     says nothing about where value goes: the wallet's net outflow is the page verifier's to bound (ADR-0013).
 - **The snapshot backend** returns one object per output reference, whichever query found it: cardano-client-lib tells
   UTxOs apart by equality.

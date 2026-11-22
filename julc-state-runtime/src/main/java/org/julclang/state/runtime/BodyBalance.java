@@ -37,7 +37,8 @@ import java.util.function.Function;
  * Value conservation of a built transaction body, per unit (#152): inputs + mint + withdrawals + certificate refunds =
  * outputs + fee + certificate deposits + proposal deposits + donation; every output quantity positive and within the
  * ledger's range (an unsigned 64-bit word; mint quantities non-zero signed 64-bit), no input twice (transaction ids
- * compared in any letter case); and on the collateral path, collateral inputs = collateral return + total collateral. The runtime checks every body it hands to a wallet (a
+ * compared in any letter case), no CBOR map key twice (a reward account's withdrawal, a policy or an asset name in a
+ * value: the bytes would keep one); and on the collateral path, collateral inputs = collateral return + total collateral. The runtime checks every body it hands to a wallet (a
  * {@link PreparedTx}, a prepared publication) with it, so it never hands out one the ledger would reject for its value
  * (a negative token quantity in the change, or a token payment no input funds: such a body passes a plain
  * conservation check of the outputs alone, the negative change cancelling the payment).
@@ -81,6 +82,7 @@ public final class BodyBalance {
                              java.util.function.Supplier<ProtocolParams> pp, String what) {
         Map<String, BigInteger> balance = inputs(body.getInputs(), resolve, what);
         if (body.getMint() != null && !body.getMint().isEmpty()) {
+            requireDistinct(body.getMint(), "the mint", what);
             for (var a : ValueUtil.toAmountList(new Value(BigInteger.ZERO, body.getMint()))) {
                 if (a.getUnit().equals(LOVELACE)) continue;   // the coin of the wrapper, zero
                 BigInteger q = a.getQuantity();
@@ -91,7 +93,20 @@ public final class BodyBalance {
             }
         }
         if (body.getWithdrawals() != null) {
-            for (var w : body.getWithdrawals()) balance.merge(LOVELACE, word64(w.getCoin(), "a withdrawal", what), BigInteger::add);
+            // A map in CBOR, keyed by reward account (#165 Codex): a second withdrawal from one account would be counted
+            // here and dropped from the bytes the wallet signs.
+            var accounts = new HashSet<String>();
+            for (var w : body.getWithdrawals()) {
+                String account;
+                try {
+                    account = com.bloxbean.cardano.client.util.HexUtil.encodeHexString(
+                            com.bloxbean.cardano.client.address.util.AddressUtil.addressToBytes(w.getRewardAddress()));
+                } catch (Exception e) {
+                    throw unbalanced(what, "a withdrawal's reward account cannot be read: " + w.getRewardAddress());
+                }
+                if (!accounts.add(account)) throw unbalanced(what, "two withdrawals from reward account " + w.getRewardAddress());
+                balance.merge(LOVELACE, word64(w.getCoin(), "a withdrawal", what), BigInteger::add);
+            }
         }
         for (TransactionOutput o : body.getOutputs()) subtractOutput(balance, o, what);
         balance.merge(LOVELACE, word64(body.getFee(), "the fee", what).negate(), BigInteger::add);
@@ -191,6 +206,9 @@ public final class BodyBalance {
     }
 
     private static void subtractOutput(Map<String, BigInteger> balance, TransactionOutput o, String what) {
+        if (o.getValue() != null && o.getValue().getMultiAssets() != null) {
+            requireDistinct(o.getValue().getMultiAssets(), "an output to " + o.getAddress(), what);
+        }
         for (var a : ValueUtil.toAmountList(o.getValue())) {
             BigInteger q = a.getQuantity();
             if (q.signum() < 0) {
@@ -202,6 +220,25 @@ public final class BodyBalance {
             }
             word64(q, "an output quantity of " + a.getUnit(), what);
             balance.merge(AssetUtil.normalizeUnit(a.getUnit()), q.negate(), BigInteger::add);
+        }
+    }
+
+    /**
+     * Each policy once, and each asset name once within it (#165 Codex): a value is a map of maps in CBOR, so a repeated
+     * key would be counted here and dropped from the bytes the wallet signs.
+     */
+    private static void requireDistinct(List<com.bloxbean.cardano.client.transaction.spec.MultiAsset> multiAssets,
+                                        String where, String what) {
+        var policies = new HashSet<String>();
+        for (var ma : multiAssets) {
+            String policy = ma.getPolicyId() == null ? null : ma.getPolicyId().toLowerCase(java.util.Locale.ROOT);
+            if (!policies.add(policy)) throw unbalanced(what, where + " lists policy " + ma.getPolicyId() + " twice");
+            var names = new HashSet<String>();
+            if (ma.getAssets() == null) continue;
+            for (var a : ma.getAssets()) {
+                String name = com.bloxbean.cardano.client.util.HexUtil.encodeHexString(a.getNameAsBytes());
+                if (!names.add(name)) throw unbalanced(what, where + " lists asset " + ma.getPolicyId() + "." + name + " twice");
+            }
         }
     }
 

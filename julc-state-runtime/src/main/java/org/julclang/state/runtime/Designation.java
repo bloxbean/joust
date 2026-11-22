@@ -160,8 +160,10 @@ final class Designation {
                 for (int page = 1; page <= 20; page++) {
                     var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                     if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) return false;
+                    // One output however the listing spells its transaction id (T3, #165 Codex).
+                    String want = ref();
                     for (Utxo u : r.getValue()) {
-                        if (u.getTxHash().equals(utxo.getTxHash()) && u.getOutputIndex() == utxo.getOutputIndex()) return true;
+                        if (Designation.ref(u).equals(want)) return true;
                     }
                     if (r.getValue().size() < 100) return false;
                 }

@@ -403,11 +403,16 @@ class WalletAssetChangeTest {
 
     /** The snapshot runtime of this test over {@code backend}, the first built body kept in {@code built}. */
     static StateRuntime observed(Fixture f, BackendService backend, AtomicReference<Transaction> built) {
+        return observed(f, backend, backend, built);
+    }
+
+    /** As above, the scripts evaluated over {@code evaluated}'s answers. */
+    static StateRuntime observed(Fixture f, BackendService backend, BackendService evaluated, AtomicReference<Transaction> built) {
         var clock = f.vector.required("clock");
         var time = new SlotChainTime(clock.get("zeroSlot").asLong(), clock.get("zeroTimeMs").asLong(), clock.get("slotLengthMs").asLong(), backend);
         return StateRuntime.builder(backend).network(Networks.testnet()).chainTime(time).ttl(Duration.ofSeconds(20))
-                .evaluator(new JulcTransactionEvaluator(new DefaultUtxoSupplier(backend.getUtxoService()),
-                        new DefaultProtocolParamsSupplier(backend.getEpochService()), new DefaultScriptSupplier(backend.getScriptService()),
+                .evaluator(new JulcTransactionEvaluator(new DefaultUtxoSupplier(evaluated.getUtxoService()),
+                        new DefaultProtocolParamsSupplier(evaluated.getEpochService()), new DefaultScriptSupplier(evaluated.getScriptService()),
                         new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())))
                 .onBuilt(b -> { if (built.get() == null) built.set(b.tx()); })
                 .build();
@@ -548,5 +553,99 @@ class WalletAssetChangeTest {
         assertFalse(String.valueOf(e.getMessage()).contains("refused"), () -> "refused before submission: " + e.getMessage());
         assertNotNull(built.get(), "built");
         assertReturned(f, built.get().getBody(), keyA.baseAddress(), keyB.baseAddress());
+    }
+
+    // ---------------------------------------------------------------- #165 Codex round
+
+    /**
+     * B swaps its tokens for ADA: the Dex's payout to B is owed to B, not B's return. B's token UTxO resolves to 2 ADA
+     * more than its listing (and another input to 2 ADA less, so the body balances): B's return, built from the listing,
+     * is 2 ADA short, and the payout must not cover it.
+     */
+    @Test
+    void aPayoutToACoCallerDoesNotHideAShortReturn() {
+        var f = new Fixture();
+        f.liquid();
+        f.wallet(List.of(f.utxo("cc", 6, 0), f.utxo("bb", 500, 0)));
+        String b = new Account(Networks.testnet()).baseAddress();
+        f.snapshot.utxos.put(b, new ArrayList<>(List.of(walletOfB(f, b))));
+        var walletB = WalletAccount.of(b, Networks.testnet());
+        // Unskewed, the same composition prepares: B's return holds what B's input does less the tokens paid in.
+        var dex = DexClient.at(f.rt, f.instance);
+        var ok = Compose.of(f.rt, f.payer)
+                .add(() -> dex.swapTokenForAda(walletB, BigInteger.valueOf(10_000), BigInteger.ONE, BigInteger.ZERO, f.tokens(10_000)))
+                .prepare();
+        assertNoNegativeOutput(ok.transaction().getBody());
+        // The payer's input the body spends: skewed by -2 ADA, B's by +2 ADA.
+        // The pool's input (not the payer's: it is the collateral too) resolves 2 ADA short, B's 2 ADA over; the
+        // scripts are evaluated over the listing, so the build succeeds and the body balances as resolved.
+        var okBody = ok.transaction().getBody();
+        String poolIn = okBody.getInputs().stream().map(TransactionInput::getTransactionId)
+                .filter(h -> !h.equals("ee".repeat(32)) && !h.equals("bb".repeat(32)) && !h.equals("cc".repeat(32)))
+                .findFirst().orElseThrow();
+        var g = new Fixture();
+        g.liquid();
+        g.wallet(List.of(g.utxo("cc", 6, 0), g.utxo("bb", 500, 0)));
+        g.snapshot.utxos.put(b, new ArrayList<>(List.of(walletOfB(g, b))));
+        var rt = observed(g, skewed(g, Map.of("ee".repeat(32), 2_000_000L, poolIn, -2_000_000L)), new SnapshotBackend(g.snapshot),
+                new AtomicReference<>());
+        var skewedDex = DexClient.at(rt, g.instance);
+        var e = assertThrows(JoustException.class, () -> Compose.of(rt, g.payer)
+                .add(() -> skewedDex.swapTokenForAda(walletB, BigInteger.valueOf(10_000), BigInteger.ONE, BigInteger.ZERO, g.tokens(10_000)))
+                .prepare());
+        assertTrue(e.getMessage().contains("2000000 lovelace from " + b), e::getMessage);
+        assertReleased("ee".repeat(32) + "#0");
+    }
+
+    /** The payer's collateral, as listed, resolves to B's address: refused, not handed out for B to sign. */
+    @Test
+    void aCollateralInputAtAnotherAddressIsRefused() {
+        var f = new Fixture();
+        f.wallet(List.of(f.utxo("cc", 6, 0), f.utxo("bb", 500, 0), f.utxo("aa", 1.15, 100_000)));
+        var collateral = f.addLiquidity().transaction().getBody().getCollateral();
+        assertEquals(1, collateral.size());
+        String hash = collateral.getFirst().getTransactionId();
+        var g = new Fixture();
+        g.wallet(List.of(g.utxo("cc", 6, 0), g.utxo("bb", 500, 0), g.utxo("aa", 1.15, 100_000)));
+        String b = new Account(Networks.testnet()).baseAddress();
+        var snapshot = new SnapshotBackend(g.snapshot);
+        UtxoService utxos = (UtxoService) Proxy.newProxyInstance(Fixture.class.getClassLoader(), new Class<?>[]{UtxoService.class},
+                (proxy, m, args) -> {
+                    Object r = m.invoke(snapshot.getUtxoService(), args);
+                    if (m.getName().equals("getTxOutput") && hash.equals(args[0])) {
+                        Utxo u = ((Result<Utxo>) r).getValue();
+                        return Result.success("ok").withValue(Utxo.builder().txHash(u.getTxHash()).outputIndex(u.getOutputIndex())
+                                .address(b).amount(u.getAmount()).build());
+                    }
+                    return r;
+                });
+        var backend = (BackendService) Proxy.newProxyInstance(Fixture.class.getClassLoader(), new Class<?>[]{BackendService.class},
+                (proxy, m, args) -> m.getName().equals("getUtxoService") ? utxos : m.invoke(snapshot, args));
+        var rt = observed(g, backend, new AtomicReference<>());
+        var dex = DexClient.at(rt, g.instance);
+        var e = assertThrows(JoustException.class, () -> Compose.of(rt, g.payer)
+                .add(() -> dex.addLiquidity(g.payer, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), g.tokens(100_000)))
+                .prepare());
+        assertTrue(e.getMessage().contains("is not at the payer's address but at " + b), e::getMessage);
+        assertReleased(hash + "#0");
+    }
+
+    /** An observer keeps the built body and changes it after prepare returned: the handed-out bytes and hash stay. */
+    @Test
+    void anObserverCannotChangeTheHandedOutBody() throws Exception {
+        var f = new Fixture();
+        f.wallet(List.of(f.utxo("bb", 500, 0), f.utxo("aa", 1.15, 100_000)));
+        var built = new AtomicReference<Transaction>();
+        var rt = observed(f, new SnapshotBackend(f.snapshot), built);
+        var dex = DexClient.at(rt, f.instance);
+        var prepared = Compose.of(rt, f.payer)
+                .add(() -> dex.addLiquidity(f.payer, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
+                .prepare();
+        String cbor = prepared.cbor();
+        var out = built.get().getBody().getOutputs().getFirst();
+        out.getValue().setCoin(out.getValue().getCoin().add(BigInteger.ONE));
+        assertEquals(cbor, prepared.cbor());
+        var reread = Transaction.deserialize(HexFormat.of().parseHex(prepared.cbor()));
+        assertEquals(prepared.txHash(), com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(reread));
     }
 }

@@ -240,4 +240,61 @@ class AssetCollectionTest {
         }
         assertTrue(cap.assetInputs.isEmpty());
     }
+
+    // ---------------------------------------------------------------- #165 Codex round
+
+    @Test
+    void anInlineDatumWithItsHashIsSpendable() {
+        // Yaci Store gives an inline datum's hash too (data_hash beside inline_datum): still an inline datum.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var both = utxo(wallet.baseAddress(), "aa", 2_000_000, 100);
+        both.setInlineDatum("d87980");
+        both.setDataHash("923918e403bf43c34b4ef6b48eb2ee04babed17320d8d1b9ff9ad086e86f44ec");
+        snapshot.utxos.put(wallet.baseAddress(), List.of(both));
+        assertEquals(List.of(both), collect(wallet, 100, null));
+    }
+
+    @Test
+    void aReturnAboveTheMaximumValueSizeIsRefused() {
+        // Two legal inputs of B's, each with 80 unrelated 32-byte names, both needed for the payment: one return holding
+        // all 160 is above a 5,000-byte maximum.
+        var p = pp();
+        p.setMaxValSize("5000");
+        snapshot.protocolParams = p;
+        String payer = new Account(Networks.testnet()).baseAddress();
+        var b = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        snapshot.utxos.put(b.baseAddress(), List.of(many(b.baseAddress(), "aa", 0), many(b.baseAddress(), "bb", 80)));
+        var cap = new TxRunner.Capture();
+        TxRunner.CAPTURE.set(cap);
+        try {
+            collect(b, 100, null);
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        assertEquals(2, cap.assetInputs.size());
+        var e = assertThrows(JoustException.class, () -> AssetTx.returnSurplus(rt, cap, payer));
+        assertTrue(e.getMessage().contains("above the ledger's maximum of 5000 bytes"), e::getMessage);
+        p.setMaxValSize("10000");
+        AssetTx.returnSurplus(rt, cap, payer);
+    }
+
+    /** 50 ADA, 75 of the test token and 80 other 32-byte names (from {@code first}) under another policy. */
+    private static Utxo many(String address, String tag, int first) {
+        var u = utxo(address, tag, 50_000_000, 75);
+        var amounts = new ArrayList<>(u.getAmount());
+        for (int i = first; i < first + 80; i++) amounts.add(new Amount("11".repeat(28) + String.format("%064x", i), BigInteger.ONE));
+        u.setAmount(amounts);
+        return u;
+    }
+
+    @Test
+    void aDesignatedInputListedInAnotherCaseIsUnspent() {
+        // The reservation saw AB…#0; the retry's listing spells ab…#0: the same output, still unspent.
+        String a = new Account(Networks.testnet()).baseAddress();
+        var upper = utxo(a, "AB", 5_000_000, 0);
+        snapshot.utxos.put(a, List.of(utxo(a, "ab", 5_000_000, 0)));
+        assertTrue(new Designation.Designated(upper, a).unspent(rt));
+        snapshot.utxos.put(a, List.of(utxo(a, "ac", 5_000_000, 0)));
+        assertFalse(new Designation.Designated(upper, a).unspent(rt));
+    }
 }

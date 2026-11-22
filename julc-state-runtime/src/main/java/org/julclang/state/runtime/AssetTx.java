@@ -327,9 +327,10 @@ final class AssetTx {
                     boolean spent = cap != null && cap.inputs.contains(ref);
                     // An inline datum at a key address is spendable as is (R9): tokens a contract sends a wallet with one
                     // can be paid in. Not a datum hash (conservative, as cardano-client-lib; F-W5), nor a reference
-                    // script (it would be consumed).
+                    // script (it would be consumed). A provider may give an inline datum's hash too (Yaci Store does):
+                    // only a hash without the inline datum is a datum hash (#165 Codex).
                     // Spent already (R3-2): it counts whatever it carries, since the transaction spends it anyway.
-                    if (!spent && (u.getReferenceScriptHash() != null || u.getDataHash() != null
+                    if (!spent && (u.getReferenceScriptHash() != null || u.getDataHash() != null && u.getInlineDatum() == null
                             || !Designation.pickable(u, TxRunner.currentOperation()))) {
                         passedOver++;
                         continue;
@@ -386,7 +387,8 @@ final class AssetTx {
      * assets its calls pay in (T1): one output to that address, appended after the calls' outputs, holding those
      * inputs' lovelace and their other assets. Without it QuickTx would make it the payer's change (the payer is the
      * change address). The payer funds the calls' lovelace and the fee, as for any composition (ADR-0011, ADR-0013).
-     * Refuses when that output would hold less than its ledger minimum. Returns what each such caller pays in, by its
+     * Refuses when that output would hold less than its ledger minimum, or a value above the ledger's maximum value
+     * size. Returns what each such caller pays in, by its
      * address, for the prepared transaction's check ({@code TxRunner.checkCoCallers}).
      */
     static Map<String, Value> returnSurplus(org.julclang.state.runtime.StateRuntime rt, TxRunner.Capture cap, String payer) {
@@ -428,9 +430,26 @@ final class AssetTx {
                         + Assets.read(back) + ") is below the ledger minimum of an output (" + min + " lovelace) and cannot"
                         + " go back to it; compose with it as the payer, or pay from a UTxO with more ADA (T1)");
             }
+            // One output holds what several inputs held: it may exceed the ledger's maximum value size (#165 Codex).
+            // Refused rather than split: a split changes the outputs a page sees and needs min ADA for each.
+            int size = valueSize(out.getValue());
+            if (pp.getMaxValSize() != null && size > Integer.parseInt(pp.getMaxValSize())) {
+                throw new JoustException("composition: what " + e.getKey() + "'s inputs hold beyond its payment needs a "
+                        + size + "-byte value, above the ledger's maximum of " + pp.getMaxValSize() + " bytes, and cannot"
+                        + " go back to it in one output; compose with it as the payer, or pay from fewer UTxOs (T1)");
+            }
             cap.tx.payToAddress(e.getKey(), amounts);
         }
         return paid;
+    }
+
+    /** The size of {@code v} as the ledger measures it: its CBOR. */
+    static int valueSize(com.bloxbean.cardano.client.transaction.spec.Value v) {
+        try {
+            return com.bloxbean.cardano.client.common.cbor.CborSerializationUtil.serialize(v.serialize()).length;
+        } catch (Exception e) {
+            throw new JoustException("composition: cannot serialise a value", e);
+        }
     }
 
     private static String unitOf(Amount a) {

@@ -265,4 +265,98 @@ class BodyBalanceTest {
         orphanTotal.setTotalCollateral(BigInteger.valueOf(300_000));
         refused(orphanTotal, "without collateral inputs");
     }
+
+    // ---------------------------------------------------------------- #165 Codex round
+
+    @Test
+    void twoWithdrawalsFromOneRewardAccountAreRefused() {
+        // CBOR keys withdrawals by reward account: 5 ADA in, 2 + 2 ADA withdrawn, 8.8 ADA out and a 0.2 ADA fee balance
+        // as objects, but the bytes keep one withdrawal and are 2 ADA short.
+        String reward = new Account(Networks.testnet()).stakeAddress();
+        var b = body(List.of(IN_B), 200_000, out(8_800_000, 0));
+        b.getWithdrawals().add(new com.bloxbean.cardano.client.transaction.spec.Withdrawal(reward, BigInteger.valueOf(2_000_000)));
+        b.getWithdrawals().add(new com.bloxbean.cardano.client.transaction.spec.Withdrawal(reward, BigInteger.valueOf(2_000_000)));
+        refused(b, "two withdrawals from reward account");
+        b.getWithdrawals().removeLast();
+        b.getOutputs().getFirst().getValue().setCoin(BigInteger.valueOf(6_800_000));
+        check(b);
+    }
+
+    @Test
+    void aPolicyOrAssetListedTwiceIsRefused() {
+        // A value is a map of maps in CBOR: two entries for one policy (or one name) keep only one of them.
+        var twice = body(List.of(IN_A), 200_000, out(9_800_000, 50));
+        twice.getOutputs().getFirst().getValue().getMultiAssets().add(MultiAsset.builder().policyId(POLICY.toUpperCase())
+                .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.valueOf(50))))).build());
+        refused(twice, "lists policy");
+        var name = body(List.of(IN_A), 200_000, out(9_800_000, 0));
+        name.getOutputs().getFirst().getValue().getMultiAssets().add(MultiAsset.builder().policyId(POLICY)
+                .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.valueOf(50)), new Asset("0x01", BigInteger.valueOf(50))))).build());
+        refused(name, "lists asset");
+    }
+
+    @Test
+    void theHandedOutBodyIsTheOneItsBytesHold() {
+        // What the wallet signs is the bytes: the checks read a copy decoded from them, which nothing else holds.
+        String reward = new Account(Networks.testnet()).stakeAddress();
+        var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
+        t.setBody(body(List.of(IN_B), 200_000, out(8_800_000, 0)));
+        t.getBody().getWithdrawals().add(new com.bloxbean.cardano.client.transaction.spec.Withdrawal(reward, BigInteger.valueOf(2_000_000)));
+        t.getBody().getWithdrawals().add(new com.bloxbean.cardano.client.transaction.spec.Withdrawal(reward, BigInteger.valueOf(2_000_000)));
+        var handed = TxRunner.handedOut(t, "test");
+        assertEquals(1, handed.getBody().getWithdrawals().size(), "one withdrawal survives the bytes");
+        var e = assertThrows(BodyBalance.UnbalancedException.class, () -> BodyBalance.check(handed.getBody(), chain::get, pp(), "test"));
+        assertTrue(e.getMessage().contains("lovelace=-2000000"), e::getMessage);
+        // An observer keeping the built object changes nothing handed out.
+        var ok = new com.bloxbean.cardano.client.transaction.spec.Transaction();
+        ok.setBody(body(List.of(IN_B), 200_000, out(4_800_000, 0)));
+        var copy = TxRunner.handedOut(ok, "test");
+        String hash = com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(copy);
+        ok.getBody().getOutputs().getFirst().getValue().setCoin(BigInteger.valueOf(4_800_001));
+        assertEquals(hash, com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(copy));
+        assertEquals(BigInteger.valueOf(4_800_000), copy.getBody().getOutputs().getFirst().getValue().getCoin());
+    }
+
+    @Test
+    void aPayoutOrASendToACoCallerIsNotItsReturn() {
+        // B's input resolves to 10 ADA. B's return is 8 ADA; a payout a contract owes B (tagged) brings B's outputs to
+        // 10 ADA, which must not count: B is 2 ADA short.
+        String a = new Account(Networks.testnet()).baseAddress();
+        var spends = Map.of(IN_A, utxo(ADDR, "aa", 10_000_000, 0), IN_B, utxo(a, "bb", 5_000_000, 0));
+        Map<String, org.julclang.ledger.Value> paid = Map.of();
+        var payout = out(2_000_000, 0);
+        payout.setInlineDatum(com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData.of(7));
+        var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(8_000_000, 0), payout, outTo(a, 4_800_000, 0)));
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, "test"));
+        assertTrue(e.getMessage().contains("2000000 lovelace from " + ADDR), e::getMessage);
+        // A send to B (no datum, at a send's index) does not count either.
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(8_000_000, 0), out(2_000_000, 0), outTo(a, 4_800_000, 0)));
+        TxRunner.checkCoCallers(t, spends, a, paid, "test");   // a plain output: B's return
+        assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, java.util.Set.of(1), "test"));
+        // B's whole 10 ADA back, beside the payout: fine.
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 0), payout, outTo(a, 2_800_000, 0)));
+        TxRunner.checkCoCallers(t, spends, a, paid, "test");
+    }
+
+    @Test
+    void theCollateralIsThePayers() {
+        // A collateral input resolving to B's address (a listing at the payer's that the provider answers otherwise), or
+        // a collateral return to B: the phase-2 path would take from B or pay B what is the payer's.
+        String a = new Account(Networks.testnet()).baseAddress();
+        var IN_C = new TransactionInput("cc".repeat(32), 0);
+        var spends = Map.of(IN_B, utxo(a, "bb", 5_000_000, 0), IN_C, utxo(ADDR, "cc", 5_000_000, 0));
+        var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
+        t.setBody(body(List.of(IN_B), 200_000, outTo(a, 4_800_000, 0)));
+        t.getBody().getCollateral().add(IN_C);
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, Map.of(), "test"));
+        assertTrue(e.getMessage().contains("collateral input " + "cc".repeat(32) + "#0 is not at the payer's address"), e::getMessage);
+        var own = Map.of(IN_B, utxo(a, "bb", 5_000_000, 0), IN_C, utxo(a, "cc", 5_000_000, 0));
+        TxRunner.checkCoCallers(t, own, a, Map.of(), "test");
+        t.getBody().setCollateralReturn(out(4_000_000, 0));   // to ADDR, not the payer
+        var r = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, own, a, Map.of(), "test"));
+        assertTrue(r.getMessage().contains("the collateral return goes to " + ADDR), r::getMessage);
+        t.getBody().setCollateralReturn(outTo(a, 4_000_000, 0));
+        TxRunner.checkCoCallers(t, own, a, Map.of(), "test");
+    }
 }
