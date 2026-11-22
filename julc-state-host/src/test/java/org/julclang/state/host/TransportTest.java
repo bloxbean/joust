@@ -165,7 +165,7 @@ class TransportTest {
             public void write(int b) { write(new byte[]{(byte) b}, 0, 1); }
             public void write(byte[] b, int off, int len) {   // the client stopped reading: the pipe is full
                 writing.countDown();
-                while (true) try { blocked.await(); } catch (InterruptedException ignored) {}
+                while (blocked.getCount() != 0) try { blocked.await(); } catch (InterruptedException ignored) {}
             }
         }, x -> exits.add(x == null ? "exit" : x), new Transport.Handler() {
             public long deadlineMs() { return 300; }
@@ -183,6 +183,39 @@ class TransportTest {
         // watchdog ends the session once the write has stalled for the frame bound.
         assertNull(exits.poll(1, TimeUnit.SECONDS));
         assertEquals("stalled protocol write", exits.poll(12, TimeUnit.SECONDS));
-        assertNull(exits.poll(200, TimeUnit.MILLISECONDS));   // once
+        // The pipe drains: the queued exit and the call's unwinding run now, and the session still exits once.
+        blocked.countDown();
+        assertNull(exits.poll(1, TimeUnit.SECONDS));
+    }
+    @Test void aBlockedStderrDelaysTheHaltOnlyBriefly() throws Exception {
+        var never = new CountDownLatch(1);
+        var err = new PrintStream(new OutputStream() {
+            public void write(int b) { while (true) try { never.await(); } catch (InterruptedException ignored) {} }
+        }, true);
+        var halts = new LinkedBlockingQueue<Integer>();
+        var exit = HostMain.exit(err, halts::add);
+        long start = System.nanoTime();
+        Thread.ofPlatform().daemon().start(() -> exit.accept("stalled frame"));
+        assertEquals(1, halts.poll(HostMain.REASON_MILLIS + 2000, TimeUnit.MILLISECONDS));
+        assertTrue(System.nanoTime() - start >= TimeUnit.MILLISECONDS.toNanos(HostMain.REASON_MILLIS - 50));
+        exit.accept(null);   // a clean exit writes nothing
+        assertEquals(0, halts.poll(1, TimeUnit.SECONDS));
+    }
+    @Test void aStopOnAnInterruptedThreadStillWritesItsReason() throws Exception {
+        var lines = new ByteArrayOutputStream();
+        var err = new PrintStream(new OutputStream() {
+            public void write(int b) {
+                try { Thread.sleep(lines.size() == 0 ? 100 : 0); } catch (InterruptedException ignored) {}
+                lines.write(b);
+            }
+        }, true);
+        var written = new LinkedBlockingQueue<String>();
+        var exit = HostMain.exit(err, code -> written.add(lines.toString(StandardCharsets.UTF_8)));
+        var stopping = Thread.ofPlatform().daemon().unstarted(() -> {
+            Thread.currentThread().interrupt();   // as a call's own thread after abandon()
+            exit.accept("protocol write failed");
+        });
+        stopping.start();
+        assertEquals("joust dev host: protocol write failed" + System.lineSeparator(), written.poll(3, TimeUnit.SECONDS));
     }
 }
