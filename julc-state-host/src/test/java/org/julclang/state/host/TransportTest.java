@@ -187,6 +187,51 @@ class TransportTest {
         blocked.countDown();
         assertNull(exits.poll(1, TimeUnit.SECONDS));
     }
+    @Test void runWaitsForAnExitInProgress_whenTheStalledWriteDrainsAndStdinEnds() throws Exception {
+        // The watchdog condemned a write and is still writing its reason; meanwhile the write completes and stdin ends.
+        // run() must not return (letting main end the JVM with status 0) before that exit ran (#149 review P3-1).
+        var blocked = new CountDownLatch(1);
+        var writing = new CountDownLatch(1);
+        var exiting = new CountDownLatch(1);
+        var exitFinished = new java.util.concurrent.atomic.AtomicBoolean();
+        var input = new PipedOutputStream();
+        var t = new Transport(new PipedInputStream(input, 65536), new OutputStream() {
+            public void write(int b) { write(new byte[]{(byte) b}, 0, 1); }
+            public void write(byte[] b, int off, int len) {
+                writing.countDown();
+                while (blocked.getCount() != 0) try { blocked.await(); } catch (InterruptedException ignored) {}
+            }
+        }, x -> {
+            if (x == null) return;
+            exiting.countDown();
+            long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(800);   // a slow reason line
+            while (System.nanoTime() < end) try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+            exitFinished.set(true);
+        }, new Transport.Handler() {
+            public long deadlineMs() { return 60_000; }
+            public Transport.Reply execute(Call call, JsonNode p) {
+                call.reverse("chain/read", obj().put("kind", "tip"));
+                return new Transport.Reply(obj());
+            }
+        });
+        var returned = new CountDownLatch(1);
+        var sawFinished = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread.ofPlatform().daemon().start(() -> { t.run(); sawFinished.set(exitFinished.get()); returned.countDown(); });
+        new Frames.Writer(input).write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get\"}".getBytes());
+        assertTrue(writing.await(2, TimeUnit.SECONDS));
+        assertTrue(exiting.await(15, TimeUnit.SECONDS), "the watchdog ends the session");
+        blocked.countDown();
+        input.close();   // stdin ends while the reason line is still being written
+        assertTrue(returned.await(5, TimeUnit.SECONDS));
+        assertTrue(sawFinished.get(), "run() returned only after the exit in progress");
+    }
+    @Test void aReasonWriterThatCannotStartStillHalts() {
+        var halts = new LinkedBlockingQueue<Integer>();
+        var oom = new OutOfMemoryError("unable to create native thread");
+        var exit = HostMain.exit(new PrintStream(new ByteArrayOutputStream()), halts::add, task -> { throw oom; });
+        assertSame(oom, assertThrows(OutOfMemoryError.class, () -> exit.accept("stalled protocol write")));
+        assertEquals(1, halts.poll());
+    }
     @Test void aBlockedStderrDelaysTheHaltOnlyBriefly() throws Exception {
         var never = new CountDownLatch(1);
         var err = new PrintStream(new OutputStream() {
