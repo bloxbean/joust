@@ -811,7 +811,7 @@ class DevHostSeamsTest {
         assertSame(pending, assertThrows(PendingTransactionException.class, () -> Compose.of(plain, payer)
                 .add(() -> { throw pending; }).add(never).submit()));
         Runnable foreign = () -> new TxRunner(hosted).submit(TxRunner.newTx(), payer, null, new byte[0][], null, List.of(), null, "a call");
-        assertThrows(TxRunner.ForeignStore.class, () -> Compose.of(plain, payer).add(foreign).add(never).submit());
+        assertThrows(TxRunner.EndsComposition.class, () -> Compose.of(plain, payer).add(foreign).add(never).submit());
         // Nested: the same, inside the outer composition's pass.
         assertSame(pending, assertThrows(PendingTransactionException.class, () -> Compose.of(plain, payer)
                 .add(() -> Compose.of(plain, payer).add(() -> { throw pending; }).add(never).submit()).add(never).submit()));
@@ -836,6 +836,55 @@ class DevHostSeamsTest {
                 (p, m, a) -> m.getName().equals("getUtxoService") ? utxos : null);
         var rt = StateRuntime.builder(backend).chainTime(chain.time()).network(Networks.testnet()).build();
         assertEquals(Designation.ref(published), Designation.ref(rt.inScope(CallScope.at(10), rt.outputVerifier()::reference)));
+        assertNull(rt.outputVerifier().reference(), "unscoped: the first page, as before");
+    }
+
+    @Test
+    void aBuiltTransactionIsNeverSubmittedFromInsideAComposition() {
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var submitted = new java.util.concurrent.atomic.AtomicInteger();
+        var other = StateRuntime.builder(failing(chain, null, null, submitted)).chainTime(chain.time())
+                .network(Networks.testnet()).claimStore(new HostStore()).build();
+        var plain = runtime(chain, b -> b);
+        Runnable never = () -> fail("a later call ran");
+        assertThrows(TxRunner.EndsComposition.class, () -> Compose.of(plain, payer)
+                .add(() -> new TxRunner(other).submitSigned(spending(utxo(payer.baseAddress(), 5_000_000)), "submit")).add(never).submit());
+        assertEquals(0, submitted.get(), "nothing broadcast");
+    }
+
+    @Test
+    void aPendingPrerequisiteOfAKeyedOperationKeepsItsOwnHash() {
+        // Nothing of the operation was handed out; a verifier publication may land: its hash is the outcome (#145 Codex).
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        chain.wallet.add(utxo(payer.baseAddress(), 30_000_000));
+        var publication = new PendingTransactionException("ab".repeat(32), "publish the verifier: submission outcome unknown");
+        var e = assertThrows(PendingTransactionException.class, () -> KeyedSeriesTest.series(chain, 3, payer, d -> {
+            throw publication;
+        }));
+        assertSame(publication, e);
+        assertEquals("ab".repeat(32), e.txHash());
+    }
+
+    @Test
+    void aScopedLookupTreatsAFailedPageAsAFailedRead() {
+        var chain = new Chain();
+        var probe = runtime(chain, b -> b);
+        String holder = probe.outputVerifier().holder();
+        var first = new ArrayList<Utxo>();
+        for (int i = 0; i < 20; i++) first.add(utxo(holder, 2_000_000));
+        var utxos = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
+                (p, m, a) -> (Integer) a[2] == 1 ? com.bloxbean.cardano.client.api.model.Result.success("ok").withValue(first)
+                        : com.bloxbean.cardano.client.api.model.Result.error("Service Unavailable").code(503));
+        var backend = (com.bloxbean.cardano.client.backend.api.BackendService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.BackendService.class},
+                (p, m, a) -> m.getName().equals("getUtxoService") ? utxos : null);
+        var rt = StateRuntime.builder(backend).chainTime(chain.time()).network(Networks.testnet()).build();
+        assertThrows(ReadFailed.class, () -> rt.inScope(CallScope.at(10), rt.outputVerifier()::reference));
+        var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        assertThrows(ReadFailed.class, () -> rt.inScope(CallScope.at(10), contract::findReferenceScript));
         assertNull(rt.outputVerifier().reference(), "unscoped: the first page, as before");
     }
 
