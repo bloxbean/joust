@@ -16,7 +16,7 @@ Run `./gradlew copyClientKit` in the client project. From an empty test director
 
 ```sh
 jar xf "$lib"/julc-state-host-*-conformance.jar verifier sessions
-java -cp "$lib/*" org.julclang.state.host.conformance.ReferenceChecker verifier/dapp-0034.json
+java -cp "$lib/*" org.julclang.state.host.conformance.ReferenceChecker verifier/dapp-0015.json
 java -cp "$lib/*" org.julclang.state.host.conformance.ReferenceChecker verifier/reject-shifted-pointer.json
 ```
 
@@ -75,7 +75,7 @@ The recorded positives are named after their recording. A derived positive (`acc
 | `result` | The complete forward result, including `prepared` and any `predicted` projection. Signing uses the independently decoded body, witnesses and resolved UTxOs. |
 | `orderedReads` | Included on the offline Registry cases and the two Bank order cases. Compare the provider arrays in `Bank-publish-1` and `permuted`. Selection can change the body hash even though the UTxO set is the same. |
 
-The checker slices the received CBOR, hashes the body and reads the ledger fields independently of the host builder. It binds the checked redeemers and datums to the body's script-data hash using the client's V3 cost model. Input order for the plan follows the wire. Spend pointers use transaction ID and numeric output index in ledger order. Compare `dapp-0003` and `dapp-0034` for the same method at pointers 0 and 1. The method constructor comes from the anchored description in both cases.
+The checker slices the received CBOR, hashes the body and reads the ledger fields independently of the host builder. It binds the checked redeemers and datums to the body's script-data hash using the client's V3 cost model. Input order for the plan follows the wire. Spend pointers use transaction ID and numeric output index in ledger order. Compare `dapp-0003` and `dapp-0015` (the same method, both at pointer 0) with `owned-action`, whose spend is at pointer 1. The method constructor comes from the anchored description in both cases.
 
 Rule 1 says to hash the received body bytes and never a re-encoding: `accept-indefinite-body`, `accept-nonminimal-integers` and `accept-untagged-sets` carry valid non-canonical bodies (an indefinite-length body map and outputs array, non-minimal integer heads, sets as plain arrays) with their correct hash, and `reject-reencoded-hash` claims the hash of the canonical re-encoding for non-canonical bytes. A client that decodes and re-encodes the body fails all four. The `malformed` negatives are bodies two decoders can read differently: duplicate body keys, a duplicate input or redeemer, trailing bytes, an indefinite byte string and an unknown witness key. Refuse them rather than keep the first or last duplicate.
 
