@@ -602,7 +602,7 @@ public final class MutationVectors {
                 e.raw(e.splice(w,head(5,w.items.size()/2+1)+"01"+"d9010281"+"8200581c"+OTHER+w.raw().substring(2)));
             })
         ));
-        String removal = "registry-019-release", action = "registry-005-upgrade";
+        String removal = "registry-m3-release", action = "registry-m3-upgrade";
         cases.addAll(List.of(
                 new Case("keyed-widened", removal, "keyedWindow/bounds", e -> e.keyedWindow(0,1)),
                 new Case("keyed-late-start", removal, "keyedWindow/bounds", e -> e.keyedWindow(3,3)),
@@ -638,7 +638,7 @@ public final class MutationVectors {
                     e.swap(e.redeemers().items.get(5).at(0),link);
                 })));
         // One vector per KeyedRules check and conjunct (D11 list roles), on the five recorded Registry calls.
-        String init = "registry-001-init", insert = "registry-017-claim", retire = "registry-021-retire";
+        String init = "registry-m3-init", insert = "registry-m3-claim", retire = "registry-m3-retire";
         cases.addAll(List.of(
                 new Case("keyed-head-instance", init, "continuingOutput/keyedHead", e -> e.outDatum(1, e.outDatum(1).replace(e.instanceId(), ELSEWHERE))),
                 new Case("keyed-head-next", init, "continuingOutput/keyedHead", e -> e.outDatum(1, e.outDatum(1).replace(e.instanceId()+"4000ff", e.instanceId()+"416100ff"))),
@@ -758,7 +758,7 @@ public final class MutationVectors {
         }
         // ADR-0014 maps (#160): the map verifier's withdrawal, claims and datum roots. Swapping the map and output
         // claims of a call with both (Locker unlock) is refused by mapClaims and redeemer/claimsShape together.
-        String token = "token-003-mint";
+        String token = "token-m3-mint-2";
         cases.add(new Case("map-withdrawal",token,"mapWithdrawal/withdrawal", e -> e.body(5,"a1581df0"+OTHER+"00")));
         cases.add(new Case("map-policy",token,"mapClaims/claim", e -> e.swap(e.mapClaim().at(0),"581c"+OTHER)));
         cases.add(new Case("map-owner",token,"mapClaims/claim", e -> e.swap(e.mapClaim().at(1).tagged(121).at(0),"5820"+"12".repeat(32))));
@@ -773,7 +773,7 @@ public final class MutationVectors {
             e.swap(datum,datum.raw().replace(root,"ab".repeat(32)));
         }));
         // Owned-object maps (Armory vaults, #160 Q1): the claim's owner is the creation's seed or the object input.
-        cases.add(new Case("owned-map-owner-instance","armory-0002-openVault","mapClaims/claim", e -> {
+        cases.add(new Case("owned-map-owner-instance","armory-m0-openVault","mapClaims/claim", e -> {
             String unit = e.v.at("/anchors/policy").asText()+e.call("instance");
             String ref = null;
             for (var r : e.ledger.plan.required("referenceInputs")) {
@@ -782,11 +782,11 @@ public final class MutationVectors {
             }
             e.swap(e.mapClaim().at(1), e.outRef(Objects.requireNonNull(ref, "no instance reference input")));
         }));
-        cases.add(new Case("owned-map-owner-wallet","armory-0004-stash","mapClaims/claim",
+        cases.add(new Case("owned-map-owner-wallet","armory-m0-stash-2","mapClaims/claim",
                 e -> e.swap(e.mapClaim().at(1), e.outRef(e.walletInput()))));
         // Q7: a destroy whose claim writes (an insert into the vault's empty map, with its new root recomputed), and a
         // continuation whose map still lists a pending read at the right root.
-        cases.add(new Case("map-destroy-write","armory-0009-closeVault","mapClaims/destroyWrites", e -> {
+        cases.add(new Case("map-destroy-write","armory-m0-closeVault","mapClaims/destroyWrites", e -> {
             org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
             var claims = org.julclang.clientlib.PlutusDataAdapter.convert(org.julclang.clientlib.PlutusDataAdapter.toClientLib(
                     CallRules.data(e.rewardData(0).raw())), org.julclang.state.api.mpf.MapClaims.class);
@@ -801,7 +801,7 @@ public final class MutationVectors {
             var encoded = org.julclang.clientlib.PlutusDataAdapter.convert(new org.julclang.state.api.mpf.MapClaims(org.julclang.core.types.JulcList.of(claim)));
             e.swap(e.rewardData(0), encoded.serializeToHex());
         }));
-        cases.add(new Case("map-pending-read","armory-0004-stash","mapDatum/root", e -> {
+        cases.add(new Case("map-pending-read","armory-m0-stash-2","mapDatum/root", e -> {
             String root = e.mapClaim().at(6).bytes();
             for (int i = 0; i < e.ledger.outputs.size(); i++) {
                 String datum = e.ledger.plan.at("/outputs/"+i+"/datum").asText("");
@@ -811,7 +811,7 @@ public final class MutationVectors {
         }));
         cases.add(new Case("map-no-claims",token,"mapClaims/count", e -> e.swap(e.rewardData(0).tagged(121).at(0),"80")));
         cases.add(new Case("map-claims-decode",token,"mapClaims/decode", e -> e.swap(e.rewardData(0),"d87980")));
-        cases.add(new Case("map-creation-root","token-001-create","mapClaims/creationRoot", e -> {
+        cases.add(new Case("map-creation-root","token-m3-create","mapClaims/creationRoot", e -> {
             // A new instance whose map starts at another root: no writes, old and new root equal, the datum agreeing.
             String zero = "00".repeat(32), root = "ab".repeat(32);
             e.swap(e.mapClaim().at(6),"5820"+root);

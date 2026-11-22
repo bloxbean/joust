@@ -22,38 +22,47 @@ final class ClientVectors {
             "Dex-combined-reconstructed", "Dex-init", "Dex-publish-1", "Dex-publish-2", "Dex-publish-3",
             "HostCouncil-init", "HostCouncil-publish-1", "destroy-events", "owned-action", "owned-destroy",
             "owned-init", "quorum-caller", "quorum-two", "owned-quorum-caller", "owned-quorum-two", "owned-events-caller",
-            "owned-destroy-events", "dapp-0003", "dapp-0034", "permuted",
-            "locker-003-unlock", "guild-003-recruit", "guild-004-levelUp", "guild-016-levelUp", "guild-017-retire", "armory-0002-openVault", "armory-0003-stash", "armory-0004-stash", "armory-0005-take", "armory-0009-closeVault", "safes-0010-openSafe", "token-m0-mint", "token-001-create", "token-002-mint", "token-003-mint", "token-004-transfer",
-            "registry-001-init", "registry-005-upgrade", "registry-017-claim", "registry-019-release", "registry-021-retire"));
+            "owned-destroy-events", "dapp-0003", "dapp-0015", "permuted",
+            // Map vectors by role (MapRecording.m3/m0: the N-th recording of a method), not by file number.
+            "locker-m3-unlock", "guild-m3-recruit", "guild-m3-levelUp", "guild-m3-levelUp-2", "guild-m3-retire",
+            "armory-m0-openVault", "armory-m0-stash", "armory-m0-stash-2", "armory-m0-take", "armory-m0-closeVault",
+            "safes-m0-openSafe", "token-m0-mint", "token-m3-create", "token-m3-mint", "token-m3-mint-2", "token-m3-transfer",
+            "registry-m3-init", "registry-m3-upgrade", "registry-m3-claim", "registry-m3-release", "registry-m3-retire"));
         for (String name : HostVectorsTest.REGISTRY) if (!name.equals("Registry-cooldown") && Files.exists(HOST.resolve(name+".json"))) names.add(name);
         for (String name : HostVectorsTest.TOKEN) if (Files.exists(HOST.resolve(name+".json"))) names.add(name);
         return List.copyOf(names);
     }
 
     static ObjectNode recording(String name) throws Exception {
-        if (name.startsWith("locker-")) return MapRecording.record("locker", name.substring(7));
-        if (name.startsWith("guild-")) return MapRecording.record("guild", name.substring(6));
-        if (name.equals("armory-0002-openVault")) return MapRecording.m0Armory("0002-Armory.openVault", "ownedInit", "openVault", null, obj());
-        if (name.equals("armory-0003-stash")) return MapRecording.m0Armory("0003-Armory.stash", "ownedAction", "stash",
-                "4f758a26a38373a933e85945755e99bc91eb14f7693c63d4b4b57d58f1", obj().put("item", "73776f7264").put("count", "3"));
-        // A vault that already holds items: the host rebuilds its map from the object unit's history.
-        if (name.equals("armory-0004-stash")) return MapRecording.m0Armory("0004-Armory.stash", "ownedAction", "stash",
-                "4f758a26a38373a933e85945755e99bc91eb14f7693c63d4b4b57d58f1", obj().put("item", "67656d").put("count", "5"));
-        if (name.equals("armory-0005-take")) return MapRecording.m0Armory("0005-Armory.take", "ownedAction", "take",
-                "4f758a26a38373a933e85945755e99bc91eb14f7693c63d4b4b57d58f1", obj().put("item", "73776f7264").put("count", "1"));
+        if (name.startsWith("locker-m3-")) return MapRecording.record("locker", MapRecording.m3("locker", name.substring(10)));
+        if (name.startsWith("guild-m3-")) return MapRecording.record("guild", MapRecording.m3("guild", name.substring(9)));
+        if (name.startsWith("armory-m0-")) {
+            String role = name.substring(10), file = MapRecording.m0("guild", "Armory." + role);
+            // The object is the vault the recorded transaction carries (or burns); a creation names none.
+            String object = role.equals("openVault") ? null : MapRecording.ownedObject("guild", file);
+            String method = role.replaceFirst("-\\d+$", "");
+            return switch (role) {
+                case "openVault" -> MapRecording.m0Armory(file, "ownedInit", "openVault", null, obj());
+                case "stash" -> MapRecording.m0Armory(file, "ownedAction", method, object, obj().put("item", "73776f7264").put("count", "3"));
+                // A vault that already holds items: the host rebuilds its map from the object unit's history.
+                case "stash-2" -> MapRecording.m0Armory(file, "ownedAction", method, object, obj().put("item", "67656d").put("count", "5"));
+                case "take" -> MapRecording.m0Armory(file, "ownedAction", method, object, obj().put("item", "73776f7264").put("count", "1"));
+                case "closeVault" -> MapRecording.m0Armory(file, "ownedDestroy", method, object, obj());
+                default -> throw new AssertionError(name);
+            };
+        }
         // A creation that writes into its map: Safes.openSafe notes the deposited token.
-        if (name.equals("safes-0010-openSafe")) {
-            String policy = "6aec60280bff70ee029fa04e37424ed140d7a322b9891b0e2547eb5a";
+        if (name.equals("safes-m0-openSafe")) {
+            String file = MapRecording.m0("locker", "Safes.openSafe");
+            String policy = MapRecording.policyOf("locker", file, "474f4c44");
             var pay = obj().put("lovelace", "0");
             pay.putArray("assets").addArray().add(policy).addArray().addArray().add("474f4c44").add("70");
-            return MapRecording.m0Owned("locker", org.julclang.state.examples.locker.SafesClient.class, "0010-Safes.openSafe", "ownedInit",
+            return MapRecording.m0Owned("locker", org.julclang.state.examples.locker.SafesClient.class, file, "ownedInit",
                     "openSafe", null, obj().put("tokenPolicy", policy).put("tokenName", "474f4c44").put("qty", "70"), pay);
         }
-        if (name.equals("armory-0009-closeVault")) return MapRecording.m0Armory("0009-Armory.closeVault", "ownedDestroy", "closeVault",
-                "4f0a81624693bb86c3f2641262ae53cef5fc56483dc44eb8a0f0aedd50", obj());
         if (name.equals("token-m0-mint")) return MapRecording.firstM0Mint();
-        if (name.startsWith("token-")) return MapRecording.record("token", name.substring(6));
-        if (name.startsWith("registry-")) return RegistryRecording.record(name.substring("registry-".length()));
+        if (name.startsWith("token-m3-")) return MapRecording.record("token", MapRecording.m3("token", name.substring(9)));
+        if (name.startsWith("registry-m3-")) return RegistryRecording.record(name.substring("registry-m3-".length()));
         if (name.startsWith("dapp-")) {
             var r = ReplayTest.Recording.read(ReplayTest.FIXTURES.resolve("dapp/" + name.substring(5) + "-composed_transaction.json"));
             return HostVectorsTest.record("prepare", r.params(), init(), JSON.createArrayNode(), r::answer, null);

@@ -69,7 +69,7 @@ class IntegrationTest {
         }
     }
     @Test void timedEscrowUsesSessionGenesisAndSentNow() throws Exception {
-        var file = ReplayTest.FIXTURES.resolveSibling("m3").resolve("escrow/001-open.json");
+        var file = ReplayTest.m3("escrow", "open");
         var vector = JSON.readTree(file.toFile());
         var snapshot = Snapshot.fromJson(vector.required("snapshot").toString());
         long tip = snapshot.tip.getSlot(), now = tip + 2;
@@ -121,7 +121,7 @@ class IntegrationTest {
         var path = java.nio.file.Files.createTempFile("not-a-map-store", ".tmp");
         try {
             System.setProperty("joust.mapStore", path.toString());
-            var v = MapRecording.record("token", "003-mint");
+            var v = MapRecording.record("token", MapRecording.m3("token", "mint-2"));
             assertTrue(v.required("reads").findValuesAsText("kind").containsAll(List.of("assetHistory","redeemers","datum")));
             HostVectorsTest.replay(v); // Reads.backend rejects getAssetService and every TransactionService method.
         } finally {

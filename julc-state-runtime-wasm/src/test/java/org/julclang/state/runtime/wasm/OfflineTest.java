@@ -58,7 +58,8 @@ class OfflineTest {
             }
         }
         assertEquals(List.of(), accepted, "mutations the scripts accept");
-        assertTrue(evaluated >= 30 && attacks > 100, evaluated + " evaluated, " + attacks + " attacks");
+        // fixtures/m0/dapp: 25 transactions since the serverless demo was dropped (ADR-0020 §12.3).
+        assertTrue(evaluated >= 25 && attacks > 100, evaluated + " evaluated, " + attacks + " attacks");
         System.out.println("[M4 gate] " + evaluated + " recorded transactions evaluated without a chain (" + scripts + " script runs); "
                 + attacks + " attacks, every one refused by the scripts");
         // A transaction whose inputs the snapshot lacks is not evaluated (no guess).

@@ -310,7 +310,7 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     });
   }
   it('refuses inconsistent map history and preserves the typed map read errors', async () => {
-    const v = fixture('verifier/token-003-mint');
+    const v = fixture('verifier/token-m3-mint-2');
     start(contracts.filter(c => JSON.parse(c.description).preamble.title === v.request.call.contract));
     try {
       await initialize({ clock: v.clock });
@@ -335,7 +335,7 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       assert.ok(names.includes(n), n);
   });
   it('restores a pending transfer with nonempty MPF paths', async () => {
-    const v = fixture('verifier/token-004-transfer');
+    const v = fixture('verifier/token-m3-transfer');
     start(contracts.filter(c => JSON.parse(c.description).preamble.title === v.request.call.contract));
     try {
       await initialize({ clock: v.clock, restoring: true });
@@ -349,7 +349,7 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     } finally { await peer.close(); }
   });
   it('restores keyed operation identity and its designation before settlement', async () => {
-    const v = fixture('verifier/registry-019-release');
+    const v = fixture('verifier/registry-m3-release');
     const p = structuredClone(v.request);
     const { cbor, txHash, validTo } = v.result.prepared;
     const operation = p.call.operation;
@@ -385,7 +385,7 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
   it('restores a retry past an unacknowledged attempt after either rewind (final review F-K1)', async () => {
     // A: the recorded removal, prepared and expired before it was handed out. B: a retry (the late-start variant)
     // with the unchanged record. After a rewind at or above A's validTo A stays expired; below it A is revived.
-    const a = fixture('verifier/registry-019-release'), b = fixture('verifier/reject-keyed-late-start');
+    const a = fixture('verifier/registry-m3-release'), b = fixture('verifier/reject-keyed-late-start');
     const operation = structuredClone(a.request.call.operation);
     const A = a.result.prepared, B = b.result.prepared;
     for (const rewound of [A.validTo + 3, A.validTo - 1]) {

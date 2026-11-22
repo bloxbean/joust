@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /** #160 review Q2: a map history rebuild does not depend on the order of transactions within a block. */
 class MapHistoryOrderTest {
     @Test void transactionsOfOneBlockInAnyOrderRebuildTheSameTrie() throws Exception {
-        var v = MapRecording.record("token", "004-transfer");
+        var v = MapRecording.record("token", MapRecording.m3("token", "transfer"));
         var original = RecordedSessionsTest.answers(v);
         var hashes = new ArrayList<String>();
         for (boolean reversed : List.of(false, true)) {

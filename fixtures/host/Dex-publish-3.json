@@ -1,11 +1,11 @@
 {
   "method" : "publish",
   "params" : {
-    "now" : 1842,
+    "now" : 1832,
     "ttlSlots" : 20,
     "contract" : "org.julclang.state.examples.dex.Dex",
-    "prerequisite" : "stakeRegistration:393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021",
-    "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p"
+    "prerequisite" : "stakeRegistration:dd15fe5da434a91d00aa7f3a6891b77a59cfd4e442506d47189b703d",
+    "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0"
   },
   "network" : {
     "networkId" : 0,
@@ -14,7 +14,7 @@
   },
   "clock" : {
     "zeroSlot" : 0,
-    "zeroTimeMs" : 1795146252000,
+    "zeroTimeMs" : 1795339145000,
     "slotLengthMs" : 1000
   },
   "time" : {
@@ -32,62 +32,62 @@
   },
   "reads" : [ {
     "request" : {
-      "address" : "addr_test1wzzuwthpcpkgtky26cz67z77zw7m943q8e3njddwjx4yqega8wk95",
+      "address" : "addr_test1wqxwkqt66vjc4n3qzkrx79f629a7emch6w0u8peqgsjg3js478vch",
       "kind" : "utxos"
     },
     "answer" : {
       "tip" : {
-        "slot" : 1842,
-        "height" : 51,
-        "hash" : "f4a27b92f0e103b152e36205c8b91e2754b640f1b9fdf2859d30673e8bdaacce"
+        "slot" : 1832,
+        "height" : 40,
+        "hash" : "cebd85ce2993488841df0277d1face1b71cdc5e9cf4b9ea01f52c282eb44618e"
       },
       "value" : [ {
-        "tx_hash" : "6cc66b6e27e32e2c85bfef3c4ab13261a7657f04585b4ffa02936f035c0e8ff8",
+        "tx_hash" : "ab2961da95baf22b1f6cf8fb6e5b459e1f6a59eff7a95c7b545b09882649e6d3",
         "output_index" : 0,
-        "address" : "addr_test1wzzuwthpcpkgtky26cz67z77zw7m943q8e3njddwjx4yqega8wk95",
+        "address" : "addr_test1wqxwkqt66vjc4n3qzkrx79f629a7emch6w0u8peqgsjg3js478vch",
         "amount" : [ {
           "unit" : "lovelace",
-          "quantity" : 54625020
+          "quantity" : 45992090
         } ],
         "data_hash" : null,
         "inline_datum" : null,
-        "reference_script_hash" : "85c72ee1c06c85d88ad605af0bde13bdb2d6203e633935ae91aa4065"
+        "reference_script_hash" : "0ceb017ad3258ace2015866f153a517becef17d39fc38720442488ca"
       } ]
     }
   }, {
     "request" : {
-      "address" : "addr_test1wqunc2mhs52mr20rsg9cn8ggn836aemt9dkzwqmzqhqyqggfphfcq",
+      "address" : "addr_test1wrw3tlja5s62j8gq4fln56y3kaa9nn75u3p9qm28rzdhq0gttstvm",
       "kind" : "utxos"
     },
     "answer" : {
       "tip" : {
-        "slot" : 1842,
-        "height" : 51,
-        "hash" : "f4a27b92f0e103b152e36205c8b91e2754b640f1b9fdf2859d30673e8bdaacce"
+        "slot" : 1832,
+        "height" : 40,
+        "hash" : "cebd85ce2993488841df0277d1face1b71cdc5e9cf4b9ea01f52c282eb44618e"
       },
       "value" : [ {
-        "tx_hash" : "e42ab8fabf92b01ce0756ec17de771f2146d3ec3efc6adbd66d7635bf82ad29c",
+        "tx_hash" : "1ccd5434580d8de145d8407f5e3c7909a4a675d3d90903b222ba6c9cd78dcb55",
         "output_index" : 0,
-        "address" : "addr_test1wqunc2mhs52mr20rsg9cn8ggn836aemt9dkzwqmzqhqyqggfphfcq",
+        "address" : "addr_test1wrw3tlja5s62j8gq4fln56y3kaa9nn75u3p9qm28rzdhq0gttstvm",
         "amount" : [ {
           "unit" : "lovelace",
-          "quantity" : 8667490
+          "quantity" : 7964960
         } ],
         "data_hash" : null,
         "inline_datum" : null,
-        "reference_script_hash" : "393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021"
+        "reference_script_hash" : "dd15fe5da434a91d00aa7f3a6891b77a59cfd4e442506d47189b703d"
       } ]
     }
   }, {
     "request" : {
-      "credential" : "393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021",
+      "credential" : "dd15fe5da434a91d00aa7f3a6891b77a59cfd4e442506d47189b703d",
       "kind" : "stakeRegistration"
     },
     "answer" : {
       "tip" : {
-        "slot" : 1842,
-        "height" : 51,
-        "hash" : "f4a27b92f0e103b152e36205c8b91e2754b640f1b9fdf2859d30673e8bdaacce"
+        "slot" : 1832,
+        "height" : 40,
+        "hash" : "cebd85ce2993488841df0277d1face1b71cdc5e9cf4b9ea01f52c282eb44618e"
       },
       "unsupported" : true
     }
@@ -97,9 +97,9 @@
     },
     "answer" : {
       "tip" : {
-        "slot" : 1842,
-        "height" : 51,
-        "hash" : "f4a27b92f0e103b152e36205c8b91e2754b640f1b9fdf2859d30673e8bdaacce"
+        "slot" : 1832,
+        "height" : 40,
+        "hash" : "cebd85ce2993488841df0277d1face1b71cdc5e9cf4b9ea01f52c282eb44618e"
       },
       "value" : {
         "min_fee_a" : 44,
@@ -1187,19 +1187,19 @@
     }
   }, {
     "request" : {
-      "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+      "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
       "kind" : "utxos"
     },
     "answer" : {
       "tip" : {
-        "slot" : 1842,
-        "height" : 51,
-        "hash" : "f4a27b92f0e103b152e36205c8b91e2754b640f1b9fdf2859d30673e8bdaacce"
+        "slot" : 1832,
+        "height" : 40,
+        "hash" : "cebd85ce2993488841df0277d1face1b71cdc5e9cf4b9ea01f52c282eb44618e"
       },
       "value" : [ {
-        "tx_hash" : "3e6bc82c14fcdfe0cb40f33d9f5ca4965ffe3e60391e463a4c54566ebff3934c",
+        "tx_hash" : "a7f0a5634e6b1c2e355e207330fea95bfe3fddbe9ab60bdb21d2d674869daf3c",
         "output_index" : 0,
-        "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+        "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
         "amount" : [ {
           "unit" : "lovelace",
           "quantity" : 30000000
@@ -1208,23 +1208,23 @@
         "inline_datum" : null,
         "reference_script_hash" : null
       }, {
-        "tx_hash" : "6cc66b6e27e32e2c85bfef3c4ab13261a7657f04585b4ffa02936f035c0e8ff8",
+        "tx_hash" : "ab2961da95baf22b1f6cf8fb6e5b459e1f6a59eff7a95c7b545b09882649e6d3",
         "output_index" : 1,
-        "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+        "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
         "amount" : [ {
           "unit" : "lovelace",
-          "quantity" : 444664671
+          "quantity" : 453385733
         } ],
         "data_hash" : null,
         "inline_datum" : null,
         "reference_script_hash" : null
       }, {
-        "tx_hash" : "e42ab8fabf92b01ce0756ec17de771f2146d3ec3efc6adbd66d7635bf82ad29c",
+        "tx_hash" : "1ccd5434580d8de145d8407f5e3c7909a4a675d3d90903b222ba6c9cd78dcb55",
         "output_index" : 1,
-        "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+        "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
         "amount" : [ {
           "unit" : "lovelace",
-          "quantity" : 41091373
+          "quantity" : 41801075
         } ],
         "data_hash" : null,
         "inline_datum" : null,
@@ -1233,10 +1233,10 @@
     }
   } ],
   "expected" : {
-    "cbor" : "84a500d90102818258203e6bc82c14fcdfe0cb40f33d9f5ca4965ffe3e60391e463a4c54566ebff3934c00018182583900a6f8b9b2d4725bbdd3531716ae216d8d080c96a2b8ff2d6a78717cf8c1e103177850651e099e5ec0df6a29e71e3ba2df1991f0865443cce01a01a8a09f021a00029e610319074604d901028182008201581c393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021a0f5f6",
-    "txHash" : "0f6749c88ed69b09fbad6dc60d006c4a3d89419e43fd66faa32a5eeb02363303",
+    "cbor" : "84a500d9010281825820a7f0a5634e6b1c2e355e207330fea95bfe3fddbe9ab60bdb21d2d674869daf3c000181825839001446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94deb7d9f8f088c335d2a3ceef4e685333dde81ad59daa73dcfe08214cc41a01a8a09f021a00029e610319073c04d901028182008201581cdd15fe5da434a91d00aa7f3a6891b77a59cfd4e442506d47189b703da0f5f6",
+    "txHash" : "c6975ccbce9a68c827f7ce694fd6d72c1414adcefc8d8cee9cbf3951c44e2fed",
     "validFrom" : null,
-    "validTo" : 1862,
+    "validTo" : 1852,
     "requiredSigners" : [ ]
   }
 }

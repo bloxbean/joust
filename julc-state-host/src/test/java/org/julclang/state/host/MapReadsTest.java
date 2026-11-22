@@ -12,7 +12,7 @@ import static org.julclang.state.host.Wire.*;
 
 class MapReadsTest {
     @Test void restoreRetryCannotReplaceMapClaimsUnderTheSameBodyHash() throws Exception {
-        var honest = JSON.readTree(ClientVectors.DIRECTORY.resolve("token-003-mint.json").toFile());
+        var honest = JSON.readTree(ClientVectors.DIRECTORY.resolve("token-m3-mint-2.json").toFile());
         var mutated = JSON.readTree(ClientVectors.DIRECTORY.resolve("reject-map-policy.json").toFile());
         String original = honest.at("/result/prepared/cbor").asText();
         var tx = Transaction.deserialize(HexFormat.of().parseHex(original));
@@ -36,7 +36,7 @@ class MapReadsTest {
     }
 
     @Test void badHistoryCannotSupplyAProofForTheSpentRoot() throws Exception {
-        var recording = MapRecording.record("token", "003-mint");
+        var recording = MapRecording.record("token", MapRecording.m3("token", "mint-2"));
         var original = RecordedSessionsTest.answers(recording);
         for (String fault : List.of("duplicate", "future", "omitted", "missingRedeemer", "missingDatum", "hash", "unavailable", "failed")) {
             var result = HostVectorsTest.run(recording, q -> {
@@ -69,8 +69,8 @@ class MapReadsTest {
     }
 
     @Test void shallowConfirmationPromotesTheActualPreparedTrieAndRollbackUnpublishesIt() throws Exception {
-        var mint = MapRecording.record("token","002-mint");
-        var later = MapRecording.record("token","003-mint");
+        var mint = MapRecording.record("token", MapRecording.m3("token", "mint"));
+        var later = MapRecording.record("token", MapRecording.m3("token", "mint-2"));
         var entry = M1bTest.entry(org.julclang.state.examples.token.TokenClient.class);
         try (var client = new Client(new Handshake(List.of(entry)))) {
             Client.success(client.rpc("initialize",Client.init(entry)));

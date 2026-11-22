@@ -19,7 +19,9 @@ class ClientConformanceTest {
             assertTrue(shipped.required("violations").isEmpty());
             assertEquals(List.of(),ReferenceChecker.check(shipped));
             if (name.startsWith("dapp-")) {
-                assertEquals(name.endsWith("0003") ? 0 : 1,shipped.at("/result/prepared/plan/redeemers/0/index").intValue());
+                // Every plain call of the JuLC 0.1.0-pre22 dApp recording spends the state output ahead of the wallet's
+                // (pre21's 0034 spent it second); owned-action and owned-destroy carry a spend redeemer at index 1.
+                assertEquals(0,shipped.at("/result/prepared/plan/redeemers/0/index").intValue());
                 assertEquals(JSON.readTree(ReplayTest.FIXTURES.resolve("dapp/"+name.substring(5)+"-composed_transaction.json")
                         .toFile()).get("unsignedTx"),shipped.at("/result/prepared/cbor"));
             }

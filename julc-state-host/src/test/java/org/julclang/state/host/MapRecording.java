@@ -16,10 +16,65 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Reduced map ledger from the recorded transactions. History points use the recorded build tips.
  * All redeemer hashes and datum bytes come from the witnesses, never from the engine fixture's proofs. */
 final class MapRecording {
+    /**
+     * A recording by role rather than by number (re-recording renumbers them): {@code method} or {@code method-N}, the
+     * N-th recording of that method in {@code fixtures/m3/<group>}, returned as its file name without {@code .json}.
+     */
+    static String m3(String group, String role) throws java.io.IOException {
+        return nth(ReplayTest.FIXTURES.resolveSibling("m3").resolve(group), "\\d+-", role);
+    }
+
+    /** As {@link #m3}, for {@code fixtures/m0/<group>}, whose files are {@code NNNN-Contract.method.json}. */
+    static String m0(String group, String role) throws java.io.IOException {
+        return nth(ReplayTest.FIXTURES.resolve(group), "\\d{4}-", role);
+    }
+
+    private static String nth(Path dir, String prefix, String role) throws java.io.IOException {
+        var m = java.util.regex.Pattern.compile("(.+?)(?:-(\\d+))?").matcher(role);
+        if (!m.matches()) throw new AssertionError(role);
+        String method = m.group(1);
+        int n = m.group(2) == null ? 1 : Integer.parseInt(m.group(2));
+        try (var s = Files.list(dir)) {
+            var matching = s.map(p -> p.getFileName().toString())
+                    .filter(f -> f.matches(prefix + java.util.regex.Pattern.quote(method) + "\\.json")).sorted().toList();
+            if (matching.size() < n) throw new AssertionError(dir + " has " + matching.size() + " " + method + " recordings, not " + n);
+            return matching.get(n - 1).replaceFirst("\\.json$", "");
+        }
+    }
+
+    /** The owned object an M0 recording's transaction carries: the one 0x4F unit in its outputs, else the one it burns. */
+    static String ownedObject(String group, String file) throws Exception {
+        var f = org.julclang.state.examples.devkit.Fixtures.read(ReplayTest.FIXTURES.resolve(group).resolve(file + ".json"));
+        var body = Transaction.deserialize(java.util.HexFormat.of().parseHex(str(f, "unsignedTx"))).getBody();
+        var found = new TreeSet<String>();
+        for (var o : body.getOutputs()) found.addAll(objects(o.getValue().getMultiAssets()));
+        if (found.isEmpty() && body.getMint() != null) found.addAll(objects(body.getMint()));
+        assertEquals(1, found.size(), file + ": owned objects " + found);
+        return found.first();
+    }
+
+    private static List<String> objects(List<com.bloxbean.cardano.client.transaction.spec.MultiAsset> assets) {
+        var out = new ArrayList<String>();
+        if (assets == null) return out;
+        for (var ma : assets) for (var a : ma.getAssets()) {
+            byte[] n = a.getNameAsBytes();
+            if (n.length == 29 && n[0] == 0x4F) out.add(java.util.HexFormat.of().formatHex(n));
+        }
+        return out;
+    }
+
+    /** The policy of the first output asset named {@code name} (hex) in an M0 recording's transaction. */
+    static String policyOf(String group, String file, String name) throws Exception {
+        var f = org.julclang.state.examples.devkit.Fixtures.read(ReplayTest.FIXTURES.resolve(group).resolve(file + ".json"));
+        var body = Transaction.deserialize(java.util.HexFormat.of().parseHex(str(f, "unsignedTx"))).getBody();
+        for (var o : body.getOutputs()) for (var ma : o.getValue().getMultiAssets())
+            for (var a : ma.getAssets()) if (java.util.HexFormat.of().formatHex(a.getNameAsBytes()).equals(name)) return ma.getPolicyId();
+        throw new AssertionError(file + " pays no " + name);
+    }
     /** M0 has no forwarded call, TTL or block hash. Recover the first mint's arguments from
      * its spending redeemer, use the recorded inclusion slot and reconstruct a 20-slot window. */
     static ObjectNode firstM0Mint() throws Exception {
-        var f = org.julclang.state.examples.devkit.Fixtures.read(ReplayTest.FIXTURES.resolve("token/0002-Token.mint.json"));
+        var f = org.julclang.state.examples.devkit.Fixtures.read(ReplayTest.FIXTURES.resolve("token").resolve(m0("token", "Token.mint") + ".json"));
         var s = org.julclang.state.examples.devkit.Fixtures.snapshot(f);
         String address = s.utxos.keySet().iterator().next();
         var tx = Transaction.deserialize(HexFormat.of().parseHex(str(f,"unsignedTx")));
@@ -50,7 +105,7 @@ final class MapRecording {
             if (!str(q,"kind").equals("stakeRegistration")) return r.answer(q);
             ObjectNode a = obj().set("tip",point);
             return a.set("value",obj().put("registered",true));
-        },null).put("provenance","Bounded reconstruction of M0 Token mint 0002");
+        },null).put("provenance","Bounded reconstruction of the first M0 Token mint");
     }
 
     static ObjectNode record(String group, String name) throws Exception {

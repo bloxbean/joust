@@ -34,7 +34,7 @@ class RecordedSessionsTest {
     }
     static ObjectNode record(String name) throws Exception {
         boolean bank = name.equals("bank");
-        var first = recording(bank ? "Bank-publish-1" : name.equals("maps") ? "token-003-mint" : "registry-019-release");
+        var first = recording(bank ? "Bank-publish-1" : name.equals("maps") ? "token-m3-mint-2" : "registry-m3-release");
         var params = first.required("params");
         String contract = (bank ? params : params.required("call")).required("contract").textValue();
         var entry = M1bTest.entry(Class.forName(contract+"Client"));
@@ -74,7 +74,7 @@ class RecordedSessionsTest {
     private static void maps(Recorder c, JsonNode recording) throws Exception {
         var p = recording.required("params");
         long now = p.required("now").asLong();
-        var previous = recording("token-002-mint").required("expected");
+        var previous = recording("token-m3-mint").required("expected");
         var restore = obj().put("complete",true);
         restore.putArray("transactions").addObject().put("state","prepared").set("cbor",previous.required("cbor"));
         var ids = success(c.rpc("restore",restore)).required("reservations");

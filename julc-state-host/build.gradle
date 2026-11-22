@@ -51,9 +51,9 @@ dependencies {
 }
 
 tasks.withType(Test).configureEach {
-    inputs.file(rootProject.file('fixtures/m3/escrow/001-open.json')).withPathSensitivity(PathSensitivity.RELATIVE)
-    inputs.file(rootProject.file('fixtures/m3/dex/003-swapAdaForToken.json')).withPathSensitivity(PathSensitivity.RELATIVE)
-    inputs.files(rootProject.fileTree('fixtures/m3') { include 'token/*.json', 'locker/*.json' })
+    inputs.files(rootProject.fileTree('fixtures/m3') { include 'escrow/*.json', 'dex/*.json' })
+            .withPropertyName('m3Recordings').withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(rootProject.fileTree('fixtures/m3') { include 'token/*.json', 'locker/*.json', 'guild/*.json' })
             .withPropertyName('mapRecordings').withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('fixtures/m0')).withPropertyName('fixturesM0').withPathSensitivity(PathSensitivity.RELATIVE)
     // The forked-host tests (fd 1 diversion, no side effects) launch `java` from this toolchain.
