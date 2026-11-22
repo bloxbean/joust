@@ -14,6 +14,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ReplayTest {
     static final Path FIXTURES = Path.of(System.getProperty("joust.host.fixtures", "../fixtures/m0"));
+
+    /** The first M3 recording of {@code contract}'s {@code method} ({@code NNN-method.json}): re-recording renumbers them. */
+    static Path m3(String contract, String method) throws java.io.IOException {
+        try (var s = Files.list(FIXTURES.resolveSibling("m3").resolve(contract))) {
+            return s.filter(p -> p.getFileName().toString().matches("\\d+-" + method + "\\.json")).sorted().findFirst()
+                    .orElseThrow(() -> new AssertionError("no recorded " + contract + "/" + method));
+        }
+    }
     // ADR-0022 §9: reconstruct testnet, 20 seconds in slots, recorded tip for now and every chain point.
     record Recording(JsonNode fixture, Snapshot snapshot, ObjectNode point, ObjectNode params) {
         static Recording read(Path file) throws Exception {
@@ -79,7 +87,7 @@ class ReplayTest {
                     var recording = Recording.read(path);
                     try (var client = new Client(new Handshake(List.of(entry)))) {
                         var hello = success(client.rpc("initialize", init(entry)));
-                        if (counter) assertEquals("c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823",
+                        if (counter) assertEquals("f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cb",
                                 hello.at("/contracts/0/scriptHashes/mint").asText());
                         var result = success(client.rpc("prepare", recording.params, recording::answer));
                         assertFalse(result.has("predicted"));
@@ -92,7 +100,9 @@ class ReplayTest {
                 }));
             }
         }
-        assertEquals(23, tests.size(), "ADR-0022 §9 plain recordings");
+        // ADR-0022 §9: every plain recording. The JuLC 0.1.0-pre22 re-recording (#148) is a shorter flow: 18 plain calls
+        // (Counter init, 13 increments, reset, close; Bank init, setPaused), where pre21's had 23; every kind is still covered.
+        assertEquals(18, tests.size(), "ADR-0022 §9 plain recordings");
         return tests.stream();
     }
 }
