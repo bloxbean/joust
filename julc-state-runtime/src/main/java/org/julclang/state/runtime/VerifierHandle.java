@@ -118,6 +118,9 @@ public final class VerifierHandle {
         tx.readFrom(ref).withdraw(rewardAddress, BigInteger.ZERO, PlutusDataAdapter.convert(redeemer));
     }
 
+    /** How far a scoped call looks for a pinned reference: a bound on a hostile answer, not a policy. */
+    static final int PIN_PAGES = 10_000;
+
     private Utxo find() {
         if (runtime.hostedCall()) return runtime.hostedReference(holder, hash);
         // ADR-0022 D8: a scoped (hosted) call sees only its own answers, so it neither reads nor fills the cache that
@@ -125,24 +128,34 @@ public final class VerifierHandle {
         boolean scoped = runtime.callScope() != null;
         if (!scoped && reference != null) return reference;
         var pinned = runtime.referenceScript(hash);
-        if (pinned != null && holder.equals(pinned.getAddress())) {
-            if (!scoped) reference = pinned;
+        if (pinned != null && !holder.equals(pinned.getAddress())) pinned = null;
+        if (pinned != null && !scoped) {
+            reference = pinned;
             return pinned;
         }
+        // A scoped call trusts only this call's answers: a pin is used once the answer shows it (a rollback may have
+        // removed it since the runtime was built; #145 Codex review), else the answer's own reference script.
+        Utxo first = null;
         try {
-            var r = runtime.backend().getUtxoService().getUtxos(holder, 20, 1);
-            if (r.isSuccessful() && r.getValue() != null) {
+            // Unscoped, the first page, as always; a scoped call, or one looking for a pin, every page until the answer runs
+            // out: absence must be the answer's, not a page cut (#145 Codex).
+            for (int page = 1; page == 1 || (scoped || pinned != null) && page <= PIN_PAGES; page++) {
+                var r = runtime.backend().getUtxoService().getUtxos(holder, 20, page);
+                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
-                    if (hash.equalsIgnoreCase(u.getReferenceScriptHash())) {
+                    if (!hash.equalsIgnoreCase(u.getReferenceScriptHash())) continue;
+                    if (pinned == null) {
                         if (!scoped) reference = u;
                         return u;
                     }
+                    if (Designation.ref(u).equals(Designation.ref(pinned))) return u;
+                    if (first == null) first = u;
                 }
             }
         } catch (Exception e) {
             throw new JoustException("cannot look up the " + label, e);
         }
-        return null;
+        return first;
     }
 
     private BigInteger deposit() {

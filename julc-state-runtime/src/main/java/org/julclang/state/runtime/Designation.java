@@ -31,7 +31,7 @@ import java.util.function.Supplier;
  *       claimed inputs (they select as before M2 while nothing is designated); keyed attempts skip other claims.</li>
  *   <li>The scope is one JVM: separate processes sharing a wallet must use separate UTxOs (or wallets).</li>
  *   <li>Where designations and claims are kept, and when they end, is the runtime's {@link ClaimStore} (ADR-0022 D8):
- *       by default {@link ClaimStore#jvm()}, the static store of this JVM described above, released by the machine
+ *       by default the static store of this JVM described above, released by the machine
  *       clock. The overloads without a store use that default.</li>
  * </ul>
  */
@@ -178,14 +178,26 @@ final class Designation {
         }
     }
 
-    // Claim-store keys name a ledger input by one spelling (lowercase hex): CCL reads either case to the same bytes,
-    // so two spellings of one input must not escape each other's reservation (I13; #145 Codex review 1).
+    // Claim-store keys name a ledger input by one spelling: the lowercase hex of the bytes CCL serialises. CCL reads an
+    // id through HexUtil.decodeHexString (either case, a leading 0x dropped, any Unicode hex digit), so every spelling it
+    // writes as the same input must have the same key, or one escapes the other's reservation (I13; #145 Codex reviews).
     static String ref(Utxo u) {
-        return u.getTxHash().toLowerCase(java.util.Locale.ROOT) + "#" + u.getOutputIndex();
+        return txKey(u.getTxHash()) + "#" + u.getOutputIndex();
     }
 
     static String ref(TransactionInput in) {
-        return in.getTransactionId().toLowerCase(java.util.Locale.ROOT) + "#" + in.getIndex();
+        return txKey(in.getTransactionId()) + "#" + in.getIndex();
+    }
+
+    /** {@code id} as the ledger sees it: re-encoded from the bytes CCL decodes it to. */
+    static String txKey(String id) {
+        if (id == null) return "null";
+        try {
+            return com.bloxbean.cardano.client.util.HexUtil.encodeHexString(com.bloxbean.cardano.client.util.HexUtil.decodeHexString(id));
+        } catch (RuntimeException e) {
+            // Not hex to CCL either: no transaction it builds can spend it (serialising refuses), so any stable key does.
+            return id.toLowerCase(java.util.Locale.ROOT);
+        }
     }
 
     /** Some keyed operation of this JVM designated {@code ref} (still reserved). */

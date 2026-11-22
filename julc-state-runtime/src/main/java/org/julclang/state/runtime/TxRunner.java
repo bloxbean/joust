@@ -64,6 +64,21 @@ final class TxRunner {
         Designation.Designated designated;
         /** Building for wallets ({@code Compose.prepare}): no key held here may take part (ADR-0013 D2). */
         boolean walletOnly;
+        /**
+         * The claim store of the composition's runtime (null: not checked). The composed transaction is checked against
+         * this store's reservations only, so a call of a runtime with another store cannot take part: its own
+         * reservations would go unchecked (ADR-0022 D8; #145 Codex review).
+         */
+        ClaimStore store;
+
+        /** Refuses a call of {@code rt} when its claim store is not the composition's. */
+        void requireStore(StateRuntime rt, String what) {
+            if (store != null && rt.claimStore() != store) {
+                throw new ForeignStore("composition: " + what + " belongs to a runtime with another claim store; a"
+                        + " composition checks its own runtime's reservations only, so its calls must share that store");
+            }
+        }
+
         /** Deposits into other instances made by the calls (ADR-0011 D3), resolved to claims when submitting. */
         final java.util.List<PendingDeposit> deposits = new java.util.ArrayList<>();
         /** The deposits the probe pass saw: a receiver's Funds.deposits in the real pass. */
@@ -114,6 +129,22 @@ final class TxRunner {
             }
             outputs += (exp != null ? 1 : 0) + extra.size() + pays.size() + snds.size();
         }
+    }
+
+    /** A call of a runtime with another claim store took part in a composition: it ends the composition at once. */
+    static final class ForeignStore extends JoustException {
+        ForeignStore(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Whether a call's failure must end a composition at once rather than wait for the other calls (a tolerant pass):
+     * something may have been sent ({@link PendingTransactionException}: running more calls could send it again), or the
+     * call belongs to another claim store (running more could publish for a composition already refused; #145 Codex).
+     */
+    static boolean endsComposition(RuntimeException e) {
+        return e instanceof PendingTransactionException || e instanceof ForeignStore;
     }
 
     /** A deposit a call makes into instance {@code target} (a unit, policy ++ instance id, hex). */
@@ -189,7 +220,8 @@ final class TxRunner {
     /** Spends {@code u} (with {@code redeemer} if a script input); a composition refuses the same UTxO twice. */
     static Tx collect(Tx tx, Utxo u, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
         Capture c = CAPTURE.get();
-        if (c != null && !c.inputs.add(u.getTxHash() + "#" + u.getOutputIndex())) {
+        // One spelling per input (Designation.ref): a provider's uppercase hash is the input a designation names.
+        if (c != null && !c.inputs.add(Designation.ref(u))) {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
         return redeemer == null ? tx.collectFrom(java.util.List.of(u)) : tx.collectFrom(u, redeemer);
@@ -232,6 +264,7 @@ final class TxRunner {
                   com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts, String what) {
         Capture cap = CAPTURE.get();
         if (cap != null) {
+            cap.requireStore(rt, what);
             cap.record(caller, requiredSigners, expected, extraExpected, payouts, sends, referenceScripts, cosigners, what);
             return "composed";
         }
@@ -269,6 +302,7 @@ final class TxRunner {
         Transaction signed = built.tx();
         boolean pending = false;
         boolean handedOut = false;
+        boolean submitted = false;   // handed to the node and not yet seen on chain: it may land however the call ends (#145 Codex)
         try {
             rt.built(what, signed, false);
 
@@ -288,7 +322,13 @@ final class TxRunner {
                 }
             }
             if (designated == null) {
-                submitToBackend(signed, txHash, what);
+                submitted = true;   // the node may have it from here, unless it answers with a definite rejection
+                try {
+                    submitToBackend(signed, txHash, what);
+                } catch (SubmitException e) {
+                    submitted = false;
+                    throw e;
+                }
             } else {
                 // A keyed operation's attempt (ADR-0016 D7): sent at its window's start, to every relay.
                 if (window != null) awaitWindow(window, what);
@@ -304,6 +344,7 @@ final class TxRunner {
             }
             rt.log(what + ": submitted " + txHash);
             awaitInclusion(txHash, what);
+            submitted = false;   // on chain: its inputs are spent, the claim can end
             return txHash;
         } catch (PendingTransactionException e) {
             pending = true;
@@ -314,7 +355,7 @@ final class TxRunner {
                 // answered (F64): it may still land.
                 designated.hold(built.claim().refs);
                 built.claim().release();
-            } else if (pending) {
+            } else if (pending || submitted) {
                 built.claim().releaseAt(window != null
                         ? new ClaimStore.Expiry(safeMs(rt.chainTime(), window.toSlot()) + 10_000, window.toSlot())
                         : ClaimStore.Expiry.atMs(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS));
@@ -409,16 +450,32 @@ final class TxRunner {
 
     /** The pre-M2 submission, kept as it was for every transaction that is not a keyed operation's attempt. */
     private void submitToBackend(Transaction signed, String txHash, String what) {
+        sendToNode(signed, txHash, what);
+    }
+
+    /**
+     * Hands {@code signed} to the node. Only a definite answer is a rejection ({@link SubmitException}); anything else,
+     * a {@link CallAbort} included, may have reached the node: the outcome is pending, with the hash (#145 Codex).
+     */
+    private void sendToNode(Transaction signed, String txHash, String what) {
         try {
             var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
-            if (!r.isSuccessful()) {
-                // A definite answer from the node: not accepted.
+            // Only a definite answer is a rejection (Relay.classify, as for keyed attempts): a gateway's 5xx or a
+            // timeout may hide an accepted transaction, so it is pending, never rebuilt (#145 Codex).
+            var o = Relay.classify(r);
+            if (o.answer() == Relay.Answer.REJECTED) {
                 throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
             }
-        } catch (SubmitException e) {
+            if (o.answer() == Relay.Answer.UNKNOWN) {
+                throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + o.message() + ")");
+            }
+        } catch (SubmitException | PendingTransactionException e) {
             throw e;
         } catch (Exception e) {
             throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
+        } catch (Error e) {
+            if (!(e instanceof CallAbort)) throw e;
+            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + e.getMessage() + ")", e);
         }
     }
 
@@ -708,7 +765,7 @@ final class TxRunner {
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null) continue;
-                    if (spent.contains(u.getTxHash() + "#" + u.getOutputIndex())) continue;
+                    if (spent.contains(Designation.ref(u))) continue;
                     if (!Designation.pickable(rt.claimStore(), u, currentOperation())) continue;   // another operation's (ADR-0016 D7, F72)
                     BigInteger q = lovelace(u);
                     if (q.compareTo(BigInteger.valueOf(3_000_000)) < 0) continue;
@@ -752,14 +809,7 @@ final class TxRunner {
     String submitSigned(Transaction signed, String what) {
         rt.requireUnscopedSubmission();
         String txHash = TransactionUtil.getTxHash(signed);
-        try {
-            var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
-            if (!r.isSuccessful()) throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
-        } catch (SubmitException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
-        }
+        sendToNode(signed, txHash, what);
         rt.log(what + ": submitted " + txHash);
         awaitInclusion(txHash, what);
         return txHash;
@@ -769,6 +819,9 @@ final class TxRunner {
     String submitPlain(com.bloxbean.cardano.client.quicktx.Tx tx, Account payer, String what) {
         rt.requireUnscopedSubmission();
         Capture cap = CAPTURE.get();
+        // A prerequisite published inside a composition (a reference script, a verifier, a registration) goes first:
+        // refused before anything is selected or sent when its runtime is not the composition's (#145 Codex).
+        if (cap != null) cap.requireStore(rt, what);
         if (payer instanceof WalletAccount || (cap != null && cap.walletOnly)) {
             throw new JoustException(what + ": needs a key-holding account to pay and sign; publish reference scripts and"
                     + " the verifiers before wallet users call the contract (ADR-0013)");
@@ -784,20 +837,27 @@ final class TxRunner {
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
+        return submitPlain(built, what);
+    }
+
+    /** Submits and confirms a built plain transaction, then releases its claim (now, or later if it may still land). */
+    String submitPlain(Designation.Claimed built, String what) {
         boolean pending = false;
+        boolean[] submitted = {false};
         try {
-            return submitPlain(built.tx(), what);
+            return submitPlain(built.tx(), what, submitted);
         } catch (PendingTransactionException e) {
             pending = true;
             throw e;
         } finally {
-            // A pending publication may still land: it has no validity bound, so its inputs stay claimed for a while.
-            if (pending) built.claim().releaseAt(ClaimStore.Expiry.atMs(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS));
+            // A pending publication may still land: it has no validity bound, so its inputs stay claimed for a while. So
+            // may one the node took, however the wait for it ended (#145 Codex).
+            if (pending || submitted[0]) built.claim().releaseAt(ClaimStore.Expiry.atMs(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS));
             else built.claim().release();
         }
     }
 
-    private String submitPlain(Transaction signed, String what) {
+    private String submitPlain(Transaction signed, String what, boolean[] submitted) {
         rt.built(what, signed, false);
         String txHash = TransactionUtil.getTxHash(signed);
         if (System.getProperty("joust.dumpTx") != null) {
@@ -808,15 +868,15 @@ final class TxRunner {
                 // diagnostics only
             }
         }
+        submitted[0] = true;   // the node may have it from here, unless it answers with a definite rejection
         try {
-            var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
-            if (!r.isSuccessful()) throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
+            sendToNode(signed, txHash, what);
         } catch (SubmitException e) {
+            submitted[0] = false;
             throw e;
-        } catch (Exception e) {
-            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
         }
         awaitInclusion(txHash, what);
+        submitted[0] = false;   // on chain: its inputs are spent, the claim can end
         return txHash;
     }
 
@@ -914,6 +974,10 @@ final class TxRunner {
         return false;
     }
 
+    /**
+     * Waits for a transaction handed to the node. It may land whatever happens here: a read the backend ends the call
+     * with ({@link CallAbort}) is the pending outcome's cause, with the hash, not a failure that loses it (#145 Codex).
+     */
     private void awaitInclusion(String txHash, String what) {
         rt.requireUnscopedSubmission();
         long deadline = System.currentTimeMillis() + rt.confirmTimeout().toMillis();
@@ -923,6 +987,10 @@ final class TxRunner {
                 if (r.isSuccessful() && r.getValue() != null) return;
             } catch (Exception ignored) {
                 // keep polling
+            } catch (Error e) {
+                if (!(e instanceof CallAbort)) throw e;
+                throw new PendingTransactionException(txHash, what + ": submitted, but the confirmation read ended the call ("
+                        + e.getMessage() + ")", e);
             }
             sleepOrPending(1000, txHash, what);
         }
