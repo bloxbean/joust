@@ -872,7 +872,13 @@ direct `Tx` building, gated by S3.
     receives them. What a call keeps of the wallet's payment is not released: its own intake (what its continuation
     gains, beyond the deposits it receives and net of those it gives) is credited back to what others may receive, up
     to its payment, so a payment into one call does not shrink what another releases to others (an adoption holds the
-    prior instance's value: it takes no payment and gets no credit). With that credit,
+    prior instance's value: it takes no payment and gets no credit). The credit rests on each target's own value,
+    which the balance does not bind (only the targets' sum): a call gets it only when its target's value is read from
+    the producing transaction (`verifiedOutput`), or when every other target's is (the last then follows from the
+    balance); a misstated value is refused, and a chain API that serves no transaction CBOR gives no credit. A
+    deposit claim's value must be one the output verifier accepts (`OutputVerifier.positive` over `ValueAdapter.fromWire`'s
+    rules: no empty value or token map, no repeated or out-of-order entry, positive quantities, no reserved names),
+    else the body could only fail on chain. With that credit,
     others' receipts bound the wallet's net loss (the fee aside) by what the calls keep of their payments, less what
     the scripts send it back.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.

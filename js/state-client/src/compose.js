@@ -13,6 +13,13 @@ import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
 import { outputRegistry, claimedSends } from './claims.js';
 
+/** Whether two values (Map unit -> bigint) are equal, zero entries aside. */
+function sameValue(a, b) {
+  for (const [u, q] of a) if (q !== (b.get(u) ?? 0n)) return false;
+  for (const [u, q] of b) if (q !== (a.get(u) ?? 0n)) return false;
+  return true;
+}
+
 /**
  * @param o.steps  [{ description, deployment, call: { kind, meta, args, pay, instance, object } }] in composition order
  * @param o.wallet, o.chain, o.txHex, o.limits  as for verifyPrepared
@@ -118,6 +125,23 @@ export async function verifyComposed(o) {
     }
   }
   for (const k of calls) if (!k.creation && k.targetIndex < 0) problems.push(`${k.call.meta.name}: its instance or object is not spent`);
+  // Each target's value bound to its producing transaction (verifiedOutput), where the chain API serves it: the balance
+  // binds only the targets' sum, and the kept-payment credit (below) rests on how it splits between them. A misstated
+  // value is refused; with every target but one bound, the last follows from the balance.
+  for (const k of calls) {
+    if (k.creation || !k.targetRef) continue;
+    let v = null;
+    try {
+      v = chain.verifiedOutput ? await chain.verifiedOutput(k.targetRef) : null;
+    } catch (e) {
+      problems.push(`the chain API served a forged transaction for ${k.targetRef}: ${e.message}`);
+      continue;
+    }
+    if (!v) continue;
+    if (v.address !== k.deployment.address || !sameValue(v.value, k.targetValue)) problems.push(`the chain API misstates the value of ${k.targetRef}`);
+    else k.bound = true;
+  }
+  const splitKnown = calls.filter((k) => !k.creation && k.targetRef && !k.bound).length <= 1;
   // An adoption (@Migrate, ADR-0011 D4): of the prior instance the page names, which its own @MigrateTo destroy spends
   // here, under the policy the adopting deployment's params name. Its token is named by that prior UTxO.
   for (const k of calls.filter((x) => x.creation)) {
@@ -371,7 +395,8 @@ export async function verifyComposed(o) {
   const kept = new Map();
   for (const k of calls) {
     // An adoption's continuation is the prior instance's value, not the wallet's (it has no target here): no credit.
-    if (k.creation) continue;
+    // Nor where the chain API alone says how the targets' sum splits: it could move value between them at will.
+    if (k.creation || !(k.bound || splitKnown)) continue;
     const own = new Map(k.continuation);
     add(own, k.targetValue, -1n);
     add(own, gives.get(k));
@@ -513,7 +538,8 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
   const p = await service.prepare(request);
   const [tip, params] = await Promise.all([chain.tip(), chain.params()]);
   const { problems, report } = await verifyComposed({
-    CSL, txHex: p.cbor, wallet, chain: { tip, params, utxo: (r) => chain.utxo(r) }, limits,
+    CSL, txHex: p.cbor, wallet, limits,
+    chain: { tip, params, utxo: (r) => chain.utxo(r), verifiedOutput: chain.verifiedOutput ? (r) => chain.verifiedOutput(r) : undefined },
     steps: prepared.map(({ k, call }) => ({ description: k.description, deployment: k.deployment, call })),
   });
   if (problems.length) {

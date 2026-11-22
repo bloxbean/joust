@@ -441,7 +441,7 @@ class PullRequestSelection(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn('not measured on this pull request: set `state-client` (its tests changed: js/state-client/test/verify.test.js)', out)
         cfg = (self.d / 'js/mutation/stryker.state-client.config.mjs').read_text()
-        self.edit('js/mutation/stryker.state-client.config.mjs', cfg.replace("const all = ['src/verify.js', 'src/keyed.js', 'src/claims.js'];", "const all = ['src/keyed.js'];"))
+        self.edit('js/mutation/stryker.state-client.config.mjs', cfg.replace("const all = ['src/verify.js', 'src/keyed.js', 'src/claims.js', 'src/compose.js', 'src/purposes.js', 'src/ledger.js'];", "const all = ['src/keyed.js'];"))
         self.commit()
         rc, out = self.stryker('state-client')
         self.assertIn('state-client: Stryker on src/keyed.js (the whole set (js/mutation/stryker.state-client.config.mjs changed', out)

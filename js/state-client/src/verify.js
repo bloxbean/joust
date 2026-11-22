@@ -448,9 +448,17 @@ function costModelOf(params, language) {
  * PlutusV3 (every JOUST script's) over the chain API's cost models. This is sound whatever cost models the chain API
  * gives: blake2b-256 binds the reviewed redeemers and datums and the cost models together, so a body that matches them
  * under any cost models cannot match other redeemers on chain. Wrong cost models only refuse. Shared by every page
- * verifier (single and keyed calls, compositions, purposes, registrations, intents).
+ * verifier (single and keyed calls, compositions, purposes, registrations, intents), with one redeemer per purpose.
  */
 export function integrityChecks(tx, params, problems) {
+  // One redeemer per purpose (tag and index), as the ledger keys them: a verifier that looks for one with `some` could
+  // otherwise read another than the ledger runs.
+  const purposes = new Set();
+  for (const r of tx.redeemers) {
+    const key = `${r.tag}#${r.index}`;
+    if (purposes.has(key)) problems.push(`two redeemers for the ${r.tag} purpose at index ${r.index}`);
+    purposes.add(key);
+  }
   const { parts, redeemerCount, datumCount, languages } = tx.integrity;
   if (redeemerCount === 0 && datumCount === 0) {
     if (tx.scriptDataHash) problems.push('a script integrity hash without redeemers or datums');

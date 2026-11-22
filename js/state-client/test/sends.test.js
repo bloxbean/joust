@@ -435,7 +435,21 @@ async function paidAndReleased() {
   const [stall, pot] = tx.inputs;
   const ov = tx.withdrawals.findIndex((w) => w.address === c.steps[0].deployment.outputVerifier.rewardAddress);
   const deposits = tx.redeemers.find((x) => x.tag === 'reward' && x.index === ov).data.fields[1].list;
-  const chain = chainOf(c.x, (ref, u) => (ref === pot ? { ...u, value: plus(u.value, 'lovelace', 7n * ADA_) } : u));
+  const truth = chainOf(c.x, (ref, u) => (ref === pot ? { ...u, value: plus(u.value, 'lovelace', 7n * ADA_) } : u));
+  // The chain API the page reads: `lie` moves lovelace from the Stall's input to the Pot's in what it reports (the
+  // sum, which the balance binds, unchanged); `verified`: the inputs it also serves from their producing transactions
+  // (verifiedOutput: the truth, which a provider cannot invent).
+  const chainOver = ({ lie = 0n, verified = [stall, pot] } = {}) => ({
+    ...truth,
+    async utxo(ref) {
+      const u = await truth.utxo(ref);
+      if (ref === stall) return { ...u, value: plus(u.value, 'lovelace', -lie) };
+      if (ref === pot) return { ...u, value: plus(u.value, 'lovelace', lie) };
+      return u;
+    },
+    ...(verified.length ? { async verifiedOutput(ref) { return verified.includes(ref) ? truth.utxo(ref) : null; } } : {}),
+  });
+  const chain = chainOver();
   const payee = enterpriseAddress({ type: 'key', hash: c.wallet.keyHashes[0] }, 0);
   // `edit`: of [stall, pot, change, send, stranger] parts.
   const build = ({ edit = (p) => p } = {}) => editTx(c.cbor, c.x, {
@@ -443,8 +457,8 @@ async function paidAndReleased() {
       { address: STRANGER, value: new Map([['lovelace', 3n * ADA_]]) }]).map(cslOutput),
     redeemers: withRegistry(ov, dataHex(Data.constr(0, [Data.list([Data.constr(0, [Data.int(3), refData(pot)])]), Data.list(deposits)]))),
   });
-  const verify = async (txHex) => verifyComposed({ steps: c.steps, wallet: c.wallet, chain, txHex });
-  return { build, verify, stall, pot };
+  const verify = async (txHex, over = chain) => verifyComposed({ steps: c.steps, wallet: c.wallet, chain: over, txHex });
+  return { build, verify, chainOver, stall, pot };
 }
 const ADA_ = 1_000_000n;
 
@@ -514,4 +528,60 @@ test('composition: an adoption takes no payment; a payment stated for it cannot 
   refused(r, /an adoption takes no payment/, 'a payment on the adoption');
   refused(r, /others receive 2000000 of lovelace, more than the scripts release to them/, 'the wallet\'s change to a stranger');
   refused(await verifyComposed({ steps: paid, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), /an adoption takes no payment/, 'the recorded upgrade with a payment on the adoption');
+});
+
+test('composition: a deposit whose value the output verifier refuses (OutputVerifier.positive) is refused before signing', async () => {
+  const w = await feesWorld();
+  const B = (h) => Data.bytes(h);
+  const ada = (q) => [B(''), Data.map([[B(''), Data.int(q)]])];
+  const P = 'cd'.repeat(28);
+  const deposit = (value) => Data.constr(0, [Data.int(1n), refData(w.stall), Data.map(value), w.memo]);
+  accepted(await w.verify(await w.build({ deposits: [deposit([ada(1n)])] })), 'a second, well-formed deposit');
+  const cases = [
+    [[], 'an empty value'],
+    [[ada(0n)], 'a zero quantity'],
+    [[ada(-1n)], 'a negative quantity'],
+    [[ada(1n << 127n)], 'a quantity beyond 128 bits'],
+    [[[B(''), Data.map([[B(''), Data.int(1n)], [B(''), Data.int(1n)]])]], 'a repeated name'],
+    [[ada(1n), ada(1n)], 'a repeated policy'],
+    [[[B(P), Data.map([[B('aa'), Data.int(1n)]])], ada(1n)], 'policies out of order'],
+    [[[B(P), Data.map([])]], 'an empty token map'],
+    [[[B(''), Data.map([[B('aa'), Data.int(1n)]])]], 'a name under the empty policy'],
+    [[[B(P), Data.map([[B('4f' + '00'.repeat(28)), Data.int(1n)]])]], 'an owned-object name (29 bytes, 0x4F)'],
+    [[[B(P), Data.map([[B('11'.repeat(32)), Data.int(1n)]])]], 'an instance name (32 bytes)'],
+  ];
+  for (const [value, what] of cases) {
+    refused(await w.verify(await w.build({ deposits: [deposit(value)] })), /the output verifier's redeemer has a malformed deposit/, what);
+  }
+});
+
+test('composition: the kept-payment credit rests on input values the chain API cannot split at will', async () => {
+  const w = await paidAndReleased();
+  const honest = await w.build();
+  // The Stall keeping 1 ADA less of the payment, that ADA paid to others (refused on true values, above).
+  const passedOn = await w.build({ edit: ([s, p, change, send, other]) => [{ ...s, value: plus(s.value, 'lovelace', -ADA_) }, p, change, send,
+    { ...other, value: plus(other.value, 'lovelace', ADA_) }] });
+  // The chain API reports the Stall's input 1 ADA lower and the Pot's 1 ADA higher: balanced, and the Stall would seem
+  // to keep its whole payment. Without the producing transactions, no credit; with them, the misstatement is refused.
+  refused(await w.verify(passedOn, w.chainOver({ lie: ADA_, verified: [] })), OTHERS, 'a misstated split, no transaction CBOR');
+  refused(await w.verify(passedOn, w.chainOver({ lie: ADA_ })), /the chain API misstates the value of/, 'a misstated split, with the CBOR');
+  // Honest: credited when every target's value is bound, or all but one (the last then follows from the balance).
+  accepted(await w.verify(honest, w.chainOver()), 'both inputs verified');
+  accepted(await w.verify(honest, w.chainOver({ verified: [w.pot] })), 'the Pot verified, the Stall from the balance');
+  accepted(await w.verify(honest, w.chainOver({ verified: [w.stall] })), 'the Stall verified, the Pot from the balance');
+  // A provider that serves no transaction CBOR: no credit, so the Pot's release to others is refused (fails closed).
+  refused(await w.verify(honest, w.chainOver({ verified: [] })), OTHERS, 'no transaction CBOR');
+});
+
+test('one redeemer per purpose: a destroy\'s burn redeemer twice is refused', async () => {
+  const c = recordedComposition('upgrade/005-undefined.json');
+  const destroy = c.steps.find((st) => st.call.kind === 'destroy');
+  const tx = parseTx(c.cbor);
+  const policies = [...new Set([...tx.mint.keys()].map((u) => u.slice(0, 56)))].sort();
+  const at = policies.indexOf(destroy.deployment.policy);
+  const twice = await editTx(c.cbor, c.x, { redeemers: (rds) => [...rds, rds.find((x) => x.tag === 'mint' && x.index === at)] });
+  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: twice }), new RegExp(`two redeemers for the mint purpose at index ${at}`), 'a second mint redeemer');
+  const { r, chain, honest } = await lovelaceWorld();
+  const spendTwice = await editTx(honest, r.x, { redeemers: (rds) => [...rds, rds.find((x) => x.tag === 'spend')] });
+  refused(await verifyPrepared(inputsOf(r, { txHex: spendTwice, chain })), /two redeemers for the spend purpose at index/, 'a spend redeemer twice');
 });

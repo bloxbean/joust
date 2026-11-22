@@ -23,16 +23,36 @@ function refOf(d) {
   return `${bytesToHex(d.fields[0].bytes)}#${d.fields[1].int}`;
 }
 
-/** A Value as Map unit -> bigint (policy hex + asset name hex; '' + '' is lovelace), or null when {@code d} is not one. */
+const MAX_QUANTITY = (1n << 127n) - 1n;
+
+/**
+ * A deposit's Value as Map unit -> bigint (policy hex + asset name hex; '' + '' is lovelace), or null when {@code d} is
+ * not one the output verifier accepts (OutputVerifier.positive over ValueAdapter.fromWire's rules, on the wire's own
+ * entries): a map of policies in strictly increasing order, each a non-empty map of distinct names (32 bytes at most,
+ * the empty name only under the empty policy), every quantity positive and within 128 bits, the value not empty, and
+ * no reserved-kind name (32 bytes, or 29 bytes starting 0x4F or 0x49) under a token policy. Nothing is merged: a
+ * redeemer the verifier would refuse is refused before the wallet signs it.
+ */
 function valueOf(d) {
-  if (!Array.isArray(d?.map)) return null;
+  if (!Array.isArray(d?.map) || d.map.length === 0) return null;
   const m = new Map();
+  let previous = null;
   for (const [p, assets] of d.map) {
-    if (!isBytes(p) || !Array.isArray(assets?.map)) return null;
+    if (!isBytes(p) || p.bytes.length > 32 || !Array.isArray(assets?.map) || assets.map.length === 0) return null;
+    const policy = bytesToHex(p.bytes);
+    if (previous !== null && !(previous < policy)) return null;
+    previous = policy;
+    const names = new Set();
     for (const [n, q] of assets.map) {
-      if (!isBytes(n) || !isInt(q)) return null;
-      const unit = p.bytes.length === 0 && n.bytes.length === 0 ? 'lovelace' : bytesToHex(p.bytes) + bytesToHex(n.bytes);
-      m.set(unit, (m.get(unit) ?? 0n) + q.int);
+      if (!isBytes(n) || n.bytes.length > 32 || !isInt(q) || q.int <= 0n || q.int > MAX_QUANTITY) return null;
+      const name = bytesToHex(n.bytes);
+      if (names.has(name)) return null;
+      names.add(name);
+      const ada = p.bytes.length === 0;
+      if (ada && n.bytes.length !== 0) return null;
+      const len = n.bytes.length;
+      if (!ada && (len === 32 || (len === 29 && (n.bytes[0] === 0x4f || n.bytes[0] === 0x49)))) return null;
+      m.set(ada ? 'lovelace' : policy + name, q.int);
     }
   }
   return m;
