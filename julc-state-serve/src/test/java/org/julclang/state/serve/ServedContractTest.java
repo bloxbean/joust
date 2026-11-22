@@ -56,6 +56,22 @@ class ServedContractTest {
         return Fixtures.read(FIXTURES.resolve("dapp").resolve(name));
     }
 
+    /**
+     * The first recorded dApp call of {@code contract}'s {@code method}, by content: re-recording renumbers the files
+     * (the JuLC 0.1.0-pre22 bump added a step before Bank's calls).
+     */
+    static String firstCall(String contract, String method) throws Exception {
+        try (var s = java.nio.file.Files.list(FIXTURES.resolve("dapp"))) {
+            for (Path p : s.filter(p -> p.getFileName().toString().endsWith("-composed_transaction.json")).sorted().toList()) {
+                JsonNode call = Fixtures.read(p).path("call");
+                if (call.path("contract").asText().endsWith("." + contract) && call.path("method").asText().equals(method)) {
+                    return p.getFileName().toString();
+                }
+            }
+        }
+        throw new AssertionError("no recorded " + contract + "." + method);
+    }
+
     static StateRuntime runtime(BackendService backend, UnaryOperator<StateRuntime.Builder> more) {
         return DevKit.snapshotRuntime(backend, FIXTURES.resolve("devkit.json"), more);
     }
@@ -186,7 +202,7 @@ class ServedContractTest {
 
     @Test
     void thePayoutsTheBuildRecorded_withWhatIsOwed() throws Exception {
-        JsonNode f = fixture("0019-composed_transaction.json");   // Bank.withdraw 10 ADA
+        JsonNode f = fixture(firstCall("Bank", "withdraw"));   // Bank.withdraw 10 ADA
         var p = prepare(runtime(f), f.get("call"));
         assertEquals(f.get("txHash").asText(), p.txHash());
         assertEquals(1, p.payouts().size(), p.payouts().toString());
@@ -316,7 +332,7 @@ class ServedContractTest {
 
     @Test
     void reservationsOnInstanceAndOwnedObjectInputsRefuseThePrepare() throws Exception {
-        for (String fixture : List.of("0003-composed_transaction.json", "0018-composed_transaction.json")) {
+        for (String fixture : List.of("0003-composed_transaction.json", firstCall("Bank", "deposit"))) {
             JsonNode f = fixture(fixture);
             var call = f.get("call");
             Snapshot snapshot = Fixtures.snapshot(f);
