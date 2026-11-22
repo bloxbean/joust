@@ -7,7 +7,8 @@
 // method computes from the call, payouts are paid, and the script's value is conserved. So the page checks that the
 // transaction makes exactly the call it asked for, on the pinned script, and that the wallet risks nothing else: it
 // loses at most the payment, the fee and (for a creation) the new UTxO's minimum ADA; others are paid only from what the
-// script releases beyond its payouts and its claimed sends to the wallet (claims.js).
+// script releases beyond its payouts and its claimed sends to the wallet, plus what a spending call forwards of its
+// payment to the outputs bound to it (claims.js).
 
 import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf, objectIdOf } from './tokens.js';
@@ -16,7 +17,7 @@ import { approvalsData, rewardAddressOf } from './governors.js';
 import { parseTx, addressParts, integrityHashOf } from './ledger.js';
 import { dataHex } from './pdata.js';
 import { isKeyedCall, verifyKeyed } from './keyed.js';
-import { outputRegistry, claimedSends } from './claims.js';
+import { outputRegistry, claimedSends, paymentCredit } from './claims.js';
 
 export const DEFAULT_LIMITS = {
   maxCollateral: 5_000_000n,     // lovelace a failing script may cost
@@ -198,6 +199,7 @@ export async function verifyPrepared(o) {
   const mintPolicies = [...new Set([...minted.keys()].map((u) => u.slice(0, 56)))];
 
   let createdUnit = null;
+  let acceptsAssets = false;
   const callFields = (def, r, what) => {
     let decoded;
     try {
@@ -222,7 +224,8 @@ export async function verifyPrepared(o) {
     }
     const argNames = new Set(call.meta.args.map((a) => a.name));
     // An offer of assets binds only through the redeemer's assetsIn: a method without one takes none.
-    if (!alt.fields.some((f) => f.title === 'assetsIn') && [...pay.assets].length) problems.push('the call takes no assets, but the page offers some');
+    acceptsAssets = alt.fields.some((f) => f.title === 'assetsIn');
+    if (!acceptsAssets && [...pay.assets].length) problems.push('the call takes no assets, but the page offers some');
     alt.fields.forEach((f, i) => {
       const actual = fields[i];
       if (argNames.has(f.title)) {
@@ -325,6 +328,8 @@ export async function verifyPrepared(o) {
   if (registry?.deposits.length) problems.push('a deposit claim in a single call (deposits are verified only in a composition with their receiver)');
   const claimed = claimedSends(tx, [{ registry, owners: targetRef ? [targetRef] : [] }], isWallet, problems);
   const third = new Map();         // outputs to anyone else
+  const loose = [];                // every output that is not the continuation: { index, value, datum, paysKey }
+  const claims = registry?.claims ?? [];
   let continuation = new Map();
   const continuingUnit = createdUnit ?? (DESTROYS.has(call.kind) ? null : targetUnit);
   let continuations = 0;
@@ -345,11 +350,16 @@ export async function verifyPrepared(o) {
       if (isTagged && claimed.indexes.has(index)) problems.push('a claimed send output that carries a payout tag');
       add(back, value);
       if (isTagged) add(tagged, value);
+      loose.push({ index, value, datum: out.datum, paysKey: paymentKeyHashOf(out.address) !== null });
       continue;
     }
     // The wallet's payment key at an address the wallet does not use (e.g. with a stranger's stake key): refused.
     const pkh = paymentKeyHashOf(out.address);
     if (pkh && wallet.keyHashes.includes(pkh)) problems.push('an output to the wallet\'s key at an address the wallet does not use');
+    // A claimed output never carries a payout tag (I30): one output is not a payout and a send at once.
+    if (out.datum && payoutTag && dataEqual(out.datum, payoutTag) && claims.some((cl) => cl.output === index)) {
+      problems.push('a claimed send output that carries a payout tag');
+    }
     const bech = out.address;
     if (continuingUnit && atScript(bech) && value.get(continuingUnit) === 1n) {
       continuations++;
@@ -369,6 +379,7 @@ export async function verifyPrepared(o) {
     }
     report.outputs.push({ address: bech, value });
     add(third, value);
+    loose.push({ index, value, datum: out.datum, paysKey: pkh !== null });
   }
   if (continuingUnit && continuations !== 1) problems.push('not exactly one continuation of the instance or object');
 
@@ -405,12 +416,26 @@ export async function verifyPrepared(o) {
   // others or the fee comes back to the wallet. A claimed send output is subtracted whole, including what the wallet
   // added to bring a send below its minimum ADA up to it (the page cannot tell that from lovelace the script sends): a
   // method that sends the caller less than the minimum ADA and pays released lovelace to others should give the send
-  // its own minimum ADA.
+  // its own minimum ADA. A spending call may also forward what it does not keep of its payment, to the outputs bound
+  // to it (its tagged payouts, its claimed sends), as in a composition (claims.js paymentCredit): a purchase paying its
+  // price to the seller (Market.buy). Its target is the one script input, so the balance binds its value.
   const released = new Map(targetValue);
   add(released, continuation, -1n);
   add(released, minted);
+  let credit = new Map();
+  if (SPEND_KINDS.has(call.kind) && targetRef) {
+    const paid = new Map([['lovelace', pay.lovelace]]);
+    if (acceptsAssets) for (const [p, assets] of pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
+    // Its intake: what its continuation gains, plus what it burns of its own user tokens (a minting method's ByAction).
+    const own = new Map(continuation);
+    add(own, targetValue, -1n);
+    if (call.meta.returns?.mint) {
+      for (const [unit, q] of minted) if (q < 0n && unit.startsWith(policy) && !reservedName(unit.slice(56), !!xj.keyed)) own.set(unit, (own.get(unit) ?? 0n) - q);
+    }
+    credit = paymentCredit([{ targetRef, tag: payoutTag, paid, own }], loose, claims);
+  }
   for (const [unit, q] of third) {
-    const free = (released.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
+    const free = (released.get(unit) ?? 0n) + (credit.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
     const sends = claimed.indexes.size ? ' beyond its claimed sends to the wallet' : '';
     if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the script releases to them${sends}`);
   }
@@ -642,7 +667,6 @@ export function paymentKeyHashOf(...args) {
   }
 }
 
-/** An enterprise address of one of the wallet's payment keys: no stake credential, so wholly the wallet's. */
 /**
  * Whether a token name (hex) is reserved for a contract's own tokens under its policy (ADR-0016): 32 bytes (an
  * instance's), 29 bytes from 0x4F (an owned object's) or 0x49 (an intent's), and in a keyed contract 29 bytes from 0x4B
@@ -654,6 +678,7 @@ export function reservedName(nameHex, keyed) {
   return len === 32 || (len === 29 && (kind === '4f' || kind === '49' || (keyed && kind === '4b')));
 }
 
+/** An enterprise address of one of the wallet's payment keys: no stake credential, so wholly the wallet's. */
 export function isWalletEnterprise(bech32, wallet) {
   try {
     const p = addressParts(bech32);

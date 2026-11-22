@@ -133,7 +133,8 @@ The provider interface is in [Networks and chain providers](/apps/networks-and-p
 | `tip()` | the latest slot |
 | `params()` | protocol parameters (Blockfrost's object) |
 | `utxo(ref)` | `{ address, value: Map, referenceScriptHash, inlineDatum }` or `null` |
-| `verifiedOutput(ref)` | `{ address, inlineDatum }` read from the producing transaction's CBOR, hash-checked; `null` without `txCbor` |
+| `verifiedOutput(ref)` | `{ address, value, inlineDatum, ... }` read from the producing transaction's CBOR, hash-checked: one this chain view submitted (or was given with `remember(cbor)`), else the provider's `txCbor`; `null` without either |
+| `remember(cbor)` | records a transaction the page submitted, for `verifiedOutput` (`submit` and the clients' calls do it) |
 | `utxosAt(address)` | `[{ ref, address, value: Map, inlineDatum }]` |
 | `findUnit(address, unit)` | the UTxO at `address` holding one `unit`, or `null` |
 | `registered(stakeAddress)` | `true`, `false`, or `undefined` when the provider cannot tell |

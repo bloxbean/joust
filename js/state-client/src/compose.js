@@ -11,7 +11,7 @@ import {
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
-import { outputRegistry, claimedSends } from './claims.js';
+import { outputRegistry, claimedSends, paymentCredit } from './claims.js';
 
 /** Whether two values (Map unit -> bigint) are equal, zero entries aside. */
 function sameValue(a, b) {
@@ -127,9 +127,12 @@ export async function verifyComposed(o) {
     }
   }
   for (const k of calls) if (!k.creation && k.targetIndex < 0) problems.push(`${k.call.meta.name}: its instance or object is not spent`);
-  // Each target's value bound to its producing transaction (verifiedOutput), where the chain API serves it: the balance
-  // binds only the targets' sum, and the kept-payment credit (below) rests on how it splits between them. A misstated
-  // value is refused; with every target but one bound, the last follows from the balance.
+  // Each target bound to its producing transaction (verifiedOutput), where the chain API serves it. A chain API's answer
+  // alone binds neither which input holds which call's token nor how the targets' sum (which the balance binds)
+  // splits between them, so with two such targets it could transpose their tokens: the page would check each call's
+  // redeemer against the other's target, and each call would run on the other's instance or object. A misstated value
+  // is refused; every target but one must be bound (the last then follows from the balance: its token and its value),
+  // else the composition is refused (as ADR-0016 D11 refuses a keyed call's unbound script inputs).
   for (const k of calls) {
     if (k.creation || !k.targetRef) continue;
     let v = null;
@@ -143,7 +146,11 @@ export async function verifyComposed(o) {
     if (v.address !== k.deployment.address || !sameValue(v.value, k.targetValue)) problems.push(`the chain API misstates the value of ${k.targetRef}`);
     else k.bound = true;
   }
-  const splitKnown = calls.filter((k) => !k.creation && k.targetRef && !k.bound).length <= 1;
+  const unbound = calls.filter((k) => !k.creation && k.targetRef && !k.bound).length;
+  if (unbound > 1) {
+    problems.push(`${unbound} targets whose inputs the page cannot authenticate (the chain API serves no transaction CBOR): `
+      + 'it could transpose their tokens, and each call would run on another\'s target');
+  }
   // An adoption (@Migrate, ADR-0011 D4): of the prior instance the page names, which its own @MigrateTo destroy spends
   // here, under the policy the adopting deployment's params name. Its token is named by that prior UTxO.
   for (const k of calls.filter((x) => x.creation)) {
@@ -313,7 +320,7 @@ export async function verifyComposed(o) {
   const back = new Map();
   const tagged = new Map();
   const third = new Map();
-  const thirdOutputs = [];
+  const loose = [];               // every output that is no continuation: { index, value, datum, paysKey }
   // Each output verifier the calls pin, with its registry and the calls pinning it. The wallet outputs its claims name
   // (each for a target spent by one of those calls; ADR-0007 D5) are the scripts' sends to the wallet, never its change.
   const registries = [];
@@ -325,6 +332,10 @@ export async function verifyComposed(o) {
       owners: pinning.filter((x) => x.targetRef).map((x) => x.targetRef) });
   }
   const claimed = claimedSends(tx, registries, isWallet, problems);
+  // Every claimed output, at any address: a claimed output never carries a payout tag (I30), so one output cannot be a
+  // call's payout and a send at once.
+  const claims = registries.flatMap(({ registry }) => registry?.claims ?? []);
+  const anyClaimed = new Set(claims.map((cl) => cl.output));
   for (const [index, out] of tx.outputs.entries()) {
     const value = out.value;
     const bech = out.address;
@@ -364,13 +375,15 @@ export async function verifyComposed(o) {
       add(back, value);
       if (isTagged) add(tagged, value);
       if (pkh === null) problems.push('a wallet output without a payment key');
+      loose.push({ index, value, datum: out.datum, paysKey: pkh !== null });
       continue;
     }
     const pkh = paymentKeyHashOf(out.address);
     if (pkh && wallet.keyHashes.includes(pkh)) problems.push('an output to the wallet\'s key at an address the wallet does not use');
+    if (out.datum && anyClaimed.has(index) && tags.some((t) => dataEqual(out.datum, t))) problems.push('a claimed send output that carries a payout tag');
     report.outputs.push({ address: bech, value });
     add(third, value);
-    thirdOutputs.push({ index, value, datum: out.datum });
+    loose.push({ index, value, datum: out.datum, paysKey: pkh !== null });
   }
   // Deposits (ADR-0011 D3): a receiver credits every deposit claimed on its continuation, whatever its `by`, so each must
   // come from the target of a call that declares deposits (its validator checks its claims exactly: their number, values,
@@ -425,12 +438,16 @@ export async function verifyComposed(o) {
     if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}`);
   }
   // Others receive only what the scripts release beyond their payouts and claimed sends to the wallet, over all calls
-  // (the rule that protects the wallet, as in verify.js; deposits are bound to composed calls above). What a call keeps
-  // of the wallet's payment is not released, so it is credited back, up to the call's payment: else a payment into one
-  // call would shrink what another releases to others. A call's own intake is what its continuation gains beyond the
-  // deposits it receives and net of those it gives (each depositing validator checks its claims exactly): a deposit
-  // funds its receiver from the depositor's release, not from the wallet. With the credit, others' receipts bound the
-  // wallet's net loss (the fee aside) by what the calls keep of their payments, less what the scripts send it back.
+  // (the rule that protects the wallet, as in verify.js; deposits are bound to composed calls above), plus what the
+  // calls keep or forward of the wallet's payments (claims.js paymentCredit): else a payment into one call would shrink
+  // what another releases to others, and a purchase could not pay its price to the seller. A call's own intake is what
+  // its continuation gains beyond the deposits it receives and net of those it gives (each depositing validator checks
+  // its claims exactly; a deposit funds its receiver from the depositor's release, not from the wallet), plus what it
+  // burns as its policy's mint owner. assetsIn binds the assets a call accepts and its validator the continuation, so
+  // tokens it mints change nothing here: of a call that accepts 400 X, mints 5 and sends 5, the wallet's 400 stayed.
+  // Every target is bound (above), so each intake rests on the target's own value. With the credit, others' receipts
+  // bound the wallet's net loss (the fee aside) by what the calls keep or forward of their payments, less what the
+  // scripts send it back.
   const released = new Map();
   for (const k of calls) {
     add(released, k.targetValue);
@@ -449,47 +466,21 @@ export async function verifyComposed(o) {
       }
     }
   }
-  // What each call keeps of its payment: its intake (what its continuation gains beyond the deposits it receives, net
-  // of those it gives, plus what it burns as its policy's mint owner), up to its payment. assetsIn binds the assets a
-  // call accepts and its validator the continuation, so tokens it mints change nothing here: of a call that accepts
-  // 400 X, mints 5 and sends 5, the wallet's 400 stayed. What it does not keep of its payment it may forward, but only
-  // to outputs bound to it: a payout carrying its tag, or an output its claims name (its validator checks both, I7 and
-  // ADR-0007 D5), and at most what they hold (a purchase paying its price to the seller, ADR-0011). Per call, the two
-  // together are at most its payment; others' receipts then bound the wallet's net loss (the fee aside) by the
-  // payments, less what the scripts send it back.
-  const boundTo = new Map(calls.map((k) => [k, new Map()]));
-  for (const { index, value, datum } of thirdOutputs) {
-    const k = calls.find((x) => x.targetRef && ((datum && x.tag && dataEqual(datum, x.tag))
-      || registries.some(({ registry }) => (registry?.claims ?? []).some((cl) => cl.output === index && cl.by === x.targetRef))));
-    if (k) add(boundTo.get(k), value);
-  }
-  const kept = new Map();
-  for (const k of calls) {
-    if (k.creation) continue;   // an adoption takes no payment
+  const paying = calls.filter((k) => !k.creation).map((k) => {     // an adoption takes no payment
     // The payment: its lovelace, and the assets it offers where its redeemer's assetsIn binds them (else none).
     const paid = new Map([['lovelace', k.pay.lovelace]]);
     if (k.acceptsAssets) for (const [p, assets] of k.pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
-    // The intake rests on the target's own value: credited only where the chain API cannot split the targets' sum at
-    // will (bound, or all but one bound); else nothing is kept, and the whole payment may only be forwarded.
     const own = new Map();
-    if (k.bound || splitKnown) {
-      add(own, k.continuation);
-      add(own, k.targetValue, -1n);
-      add(own, gives.get(k));
-      add(own, gets.get(k), -1n);
-      if (mintOwner.get(k.policy) === k) {
-        for (const [unit, q] of minted) if (q < 0n && unit.startsWith(k.policy) && !reserved(unit)) own.set(unit, (own.get(unit) ?? 0n) - q);
-      }
+    add(own, k.continuation);
+    add(own, k.targetValue, -1n);
+    add(own, gives.get(k));
+    add(own, gets.get(k), -1n);
+    if (mintOwner.get(k.policy) === k) {
+      for (const [unit, q] of minted) if (q < 0n && unit.startsWith(k.policy) && !reserved(unit)) own.set(unit, (own.get(unit) ?? 0n) - q);
     }
-    for (const [unit, cap] of paid) {
-      if (cap <= 0n) continue;
-      const q = own.get(unit) ?? 0n;
-      const keeps = q <= 0n ? 0n : q < cap ? q : cap;
-      const sent = boundTo.get(k).get(unit) ?? 0n;
-      const forwards = sent < cap - keeps ? sent : cap - keeps;
-      kept.set(unit, (kept.get(unit) ?? 0n) + keeps + forwards);
-    }
-  }
+    return { targetRef: k.targetRef, tag: k.tag, paid, own };
+  });
+  const kept = paymentCredit(paying, loose, claims);
   for (const [unit, q] of third) {
     const free = (released.get(unit) ?? 0n) + (kept.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
     const sends = claimed.indexes.size ? ' beyond their claimed sends to the wallet' : '';
@@ -638,6 +629,7 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
   const signed = assemble(CSL, p.cbor, ...witnesses);
   if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
   await api.submitTx(signed.cbor);
+  chain.remember?.(signed.cbor);
   await chain.awaitTx(signed.txHash);
   return { txHash: signed.txHash, report };
 }

@@ -308,7 +308,9 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
     - outputs to other parties are allowed and listed in the review, but only up to what the script releases
       (the target's value, less the continuation, plus the mint) beyond its tagged payouts to the wallet and its
       claimed sends to the wallet (below). A payout to the wallet can thus never hide the wallet's own funds going
-      elsewhere (r4);
+      elsewhere (r4). A spending call may also forward what it does not keep of its payment, to the outputs bound to
+      it (a purchase paying its price to the seller): ADR-0015 D7 states the rule, the same for one call and for a
+      composition. The single target is the only script input, so the balance binds its value;
     - **claimed sends** (ADR-0007 D5): when the transaction withdraws zero from the deployment's pinned output
       verifier, the page decodes that withdrawal's `OutputClaims` redeemer (its Reward redeemer, by the withdrawal's
       ledger index). Every claim must name a distinct output in strictly increasing order and, as `by`, the target

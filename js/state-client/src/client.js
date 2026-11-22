@@ -225,6 +225,7 @@ export class JoustContract {
     const signed = assemble(CSL, prepared.cbor, ...witnesses);
     if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
     const submitted = await api.submitTx(signed.cbor);
+    this.chain.remember?.(signed.cbor);
     if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
     await this.chain.awaitTx(signed.txHash);
     return { txHash: signed.txHash, report };
@@ -307,6 +308,7 @@ export class JoustContract {
     const signed = assemble(CSL, prepared.cbor, ...witnesses);
     if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
     const submitted = await api.submitTx(signed.cbor);
+    this.chain.remember?.(signed.cbor);
     if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
     await this.chain.awaitTx(signed.txHash);
     return { txHash: signed.txHash, report };
@@ -502,6 +504,7 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
     // A link window may start a little ahead (at most the page's start limit): submitted once it has started.
     if (report.plan.validFrom) await untilSlot(this.chain, Number(report.plan.validFrom));
     const submitted = await api.submitTx(signed.cbor);
+    this.chain.remember?.(signed.cbor);
     if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
     await this.chain.awaitTx(signed.txHash);
   } catch (e) {
@@ -585,6 +588,7 @@ JoustContract.prototype.runIntentOp = async function runIntentOp(api, request, v
   const signed = assemble(CSL, prepared.cbor, await api.signTx(prepared.cbor, true));
   if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
   const submitted = await api.submitTx(signed.cbor);
+  this.chain.remember?.(signed.cbor);
   if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
   await this.chain.awaitTx(signed.txHash);
   return { txHash: signed.txHash, report, created: prepared.instance ?? prepared.created ?? null };

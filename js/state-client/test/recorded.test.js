@@ -1,13 +1,16 @@
 // Every recorded engine transaction of fixtures/m3 that the page verifies through verifyPrepared or verifyComposed
 // (spending calls, creations, owned calls, compositions; a spending call also as a one-call composition) is accepted:
 // an over-refusal of a legitimate flow shows here, not in review. Keyed calls, intents, purposes and registrations have
-// their own verifiers and tests (keyed.test.js, sends.test.js).
+// their own verifiers and tests (keyed.test.js, sends.test.js). A composition's targets are read from their producing
+// transactions, which fixtures/m3 records too. fixtures/m0 (JVM-runtime recordings) carries no descriptions or page
+// calls; its Market.buy, a purchase that forwards the buyer's payment, is replayed with the Market's description.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { verifyPrepared } from '../src/verify.js';
 import { verifyComposed } from '../src/compose.js';
 import { fixtureInputs } from './sends-world.js';
+import { m0Inputs } from './m0-world.js';
 
 const ROOT = new URL('../../../fixtures/m3/', import.meta.url);
 const SPENDING = new Set(['action', 'destroy', 'ownedAction', 'ownedDestroy']);
@@ -42,4 +45,21 @@ test('every recorded call the page verifies is accepted, alone and as a one-call
   }
   assert.deepEqual(refused, [], `refused:\n${refused.join('\n')}`);
   assert.ok(verified >= 190, `only ${verified} verifications`);
+});
+
+test('fixtures/m0\'s Market.buy: the payment it forwards is credited; refused only for the wallet\'s top-up of the NFT send', async () => {
+  const description = JSON.parse(readFileSync(new URL('./fixtures/market.description.json', import.meta.url), 'utf8'));
+  const i = m0Inputs('market/0004-Market.buy.json', {
+    description, walletAddress: 'addr_test1qzf4l8rrxcqla29qzy7curspnpttanpyuc6fgdv0djc5ygqgr6hw09v402suvtx69tq6xugjddy9mww9kz9g5re4qclswstdts',
+    call: { method: 'buy', instance: 'ee7b4388074a7276c17f057636a8331523b65ae83e0c5662eb0a909f67cd8882',
+      object: '4f414a2479f419704d8e85f80bce6b6da8514c9d358b2ffba64c588b11', pay: { lovelace: 100_000_000n } },
+  });
+  // The known limitation of ADR-0013 §9.2 (refused on main too, before forwarding): the NFT send to the buyer holds
+  // 1.02147 ADA of the wallet's to reach its minimum ADA, and a claimed wallet output counts whole as the script's. The
+  // forwarded price is credited: the only refusal is that 1.02147 ADA (others receive 103.6 ADA, 102.57853 allowed).
+  // sends.test.js accepts the purchase once the send carries its own minimum ADA.
+  for (const r of [await verifyPrepared(i), await verifyComposed({ ...i, steps: [i] })]) {
+    assert.equal(r.problems.length, 1, r.problems.join('; '));
+    assert.match(r.problems[0], /^others receive 103600000 of lovelace, more than the scripts? releases? to them beyond (its|their) claimed sends to the wallet$/);
+  }
 });

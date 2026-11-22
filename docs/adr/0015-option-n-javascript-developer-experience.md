@@ -873,9 +873,15 @@ direct `Tx` building, gated by S3.
     gains, beyond the deposits it receives and net of those it gives) is credited back to what others may receive, up
     to its payment, so a payment into one call does not shrink what another releases to others (an adoption holds the
     prior instance's value: it takes no payment and gets no credit). The credit rests on each target's own value,
-    which the balance does not bind (only the targets' sum): a call gets it only when its target's value is read from
-    the producing transaction (`verifiedOutput`), or when every other target's is (the last then follows from the
-    balance); a misstated value is refused, and a chain API that serves no transaction CBOR gives no credit. A
+    which the balance does not bind (only the targets' sum), and the chain API's answer binds neither which input
+    holds which call's token: with two unbound targets it could transpose their tokens, the page would check each
+    call's redeemer against the other's target, and each call would run on the other's instance or object. So every
+    target but one must be read from its producing transaction (`verifiedOutput`: the provider's transaction CBOR, or
+    a transaction the page submitted itself, kept by its chain view, both hash-checked), the last following from the
+    balance (its token and its value); a misstated value is refused, and so is a composition with two or more unbound
+    targets (as ADR-0016 D11 refuses a keyed call's), before its redeemers are trusted. On a provider that serves no
+    transaction CBOR (Ogmios; Yaci Store unless `store.transaction.save-cbor=true`) such compositions are refused
+    unless the page itself created the inputs in the session. A
     deposit claim's value must be one the output verifier accepts (`OutputVerifier.positive` over `ValueAdapter.fromWire`'s
     rules: no empty value or token map, no repeated or out-of-order entry, positive quantities, no reserved names),
     else the body could only fail on chain, and so is a depositor's second claim to the same receiver or a claim into
@@ -886,9 +892,21 @@ direct `Tx` building, gated by S3.
     `min(intake, payment)` per unit, the intake adding back what a call burns as its policy's mint owner; offered assets
     count only where the call's `assetsIn` binds them (the validator checks the call accepts exactly those), so what a
     call mints changes nothing: of a call that accepts 400 X, mints 5 and sends 5, the wallet's 400 stayed. What a call
-    does not keep of its payment it may forward, but only to outputs bound to it, its payouts (carrying its tag, I7) or
-    outputs its claims name, and at most what they hold: a purchase paying its price to the seller (ADR-0011's
-    Market.buy) has no continuation to keep it in. Per call, kept and forwarded together are at most its payment.
+    does not keep of its payment it may forward, but only to outputs bound to it, and at most what they hold: a
+    purchase paying its price to the seller (ADR-0011's Market.buy) has no continuation to keep it in. An output is
+    bound to a call when it pays a key and carries the call's tag (a payout: payouts pay keys, I7) or when a claim
+    names it for the call's target (a send, at any address), whoever it pays, the wallet included: a refund to the
+    caller is payment the call forwards, so a 10 ADA payment split into a 6 ADA payout to the seller and a 4 ADA tagged
+    refund is accepted (the tagged and claimed wallet outputs are still subtracted from what others may receive, so a
+    refund the wallet funds itself frees nothing). An output binds to one call at most, and an output that carries a
+    call's tag and is also claimed is refused, at a wallet address or not (on chain I30 refuses a claimed output with
+    a JOUST tag): else one output would meet a payout and a send at once and free the other's share of the payment for
+    a tagged stranger output. So each obligation has its own output, and an extra bound output is funded only beyond
+    the payments (refused by the wallet's loss bound) or from the release. Per call and unit, kept and forwarded
+    together are at most its payment (`paymentCredit` in claims.js). A single spending call follows the same rule
+    (`verifyPrepared`): its target is the one script input, so the balance binds its value. fixtures/m0's recorded
+    Market.buy is refused only by ADR-0013 §9.2's known limitation (its NFT send to the buyer carries the wallet's
+    minimum ADA), alone and composed; main refused it too, for the forwarded price.
     Mints are owned per policy. A name the protocol reserves (an instance's, an owned object's, an intent's, a keyed
     object's) is a lifecycle token: only a composed destroy's burn of its own target or an adoption's mint of its own.
     Any other unit is a user token whose policy's one mint redeemer must be `ByAction` naming the target of a composed
@@ -899,7 +917,8 @@ direct `Tx` building, gated by S3.
     other asset. A call whose method takes no assets (no `assetsIn`) may be offered none, and one that is not payable no
     lovelace. With that credit, others' receipts bound the wallet's net loss (the fee aside) by what the calls keep or
     forward of their payments, less what the scripts send it back. `test/recorded.test.js` verifies every recorded
-    call and composition of `fixtures/m3` the page takes, so an over-refusal of a recorded flow fails the suite.
+    call and composition of `fixtures/m3` the page takes (a composition's targets read from their producing
+    transactions, which the fixtures record), so an over-refusal of a recorded flow fails the suite.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.
     Deployments that deposit or receive now pin it.
   - Spending calls only for now (no creations in a composition).

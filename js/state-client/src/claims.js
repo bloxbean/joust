@@ -8,6 +8,7 @@
 // validator then checks its claims exactly) into a composed call that receives them (compose.js).
 
 import { bytesToHex, hexToBytes } from './hex.js';
+import { dataEqual } from './pdata.js';
 import { blake2b } from '@noble/hashes/blake2.js';
 
 /** The claimant of a @Withdraw handler's sends (ADR-0010 I37): TxOutRef(blake2b_256(policy), -1), as "txId#-1". */
@@ -148,4 +149,43 @@ export function claimedSends(tx, registries, isWallet, problems) {
     }
   });
   return { indexes, value };
+}
+
+/**
+ * What the calls keep or forward of their payments (ADR-0015 D7, ADR-0013 §9.2): the credit, per unit, that others may
+ * receive beyond what the scripts release. A call's payment ({@code paid}) goes into its continuation or out through
+ * the outputs bound to it, as its validator checks: its continuation exact, its payouts paid by outputs to the payee's
+ * key carrying its tag (I7), its sends by outputs its claims name (I29). So a call keeps its intake ({@code own}: what
+ * its continuation gains, its target's value bound), up to its payment, and forwards the rest, but
+ * only up to what the outputs bound to it hold: an output paying a key with its tag (a payout), or one a claim names
+ * for its target (a send), to anyone, the wallet included (a refund to the caller is part of the payment the call
+ * forwards; the verifiers still subtract every tagged or claimed wallet output from what others may receive). Per call
+ * and unit, kept and forwarded together are at most its payment. An output is bound to one call at most, and one that
+ * carries a tag and is claimed too is refused by the verifiers (on chain I30 refuses it), so each obligation has its
+ * own output and an extra output can be bound only beyond what the obligations need.
+ *
+ * @param calls   [{ targetRef, tag (Data, the call's payout tag), paid: Map unit -> bigint, own: Map unit -> bigint }]
+ * @param outputs [{ index, value: Map, datum, paysKey }] the outputs that are no call's continuation
+ * @param claims  [{ output, by }] the claims of every registry
+ * @returns Map unit -> bigint
+ */
+export function paymentCredit(calls, outputs, claims) {
+  const bound = new Map(calls.map((k) => [k, new Map()]));
+  for (const { index, value, datum, paysKey } of outputs) {
+    const k = calls.find((x) => x.targetRef && ((paysKey && datum && x.tag && dataEqual(datum, x.tag))
+      || claims.some((cl) => cl.output === index && cl.by === x.targetRef)));
+    if (k) for (const [unit, q] of value) bound.get(k).set(unit, (bound.get(k).get(unit) ?? 0n) + q);
+  }
+  const credit = new Map();
+  for (const k of calls) {
+    for (const [unit, cap] of k.paid) {
+      if (cap <= 0n) continue;
+      const q = k.own.get(unit) ?? 0n;
+      const keeps = q <= 0n ? 0n : q < cap ? q : cap;
+      const sent = bound.get(k).get(unit) ?? 0n;
+      const forwards = sent < cap - keeps ? sent : cap - keeps;
+      credit.set(unit, (credit.get(unit) ?? 0n) + keeps + forwards);
+    }
+  }
+  return credit;
 }

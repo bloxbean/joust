@@ -8,7 +8,8 @@
 // recomputed) are refused.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { verifyPrepared } from '../src/verify.js';
+import { readFileSync } from 'node:fs';
+import { verifyPrepared, ledgerOrder } from '../src/verify.js';
 import { verifyComposed } from '../src/compose.js';
 import { verifyPurpose, purposeOf, rewardsData } from '../src/purposes.js';
 import { outputRegistry, rewardRefOf } from '../src/claims.js';
@@ -18,6 +19,7 @@ import { Data, dataHex } from '../src/pdata.js';
 import {
   CSL, recorded, recordedComposition, inputsOf, chainOf, walletOf, editTx, cslOutput, partsOf, bodyOf, repeatWitnessKey, STRANGER, OUTPUT_VERIFIER,
 } from './sends-world.js';
+import { m0Inputs } from './m0-world.js';
 
 const accepted = (r, what) => assert.deepEqual(r.problems, [], `${what}: ${r.problems.join('; ')}`);
 const refused = (r, re, what) => assert.ok(r.problems.some((p) => re.test(p)), `${what}: expected ${re}, got: ${r.problems.join('; ') || 'accepted'}`);
@@ -448,7 +450,7 @@ async function paidAndReleased() {
       if (ref === pot) return { ...u, value: plus(u.value, 'lovelace', lie) };
       return u;
     },
-    ...(verified.length ? { async verifiedOutput(ref) { return verified.includes(ref) ? truth.utxo(ref) : null; } } : {}),
+    verifiedOutput: verified.length ? async (ref) => (verified.includes(ref) ? truth.utxo(ref) : null) : undefined,
   });
   const chain = chainOver();
   const payee = enterpriseAddress({ type: 'key', hash: c.wallet.keyHashes[0] }, 0);
@@ -559,21 +561,23 @@ test('composition: a deposit whose value the output verifier refuses (OutputVeri
 });
 
 test('composition: the kept-payment credit rests on input values the chain API cannot split at will', async () => {
+  const UNBOUND = /2 targets whose inputs the page cannot authenticate/;
   const w = await paidAndReleased();
   const honest = await w.build();
   // The Stall keeping 1 ADA less of the payment, that ADA paid to others (refused on true values, above).
   const passedOn = await w.build({ edit: ([s, p, change, send, other]) => [{ ...s, value: plus(s.value, 'lovelace', -ADA_) }, p, change, send,
     { ...other, value: plus(other.value, 'lovelace', ADA_) }] });
   // The chain API reports the Stall's input 1 ADA lower and the Pot's 1 ADA higher: balanced, and the Stall would seem
-  // to keep its whole payment. Without the producing transactions, no credit; with them, the misstatement is refused.
-  refused(await w.verify(passedOn, w.chainOver({ lie: ADA_, verified: [] })), OTHERS, 'a misstated split, no transaction CBOR');
+  // to keep its whole payment. Without the producing transactions, refused (neither target bound); with them, the
+  // misstatement is refused.
+  refused(await w.verify(passedOn, w.chainOver({ lie: ADA_, verified: [] })), UNBOUND, 'a misstated split, no transaction CBOR');
   refused(await w.verify(passedOn, w.chainOver({ lie: ADA_ })), /the chain API misstates the value of/, 'a misstated split, with the CBOR');
   // Honest: credited when every target's value is bound, or all but one (the last then follows from the balance).
   accepted(await w.verify(honest, w.chainOver()), 'both inputs verified');
   accepted(await w.verify(honest, w.chainOver({ verified: [w.pot] })), 'the Pot verified, the Stall from the balance');
   accepted(await w.verify(honest, w.chainOver({ verified: [w.stall] })), 'the Stall verified, the Pot from the balance');
-  // A provider that serves no transaction CBOR: no credit, so the Pot's release to others is refused (fails closed).
-  refused(await w.verify(honest, w.chainOver({ verified: [] })), OTHERS, 'no transaction CBOR');
+  // A provider that serves no transaction CBOR binds neither target: refused (fails closed; see the transposition test).
+  refused(await w.verify(honest, w.chainOver({ verified: [] })), UNBOUND, 'no transaction CBOR');
 });
 
 test('one redeemer per purpose: a destroy\'s burn redeemer twice is refused', async () => {
@@ -984,4 +988,128 @@ test('composition: a payment a call forwards through its payout (tagged for its 
   refused(await verify(await build({ tagged: false })), OTHERS_PLAIN, 'the same, untagged');
   // A tagged output paid from the wallet's change while the Stall keeps the whole payment: nothing was forwarded.
   refused(await verify(await build({ kept: 0n })), OTHERS_PLAIN, 'a tagged output beyond what the call forwards');
+});
+
+// --------------------------------------------------- forwarding: one output per obligation, refunds, purchases alone
+
+// fees/004's Stall.sell (paid 10 ADA, both targets bound) forwarding part of its payment: `outs(s, p, change)` gives
+// the outputs, `claims` the OutputClaims claims ([output, by]) beside the recorded deposit.
+function forwarding() {
+  const c = recordedComposition('fees/004-undefined.json');
+  const tx = parseTx(c.cbor);
+  const [stall] = tx.inputs;
+  const ov = tx.withdrawals.findIndex((w) => w.address === c.steps[0].deployment.outputVerifier.rewardAddress);
+  const deposits = tx.redeemers.find((x) => x.tag === 'reward' && x.index === ov).data.fields[1].list;
+  const tag = dataHex(refData(stall));
+  const build = (outs, claims = []) => editTx(c.cbor, c.x, {
+    outputs: (cur) => { const [s, p, change] = cur.map(partsOf); return outs(s, p, change).map(cslOutput); },
+    redeemers: withRegistry(ov, dataHex(Data.constr(0, [Data.list(claims.map(([o, by]) => Data.constr(0, [Data.int(BigInt(o)), refData(by)]))), Data.list(deposits)]))),
+  });
+  const verify = async (hex, chain = c.chain) => verifyComposed({ steps: c.steps, wallet: c.wallet, chain, txHex: hex });
+  return { c, stall, tag, build, verify };
+}
+const SELLER = enterpriseAddress({ type: 'key', hash: 'ab'.repeat(28) }, 0);
+const SCRIPT = enterpriseAddress({ type: 'script', hash: 'cd'.repeat(28) }, 0);
+const lovelace = (q) => new Map([['lovelace', q]]);
+
+test('forwarding: one output both tagged and claimed, beside a tagged stranger output, is refused (each obligation its own output)', async () => {
+  const { stall, tag, build, verify } = forwarding();
+  // The Stall forwards 6 ADA: a 3 ADA payout to SELLER (tagged) and a 3 ADA send to SELLER (claimed), apart: accepted.
+  accepted(await verify(await build((s, p, ch) => [{ ...s, value: plus(s.value, 'lovelace', -6n * ADA_) }, p, ch,
+    { address: SELLER, value: lovelace(3n * ADA_), datumHex: tag }, { address: SELLER, value: lovelace(3n * ADA_) }], [[4, stall]])), 'a payout and a send, apart');
+  // One output to SELLER tagged and claimed (on chain I30 refuses a claimed output with a tag), the other 3 ADA to a
+  // stranger carrying the Stall's tag: refused.
+  refused(await verify(await build((s, p, ch) => [{ ...s, value: plus(s.value, 'lovelace', -6n * ADA_) }, p, ch,
+    { address: SELLER, value: lovelace(3n * ADA_), datumHex: tag }, { address: STRANGER, value: lovelace(3n * ADA_), datumHex: tag }], [[3, stall]])),
+  /a claimed send output that carries a payout tag/, 'one output tagged and claimed');
+  // A tag binds an output only where it pays a key (a payout pays a key, I7): a tagged output at a script is not
+  // forwarded payment.
+  refused(await verify(await build((s, p, ch) => [{ ...s, value: plus(s.value, 'lovelace', -3n * ADA_) }, p, ch,
+    { address: SCRIPT, value: lovelace(3n * ADA_), datumHex: tag }])), OTHERS_PLAIN, 'a tagged output at a script address');
+});
+
+test('forwarding: a payment split between a seller\'s payout and a tagged refund to the caller is accepted', async () => {
+  const { c, tag, build, verify } = forwarding();
+  const caller = enterpriseAddress({ type: 'key', hash: c.wallet.keyHashes[0] }, 0);
+  // The Stall keeps none of the 10 ADA (its continuation 10 ADA lower): 6 to the seller, 4 back to the caller, both tagged.
+  accepted(await verify(await build((s, p, ch) => [{ ...s, value: plus(s.value, 'lovelace', -10n * ADA_) }, p, ch,
+    { address: SELLER, value: lovelace(6n * ADA_), datumHex: tag }, { address: caller, value: lovelace(4n * ADA_), datumHex: tag }])), '6 forwarded, 4 refunded');
+  // The refund funded from the wallet's change instead (the Stall keeps 4): the seller's 6 are covered by the payment,
+  // but a tagged refund the wallet pays itself does not free anything for others.
+  refused(await verify(await build((s, p, ch) => [{ ...s, value: plus(s.value, 'lovelace', -6n * ADA_) }, p, { ...ch, value: plus(ch.value, 'lovelace', -4n * ADA_) },
+    { address: SELLER, value: lovelace(6n * ADA_), datumHex: tag }, { address: caller, value: lovelace(4n * ADA_), datumHex: tag }])), OTHERS_PLAIN, 'a refund from the change');
+  // More than the payment forwarded and refunded together: refused.
+  refused(await verify(await build((s, p, ch) => [{ ...s, value: plus(s.value, 'lovelace', -10n * ADA_) }, p, { ...ch, value: plus(ch.value, 'lovelace', -1n * ADA_) },
+    { address: SELLER, value: lovelace(7n * ADA_), datumHex: tag }, { address: caller, value: lovelace(4n * ADA_), datumHex: tag }])), OTHERS_PLAIN, '11 of a 10 ADA payment');
+});
+
+test('composition: targets whose provenance the page cannot authenticate are refused when more than one could be transposed', async () => {
+  // guild/005: Guild.transfer moves an object of one instance into another, whose Guild.admit consents; both targets
+  // are of one deployment. A hostile service swaps the two spend redeemers and a hostile chain API swaps the two
+  // targets' tokens: without the producing transactions the page would check each call against the other's target,
+  // and each would run on the other's.
+  const c = recordedComposition('guild/005-undefined.json');
+  const tx = parseTx(c.cbor);
+  const [a, b] = ledgerOrder(tx.inputs.filter((r) => !c.wallet.utxos.has(r)));
+  const swapped = await editTx(c.cbor, c.x, {
+    redeemers: (rds) => rds.map((x) => (x.tag === 'spend' ? { ...x, dataHex: rds.find((y) => y.tag === 'spend' && y.index !== x.index).dataHex } : x)),
+  });
+  const ua = await c.chain.utxo(a);
+  const ub = await c.chain.utxo(b);
+  const liar = { ...c.chain, async utxo(r) { return r === a ? ub : r === b ? ua : c.chain.utxo(r); } };
+  const noCbor = { ...liar, verifiedOutput: undefined };
+  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: noCbor, txHex: swapped }), /cannot authenticate/, 'transposed, no transaction CBOR');
+  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: liar, txHex: swapped }), /the chain API misstates the value of/, 'transposed, with the CBOR');
+  // Honest: accepted with the producing transactions (or all but one), refused without.
+  accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), 'the recorded transfer');
+  const one = { ...c.chain, async verifiedOutput(r) { return r === a ? c.chain.verifiedOutput(r) : null; } };
+  accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: one, txHex: c.cbor }), 'one target bound, the other by the balance');
+  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: { ...c.chain, verifiedOutput: undefined }, txHex: c.cbor }), /cannot authenticate/, 'honest, no transaction CBOR');
+});
+
+// fixtures/m0's recorded Market.buy (a JVM-runtime recording): the buyer pays the 100 ADA price; the listing (3.6 ADA,
+// the NFT) ends; the market's fee (2.5 ADA, output 0) and the seller's payout (96.1 ADA, output 1) are tagged, the
+// royalty (5 ADA at a script, output 2) and the NFT (to the buyer with the wallet's 1.02147 ADA minimum, output 3) are
+// claimed sends; output 4 is the change.
+const BUYER = 'addr_test1qzf4l8rrxcqla29qzy7curspnpttanpyuc6fgdv0djc5ygqgr6hw09v402suvtx69tq6xugjddy9mww9kz9g5re4qclswstdts';
+function marketBuy() {
+  const description = JSON.parse(readFileSync(new URL('./fixtures/market.description.json', import.meta.url), 'utf8'));
+  return m0Inputs('market/0004-Market.buy.json', { description, walletAddress: BUYER, call: {
+    method: 'buy', instance: 'ee7b4388074a7276c17f057636a8331523b65ae83e0c5662eb0a909f67cd8882',
+    object: '4f414a2479f419704d8e85f80bce6b6da8514c9d358b2ffba64c588b11', pay: { lovelace: 100_000_000n } } });
+}
+
+test('a purchase alone forwards the stated payment to the parties its payouts and claims name', async () => {
+  const i = marketBuy();
+  const x = { snapshot: { protocolParams: i.chain.params } };
+  const [, , , nft] = parseTx(i.txHex).outputs;
+  const top = nft.value.get('lovelace');
+  // The buyer's NFT send carrying its minimum ADA from the listing's release (the seller paid that much less), so the
+  // case isolates forwarding from the known limitation of a send the wallet tops up.
+  const edit = ({ sellerDelta = -top, changeDelta = top, tagSeller = true, tagRoyalty = false } = {}) => editTx(i.txHex, x, {
+    outputs: (cur) => cur.map(partsOf).map((p, n) => (n === 1 ? { ...p, value: plus(p.value, 'lovelace', sellerDelta), datumHex: tagSeller ? p.datumHex : undefined }
+      : n === 2 && tagRoyalty ? { ...p, datumHex: cur.map(partsOf)[1].datumHex }
+        : n === 4 ? { ...p, value: plus(p.value, 'lovelace', changeDelta) } : p)).map(cslOutput),
+  });
+  for (const r of await both({ ...i, txHex: await edit() })) accepted(r, 'the buyer\'s payment forwarded to the seller, the market and the royalty');
+  // A lovelace more to the seller, from the wallet's change: beyond what the purchase forwards.
+  for (const r of await both({ ...i, txHex: await edit({ sellerDelta: 1n - top, changeDelta: top - 1n }) })) refused(r, /others receive/, 'one lovelace beyond the payment');
+  // The seller's output untagged: not bound to the purchase, so the payment cannot have gone there.
+  for (const r of await both({ ...i, txHex: await edit({ tagSeller: false }) })) refused(r, /others receive/, 'the seller untagged');
+  // The royalty send (claimed) carrying the payout tag too: refused.
+  for (const r of await both({ ...i, txHex: await edit({ tagRoyalty: true }) })) refused(r, /a claimed send output that carries a payout tag/, 'a claimed output with the tag');
+});
+
+test('the page\'s chain binds the outputs of transactions it submitted itself, on a provider that serves no transaction CBOR', async () => {
+  const { chainOf: chainView } = await import('../src/chain.js');
+  const { txHash } = await import('../src/ledger.js');
+  const { cbor } = recorded('fees/004-undefined.json');
+  const ref = `${txHash(cbor)}#0`;
+  const remembered = chainView({});
+  assert.equal(await remembered.verifiedOutput(ref), null, 'nothing known yet');
+  remembered.remember(cbor);
+  assert.deepEqual((await remembered.verifiedOutput(ref)).value, parseTx(cbor).outputs[0].value);
+  const submitted = chainView({ async submit() { return txHash(cbor); } });
+  await submitted.submit(cbor);
+  assert.equal((await submitted.verifiedOutput(ref)).address, parseTx(cbor).outputs[0].address);
 });
