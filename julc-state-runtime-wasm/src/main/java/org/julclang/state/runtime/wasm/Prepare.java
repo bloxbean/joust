@@ -354,14 +354,12 @@ public final class Prepare {
         return registration(new SnapshotBackend(Snapshot.fromJson(r.snapshot())), reward, call.path("address").asText());
     }
 
-    /** The unsigned transaction registering the stake credential of {@code reward}, paid from {@code payer}. */
-    private static Result registration(SnapshotBackend backend, String reward, String payer) throws Exception {
-        var tx = new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(reward).from(payer);
-        var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend).compose(tx)
-                .feePayer(payer)
-                .additionalSignersCount(1)
-                .build();
-        // Handed to a wallet like the runtime's prepared bodies: it must balance per unit too (#152 F-W1).
+    /**
+     * Handed to a wallet like the runtime's prepared bodies, a registration must balance per unit too (#152 F-W1). The
+     * snapshot answers each output alike to QuickTx and to this check (one object per reference), so this guards
+     * against the builder, not the chain reads (#165 reviewer3 R3-4).
+     */
+    static void checkRegistration(com.bloxbean.cardano.client.transaction.spec.Transaction built, SnapshotBackend backend) {
         org.julclang.state.runtime.BodyBalance.check(built.getBody(), in -> {
             try {
                 var o = backend.getUtxoService().getTxOutput(in.getTransactionId(), in.getIndex());
@@ -376,6 +374,16 @@ public final class Prepare {
                 throw new IllegalStateException(e);
             }
         }, "register the stake credential");
+    }
+
+    /** The unsigned transaction registering the stake credential of {@code reward}, paid from {@code payer}. */
+    private static Result registration(SnapshotBackend backend, String reward, String payer) throws Exception {
+        var tx = new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(reward).from(payer);
+        var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend).compose(tx)
+                .feePayer(payer)
+                .additionalSignersCount(1)
+                .build();
+        checkRegistration(built, backend);
         byte[] pkh = new com.bloxbean.cardano.client.address.Address(payer).getPaymentCredentialHash().orElseThrow();
         return new Result(true, com.bloxbean.cardano.client.util.HexUtil.encodeHexString(built.serialize()),
                 com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(built), null, -1,

@@ -187,6 +187,16 @@ class BodyBalanceTest {
     }
 
     @Test
+    void aCollateralInputWithoutAnAddressIsAClearRefusal() {
+        // R3-3: inputOwners sees collateral inputs that checkCoCallers does not; no address is a JoustException, not an NPE.
+        var anonymous = utxo(ADDR, "bb", 5_000_000, 0);
+        anonymous.setAddress(null);
+        var e = assertThrows(JoustException.class, () -> TxRunner.inputOwners(Map.of(IN_B, anonymous)));
+        assertTrue(e.getMessage().contains("no address for input " + "bb".repeat(32) + "#0"), e::getMessage);
+        assertEquals(1, TxRunner.inputOwners(Map.of(IN_A, chain.get(IN_A))).size());
+    }
+
+    @Test
     void donationsAndCertificateCoinsAreRangeChecked() {
         // F-W2: a negative donation would add 5 ADA to the inputs' side (10 ADA in, 15 ADA out).
         var negative = body(List.of(IN_A), 0, out(15_000_000, 100));
@@ -234,5 +244,25 @@ class BodyBalanceTest {
         refused(b, "on the collateral path");
         b.setTotalCollateral(null);
         check(b);   // without a total, the ledger keeps what is left
+    }
+
+    @Test
+    void theTotalCollateralIsRangeCheckedAndNeedsCollateralInputs() {
+        // R3-1: 5 ADA of collateral, a 10 ADA return and a total of -5 ADA cancel out; the total is outside the range.
+        var b = body(List.of(IN_A, IN_B), 200_000, out(3_000_000, 40), out(11_800_000, 60));
+        b.getCollateral().add(IN_B);
+        b.setCollateralReturn(out(10_000_000, 0));
+        b.setTotalCollateral(BigInteger.valueOf(-5_000_000));
+        refused(b, "the total collateral is outside the ledger's range");
+        b.setCollateralReturn(null);
+        b.setTotalCollateral(BigInteger.ONE.shiftLeft(64).add(BigInteger.valueOf(5_000_000)));
+        refused(b, "the total collateral is outside the ledger's range");
+        // No collateral inputs: neither a return nor a total may be set.
+        var orphanReturn = body(List.of(IN_A, IN_B), 200_000, out(3_000_000, 40), out(11_800_000, 60));
+        orphanReturn.setCollateralReturn(out(1_000_000, 0));
+        refused(orphanReturn, "without collateral inputs");
+        var orphanTotal = body(List.of(IN_A, IN_B), 200_000, out(3_000_000, 40), out(11_800_000, 60));
+        orphanTotal.setTotalCollateral(BigInteger.valueOf(300_000));
+        refused(orphanTotal, "without collateral inputs");
     }
 }

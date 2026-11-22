@@ -124,11 +124,18 @@ public final class BodyBalance {
         requireZero(balance, what, "");
 
         // The phase-2 failure path: the collateral inputs pay the collateral return and the total collateral.
-        if (body.getCollateral() == null || body.getCollateral().isEmpty()) return;
+        if (body.getCollateral() == null || body.getCollateral().isEmpty()) {
+            // R3-1: a collateral return or total with no collateral inputs is not checked by anything below.
+            if (body.getCollateralReturn() != null || body.getTotalCollateral() != null) {
+                throw unbalanced(what, "a collateral return or total collateral without collateral inputs");
+            }
+            return;
+        }
         Map<String, BigInteger> collateral = inputs(body.getCollateral(), resolve, what);
         if (body.getCollateralReturn() != null) subtractOutput(collateral, body.getCollateralReturn(), what);
         if (body.getTotalCollateral() != null) {
-            collateral.merge(LOVELACE, body.getTotalCollateral().negate(), BigInteger::add);
+            // R3-1: a negative total would add to the collateral inputs' side, as a negative donation does (F-W2).
+            collateral.merge(LOVELACE, word64(body.getTotalCollateral(), "the total collateral", what).negate(), BigInteger::add);
         } else if (collateral.getOrDefault(LOVELACE, BigInteger.ZERO).signum() >= 0) {
             collateral.remove(LOVELACE);   // without a total, the ledger collects all the remaining collateral lovelace
         }

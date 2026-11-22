@@ -754,9 +754,15 @@ final class TxRunner {
     }
 
     /** The payment key hashes owning the transaction's spent and collateral inputs (those at key addresses). */
-    private static java.util.List<byte[]> inputOwners(java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> spends) {
+    static java.util.List<byte[]> inputOwners(java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> spends) {
         var out = new java.util.ArrayList<byte[]>();
-        for (Utxo u : spends.values()) {
+        for (var e : spends.entrySet()) {
+            Utxo u = e.getValue();
+            // R3-3: a collateral-only input is not seen by checkCoCallers; its missing address is a clear refusal too.
+            if (u.getAddress() == null) {
+                throw new JoustException("the backend gave no address for input "
+                        + e.getKey().getTransactionId() + "#" + e.getKey().getIndex());
+            }
             var cred = com.bloxbean.cardano.client.address.AddressProvider.getPaymentCredential(
                     new com.bloxbean.cardano.client.address.Address(u.getAddress()));
             if (cred.isPresent() && cred.get().getType() == com.bloxbean.cardano.client.address.CredentialType.Key) {
