@@ -14,6 +14,8 @@ import static org.julclang.state.host.Wire.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ReplayTest {
+    /** The plain calls the dApp recording must replay (ADR-0022 §9): Counter's init, action and destroy; Bank's init and action. */
+    static final Set<String> PLAIN = Set.of("Counter init", "Counter action", "Counter destroy", "Bank init", "Bank action");
     static final Path FIXTURES = Path.of(System.getProperty("joust.host.fixtures", "../fixtures/m0"));
 
     /** The first M3 recording of {@code contract}'s {@code method} ({@code NNN-method.json}): re-recording renumbers them. */
@@ -75,12 +77,29 @@ class ReplayTest {
             return a;
         }
     }
+    /**
+     * ADR-0022 §9 replay gates check coverage, not a count (re-recording changes how many calls a flow makes): each
+     * {@code "Contract kind"} in {@code wanted} must be among those replayed. The message lists what is missing.
+     */
+    static void assertCovers(Set<String> replayed, Set<String> wanted, String gate) {
+        var missing = new TreeSet<>(wanted);
+        missing.removeAll(replayed);
+        assertTrue(missing.isEmpty(), gate + ": no recording replays " + missing + " (replayed: " + new TreeSet<>(replayed) + ")");
+    }
+
+    /** {@code "Counter action"} for a recording's call: the contract's simple name and the call kind. */
+    static String covered(JsonNode f) {
+        String contract = f.at("/call/contract").asText();
+        return contract.substring(contract.lastIndexOf('.') + 1) + " " + f.at("/call/kind").asText();
+    }
     @TestFactory Stream<DynamicTest> plainPrepares() throws Exception {
         var tests = new ArrayList<DynamicTest>();
+        var replayed = new HashSet<String>();
         try (var paths = Files.list(FIXTURES.resolve("dapp"))) {
             for (Path path : paths.sorted().toList()) {
                 var f = JSON.readTree(path.toFile());
                 if (!Set.of("init", "action", "destroy").contains(f.at("/call/kind").asText())) continue;
+                replayed.add(covered(f));
                 boolean counter = f.at("/call/contract").asText().endsWith(".Counter");
                 Path entry = counter ? counter() : Path.of(org.julclang.state.examples.bank.BankClient.class
                         .getProtectionDomain().getCodeSource().getLocation().toURI());
@@ -108,9 +127,8 @@ class ReplayTest {
                 }));
             }
         }
-        // ADR-0022 §9: every plain recording. The JuLC 0.1.0-pre22 re-recording (#148) is a shorter flow: 18 plain calls
-        // (Counter init, 13 increments, reset, close; Bank init, setPaused), where pre21's had 23; every kind is still covered.
-        assertEquals(18, tests.size(), "ADR-0022 §9 plain recordings");
+        // ADR-0022 §9: every plain recording replays, and together they cover each plain kind of both dApp contracts.
+        assertCovers(replayed, PLAIN, "ADR-0022 §9 plain recordings");
         return tests.stream();
     }
 }
