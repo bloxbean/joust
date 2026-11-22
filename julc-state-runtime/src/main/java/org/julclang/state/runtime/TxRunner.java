@@ -203,7 +203,8 @@ final class TxRunner {
     /** Spends {@code u} (with {@code redeemer} if a script input); a composition refuses the same UTxO twice. */
     static Tx collect(Tx tx, Utxo u, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
         Capture c = CAPTURE.get();
-        if (c != null && !c.inputs.add(u.getTxHash() + "#" + u.getOutputIndex())) {
+        // One spelling per input (Designation.ref): a provider's uppercase hash is the input a designation names.
+        if (c != null && !c.inputs.add(Designation.ref(u))) {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
         return redeemer == null ? tx.collectFrom(java.util.List.of(u)) : tx.collectFrom(u, redeemer);
@@ -304,8 +305,13 @@ final class TxRunner {
                 }
             }
             if (designated == null) {
-                submitToBackend(signed, txHash, what);
-                submitted = true;
+                submitted = true;   // the node may have it from here, unless it answers with a definite rejection
+                try {
+                    submitToBackend(signed, txHash, what);
+                } catch (SubmitException e) {
+                    submitted = false;
+                    throw e;
+                }
             } else {
                 // A keyed operation's attempt (ADR-0016 D7): sent at its window's start, to every relay.
                 if (window != null) awaitWindow(window, what);
@@ -427,6 +433,14 @@ final class TxRunner {
 
     /** The pre-M2 submission, kept as it was for every transaction that is not a keyed operation's attempt. */
     private void submitToBackend(Transaction signed, String txHash, String what) {
+        sendToNode(signed, txHash, what);
+    }
+
+    /**
+     * Hands {@code signed} to the node. Only a definite answer is a rejection ({@link SubmitException}); anything else,
+     * a {@link CallAbort} included, may have reached the node: the outcome is pending, with the hash (#145 Codex).
+     */
+    private void sendToNode(Transaction signed, String txHash, String what) {
         try {
             var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
             if (!r.isSuccessful()) {
@@ -437,6 +451,9 @@ final class TxRunner {
             throw e;
         } catch (Exception e) {
             throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
+        } catch (Error e) {
+            if (!(e instanceof CallAbort)) throw e;
+            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + e.getMessage() + ")", e);
         }
     }
 
@@ -726,7 +743,7 @@ final class TxRunner {
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null) continue;
-                    if (spent.contains(u.getTxHash() + "#" + u.getOutputIndex())) continue;
+                    if (spent.contains(Designation.ref(u))) continue;
                     if (!Designation.pickable(rt.claimStore(), u, currentOperation())) continue;   // another operation's (ADR-0016 D7, F72)
                     BigInteger q = lovelace(u);
                     if (q.compareTo(BigInteger.valueOf(3_000_000)) < 0) continue;
@@ -770,14 +787,7 @@ final class TxRunner {
     String submitSigned(Transaction signed, String what) {
         rt.requireUnscopedSubmission();
         String txHash = TransactionUtil.getTxHash(signed);
-        try {
-            var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
-            if (!r.isSuccessful()) throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
-        } catch (SubmitException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
-        }
+        sendToNode(signed, txHash, what);
         rt.log(what + ": submitted " + txHash);
         awaitInclusion(txHash, what);
         return txHash;
@@ -787,6 +797,9 @@ final class TxRunner {
     String submitPlain(com.bloxbean.cardano.client.quicktx.Tx tx, Account payer, String what) {
         rt.requireUnscopedSubmission();
         Capture cap = CAPTURE.get();
+        // A prerequisite published inside a composition (a reference script, a verifier, a registration) goes first:
+        // refused before anything is selected or sent when its runtime is not the composition's (#145 Codex).
+        if (cap != null) cap.requireStore(rt, what);
         if (payer instanceof WalletAccount || (cap != null && cap.walletOnly)) {
             throw new JoustException(what + ": needs a key-holding account to pay and sign; publish reference scripts and"
                     + " the verifiers before wallet users call the contract (ADR-0013)");
@@ -833,15 +846,13 @@ final class TxRunner {
                 // diagnostics only
             }
         }
+        submitted[0] = true;   // the node may have it from here, unless it answers with a definite rejection
         try {
-            var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
-            if (!r.isSuccessful()) throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
+            sendToNode(signed, txHash, what);
         } catch (SubmitException e) {
+            submitted[0] = false;
             throw e;
-        } catch (Exception e) {
-            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
         }
-        submitted[0] = true;
         awaitInclusion(txHash, what);
         submitted[0] = false;   // on chain: its inputs are spent, the claim can end
         return txHash;

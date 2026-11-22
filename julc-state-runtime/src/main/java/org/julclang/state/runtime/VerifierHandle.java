@@ -117,6 +117,9 @@ public final class VerifierHandle {
         tx.readFrom(ref).withdraw(rewardAddress, BigInteger.ZERO, PlutusDataAdapter.convert(redeemer));
     }
 
+    /** How far a scoped call looks for a pinned reference: a bound on a hostile answer, not a policy. */
+    static final int PIN_PAGES = 10_000;
+
     private Utxo find() {
         // ADR-0022 D8: a scoped (hosted) call sees only its own answers, so it neither reads nor fills the cache that
         // unscoped callers keep; a rollback between two calls cannot hand the second call the first call's hit.
@@ -132,8 +135,10 @@ public final class VerifierHandle {
         // removed it since the runtime was built; #145 Codex review), else the answer's own reference script.
         Utxo first = null;
         try {
-            var r = runtime.backend().getUtxoService().getUtxos(holder, 20, 1);
-            if (r.isSuccessful() && r.getValue() != null) {
+            // The first page, as always; looking for a pin, every page until the answer runs out (#145 Codex).
+            for (int page = 1; page == 1 || pinned != null && page <= PIN_PAGES; page++) {
+                var r = runtime.backend().getUtxoService().getUtxos(holder, 20, page);
+                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (!hash.equalsIgnoreCase(u.getReferenceScriptHash())) continue;
                     if (pinned == null) {
