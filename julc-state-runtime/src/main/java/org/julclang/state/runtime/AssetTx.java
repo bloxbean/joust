@@ -314,8 +314,13 @@ final class AssetTx {
             for (int page = 1; page <= pages && !missing.isEmpty(); page++) {
                 var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), size, page);
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                var cap = TxRunner.CAPTURE.get();
                 for (Utxo u : r.getValue()) {
                     if (contract.runtime.claimStore().avoids(Designation.ref(u))) continue;
+                    // Never a published script (spending it ends what references it), never an input an earlier call
+                    // of the composition already spends (#151 Codex re-review).
+                    if (u.getReferenceScriptHash() != null) continue;
+                    if (cap != null && cap.inputs.contains(Designation.ref(u))) continue;
                     if (alreadyIn != null && u.getTxHash().equals(alreadyIn.getTxHash())
                             && u.getOutputIndex() == alreadyIn.getOutputIndex()) continue;
                     boolean useful = false;
