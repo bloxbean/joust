@@ -40,6 +40,12 @@ class HostSpecConsumerTest {
         module("fixture", "forced", "2");
         module("fixture", "replacement", "1");
         module("org.julclang", "julc-state-serve", "old");
+        // The old adapter has the adapter's classes: on the launch path ahead of the plugin's, the JVM would load them.
+        try (var out = new JarOutputStream(Files.newOutputStream(project.resolve(
+                "fixture-repo/org/julclang/julc-state-serve/old/julc-state-serve-old.jar")))) {
+            out.putNextEntry(new java.util.zip.ZipEntry("org/julclang/state/serve/ServedContract.class"));
+            out.closeEntry();
+        }
         module("org.julclang", "julc-state-runtime", "old");
     }
 
@@ -143,6 +149,24 @@ class HostSpecConsumerTest {
         assertTrue(error.contains("incompatible adapter") && error.contains("julc-state-serve:old"), error);
     }
 
+    @Test void theAdapterThatWinsClassLookupIsTheOneChecked() throws Exception {
+        // #150 Codex review: an older adapter through another configuration comes first on the launch path.
+        String error = runner(":joustHostSpec", "-PsecondAdapter").buildAndFail().getOutput();
+        assertTrue(error.contains("incompatible adapter") && error.contains("julc-state-serve-old.jar")
+                && error.contains("provides julc-state-serve classes"), error);
+        // A sources jar of the right version is not the adapter: the plugin's binary adapter is added.
+        runner(":joustHostSpec", "-PsourcesAdapter").build();
+        var spec = JSON.readTree(project.resolve("build/joust/host-spec.json").toFile());
+        var names = spec.required("launch").findValuesAsText("path").stream().map(p -> Path.of(p).getFileName().toString()).toList();
+        assertTrue(names.contains("julc-state-serve-" + VERSION + ".jar") && names.contains("julc-state-serve-" + VERSION + "-sources.jar"), names.toString());
+        assertTrue(names.indexOf("julc-state-serve-" + VERSION + "-sources.jar") < names.indexOf("julc-state-serve-" + VERSION + ".jar"));
+    }
+    @Test void theHostsVmDependencyAndTheSpecsLocationAreChecked() throws Exception {
+        String error = runner(":joustHostSpec", "-PnoVm").buildAndFail().getOutput();
+        assertTrue(error.contains("Unsatisfied runtime dependency") && error.contains("julc-vm"), error);
+        error = runner(":joustHostSpec", "-PspecInOutput").buildAndFail().getOutput();
+        assertTrue(error.contains("is inside the launch directory"), error);
+    }
     @Test void rejectsIncompleteGraphsAndUnpinnedJarEntries() throws Exception {
         String error = runner(":joustHostSpec", "-PmissingJackson").buildAndFail().getOutput();
         assertTrue(error.contains("Unsatisfied runtime dependency") && error.contains("jackson-databind"), error);

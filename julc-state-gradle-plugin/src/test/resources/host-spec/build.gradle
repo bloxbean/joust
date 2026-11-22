@@ -23,7 +23,16 @@ dependencies {
     if (project.hasProperty('http')) implementation "org.julclang:julc-state-server:${joustVersion}"
     if (project.hasProperty('badRuntime')) runtimeOnly "org.julclang:julc-state-serve:${joustVersion}"
     if (project.hasProperty('missingFile')) runtimeOnly files('missing.jar')
+    if (project.hasProperty('sourcesAdapter')) runtimeOnly "org.julclang:julc-state-serve:${joustVersion}:sources"
 }
+// #150 Codex review: an older adapter through another configuration, ahead of the application's own graph.
+if (project.hasProperty('secondAdapter')) {
+    def older = configurations.create('olderAdapter') { canBeConsumed = false }
+    dependencies { olderAdapter 'org.julclang:julc-state-serve:old' }
+    sourceSets.main.runtimeClasspath = older + sourceSets.main.runtimeClasspath
+}
+// #150 Codex review: a launch directory that would contain the spec itself.
+if (project.hasProperty('specInOutput')) sourceSets.main.output.dir(layout.buildDirectory.dir('joust'))
 configurations.runtimeClasspath {
     resolutionStrategy.force 'fixture:forced:2'
     resolutionStrategy.dependencySubstitution {
@@ -32,6 +41,7 @@ configurations.runtimeClasspath {
     if (project.hasProperty('incompatible')) resolutionStrategy.force 'org.julclang:julc-state-serve:old'
     if (project.hasProperty('badRuntime')) resolutionStrategy.force 'org.julclang:julc-state-runtime:old'
     if (project.hasProperty('missingJackson')) exclude group: 'com.fasterxml.jackson.core', module: 'jackson-databind'
+    if (project.hasProperty('noVm')) exclude group: 'org.julclang', module: 'julc-vm'
 }
 
 publishing.publications.create('app', MavenPublication) { from components.java }

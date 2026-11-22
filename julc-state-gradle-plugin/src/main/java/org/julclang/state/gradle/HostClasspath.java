@@ -68,22 +68,66 @@ final class HostClasspath {
         c.getAttributes().attribute(Category.CATEGORY_ATTRIBUTE, project.getObjects().named(Category.class, Category.LIBRARY));
     }
 
+    /** A class only the tool's own jar provides: whichever classpath entry has it first is the one the JVM loads. */
+    private static final Map<String, String> MARKERS = Map.of(
+            SERVE, "org/julclang/state/serve/ServedContract.class",
+            "julc-state-host", "org/julclang/state/host/DevHost.class");
+
     private static List<File> extraJars(Configuration runtime, Set<File> application, Configuration host,
                                         Configuration metadata, String version) {
         var selected = applicationComponents(runtime, application);
         var tools = toolJars(host, version);
+        var owners = artifactOwners(runtime);
         var extra = new ArrayList<File>();
         for (String name : TOOLS) {
             if (!tools.containsKey(name)) throw new GradleException("Missing joustHost jar: " + name);
             String appVersion = selected.putIfAbsent(GROUP + ":" + name, version);
-            if (appVersion == null) extra.add(tools.get(name));
-            else if (!version.equals(appVersion)) {
+            if (appVersion != null && !version.equals(appVersion)) {
                 throw new GradleException((name.equals(SERVE) ? "incompatible adapter" : "incompatible host")
                         + ": application selected " + name + ":" + appVersion + ", plugin requires " + version);
             }
+            // The launch order is the application's files, then the extra jars: an application entry with the tool's
+            // classes wins class lookup, whatever configuration put it there. Each such entry must be the expected
+            // component's own artifact; without one (none, or only a sources jar) the tool jar is added (#150 Codex).
+            boolean provided = false;
+            String expected = GROUP + ":" + name + ":" + version;
+            for (File file : application) {
+                if (!hasEntry(file, MARKERS.get(name))) continue;
+                String owner = owners.get(file);
+                if (!expected.equals(owner)) {
+                    throw new GradleException((name.equals(SERVE) ? "incompatible adapter" : "incompatible host")
+                            + ": " + file + " on the application classpath provides " + name + " classes"
+                            + (owner == null ? " from no verifiable component" : " from " + owner)
+                            + ", plugin requires " + expected);
+                }
+                provided = true;
+            }
+            if (!provided) extra.add(tools.get(name));
         }
         checkRuntimeDependencies(metadata, selected, version);
         return extra;
+    }
+
+    /** Each resolved artifact of {@code runtime}, by file: its component as group:module:version. */
+    private static Map<File, String> artifactOwners(Configuration runtime) {
+        var owners = new HashMap<File, String>();
+        for (var artifact : runtime.getIncoming().getArtifacts().getArtifacts()) {
+            if (artifact.getId().getComponentIdentifier() instanceof ModuleComponentIdentifier id) {
+                owners.put(artifact.getFile(), id.getGroup() + ":" + id.getModule() + ":" + id.getVersion());
+            }
+        }
+        return owners;
+    }
+
+    /** Whether the jar or class directory {@code file} has {@code entry}. */
+    private static boolean hasEntry(File file, String entry) {
+        if (file.isDirectory()) return new File(file, entry).isFile();
+        if (!file.isFile()) return false;
+        try (var zip = new java.util.zip.ZipFile(file)) {
+            return zip.getEntry(entry) != null;
+        } catch (java.io.IOException e) {
+            return false;   // not a jar: LaunchManifest refuses it when it scans the entries
+        }
     }
 
     private static Map<String, String> applicationComponents(Configuration runtime, Set<File> application) {

@@ -42,7 +42,7 @@ final class SnapshotClient {
             entries.add(destName);
             Path dest = staging.resolve(destName);
             if (kind.equals("jar")) {
-                Files.copy(from, dest);
+                copyJar(from, dest);
                 try (var jar = new JarFile(dest.toFile(), false)) {
                     var mf = jar.getManifest();
                     assertTrue(mf == null || mf.getMainAttributes().getOrDefault(Attributes.Name.CLASS_PATH, "").equals(""));
@@ -176,5 +176,14 @@ final class SnapshotClient {
                 return answer.required("result");
             } catch (IOException e) { throw new UncheckedIOException(e); }
         }).get(60, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Copies a launch jar after checking it is a regular file: a stale or malformed spec naming a FIFO (or a device)
+     * would otherwise block the copy before any digest or timeout applies (#150 Codex review).
+     */
+    static void copyJar(Path from, Path dest) throws IOException {
+        if (!Files.isRegularFile(from)) throw new IOException("launch jar is not a regular file: " + from);
+        Files.copy(from, dest);
     }
 }

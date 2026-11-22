@@ -89,6 +89,8 @@ def hostSpecRepo = tasks.register('hostSpecTestRepository', Sync) {
         into("org/julclang/${module.name}/${module.version}") {
             from(module.tasks.named('jar').flatMap { it.archiveFile })
             if (suffix == 'api') from(module.tasks.named('onchainJar').flatMap { it.archiveFile })
+            // A classifier-only adapter dependency (#150 Codex review): its sources jar must not count as the adapter.
+            if (suffix == 'serve') from(module.tasks.named('sourcesJar').flatMap { it.archiveFile })
             from(module.layout.buildDirectory.file('publications/mavenJava/pom-default.xml')) { rename { "${artifact}.pom" } }
             from(module.layout.buildDirectory.file('publications/mavenJava/module.json')) { rename { "${artifact}.module" } }
         }
