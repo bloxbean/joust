@@ -121,9 +121,9 @@
       "score": 62.0
     },
     "js/state-client/src/compose.js": {
-      "mutants": 1133,
+      "mutants": 1321,
       "scope": "state-client",
-      "score": 48.9
+      "score": 58.0
     },
     "js/state-client/src/keyed.js": {
       "mutants": 1542,

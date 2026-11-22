@@ -6,7 +6,7 @@ import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { codec as makeCodec } from '../src/data.js';
 import { rewardAddressOf } from '../src/governors.js';
 import { paymentKeyHash } from '../src/wallet.js';
-import { ledgerTx, scriptIntegrityHash, enterpriseAddress } from '../src/ledger.js';
+import { ledgerTx, scriptIntegrityHash, enterpriseAddress, parseTx } from '../src/ledger.js';
 
 export { CSL };
 
@@ -271,4 +271,83 @@ export function repeatWitnessKey(txHex, key) {
   }
   const dup = entries.find((e) => e.key === key);
   return Buffer.concat([b.subarray(0, bodyEnd), Buffer.from([0xa0 | (n + 1)]), ...entries.map((e) => e.bytes), dup.bytes, b.subarray(q)]).toString('hex');
+}
+
+// ------------------------------------------------------------------------------------- every recorded call
+
+/**
+ * The page verifier's inputs for any recorded call of fixtures/m3 that verifyPrepared or verifyComposed takes (spending
+ * calls, creations, owned calls, compositions; keyed calls, intents, purposes and registrations have their own
+ * verifiers and tests): { steps } for a composition, else { single }, or null. Each call's description is its own
+ * contract's (by title); its deployment is the policy and address of the UTxO holding its instance or object (an
+ * adoption's under the policy its params do not name as the previous one; a creation's from the token it mints),
+ * with its params; its co-signers and governor as recorded.
+ */
+export function fixtureInputs(name) {
+  const x = JSON.parse(readFileSync(new URL(name, FIXTURES), 'utf8'));
+  const descriptions = {};
+  for (const sha of x.contracts) {
+    const built = JSON.parse(readFileSync(new URL(`contracts/${sha}.json`, FIXTURES), 'utf8'));
+    const d = typeof built.description === 'string' ? JSON.parse(built.description) : built.description;
+    descriptions[d.preamble.title] = d;
+  }
+  const tx = parseTx(x.cbor);
+  const keys = Object.keys(x.snapshot.assetUtxos ?? {}).map((k) => k.split('|'));
+  const calls = x.call.calls ?? [x.call];
+  const previous = calls.map((k) => k.params?.previous).filter(Boolean);
+  const SUPPORTED = new Set(['action', 'destroy', 'ownedAction', 'ownedDestroy', 'init', 'ownedInit', 'migrate']);
+  if (!calls.every((k) => SUPPORTED.has(k.kind))) return null;
+  if (calls.some((k) => descriptions[k.contract]['x-joust'].keyed)) return null;     // keyed contracts: keyed.test.js
+  const steps = calls.map((k) => {
+    const description = descriptions[k.contract];
+    const c = makeCodec(description);
+    const xj = description['x-joust'];
+    const meta = [...xj.actions, ...xj.creations].find((a) => a.name === k.method && a.kind === k.kind);
+    const target = k.kind.startsWith('owned') && k.kind !== 'ownedInit' ? k.object : k.instance;
+    let policy;
+    let address;
+    if (k.kind === 'init' || k.kind === 'ownedInit') {
+      // A creation: the policy of the thread token it mints (one, +1), at the output that holds it.
+      const created = [...tx.mint].filter(([, q]) => q === 1n).map(([u]) => u);
+      const unit = k.kind === 'ownedInit' ? created.find((u) => u.slice(56, 58) === '4f') : created.find((u) => u.length === 120);
+      policy = unit.slice(0, 56);
+      address = tx.outputs.find((o) => o.value.get(unit) === 1n).address;
+      if (k.kind === 'ownedInit') {
+        const inst = keys.find(([, u]) => u.startsWith(policy) && u.endsWith(k.instance));
+        if (inst) address = inst[0];
+      }
+    } else {
+      const holding = keys.filter(([, u]) => u.endsWith(target));
+      const pick = k.kind === 'migrate' ? holding.find(([, u]) => !previous.includes(u.slice(0, 56)))
+        : holding.find(([, u]) => (previous.length && calls.some((m) => m.kind === 'migrate') ? previous.includes(u.slice(0, 56)) : true));
+      [address, policy] = [pick[0], pick[1].slice(0, 56)];
+      if (k.kind.startsWith('owned')) {
+        const inst = keys.find(([, u]) => u.startsWith(policy) && u.endsWith(k.instance));
+        if (inst) address = inst[0];
+      }
+    }
+    const args = {};
+    for (const a of meta.args) args[a.name] = c.decode(a.schema, c.encode(a.schema, k.args[a.name], a.name));
+    const usesMaps = JSON.stringify(description.definitions ?? {}).includes('org.julclang.state.api.MerkleMap');
+    // The governor: the script credential the call's @AuthorizedBy names among the deployment's params.
+    const cred = (meta.policies?.authorizedBy ?? []).map((at) => (at.startsWith('params.') ? k.params?.[at.slice(7)] : null))
+      .find((cr) => cr?.$variant === 'ScriptCredential');
+    const governor = k.governor && cred ? { hash: cred.hash } : undefined;
+    return {
+      description,
+      deployment: {
+        contract: k.contract, policy, address, networkId: x.networkId, referenceScripts: x.call.referenceScripts, params: k.params,
+        outputVerifier: { rewardAddress: rewardAddressOf(OUTPUT_VERIFIER, x.networkId), referenceScripts: [] },
+        ...(usesMaps ? { mapVerifier: { rewardAddress: rewardAddressOf(MAP_VERIFIER, x.networkId), referenceScripts: [] } } : {}),
+      },
+      call: {
+        kind: k.kind, meta, args, instance: k.instance ?? undefined, object: k.object ?? undefined, into: k.into ?? undefined,
+        pay: { lovelace: BigInt(k.pay?.lovelace ?? 0), assets: k.pay?.assets ?? [] },
+        cosignerKeys: k.cosigners ?? k.governor?.signers ?? [], governor,
+      },
+    };
+  });
+  const wallet = walletOf(x);
+  const chain = chainOf(x);
+  return x.call.calls ? { steps, wallet, chain, txHex: x.cbor } : { single: { ...steps[0], wallet, chain, txHex: x.cbor } };
 }

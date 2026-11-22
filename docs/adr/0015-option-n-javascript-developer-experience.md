@@ -882,18 +882,24 @@ direct `Tx` building, gated by S3.
     its own continuation (the depositing validator's `notSelf`). Deposit claims
     shape the credit (a call that deposits more keeps less of its own), within what only the validators decide: the
     page cannot tell a body whose call deposits 1.5 ADA from one that deposits 1, as the call's validator does from the
-    arguments the page verified. Either way the wallet loses at most the fee and its stated payments. Tokens the
-    transaction mints are not the wallet's. Mints are owned per policy: a destroy burns its own token and an adoption
-    mints its own, no other call's token is minted or burned, and any other unit is a user token whose policy's one
-    mint redeemer must be `ByAction` naming the target of a composed call under that policy whose method mints (that
-    call owns the policy's mint; other instances under the policy mint nothing). Of an owner's positive mint, what
-    leaves the call (its target, the payment it accepts, its mint and the deposits it receives, less its continuation
-    and the deposits it gives) is what it sends; only the rest stayed, and that part is not counted as kept. So a call
-    may send what it mints while keeping the wallet's payment, and a call minting tokens for others does not cancel
-    another call's kept payment; a lifecycle mint leaves every call's credit. A call whose method takes no assets (no
-    `assetsIn`) may be offered none, and one that is not payable no lovelace. With that credit,
-    others' receipts bound the wallet's net loss (the fee aside) by what the calls keep of their payments, less what
-    the scripts send it back.
+    arguments the page verified. Either way the wallet loses at most the fee and its stated payments. The credit is
+    `min(intake, payment)` per unit, the intake adding back what a call burns as its policy's mint owner; offered assets
+    count only where the call's `assetsIn` binds them (the validator checks the call accepts exactly those), so what a
+    call mints changes nothing: of a call that accepts 400 X, mints 5 and sends 5, the wallet's 400 stayed. What a call
+    does not keep of its payment it may forward, but only to outputs bound to it, its payouts (carrying its tag, I7) or
+    outputs its claims name, and at most what they hold: a purchase paying its price to the seller (ADR-0011's
+    Market.buy) has no continuation to keep it in. Per call, kept and forwarded together are at most its payment.
+    Mints are owned per policy. A name the protocol reserves (an instance's, an owned object's, an intent's, a keyed
+    object's) is a lifecycle token: only a composed destroy's burn of its own target or an adoption's mint of its own.
+    Any other unit is a user token whose policy's one mint redeemer must be `ByAction` naming the target of a composed
+    call under that policy whose method mints. That call owns the policy's mint; other instances under the policy
+    mint nothing, and a destroy that owns it burns its token under the same `ByAction` (`mintMatches` checks the two
+    together, as the runtime's AssetTx builds them). Outside its continuation only a called contract's reserved-name
+    tokens are refused: its user tokens (an LP token's change after a partial burn) are bounded per unit like any
+    other asset. A call whose method takes no assets (no `assetsIn`) may be offered none, and one that is not payable no
+    lovelace. With that credit, others' receipts bound the wallet's net loss (the fee aside) by what the calls keep or
+    forward of their payments, less what the scripts send it back. `test/recorded.test.js` verifies every recorded
+    call and composition of `fixtures/m3` the page takes, so an over-refusal of a recorded flow fails the suite.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.
     Deployments that deposit or receive now pin it.
   - Spending calls only for now (no creations in a composition).

@@ -7,7 +7,7 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
-  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks,
+  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks, reservedName,
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
@@ -183,19 +183,23 @@ export async function verifyComposed(o) {
   for (const p of sortedPolicies) {
     if (!calls.some((k) => k.policy === p)) problems.push(`a mint under a policy no call pins: ${p}`);
   }
-  // Mint owners, per policy (ADR-0007 D4). The lifecycle tokens are the calls' own: a destroy burns its target's, an
-  // adoption mints its own (checked per call below); no other call's token may be minted or burned. Any other unit is
-  // a user token: its policy's one mint redeemer must be ByAction naming the target of a composed call under that
-  // policy whose method mints (the policy checks the rest on chain, as for one call). That call owns the policy's
-  // user-token mint: siblings under the same policy (other instances) mint nothing, and its mint is its own.
+  // Mint owners, per policy (ADR-0007 D4). A unit under a called policy whose name is reserved (an instance's, an owned
+  // object's, an intent's, a keyed object's: ADR-0016) is a lifecycle token: only a composed destroy's burn of its own
+  // target (-1) or an adoption's mint of its own (+1, checked per call below). Any other unit is a user token: its
+  // policy's one mint redeemer must be ByAction naming the target of a composed call under that policy whose method
+  // mints (the policy checks the rest on chain, as for one call). That call owns the policy's user-token mint (a
+  // destroy may: it then burns its token under the same ByAction); siblings under the same policy mint nothing.
+  const keyedPolicy = (p) => calls.some((x) => x.policy === p && x.xj.keyed);
+  const reserved = (unit) => calls.some((x) => x.policy === unit.slice(0, 56)) && reservedName(unit.slice(56), keyedPolicy(unit.slice(0, 56)));
   const mintOwner = new Map();
   for (const [unit, q] of minted) {
+    if (!reserved(unit)) continue;
     const k = calls.find((x) => x.targetUnit === unit);
-    if (k && !((DESTROYS.has(k.call.kind) && q === -1n) || (k.creation && q === 1n))) problems.push(`${k.call.meta.name}: a mint of ${unit}`);
+    if (!k || !((DESTROYS.has(k.call.kind) && q === -1n) || (k.creation && q === 1n))) problems.push(`${k ? `${k.call.meta.name}: ` : ''}a mint of ${unit}, a reserved token name`);
   }
   for (const p of sortedPolicies) {
     const under = calls.filter((x) => x.policy === p && !x.creation);
-    if (!under.length || ![...minted.keys()].some((u) => u.startsWith(p) && !calls.some((x) => x.targetUnit === u))) continue;
+    if (!under.length || ![...minted.keys()].some((u) => u.startsWith(p) && !reserved(u))) continue;
     const r = mints.filter((x) => sortedPolicies[x.index] === p);
     const k0 = under[0];
     let alt = null;
@@ -282,18 +286,20 @@ export async function verifyComposed(o) {
           });
           // An offer of assets binds only through the redeemer's assetsIn (the validator checks the call accepts exactly
           // those): a method without one takes none, and an offer to it would only widen what the wallet may lose.
-          if (!got.alt.fields.some((f) => f.title === 'assetsIn') && [...k.pay.assets].length) {
+          k.acceptsAssets = got.alt.fields.some((f) => f.title === 'assetsIn');
+          if (!k.acceptsAssets && [...k.pay.assets].length) {
             problems.push(`${call.meta.name}: it takes no assets, but the page offers some`);
           }
         }
       }
     }
-    // A destroy burns exactly its token (user tokens are checked by policy, above).
+    // A destroy burns exactly its token: under BurnInstance, unless it owns its policy's user mint (its ByAction redeemer
+    // then covers the burn too; user tokens are checked by policy, above).
     const ownMints = mints.filter((r) => sortedPolicies[r.index] === k.policy);
     if (DESTROYS.has(call.kind)) {
       if (minted.get(k.targetUnit) !== -1n) problems.push(`${call.meta.name}: a destroy must burn exactly its token`);
       const burns = ownMints.map((r) => fields(rdefs.mint, r, 'the burn')).filter(Boolean);
-      if (!burns.some((b) => b.alt.title === 'BurnInstance')) problems.push(`${call.meta.name}: no BurnInstance redeemer`);
+      if (mintOwner.get(k.policy) !== k && !burns.some((b) => b.alt.title === 'BurnInstance')) problems.push(`${call.meta.name}: no BurnInstance redeemer`);
     }
   }
 
@@ -301,9 +307,13 @@ export async function verifyComposed(o) {
   // and other parties'.
   const tags = calls.map((k) => (k.targetRef ? k.c.encode({ $ref: '#/definitions/org.julclang.ledger.TxOutRef' },
     { txId: k.targetRef.split('#')[0], index: k.targetRef.split('#')[1] }) : null)).filter(Boolean);
+  for (const k of calls) {
+    if (k.targetRef) k.tag = k.c.encode({ $ref: '#/definitions/org.julclang.ledger.TxOutRef' }, { txId: k.targetRef.split('#')[0], index: k.targetRef.split('#')[1] });
+  }
   const back = new Map();
   const tagged = new Map();
   const third = new Map();
+  const thirdOutputs = [];
   // Each output verifier the calls pin, with its registry and the calls pinning it. The wallet outputs its claims name
   // (each for a target spent by one of those calls; ADR-0007 D5) are the scripts' sends to the wallet, never its change.
   const registries = [];
@@ -321,8 +331,9 @@ export async function verifyComposed(o) {
     const k = calls.find((x) => !DESTROYS.has(x.call.kind) && bech === x.deployment.address && value.get(x.targetUnit) === 1n);
     for (const unit of value.keys()) {
       for (const x of calls) {
-        const mintedHere = mintOwner.has(x.policy) && (minted.get(unit) ?? 0n) > 0n;
-        if (unit.startsWith(x.policy) && unit.length > 56 && unit !== k?.targetUnit && !mintedHere) {
+        // A thread token (a reserved name) of a called contract moves only as its own continuation; the contracts'
+        // user tokens are bounded per unit like any other asset.
+        if (unit.startsWith(x.policy) && unit !== k?.targetUnit && reservedName(unit.slice(56), !!x.xj.keyed)) {
           problems.push('an output carries another token of a called contract');
         }
       }
@@ -359,6 +370,7 @@ export async function verifyComposed(o) {
     if (pkh && wallet.keyHashes.includes(pkh)) problems.push('an output to the wallet\'s key at an address the wallet does not use');
     report.outputs.push({ address: bech, value });
     add(third, value);
+    thirdOutputs.push({ index, value, datum: out.datum });
   }
   // Deposits (ADR-0011 D3): a receiver credits every deposit claimed on its continuation, whatever its `by`, so each must
   // come from the target of a call that declares deposits (its validator checks its claims exactly: their number, values,
@@ -437,47 +449,46 @@ export async function verifyComposed(o) {
       }
     }
   }
-  // Each user-token mint is its policy's owner's (above); a lifecycle mint (an adoption's token) or one the page could
-  // not attribute is no call's, and leaves every call's credit.
-  const mintedBy = new Map(calls.map((k) => [k, new Map()]));
-  const unattributed = new Map();
-  for (const [unit, q] of minted) {
-    const owner = calls.some((x) => x.targetUnit === unit) ? null : mintOwner.get(unit.slice(0, 56));
-    if (owner) mintedBy.get(owner).set(unit, q);
-    else if (q > 0n) unattributed.set(unit, q);
+  // What each call keeps of its payment: its intake (what its continuation gains beyond the deposits it receives, net
+  // of those it gives, plus what it burns as its policy's mint owner), up to its payment. assetsIn binds the assets a
+  // call accepts and its validator the continuation, so tokens it mints change nothing here: of a call that accepts
+  // 400 X, mints 5 and sends 5, the wallet's 400 stayed. What it does not keep of its payment it may forward, but only
+  // to outputs bound to it: a payout carrying its tag, or an output its claims name (its validator checks both, I7 and
+  // ADR-0007 D5), and at most what they hold (a purchase paying its price to the seller, ADR-0011). Per call, the two
+  // together are at most its payment; others' receipts then bound the wallet's net loss (the fee aside) by the
+  // payments, less what the scripts send it back.
+  const boundTo = new Map(calls.map((k) => [k, new Map()]));
+  for (const { index, value, datum } of thirdOutputs) {
+    const k = calls.find((x) => x.targetRef && ((datum && x.tag && dataEqual(datum, x.tag))
+      || registries.some(({ registry }) => (registry?.claims ?? []).some((cl) => cl.output === index && cl.by === x.targetRef))));
+    if (k) add(boundTo.get(k), value);
   }
   const kept = new Map();
   for (const k of calls) {
-    // An adoption's continuation is the prior instance's value, not the wallet's (it has no target here): no credit.
-    // Nor where the chain API alone says how the targets' sum splits: it could move value between them at will.
-    if (k.creation || !(k.bound || splitKnown)) continue;
+    if (k.creation) continue;   // an adoption takes no payment
+    // The payment: its lovelace, and the assets it offers where its redeemer's assetsIn binds them (else none).
     const paid = new Map([['lovelace', k.pay.lovelace]]);
-    for (const [p, assets] of k.pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
-    // Its intake: what its continuation gains beyond the deposits it receives, net of those it gives, less what it
-    // mints and keeps. What it mints is not the wallet's. Of a positive mint, the part the call sends out (its target,
-    // the payment it accepts, its mint and the deposits it receives, less its continuation and the deposits it gives)
-    // left it; only the rest stayed in its continuation. A burn is taken from what the call holds.
-    const own = new Map(k.continuation);
-    add(own, k.targetValue, -1n);
-    add(own, gives.get(k));
-    add(own, gets.get(k), -1n);
-    for (const [unit, q] of mintedBy.get(k)) {
-      if (q <= 0n) {
-        own.set(unit, (own.get(unit) ?? 0n) - q);
-        continue;
+    if (k.acceptsAssets) for (const [p, assets] of k.pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
+    // The intake rests on the target's own value: credited only where the chain API cannot split the targets' sum at
+    // will (bound, or all but one bound); else nothing is kept, and the whole payment may only be forwarded.
+    const own = new Map();
+    if (k.bound || splitKnown) {
+      add(own, k.continuation);
+      add(own, k.targetValue, -1n);
+      add(own, gives.get(k));
+      add(own, gets.get(k), -1n);
+      if (mintOwner.get(k.policy) === k) {
+        for (const [unit, q] of minted) if (q < 0n && unit.startsWith(k.policy) && !reserved(unit)) own.set(unit, (own.get(unit) ?? 0n) - q);
       }
-      const out = (k.targetValue.get(unit) ?? 0n) + (paid.get(unit) ?? 0n) + q + (gets.get(k).get(unit) ?? 0n)
-        - (k.continuation.get(unit) ?? 0n) - (gives.get(k).get(unit) ?? 0n);
-      const left = out > 0n ? (out < q ? out : q) : 0n;
-      own.set(unit, (own.get(unit) ?? 0n) - (q - left));
     }
-    for (const [unit, q] of own) {
-      const cap = paid.get(unit) ?? 0n;
-      if (q > 0n && cap > 0n) kept.set(unit, (kept.get(unit) ?? 0n) + (q < cap ? q : cap));
+    for (const [unit, cap] of paid) {
+      if (cap <= 0n) continue;
+      const q = own.get(unit) ?? 0n;
+      const keeps = q <= 0n ? 0n : q < cap ? q : cap;
+      const sent = boundTo.get(k).get(unit) ?? 0n;
+      const forwards = sent < cap - keeps ? sent : cap - keeps;
+      kept.set(unit, (kept.get(unit) ?? 0n) + keeps + forwards);
     }
-  }
-  for (const [unit, q] of unattributed) {
-    if (kept.has(unit)) kept.set(unit, kept.get(unit) > q ? kept.get(unit) - q : 0n);
   }
   for (const [unit, q] of third) {
     const free = (released.get(unit) ?? 0n) + (kept.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);

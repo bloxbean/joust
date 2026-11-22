@@ -267,18 +267,28 @@ export async function verifyPrepared(o) {
       if (r.index !== targetIndex) problems.push('the redeemer is not on the target input');
       checkCall(callFields(rdefs.spend, r, 'the call'));
     }
+    // A destroy burns exactly its token. With a user mint besides (a destroy whose method mints), the policy's one
+    // mint redeemer is ByAction naming the target, and the policy checks the burn and the mint together (mintMatches;
+    // the runtime's AssetTx builds it so); else it is BurnInstance and the burn is the whole mint.
+    const userMint = [...minted.keys()].some((u) => u !== targetUnit);
     if (DESTROYS.has(call.kind)) {
-      if (minted.size !== 1 || minted.get(targetUnit) !== -1n) problems.push('a destroy must burn exactly its token');
+      if (minted.get(targetUnit) !== -1n) problems.push('a destroy must burn exactly its token');
       if (mints.length !== 1) problems.push('a destroy needs exactly one burn redeemer');
-      else {
+    }
+    if (DESTROYS.has(call.kind) && !userMint) {
+      if (mints.length === 1) {
         const got = callFields(rdefs.mint, mints[0], 'the burn');
         if (got && (got.alt.title !== 'BurnInstance' || got.alt.fields.length !== 0)) problems.push('the burn redeemer is not BurnInstance');
       }
     } else if (call.meta.returns?.mint) {
-      // A method that mints the contract's own tokens (ADR-0007 D4): only under the pinned policy, never its thread
-      // tokens, with one ByAction redeemer naming the target it spends; the amounts are the method's, checked on chain.
-      for (const unit of minted.keys()) {
+      // A method that mints the contract's own tokens (ADR-0007 D4): only under the pinned policy, never a reserved
+      // name (a thread token's or an owned object's or an intent's: the policy refuses them, I27) other than a
+      // destroy's own burn, with one ByAction redeemer naming the target it spends; the amounts are the method's,
+      // checked on chain.
+      for (const [unit, q] of minted) {
+        if (DESTROYS.has(call.kind) && unit === targetUnit && q === -1n) continue;
         if (!unit.startsWith(policy) || unit === targetUnit) problems.push(`a mint of ${unit}, not one of the contract's own tokens`);
+        else if (reservedName(unit.slice(56), !!xj.keyed)) problems.push(`a mint of ${unit}, a reserved token name`);
       }
       if (minted.size && mints.length !== 1) problems.push('a mint needs exactly one ByAction redeemer');
       if (!minted.size && mints.length) problems.push('a mint redeemer without a mint');
@@ -324,8 +334,9 @@ export async function verifyPrepared(o) {
     for (const unit of value.keys()) {
       // Another token of the contract (another instance's or object's) may not move, except the tokens this call
       // mints itself (a minting method's own tokens, ADR-0007 D4).
-      const mintedHere = call.meta.returns?.mint && (minted.get(unit) ?? 0n) > 0n;
-      if (unit.startsWith(policy) && unit !== continuingUnit && unit.length > 56 && !mintedHere) problems.push('an output carries another token of the contract');
+      // A thread token (a reserved name: an instance's, an owned object's, an intent's, a keyed object's) other than
+      // the continuing one may not move. The contract's user tokens are bounded per unit like any other asset.
+      if (unit.startsWith(policy) && unit !== continuingUnit && reservedName(unit.slice(56), !!xj.keyed)) problems.push('an output carries another token of the contract');
     }
     if (isWallet(out.address)) {
       if (out.hasScriptRef || out.datumHash) problems.push('a wallet output with a script or datum hash');
@@ -632,6 +643,17 @@ export function paymentKeyHashOf(...args) {
 }
 
 /** An enterprise address of one of the wallet's payment keys: no stake credential, so wholly the wallet's. */
+/**
+ * Whether a token name (hex) is reserved for a contract's own tokens under its policy (ADR-0016): 32 bytes (an
+ * instance's), 29 bytes from 0x4F (an owned object's) or 0x49 (an intent's), and in a keyed contract 29 bytes from 0x4B
+ * (a keyed object's). Never a user token's.
+ */
+export function reservedName(nameHex, keyed) {
+  const len = nameHex.length / 2;
+  const kind = nameHex.slice(0, 2);
+  return len === 32 || (len === 29 && (kind === '4f' || kind === '49' || (keyed && kind === '4b')));
+}
+
 export function isWalletEnterprise(bech32, wallet) {
   try {
     const p = addressParts(bech32);

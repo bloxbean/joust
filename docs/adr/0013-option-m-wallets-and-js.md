@@ -327,7 +327,12 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
       fee to a third party, say) is refused unless the send carries at least its own minimum ADA from the script
       (`Assets.lovelace(min)` with the tokens). Transactions without the output verifier's withdrawal are verified
       as before;
-    - no output pays the wallet's payment key at an address the wallet does not use (another stake key).
+    - no output pays the wallet's payment key at an address the wallet does not use (another stake key);
+    - no output carries another of the contract's reserved-name tokens (an instance's, an owned object's, an intent's,
+      a keyed object's) than the continuing one; the contract's user tokens are bounded per unit like any other asset.
+  - **Mints:** a minting method mints only user tokens under the pinned policy, never a reserved name, with one
+    `ByAction` redeemer naming its target; a destroy burns exactly its token, under `BurnInstance`, or under that
+    `ByAction` when its method also mints (the policy's `mintMatches` checks the burn and the mint together).
   - **The body commits to what the page read:** the wallet signs the body only, and the body commits to the witness
     set's redeemers and datums through its script integrity hash. The page reads the call, the claims and the
     approvals from the witness set, so it recomputes that hash from the witness set's own bytes (the languages of its
