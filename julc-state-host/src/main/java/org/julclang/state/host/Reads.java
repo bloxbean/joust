@@ -287,19 +287,17 @@ final class Reads {
         lastHeight = height.longValue();
         greatestTip = slot.longValue();
         if (now - greatestTip > ahead) throw HostError.bad("nowImplausible", "now is too far ahead of the observed tip");
+        // A failed or unsupported outcome ends the call, before any kind's checks (a utxos continuation's chain point
+        // among them): its tip is not evidence for the reservation table (#149 Codex fix review).
         if (a.has("failed")) {
             if (!a.path("failed").path("message").isTextual()) throw inconsistent("invalid read failure");
-            accepted();
             throw new ReadFailed(kind, "", a.get("failed").get("message").textValue());
         }
-        if (a.has("unsupported") && !kind.equals("stakeRegistration")) {
-            accepted();
-            throw new Unsupported(kind);
-        }
+        if (a.has("unsupported") && !kind.equals("stakeRegistration")) throw new Unsupported(kind);
         return a;
     }
     // D8: a tip reaches the reservation table only from a read the host accepted, after its kind's own checks
-    // (one chain point across chunks, output and script evidence). A rejected answer releases nothing (#149 Codex).
+    // (one chain point across chunks, output and script evidence). A refused answer releases nothing (#149 Codex).
     private void accepted() { observe.accept(greatestTip); }
     private static HostError inconsistent(String reason) { return HostError.internal("inconsistentRead", reason); }
 }

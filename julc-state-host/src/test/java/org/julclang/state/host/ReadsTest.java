@@ -182,6 +182,20 @@ class ReadsTest {
         failure("internal", "inconsistentRead", () -> Reads.backend(() -> first).getUtxoService().getUtxos(ADDRESS, 10, 1));
         assertTrue(table.avoids("spend"));
         assertTrue(table.avoids("collateral"));
+        // Nor is a failed or unsupported continuation at another point: it ends the call before the chunk check.
+        for (var outcome : List.of("failed", "unsupported")) {
+            var reads = new Reads(req -> {
+                if (!req.has("cursor")) return new Call.Answer(obj().set("result", value(JSON.createArrayNode(), 199).put("more", "next")), 128);
+                var a = obj();
+                a.set("tip", point(204));
+                if (outcome.equals("failed")) a.putObject("failed").put("message", "provider disconnected");
+                else a.put("unsupported", true);
+                return new Call.Answer(obj().set("result", a), 128);
+            }, 199, 20, 10, 8192, 0, table::observe);
+            assertThrows(Error.class, () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+            assertTrue(table.avoids("spend"), outcome);
+            assertTrue(table.avoids("collateral"), outcome);
+        }
         // An accepted answer at the same point does release them.
         var accepted = new Reads(req -> new Call.Answer(obj().set("result", value(JSON.createArrayNode(), 204)), 128),
                 199, 20, 10, 8192, 0, table::observe);
