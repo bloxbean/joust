@@ -545,8 +545,8 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | an `int32`/`int64` value out of range, or a `utf8` value that is not well-formed UTF-8 | `bad/params`, the same path on both hosts (D2a) |
 | raw `PlutusData` with a constructor index above 2^63 − 1 at any depth | `bad/params` on both hosts (D2a) |
 | a restore entry without `operation` whose body another entry's `attempts` name, and which has that `validTo`, spends that record's designated input and holds keyed tokens under its `policy` | a link: both restored as attempts of that operation, under the discard guard, the operation retryable, in either order (D2) |
-| a later restore entry carrying a record for a body the host holds live without one (same hash, state and slot) | the record checked against the body and attached to the existing entry (same id, discard guard kept); an inconsistent record is not attached and its operation retired; the batch completes (D2) |
 | the same, but any of those three checks fails | retirement: the naming record's operation retired (retry `bad/operation`), the recordless body held independently under the discard guard, the batch completes, in either order (D2) |
+| a later restore entry carrying a record for a body the host holds live without one (same hash, state and slot) | the record checked against the body and attached to the existing entry (same id, discard guard kept); an inconsistent record is not attached and its operation retired; the batch completes (D2) |
 | a restore entry omitting `operation` for a body the host already holds live, with the same state and slot | the held entry kept (operation, attempts, reservation id); the discard guard applies; the batch completes (D2) |
 | a key-credential call on a host without `authorizedBy:key` | `unsupported/authorizedBy` ("key credentials") |
 | a script-credential call on a host without `authorizedBy:script` | `unsupported/authorizedBy` ("script governors") |
