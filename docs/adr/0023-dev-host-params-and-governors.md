@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r14). Design only.
+**Status:** Proposed (r15). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -205,6 +205,17 @@ is `unsupported`, code `params` (protocol 1's answer); present but outside the d
   operation, attempts and reservation id) and applies the restored-body discard guard above to it; an incoming
   entry that **carries** a record merges as ADR-0022 merges it (same identity, a superset of attempts), and any
   other difference (state, slot, or a record of another identity) is refused as today.
+- **A recordless body named in another entry's attempts** (X56): a rewind and restart can require restoring attempt A
+  without its record and retry B whose record lists A's hash. ADR-0022's batch check requires both records to share
+  an identity before it accepts a deadline for the other body (`Reservations.restore`, `:362-377` at `2ffaf41b`), so
+  today the batch fails in either order. In a protocol-2 session, when one entry has no record and another entry's
+  `attempts` name its body hash, the host checks that the named deadline equals that body's `validTo` and that the
+  body spends the record's designated input; then it treats the recordless body as **an attempt of that
+  operation**: both entries keep their own reservations (out-refs and keyed tokens) and the restored-body discard
+  guard applies to both, in whichever order they arrive. If either check fails, the record is inconsistent with the
+  body its own history names: that operation is **retired** (above) and the recordless body is held under the
+  discard guard, so the restore still completes. When **both** entries carry records, ADR-0022's identity-conflict
+  check applies unchanged.
 - Every other entry (an ordinary call, a reference-script publication, a stake or governor registration) is restored
   by ADR-0022 D8's existing path, unchanged and without `params`: its reservation is of out-refs, which D8 already
   excludes session-wide. A later retry is compared with its own request's params.
@@ -488,6 +499,7 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | a `@Quorum` call of a kind outside the protocol-2 list | `unsupported` on both hosts (D5) |
 | an `int32`/`int64` value out of range, or a `utf8` value that is not well-formed UTF-8 | `bad/params`, the same path on both hosts (D2a) |
 | raw `PlutusData` with a constructor index above 2^63 − 1 at any depth | `bad/params` on both hosts (D2a) |
+| a restore entry without `operation` whose body another entry's `attempts` name with its `validTo` | both restored, as attempts of that operation, under the discard guard, in either order (D2) |
 | a restore entry omitting `operation` for a body the host already holds live, with the same state and slot | the held entry kept (operation, attempts, reservation id); the discard guard applies; the batch completes (D2) |
 | a key-credential call on a host without `authorizedBy:key` | `unsupported/authorizedBy` ("key credentials") |
 | a script-credential call on a host without `authorizedBy:script` | `unsupported/authorizedBy` ("script governors") |
@@ -560,6 +572,11 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   digest (`stageMismatch`), and changed **after** it (the running session keeps its loaded bytes); an old client
   (fingerprint version 1) and a new host on a project with the manifest (initializes, no `authorizedBy:script`); two
   packages with a `Guardian` (the Gradle qualified selector works; ambiguity fails closed).
+- **Recordless attempt and its retry (X56), M4a:** attempt A expires, retry B is handed out with A in its
+  `attempts`, a rewind revives A, the host restarts, and the journal restores A **without** its record and B with
+  it, in both orders: reconciliation completes, both bodies stay held under the discard guard, and B's operation is
+  live; the same with B naming A under a deadline other than A's `validTo` (B's operation retired, A held, the
+  restore completes); and with both records present but of different identities (refused, as today).
 - **Rewind and replay (X54), M4a:** prepare a keyed operation, hand it out, rewind, then restore a journal entry with
   the same body, state and slot but no `operation`: reconciliation completes, the held entry keeps its operation,
   attempts and reservation id, `discarded` is refused, and its inputs and keyed token stay held until final
@@ -630,7 +647,7 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | I17 | A key-credential call is accepted only if the credential's key, from the client's own params, is a required signer that is the caller or a named co-signer | D4, D5 | M4b vectors |
 | I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, its V3 script in the witness set, and exactly one `Approvals` naming this policy, instance and action at that withdrawal's pointer; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
 | I19 | The body's required signers equal exactly D5's signer set | D5 | M4b/M4c mutations, payer ≠ owner |
-| I20 | Reservations exclude out-refs across all parameterizations in a session; operations are identified by `{designated, policy, method, instance, key}`; a keyed operation is retried only when R holds for its request's params; every restored body with keyed tokens is never discarded and keeps its out-refs and keyed tokens until final inclusion or margin-qualified expiry; a recordless replay of a body the host already holds live keeps the held entry; other pending transactions restore as under ADR-0022 | D2 | identity, keyed-restore and rewind-and-replay tests |
+| I20 | Reservations exclude out-refs across all parameterizations in a session; operations are identified by `{designated, policy, method, instance, key}`; a keyed operation is retried only when R holds for its request's params; every restored body with keyed tokens is never discarded and keeps its out-refs and keyed tokens until final inclusion or margin-qualified expiry; a recordless replay of a body the host already holds live keeps the held entry; a recordless body named in another entry's attempts restores as an attempt of that operation, in either order; other pending transactions restore as under ADR-0022 | D2 | identity, keyed-restore and rewind-and-replay tests |
 | I21 | A protocol-1 session with a host that ships this ADR is indistinguishable from one with an M3 host: apart from `fingerprint` and `versions` (checked against the launch), every reply field, the capability list and every error code (per-method precedence included) equal the final M3b host's, every reply validates against the unmodified `dev-host-1` schemas, and a client that sends no fingerprint version gets ADR-0022's digest on every project | D1, D2, D4, D7 | legacy-session (differential) and old-client vectors |
 | I22 | Both hosts accept exactly D2a's input domain for `params` and governor params, formats and the raw-Data constructor-index cap included, refusing the rest with the same code and path; neither serves, advertises or describes as served a parameterized contract whose description lacks the `formats` marker | D2, D2a | input-domain boundary and format vectors; mixed marked/unmarked session |
 | I23 | A `@Quorum` call is accepted only if at least `threshold` distinct required signers are in `keys`, both read by the client from its own params or from the input record of the object whose method runs (by call kind; `removed` for `keyedRemove`); both hosts prepare exactly the protocol-2 quorum call kinds | D5 | quorum-eligibility vectors (instance, owned, keyed, removal), through both dispatchers |
@@ -838,3 +855,7 @@ host's bodies already satisfy it.
     a record keeps the held entry, under the discard guard), D7, D8 (rewind-and-replay vector);
   - X55 (raw Data constructor indices above 2^63 − 1) → D2a (cap at any depth in the shared prevalidation), D7, D8
     (differential at 2^63 − 1 and 2^63).
+- **r15** (2026-11-22, responds to Codex review of `fe518c24`, which confirmed X54 and X55; its one finding is X56):
+  - X56 (a recordless attempt blocked restoring its retry) → D2 (a recordless body named in another entry's
+    attempts, with matching `validTo` and designated input, restores as an attempt of that operation; an
+    inconsistent record is retired; both-records identity check unchanged), D7, D8 (both orders), I20.
