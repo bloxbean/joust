@@ -57,9 +57,8 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 
 ## Build / test
 - JDK 25 and Node 22 (the `.jsc` 2 five-way tests run the JavaScript reference interpreter, `js/jsc-interpreter`). `./gradlew build`.
-- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is the release **`0.1.0-pre21-rc1`** (with
-  #311/#313), resolved from the BloxBean release repository (`https://repo.bloxbean.org/maven/releases`; not on Maven
-  Central). `settings.gradle` lists the BloxBean repositories for the `org.julclang.julc` plugin too. A release refuses
+- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre8**. JuLC is the release **`0.1.0-pre22`** (with
+  #311/#313, and #348: name-independent ties between equal library methods), on Maven Central and in the BloxBean release repository (`https://repo.bloxbean.org/maven/releases`). `settings.gradle` lists the BloxBean repositories for the `org.julclang.julc` plugin too. A release refuses
   SNAPSHOT pins unless `allow_snapshot_dependencies` (rehearsals only), so pin JuLC releases.
   JuLC changes JOUST needs: a JuLC PR labelled `joust`.
 - A consumer of JOUST needs on its processor path: `julc-state-processor`, `julc-annotation-processor`, and
