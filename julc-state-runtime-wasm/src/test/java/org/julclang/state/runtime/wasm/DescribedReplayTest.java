@@ -86,7 +86,8 @@ class DescribedReplayTest {
             }
         }
         assertEquals(List.of(), diffs);
-        assertTrue(vectors.size() >= 30, "recorded prepares: " + vectors.size());
+        // fixtures/m0/dapp: the page's flow records 25 prepares since the serverless demo was dropped (ADR-0020 §12.3).
+        assertTrue(vectors.size() >= 25, "recorded prepares: " + vectors.size());
         var sorted = ms.stream().sorted().toList();
         System.out.println("[M1a] " + vectors.size() + " recorded prepares (Counter, Bank) byte-identical through descriptions and"
                 + " transition programs; prepare: first " + ms.get(0) + " ms, median " + sorted.get(sorted.size() / 2) + " ms");
