@@ -3,7 +3,7 @@
 // rewards go. Each prepared transaction is verified before the wallet signs: nothing beyond the operation, the
 // wallet's funds bounded (it pays the fee only), the redeemers the page's own.
 
-import { DEFAULT_LIMITS, add, isWalletEnterprise } from './verify.js';
+import { DEFAULT_LIMITS, add, isWalletEnterprise, integrityChecks } from './verify.js';
 import { codec as makeCodec } from './data.js';
 import { Data, dataEqual } from './pdata.js';
 import { rewardAddressOf } from './governors.js';
@@ -58,6 +58,8 @@ export async function verifyPurpose(o) {
   if (tx.mint.size) problems.push('a mint');
   if (tx.hasAuxiliaryData) problems.push('auxiliary data');
   if (tx.networkId !== null && tx.networkId !== (deployment.networkId === 1 ? 1 : 0)) problems.push('another network');
+  // The body commits to the redeemers verified below (the handler's, the output verifier's claims).
+  integrityChecks(tx, chain.params, problems);
 
   // Certificates: a delegation's one, of the script's own credential to the page's pool; none for a collection.
   const certs = tx.certificates;
@@ -124,6 +126,17 @@ export async function verifyPurpose(o) {
   const registry = op === 'collect' ? outputRegistry(tx, deployment.outputVerifier, problems) : null;
   if (registry?.deposits.length) problems.push('a deposit claim in a reward collection');
   const claimed = claimedSends(tx, [{ registry, owners: [rewardRefOf(policy)] }], isWallet, problems);
+  // A positive collection is fully allocated by the handler's sends, each claimed for RewardRef(policy) at an output
+  // covering it (I37): so its claims name outputs holding at least the rewards withdrawn. Without them the withdrawal
+  // validator refuses the transaction; the page does not ask the wallet to sign one that cannot succeed. A zero balance
+  // has no sends (and no output verifier's withdrawal).
+  if (op === 'collect' && withdrawn > 0n) {
+    const by = rewardRefOf(policy);
+    const mine = (registry?.claims ?? []).filter((cl) => cl.by === by);
+    const held = mine.reduce((s, cl) => s + (tx.outputs[cl.output].value.get('lovelace') ?? 0n), 0n);
+    if (mine.length === 0) problems.push(`no send claimed for the ${withdrawn} lovelace of rewards withdrawn`);
+    else if (held < withdrawn) problems.push(`the claimed sends hold ${held} lovelace, less than the ${withdrawn} of rewards withdrawn`);
+  }
   const produced = new Map();
   const back = new Map();
   let others = 0n;

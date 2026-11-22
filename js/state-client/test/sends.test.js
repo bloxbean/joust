@@ -16,7 +16,7 @@ import { rewardAddressOf } from '../src/governors.js';
 import { parseTx, enterpriseAddress } from '../src/ledger.js';
 import { Data, dataHex } from '../src/pdata.js';
 import {
-  CSL, recorded, recordedComposition, inputsOf, chainOf, walletOf, editTx, cslOutput, partsOf, STRANGER, OUTPUT_VERIFIER,
+  CSL, recorded, recordedComposition, inputsOf, chainOf, walletOf, editTx, cslOutput, partsOf, bodyOf, STRANGER, OUTPUT_VERIFIER,
 } from './sends-world.js';
 
 const accepted = (r, what) => assert.deepEqual(r.problems, [], `${what}: ${r.problems.join('; ')}`);
@@ -194,7 +194,7 @@ test('a malformed, out-of-order or foreign claim set is refused', async () => {
     [claimsHex([[2, target], [1, target]]), /do not name distinct outputs in order \(output 1\)/, 'claims out of order'],
     [claimsHex([[9, target]]), /do not name distinct outputs in order \(output 9\)/, 'a claim beyond the outputs'],
     [claimsHex([[1, foreign]]), /a send claimed for abab.*#0, not a contract input the transaction spends/, 'a claim for an input not spent'],
-    [dataHex(Data.constr(0, [Data.list([])])), /not an OutputClaims/, 'a redeemer of another shape'],
+    [dataHex(Data.constr(0, [Data.list([])])), /not an OutputClaims/, 'the one-field OutputClaims of before the first release (claims.js)'],
     [dataHex(Data.constr(0, [Data.list([Data.constr(0, [Data.int(1)])]), Data.list([])])), /malformed claim/, 'a malformed claim'],
     [claimsHex([[1, target]], [Data.constr(0, [Data.int(0), refData(target)])]), /malformed deposit/, 'a malformed deposit'],
     [claimsHex([[1, target]], [depositData(2n, target, 1n), depositData(0n, target, 1n)]), /deposits do not name outputs in order \(output 0\)/, 'deposits out of order'],
@@ -305,12 +305,13 @@ async function collect() {
   const wallet = walletOf(r.x);
   const own = rewardAddressOf(policy, 0);
   const meta = purposeOf(r.description, 'withdraw');
-  const build = async (outputs, deposits = []) => {
+  // `claims`: the registry's [output, by]; `verifier`: whether the output verifier withdraws (and claims) at all.
+  const build = async (outputs, deposits = [], { claims = [[0, rewardRefOf(policy)]], verifier = true } = {}) => {
     const hex = await editTx(r.cbor, r.x, {
       withdrawals: () => {
         const w = CSL.Withdrawals.new();
         w.insert(CSL.RewardAddress.from_address(CSL.Address.from_bech32(own)), CSL.BigNum.from_str(String(REWARDS)));
-        w.insert(CSL.RewardAddress.from_address(CSL.Address.from_bech32(deployment.outputVerifier.rewardAddress)), CSL.BigNum.zero());
+        if (verifier) w.insert(CSL.RewardAddress.from_address(CSL.Address.from_bech32(deployment.outputVerifier.rewardAddress)), CSL.BigNum.zero());
         return w;
       },
       outputs,
@@ -319,15 +320,16 @@ async function collect() {
     return editTx(hex, r.x, {
       redeemers: ([mine]) => [
         { ...mine, index: order.indexOf(own), dataHex: dataHex(rewardsData(r.description, meta, REWARDS)) },
-        { tag: 'reward', index: order.indexOf(deployment.outputVerifier.rewardAddress), dataHex: claimsHex([[0, rewardRefOf(policy)]], deposits) },
+        ...(verifier ? [{ tag: 'reward', index: order.indexOf(deployment.outputVerifier.rewardAddress), dataHex: claimsHex(claims, deposits) }] : []),
       ],
     });
   };
-  const verify = async (txHex) => verifyPurpose({
-    op: 'collect', amount: REWARDS, args: {}, cosignerKeys: r.x.call.cosigners ?? [], description: r.description, deployment, wallet, txHex, chain: chainOf(r.x),
+  const verifyAt = async (txHex, amount) => verifyPurpose({
+    op: 'collect', amount, args: {}, cosignerKeys: r.x.call.cosigners ?? [], description: r.description, deployment, wallet, txHex, chain: chainOf(r.x),
   });
+  const verify = (txHex) => verifyAt(txHex, REWARDS);
   const payee = enterpriseAddress({ type: 'key', hash: wallet.keyHashes[0] }, 0);
-  return { build, verify, payee, policy };
+  return { build, verify, verifyAt, payee, policy, recordedHex: r.cbor };
 }
 
 test('collect: the rewards sent to the wallet are accepted; claimed on its change and paid to a stranger, or with a deposit, refused', async () => {
@@ -404,4 +406,89 @@ test('composition with two output verifiers: a send each is accepted; one wallet
   refused(await verify(await w.build(w.outputs(STRANGER), 2, 2)), /output 2 is claimed in two output verifiers' registries/, 'a shared send output');
   // The same, for an output that is not the wallet's: the stranger's output 3 claimed in both registries.
   refused(await verify(await w.build(w.outputs(STRANGER), 3, 3)), /output 3 is claimed in two output verifiers' registries/, 'a shared stranger output');
+});
+
+test('collect: a positive collection needs the handler\'s sends claimed, covering the rewards; a zero balance needs none', async () => {
+  const { build, verify, verifyAt, payee, policy, recordedHex } = await collect();
+  const honest = (cur) => [cslOutput({ address: payee, value: new Map([['lovelace', REWARDS]]) }), cur[0]];
+  // On chain the sends total the rewards exactly, each claimed for RewardRef(policy) at an output covering it (I37).
+  refused(await verify(await build(honest, [], { verifier: false })), /no send claimed for the 10000000 lovelace of rewards withdrawn/, 'no output verifier');
+  refused(await verify(await build(honest, [], { claims: [] })), /no send claimed for the 10000000 lovelace of rewards withdrawn/, 'no claim');
+  // The claimed output covers less than the rewards; the stranger gets the rest (within the others rule).
+  const short = (cur) => [cslOutput({ address: payee, value: new Map([['lovelace', REWARDS - 1n]]) }), cslOutput({ address: STRANGER, value: new Map([['lovelace', 1n]]) }), cur[0]];
+  refused(await verify(await build(short)), /the claimed sends hold 9999999 lovelace, less than the 10000000 of rewards withdrawn/, 'claims short of the rewards');
+  // Two sends, each claimed: accepted.
+  const split = (cur) => [cslOutput({ address: payee, value: new Map([['lovelace', REWARDS - 4_000_000n]]) }), cslOutput({ address: payee, value: new Map([['lovelace', 4_000_000n]]) }), cur[0]];
+  accepted(await verify(await build(split, [], { claims: [[0, rewardRefOf(policy)], [1, rewardRefOf(policy)]] })), 'two claimed sends');
+  // The recorded zero-balance collection: no send, no output verifier.
+  accepted(await verifyAt(recordedHex, 0n), 'the recorded zero collection');
+});
+
+// ------------------------------------------------------------------- a payment into one call, a release from another
+
+// The recorded composition fees/004 (Stall.sell is paid 10 ADA by the wallet and deposits 0.5 ADA into Pot.collect),
+// restated so that the Pot's instance also releases 7 ADA: 4 sent to the caller (claimed for the Pot input), 3 to others.
+// What the Stall keeps of the wallet's payment is not released, so it may not shrink what the Pot releases to others.
+async function paidAndReleased() {
+  const c = recordedComposition('fees/004-undefined.json');
+  const tx = parseTx(c.cbor);
+  const [stall, pot] = tx.inputs;
+  const ov = tx.withdrawals.findIndex((w) => w.address === c.steps[0].deployment.outputVerifier.rewardAddress);
+  const deposits = tx.redeemers.find((x) => x.tag === 'reward' && x.index === ov).data.fields[1].list;
+  const chain = chainOf(c.x, (ref, u) => (ref === pot ? { ...u, value: plus(u.value, 'lovelace', 7n * ADA_) } : u));
+  const payee = enterpriseAddress({ type: 'key', hash: c.wallet.keyHashes[0] }, 0);
+  // `edit`: of [stall, pot, change, send, stranger] parts.
+  const build = ({ edit = (p) => p } = {}) => editTx(c.cbor, c.x, {
+    outputs: (cur) => edit([...cur.map(partsOf), { address: payee, value: new Map([['lovelace', 4n * ADA_]]) },
+      { address: STRANGER, value: new Map([['lovelace', 3n * ADA_]]) }]).map(cslOutput),
+    redeemers: withRegistry(ov, dataHex(Data.constr(0, [Data.list([Data.constr(0, [Data.int(3), refData(pot)])]), Data.list(deposits)]))),
+  });
+  const verify = async (txHex) => verifyComposed({ steps: c.steps, wallet: c.wallet, chain, txHex });
+  return { build, verify, stall, pot };
+}
+const ADA_ = 1_000_000n;
+
+test('composition: a call paid by the wallet beside a call that sends to the wallet and pays others is accepted', async () => {
+  const w = await paidAndReleased();
+  accepted(await w.verify(await w.build()), 'the Pot\'s release: 4 ADA sent to the caller, 3 ADA to others');
+  // One lovelace more to others, taken from the wallet's change.
+  const more = ([s, p, change, send, other]) => [s, p, { ...change, value: plus(change.value, 'lovelace', -1n) }, send, { ...other, value: plus(other.value, 'lovelace', 1n) }];
+  refused(await w.verify(await w.build({ edit: more })), OTHERS, 'one lovelace of the wallet\'s to others');
+  // The Stall keeping 1 ADA less of the payment, that ADA paid to others: the payment is credited only where it is kept.
+  const passedOn = ([s, p, change, send, other]) => [{ ...s, value: plus(s.value, 'lovelace', -ADA_) }, p, change, send, { ...other, value: plus(other.value, 'lovelace', ADA_) }];
+  refused(await w.verify(await w.build({ edit: passedOn })), OTHERS, 'the payment passed on to others');
+  // The Stall keeping 3 ADA of the Pot's release beyond its payment, and 1 ADA of the wallet's change paid to others:
+  // what a call keeps is credited up to its payment only, so the wallet's change cannot pay others.
+  const keepsMore = ([s, p, change, send, other]) => [{ ...s, value: plus(s.value, 'lovelace', 3n * ADA_) }, p,
+    { ...change, value: plus(change.value, 'lovelace', -ADA_) }, send, { ...other, value: plus(other.value, 'lovelace', -2n * ADA_) }];
+  refused(await w.verify(await w.build({ edit: keepsMore })), OTHERS, 'a call keeping more than its payment');
+});
+
+// ------------------------------------------------------------------------------- the script integrity hash
+
+// The wallet signs the body; the body commits to the witness set's redeemers through its script data hash. A body
+// committing to other redeemers than the ones the page read could be submitted with those by whoever holds it.
+test('the body must commit to the redeemers the page verified: a script data hash over other claims is refused', async () => {
+  const { r, target, ov, chain, honest } = await lovelaceWorld();
+  // The committed registry claims the wallet's change (output 2) instead of the send; the page reads the honest one.
+  const committed = await editTx(honest, r.x, { redeemers: withRegistry(ov, claimsHex([[2, target]])) });
+  const [alone, composed] = await both(inputsOf(r, { txHex: bodyOf(committed, honest), chain }));
+  refused(alone, /the script integrity hash does not commit to the redeemers and datums the page verified/, 'alone');
+  refused(composed, /the script integrity hash does not commit to the redeemers and datums the page verified/, 'composed');
+  // A collection, likewise: the committed registry claims nothing.
+  const { build, verify, payee } = await collect();
+  const outs = (cur) => [cslOutput({ address: payee, value: new Map([['lovelace', REWARDS]]) }), cur[0]];
+  const good = await build(outs);
+  refused(await verify(bodyOf(await build(outs, [], { claims: [] }), good)), /the script integrity hash does not commit/, 'a collection');
+});
+
+test('the script integrity hash: checked over cost_models when the chain gives no cost_models_raw; refused without either', async () => {
+  const { r, chain, honest } = await lovelaceWorld();
+  const { cost_models_raw: _, ...named } = chain.params;
+  accepted(await verifyPrepared(inputsOf(r, { txHex: honest, chain: { ...chain, params: named } })), 'cost_models only');
+  const { cost_models: __, ...none } = named;
+  refused(await verifyPrepared(inputsOf(r, { txHex: honest, chain: { ...chain, params: none } })), /the chain gives no PlutusV3 cost model/, 'no cost model');
+  // A script data hash with no redeemers or datums to commit to.
+  const bare = CSL.Transaction.new(CSL.Transaction.from_hex(honest).body(), CSL.TransactionWitnessSet.new(), undefined).to_hex();
+  refused(await verifyPrepared(inputsOf(r, { txHex: bare, chain })), /a script integrity hash without redeemers or datums/, 'a hash over nothing');
 });

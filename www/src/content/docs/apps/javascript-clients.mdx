@@ -251,6 +251,8 @@ For a single call, `verifyPrepared` refuses:
   lovelace, or a small lovelace send) is topped up from the wallet, and the page cannot tell that top-up from lovelace
   the script sends: a transaction with such a send that also pays released lovelace to others (in any of its calls) is
   refused, unless the send carries at least its own minimum ADA (`Assets.lovelace(min)` with the tokens);
+- a script integrity hash that does not commit to the redeemers and datums the page read (recomputed over the chain
+  API's cost models; every verifier checks it, since the wallet signs only the body);
 - a fee above the protocol's for this size and budget (times 1.2, plus `feeMargin`) or above `maxFee`; execution
   budgets above the protocol's limits;
 - collateral that is not the wallet's, not returned to the wallet, or above `maxCollateral`;

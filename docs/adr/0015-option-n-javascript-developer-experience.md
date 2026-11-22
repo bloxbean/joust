@@ -869,7 +869,11 @@ direct `Tx` building, gated by S3.
     send to the caller counts against what all the calls release to others. A receiver credits every deposit claimed
     on its continuation, whatever its `by`, so each deposit claim must come from the target of a composed call that
     declares deposits (its validator checks its claims exactly) and land on the continuation of a composed call that
-    receives them.
+    receives them. What a call keeps of the wallet's payment is not released: its own intake (what its continuation
+    gains, beyond the deposits it receives and net of those it gives) is credited back to what others may receive, up
+    to its payment, so a payment into one call does not shrink what another releases to others. With that credit,
+    others' receipts bound the wallet's net loss (the fee aside) by what the calls keep of their payments, less what
+    the scripts send it back.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.
     Deployments that deposit or receive now pin it.
   - Spending calls only for now (no creations in a composition).
@@ -1009,7 +1013,10 @@ direct `Tx` building, gated by S3.
       (and the output verifier's zero withdrawal, when there are sends). Others receive at most what was withdrawn
       beyond the handler's sends claimed at wallet outputs (each claim's `by` is `RewardRef(policy)`, I37; the
       claims are decoded and checked as ADR-0013 §9.2 states; no deposit claims). As there, the wallet's top-up of a
-      send to it below the minimum ADA counts against what others may receive of the rewards.
+      send to it below the minimum ADA counts against what others may receive of the rewards. A positive collection
+      must claim its sends: on chain they total the rewards, each claimed for `RewardRef(policy)` at an output that
+      covers it, so the claimed outputs hold at least the rewards withdrawn; else the withdrawal validator would refuse
+      the transaction. A zero balance has no sends.
     - **Both:** the wallet's inputs only; the pinned reference scripts only; the wallet loses at most the fee;
       bounded collateral and validity; signers are the wallet's and the named co-signers.
   - **I5:** all 11 tamperings of a delegation (a delegation to another pool among them) and all 10 of a reward

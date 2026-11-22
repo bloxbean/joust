@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { keyIdOf, typeIdOf, compareKeys, verifyKeyed } from '../src/keyed.js';
 import { dataHex } from '../src/pdata.js';
 import { verifyComposed } from '../src/compose.js';
+import { parseTx } from '../src/ledger.js';
 import {
   DESCRIPTION, ADA, PARAMS, WK, I, SA, THIRD, TIP, ZERO_TIME, ref, scriptAddr, world, build, chainOf, deployment, check, spendR, mintR, TxOutRef,
   insertScn, actionScn, retireScn, removeScn, createScn,
@@ -32,6 +33,14 @@ test('insert: honest, with and without transaction CBOR', async () => {
   const scn = insertScn(w);
   accepted(await check(w, scn), 'insert');
   accepted(await check(w, scn, undefined, { noCbor: true }), 'insert, the anchor solved by the balance equation');
+});
+
+test('a keyed call whose body commits to other redeemers (its script integrity hash) is refused', async () => {
+  const w = world();
+  const scn = insertScn(w);
+  const other = actionScn(w);
+  const committed = parseTx(build(w, structuredClone(other.spec), other.truth)).scriptDataHash;
+  refused(await check(w, scn, (s) => ({ ...s, scriptDataHashHex: committed })), /the script integrity hash does not commit/, 'another call\'s hash');
 });
 
 test('insert: tamperings refused', async () => {

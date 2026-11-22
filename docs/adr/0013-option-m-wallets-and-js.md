@@ -328,6 +328,13 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
       (`Assets.lovelace(min)` with the tokens). Transactions without the output verifier's withdrawal are verified
       as before;
     - no output pays the wallet's payment key at an address the wallet does not use (another stake key).
+  - **The body commits to what the page read:** the wallet signs the body only, and the body commits to the witness
+    set's redeemers and datums through its script integrity hash. The page reads the call, the claims and the
+    approvals from the witness set, so it recomputes that hash from the witness set's own bytes (the languages of its
+    Plutus scripts and PlutusV3, over the chain API's cost models) and refuses a mismatch, a hash with nothing to
+    commit to, and a chain API that gives no cost model. Else whoever holds the signed body could submit it with other
+    redeemers. Wrong cost models can only refuse: the hash binds the reviewed redeemers and the cost models together.
+    Every page verifier checks it (single and keyed calls, compositions, purposes, registrations, intents).
   - **The transaction balances:** inputs plus mint equal outputs plus fee. An unbalanced transaction is not worth a
     signature: the e2e test found a tampering that added an unfunded output.
   - **The wallet's net outflow** is at most the fee plus the payment (for a creation, plus the new UTxO, itself at

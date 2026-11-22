@@ -2,7 +2,7 @@
 // batcher. Each prepared transaction is verified against the description before the wallet signs, as for calls:
 // nothing beyond the operation, the wallet's funds bounded, every datum and redeemer the page's own.
 
-import { DEFAULT_LIMITS, ledgerOrder, add, isWalletEnterprise } from './verify.js';
+import { DEFAULT_LIMITS, ledgerOrder, add, isWalletEnterprise, integrityChecks } from './verify.js';
 import { parseTx, addressParts } from './ledger.js';
 import { codec as makeCodec, dataEqual } from './data.js';
 import { bytesToHex } from './hex.js';
@@ -50,6 +50,8 @@ async function frame({ deployment, txHex, wallet, chain, limits, scriptInput, wa
   if (tx.withdrawals.length > 0) problems.push('withdrawals');
   if (tx.hasAuxiliaryData) problems.push('auxiliary data');
   if (tx.networkId !== null && tx.networkId !== (deployment.networkId === 1 ? 1 : 0)) problems.push('another network');
+  // The body commits to the redeemers and datums verified below.
+  integrityChecks(tx, chain.params, problems);
 
   // Inputs, in ledger order (the redeemers' indexes).
   const sorted = ledgerOrder(tx.inputs);

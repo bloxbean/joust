@@ -42,7 +42,10 @@ function valueOf(d) {
  * {@code verifier}'s registry in {@code tx}: { claims: [{ output, by }], deposits: [{ output, by, value }] } (refs as
  * "txId#index"), found by the Rewarding pointer of its zero withdrawal; null when the transaction has none. Claims must
  * name outputs of the transaction in strictly increasing order and deposits in non-decreasing order (the verifier's own
- * rules on chain). Anything else is a problem, and null is returned.
+ * rules on chain). Anything else is a problem, and null is returned. The redeemer is OutputClaims(claims, deposits),
+ * the only format any JOUST release's output verifier reads: its one-field predecessor (claims only) lived for one day
+ * of development and was replaced, with a new verifier hash, before the first release, so no page meets it and it is
+ * refused as malformed.
  */
 export function outputRegistry(tx, verifier, problems) {
   if (!verifier?.rewardAddress) return null;

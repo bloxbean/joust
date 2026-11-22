@@ -224,3 +224,12 @@ export function partsOf(o) {
   }
   return { address: o.address().to_bech32(), value: m, datumHex: o.has_plutus_data() ? o.plutus_data().to_hex() : null };
 }
+
+/**
+ * {@code reviewedHex}'s witness set under {@code committedHex}'s body: what a hostile service could hand the page, the
+ * body (which the wallet signs) committing by its script data hash to the redeemers of another transaction.
+ */
+export function bodyOf(committedHex, reviewedHex) {
+  const t = CSL.Transaction.from_hex(reviewedHex);
+  return CSL.Transaction.new(CSL.Transaction.from_hex(committedHex).body(), t.witness_set(), t.auxiliary_data()).to_hex();
+}

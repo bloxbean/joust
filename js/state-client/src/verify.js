@@ -13,7 +13,7 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf, objectIdOf } from './tokens.js';
 import { bytesToHex } from './hex.js';
 import { approvalsData, rewardAddressOf } from './governors.js';
-import { parseTx, addressParts } from './ledger.js';
+import { parseTx, addressParts, integrityHashOf } from './ledger.js';
 import { dataHex } from './pdata.js';
 import { isKeyedCall, verifyKeyed } from './keyed.js';
 import { outputRegistry, claimedSends } from './claims.js';
@@ -425,10 +425,64 @@ export async function verifyPrepared(o) {
 }
 
 /**
- * The checks every single call shares (ADR-0013 D2): the fee, the collateral, the validity interval and the signers.
- * Shared by the keyed calls' verifier (ADR-0016 D11).
+ * A language's cost model from the chain's parameters, as a list in the ledger's order: Blockfrost's cost_models_raw,
+ * else cost_models when it is a list or keyed by position ("000", "001", ...: Yaci Store); null otherwise (a model
+ * keyed by parameter name has no order the page can rely on).
+ */
+function costModelOf(params, language) {
+  const raw = params?.cost_models_raw?.[language];
+  if (Array.isArray(raw)) return raw;
+  const named = params?.cost_models?.[language];
+  if (Array.isArray(named)) return named;
+  if (!named || typeof named !== 'object') return null;
+  const keys = Object.keys(named);
+  if (keys.length === 0 || !keys.every((k) => /^\d+$/.test(k))) return null;
+  return keys.map(Number).sort((a, b) => a - b).every((n, i) => n === i) ? keys.sort((a, b) => Number(a) - Number(b)).map((k) => named[k]) : null;
+}
+
+/**
+ * The script integrity hash (Conway): the wallet signs the body only, and the body commits to the witness set's
+ * redeemers and datums through this hash. Every verifier reads the call, the claims and the approvals from the witness
+ * set, so the body must commit to exactly those, else whoever holds the signed body could submit it with other
+ * redeemers. The hash is recomputed from the witness set's own bytes, with the languages of its Plutus scripts and
+ * PlutusV3 (every JOUST script's) over the chain API's cost models. This is sound whatever cost models the chain API
+ * gives: blake2b-256 binds the reviewed redeemers and datums and the cost models together, so a body that matches them
+ * under any cost models cannot match other redeemers on chain. Wrong cost models only refuse. Shared by every page
+ * verifier (single and keyed calls, compositions, purposes, registrations, intents).
+ */
+export function integrityChecks(tx, params, problems) {
+  const { parts, redeemerCount, datumCount, languages } = tx.integrity;
+  if (redeemerCount === 0 && datumCount === 0) {
+    if (tx.scriptDataHash) problems.push('a script integrity hash without redeemers or datums');
+    return;
+  }
+  const langs = [...new Set(['PlutusV3', ...languages])];
+  const costModels = {};
+  for (const l of langs) {
+    const m = costModelOf(params, l);
+    if (!m) {
+      problems.push(`the chain gives no ${l} cost model, so the script integrity hash cannot be checked`);
+      return;
+    }
+    costModels[l] = m;
+  }
+  let want;
+  try {
+    want = integrityHashOf(parts, langs, costModels);
+  } catch (e) {
+    problems.push(`the script integrity hash cannot be computed: ${e.message}`);
+    return;
+  }
+  if (want.unsupported) problems.push(`the script integrity hash cannot be checked (${want.unsupported})`);
+  else if (tx.scriptDataHash !== want.hash) problems.push('the script integrity hash does not commit to the redeemers and datums the page verified');
+}
+
+/**
+ * The checks every single call shares (ADR-0013 D2): the fee, the collateral, the validity interval, the signers and
+ * the script integrity hash. Shared by the keyed calls' verifier (ADR-0016 D11).
  */
 export function envelopeChecks({ tx, txHex, call, wallet, chain, deployment, limits, isWallet }, problems) {
+  integrityChecks(tx, chain.params, problems);
   const rds = tx.redeemers;
   const fee = tx.fee;
   // The fee: at most what the protocol asks for this size and these budgets, with a margin.

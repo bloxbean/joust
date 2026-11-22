@@ -7,7 +7,7 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
-  paymentKeyHashOf, isWalletEnterprise, decodeNext,
+  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks,
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
@@ -31,6 +31,8 @@ export async function verifyComposed(o) {
   } catch (e) {
     return { problems: ['not a transaction'], report };
   }
+  // The body commits to the redeemers verified below (the calls', the claims, the approvals).
+  integrityChecks(tx, chain.params, problems);
 
   // Each call: its contract, a spending kind, verifiable by the page.
   const calls = steps.map((s) => {
@@ -339,15 +341,45 @@ export async function verifyComposed(o) {
     if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}`);
   }
   // Others receive only what the scripts release beyond their payouts and claimed sends to the wallet, over all calls
-  // (the rule that protects the wallet, as in verify.js; deposits are bound to composed calls above).
+  // (the rule that protects the wallet, as in verify.js; deposits are bound to composed calls above). What a call keeps
+  // of the wallet's payment is not released, so it is credited back, up to the call's payment: else a payment into one
+  // call would shrink what another releases to others. A call's own intake is what its continuation gains beyond the
+  // deposits it receives and net of those it gives (each depositing validator checks its claims exactly): a deposit
+  // funds its receiver from the depositor's release, not from the wallet. With the credit, others' receipts bound the
+  // wallet's net loss (the fee aside) by what the calls keep of their payments, less what the scripts send it back.
   const released = new Map();
   for (const k of calls) {
     add(released, k.targetValue);
     add(released, k.continuation, -1n);
   }
   add(released, minted);
+  const gives = new Map(calls.map((k) => [k, new Map()]));
+  const gets = new Map(calls.map((k) => [k, new Map()]));
+  for (const { registry, pinning } of registries) {
+    for (const d of registry?.deposits ?? []) {
+      const from = pinning.find((x) => x.targetRef === d.by);
+      const into = pinning.find((x) => x.continuationIndex === d.output);
+      if (from && into) {
+        add(gives.get(from), d.value);
+        add(gets.get(into), d.value);
+      }
+    }
+  }
+  const kept = new Map();
+  for (const k of calls) {
+    const own = new Map(k.continuation);
+    add(own, k.targetValue, -1n);
+    add(own, gives.get(k));
+    add(own, gets.get(k), -1n);
+    const paid = new Map([['lovelace', k.pay.lovelace]]);
+    for (const [p, assets] of k.pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
+    for (const [unit, q] of own) {
+      const cap = paid.get(unit) ?? 0n;
+      if (q > 0n && cap > 0n) kept.set(unit, (kept.get(unit) ?? 0n) + (q < cap ? q : cap));
+    }
+  }
   for (const [unit, q] of third) {
-    const free = (released.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
+    const free = (released.get(unit) ?? 0n) + (kept.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
     const sends = claimed.indexes.size ? ' beyond their claimed sends to the wallet' : '';
     if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the scripts release to them${sends}`);
   }

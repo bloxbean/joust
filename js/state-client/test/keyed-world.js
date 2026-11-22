@@ -25,8 +25,20 @@ export const WALLET = keyAddr(WK);
 export const THIRD = keyAddr(OTHER);
 export const REF_SCRIPT = 'e0'.repeat(32) + '#0';
 export const ref = (byte, i = 0) => byte.repeat(32) + '#' + i;
+// PlutusV3's cost model: the script integrity hash is computed over it (CSL's hash_script_data, an independent
+// implementation) and the page checks it (verify.js integrityChecks).
+const PLUTUS_V3 = JSON.parse(readFileSync(new URL('../../joust/src/test/protocol-params.json', import.meta.url))).cost_models_raw.PlutusV3;
 export const PARAMS = { min_fee_a: 44, min_fee_b: 155381, price_mem: 0.0577, price_step: 0.0000721, max_tx_ex_mem: '14000000',
-  max_tx_ex_steps: '10000000000', coins_per_utxo_size: '4310' };
+  max_tx_ex_steps: '10000000000', coins_per_utxo_size: '4310', cost_models_raw: { PlutusV3: PLUTUS_V3 } };
+
+/** The script data hash CSL computes for {@code redeemers} under PlutusV3's cost model. */
+export function cslScriptDataHash(redeemers, datums) {
+  const model = CSL.CostModel.new();
+  PLUTUS_V3.forEach((c, i) => model.set(i, CSL.Int.from_str(String(c))));
+  const models = CSL.Costmdls.new();
+  models.insert(CSL.Language.new_plutus_v3(), model);
+  return CSL.hash_script_data(redeemers, models, datums);
+}
 
 export function world(description = DESCRIPTION) {
   const c = codec(description);
@@ -115,7 +127,10 @@ export function build(w, spec, utxos) {
     rds.add(CSL.Redeemer.new(CSL.RedeemerTag.new_mint(), CSL.BigNum.from_str('0'), CSL.PlutusData.from_hex(dataHex(r)), ex));
   }
   const ws = CSL.TransactionWitnessSet.new();
-  if (rds.len()) ws.set_redeemers(rds);
+  if (rds.len()) {
+    ws.set_redeemers(rds);
+    body.set_script_data_hash(spec.scriptDataHashHex ? CSL.ScriptDataHash.from_hex(spec.scriptDataHashHex) : cslScriptDataHash(rds));
+  }
   return CSL.Transaction.new(body, ws, undefined).to_hex();
 }
 
