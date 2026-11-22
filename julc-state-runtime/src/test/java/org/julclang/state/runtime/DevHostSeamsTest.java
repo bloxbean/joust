@@ -415,6 +415,31 @@ class DevHostSeamsTest {
         assertTrue(cap.inputs.contains(Designation.ref(tokens)), "the largest UTxO, picked for its token, is spent");
     }
 
+    /** #151 Codex re-review: asset selection skips a published reference script and an input the composition spends. */
+    @Test
+    void assetSelectionSkipsReferenceScriptsAndSpentInputs() {
+        var chain = new Chain();
+        var payer = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var rt = runtime(chain, b -> b.claimStore(new HostStore()));
+        var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        var token = new Amount("00".repeat(28) + "01", BigInteger.ONE);
+        var script = utxo(payer.baseAddress(), 30_000_000, token);
+        script.setReferenceScriptHash("ef".repeat(28));
+        var spent = utxo(payer.baseAddress(), 9_000_000, token);
+        var free = utxo(payer.baseAddress(), 9_000_000, token);
+        chain.wallet.addAll(List.of(script, spent, free));
+        var cap = new TxRunner.Capture();
+        cap.inputs.add(Designation.ref(spent));
+        TxRunner.CAPTURE.set(cap);
+        try {
+            AssetTx.collectAssets(cap.tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        assertTrue(cap.inputs.contains(Designation.ref(free)), "the ordinary, unspent token input");
+        assertFalse(cap.inputs.contains(Designation.ref(script)), "never the reference script");
+    }
+
     private void checkAssetCollection(Account payer, ClaimStore store, boolean collects) {
         var chain = new Chain();
         var rt = runtime(chain, b -> b.claimStore(store));

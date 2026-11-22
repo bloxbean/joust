@@ -246,21 +246,27 @@ class ReadsTest {
             var table = new Reservations(3, false, 0);
             table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of(), 0, 200), 190));
             var reads = new Reads(req -> new Call.Answer(obj().set("result", value(answer, 204)), 128),
-                    199, 20, 10, 8192, 0, table::observe).uniqueTokens(Set.of(policy));
+                    199, 20, 10, 8192, 0, table::observe).uniqueTokens(Map.of(policy, false));
             failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
             assertTrue(table.avoids("spend"), answer::toString);
         }
-        // Another policy's tokens, and a fungible name of this one, may repeat.
-        var table = new Reservations(3, false, 0);
-        var fungible = JSON.createArrayNode();
-        for (int i = 1; i <= 2; i++) {
-            var n = holding.apply(i);
-            ((ObjectNode) n.withArray("amount").get(0)).put("unit", policy + "74");
-            fungible.add(n);
+        // A fungible name may repeat, and a 0x4B name too unless the contract is keyed (ADR-0016 I44, Codex re-review).
+        for (String name : List.of("74", "4b" + "22".repeat(28))) {
+            var fungible = JSON.createArrayNode();
+            for (int i = 1; i <= 2; i++) {
+                var n = holding.apply(i);
+                ((ObjectNode) n.withArray("amount").get(0)).put("unit", policy + name);
+                fungible.add(n);
+            }
+            for (boolean keyed : List.of(false, true)) {
+                var table = new Reservations(3, false, 0);
+                var reads = new Reads(req -> new Call.Answer(obj().set("result", value(fungible, 204)), 128),
+                        199, 20, 10, 8192, 0, table::observe).uniqueTokens(Map.of(policy, keyed));
+                if (keyed && name.startsWith("4b"))
+                    failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+                else assertDoesNotThrow(() -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1), name + " " + keyed);
+            }
         }
-        var reads = new Reads(req -> new Call.Answer(obj().set("result", value(fungible, 204)), 128),
-                199, 20, 10, 8192, 0, table::observe).uniqueTokens(Set.of(policy));
-        assertDoesNotThrow(() -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
     }
     @Test void hashesAreJsonStrings() {
         var table = new Reservations(3, false, 0);

@@ -10,10 +10,13 @@ import static org.julclang.state.host.Wire.*;
 
 /** Verified descriptions and the generated entry points they describe (D4/D5/D16). */
 record Contracts(Map<String, Contract> all) {
-    /** Every catalogued contract's policy (its script hash), for the unique-token check of Reads. */
-    Set<String> policies() {
-        var out = new HashSet<String>();
-        for (var c : all.values()) if (c.hash() != null) out.add(c.hash());
+    /**
+     * Every catalogued contract's policy (its script hash) with whether it has keyed types, for the unique-token check
+     * of Reads: 0x4B names are reserved only in keyed contracts (ADR-0016 I44).
+     */
+    Map<String, Boolean> policies() {
+        var out = new HashMap<String, Boolean>();
+        for (var c : all.values()) if (c.hash() != null) out.merge(c.hash(), c.spec().hasKeyed(), Boolean::logicalOr);
         return out;
     }
 
