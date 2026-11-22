@@ -75,6 +75,15 @@ class WireParityTest {
     }
 
     @Test
+    void anAbsentOptionalIsMissingNotNone() throws Exception {
+        String opt = "{\"anyOf\":[{\"title\":\"Some\",\"index\":0,\"fields\":[" + INT + "]},{\"title\":\"None\",\"index\":1,\"fields\":[]}]}";
+        assertFalse(engine(STRICT, opt, null));                       // omitted: refused, as JsonValues refuses it
+        assertTrue(engine(STRICT, opt, JSON.nullNode()));             // explicit null: None
+        assertFalse(jvm(null, BigInteger.class));
+        assertTrue(engine(LENIENT, opt, null));                       // the lenient codec, unchanged
+    }
+
+    @Test
     void nestingAgrees() throws Exception {
         // 33 nested lists around an integer: one level more than either host reads.
         String schema = INT, value = "1";

@@ -86,7 +86,7 @@ export function joustRuntime(o) {
   // scanning the contract's address (which grows with every instance).
   const service = {
     ...engine,
-    prepare(request) {
+    prepare(request, scope) {
       // Each call (one, or a composition's) carries its deployment's @Params; the request carries every pinned
       // reference script (the contracts' and their verifiers').
       const refs = new Set();
@@ -97,7 +97,8 @@ export function joustRuntime(o) {
         return d?.params ? { ...c, params: d.params } : c;
       };
       const req = request.calls ? { ...request, calls: request.calls.map(withDeployment) } : withDeployment(request);
-      return engine.prepare(refs.size ? { ...req, referenceScripts: [...refs] } : req);
+      // The caller's scope (now, TTL, page limits) reaches the engine (Codex review 3).
+      return engine.prepare(refs.size ? { ...req, referenceScripts: [...refs] } : req, scope);
     },
   };
   const verifiers = {};
