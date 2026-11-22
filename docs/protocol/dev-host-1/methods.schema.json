@@ -118,6 +118,20 @@
         "cosigners": {"type": "array", "maxItems": 64, "items": {"type": "string", "pattern": "^[0-9a-f]{56}$"}}
       },
       "required": ["contract", "kind", "method", "args", "address"],
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"enum": ["ownedAction", "ownedDestroy"]}}, "required": ["kind"]},
+          "then": {"properties": {"object": {"type": "string", "pattern": "^4f[0-9a-f]{56}$"}}, "required": ["object"]}
+        },
+        {
+          "if": {"properties": {"kind": {"enum": ["keyedAction", "keyedRemove", "keyedRetire"]}}, "required": ["kind"]},
+          "then": {"properties": {"object": {"type": "string", "pattern": "^([0-9a-f]{2})+$"}}, "required": ["object"]}
+        },
+        {
+          "if": {"properties": {"kind": {"not": {"enum": ["ownedAction", "ownedDestroy", "keyedAction", "keyedRemove", "keyedRetire"]}}}, "required": ["kind"]},
+          "then": {"properties": {"object": {"type": "null"}}}
+        }
+      ],
       "additionalProperties": false
     },
     "prepare": {

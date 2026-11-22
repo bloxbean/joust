@@ -42,7 +42,7 @@ final class SnapshotClient {
             entries.add(destName);
             Path dest = staging.resolve(destName);
             if (kind.equals("jar")) {
-                Files.copy(from, dest);
+                copyJar(from, dest);
                 try (var jar = new JarFile(dest.toFile(), false)) {
                     var mf = jar.getManifest();
                     assertTrue(mf == null || mf.getMainAttributes().getOrDefault(Attributes.Name.CLASS_PATH, "").equals(""));
@@ -55,14 +55,23 @@ final class SnapshotClient {
                 var names = new ArrayList<String>();
                 files.fieldNames().forEachRemaining(names::add);
                 names.sort((a,b) -> Arrays.compareUnsigned(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8)));
+                // The tree is exactly the manifest's regular files (by name, not count) and directories: a FIFO or
+                // device would block the copy before any digest or timeout applies (#150 Codex re-review).
+                var actual = new ArrayList<String>();
                 try (var tree = Files.walk(from)) {
-                    assertEquals(names.size(), tree.filter(Files::isRegularFile).count());
+                    for (var p : (Iterable<Path>) tree::iterator) {
+                        if (Files.isDirectory(p, LinkOption.NOFOLLOW_LINKS)) continue;
+                        if (!Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) throw new IOException("not a regular file: " + p);
+                        actual.add(from.relativize(p).toString().replace(File.separatorChar, '/'));
+                    }
                 }
+                actual.sort((a,b) -> Arrays.compareUnsigned(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8)));
+                assertEquals(names, actual);
                 for (String name : names) {
                     Path copy = dest.resolve(name).normalize();
                     assertTrue(copy.startsWith(dest));
                     Files.createDirectories(copy.getParent());
-                    Files.copy(from.resolve(name), copy);
+                    copyJar(from.resolve(name), copy);   // a regular file again, right before it is opened
                     verifyFile(copy, files.required(name), digest, ordinal, kind, name);
                 }
             }
@@ -176,5 +185,14 @@ final class SnapshotClient {
                 return answer.required("result");
             } catch (IOException e) { throw new UncheckedIOException(e); }
         }).get(60, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Copies a launch jar after checking it is a regular file: a stale or malformed spec naming a FIFO (or a device)
+     * would otherwise block the copy before any digest or timeout applies (#150 Codex review).
+     */
+    static void copyJar(Path from, Path dest) throws IOException {
+        if (!Files.isRegularFile(from)) throw new IOException("launch file is not a regular file: " + from);
+        Files.copy(from, dest);
     }
 }

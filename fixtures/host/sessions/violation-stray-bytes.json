@@ -128,6 +128,6 @@
     }
   }, {
     "violation" : "strayBytes",
-    "raw" : "stray output\n"
+    "raw" : "stray output\r\n\r\n"
   } ]
 }

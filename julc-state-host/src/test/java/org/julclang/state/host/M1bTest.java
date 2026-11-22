@@ -358,4 +358,60 @@ class M1bTest {
             assertTrue(twice.at("/error/message").asText().startsWith("reserved input "), twice::toString);
         }
     }
+
+    /** The first recorded Bank call of {@code kind} (looked up by content, not by file number). */
+    static ReplayTest.Recording bankCall(String kind) throws Exception {
+        try (var files = Files.list(ReplayTest.FIXTURES.resolve("dapp"))) {
+            for (var file : files.sorted().toList())
+                if (JSON.readTree(file.toFile()).at("/call/kind").asText().equals(kind)) return ReplayTest.Recording.read(file);
+        }
+        return fail("no recorded Bank " + kind);
+    }
+
+    /** #151 Codex review: only an owned spend names an object, as a string, refused before any chain read. */
+    @Test void onlyAnOwnedSpendNamesAnObject() throws Exception {
+        var open = bankCall("ownedInit");
+        var deposit = bankCall("ownedAction");
+        var entry = entry(org.julclang.state.examples.bank.BankClient.class);
+        try (var c = new Client(new Handshake(List.of(entry)))) {
+            success(c.rpc("initialize", init(entry)));
+            var named = open.params().deepCopy();
+            named.withObject("/call").put("object", "4f" + "00".repeat(28));
+            var reply = c.rpc("prepare", named);   // no answerer: a chain read would fail the call differently
+            error("bad", "request", reply);
+            assertTrue(reply.at("/error/message").asText().contains("takes no object"), reply::toString);
+            var shaped = open.params().deepCopy();
+            shaped.withObject("/call").putObject("object");
+            error("bad", "request", c.rpc("prepare", shaped));
+            var objectValued = deposit.params().deepCopy();
+            objectValued.withObject("/call").putObject("object");
+            error("bad", "request", c.rpc("prepare", objectValued));
+        }
+    }
+
+    /** #151 Codex review: a listing holding one object's token twice contradicts itself; never take the first. */
+    @Test void anObjectHeldTwiceIsAnInconsistentRead() throws Exception {
+        // Both provider orders, the stale copy naming another instance: the listing is refused, never its first holding.
+        for (boolean staleFirst : List.of(true, false)) {
+            var r = bankCall("ownedAction");
+            String object = r.params().at("/call/object").asText();
+            for (var e : new ArrayList<>(r.snapshot().utxos.entrySet())) {
+                var list = new ArrayList<>(e.getValue());
+                for (var u : e.getValue()) {
+                    if (u.getAmount().stream().noneMatch(a -> a.getUnit().endsWith(object))) continue;
+                    var stale = JSON.convertValue(JSON.valueToTree(u), Utxo.class);
+                    stale.setTxHash("ab".repeat(32));
+                    if (stale.getInlineDatum() != null) stale.setInlineDatum(stale.getInlineDatum().replace(
+                            r.params().at("/call/instance").asText(), "00".repeat(32)));
+                    if (staleFirst) list.add(0, stale); else list.add(stale);
+                }
+                r.snapshot().utxos.put(e.getKey(), list);
+            }
+            var entry = entry(org.julclang.state.examples.bank.BankClient.class);
+            try (var c = new Client(new Handshake(List.of(entry)))) {
+                success(c.rpc("initialize", init(entry)));
+                error("internal", "inconsistentRead", c.rpc("prepare", r.params(), r::answer));
+            }
+        }
+    }
 }

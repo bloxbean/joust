@@ -26,6 +26,8 @@ public abstract class HostSpec extends DefaultTask {
     @OutputFile public abstract RegularFileProperty getSpec();
 
     @TaskAction public void write() throws IOException {
+        // First, so a launch directory that would contain the spec exists and is checked on the first run too.
+        Files.createDirectories(getSpec().get().getAsFile().toPath().getParent());
         var optional = getOptionalOutputs().getFiles();
         var required = getRequiredArtifacts().getFiles();
         var entries = new ArrayList<File>();
@@ -38,6 +40,18 @@ public abstract class HostSpec extends DefaultTask {
     }
 
     static void writeSpec(String java, List<File> entries, Path output) throws IOException {
+        // The spec must not be inside a launch directory: writing it would change the directory just hashed, so the
+        // client's verification fails on every run while Gradle reports success (#150 Codex review).
+        Files.createDirectories(output.getParent());
+        Path parent = output.getParent().toRealPath();
+        for (File file : entries) {
+            Path dir = file.toPath();
+            if (!Files.isDirectory(dir)) continue;
+            if (parent.startsWith(dir.toRealPath())) {
+                throw new org.gradle.api.GradleException("the host spec " + output + " is inside the launch directory " + file
+                        + ": move the directory out of " + output.getParent() + ", or the spec cannot be verified");
+            }
+        }
         var manifest = LaunchManifest.scan(entries);
         var spec = Map.of("protocol", 1, "java", java, "mainClass", "org.julclang.state.host.DevHost",
                 "launch", manifest.entries(), "digest", manifest.digest());
