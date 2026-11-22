@@ -209,7 +209,21 @@ test('a malformed, out-of-order or foreign claim set is refused', async () => {
 test('a claimed send output that also carries the payout tag is refused', async () => {
   const { r, target, chain, honest } = await lovelaceWorld();
   const tagged = await editTx(honest, r.x, { outputs: (cur) => cur.map((o, k) => (k === 1 ? cslOutput({ ...partsOf(o), datumHex: dataHex(refData(target)) }) : o)) });
-  refused(await verifyPrepared(inputsOf(r, { txHex: tagged, chain })), /a claimed send output that carries a payout tag/, 'tag and claim');
+  const [alone, composed] = await both(inputsOf(r, { txHex: tagged, chain }));
+  refused(alone, /a claimed send output that carries a payout tag/, 'tag and claim');
+  refused(composed, /a claimed send output that carries a payout tag/, 'tag and claim (composed)');
+});
+
+test('the output verifier\'s withdrawal with no redeemer, or with two, is refused', async () => {
+  const { r, ov, chain, honest } = await lovelaceWorld();
+  const isOv = (x) => x.tag === 'reward' && x.index === ov;
+  const none = await editTx(honest, r.x, { redeemers: (rds) => rds.filter((x) => !isOv(x)) });
+  const two = await editTx(honest, r.x, { redeemers: (rds) => [...rds, ...rds.filter(isOv)] });
+  for (const [hex, n] of [[none, 0], [two, 2]]) {
+    for (const v of await both(inputsOf(r, { txHex: hex, chain }))) {
+      refused(v, new RegExp(`the output verifier's withdrawal has ${n} redeemers, not one`), `${n} redeemers`);
+    }
+  }
 });
 
 test('a deposit claim in a single call is refused', async () => {
@@ -388,4 +402,6 @@ test('composition with two output verifiers: a send each is accepted; one wallet
   accepted(await verify(await w.build(w.outputs(), 2, 3)), 'one send output per call');
   // Output 2 claimed for A in A's registry and for B in B's (it covers both sends on chain); B's send paid to a stranger.
   refused(await verify(await w.build(w.outputs(STRANGER), 2, 2)), /output 2 is claimed in two output verifiers' registries/, 'a shared send output');
+  // The same, for an output that is not the wallet's: the stranger's output 3 claimed in both registries.
+  refused(await verify(await w.build(w.outputs(STRANGER), 3, 3)), /output 3 is claimed in two output verifiers' registries/, 'a shared stranger output');
 });
