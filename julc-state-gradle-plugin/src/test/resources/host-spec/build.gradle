@@ -23,12 +23,16 @@ dependencies {
     if (project.hasProperty('http')) implementation "org.julclang:julc-state-server:${joustVersion}"
     if (project.hasProperty('badRuntime')) runtimeOnly "org.julclang:julc-state-serve:${joustVersion}"
     if (project.hasProperty('missingFile')) runtimeOnly files('missing.jar')
+    if (project.hasProperty('partialAdapter')) runtimeOnly 'fixture:partial:1'
     if (project.hasProperty('sourcesAdapter')) runtimeOnly "org.julclang:julc-state-serve:${joustVersion}:sources"
 }
 // #150 Codex review: an older adapter through another configuration, ahead of the application's own graph.
 if (project.hasProperty('secondAdapter')) {
-    def older = configurations.create('olderAdapter') { canBeConsumed = false }
-    dependencies { olderAdapter 'org.julclang:julc-state-serve:old' }
+    def older = configurations.create('olderAdapter') {
+        canBeConsumed = false
+        attributes { attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage, Usage.JAVA_RUNTIME)) }
+    }
+    dependencies { olderAdapter "org.julclang:julc-state-serve:${findProperty('secondAdapter') == 'current' ? joustVersion : 'old'}" }
     sourceSets.main.runtimeClasspath = older + sourceSets.main.runtimeClasspath
 }
 // #150 Codex review: a launch directory that would contain the spec itself.

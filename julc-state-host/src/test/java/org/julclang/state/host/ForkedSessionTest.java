@@ -183,12 +183,13 @@ class ForkedSessionTest {
     }
 
     /**
-     * A syscall that creates, removes, renames, links, truncates or changes a file (#150 review F-C1). Each optional
+     * A syscall that creates, removes, renames, links, truncates or changes a file, its mode, times or extended
+     * attributes (#150 review F-C1; xattrs: #150 Codex re-review). Each optional
      * {@code at} suffix is grouped on its own: {@code mkdirat?} matched {@code mkdira} but not {@code mkdir} (#150 Codex).
      */
     static boolean mutatesFiles(String line) {
         return line.matches(".* (creat|mkdir(at)?|rmdir|unlink(at)?|rename(at2?)?|f?truncate|link(at)?|symlink(at)?"
-                + "|f?chmod(at)?|utimensat|mknod(at)?)\\(.*");
+                + "|f?chmod(at)?|utimensat|mknod(at)?|[lf]?setxattr|[lf]?removexattr)\\(.*");
     }
 
     // The first stdin read marks the serving interval, after the JVM's own launch and perf-data setup.

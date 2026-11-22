@@ -46,6 +46,12 @@ class HostSpecConsumerTest {
             out.putNextEntry(new java.util.zip.ZipEntry("org/julclang/state/serve/ServedContract.class"));
             out.closeEntry();
         }
+        // A partial copy: only one older adapter class, which would still win class lookup for it.
+        module("fixture", "partial", "1");
+        try (var out = new JarOutputStream(Files.newOutputStream(project.resolve("fixture-repo/fixture/partial/1/partial-1.jar")))) {
+            out.putNextEntry(new java.util.zip.ZipEntry("org/julclang/state/serve/JsonValues.class"));
+            out.closeEntry();
+        }
         module("org.julclang", "julc-state-runtime", "old");
     }
 
@@ -151,9 +157,16 @@ class HostSpecConsumerTest {
 
     @Test void theAdapterThatWinsClassLookupIsTheOneChecked() throws Exception {
         // #150 Codex review: an older adapter through another configuration comes first on the launch path.
-        String error = runner(":joustHostSpec", "-PsecondAdapter").buildAndFail().getOutput();
+        String error = runner(":joustHostSpec", "-PsecondAdapter").buildAndFail().getOutput();   // =old
         assertTrue(error.contains("incompatible adapter") && error.contains("julc-state-serve-old.jar")
                 && error.contains("provides julc-state-serve classes"), error);
+        error = runner(":joustHostSpec", "-PpartialAdapter").buildAndFail().getOutput();
+        assertTrue(error.contains("incompatible adapter") && error.contains("partial-1.jar") && error.contains("fixture:partial:1"), error);
+        // The plugin's own adapter binary through another configuration is the adapter: accepted, and not added twice.
+        runner(":joustHostSpec", "-PsecondAdapter=current").build();
+        var twice = JSON.readTree(project.resolve("build/joust/host-spec.json").toFile()).required("launch").findValuesAsText("path")
+                .stream().filter(p -> Path.of(p).getFileName().toString().equals("julc-state-serve-" + VERSION + ".jar")).count();
+        assertEquals(1, twice);
         // A sources jar of the right version is not the adapter: the plugin's binary adapter is added.
         runner(":joustHostSpec", "-PsourcesAdapter").build();
         var spec = JSON.readTree(project.resolve("build/joust/host-spec.json").toFile());
