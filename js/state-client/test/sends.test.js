@@ -16,7 +16,7 @@ import { rewardAddressOf } from '../src/governors.js';
 import { parseTx, enterpriseAddress } from '../src/ledger.js';
 import { Data, dataHex } from '../src/pdata.js';
 import {
-  CSL, recorded, recordedComposition, inputsOf, chainOf, walletOf, editTx, cslOutput, partsOf, bodyOf, STRANGER, OUTPUT_VERIFIER,
+  CSL, recorded, recordedComposition, inputsOf, chainOf, walletOf, editTx, cslOutput, partsOf, bodyOf, repeatWitnessKey, STRANGER, OUTPUT_VERIFIER,
 } from './sends-world.js';
 
 const accepted = (r, what) => assert.deepEqual(r.problems, [], `${what}: ${r.problems.join('; ')}`);
@@ -491,4 +491,27 @@ test('the script integrity hash: checked over cost_models when the chain gives n
   // A script data hash with no redeemers or datums to commit to.
   const bare = CSL.Transaction.new(CSL.Transaction.from_hex(honest).body(), CSL.TransactionWitnessSet.new(), undefined).to_hex();
   refused(await verifyPrepared(inputsOf(r, { txHex: bare, chain })), /a script integrity hash without redeemers or datums/, 'a hash over nothing');
+});
+
+test('a witness set that repeats a key is not a transaction the page reads (one reading of what the hash covers)', async () => {
+  const { r, chain, honest } = await lovelaceWorld();
+  const [alone, composed] = await both(inputsOf(r, { txHex: repeatWitnessKey(honest, 5), chain }));
+  refused(alone, /not a transaction/, 'the redeemers twice');
+  refused(composed, /not a transaction/, 'the redeemers twice (composed)');
+});
+
+// The recorded upgrade (fixtures/m3/upgrade/005: a destroy migrating to an adoption under a new policy). An adoption
+// holds exactly the prior instance's value, so it takes no payment; none is credited to it as kept.
+test('composition: an adoption takes no payment; a payment stated for it cannot carry the wallet\'s change to others', async () => {
+  const c = recordedComposition('upgrade/005-undefined.json');
+  accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), 'the recorded upgrade');
+  const change = parseTx(c.cbor).outputs.findIndex((o) => c.wallet.addresses.includes(o.address));
+  const P = 2_000_000n;
+  const stolen = await editTx(c.cbor, c.x, { outputs: (cur) => [...cur.map(partsOf).map((p, i) => (i === change ? { ...p, value: plus(p.value, 'lovelace', -P) } : p)),
+    { address: STRANGER, value: new Map([['lovelace', P]]) }].map(cslOutput) });
+  const paid = c.steps.map((s) => (s.call.kind === 'migrate' ? { ...s, call: { ...s.call, pay: { lovelace: P, assets: [] } } } : s));
+  const r = await verifyComposed({ steps: paid, wallet: c.wallet, chain: c.chain, txHex: stolen });
+  refused(r, /an adoption takes no payment/, 'a payment on the adoption');
+  refused(r, /others receive 2000000 of lovelace, more than the scripts release to them/, 'the wallet\'s change to a stranger');
+  refused(await verifyComposed({ steps: paid, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), /an adoption takes no payment/, 'the recorded upgrade with a payment on the adoption');
 });

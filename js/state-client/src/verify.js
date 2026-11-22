@@ -456,7 +456,9 @@ export function integrityChecks(tx, params, problems) {
     if (tx.scriptDataHash) problems.push('a script integrity hash without redeemers or datums');
     return;
   }
-  const langs = [...new Set(['PlutusV3', ...languages])];
+  // The languages of the scripts that run: none without redeemers (datums alone, an empty view map), else PlutusV3
+  // (every JOUST script's) and the witness set's own Plutus scripts'.
+  const langs = redeemerCount === 0 ? [] : [...new Set(['PlutusV3', ...languages])];
   const costModels = {};
   for (const l of langs) {
     const m = costModelOf(params, l);

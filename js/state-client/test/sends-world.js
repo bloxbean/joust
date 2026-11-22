@@ -233,3 +233,40 @@ export function bodyOf(committedHex, reviewedHex) {
   const t = CSL.Transaction.from_hex(reviewedHex);
   return CSL.Transaction.new(CSL.Transaction.from_hex(committedHex).body(), t.witness_set(), t.auxiliary_data()).to_hex();
 }
+
+// A minimal CBOR walker over definite and indefinite items: the end of the item at {@code p} in {@code b}.
+function skipItem(b, p) {
+  const mt = b[p] >> 5;
+  const ai = b[p] & 31;
+  let n = ai;
+  let q = p + 1;
+  if (ai === 24) { n = b[p + 1]; q = p + 2; } else if (ai === 25) { n = (b[p + 1] << 8) | b[p + 2]; q = p + 3; } else if (ai === 26) {
+    n = b[p + 1] * 2 ** 24 + (b[p + 2] << 16) + (b[p + 3] << 8) + b[p + 4]; q = p + 5;
+  } else if (ai === 27) { n = Number(Buffer.from(b.slice(p + 1, p + 9)).readBigUInt64BE()); q = p + 9; } else if (ai === 31) n = null;
+  if (mt === 0 || mt === 1 || mt === 7) return q;
+  if (mt === 6) return skipItem(b, q);
+  if (n === null) {
+    while (b[q] !== 0xff) q = skipItem(b, q);
+    return q + 1;
+  }
+  if (mt === 2 || mt === 3) return q + n;
+  for (let i = 0; i < n * (mt === 5 ? 2 : 1); i++) q = skipItem(b, q);
+  return q;
+}
+
+/** {@code txHex} with its witness set's entry for {@code key} (redeemers: 5) repeated, after the original. */
+export function repeatWitnessKey(txHex, key) {
+  const b = Buffer.from(txHex, 'hex');
+  const bodyEnd = skipItem(b, 1);
+  const n = b[bodyEnd] & 31;
+  if (b[bodyEnd] >> 5 !== 5 || n > 22) throw new Error('a small definite witness map expected');
+  let q = bodyEnd + 1;
+  const entries = [];
+  for (let i = 0; i < n; i++) {
+    const end = skipItem(b, skipItem(b, q));
+    entries.push({ key: b[q], bytes: b.subarray(q, end) });
+    q = end;
+  }
+  const dup = entries.find((e) => e.key === key);
+  return Buffer.concat([b.subarray(0, bodyEnd), Buffer.from([0xa0 | (n + 1)]), ...entries.map((e) => e.bytes), dup.bytes, b.subarray(q)]).toString('hex');
+}

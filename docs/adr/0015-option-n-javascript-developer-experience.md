@@ -871,7 +871,8 @@ direct `Tx` building, gated by S3.
     declares deposits (its validator checks its claims exactly) and land on the continuation of a composed call that
     receives them. What a call keeps of the wallet's payment is not released: its own intake (what its continuation
     gains, beyond the deposits it receives and net of those it gives) is credited back to what others may receive, up
-    to its payment, so a payment into one call does not shrink what another releases to others. With that credit,
+    to its payment, so a payment into one call does not shrink what another releases to others (an adoption holds the
+    prior instance's value: it takes no payment and gets no credit). With that credit,
     others' receipts bound the wallet's net loss (the fee aside) by what the calls keep of their payments, less what
     the scripts send it back.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.

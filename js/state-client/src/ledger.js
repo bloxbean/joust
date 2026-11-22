@@ -161,9 +161,13 @@ function integrityParts(hex) {
   r.readStartArray();
   r.readEncodedValue();                                     // the body
   const parts = { redeemers: null, datums: null };
+  const seen = new Set();
   const n = r.readStartMap();
   for (let i = 0; n === null ? r.peekState() !== Serialization.CborReaderState.EndMap : i < n; i++) {
     const key = Number(r.readInt());
+    // One reading of the witness set: the hash covers these bytes, and the verifiers read the SDK's parse of them.
+    if (seen.has(key)) throw new LedgerError(`the witness set repeats key ${key}`);
+    seen.add(key);
     const value = bytesToHex(r.readEncodedValue());
     if (key === 5) parts.redeemers = value;
     if (key === 4) parts.datums = value;

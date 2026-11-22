@@ -50,6 +50,9 @@ export async function verifyComposed(o) {
   for (const k of calls) {
     if (KEYED_KINDS.has(k.call.kind)) problems.push(`${k.call.meta.name}: a keyed call is verified on its own, never in a composition (ADR-0016 D11)`);
     else if (!SPEND_KINDS.has(k.call.kind) && !k.creation) problems.push(`${k.call.meta.name}: only spending calls and adoptions can be composed here`);
+    // An adoption holds exactly what the prior instance held (below): it takes no payment, and one stated for it would
+    // only raise what the wallet may lose.
+    if (k.creation && (k.pay.lovelace !== 0n || [...k.pay.assets].length)) problems.push(`${k.call.meta.name}: an adoption takes no payment`);
     // In a composition, deposits and @Receives are verifiable: their claims go through the pinned output verifier
     // (checked on chain), and the receiving call is part of the same transaction.
     const meta = k.call.meta;
@@ -367,6 +370,8 @@ export async function verifyComposed(o) {
   }
   const kept = new Map();
   for (const k of calls) {
+    // An adoption's continuation is the prior instance's value, not the wallet's (it has no target here): no credit.
+    if (k.creation) continue;
     const own = new Map(k.continuation);
     add(own, k.targetValue, -1n);
     add(own, gives.get(k));
@@ -477,6 +482,9 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
       throw new Error(`${s.method} is a keyed call: a page does not compose keyed calls (ADR-0016 D11)`);
     }
     const meta = k.meta(s.method, ['action', 'destroy', 'ownedAction', 'ownedDestroy', 'migrate']);
+    if (meta.kind === 'migrate' && (BigInt(s.pay?.lovelace ?? 0) !== 0n || (s.pay?.assets ?? []).length)) {
+      throw new Error(`${s.method}: an adoption takes no payment`);
+    }
     const args = {};
     for (const a of meta.args) {
       if (!(a.name in (s.args ?? {}))) throw new Error(`${s.method}: missing argument ${a.name}`);
