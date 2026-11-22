@@ -74,10 +74,11 @@ final class TxRunner {
         /** Refuses a call of {@code rt} when its claim store is not the composition's. */
         void requireStore(StateRuntime rt, String what) {
             if (store != null && rt.claimStore() != store) {
-                throw new JoustException("composition: " + what + " belongs to a runtime with another claim store; a"
+                throw new ForeignStore("composition: " + what + " belongs to a runtime with another claim store; a"
                         + " composition checks its own runtime's reservations only, so its calls must share that store");
             }
         }
+
         /** Deposits into other instances made by the calls (ADR-0011 D3), resolved to claims when submitting. */
         final java.util.List<PendingDeposit> deposits = new java.util.ArrayList<>();
         /** The deposits the probe pass saw: a receiver's Funds.deposits in the real pass. */
@@ -128,6 +129,22 @@ final class TxRunner {
             }
             outputs += (exp != null ? 1 : 0) + extra.size() + pays.size() + snds.size();
         }
+    }
+
+    /** A call of a runtime with another claim store took part in a composition: it ends the composition at once. */
+    static final class ForeignStore extends JoustException {
+        ForeignStore(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Whether a call's failure must end a composition at once rather than wait for the other calls (a tolerant pass):
+     * something may have been sent ({@link PendingTransactionException}: running more calls could send it again), or the
+     * call belongs to another claim store (running more could publish for a composition already refused; #145 Codex).
+     */
+    static boolean endsComposition(RuntimeException e) {
+        return e instanceof PendingTransactionException || e instanceof ForeignStore;
     }
 
     /** A deposit a call makes into instance {@code target} (a unit, policy ++ instance id, hex). */
@@ -443,11 +460,16 @@ final class TxRunner {
     private void sendToNode(Transaction signed, String txHash, String what) {
         try {
             var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
-            if (!r.isSuccessful()) {
-                // A definite answer from the node: not accepted.
+            // Only a definite answer is a rejection (Relay.classify, as for keyed attempts): a gateway's 5xx or a
+            // timeout may hide an accepted transaction, so it is pending, never rebuilt (#145 Codex).
+            var o = Relay.classify(r);
+            if (o.answer() == Relay.Answer.REJECTED) {
                 throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
             }
-        } catch (SubmitException e) {
+            if (o.answer() == Relay.Answer.UNKNOWN) {
+                throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + o.message() + ")");
+            }
+        } catch (SubmitException | PendingTransactionException e) {
             throw e;
         } catch (Exception e) {
             throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
