@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r12). Design only.
+**Status:** Proposed (r13). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -49,7 +49,7 @@ parameterized contract's script hash, address and policy are not in the build: t
 | F11 | The page's governor registration check: one pure registration of exactly the governor's script credential, the protocol deposit, wallet-only inputs and outputs, no withdrawals, mint or redeemers; it counts Plutus witness scripts and **allows an absent TTL** | `governors.js:56-114`; `ledger.js:101` at `d529bfd0` |
 | F12 | Generated clients take the params record (`deploy(runtime, Config, …)`, `at(runtime, Config, instanceId)`) and an `Authorization` argument for `@AuthorizedBy` methods | `ClientGenerator.java:99-106` (`contract(runtime, P params)`, `policyIdFor`), `:120-121` (`deploy`), `:179` (`at`), `:731`, `:758` (`Authorization`); `TreasuryClient` (generated) |
 | F13 | The JVM host's adapter refuses `@Params`, looks contracts up without params, and accepts extra accounts only for `@Quorum`; `Contracts.code` returns the contract-wide `params` before any method's `authorizedBy`, so Treasury's `freeze` reports `params` today | `ServedContract.java:69-70`, `:117`, `:147-149`, `:258`; `Contracts.java:37-42`, `:78`, `:94` at `4335773d` |
-| F14 | The npm host fingerprints and reads `contracts.json` and the two engine files only, not `validators.json` | `js/joust/src/host/launch.js:32-51` at `4335773d` |
+| F14 | The npm host fingerprints and reads `contracts.json` and the two engine files, not `validators.json`; at the final M3b pin it also fingerprints the **launch closure** (the host's JavaScript files and package manifests captured at launch), all as lines `<sha256> 0 dir <path>` sorted by the paths' bytes | `js/joust/src/host/launch.js:32-51` at `4335773d`; `:28-38` at `2ffaf41b` |
 | F15 | ADR-0022 D8 excludes live out-refs across the whole session; ADR-0022 D11's persisted keyed operation is `{designated, contract, method, instance, key, attempts}`, with no policy | `Reservations.java` (`prepare`, `avoids`); `KeyedOperation.java:8-26`, `:40-45` at `4335773d` |
 | F16 | ADR-0009 D3 refuses a governor equal to the contract's own script or either shared verifier, and allows native-script governors; no runtime path builds a native governor (F2) | ADR-0009 `:77-100` |
 | F17 | The schema codec sorts a typed map's entries by their keys' CBOR in RFC 8949 length-first order and refuses duplicates; JuLC's encoder and the JVM adapter's JSON values keep the order given. Reversing two map entries changes the applied hash (#157 review X12) | `SchemaCodec.java:118-132` at `d529bfd0` |
@@ -192,8 +192,11 @@ is `unsupported`, code `params` (protocol 1's answer); present but outside the d
   covers only restored entries, whose history the host did not see. A stripped keyed record
   thus loses only its attempt history, and nothing can retry or start another operation on that object while the
   old body can still land; an honest non-keyed body with such a token is held the same way, which costs at most its
-  own validity window. An entry whose keyed tokens are under an unparameterized keyed catalog contract also keeps
-  ADR-0022's existing record check (F20).
+  own validity window. An entry whose keyed tokens are under an unparameterized keyed catalog contract keeps
+  ADR-0022's existing record check (F20) **only when its record's contract name still resolves to that catalog
+  contract**; a present record whose name no longer re-derives the body's policy (renamed, or now parameterized) is
+  retired, by the legacy-record rule above, **before** the catalog-name comparison runs (X52), keeping the
+  designated-input and attempt checks. So no legacy record ever makes a restore batch fail for a name change.
 - Every other entry (an ordinary call, a reference-script publication, a stake or governor registration) is restored
   by ADR-0022 D8's existing path, unchanged and without `params`: its reservation is of out-refs, which D8 already
   excludes session-wide. A later retry is compared with its own request's params.
@@ -298,8 +301,11 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
   already resolves before launch (ADR-0022 D3): it sends `fingerprintVersion: 2` only when the resolved
   `@julclang/joust` package's own `package.json` version is at or above the release that ships M4c; an older host
   would refuse it with `bad/request`, and a client that nevertheless receives that answer starts a fresh host process
-  without the field (a failed `initialize` ends the session's usefulness; nothing is retried in place). Version **1** (absent means 1: every protocol-1 client today) is ADR-0022's three files;
-  version **2** adds `validators.json` when present, in the same line format after `contracts.json`.
+  without the field (a failed `initialize` ends the session's usefulness; nothing is retried in place). Version **1** (absent means 1: every protocol-1 client today) is
+  **the final M3b host's file set and ordering** (X51, F14): `contracts.json`, the two engine files and the launch
+  closure, as sorted lines; version **2** is that same set plus `validators.json` and `joust.lock.json` when present,
+  as further lines in the same format, sorted with the rest. So a change to a captured host file changes both
+  versions' digests, and an M3b client's digest still initializes a version-1 session.
   `fingerprintVersion: 2` is a protocol-2 field: a client sends it only together with `protocol: [1, 2]` (D1), and a
   host that selects protocol 1 refuses it (`bad/request`). **A manifest is current only if the build wrote it**
   (X24, T16): today a build with no validators leaves an earlier `validators.json` in place (F21), so the digest
@@ -313,8 +319,10 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
   else** (X41), and writes the new one **last** (after
   `contracts.json` and `validators.json`, by a temporary file and rename) with
   `buildDigests: {contracts, validators}`, the SHA-256 of the exact `contracts.json` and `validators.json` bytes it
-  wrote (X31, X37). Version 2 also digests `joust.lock.json`, after `validators.json`, and **both** host and client
-  serve script governors only when a lock is present **and both** its digests equal the files beside it. A build
+  wrote (X31, X37). Version 2 also digests `joust.lock.json` (above), and **both** host and client serve script
+  governors only when **no `.joust-build` marker is present** (X53: a build that crashed after creating it, before
+  removing the old lock, leaves an old lock that still matches the old files), a lock is present, **and both** its
+  digests equal the files beside it. A build
   interrupted anywhere before the lock leaves **no lock** (the old one was removed first), even when the rewritten
   `contracts.json` is byte-identical to the previous one, as it is after a validator-only rebuild; a lock without
   `buildDigests` (any build before M4c, F21) matches nothing. Either way the manifest is stale: the
@@ -540,7 +548,9 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 - **Keyed restore (X22, X23, X27, X28, X40, X47), M4a:** a **protocol-1-to-2 restart**: a pending keyed operation
   recorded by an M3 client (no `policy`, `template` or `params`), its contract gaining `@Params` under the same name
   before the restart (retired: attempts, inputs and keyed tokens held, the restore completes); the same restart with
-  the contract unchanged (ADR-0022's check, live); a re-derivable keyed operation whose record keeps everything
+  the contract unchanged (ADR-0022's check, live); the same restart after the unchanged keyed script is **renamed**
+  from A to B in the catalog (retired, not `bad/operation`: the restore completes and the original inputs and keyed
+  tokens stay reserved, X52); a re-derivable keyed operation whose record keeps everything
   but drops **only its current attempt** from `attempts` (live; `discarded` refused; held until margin-qualified
   expiry); a pending keyed `@Params` entry with its `operation` dropped
   (restored by D8's path: its inputs and keyed token stay held; `discarded` after restore is refused; a new keyed
@@ -557,7 +567,11 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   interrupted right after a byte-identical `contracts.json` write, and one interrupted after `validators.json`: no
   lock, so no `authorizedBy:script` (X41); **two overlapping builds** into one directory with identical contract bytes
   and different validator manifests (the second waits or fails at the build marker; neither leaves a lock matching
-  the other's manifest, X48).
+  the other's manifest, X48); a build that removes Guardian **interrupted right after creating `.joust-build`**,
+  with the old matching lock still in place, then a fresh `initialize` before recovery (no `authorizedBy:script` on
+  host or client, X53).
+- **Fingerprint sets (X51), npm:** an M3b client's version-1 digest for the same snapshot initializes; changing a
+  captured host JavaScript file changes both the version-1 and the version-2 digests.
 - **Signer count (X50), both hosts:** 64 and 65 `governor.signers` entries (accepted; `bad/governor`), 64 distinct
   keys across `governor.signers` and `cosigners` (accepted), 65 (`bad/governor`), each refusal before any account is
   built, and duplicates across the two lists counted once in the union.
@@ -792,3 +806,11 @@ host's bodies already satisfy it.
   - X49 (D7 rows ignored the per-contract marker) → D7 (`initialize` and `describe` rows qualified), D8;
   - X50 (no governor signer limit) → D4 (64 distinct keys across `governor.signers` and `cosigners`, before any
     account is built), D8.
+- **r13** (2026-11-22, responds to Codex review of `05a192eb`, which confirmed X49 and X50; its three findings are
+  X51–X53; no Codex review of r13 was run, the round budget being spent):
+  - X51 (version 1 dropped the M3b launch closure) → D4 (version 1 is the final M3b file set and ordering; version 2
+    adds two files to it), F14, D8;
+  - X52 (a renamed legacy record still hit the catalog-name check) → D2 (retirement takes precedence when the name
+    no longer re-derives the policy), D8;
+  - X53 (a crash between marker and lock removal) → D4 (an outstanding `.joust-build` disqualifies script
+    governors on host and client), D8.
