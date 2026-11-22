@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r10). Design only.
+**Status:** Proposed (r11). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -110,7 +110,10 @@ its own schemas (`docs/protocol/dev-host-2/`, protocol 1's with those additions)
   with `params` are `bad/request`. The oracle is the M3 host itself, compared field by field (X39): `fingerprint` and
   `versions` are checked against each launch independently (ADR-0022 D4: they must name the actual snapshot and
   runtime, so they differ between releases), and every other field, the capability list and every error code must
-  equal the pinned M3 host's under identical project and chain fixtures.
+  equal the pinned M3 host's under identical project and chain fixtures. **The pinned M3 host is the final M3b host**
+  (X46), with its `dev-host-1` schemas, recorded at M4a's entry: M3b adds `maps` to `capabilities` and
+  `assetHistory`, `redeemers` and `datum` to `reads` for map contracts, so the rules above cite `4335773d` (M3a) for
+  the precedence they quote, and M4a re-verifies that precedence at the M3b pin.
 - The alternative, a client opt-in field in `initialize`, fails for the same reason as `fingerprintVersion` (D4): M1–M3
   hosts refuse an unknown `initialize` field, so the client could not offer it without knowing the host's version.
   The protocol list is the negotiation ADR-0022 already defines.
@@ -137,21 +140,27 @@ is `unsupported`, code `params` (protocol 1's answer); present but outside the d
   `params`, so its `mapsStale` scope is the policy its body spends or mints under. **Reservations are not:**
   ADR-0022 D8's out-ref exclusion stays session-wide, so two parameterizations can never reserve the same payer
   input or collateral (F15). ADR-0022 D11's persisted `operation` gains, for a parameterized contract, **`policy`**
-  (the applied policy) and **`template`** (the unapplied template hash the params were applied to, X23); a retry
-  whose request params give another policy, or made while the snapshot's template differs from `operation.template`,
-  is `bad`, code `operation`.
+  (the applied policy) and **`template`** (the unapplied template hash the params were applied to, X23).
+- **Operation identity** (X42): for a parameterized contract, ADR-0022 D11's identity `{designated, contract,
+  method, instance, key}` becomes **`{designated, policy, method, instance, key}`**; `contract` stays a label. Two
+  operations on different instances or keys of one deployment share a policy and are different operations, as
+  under ADR-0022. Attempt histories are compared per identity, never per policy.
+- **One template predicate** (X42), **R(op, params)**: the snapshot holds a contract named `operation.contract`
+  whose template hashes to `operation.template`, and applying `params` to that template gives `operation.policy`.
+  A **retry** requires R with its request's params (else `bad`, code `operation`); a **restore** uses R to choose
+  between live and retired (below). A stale `template` field with an otherwise matching policy fails R in both.
 - **Restore** (ADR-0022 D8, whose entry is `{cbor, state, slot?, operation?}`; X19): the deployment binding applies
   **only to keyed operations**. An entry whose `operation` names a parameterized contract (ADR-0022 still requires
-  that record for every pending keyed transaction) also carries **`params`**, persisted with it. **An operation's
-  identity is its applied policy**, which the body proves; the catalog name is a label the host cannot verify
-  historically (X34). The host requires the body to spend or mint keyed tokens under `operation.policy` and to
-  spend the designated input (else `bad`, code `operation`, as ADR-0022 refuses a record that does not match its
-  body); then:
-  - **Re-derivable** (the snapshot's template for `operation.contract`, with the persisted params, gives
-    `operation.policy`): the operation is live and retryable with the same params. Two catalog names whose
-    templates give the same policy name the same script, so a name-only change between them is the same operation.
-  - **Not re-derivable** (X23, X34: the template was rebuilt, the name now resolves to another template, or the
-    params no longer give the policy): the host cannot tell a rebuild from a mislabelled record and does not try.
+  that record for every pending keyed transaction) also carries **`params`**, persisted with it. The body proves
+  the policy; the catalog name is a label the host cannot verify historically (X34). The host requires the body to
+  spend or mint keyed tokens under `operation.policy` and to spend the designated input (else `bad`, code
+  `operation`, as ADR-0022 refuses a record that does not match its body); then:
+  - **R holds** (re-derivable): the operation is live and retryable with the same params. Two catalog names whose
+    templates are the same bytes give the same policy, so a name-only change between them, with a matching
+    `template`, is the same operation.
+  - **R fails** (X23, X34: the template was rebuilt, the name now resolves to another template, the `template` field
+    is stale, or the params no longer give the policy): the host cannot tell a rebuild from a mislabelled record and
+    does not try.
     It restores the entry as a **retired operation**: its out-refs and keyed tokens stay reserved, its attempts
     history is kept, any retry of it or new keyed operation on its keyed object is `bad`, code `operation` ("not
     re-derivable from this build"), and it is **never discarded** (it may have been handed out): it ends only as
@@ -164,15 +173,21 @@ is `unsupported`, code `params` (protocol 1's answer); present but outside the d
   reserved only in keyed contracts (ADR-0016), so a parameterized **non-keyed** contract may mint one legitimately.
   The host therefore never refuses such an entry: an entry **without** `operation` is restored by ADR-0022 D8's
   path, which holds its out-refs **and** every keyed token in its body (F20's structural set; a live entry's keyed
-  tokens already block any keyed operation on them, `Reservations.prepare` at `4335773d`). **When its body holds
-  keyed tokens under a policy that is not an unparameterized catalog hash, the host treats it as possibly handed
-  out** (X33): `discarded` is refused for it (`conflict`, as for a handed-out keyed attempt; today `settled` lets a
-  recordless `prepared` entry be discarded, `Reservations.java` at `4335773d`), and it ends only by final inclusion or
-  by expiry at a tip beyond `validTo + settlementSlots`, as D8 ends a handed-out entry. A stripped keyed record
+  tokens already block any keyed operation on them, `Reservations.prepare` at `4335773d`).
+- **Every restored body with keyed tokens is possibly handed out** (X33, X40). The host has no independent
+  evidence that a journaled body never left the client: a record may be missing, or its `attempts` may omit the
+  body's own hash (`Reservations.restore` accepts that omission at `4335773d`, and `settled` then permits
+  `discarded`). So in a protocol-2 session, for **every** restored entry whose body holds keyed tokens (F20's
+  structural set), with or without a record, whatever its `attempts` say and whatever the policy, `discarded` is
+  refused (`conflict`, as for a handed-out keyed attempt), and the entry ends only by final inclusion or by expiry
+  at a tip beyond `validTo + settlementSlots`, as D8 ends a handed-out entry. A restored body that was in fact
+  never exported costs liveness on its object until that expiry (a keyed body's window is bounded by D7's keyed
+  rule). Entries prepared **within** the running session keep ADR-0022's settlement rules unchanged; the rule
+  covers only restored entries, whose history the host did not see. A stripped keyed record
   thus loses only its attempt history, and nothing can retry or start another operation on that object while the
   old body can still land; an honest non-keyed body with such a token is held the same way, which costs at most its
-  own validity window. An entry whose keyed tokens are under an unparameterized keyed catalog contract keeps
-  ADR-0022's existing check (F20).
+  own validity window. An entry whose keyed tokens are under an unparameterized keyed catalog contract also keeps
+  ADR-0022's existing record check (F20).
 - Every other entry (an ordinary call, a reference-script publication, a stake or governor registration) is restored
   by ADR-0022 D8's existing path, unchanged and without `params`: its reservation is of out-refs, which D8 already
   excludes session-wide. A later retry is compared with its own request's params.
@@ -181,10 +196,14 @@ is `unsupported`, code `params` (protocol 1's answer); present but outside the d
   stays empty in protocol 2** (Y2): governors are named per call (D4), never pinned in a deployment; a client
   treats a non-empty list as a protocol violation.
 - **`initialize` and `describe` under `params`** (Y2; protocol 2 only, X20): a host advertising `params` reports a
-  parameterized contract with its `unapplied` template hash and `parameterized: true` instead of
-  `unsupported: "params"` (a host without the capability keeps protocol 1's entry); `describe` gives each method of
-  such a contract the status its own code gives (a plain method is `served: true`; an `@AuthorizedBy` method follows
-  D7). The contract-wide `params` code no longer masks a method's own code once `params` is served (F13).
+  parameterized contract **whose description carries D2a's `formats` marker** with its `unapplied` template hash and
+  `parameterized: true` instead of `unsupported: "params"`; `describe` gives each method of such a contract the
+  status its own code gives (a plain method is `served: true`; an `@AuthorizedBy` method follows D7). The
+  contract-wide `params` code no longer masks a method's own code once `params` is served (F13). **The marker is
+  per contract** (X44): in the same session, a parameterized contract without it keeps protocol 1's entry
+  (`unsupported: "params"`, message "rebuild with JOUST M4a or later") in `initialize`, every one of its methods is
+  `unsupported: "params"` in `describe`, and its requests are `unsupported/params`. A host without the capability
+  keeps protocol 1's entry for every parameterized contract.
 - **Fields that need a capability** (Y1): every field this ADR adds exists only in protocol 2 (D1). Within a
   protocol-2 session a client sends `params` only after `initialize` advertised `params`; `operation.policy`,
   `operation.template` and a restore entry's `params` only after `params` (all name a parameterized contract); and
@@ -203,8 +222,15 @@ applies them, so the JVM's reflective codec and the engine's schema codec can ne
   `integer`, and `String` and `byte[]` alike as `bytes`; the engine encodes them as unbounded integers and raw bytes,
   while the JVM adapter narrows `int`/`long` exactly and decodes a `String` as UTF-8, replacing malformed bytes
   (`JsonValues.java:72-73`, `:79` at `4335773d`). So the same request could be refused by one host or give another
-  policy on the other. From M4a the processor writes, in `x-joust.params`, the marker **`"formats": 1`** and, on
-  every component (at any depth) of a Java `int`, `long` or `String` type, **`format`** `int32`, `int64` or `utf8`.
+  policy on the other. The description also writes `short`, `byte` and the boxed `Integer` and `Long` as
+  `integer` (`DescriptionWriter.schemaOf`, `:588`, `:601-602` at `4335773d`), and `JsonValues` has no decoder for
+  `short` or `byte` (X43). From M4a the processor writes, on every component **at any depth, inside records, lists,
+  maps and `Optional`s**, a **`format`**: `int32` for `int` and `Integer`, `int64` for `long` and `Long`, `utf8` for
+  `String`; and it writes the marker **`"formats": 1`** in `x-joust.params` **only when every reachable integer is
+  one of those or `BigInteger`, and every reachable byte string is `byte[]` or `String`**. A params record reaching
+  any other representation (`short`, `byte`, `char`, their boxed forms, or a type the processor cannot classify)
+  gets no marker, so the contract is not served (below), and the processor reports a warning naming the component;
+  it is not a build error, since the contract still works outside the dev host.
   Both hosts check the format before either adapter: an `int32`/`int64` value must be in that type's range, and a
   `utf8` value's bytes must be well-formed UTF-8 (strict, no replacement), so the JVM's decode and re-encode returns
   the same bytes. A params description **without** the marker (any artifact built before M4a: an older jar,
@@ -273,13 +299,15 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
   (X24, T16): today a build with no validators leaves an earlier `validators.json` in place (F21), so the digest
   would cover, and the host would load, governors the project no longer has. M4c therefore changes the npm build to
   write `validators.json` on every successful build, as `[]` when there are no validators, and to remove stale
-  `<name>.plutus` files with it. **The lock binds the manifest's exact bytes** (X31): the same build writes
-  `joust.lock.json` **last** (after `contracts.json` and `validators.json`, by a temporary file and rename) with
+  `<name>.plutus` files with it. **The lock binds the manifest's exact bytes** (X31): the build **removes the
+  previous `joust.lock.json` before writing anything else** (X41), and writes the new one **last** (after
+  `contracts.json` and `validators.json`, by a temporary file and rename) with
   `buildDigests: {contracts, validators}`, the SHA-256 of the exact `contracts.json` and `validators.json` bytes it
   wrote (X31, X37). Version 2 also digests `joust.lock.json`, after `validators.json`, and **both** host and client
-  serve script governors only when **both** lock digests equal the files beside it. A build interrupted anywhere
-  before the lock (after `contracts.json`, after `validators.json`) leaves an old lock that matches neither new file;
-  a lock without `buildDigests` (any build before M4c, F21) matches nothing. Either way the manifest is stale: the
+  serve script governors only when a lock is present **and both** its digests equal the files beside it. A build
+  interrupted anywhere before the lock leaves **no lock** (the old one was removed first), even when the rewritten
+  `contracts.json` is byte-identical to the previous one, as it is after a validator-only rebuild; a lock without
+  `buildDigests` (any build before M4c, F21) matches nothing. Either way the manifest is stale: the
   host advertises no `authorizedBy:script`, and the client treats an answer that does as a protocol violation. The
   fallback for older builds is a rebuild with the M4c toolchain. The host
   computes the digest the client asked for; under version 1 it serves no script governors (`authorizedBy:script`
@@ -342,14 +370,18 @@ signers authorize the call:
   of the object the call spends, decoded against its own description from the input it resolved through its own node
   (ADR-0022 D13 rule 3): the instance's state for `action` and `destroy`, the owned record for `ownedAction` and
   `ownedDestroy` (whose council may differ from the parent's, and whose call need not spend the parent), the keyed
-  record for `keyedAction` and `keyedRetire`, and for `keyedRemove` the **`removed`** input of
+  record for `keyedAction`, and for `keyedRemove` the **`removed`** input of
   `Remove_T(anchor, removed)` (ADR-0016 D5: the removed node runs the removing method; its predecessor's council is
   not the source, X36). It requires at least `threshold` **distinct** required signers that are in `keys`; otherwise
-  it refuses (`quorum`). **Host parity** (X36): at `4335773d` the JVM host's catalog admits `@Quorum` on
-  `keyedRemove` and `keyedRetire` (`Contracts.java:46`) while the engine's dispatcher refuses quorum on calls other
-  than `action`, `destroy`, `keyedAction` and hosted owned ones (`DescribedContract.java:189-192`). M4a aligns them:
-  both hosts serve exactly the same quorum call kinds and report the others `unsupported`. This also amends ADR-0022 D13 rule 3 for M1b's `@Quorum` calls,
-  whose rule today checks only that signers are within the caller and the chosen co-signers.
+  it refuses (`quorum`). **The protocol-2 quorum call kinds** (X36, X45) are exactly `action`, `destroy`,
+  `ownedAction`, `ownedDestroy`, `keyedAction` and `keyedRemove`, and **both hosts must prepare each** of them when
+  the call is otherwise servable. `keyedRetire` is excluded: the processor refuses `@Quorum` on a retiring exit so the
+  owner can always leave (`ContractReader.java:783-787` at `4335773d`, ADR-0016 D1), so no such contract builds;
+  a host reports any other kind with `@Quorum` `unsupported`. At `4335773d` the JVM catalog admits quorum on
+  `keyedRemove` and `keyedRetire` (`Contracts.java:46`) while the engine's dispatcher refuses quorum on `keyedRemove`
+  (`DescribedContract.java:189-192`); M4a changes the engine to prepare a quorum removal and the catalog to drop
+  `keyedRetire`. The eligibility count also amends ADR-0022 D13 rule 3 for M1b's `@Quorum` calls, whose rule today
+  checks only that signers are within the caller and the chosen co-signers.
 - **Key credentials:** I17 already requires the credential's key among the required signers, which is the whole
   authorization rule of the key branch (F1).
 - **Script governors:** whether `governor.signers` satisfy the governor's rules is known only by running it: a
@@ -415,10 +447,12 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | any field this ADR adds, in a protocol-1 session | the M3 host's answer for that method, with its precedence (D1): e.g. Treasury `deployment` with `params` `unsupported/params`; Treasury `prepare` with `call.params`, or `decode` with `params`, `bad/request` |
 | a parameterized contract, `params` absent (any client) | `unsupported/params` |
 | `params` present, outside D2a's domain or does not encode exactly | `bad/params`, the same path on both hosts |
-| a restore entry without `operation` whose body holds keyed tokens under a policy no unparameterized catalog contract has | restored by ADR-0022 D8's path, out-refs and keyed tokens held; `discarded` refused (`conflict`); ends by final inclusion or margin-qualified expiry (D2) |
-| a keyed restore entry the current build cannot re-derive (rebuilt template, another template under its name, params that no longer give its policy) | restored as a retired operation, held and never discarded; its retries `bad/operation` (D2) |
-| an npm lock whose `buildDigests` do not equal `contracts.json` and `validators.json`, or a lock without them | no `authorizedBy:script` in the session (D4) |
-| a params description without `"formats": 1` (built before M4a) | `unsupported/params` ("rebuild") on both hosts (D2a) |
+| any restored entry whose body holds keyed tokens (with or without a record, whatever its `attempts`) | out-refs and keyed tokens held; `discarded` refused (`conflict`); ends by final inclusion or margin-qualified expiry (D2) |
+| a keyed restore entry for which R fails (rebuilt template, another template under its name, a stale `template` field, params that no longer give its policy) | restored as a retired operation, held and never discarded; its retries `bad/operation` (D2) |
+| a retry for which R fails with its request's params | `bad/operation` (D2) |
+| no `joust.lock.json`, a lock without `buildDigests`, or digests that do not equal `contracts.json` and `validators.json` | no `authorizedBy:script` in the session (D4) |
+| a parameterized contract whose description lacks `"formats": 1` (built before M4a, or reaching an unformatted representation) | `initialize` and `describe` entries `unsupported: "params"`, requests `unsupported/params` ("rebuild"), on both hosts, while marked contracts in the same session are served (D2, D2a) |
+| a `@Quorum` call of a kind outside the protocol-2 list | `unsupported` on both hosts (D5) |
 | an `int32`/`int64` value out of range, or a `utf8` value that is not well-formed UTF-8 | `bad/params`, the same path on both hosts (D2a) |
 | a key-credential call on a host without `authorizedBy:key` | `unsupported/authorizedBy` ("key credentials") |
 | a script-credential call on a host without `authorizedBy:script` | `unsupported/authorizedBy` ("script governors") |
@@ -444,8 +478,13 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   nesting of 32 and 33 levels; 2147483648 and 9223372036854775808 in a `BigInteger` component (accepted, same
   bytes on both hosts) and in `int` and `long` components (refused, `bad/params`); `ff` in a `String` component
   (refused) and in a `byte[]` component (accepted); a multi-byte UTF-8 string in a `String` component (accepted,
-  same bytes). Each refusal has the same code and path on both hosts. **Formats (X30, X35):** a nested record's
-  `int` component carries `format`; a pre-M4a artifact (no `formats` marker) is `unsupported/params` on both hosts.
+  same bytes). Each refusal has the same code and path on both hosts. **Formats (X30, X35, X43, X44):** a nested
+  record's `int` component carries `format`; `Optional<Long>` and `List<Integer>` elements at 2^63 and 2^31
+  (refused on both hosts) and at the type's maximum (accepted, same bytes); a params record reaching a `short` or
+  `Byte` gets no marker and a processor warning; one protocol-2 session with a **marked and an unmarked**
+  parameterized contract: the marked one is `parameterized: true` with its plain methods served, the unmarked one
+  `unsupported: "params"` in `initialize` and `describe`, and a `deployment` of it `unsupported/params`; a pre-M4a
+  artifact likewise.
 - **Mutations** (recomputed hashes, one targeted rule each, proven by disabling it): other params (definite-array
   encoding of the same values included); another governor; an **ineligible** governor (a script credential in a
   params field no served `@AuthorizedBy` names) and either of two eligible ones (positive); the contract's own hash
@@ -469,16 +508,23 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   from the parent instance's: signers meeting the object's threshold (positive) and signers meeting only the
   parent's (refused); the same pair for a keyed `@Quorum` call; and a `keyedRemove` whose `removed` node and
   predecessor have different councils (signers meeting the removed node's threshold accepted, the predecessor's
-  only refused). Both hosts report the same quorum call kinds served (X36). M4a needs fixture contracts for these
-  (owned and keyed quorum), added to its entry gates.
-- **Identity tests:** two parameterizations competing for one wallet out-ref (refused); a restored keyed entry whose
-  params, `operation.policy` and body disagree (`bad/operation`), separately from a valid restore followed by a retry
+  only refused). Each positive is **prepared by both hosts' dispatchers** and accepted by the checker, the removal
+  included (X45); a `keyedRetire` with `@Quorum` fails to build (processor test). M4a needs fixture contracts for
+  these (owned, keyed and removal quorum), added to its entry gates.
+- **Identity tests:** two parameterizations competing for one wallet out-ref (refused); **two disjoint keyed
+  operations under one policy** (different instances or keys: both prepared, their histories kept apart, X42); a
+  restore with a **stale `template` field** and an otherwise matching policy (retired), and a retry under the same
+  stale record (`bad/operation`); a restored keyed entry whose
+  `operation.policy` and body disagree (`bad/operation`, the batch commits nothing), one whose params no longer give
+  its policy (retired, by R), separately from a valid restore followed by a retry
   with changed params (`bad/operation`); restarts with a pending **bounded governor registration** and a pending
   **reference-script publication** of a parameterized contract (both restored, positive, by D8's path); an npm `validators.json` changed **before** `initialize` against the old
   digest (`stageMismatch`), and changed **after** it (the running session keeps its loaded bytes); an old client
   (fingerprint version 1) and a new host on a project with the manifest (initializes, no `authorizedBy:script`); two
   packages with a `Guardian` (the Gradle qualified selector works; ambiguity fails closed).
-- **Keyed restore (X22, X23, X27, X28), M4a:** a pending keyed `@Params` entry with its `operation` dropped
+- **Keyed restore (X22, X23, X27, X28, X40), M4a:** a re-derivable keyed operation whose record keeps everything
+  but drops **only its current attempt** from `attempts` (live; `discarded` refused; held until margin-qualified
+  expiry); a pending keyed `@Params` entry with its `operation` dropped
   (restored by D8's path: its inputs and keyed token stay held; `discarded` after restore is refused; a new keyed
   operation on the object is refused while the body can land; expiry is refused at `validTo + settlementSlots` and
   established one slot later, after which a new operation is allowed); a **mixed project** (a parameterized keyed
@@ -489,8 +535,9 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   live names with the **same template** (a name-only change restores as the same, retryable operation).
 - **Stale manifest (X24, X31), M4c:** build Treasury with Guardian, remove the last validator, rebuild in the same
   directory, launch: no `authorizedBy:script` and a Guardian lookup fails; a lock from an older toolchain (no
-  `buildDigests`): no `authorizedBy:script`; a rebuild interrupted **after `contracts.json`** (old manifest and lock
-  still agree with each other) and one interrupted after `validators.json`: no `authorizedBy:script`.
+  `buildDigests`): no `authorizedBy:script`; a **validator-only** rebuild (remove Guardian, Treasury unchanged)
+  interrupted right after a byte-identical `contracts.json` write, and one interrupted after `validators.json`: no
+  lock, so no `authorizedBy:script` (X41).
 - **Differential:** the JVM host (through generated clients) and the Node host agree byte for byte on every M4 vector.
 - **Governor artifact resolution** (Y3): a refusal vector for each clause of D4's client rule (a second class with the
   same simple name in the first entry, missing resource, wrong `type`, wrong `purpose`, `params` arity and type; npm:
@@ -498,8 +545,10 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   the same name (the first entry wins).
 - **Capability gating** (Y1, Y2): a new client against an M3 host (the field-gating rows of D7), and `initialize`/
   `describe` of Treasury with and without `params`.
-- **Legacy session (X20, X32, X38, X39), both hosts, differential against a pinned M3 host** under identical
-  project and chain fixtures: a client offering `[1]` to a host that ships this ADR, on a project with Treasury:
+- **Legacy session (X20, X32, X38, X39, X46), both hosts, differential against the pinned final M3b host** under
+  identical project and chain fixtures: a client offering `[1]` to a host that ships this ADR, on a project with
+  Treasury **and a servable unparameterized map contract** (its `maps` capability, `assetHistory`, `redeemers` and
+  `datum` read kinds, and its `deployment` compared too):
   every `initialize`, `describe` and `deployment` reply validates against the **unmodified** `dev-host-1` result
   schemas; `fingerprint` and `versions` are checked against the launch; every other field and the capability list
   (no `params`, `authorizedBy:*` or `fingerprint:2`) equal the M3 host's; Treasury is `unsupported:"params"`; and
@@ -513,7 +562,7 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 
 | Milestone | Scope | Entry | Exit |
 |---|---|---|---|
-| **M4a** | Protocol 2 and its schemas (D1); `@Params` contracts on both hosts (D2, D2a, D3, D4's JVM path for params); keyed restore with `operation.template` and retired operations (D2); the `@Quorum` eligibility count and quorum-kind parity (D5); the processor's params `formats` marker (D2a); application, input-domain and format vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved; the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit; and, from r9, owned and keyed `@Quorum` fixture contracts whose object council differs from the parent's), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths); and from the Fable final review: F-Y1 (an application vector for an asset-aware script such as Stall, with an oracle for scripts Aiken's binding cannot decode), F-Y5 (F7 and D4's artifact rule re-verified at the JuLC and CCL versions JOUST then pins, recorded with the vectors) | application vectors agree across JuLC, Aiken (or the stated oracle) and the kit; the input-domain boundary vectors give the same answer on both hosts; Treasury's non-governed calls served and checked on both hosts, including the quorum-eligibility vectors; the legacy-session, old-client and capability-gating vectors (D7, D8) pass; the keyed-restore vectors pass; I16, I20, I21, I22, I23 |
+| **M4a** | Protocol 2 and its schemas (D1); `@Params` contracts on both hosts (D2, D2a, D3, D4's JVM path for params); keyed restore with `operation.template` and retired operations (D2); the `@Quorum` eligibility count and quorum-kind parity (D5); the processor's params `formats` marker (D2a); application, input-domain and format vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved; the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit; the final M3b host and its `dev-host-1` schemas pinned as the protocol-1 oracle (X46); and, from r9, owned and keyed `@Quorum` fixture contracts whose object council differs from the parent's), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths); and from the Fable final review: F-Y1 (an application vector for an asset-aware script such as Stall, with an oracle for scripts Aiken's binding cannot decode), F-Y5 (F7 and D4's artifact rule re-verified at the JuLC and CCL versions JOUST then pins, recorded with the vectors) | application vectors agree across JuLC, Aiken (or the stated oracle) and the kit; the input-domain boundary vectors give the same answer on both hosts; Treasury's non-governed calls served and checked on both hosts, including the quorum-eligibility vectors; the legacy-session, old-client and capability-gating vectors (D7, D8) pass; the keyed-restore vectors pass; I16, I20, I21, I22, I23 |
 | **M4b** | Key-credential `@AuthorizedBy` (D4, D5 signers) | M4a | key vectors and mutations on both hosts, **including the non-caller key-holder positive** (X26); capability `authorizedBy:key`; I17, I19 |
 | **M4c** | Plutus governors (D4, D5, D6), fingerprint version 2 with capability `fingerprint:2` and the lock-file binding (D4), and the npm build writing or emptying `validators.json` (D4, F21) | M4b; **Q6 decided** and, if it requires evaluation, the client's evaluation rule written into D5 | Treasury + Guardian recorded on a fresh DevKit (registration, `freeze`, payer ≠ owner); every D5/D8 mutation rejected with its code; the stale-manifest vectors pass; capability `authorizedBy:script`; I18, I19 |
 
@@ -525,10 +574,10 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | I17 | A key-credential call is accepted only if the credential's key, from the client's own params, is a required signer that is the caller or a named co-signer | D4, D5 | M4b vectors |
 | I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, its V3 script in the witness set, and exactly one `Approvals` naming this policy, instance and action at that withdrawal's pointer; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
 | I19 | The body's required signers equal exactly D5's signer set | D5 | M4b/M4c mutations, payer ≠ owner |
-| I20 | Reservations exclude out-refs across all parameterizations in a session; a keyed operation is retried only when the current build re-derives its policy from its persisted params; a restored body that may have been handed out (a retired operation, or a recordless entry with keyed tokens under a non-catalog policy) is never discarded and keeps its out-refs and keyed tokens until final inclusion or margin-qualified expiry; other pending transactions restore as under ADR-0022 | D2 | identity and keyed-restore tests |
-| I21 | A protocol-1 session with a host that ships this ADR is indistinguishable from one with an M3 host: apart from `fingerprint` and `versions` (checked against the launch), every reply field, the capability list and every error code (per-method precedence included) equal the M3 host's, every reply validates against the unmodified `dev-host-1` schemas, and a client that sends no fingerprint version gets ADR-0022's digest on every project | D1, D2, D4, D7 | legacy-session (differential) and old-client vectors |
-| I22 | Both hosts accept exactly D2a's input domain for `params` and governor params, formats included, refusing the rest with the same code and path; neither serves a params description without the `formats` marker | D2a | input-domain boundary and format vectors |
-| I23 | A `@Quorum` call is accepted only if at least `threshold` distinct required signers are in `keys`, both read by the client from its own params or from the input record of the object whose method runs (by call kind; `removed` for `keyedRemove`); both hosts serve the same quorum call kinds | D5 | quorum-eligibility vectors (instance, owned, keyed, removal) |
+| I20 | Reservations exclude out-refs across all parameterizations in a session; operations are identified by `{designated, policy, method, instance, key}`; a keyed operation is retried only when R holds for its request's params; every restored body with keyed tokens is never discarded and keeps its out-refs and keyed tokens until final inclusion or margin-qualified expiry; other pending transactions restore as under ADR-0022 | D2 | identity and keyed-restore tests |
+| I21 | A protocol-1 session with a host that ships this ADR is indistinguishable from one with an M3 host: apart from `fingerprint` and `versions` (checked against the launch), every reply field, the capability list and every error code (per-method precedence included) equal the final M3b host's, every reply validates against the unmodified `dev-host-1` schemas, and a client that sends no fingerprint version gets ADR-0022's digest on every project | D1, D2, D4, D7 | legacy-session (differential) and old-client vectors |
+| I22 | Both hosts accept exactly D2a's input domain for `params` and governor params, formats included, refusing the rest with the same code and path; neither serves, advertises or describes as served a parameterized contract whose description lacks the `formats` marker | D2, D2a | input-domain boundary and format vectors; mixed marked/unmarked session |
+| I23 | A `@Quorum` call is accepted only if at least `threshold` distinct required signers are in `keys`, both read by the client from its own params or from the input record of the object whose method runs (by call kind; `removed` for `keyedRemove`); both hosts prepare exactly the protocol-2 quorum call kinds | D5 | quorum-eligibility vectors (instance, owned, keyed, removal), through both dispatchers |
 
 ## 5. Alternatives considered
 
@@ -697,3 +746,18 @@ host's bodies already satisfy it.
   - X38 (protocol-1 precedence differs by method) → D1 (per-method precedence as M3 validates it), D7, D8;
   - X39 (whole-reply equality impossible across releases) → D1 (`fingerprint` and `versions` checked against the
     launch, the rest compared), D8, I21.
+- **r11** (2026-11-22, responds to Codex review of `0fd6e440`; its seven findings are X40–X46; it confirmed the
+  removal-quorum source and the three protocol-1 precedence examples):
+  - X40 (a partial attempt history let a restored body be discarded) → D2 (every restored body with keyed tokens is
+    possibly handed out, with or without a record), D7, D8, I20;
+  - X41 (a validator-only rebuild left the old lock valid) → D4 (the build removes the old lock first and writes
+    the new one last), D7, D8;
+  - X42 (policy is not an operation identity; two template rules) → D2 (identity `{designated, policy, method,
+    instance, key}`; one predicate R for restore and retry), D7, D8, I20;
+  - X43 (boxed and other integer types) → D2a (`int32` for `int`/`Integer`, `int64` for `long`/`Long`, at any
+    depth; no marker, with a warning, for anything else), D8;
+  - X44 (marker per contract in `initialize`/`describe`) → D2, D7, D8 (mixed marked/unmarked session), I22;
+  - X45 (quorum kinds) → D5 (the six protocol-2 kinds, both dispatchers; `keyedRetire` excluded as the processor
+    refuses it), D7, D8, I23;
+  - X46 (baseline predates maps) → D1 (the final M3b host is the oracle), D8 (a map contract in the legacy
+    session), I21.
