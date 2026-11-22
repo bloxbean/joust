@@ -139,6 +139,8 @@ public final class VerifierHandle {
             // out: absence must be the answer's, not a page cut (#145 Codex).
             for (int page = 1; page == 1 || (scoped || pinned != null) && page <= PIN_PAGES; page++) {
                 var r = runtime.backend().getUtxoService().getUtxos(holder, 20, page);
+                // Scoped, a failed page is a failed read, not the end of the answer: absence would publish a copy (#145 Codex).
+                if (scoped && !r.isSuccessful()) throw new org.julclang.state.runtime.snapshot.ReadFailed("utxos", holder, r.getResponse());
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (!hash.equalsIgnoreCase(u.getReferenceScriptHash())) continue;

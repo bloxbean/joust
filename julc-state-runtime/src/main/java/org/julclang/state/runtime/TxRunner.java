@@ -74,7 +74,7 @@ final class TxRunner {
         /** Refuses a call of {@code rt} when its claim store is not the composition's. */
         void requireStore(StateRuntime rt, String what) {
             if (store != null && rt.claimStore() != store) {
-                throw new ForeignStore("composition: " + what + " belongs to a runtime with another claim store; a"
+                throw new EndsComposition("composition: " + what + " belongs to a runtime with another claim store; a"
                         + " composition checks its own runtime's reservations only, so its calls must share that store");
             }
         }
@@ -131,9 +131,12 @@ final class TxRunner {
         }
     }
 
-    /** A call of a runtime with another claim store took part in a composition: it ends the composition at once. */
-    static final class ForeignStore extends JoustException {
-        ForeignStore(String message) {
+    /**
+     * A refusal that ends a composition at once: a call of a runtime with another claim store, or a submission of a
+     * transaction already built, inside a composition (#145 Codex).
+     */
+    static final class EndsComposition extends JoustException {
+        EndsComposition(String message) {
             super(message);
         }
     }
@@ -144,7 +147,7 @@ final class TxRunner {
      * call belongs to another claim store (running more could publish for a composition already refused; #145 Codex).
      */
     static boolean endsComposition(RuntimeException e) {
-        return e instanceof PendingTransactionException || e instanceof ForeignStore;
+        return e instanceof PendingTransactionException || e instanceof EndsComposition;
     }
 
     /** A deposit a call makes into instance {@code target} (a unit, policy ++ instance id, hex). */
@@ -808,6 +811,11 @@ final class TxRunner {
     /** Submits a signed transaction and waits for it (a {@link PreparedTx} after the wallets signed). */
     String submitSigned(Transaction signed, String what) {
         rt.requireUnscopedSubmission();
+        // A transaction already built is never part of a composition: sending it from inside one would broadcast it
+        // whatever the composition decides, perhaps from another runtime's store (#145 Codex).
+        if (CAPTURE.get() != null) {
+            throw new EndsComposition("composition: " + what + " submits a transaction already built; it cannot take part");
+        }
         String txHash = TransactionUtil.getTxHash(signed);
         sendToNode(signed, txHash, what);
         rt.log(what + ": submitted " + txHash);

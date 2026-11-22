@@ -238,6 +238,8 @@ public final class StateContractHandle<S> {
             // absence must be the answer's, not a page cut (#145 Codex).
             for (int page = 1; page < 20 || (scoped || pinned != null) && page <= VerifierHandle.PIN_PAGES; page++) {
                 var r = runtime.backend().getUtxoService().getUtxos(address, 100, page);
+                // Scoped, a failed page is a failed read, not the end of the answer: absence would publish a copy (#145 Codex).
+                if (scoped && !r.isSuccessful()) throw new org.julclang.state.runtime.snapshot.ReadFailed("utxos", address, r.getResponse());
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (!policyId.equalsIgnoreCase(u.getReferenceScriptHash())) continue;
