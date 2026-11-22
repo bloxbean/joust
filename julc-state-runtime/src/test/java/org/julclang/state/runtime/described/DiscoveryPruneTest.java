@@ -8,41 +8,57 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * #160 Codex review: a method that reads B only when A is absent. The first discovery run answers A as absent and so
- * also reports B; once A is known present the final run never reads B, and B's proof must not join the signed claims
- * (the JVM host, running the method itself, reads only A).
+ * #160 Codex review: the npm host's discovery keeps only the reads the final path reaches, in the order it reaches
+ * them, as the JVM host (running the method itself) records them.
  */
 class DiscoveryPruneTest {
-    static final String ROOT = "aa".repeat(32), A = "0a", B = "0b", W = "0c";
-
-    /** The program: looks up W (witnessed), then A; only if A is absent, B. Reports each key missing from {@code known}. */
-    static TransitionFn.Run run(Map<String, List<MapEntry>> known) {
-        var have = new HashMap<String, MapEntry>();
-        for (var e : known.getOrDefault(ROOT, List.of())) have.put(HexFormat.of().formatHex(e.key()), e);
-        var traces = new ArrayList<String>();
-        for (String k : List.of(W, A)) if (!have.containsKey(k)) traces.add("joust:read " + ROOT + " " + k);
-        var a = have.get(A);
-        if (a == null || !a.present()) if (!have.containsKey(B)) traces.add("joust:read " + ROOT + " " + B);
-        return new TransitionFn.Run(null, "step", traces);
-    }
+    static final String ROOT = "aa".repeat(32), A = "0a", B = "0b", C = "0c", W = "0d";
 
     static MapEntry entry(String key, boolean present) {
         return new MapEntry(HexFormat.of().parseHex(key), present, new byte[0]);
     }
 
-    @Test void aReadOffTheFinalPathIsDropped() {
-        var known = new LinkedHashMap<String, List<MapEntry>>();
-        known.put(ROOT, new ArrayList<>(List.of(entry(W, true), entry(A, true), entry(B, false))));
-        assertTrue(DescribedContract.prune(known, Set.of(ROOT + " " + W), DiscoveryPruneTest::run));
-        assertEquals(List.of(W, A), known.get(ROOT).stream().map(e -> HexFormat.of().formatHex(e.key())).toList());
-        assertTrue(run(known).traces().isEmpty(), "the pruned reads still answer every lookup");
+    /** A program over one map: each lookup the {@code program} makes that {@code known} lacks is reported, in order. */
+    static TransitionFn.Run run(Map<String, List<MapEntry>> known, java.util.function.Function<java.util.function.Function<String, Boolean>, Void> program) {
+        var have = new HashMap<String, MapEntry>();
+        for (var e : known.getOrDefault(ROOT, List.of())) have.put(HexFormat.of().formatHex(e.key()), e);
+        var traces = new ArrayList<String>();
+        program.apply(k -> {
+            var e = have.get(k);
+            if (e == null) { traces.add("joust:read " + ROOT + " " + k); return false; }
+            return e.present();
+        });
+        return new TransitionFn.Run(null, "step", traces);
     }
 
-    @Test void readsOnThePathAndWitnessedReadsStay() {
+    static List<String> keys(Map<String, List<MapEntry>> m) {
+        return m.getOrDefault(ROOT, List.of()).stream().map(e -> HexFormat.of().formatHex(e.key())).toList();
+    }
+
+    @Test void aReadOffTheFinalPathIsDropped() {
+        // W (witnessed), then A; B only when A is absent. The first round answered A as absent, so it also found B.
+        java.util.function.Function<java.util.function.Function<String, Boolean>, Void> program = get -> {
+            get.apply(W);
+            if (!get.apply(A)) get.apply(B);
+            return null;
+        };
         var known = new LinkedHashMap<String, List<MapEntry>>();
-        known.put(ROOT, new ArrayList<>(List.of(entry(W, true), entry(A, false), entry(B, true))));   // A absent: B is read
-        assertFalse(DescribedContract.prune(known, Set.of(ROOT + " " + W), DiscoveryPruneTest::run));
-        assertEquals(3, known.get(ROOT).size());
+        known.put(ROOT, new ArrayList<>(List.of(entry(W, true), entry(A, true), entry(B, false))));
+        var path = DescribedContract.path(known, Set.of(ROOT + " " + W), k -> run(k, program));
+        assertEquals(List.of(W, A), keys(path));
+    }
+
+    @Test void thePathKeepsTheJvmsLookupOrder() {
+        // A; B only when A is present; then always C. Discovery found A and C first (A unknown, so absent), then B.
+        java.util.function.Function<java.util.function.Function<String, Boolean>, Void> program = get -> {
+            if (get.apply(A)) get.apply(B);
+            get.apply(C);
+            return null;
+        };
+        var known = new LinkedHashMap<String, List<MapEntry>>();
+        known.put(ROOT, new ArrayList<>(List.of(entry(A, true), entry(C, false), entry(B, true))));
+        var path = DescribedContract.path(known, Set.of(), k -> run(k, program));
+        assertEquals(List.of(A, B, C), keys(path));
     }
 
     @Test void aFailureIsRaisedOnlyWhenAsked() {

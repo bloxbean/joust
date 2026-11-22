@@ -772,11 +772,12 @@ public final class DescribedContract {
                 fresh = true;
             }
             if (!fresh) {
-                if (prune(known, witnessed, runWith)) r = runWith.apply(known);
+                // The final path's reads, in the order it reaches them: the reads the JVM host records (#160 Codex).
+                var path = path(known, witnessed, runWith);
+                r = runWith.apply(path);
                 r.raise();
                 if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
-                // The final run's reads join the withdrawal, in discovery order (the JVM host records exactly these).
-                for (var e : known.entrySet()) {
+                for (var e : path.entrySet()) {
                     for (var entry : e.getValue()) {
                         String key = HexFormat.of().formatHex(entry.key());
                         if (!witnessed.contains(e.getKey() + " " + key))
@@ -802,28 +803,34 @@ public final class DescribedContract {
     }
 
     /**
-     * Drops from {@code known} each discovered read (not one {@code witnessed} with the target) that the run's path does
-     * not reach: without it, a run that still looks the key up reports it, and a run that does not is unchanged by it. A
-     * key read under an earlier round's absent answer may be off the final path; its proof must not enter the signed
-     * claims (#160 Codex review). True if any read was dropped.
+     * The reads the run's path reaches, in the order it reaches them, from the converged {@code known} reads: starting
+     * from the {@code witnessed} reads alone, each run's first unknown read is the path's next lookup (every earlier one
+     * is answered as on chain), so it is added from {@code known} until a run reports none. A key read under an earlier
+     * round's absent answer is off the final path and stays out; the order is the JVM host's lookup order, so both hosts
+     * write the same claims (#160 Codex review). A key the path reaches but {@code known} lacks cannot occur after
+     * convergence; it is refused.
      */
-    static boolean prune(java.util.Map<String, List<org.julclang.state.api.MapEntry>> known, java.util.Set<String> witnessed,
-                         java.util.function.Function<java.util.Map<String, List<org.julclang.state.api.MapEntry>>, TransitionFn.Run> runWith) {
-        boolean dropped = false;
+    static java.util.LinkedHashMap<String, List<org.julclang.state.api.MapEntry>> path(
+            java.util.Map<String, List<org.julclang.state.api.MapEntry>> known, java.util.Set<String> witnessed,
+            java.util.function.Function<java.util.Map<String, List<org.julclang.state.api.MapEntry>>, TransitionFn.Run> runWith) {
+        var path = new java.util.LinkedHashMap<String, List<org.julclang.state.api.MapEntry>>();
         for (var e : known.entrySet()) {
-            var list = e.getValue();
-            for (int i = list.size() - 1; i >= 0; i--) {
-                var entry = list.get(i);
-                String key = HexFormat.of().formatHex(entry.key());
-                if (witnessed.contains(e.getKey() + " " + key)) continue;
-                list.remove(i);
-                boolean reached = reads(runWith.apply(known).traces()).stream()
-                        .anyMatch(r -> r[0].equals(e.getKey()) && r[1].equals(key));
-                if (reached) list.add(i, entry);
-                else dropped = true;
-            }
+            var list = path.computeIfAbsent(e.getKey(), k -> new ArrayList<>());
+            for (var entry : e.getValue())
+                if (witnessed.contains(e.getKey() + " " + HexFormat.of().formatHex(entry.key()))) list.add(entry);
         }
-        return dropped;
+        int limit = 1;
+        for (var list : known.values()) limit += list.size();
+        for (int step = 0; step < limit; step++) {
+            var reported = reads(runWith.apply(path).traces());
+            if (reported.isEmpty()) return path;
+            String[] next = reported.get(0);
+            var entry = known.getOrDefault(next[0], List.of()).stream()
+                    .filter(e -> HexFormat.of().formatHex(e.key()).equals(next[1])).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("map read discovery: the final path reads an unknown key"));
+            path.computeIfAbsent(next[0], k -> new ArrayList<>()).add(entry);
+        }
+        throw new IllegalStateException("map read discovery: the final path does not settle");
     }
 
     /** The round limit of read discovery (ADR-0015 D3). */
