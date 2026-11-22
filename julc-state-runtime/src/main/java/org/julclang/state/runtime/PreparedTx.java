@@ -142,6 +142,12 @@ public final class PreparedTx {
     /** Adds the witnesses as {@link #withWitnesses} does, submits, and waits until the transaction is on chain. */
     public String submit(String... witnessSetsCbor) {
         runtime.requireUnscopedSubmission();
+        // Refused before its witnesses are read: a prepared transaction never takes part in a composition (#145 Codex item 3).
+        var cap = TxRunner.capture();
+        if (cap != null) {
+            throw cap.refuse(new TxRunner.EndsComposition("composition: " + what + " submits a transaction already built;"
+                    + " it cannot take part"));
+        }
         return new TxRunner(runtime).submitSigned(signed(witnessSetsCbor), what);
     }
 

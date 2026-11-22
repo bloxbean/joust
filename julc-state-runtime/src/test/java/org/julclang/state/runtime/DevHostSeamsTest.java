@@ -873,7 +873,8 @@ class DevHostSeamsTest {
         var probe = runtime(chain, b -> b);
         String holder = probe.outputVerifier().holder();
         var first = new ArrayList<Utxo>();
-        for (int i = 0; i < 20; i++) first.add(utxo(holder, 2_000_000));
+        // A full page for both lookups (the verifier reads 20 a page, a contract 100): a short page is the last one.
+        for (int i = 0; i < 100; i++) first.add(utxo(holder, 2_000_000));
         var utxos = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
                 getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
                 (p, m, a) -> (Integer) a[2] == 1 ? com.bloxbean.cardano.client.api.model.Result.success("ok").withValue(first)

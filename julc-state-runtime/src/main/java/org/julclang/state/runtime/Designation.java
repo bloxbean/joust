@@ -368,10 +368,9 @@ final class Designation {
         Designated chosen = locked(address, () -> {
             var candidates = new ArrayList<Utxo>();
             try {
-                for (int page = 1; page <= 20; page++) {
-                    var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                    if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                    for (Utxo u : r.getValue()) {
+                var walk = new Pages(rt, address, 100, 20);
+                for (var list = walk.next(); list != null; list = walk.next()) {
+                    for (Utxo u : list) {
                         if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
                                 || u.getInlineDatum() != null || u.getDataHash() != null || u.getReferenceScriptHash() != null) {
                             continue;
@@ -379,7 +378,6 @@ final class Designation {
                         if (u.getAmount().get(0).getQuantity().compareTo(BigInteger.valueOf(5_000_000)) < 0) continue;
                         candidates.add(u);
                     }
-                    if (r.getValue().size() < 100) break;
                 }
             } catch (Exception e) {
                 throw new JoustException(what + ": cannot read the payer's UTxOs", e);
