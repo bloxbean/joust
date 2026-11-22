@@ -883,9 +883,14 @@ direct `Tx` building, gated by S3.
     shape the credit (a call that deposits more keeps less of its own), within what only the validators decide: the
     page cannot tell a body whose call deposits 1.5 ADA from one that deposits 1, as the call's validator does from the
     arguments the page verified. Either way the wallet loses at most the fee and its stated payments. Tokens the
-    transaction mints are not the wallet's: each mint leaves the intake of the call whose policy's `ByAction` redeemer
-    names its target (a mint the page cannot attribute leaves every call's credit), so none counts as kept, while a
-    call minting tokens for others does not cancel another call's kept payment. A call whose method takes no assets (no
+    transaction mints are not the wallet's. Mints are owned per policy: a destroy burns its own token and an adoption
+    mints its own, no other call's token is minted or burned, and any other unit is a user token whose policy's one
+    mint redeemer must be `ByAction` naming the target of a composed call under that policy whose method mints (that
+    call owns the policy's mint; other instances under the policy mint nothing). Of an owner's positive mint, what
+    leaves the call (its target, the payment it accepts, its mint and the deposits it receives, less its continuation
+    and the deposits it gives) is what it sends; only the rest stayed, and that part is not counted as kept. So a call
+    may send what it mints while keeping the wallet's payment, and a call minting tokens for others does not cancel
+    another call's kept payment; a lifecycle mint leaves every call's credit. A call whose method takes no assets (no
     `assetsIn`) may be offered none, and one that is not payable no lovelace. With that credit,
     others' receipts bound the wallet's net loss (the fee aside) by what the calls keep of their payments, less what
     the scripts send it back.
