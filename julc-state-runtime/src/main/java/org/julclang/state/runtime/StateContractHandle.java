@@ -226,25 +226,32 @@ public final class StateContractHandle<S> {
         boolean scoped = runtime.callScope() != null;
         if (!scoped && referenceScript != null) return referenceScript;
         var pinned = runtime.referenceScript(policyId);
-        if (pinned != null && pinned.getAddress() != null && pinned.getAddress().equals(address)) {
-            if (!scoped) referenceScript = pinned;
+        if (pinned != null && (pinned.getAddress() == null || !pinned.getAddress().equals(address))) pinned = null;
+        if (pinned != null && !scoped) {
+            referenceScript = pinned;
             return pinned;
         }
+        // A scoped call trusts only this call's answers: a pin is used once the answer shows it (a rollback may have
+        // removed it since the runtime was built; #145 Codex review), else the answer's own reference script.
+        Utxo first = null;
         try {
             for (int page = 1; page < 20; page++) {
                 var r = runtime.backend().getUtxoService().getUtxos(address, 100, page);
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
-                    if (policyId.equalsIgnoreCase(u.getReferenceScriptHash())) {
+                    if (!policyId.equalsIgnoreCase(u.getReferenceScriptHash())) continue;
+                    if (pinned == null) {
                         if (!scoped) referenceScript = u;
                         return u;
                     }
+                    if (Designation.ref(u).equals(Designation.ref(pinned))) return u;
+                    if (first == null) first = u;
                 }
             }
         } catch (Exception e) {
             throw new JoustException("cannot look up the " + spec.name() + " reference script", e);
         }
-        return null;
+        return first;
     }
 
     /**
