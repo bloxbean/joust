@@ -678,3 +678,141 @@ test('a single call whose method takes no assets is offered none', async () => {
   const offered = { ...o, call: { ...o.call, pay: { ...o.call.pay, assets: [['cd'.repeat(28), [['aa', 1n]]]] } } };
   refused(await verifyPrepared(offered), /the call takes no assets, but the page offers some/, 'an offer to unlock');
 });
+
+// The recorded Locker lock (the wallet locks 400 tokens it offers, through assetsIn), restated so that the locked token
+// is X under a second contract's policy (a copy of the Locker whose unlock mints, by its ByAction redeemer), composed
+// with that contract's unlock minting 5 X and paying them, with 2 ADA its instance releases, to a stranger.
+async function mintAndKeep() {
+  const r = recorded('locker/002-lock.json');
+  const base = inputsOf(r);
+  const tx = parseTx(r.cbor);
+  const [GOLD] = base.call.pay.assets[0];
+  const PA = 'ab'.repeat(28);
+  const swapUnit = (u) => (u.startsWith(GOLD) ? PA + u.slice(56) : u);
+  const swap = (m) => new Map([...m].map(([u, q]) => [swapUnit(u), q]));
+  const X = PA + base.call.pay.assets[0][1][0][0];
+  const refB = tx.inputs.find((i) => !base.wallet.utxos.has(i));
+  const refA = `${'dd'.repeat(32)}#0`;
+  const addrA = enterpriseAddress({ type: 'script', hash: PA }, 0);
+  const instance = base.call.instance;
+  const chainB = chainOf(r.x, (ref, u) => ({ ...u, value: swap(u.value) }));
+  const chain = {
+    ...chainB,
+    utxo: async (ref) => (ref === refA ? { address: addrA, value: new Map([['lovelace', 10n * ADA_], [PA + instance, 1n]]), referenceScriptHash: null } : chainB.utxo(ref)),
+  };
+  chain.verifiedOutput = chain.utxo;
+  const wallet = { ...base.wallet, utxos: new Map([...base.wallet.utxos].map(([k, u]) => [k, { ...u, value: swap(u.value) }])) };
+  // The second contract: the Locker's description with a ByAction mint redeemer, its unlock minting.
+  const descA = structuredClone(r.description);
+  descA.definitions['org.julclang.state.examples.locker.LockerValidator.Lifecycle'].anyOf.push({
+    title: 'ByAction', dataType: 'constructor', index: 2, fields: [{ title: 'by', $ref: '#/definitions/org.julclang.ledger.TxOutRef' }] });
+  const unlock = descA['x-joust'].actions.find((a) => a.name === 'unlock');
+  unlock.returns = { ...(unlock.returns ?? {}), mint: true };
+  const depA = { ...base.deployment, policy: PA, address: addrA };
+  const steps = [
+    { description: r.description, deployment: base.deployment, call: { ...base.call, pay: { lovelace: 0n, assets: [[PA, base.call.pay.assets[0][1]]] } } },
+    { description: descA, deployment: depA, call: { kind: 'action', meta: unlock, args: { qty: 1n }, instance, pay: { lovelace: 0n, assets: [] } } },
+  ];
+  const sorted = [...tx.inputs, refA].sort();
+  const build = (toStranger = 5n) => editTx(r.cbor, r.x, {
+    inputs: (ins) => {
+      ins.add(CSL.TransactionInput.new(CSL.TransactionHash.from_hex('dd'.repeat(32)), 0));
+      return ins;
+    },
+    mint: () => {
+      const m = CSL.Mint.new();
+      const a = CSL.MintAssets.new();
+      a.insert(CSL.AssetName.new(Buffer.from(X.slice(56), 'hex')), CSL.Int.new_i32(5));
+      m.insert(CSL.ScriptHash.from_hex(PA), a);
+      return m;
+    },
+    outputs: (cur) => {
+      const [cont, change] = cur.map(partsOf);
+      return [{ ...cont, value: swap(cont.value) }, { ...change, value: plus(swap(change.value), X, 5n - toStranger) },
+        { address: addrA, value: new Map([['lovelace', 8n * ADA_], [PA + instance, 1n]]), datumHex: cont.datumHex },
+        { address: STRANGER, value: new Map([['lovelace', 2n * ADA_], [X, toStranger]]) }].map(cslOutput);
+    },
+    redeemers: (rds) => {
+      const lock = rds.find((x) => x.tag === 'spend');
+      const data = parseTx(r.cbor).redeemers.find((x) => x.tag === 'spend').data;
+      const lockData = Data.constr(0, [data.fields[0], data.fields[1], Data.map([[Data.bytes(PA), data.fields[2].map[0][1]]])]);
+      return [...rds.filter((x) => x.tag !== 'spend'),
+        { ...lock, index: sorted.indexOf(refB), dataHex: dataHex(lockData) },
+        { ...lock, index: sorted.indexOf(refA), dataHex: dataHex(Data.constr(1, [Data.int(1n), data.fields[1]])) },
+        { tag: 'mint', index: 0, dataHex: dataHex(Data.constr(2, [refData(refA)])) }];
+    },
+  });
+  const verify = async (hex) => verifyComposed({ steps, wallet, chain, txHex: hex });
+  return { build, verify, X, inputs: { steps, wallet, chain } };
+}
+
+test('composition: a call minting tokens and paying them to others beside a call that keeps the wallet\'s tokens is accepted', async () => {
+  const w = await mintAndKeep();
+  accepted(await w.verify(await w.build()), 'the unlock\'s 5 minted X to a stranger, the lock keeping the wallet\'s 400 X');
+  // One more X to the stranger, from the wallet's change: refused.
+  refused(await w.verify(await w.build(6n)), new RegExp(`others receive 6 of ${w.X}, more than the scripts release to them`), 'one of the wallet\'s X to the stranger');
+});
+
+test('composition: a deposit into the depositor\'s own continuation is refused, even for a call that also receives', async () => {
+  const w = await feesWorld();
+  // The Stall's sell restated as also receiving (@Receives): its validator still refuses a deposit to itself (notSelf).
+  const steps = w.c.steps.map((st, i) => (i === 0 ? { ...st, call: { ...st.call, meta: { ...st.call.meta, policies: { ...st.call.meta.policies, receives: true } } } } : st));
+  const verify = async (txHex) => verifyComposed({ steps, wallet: w.c.wallet, chain: chainOf(w.c.x, (ref, u) => (ref === w.stall ? { ...u, value: plus(u.value, 'lovelace', SEND) } : u)), txHex });
+  // The Pot's continuation first: the recorded deposit (into output 1) lands on the Stall's own continuation.
+  const self = await w.build({ edit: ([s, p, ...rest]) => [p, s, ...rest] });
+  const r = await verify(self);
+  refused(r, /a deposit claimed for .* into its own continuation/, 'a self-deposit');
+  assert.ok(!r.problems.some((x) => /not the continuation of a composed call that receives/.test(x)), 'refused as a self-deposit, not as a non-receiver');
+});
+
+test('composition: a payment to a call whose method is not payable is refused', async () => {
+  const w = await mintAndKeep();
+  const hex = await w.build();
+  // The unlock is not payable (payable: false): 1 ADA stated for it.
+  const r = await verifyComposed({ ...w.inputs, txHex: hex, steps: w.inputs.steps.map((st, i) => (i === 1 ? { ...st, call: { ...st.call, pay: { lovelace: ADA_, assets: [] } } } : st)) });
+  refused(r, /unlock: it is not payable, but the page pays 1000000 lovelace/, 'a payment to unlock');
+});
+
+test('composition: a call that mints the tokens it is offered and keeps them has not kept the wallet\'s', async () => {
+  // The recorded lock, its token X now under the Locker's own policy: the lock mints 400 X into its continuation (its
+  // ByAction redeemer naming its target) while offered 400 X, and the wallet's own 400 X go to a stranger with 2 ADA
+  // the instance releases.
+  const r = recorded('locker/002-lock.json');
+  const base = inputsOf(r);
+  const tx = parseTx(r.cbor);
+  const [GOLD, names] = base.call.pay.assets[0];
+  const PB = base.deployment.policy;
+  const swap = (m) => new Map([...m].map(([u, q]) => [u.startsWith(GOLD) ? PB + u.slice(56) : u, q]));
+  const X = PB + names[0][0];
+  const refB = tx.inputs.find((i) => !base.wallet.utxos.has(i));
+  const chain = chainOf(r.x, (ref, u) => ({ ...u, value: ref === refB ? plus(swap(u.value), 'lovelace', 2n * ADA_) : swap(u.value) }));
+  chain.verifiedOutput = chain.utxo;
+  const wallet = { ...base.wallet, utxos: new Map([...base.wallet.utxos].map(([k, u]) => [k, { ...u, value: swap(u.value) }])) };
+  const desc = structuredClone(r.description);
+  desc.definitions['org.julclang.state.examples.locker.LockerValidator.Lifecycle'].anyOf.push({
+    title: 'ByAction', dataType: 'constructor', index: 2, fields: [{ title: 'by', $ref: '#/definitions/org.julclang.ledger.TxOutRef' }] });
+  const lock = desc['x-joust'].actions.find((a) => a.name === 'lock');
+  lock.returns = { ...(lock.returns ?? {}), mint: true };
+  const step = { description: desc, deployment: base.deployment, call: { ...base.call, meta: lock, pay: { lovelace: 0n, assets: [[PB, names]] } } };
+  const hex = await editTx(r.cbor, r.x, {
+    mint: () => {
+      const m = CSL.Mint.new();
+      const a = CSL.MintAssets.new();
+      a.insert(CSL.AssetName.new(Buffer.from(X.slice(56), 'hex')), CSL.Int.new_i32(400));
+      m.insert(CSL.ScriptHash.from_hex(PB), a);
+      return m;
+    },
+    outputs: (cur) => {
+      const [cont, change] = cur.map(partsOf);
+      return [{ ...cont, value: swap(cont.value) }, { ...change, value: swap(change.value) },
+        { address: STRANGER, value: new Map([['lovelace', 2n * ADA_], [X, 400n]]) }].map(cslOutput);
+    },
+    redeemers: (rds) => {
+      const data = tx.redeemers.find((x) => x.tag === 'spend').data;
+      const lockData = Data.constr(0, [data.fields[0], data.fields[1], Data.map([[Data.bytes(PB), data.fields[2].map[0][1]]])]);
+      return [...rds.map((x) => (x.tag === 'spend' ? { ...x, dataHex: dataHex(lockData) } : x)), { tag: 'mint', index: 0, dataHex: dataHex(Data.constr(2, [refData(refB)])) }];
+    },
+  });
+  const res = await verifyComposed({ steps: [step], wallet, chain, txHex: hex });
+  assert.deepEqual(res.problems, [`others receive 400 of ${X}, more than the scripts release to them`], 'refused for that alone');
+});

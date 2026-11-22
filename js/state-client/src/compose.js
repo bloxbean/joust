@@ -60,6 +60,8 @@ export async function verifyComposed(o) {
     // An adoption holds exactly what the prior instance held (below): it takes no payment, and one stated for it would
     // only raise what the wallet may lose.
     if (k.creation && (k.pay.lovelace !== 0n || [...k.pay.assets].length)) problems.push(`${k.call.meta.name}: an adoption takes no payment`);
+    // A method that is not payable takes no lovelace (as client.js refuses for one call).
+    else if (k.call.meta.payable === false && k.pay.lovelace !== 0n) problems.push(`${k.call.meta.name}: it is not payable, but the page pays ${k.pay.lovelace} lovelace`);
     // In a composition, deposits and @Receives are verifiable: their claims go through the pinned output verifier
     // (checked on chain), and the receiving call is part of the same transaction.
     const meta = k.call.meta;
@@ -344,6 +346,8 @@ export async function verifyComposed(o) {
       const into = pinning.find((x) => x.continuationIndex === d.output);
       if (!from || !from.call.meta.returns?.deposits) problems.push(`a deposit claimed for ${d.by}, not a composed call that deposits`);
       if (!into || !into.call.meta.policies?.receives) problems.push(`a deposit into output ${d.output}, not the continuation of a composed call that receives`);
+      // The depositing validator refuses a deposit to its own instance (notSelf).
+      if (from && from === into) problems.push(`a deposit claimed for ${d.by} into its own continuation`);
     }
   }
   for (const k of calls) {
@@ -403,6 +407,29 @@ export async function verifyComposed(o) {
       }
     }
   }
+  // Each positive mint, by the call that makes it: its policy's mint redeemer is ByAction naming that call's target
+  // (the policy checks it on chain). Tokens minted are not the wallet's, so they leave that call's intake before its
+  // credit is capped (else an offer of them would let as many of the wallet's own go to others); a mint the page cannot
+  // attribute leaves every call's credit.
+  const mintedBy = new Map(calls.map((k) => [k, new Map()]));
+  const unattributed = new Map();
+  for (const [unit, q] of minted) {
+    if (q <= 0n) continue;
+    const policy = unit.slice(0, 56);
+    const r = mints.find((x) => sortedPolicies[x.index] === policy);
+    const by = r && calls.find((x) => {
+      if (x.creation || x.policy !== policy || !x.targetRef || !x.rdefs.mint) return false;
+      try {
+        const alt = x.c.resolve(x.rdefs.mint).anyOf.find((a) => a.index === r.data.constr);
+        const d = x.c.decode(x.rdefs.mint, r.data);
+        return alt?.title === 'ByAction' && `${d.by?.txId}#${d.by?.index}` === x.targetRef;
+      } catch {
+        return false;
+      }
+    });
+    if (by) mintedBy.get(by).set(unit, q);
+    else unattributed.set(unit, q);
+  }
   const kept = new Map();
   for (const k of calls) {
     // An adoption's continuation is the prior instance's value, not the wallet's (it has no target here): no credit.
@@ -412,6 +439,7 @@ export async function verifyComposed(o) {
     add(own, k.targetValue, -1n);
     add(own, gives.get(k));
     add(own, gets.get(k), -1n);
+    add(own, mintedBy.get(k), -1n);
     const paid = new Map([['lovelace', k.pay.lovelace]]);
     for (const [p, assets] of k.pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
     for (const [unit, q] of own) {
@@ -419,10 +447,8 @@ export async function verifyComposed(o) {
       if (q > 0n && cap > 0n) kept.set(unit, (kept.get(unit) ?? 0n) + (q < cap ? q : cap));
     }
   }
-  // Tokens the transaction mints are not the wallet's: kept in a continuation, they are no payment kept (else an offer of
-  // them would let as many of the wallet's own go to others).
-  for (const [unit, q] of minted) {
-    if (q > 0n && kept.has(unit)) kept.set(unit, kept.get(unit) > q ? kept.get(unit) - q : 0n);
+  for (const [unit, q] of unattributed) {
+    if (kept.has(unit)) kept.set(unit, kept.get(unit) > q ? kept.get(unit) - q : 0n);
   }
   for (const [unit, q] of third) {
     const free = (released.get(unit) ?? 0n) + (kept.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
@@ -526,6 +552,7 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
     if (meta.kind === 'migrate' && (BigInt(s.pay?.lovelace ?? 0) !== 0n || (s.pay?.assets ?? []).length)) {
       throw new Error(`${s.method}: an adoption takes no payment`);
     }
+    if (meta.payable === false && BigInt(s.pay?.lovelace ?? 0) !== 0n) throw new Error(`${s.method} is not payable`);
     const args = {};
     for (const a of meta.args) {
       if (!(a.name in (s.args ?? {}))) throw new Error(`${s.method}: missing argument ${a.name}`);
