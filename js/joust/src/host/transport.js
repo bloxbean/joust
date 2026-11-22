@@ -29,8 +29,10 @@ const fs = require('node:fs');
 const { since, limit } = workerData;
 const kill = () => process.kill(process.pid, 'SIGKILL');
 const timer = setInterval(() => {
-  const start = Number(Atomics.load(since, 0));
-  if (start === 0 || Date.now() - start < limit) return;
+  // The clock first, then the write's start: a write that started after this sample gives a negative age.
+  const now = process.hrtime.bigint();
+  const start = Atomics.load(since, 0);
+  if (start === 0n || now - start < BigInt(limit) * 1_000_000n) return;
   clearInterval(timer);
   setTimeout(kill, 1000);
   fs.write(2, 'joust-host: stalled protocol write\\n', kill);
@@ -43,7 +45,7 @@ const timer = setInterval(() => {
 export function serve({ writeFrame, Worker, launch, deferred, writeStallMs = WRITE_STALL_MS }) {
   let worker, active, generation = 0, initialized = false, deadline = 60_000, stopped = false, backpressure = false;
   const reader = frameReader(accept, stop);
-  // The start (epoch ms) of the oldest frame write not yet finished, 0 when none; writes finish in order.
+  // The start (monotonic ns) of the oldest frame write not yet finished, 0 when none; writes finish in order.
   const since = new BigInt64Array(new SharedArrayBuffer(8)), writes = [];
   const watchdog = new Worker(WATCHDOG, { eval: true, workerData: { since, limit: writeStallMs }, stdout: true, stderr: true });
   watchdog.unref();
@@ -51,18 +53,18 @@ export function serve({ writeFrame, Worker, launch, deferred, writeStallMs = WRI
     if (stopped) return;
     stopped = true;
     // The reason line may block on a full stderr: the watchdog ends the process a second later.
-    Atomics.store(since, 0, BigInt(Date.now() - writeStallMs + 1000));
+    Atomics.store(since, 0, process.hrtime.bigint() - BigInt(writeStallMs - 1000) * 1_000_000n);
     if (reason) console.error('joust-host: ' + String(reason).replace(/[\r\n]/g, ' ').slice(0, 240));
     process.exit(reason ? 1 : 0);
   }
   function send(text, callback) {
     const frame = encode(text);
     if (!frame) return false;
-    writes.push(Date.now());
-    if (writes.length === 1) Atomics.store(since, 0, BigInt(writes[0]));
+    writes.push(process.hrtime.bigint());
+    if (writes.length === 1) Atomics.store(since, 0, writes[0]);
     const ready = writeFrame(frame, err => {
       writes.shift();
-      if (!stopped) Atomics.store(since, 0, BigInt(writes[0] ?? 0));
+      if (!stopped) Atomics.store(since, 0, writes[0] ?? 0n);
       err ? stop('protocol write failed') : callback?.();
     });
     if (!ready && !backpressure) {

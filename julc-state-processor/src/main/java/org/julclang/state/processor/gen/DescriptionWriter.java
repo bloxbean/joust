@@ -271,7 +271,8 @@ public final class DescriptionWriter {
         xj.put("maxDatumBytes", c.maxDatumBytes());
         // The widest validity window of a Ctx-reading call, when not the default (an hour), so a described client
         // keeps within the validator's limit as the generated one does (#154 Codex review).
-        if (c.maxValidityMs() != 3_600_000L) xj.put("maxValidityMs", c.maxValidityMs());
+        // A decimal string: the limit is a long, beyond what canonical JSON numbers carry (2^53 - 1).
+        if (c.maxValidityMs() != 3_600_000L) xj.put("maxValidityMs", Long.toString(c.maxValidityMs()));
         xj.put("assetAware", c.assetAware());
         xj.put("owned", owned);
         if (c.hasKeyed()) xj.put("keyed", keyed);   // ADR-0016 D11

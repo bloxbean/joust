@@ -51,5 +51,11 @@ class EngineCatalogTest {
         assertEquals(HostError.Kind.BAD, e.kind);
         assertEquals("stageMismatch", e.code);
         assertTrue(e.getMessage().contains("joust.transitions=false"), e.getMessage());
+
+        // One program lost, its manifest kept: still the build's stage mismatch, before the manifest check (Codex 2).
+        var fewer = new java.util.HashMap<>(c.transitions());
+        fewer.remove(fewer.keySet().iterator().next());
+        var lost = assertThrows(HostError.class, () -> EngineSession.catalog(entries(new Prepare.Contract(c.descriptionJson(), c.scriptCborHex(), fewer, c.manifestJson()))));
+        assertEquals("stageMismatch", lost.code);
     }
 }

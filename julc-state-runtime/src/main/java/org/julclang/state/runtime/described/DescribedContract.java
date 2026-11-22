@@ -88,7 +88,7 @@ public final class DescribedContract {
                     PlutusData.class, new PlutusData.ConstrData(link, List.of()), removeRedeemer));
         }
         // Absent in a description means the default limit, an hour (StateContract.maxValidityMs).
-        long maxValidityMs = x.has("maxValidityMs") ? x.get("maxValidityMs").asLong() : 3_600_000L;
+        long maxValidityMs = x.has("maxValidityMs") ? Long.parseLong(x.get("maxValidityMs").asText()) : 3_600_000L;
         this.spec = keyed.isEmpty()
                 ? ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
                         x.get("maxDatumBytes").asInt(), maxValidityMs, x.path("stakeSelf").asBoolean(),
