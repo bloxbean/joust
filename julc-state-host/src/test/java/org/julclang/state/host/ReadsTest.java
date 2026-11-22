@@ -170,4 +170,23 @@ class ReadsTest {
         b.getUtxoService().getUtxos(ADDRESS, 10, 1);
         failure("internal", "chainMoved", () -> b.getUtxoService().getTxOutput(HASH, 1));
     }
+    @Test void aRejectedChunkReleasesNoReservation() {
+        var table = new Reservations(3, false, 0);
+        table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
+        java.util.function.Supplier<Reads> session = () -> new Reads(req -> new Call.Answer(obj().set("result",
+                req.has("cursor") ? value(JSON.createArrayNode(), 204) : value(JSON.createArrayNode(), 199).put("more", "next")), 128),
+                199, 20, 10, 8192, 0, table::observe);
+        var first = session.get();
+        // The second chunk's point is past the expiry threshold (204 - 200 > 3), but the chunks disagree: the read is
+        // refused, so its tip is not evidence and the transaction's inputs stay reserved.
+        failure("internal", "inconsistentRead", () -> Reads.backend(() -> first).getUtxoService().getUtxos(ADDRESS, 10, 1));
+        assertTrue(table.avoids("spend"));
+        assertTrue(table.avoids("collateral"));
+        // An accepted answer at the same point does release them.
+        var accepted = new Reads(req -> new Call.Answer(obj().set("result", value(JSON.createArrayNode(), 204)), 128),
+                199, 20, 10, 8192, 0, table::observe);
+        assertDoesNotThrow(() -> Reads.backend(() -> accepted).getUtxoService().getUtxos(ADDRESS, 10, 1));
+        assertFalse(table.avoids("spend"));
+        assertFalse(table.avoids("collateral"));
+    }
 }

@@ -164,6 +164,8 @@ final class Session implements Transport.Handler {
         try { wallet = WalletAccount.of(address, network); }
         catch (IllegalArgumentException e) { throw bad("invalid caller address"); }
         var pay = request.has("pay") ? fields(request.get("pay"), "lovelace", "assets") : obj();
+        // The wire schema's assets is an array; any other shape is refused here, before a chain read, never dropped (#149 Codex).
+        if (pay.has("assets") && !pay.get("assets").isArray()) throw bad("pay.assets must be an array");
         var amount = pay.has("lovelace") ? (BigInteger) JsonValues.fromJson(pay.get("lovelace"), BigInteger.class, "pay.lovelace") : BigInteger.ZERO;
         var reads = new Reads(params -> execution.reverse("chain/read", params), now, limits.ahead, limits.reads,
                 limits.bytes, network.getNetworkId(), tip -> execution.whileLive(() -> reservations.observe(tip)));
