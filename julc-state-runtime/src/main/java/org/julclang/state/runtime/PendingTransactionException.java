@@ -22,6 +22,14 @@ public class PendingTransactionException extends JoustException {
         this.designatedInput = null;
     }
 
+    /** As {@link #PendingTransactionException(String, String)}, with what ended the wait ({@code cause}). */
+    public PendingTransactionException(String txHash, String message, Throwable cause) {
+        super(message + " (tx " + txHash + ")", cause);
+        this.txHash = txHash;
+        this.attempts = txHash == null ? List.of() : List.of(txHash);
+        this.designatedInput = null;
+    }
+
     /**
      * A keyed operation's pending outcome (ADR-0016 D7): {@code attempts} are the hashes of every attempt handed out, in
      * order (the last is {@link #txHash()}); {@code designatedInput} is the out-ref ({@code txHash#index}) they all spend.

@@ -151,6 +151,9 @@ final class KeyedObjects {
     private static Next next(StateRuntime rt, Designated d, String what, Throwable thrown, int retries) {
         if (thrown instanceof PendingTransactionException p) {
             if (d == null || p.designatedInput() != null) return new Next(false, p);
+            // Nothing of the operation was handed out: what may land is another transaction (a prerequisite such as a
+            // verifier publication), whose own hash is the outcome to recover by (#145 Codex).
+            if (d.attemptHashes().isEmpty() && p.txHash() != null) return new Next(false, p);
             var e = new PendingTransactionException(p.getMessage(), d.attemptHashes(), d.ref());
             e.initCause(p);
             return new Next(false, e);

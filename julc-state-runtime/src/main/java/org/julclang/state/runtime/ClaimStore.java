@@ -19,8 +19,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *       not rely on a claim to protect a reservation.</li>
  * </ul>
  * <p>
- * The default, {@link #jvm()}, is the store the runtime always had: static (shared by every runtime of the JVM that
- * uses it), with claims released at a machine-clock time. A dev host gives its session runtime its own store through
+ * The default is the store the runtime always had: static (shared by every runtime of the JVM that uses it), with
+ * claims released at a machine-clock time. It is the runtime's own: no public method hands it out, so code outside the
+ * runtime cannot end another runtime's claims or designations through it (#145 Codex review). A dev host gives its session runtime its own store through
  * {@link StateRuntime.Builder#claimStore}, driven by its reservation table: it releases on chain evidence (each
  * {@link Expiry} carries the slot after which what it releases can no longer land), and names inputs no build may
  * select ({@link #avoids}). A runtime never discovers a store by itself.
@@ -29,11 +30,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * serialised by the runtime (a lock per address), but queries come from any thread.
  */
 public interface ClaimStore {
-
-    /** The default store: this JVM's static claims, released by the machine clock (ADR-0016 D7; unchanged). */
-    static ClaimStore jvm() {
-        return JvmClaimStore.INSTANCE;
-    }
 
     // ------------------------------------------------------------------ designated inputs (ADR-0016 D7)
 
@@ -83,7 +79,7 @@ public interface ClaimStore {
 
     /**
      * When a claim or designation may end. {@code untilMs} is the machine-clock time the runtime has always used
-     * ({@link #jvm()} releases by it; it includes the runtime's own margins). {@code untilSlot} is the chain's view,
+     * (the default store releases by it; it includes the runtime's own margins). {@code untilSlot} is the chain's view,
      * always without any settlement margin: the exclusive validity upper bound of the transaction it guards (a
      * prepared transaction's {@code ttl}, an attempt's window end), or of the last attempt of a keyed operation; a
      * store applies its own settlement margin once (ADR-0022 D8: releasable once a tip passes

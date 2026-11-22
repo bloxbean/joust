@@ -5,8 +5,9 @@ description = 'JOUST dev host: the project\'s own JOUST, driven by an IDE over s
 dependencies {
     api project(':julc-state-serve')
     api project(':julc-state-runtime')
-    // The runtime evaluator already supplies julc-vm, at JuLC's (independent) version.
-    compileOnly libs.julc.vm.api
+    // Session.initialize loads JulcVmProvider itself: a runtime dependency, published, so the spec's metadata check
+    // requires julc-vm on the application's classpath at JuLC's (independent) version (#150 Codex review).
+    implementation libs.julc.vm.api
 }
 
 // ADR-0022 D3: the julc-state-runtime version this host was built with; `initialize` refuses another (`runtimeVersion`).

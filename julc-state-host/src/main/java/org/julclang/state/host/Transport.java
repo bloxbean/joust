@@ -29,6 +29,8 @@ final class Transport {
     // input thread's cancel and exit need. This watchdog takes no lock and ends the session on a stalled write (#149 Codex).
     private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().factory());
     private final AtomicBoolean exited = new AtomicBoolean();
+    /** Open until the exit that {@link #exited} claimed has run: {@link #run} does not return before it (#149). */
+    private final java.util.concurrent.CountDownLatch exitDone = new java.util.concurrent.CountDownLatch(1);
     private Call active;
     private long generation;
     private volatile boolean stopped;
@@ -72,6 +74,16 @@ final class Transport {
         } finally {
             timer.shutdownNow();
             watchdog.shutdownNow();
+            // An exit in progress on another thread (the watchdog's halt after its reason line) finishes first: main
+            // returning here could otherwise end the JVM with status 0 before that halt (#149 review P3-1).
+            if (exited.get()) {
+                boolean interrupted = false;
+                while (true) {
+                    try { exitDone.await(); break; }
+                    catch (InterruptedException e) { interrupted = true; }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -84,7 +96,12 @@ final class Transport {
     }
 
     private void exitOnce(String why) {
-        if (exited.compareAndSet(false, true)) exit.accept(why);
+        if (!exited.compareAndSet(false, true)) return;
+        try {
+            exit.accept(why);
+        } finally {
+            exitDone.countDown();
+        }
     }
 
     synchronized void accept(JsonNode msg, int bytes) throws Frames.Violation {

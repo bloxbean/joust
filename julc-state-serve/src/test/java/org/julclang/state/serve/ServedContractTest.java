@@ -282,10 +282,7 @@ class ServedContractTest {
         JsonNode f = fixture("0003-composed_transaction.json");
         var store = new RecordingStore();
         var rt = runtime(new SnapshotBackend(Fixtures.snapshot(f)), b -> b.claimStore(store));
-        assertSame(store, rt.claimStore());
-        int jvmBefore = ClaimStore.jvm().claims().size();
         var p = prepare(rt, f.get("call"));
-        assertEquals(jvmBefore, ClaimStore.jvm().claims().size(), "nothing claimed in the JVM's own store");
         assertEquals(f.get("txHash").asText(), p.txHash(), "a store that avoids nothing changes nothing");
         Transaction body = Transaction.deserialize(HexUtil.decodeHexString(p.cbor()));
         var spent = new HashSet<String>();
