@@ -15,7 +15,8 @@ import static org.julclang.state.host.Wire.*;
 class ReadsTest {
     static final String ADDRESS = "addr_test1wrpacy0txl7juaj802py5ev020c4u7pd30xdy3m66lsjsgca7qs4p";
     static final String HASH = "a".repeat(64);
-    static ObjectNode point(long slot) { return obj().put("hash", HASH).put("height", slot).put("slot", slot); }
+    // One block per slot: a block hash names one chain point.
+    static ObjectNode point(long slot) { return obj().put("hash", "%064x".formatted(slot)).put("height", slot).put("slot", slot); }
     static ObjectNode value(JsonNode v, long tip) {
         var n = obj();
         n.set("tip",point(tip));
@@ -135,7 +136,7 @@ class ReadsTest {
         var requests = new AtomicInteger();
         var b = backend(q -> { requests.incrementAndGet(); return value(point(12),12); });
         assertEquals(12,b.getBlockService().getLatestBlock().getValue().getSlot());
-        assertEquals(HASH,b.getBlockService().getLatestBlock().getValue().getHash());
+        assertEquals(point(12).get("hash").textValue(),b.getBlockService().getLatestBlock().getValue().getHash());
         assertEquals(1,requests.get());
     }
 
@@ -233,5 +234,28 @@ class ReadsTest {
         }
         var ok = output(0).put("data_hash", "c".repeat(64)).put("reference_script_hash", "d".repeat(56)).putNull("inline_datum");
         assertDoesNotThrow(() -> backend(q -> value(JSON.createArrayNode().add(ok), 10)).getUtxoService().getUtxos(ADDRESS, 10, 1));
+    }
+    @Test void aBlockHashNamesOnePoint() {
+        var table = new Reservations(3, false, 0);
+        table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
+        var reads = new Reads(req -> {
+            var a = req.path("kind").asText().equals("utxos") ? value(JSON.createArrayNode(), 199) : obj().put("absent", true);
+            a.set("tip", obj().put("hash", HASH).put("height", req.path("kind").asText().equals("utxos") ? 50 : 51)
+                    .put("slot", req.path("kind").asText().equals("utxos") ? 199 : 204));
+            return new Call.Answer(obj().set("result", a), 128);
+        }, 199, 20, 10, 8192, 0, table::observe);
+        var b = Reads.backend(() -> reads).getUtxoService();
+        assertDoesNotThrow(() -> b.getUtxos(ADDRESS, 10, 1));
+        failure("internal", "chainMoved", () -> b.getTxOutput(HASH, 0));
+        assertTrue(table.avoids("spend"));
+        assertTrue(table.avoids("collateral"));
+    }
+    @Test void inlineDatumHexOfEitherCaseIsOneDatum() throws Exception {
+        var listed = output(0).put("inline_datum", "41AB");
+        var looked = output(0).put("inline_datum", "41ab");
+        var b = backend(q -> q.path("kind").asText().equals("utxos") ? value(JSON.createArrayNode().add(listed), 10) : value(looked, 10))
+                .getUtxoService();
+        assertEquals(1, b.getUtxos(ADDRESS, 10, 1).getValue().size());
+        assertEquals("41ab", b.getTxOutput(HASH, 0).getValue().getInlineDatum());
     }
 }

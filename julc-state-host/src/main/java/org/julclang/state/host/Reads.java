@@ -26,6 +26,7 @@ final class Reads {
     private final LongConsumer observe;
     private long count, bytes, lastHeight = -1;
     private String lastHash;
+    private final Set<String> seenHashes = new HashSet<>();
     long greatestTip = -1;
     private final Snapshot snapshot = new Snapshot();
     private final SnapshotBackend local = new SnapshotBackend(snapshot);
@@ -198,6 +199,8 @@ final class Reads {
         // Some providers omit the redundant data_hash on output lookup. Compare it
         // by deriving the hash from the exact inline datum bytes in both projections.
         if (u.getInlineDatum() != null) {
+            // The schema allows either case; one spelling, so two answers with the same bytes agree (sameOutput).
+            u.setInlineDatum(u.getInlineDatum().toLowerCase(Locale.ROOT));
             String hash;
             try {
                 hash = HexFormat.of().formatHex(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(
@@ -277,8 +280,13 @@ final class Reads {
         String hash = tip.get("hash").textValue();
         if (slot.longValue() < greatestTip || height.longValue() < lastHeight
                 || slot.longValue() == greatestTip && !hash.equals(lastHash)
-                || height.longValue() == lastHeight && slot.longValue() != greatestTip)   // final review F-B3
+                || height.longValue() == lastHeight && slot.longValue() != greatestTip   // final review F-B3
+                || !hash.equals(lastHash) && seenHashes.contains(hash)
+                || hash.equals(lastHash) && (slot.longValue() != greatestTip || height.longValue() != lastHeight))
+            // A block hash names one point: seen again at another slot or height, an answer contradicts the call's
+            // evidence and must not advance reservations (#149 Codex fix review).
             throw HostError.internal("chainMoved", "chain point rolled back or was replaced");
+        seenHashes.add(hash);
         int variants = 0;
         for (String k : List.of("value", "absent", "unsupported", "failed")) if (a.has(k)) variants++;
         if (variants != 1 || a.path("value").isNull()
