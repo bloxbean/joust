@@ -1,13 +1,13 @@
 {
   "method" : "prepare",
   "params" : {
-    "now" : 1896,
+    "now" : 1886,
     "ttlSlots" : 20,
     "call" : {
       "contract" : "org.julclang.state.examples.treasury.Treasury",
       "kind" : "action",
       "method" : "pay",
-      "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+      "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
       "args" : {
         "to" : "22222222222222222222222222222222222222222222222222222222",
         "amount" : "1"
@@ -22,7 +22,7 @@
   },
   "clock" : {
     "zeroSlot" : 0,
-    "zeroTimeMs" : 1795146252000,
+    "zeroTimeMs" : 1795339145000,
     "slotLengthMs" : 1000
   },
   "time" : {
