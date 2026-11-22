@@ -313,8 +313,11 @@ final class Designation {
         ClaimStore store = rt.claimStore();
         if (store.avoids(ref) && !store.reusable(ref)) throw new ReservedInputException("the designated input", ref);
         boolean complete = false;
+        // A host answers from the complete wallet listing it acquired: read all of it, so a designation past the first
+        // 2,000 outputs is found (#156 Codex review). A provider keeps the earlier bound.
+        int lastPage = rt.hostedCall() ? 100_000 : 20;
         try {
-            for (int page = 1; page <= 20; page++) {
+            for (int page = 1; page <= lastPage; page++) {
                 var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                 if (!r.isSuccessful()) {
                     throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref + ": " + r.getResponse());

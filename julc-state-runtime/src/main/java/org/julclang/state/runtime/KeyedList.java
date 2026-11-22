@@ -259,16 +259,17 @@ public final class KeyedList<S, R> {
             if (type.signedKey() && !Arrays.equals(key, callerPkh)) {
                 throw new RequireException(what + ": the key must be the caller's key hash (signedKey, I53)");
             }
+            // A host's reserved, not yet final transaction that inserts, burns or relinks this key's token decides it
+            // first: a rollback or settlement can change the listing, so the caller waits, before the duplicate and the
+            // cooldown checks (#156 Codex review).
+            if (rt.hostedCall() && rt.claimStore().reservesToken(unit(key))) {
+                throw new CallScope.Refusal("pending", what + ": key " + keyHex + " is held by a transaction that is not final");
+            }
             var all = listing();
             Listed<R> anchor = predecessor(all, keyHex);
             String after = HexUtil.encodeHexString(anchor.node().next());
             if (checkTaken && (all.containsKey(keyHex) || after.equals(keyHex))) {
                 boolean retired = all.containsKey(keyHex) && all.get(keyHex).node().kind() == KeyedType.Node.Kind.RETIRED;
-                // An insert of this key that a host still holds (shallow, or prepared) can be rolled back: not taken for
-                // good yet, so the caller waits (#156 Codex review).
-                if (!retired && rt.hostedCall() && rt.claimStore().reservesToken(unit(key))) {
-                    throw new CallScope.Refusal("pending", what + ": key " + keyHex + " is held by a transaction that is not final");
-                }
                 throw new RequireException(what + ": key " + keyHex + " is already taken" + (retired ? " (retired, for good)" : ""));
             }
             // D7 step 4: wait for the anchor's cooldown by moving the window, and start again (the key may change).

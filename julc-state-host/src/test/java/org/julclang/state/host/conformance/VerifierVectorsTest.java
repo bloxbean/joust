@@ -164,6 +164,7 @@ class VerifierVectorsTest {
      */
     static final Map<String,String> UNCOVERED = Map.of(
             "continuingOutput/keyedInsert#signedKey", "needs a recorded insert of a signed-key type (Registry's Ballot cast)",
+            "continuingOutput/keyedInsert#signedKeySigner", "needs a recorded insert of a signed-key type (Registry's Ballot cast)",
             "deposit/keyedHead#maxTop", "needs a head output whose minimum exceeds minAda by 10 ADA (over 2,300 bytes)",
             "keyedLink/relink#width", "needs a client clock giving link times outside 33 to 64 bits, with every Ctx and linkedAt re-derived",
             "notVerifiable/keyedCall#payment", "needs a recorded keyed call to a non-payable method without Ctx (Registry's change or recover)");
