@@ -87,12 +87,21 @@ final class Frames {
         }
     }
 
-    /** Writes whole frames, one at a time, to the protocol's descriptor. */
+    /**
+     * Writes whole frames, one at a time, to the protocol's descriptor. {@link #writingSince()} is the monotonic time the
+     * frame being written started, or 0 between frames: a frame that does not complete within {@link #STALL_NANOS} ends
+     * the session (the client stopped reading), and the host's watchdog sees it without this writer's lock.
+     */
     static final class Writer {
         private final OutputStream out;
+        private volatile long writingSince;
 
         Writer(OutputStream out) {
             this.out = out;
+        }
+
+        long writingSince() {
+            return writingSince;
         }
 
         /** Writes one frame; false if the write failed (the commit point is not reached, D8). */
@@ -103,11 +112,14 @@ final class Frames {
                 byte[] frame = new byte[head.length + body.length];
                 System.arraycopy(head, 0, frame, 0, head.length);
                 System.arraycopy(body, 0, frame, head.length, body.length);
+                writingSince = System.nanoTime() | 1;   // never 0 while a frame is being written
                 out.write(frame);
                 out.flush();
                 return true;
             } catch (IOException e) {
                 return false;
+            } finally {
+                writingSince = 0;
             }
         }
     }

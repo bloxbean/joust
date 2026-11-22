@@ -332,6 +332,9 @@ final class Reservations implements ClaimStore {
         if (!p.path("transactions").isArray()) throw bad("transactions must be an array");
         var staged = new LinkedHashMap<>(entries);
         var restoredMaps = new HashMap<String, MapWithdrawal.Restored>();
+        // The live bodies, indexed by hash: finding a restored body's entry takes no scan of the table (#149 Codex).
+        var live = new HashMap<String, Entry>();
+        for (var e : staged.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
         var out = obj();
         var ids = out.putArray("reservations");
         for (var t : p.get("transactions")) {
@@ -372,10 +375,8 @@ final class Reservations implements ClaimStore {
             if (state == State.shallow && op != null) op = op.handedOut(b.hash,b.to);
             Long slot = state == State.shallow ? inclusion(b, t) : null;
             if (slot == null && t.has("slot")) throw bad("prepared transaction has no inclusion slot");
-            var existing = staged.values().stream().filter(e -> e.body.hash.equals(b.hash) && e.live()).findFirst();
-            Entry e;
-            if (existing.isPresent()) {
-                e = existing.get();
+            Entry e = live.get(b.hash);
+            if (e != null) {
                 if (e.state != state || !Objects.equals(e.slot, slot)) throw conflict();
                 if (!Objects.equals(e.operation, op)) {
                     // A rewind can re-import our prepared result after the client handed it out.
@@ -386,10 +387,12 @@ final class Reservations implements ClaimStore {
                             || !op.attempts().entrySet().containsAll(known.attempts().entrySet())) throw KeyedOperation.mismatch();
                     e = new Entry(e.id,b,state,slot,op);
                     staged.put(e.id,e);
+                    live.put(b.hash,e);
                 }
             } else {
                 e = new Entry(Long.toString(++lastId), b, state, slot, op);
                 staged.put(e.id, e);
+                live.put(b.hash, e);
             }
             maps.checkRestored(e.id, imported.writes(), restoredMaps.get(e.id));
             if (imported.writes() != null) restoredMaps.put(e.id, imported.writes());

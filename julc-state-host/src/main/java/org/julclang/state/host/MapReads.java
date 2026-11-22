@@ -22,7 +22,7 @@ record MapReads(Reads reads) {
             var page = reads.mapAnswer("assetHistory", request);
             if (point != null && !point.equals(page.get("tip"))) throw inconsistent("history chunks have different tips");
             point = page.get("tip");
-            if (page.has("absent") && cursor == null) return List.of();
+            if (page.has("absent") && cursor == null) { reads.accepted(); return List.of(); }
             var items = page.path("value");
             if (!items.isArray()) throw inconsistent("expected ordered asset history");
             for (var item : items) {
@@ -37,6 +37,7 @@ record MapReads(Reads reads) {
             if (page.has("more") && (cursor == null || cursor.isEmpty() || !cursors.add(cursor)))
                 throw inconsistent("invalid history cursor");
         } while (cursor != null);
+        reads.accepted();   // every page at one chain point, ordered (#149 Codex: only accepted reads advance reservations)
         return List.copyOf(txs);
     }
 
@@ -81,6 +82,7 @@ record MapReads(Reads reads) {
         }
         try { MapHistory.replay(store, withdrawals); }
         catch (RuntimeException e) { throw inconsistent("malformed or inconsistent map history claim"); }
+        reads.accepted();   // the redeemers and datums replayed
     }
 
     static HostError inconsistent(String message) { return HostError.internal("inconsistentRead", message); }
