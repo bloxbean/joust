@@ -123,16 +123,18 @@ class ForkedSessionTest {
     }
 
     /**
-     * #150 review SA5: everything the in-process replay covers, under the OS-level observation: every plain recording (18
-     * since the JuLC 0.1.0-pre22 re-recording; each prepared, checked byte for byte and discarded), a contract refusal, a
-     * failed read and a cancellation.
+     * #150 review SA5: everything the in-process replay covers, under the OS-level observation: every plain recording
+     * (each prepared, checked byte for byte and discarded; together they cover {@link ReplayTest#PLAIN}), a contract
+     * refusal, a failed read and a cancellation.
      */
     private static void serve(Frames.Writer writer, Frames.Reader reader) throws Exception {
         int id = 1;
-        int prepared = 0;
+        var replayed = new java.util.HashSet<String>();
         try (var paths = Files.list(ReplayTest.FIXTURES.resolve("dapp"))) {
             for (Path path : paths.sorted().toList()) {
-                if (!Set.of("init", "action", "destroy").contains(JSON.readTree(path.toFile()).at("/call/kind").asText())) continue;
+                var f = JSON.readTree(path.toFile());
+                if (!Set.of("init", "action", "destroy").contains(f.at("/call/kind").asText())) continue;
+                replayed.add(ReplayTest.covered(f));
                 var r = ReplayTest.Recording.read(path);
                 var result = success(call(writer, reader, ++id, "prepare", r.params(), r::answer, null));
                 assertEquals(r.fixture().required("unsignedTx"), result.at("/prepared/cbor"), path.toString());
@@ -140,10 +142,9 @@ class ForkedSessionTest {
                 success(call(writer, reader, ++id, "settled", obj().put("status", "discarded")
                         .put("reservation", str(tx, "reservation")).put("txHash", str(tx, "txHash"))
                         .put("tip", r.point().required("slot").asLong()), r::answer, null));
-                prepared++;
             }
         }
-        assertEquals(18, prepared, "ADR-0022 §9 plain recordings (ReplayTest.plainPrepares)");
+        ReplayTest.assertCovers(replayed, ReplayTest.PLAIN, "ADR-0022 §9 plain recordings, traced");
         var r = IntegrationTest.record();
         // An earlier recording: reset the session's floor for now (reservations are kept).
         success(call(writer, reader, ++id, "reset", obj().put("now", r.point().required("slot").asLong()), r::answer, null));
