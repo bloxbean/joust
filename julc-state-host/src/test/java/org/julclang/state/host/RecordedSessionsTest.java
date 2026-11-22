@@ -34,7 +34,7 @@ class RecordedSessionsTest {
     }
     static ObjectNode record(String name) throws Exception {
         boolean bank = name.equals("bank");
-        var first = recording(bank ? "Bank-publish-1" : "registry-019-release");
+        var first = recording(bank ? "Bank-publish-1" : "registry-m3-release");
         var params = first.required("params");
         String contract = (bank ? params : params.required("call")).required("contract").textValue();
         var entry = M1bTest.entry(Class.forName(contract+"Client"));

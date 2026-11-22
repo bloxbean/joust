@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class KeyedReservationTest {
     @Test void restoreAndSettleAcrossEveryKeyedTransition() throws Exception {
-        var v = ClientVectors.recording("registry-019-release");
+        var v = ClientVectors.recording("registry-m3-release");
         var p = v.required("params").deepCopy();
         var built = v.required("expected");
         String hash = str(built,"txHash"), cbor = str(built,"cbor");
@@ -51,7 +51,7 @@ class KeyedReservationTest {
     }
 
     @Test void unsignedDiscardDoesNotBecomePartOfTheHandedOutHistory() throws Exception {
-        var v = ClientVectors.recording("registry-019-release");
+        var v = ClientVectors.recording("registry-m3-release");
         var op = KeyedOperation.parse(v.at("/params/call/operation"));
         var b = Reservations.Body.decode(v.at("/expected/cbor").asText(),0);
         var table = new Reservations(2,false,0);
@@ -70,7 +70,7 @@ class KeyedReservationTest {
     }
 
     @Test void clientPageLimitsNarrowTheWindowOrYieldAnActionableCooldown() throws Exception {
-        var v = ClientVectors.recording("registry-019-release");
+        var v = ClientVectors.recording("registry-m3-release");
         var call = v.withObject("/params/call");
         var answers = RecordedSessionsTest.answers(v);
         long now = v.at("/params/now").asLong();

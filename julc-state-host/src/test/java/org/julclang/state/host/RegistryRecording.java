@@ -20,9 +20,29 @@ final class RegistryRecording {
         return op;
     }
 
-    static ObjectNode record(String name) throws Exception {
+    /**
+     * The fixtures/m3/registry recording behind each keyed role, by method and occurrence rather than by number (a
+     * re-recording renumbers them): the init, the first upgrade (a keyed action), the second claim (a key inserted into
+     * a registry already holding one), the first release (a removal) and the first retire.
+     */
+    static final java.util.Map<String, java.util.Map.Entry<String, Integer>> ROLES = java.util.Map.of(
+            "init", java.util.Map.entry("init", 1), "upgrade", java.util.Map.entry("upgrade", 1),
+            "claim", java.util.Map.entry("claim", 2), "release", java.util.Map.entry("release", 1),
+            "retire", java.util.Map.entry("retire", 1));
+
+    static java.nio.file.Path file(String role) throws Exception {
         var dir = ReplayTest.FIXTURES.resolveSibling("m3").resolve("registry");
-        var f = JSON.readTree(dir.resolve(name + ".json").toFile());
+        var r = ROLES.get(role);
+        if (r == null) throw new AssertionError("no keyed role " + role);
+        try (var s = java.nio.file.Files.list(dir)) {
+            var matching = s.filter(p -> p.getFileName().toString().matches("\\d+-" + r.getKey() + "\\.json")).sorted().toList();
+            if (matching.size() < r.getValue()) throw new AssertionError("fixtures/m3/registry has " + matching.size() + " " + r.getKey() + " recordings, not " + r.getValue());
+            return matching.get(r.getValue() - 1);
+        }
+    }
+
+    static ObjectNode record(String name) throws Exception {
+        var f = JSON.readTree(file(name).toFile());
         ObjectNode call = f.required("call").deepCopy();
         call.remove(List.of("walletUtxos", "referenceScripts"));
         operation(call);

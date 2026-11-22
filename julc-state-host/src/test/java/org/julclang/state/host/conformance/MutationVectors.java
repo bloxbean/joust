@@ -602,7 +602,7 @@ public final class MutationVectors {
                 e.raw(e.splice(w,head(5,w.items.size()/2+1)+"01"+"d9010281"+"8200581c"+OTHER+w.raw().substring(2)));
             })
         ));
-        String removal = "registry-019-release", action = "registry-005-upgrade";
+        String removal = "registry-m3-release", action = "registry-m3-upgrade";
         cases.addAll(List.of(
                 new Case("keyed-widened", removal, "keyedWindow/bounds", e -> e.keyedWindow(0,1)),
                 new Case("keyed-late-start", removal, "keyedWindow/bounds", e -> e.keyedWindow(3,3)),
@@ -638,7 +638,7 @@ public final class MutationVectors {
                     e.swap(e.redeemers().items.get(5).at(0),link);
                 })));
         // One vector per KeyedRules check and conjunct (D11 list roles), on the five recorded Registry calls.
-        String init = "registry-001-init", insert = "registry-017-claim", retire = "registry-021-retire";
+        String init = "registry-m3-init", insert = "registry-m3-claim", retire = "registry-m3-retire";
         cases.addAll(List.of(
                 new Case("keyed-head-instance", init, "continuingOutput/keyedHead", e -> e.outDatum(1, e.outDatum(1).replace(e.instanceId(), ELSEWHERE))),
                 new Case("keyed-head-next", init, "continuingOutput/keyedHead", e -> e.outDatum(1, e.outDatum(1).replace(e.instanceId()+"4000ff", e.instanceId()+"416100ff"))),

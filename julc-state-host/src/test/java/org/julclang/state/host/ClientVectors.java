@@ -23,13 +23,13 @@ final class ClientVectors {
             "HostCouncil-init", "HostCouncil-publish-1", "destroy-events", "owned-action", "owned-destroy",
             "owned-init", "quorum-caller", "quorum-two", "owned-quorum-caller", "owned-quorum-two", "owned-events-caller",
             "owned-destroy-events", "dapp-0003", "dapp-0015", "permuted",
-            "registry-init", "registry-upgrade", "registry-claim", "registry-release", "registry-retire"));
+            "registry-m3-init", "registry-m3-upgrade", "registry-m3-claim", "registry-m3-release", "registry-m3-retire"));
         for (String name : HostVectorsTest.REGISTRY) if (!name.equals("Registry-cooldown") && Files.exists(HOST.resolve(name+".json"))) names.add(name);
         return List.copyOf(names);
     }
 
     static ObjectNode recording(String name) throws Exception {
-        if (name.startsWith("registry-")) return RegistryRecording.record(name.substring("registry-".length()));
+        if (name.startsWith("registry-m3-")) return RegistryRecording.record(name.substring("registry-m3-".length()));
         if (name.startsWith("dapp-")) {
             var r = ReplayTest.Recording.read(ReplayTest.FIXTURES.resolve("dapp/" + name.substring(5) + "-composed_transaction.json"));
             return HostVectorsTest.record("prepare", r.params(), init(), JSON.createArrayNode(), r::answer, null);
