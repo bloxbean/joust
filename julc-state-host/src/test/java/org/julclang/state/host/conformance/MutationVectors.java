@@ -675,6 +675,7 @@ public final class MutationVectors {
                 }),
                 new Case("keyed-action-mint", action, "mint/keyedAction", e -> e.foreignMint(1)),
                 new Case("keyed-wallet-loss", action, "netOutflow/keyedWallet", e -> e.transfer(0, 1, 1)),
+                new Case("keyed-change-at-enterprise", action, "walletOutput/keyedChange", e -> e.address(1, "60" + e.caller())),
                 new Case("keyed-coins", action, "notVerifiable/keyedCall", e -> e.v.withObject("/protocolParams").put("coins_per_utxo_size", 0)),
                 new Case("keyed-assets", action, "notVerifiable/keyedCall", e -> e.v.withObject("/request/call/pay").putArray("assets")
                         .addArray().add(OTHER).addArray().addArray().add("01").add("1")),

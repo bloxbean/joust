@@ -212,7 +212,10 @@ public final class DescribedContract {
         }
         boolean hostedOwnedQuorum = runtime.hostedCall() && meta.path("policies").path("quorum").isObject()
                 && (kind.equals("ownedAction") || kind.equals("ownedDestroy"));
-        if (signedByOthers && !hostedOwnedQuorum && !kind.equals("action") && !kind.equals("destroy") && !kind.equals("keyedAction")) {
+        // A keyed removal takes its co-signers like a keyed action (the dispatch below adds them): the dev hosts serve
+        // both, so the npm host must not refuse what the JVM host prepares (#156 Codex review).
+        if (signedByOthers && !hostedOwnedQuorum && !kind.equals("action") && !kind.equals("destroy") && !kind.equals("keyedAction")
+                && !kind.equals("keyedRemove")) {
             throw new BadCall(method + ": @Quorum and @AuthorizedBy on " + kind + " calls: not supported yet (ADR-0015 M3)");
         }
         if (!signedByOthers && !cosigners.isEmpty()) throw new BadCall(method + " takes no co-signers");

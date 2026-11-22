@@ -300,7 +300,7 @@ final class KeyedRules {
                     var tag = codec.decode(codec.definition("org.julclang.ledger.TxOutRef"),data(o.required("datum").asText()));
                     c.test("walletOutput/keyedTag",target!=null && target.ref.equals(ref(tag)));
                     add(tagged,amount,1);
-                }
+                } else c.test("walletOutput/keyedChange",c.payer.equals(addr)); // rule 6: change stays at the payer (#156 Codex)
             } else {
                 c.test("walletOutput/keyedForeignKey",!c.caller.equals(paymentKey(addr)));
                 if (c.enabled("netOutflow/keyedThird#receipts")) add(third,amount,1);

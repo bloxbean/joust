@@ -316,6 +316,8 @@ final class Session implements Transport.Handler {
             boolean spend = !creation && !kind.equals("keyedInit");
             if (creation == (operation.identity().instance() != null) || spend != (operation.identity().key() != null))
                 throw KeyedOperation.mismatch();
+            // Before any chain read: a failed or late read must not lose the handoff this retry reports (#156 Codex).
+            whileLive.accept(() -> reservations.acknowledge(operation));
         }
         var wallet = wallet(str(request, "address"));
         boolean quorum = meta.at("/policies/quorum").isObject();

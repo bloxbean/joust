@@ -167,6 +167,11 @@ final class Reservations implements ClaimStore {
         return false;
     }
 
+    @Override public boolean reservesToken(String unit) {
+        for (var e : entries.values()) if (e.live() && e.body.keyedTokens.contains(unit)) return true;
+        return false;
+    }
+
     @Override public boolean avoids(String ref) {
         for (var e : entries.values()) {
             if (e.live() && (e.body.inputs.contains(ref) || e.body.collateral.contains(ref))) return true;
@@ -183,6 +188,19 @@ final class Reservations implements ClaimStore {
     @Override public boolean isDesignated(String ref) { return false; }
     @Override public boolean designate(String ref) { throw new Unsupported("designate"); }
     @Override public void undesignate(String ref, Expiry when) { throw new Unsupported("undesignate"); }
+
+    /**
+     * A retry acknowledges the handoff of every attempt its record lists with that attempt's own deadline, even when the
+     * prepare then fails or answers pending. Retained across rollback, so a later discarded notification cannot release
+     * signed inputs. The session takes it before any chain read, and for an attempt that already expired too: a failed
+     * read must not lose it, and a rewind can revive the attempt (#156 Codex review).
+     */
+    void acknowledge(KeyedOperation op) {
+        var id = op.identity();
+        entries.replaceAll((rid,e) -> e.state != State.discarded && e.operation != null && id.equals(e.operation.identity())
+                && Objects.equals(op.attempts().get(e.body.hash), e.body.to) && !e.operation.attempts().containsKey(e.body.hash)
+                ? new Entry(rid,e.body,e.state,e.slot,e.operation.handedOut(e.body.hash,e.body.to)) : e);
+    }
 
     // Use the chain point of the complete wallet listing, never now or an output-by-ref lookup.
     void checkOperation(KeyedOperation op, boolean unspent, long tip, String objectUnit) {
@@ -214,11 +232,7 @@ final class Reservations implements ClaimStore {
             landed |= e.state == State.confirmed;
         }
         if (known && !expected.equals(op.attempts())) throw KeyedOperation.mismatch();
-        // A matching retry acknowledges handoff even when this prepare must return pending.
-        // Retain it across rollback so a later discarded notification cannot release signed inputs.
-        if (known) entries.replaceAll((rid,e) -> e.live() && e.operation != null && id.equals(e.operation.identity())
-                && op.attempts().containsKey(e.body.hash) && !e.operation.attempts().containsKey(e.body.hash)
-                ? new Entry(rid,e.body,e.state,e.slot,e.operation.handedOut(e.body.hash,e.body.to)) : e);
+        acknowledge(op);
         if (!unspent || landed) throw HostError.refusal("mayHaveLanded", "designated input spent or an attempt confirmed");
         if (pending || avoids(id.designated()) || op.attempts().values().stream().anyMatch(to -> tip - to <= margin))
             throw HostError.refusal("pending", "a previous attempt or an input is still reserved");
@@ -322,6 +336,8 @@ final class Reservations implements ClaimStore {
         if (!p.get("transactions").isEmpty()) for (var e : staged.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
         var out = obj();
         var ids = out.putArray("reservations");
+        // The record each entry of this batch carried: the protocol journals one record per operation (#156 Codex).
+        var records = new HashMap<String, KeyedOperation>();
         for (var t : p.get("transactions")) {
             fields(t, "cbor", "state", "slot", "operation");
             Body b = Body.decode(str(t, "cbor"), network);
@@ -344,13 +360,20 @@ final class Reservations implements ClaimStore {
                 // restored record does not list, expired (K2) or prepared (awaiting approval, or revived by a rewind
                 // below its validTo), does not refuse the client's record; a prepared one stays reserved, and the
                 // next prepare answers pending until it is discarded or expires (final review F-K1).
-                if (same && !held.body.hash.equals(b.hash) && deadline == null && !previous.attempts().containsKey(held.body.hash)
-                        && (held.state == State.expired || held.state == State.prepared)) continue;
+                // Only the listing is exempt: what the held record already acknowledges is checked in either order
+                // (#156 Codex review).
+                boolean unlisted = same && !held.body.hash.equals(b.hash) && deadline == null;
+                boolean exempt = unlisted && !previous.attempts().containsKey(held.body.hash)
+                        && (held.state == State.expired || held.state == State.prepared);
                 if (deadline != null && (!same || deadline != held.body.to) ||
                         priorDeadline != null && (!same || priorDeadline != b.to)) throw KeyedOperation.mismatch();
-                if (same && (!op.attempts().entrySet().containsAll(previous.attempts().entrySet()) ||
-                        !held.body.hash.equals(b.hash) && deadline == null)) throw KeyedOperation.mismatch();
+                if (same && (!op.attempts().entrySet().containsAll(previous.attempts().entrySet()) || unlisted && !exempt))
+                    throw KeyedOperation.mismatch();
+                var carried = records.get(held.id);
+                if (op != null && carried != null && carried.identity().equals(op.identity())
+                        && !carried.attempts().equals(op.attempts())) throw KeyedOperation.mismatch();
             }
+            var record = op;
             State state = switch (str(t, "state")) {
                 case "prepared" -> State.prepared;
                 case "shallow" -> State.shallow;
@@ -377,6 +400,24 @@ final class Reservations implements ClaimStore {
                 e = new Entry(Long.toString(++lastId), b, state, slot, op);
                 staged.put(e.id, e);
                 live.put(b.hash, e);
+            }
+            if (record != null) {
+                records.put(e.id, record);
+                // The fuller record is kept on every entry of the operation, so one restored from an earlier batch
+                // with an older record takes this one's acknowledgements (#156 Codex review).
+                var fuller = record;
+                var upgraded = new ArrayList<Entry>();
+                for (var held : staged.values()) {
+                    if (held.state == State.discarded || held.operation == null || held.id.equals(e.id)
+                            || !held.operation.identity().equals(fuller.identity())
+                            || held.operation.attempts().equals(fuller.attempts())) continue;
+                    var op2 = held.state == State.shallow ? fuller.handedOut(held.body.hash, held.body.to) : fuller;
+                    upgraded.add(new Entry(held.id, held.body, held.state, held.slot, op2));
+                }
+                for (var u : upgraded) {
+                    staged.put(u.id, u);
+                    if (live.get(u.body.hash) != null && live.get(u.body.hash).id.equals(u.id)) live.put(u.body.hash, u);
+                }
             }
             ids.add(e.id);
         }

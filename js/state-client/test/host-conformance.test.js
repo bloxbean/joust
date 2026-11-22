@@ -36,6 +36,9 @@ const pageGaps = {
   'keyed-signed-by': 'signedBy against the keyed target\'s state',
   // #153 Codex review: the kit refuses these two; the page does not yet (bloxbean/joust#162).
   'claimed-third-party-tagged': claims, 'owned-destroy-wrong-parent': 'the owned target names the call\'s instance',
+  // #156 Codex review: keyed change at the caller's enterprise address (protocol rule 6); keyed.js counts that address
+  // as the wallet's (bloxbean/joust#162).
+  'keyed-change-at-enterprise': 'keyed change at the payer\'s address',
 };
 
 // Positive vectors (by `mutation`) the page verifier still refuses: protocol 1 accepts them. Each must still be refused
