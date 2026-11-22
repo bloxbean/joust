@@ -258,4 +258,13 @@ class ReadsTest {
         assertEquals(1, b.getUtxos(ADDRESS, 10, 1).getValue().size());
         assertEquals("41ab", b.getTxOutput(HASH, 0).getValue().getInlineDatum());
     }
+    @Test void aMisspelledContinuationIsRefusedNotTheEnd() {
+        var table = new Reservations(3, false, 0);
+        table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
+        var reads = new Reads(req -> new Call.Answer(obj().set("result",
+                value(JSON.createArrayNode().add(output(0)), 204).put("cursor", "page2")), 128), 199, 20, 10, 8192, 0, table::observe);
+        failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+        assertTrue(table.avoids("spend"));
+        assertTrue(table.avoids("collateral"));
+    }
 }

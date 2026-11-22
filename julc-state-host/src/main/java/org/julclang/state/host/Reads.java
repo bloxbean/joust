@@ -27,6 +27,7 @@ final class Reads {
     private long count, bytes, lastHeight = -1;
     private String lastHash;
     private final Set<String> seenHashes = new HashSet<>();
+    private static final Set<String> RESULT_FIELDS = Set.of("tip", "value", "absent", "unsupported", "failed", "more");
     long greatestTip = -1;
     private final Snapshot snapshot = new Snapshot();
     private final SnapshotBackend local = new SnapshotBackend(snapshot);
@@ -287,6 +288,10 @@ final class Reads {
             // evidence and must not advance reservations (#149 Codex fix review).
             throw HostError.internal("chainMoved", "chain point rolled back or was replaced");
         seenHashes.add(hash);
+        // The schema's closed result: a misspelled continuation (cursor for more) would end a listing early (#149 Codex).
+        for (var names = a.fieldNames(); names.hasNext(); ) {
+            if (!RESULT_FIELDS.contains(names.next())) throw inconsistent("unknown read result field");
+        }
         int variants = 0;
         for (String k : List.of("value", "absent", "unsupported", "failed")) if (a.has(k)) variants++;
         if (variants != 1 || a.path("value").isNull()
