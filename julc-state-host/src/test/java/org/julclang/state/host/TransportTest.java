@@ -156,4 +156,33 @@ class TransportTest {
             assertEquals("execution did not stop within two seconds", c.exits.poll(3, TimeUnit.SECONDS));
         } finally { release.countDown(); }
     }
+    @Test void aBlockedOutputStillEndsTheSession() throws Exception {
+        var blocked = new CountDownLatch(1);
+        var writing = new CountDownLatch(1);
+        var exits = new LinkedBlockingQueue<String>();
+        var input = new PipedOutputStream();
+        var t = new Transport(new PipedInputStream(input, 65536), new OutputStream() {
+            public void write(int b) { write(new byte[]{(byte) b}, 0, 1); }
+            public void write(byte[] b, int off, int len) {   // the client stopped reading: the pipe is full
+                writing.countDown();
+                while (true) try { blocked.await(); } catch (InterruptedException ignored) {}
+            }
+        }, x -> exits.add(x == null ? "exit" : x), new Transport.Handler() {
+            public long deadlineMs() { return 300; }
+            public Transport.Reply execute(Call call, JsonNode p) {
+                call.reverse("chain/read", obj().put("kind", "tip"));
+                return new Transport.Reply(obj());
+            }
+        });
+        Thread.ofPlatform().daemon().start(t::run);
+        var writer = new Frames.Writer(input);
+        writer.write("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get\"}".getBytes());
+        assertTrue(writing.await(2, TimeUnit.SECONDS));
+        writer.write("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}".getBytes());
+        // The reverse request's write holds the transport's monitor, so neither the deadline nor exit can act; the
+        // watchdog ends the session once the write has stalled for the frame bound.
+        assertNull(exits.poll(1, TimeUnit.SECONDS));
+        assertEquals("stalled protocol write", exits.poll(12, TimeUnit.SECONDS));
+        assertNull(exits.poll(200, TimeUnit.MILLISECONDS));   // once
+    }
 }

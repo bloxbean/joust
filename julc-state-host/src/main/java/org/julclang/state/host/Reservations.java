@@ -230,7 +230,11 @@ final class Reservations implements ClaimStore {
         fields(p, "transactions", "complete");
         boolean complete = bool(p, "complete");
         if (!p.path("transactions").isArray()) throw bad("transactions must be an array");
-        var staged = new LinkedHashMap<>(entries);
+        // One pass indexes the live bodies by hash, so a batch costs linear time in the table and the batch, and only the
+        // batch's additions are staged: restore never changes an existing entry (#149 Codex).
+        var live = new HashMap<String, Entry>();
+        for (var e : entries.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
+        var added = new LinkedHashMap<String, Entry>();
         var out = obj();
         var ids = out.putArray("reservations");
         for (var t : p.get("transactions")) {
@@ -243,19 +247,18 @@ final class Reservations implements ClaimStore {
             };
             Long slot = state == State.shallow ? inclusion(b, t) : null;
             if (slot == null && t.has("slot")) throw bad("prepared transaction has no inclusion slot");
-            var existing = staged.values().stream().filter(e -> e.body.hash.equals(b.hash) && e.live()).findFirst();
-            Entry e;
-            if (existing.isPresent()) {
-                e = existing.get();
+            Entry e = live.get(b.hash);
+            if (e != null) {
                 if (e.state != state || !Objects.equals(e.slot, slot)) throw conflict();
             } else {
                 e = new Entry(Long.toString(++lastId), b, state, slot);
-                staged.put(e.id, e);
+                added.put(e.id, e);
+                live.put(b.hash, e);
             }
             ids.add(e.id);
         }
         return new Transport.Reply(out, () -> {
-            entries = staged;
+            entries.putAll(added);
             reconcile = !complete;
         });
     }
