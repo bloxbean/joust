@@ -158,7 +158,7 @@ function probe(t) {
           while (performance.now() < end) {}
         }
       }
-      return { response: JSON.stringify({ result: method === 'large' ? 'x'.repeat(4194304) : committed }) };
+      return { response: JSON.stringify({ result: method === 'large' ? 'x'.repeat(4194304) : method === 'wide' ? 'x'.repeat(1 << 20) : committed }) };
     } } });
   `);
   return { root, build: bundle(root, []) };
@@ -218,6 +218,39 @@ test('D10 a session mutation and the latch are one step (#154 review M2-4)', asy
   // Cancelled first: the later mutation's claim fails.
   assert.ok(await cancel('late', 50) < 150);
   assert.equal((await peer.rpc('claimed', {})).result, false);
+  // A competing request before the cancellation is answered: busy comes first, and the cancellation only after the
+  // worker releases the call (#154 Codex review).
+  peer.send({ jsonrpc: '2.0', method: 'hold', id: 'held' });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const sent = performance.now();
+  peer.send({ jsonrpc: '2.0', method: '$/cancelRequest', params: { id: 'held' } });
+  peer.send({ jsonrpc: '2.0', method: 'competing', id: 'competing' });
+  const first = await peer.receive();
+  assert.equal(first.id, 'competing');
+  assert.equal(first.error.data.code, 'busy');
+  const second = await peer.receive();
+  assert.equal(second.id, 'held');
+  assert.equal(second.error.data.code, 'cancelled');
+  assert.ok(performance.now() - sent >= 150);
+  await new Promise(resolve => setTimeout(resolve, 450));
+  assert.equal((await peer.rpc('claimed', {})).result, true);
+});
+
+test('D2 a client that stops reading stdout ends the session within the write bound, stdin still open (#154 Codex review)', async t => {
+  const { root, build } = probe(t);
+  const peer = client(root);
+  t.after(() => peer.child.kill('SIGKILL'));
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build })).result, 0);
+  let diagnostics = '';
+  peer.child.stderr.on('data', b => { diagnostics += b; });
+  // A 1 MiB result fills the pipe: the client never reads it, and keeps stdin open.
+  const sent = performance.now();
+  peer.send({ jsonrpc: '2.0', method: 'wide', id: 'wide' });
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(Error('host still running')), 20_000));
+  await Promise.race([new Promise(resolve => peer.child.once('exit', resolve)), timeout]);
+  const waited = performance.now() - sent;
+  assert.ok(waited >= 9_000 && waited < 15_000, 'ended after ' + waited + ' ms');
+  assert.match(diagnostics, /stalled protocol write/);
 });
 
 test('I7 the fingerprint covers the host closure, and the host runs the bytes it hashed (#154 review M2-6)', async t => {

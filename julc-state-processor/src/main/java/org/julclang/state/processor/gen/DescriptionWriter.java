@@ -269,6 +269,9 @@ public final class DescriptionWriter {
         xj.put("stakeSelf", c.stakeSelf());
         xj.put("minAda", c.minAda());
         xj.put("maxDatumBytes", c.maxDatumBytes());
+        // The widest validity window of a Ctx-reading call, when not the default (an hour), so a described client
+        // keeps within the validator's limit as the generated one does (#154 Codex review).
+        if (c.maxValidityMs() != 3_600_000L) xj.put("maxValidityMs", c.maxValidityMs());
         xj.put("assetAware", c.assetAware());
         xj.put("owned", owned);
         if (c.hasKeyed()) xj.put("keyed", keyed);   // ADR-0016 D11

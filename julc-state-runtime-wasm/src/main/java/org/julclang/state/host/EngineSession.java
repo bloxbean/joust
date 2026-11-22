@@ -61,7 +61,7 @@ public final class EngineSession {
         if (reply != null) reply.commit().run();
     }
 
-    private static Contracts catalog(JsonNode entries) throws Exception {
+    static Contracts catalog(JsonNode entries) throws Exception {
         var contracts = new TreeMap<String, Contracts.Contract>();
         for (JsonNode entry : entries) {
             var source = JSON.treeToValue(entry, Prepare.Contract.class);
@@ -75,9 +75,29 @@ public final class EngineSession {
             var calls = code == null ? new Described(load(source, desc), messages) : null;
             var c = new Contracts.Contract(name, desc, !x.path("keyed").isEmpty(), x.path("stakeSelf").asBoolean(),
                     messages, calls, hash, code, false);
+            if (calls != null) requirePrograms(c, source);
             if (contracts.put(name, c) != null) throw bad("duplicate contract " + name);
         }
         return new Contracts(contracts);
+    }
+
+    /**
+     * Every call the catalog serves has its transition program: a build without them (joust.transitions=false) is a
+     * stage mismatch at initialize, with the remedy, not a served method that fails when prepared (#154 Codex review).
+     */
+    private static void requirePrograms(Contracts.Contract c, Prepare.Contract source) {
+        var programs = source.transitions() == null ? Map.<String, String>of() : source.transitions();
+        for (String group : List.of("creations", "actions", "purposes")) {
+            for (JsonNode m : c.description().path("x-joust").path(group)) {
+                String kind = m.path("kind").asText(m.path("purpose").textValue());
+                if (kind == null || c.code(kind, m) != null) continue;
+                String transition = m.path("recipe").path("transition").asText(null);
+                if (transition != null && !programs.containsKey(transition)) {
+                    throw HostError.bad("stageMismatch", c.name() + "." + m.path("name").asText() + " has no transition program"
+                            + (programs.isEmpty() ? ": the build has none (joust.transitions=false); build with transition programs" : ": rebuild the project"));
+                }
+            }
+        }
     }
 
     // Hosted calls exclude maps. Their transition needs only the step and the VM's typed verdict.
@@ -93,7 +113,7 @@ public final class EngineSession {
                 case ERROR -> throw HostError.internal("internal", "transition failed: " + result.run().refusal());
                 case BUDGET -> throw HostError.internal("evaluator", result.run().refusal());
             };
-        });
+        }, true);
     }
 
     private record Described(DescribedContract contract, JsonNode messages) implements ContractCalls {

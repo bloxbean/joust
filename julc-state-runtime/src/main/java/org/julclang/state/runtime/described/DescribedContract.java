@@ -61,11 +61,19 @@ public final class DescribedContract {
     private final java.util.Map<String, org.julclang.state.runtime.KeyedType<PlutusData>> keyed = new java.util.LinkedHashMap<>();
 
     public DescribedContract(JsonNode description, String scriptCborHex, TransitionFn fn) {
+        this(description, scriptCborHex, fn, false);
+    }
+
+    /**
+     * {@code strictWire}: read call arguments and params as the dev host's wire bounds them ({@link SchemaCodec}'s
+     * strict mode), as the JVM host does (#154 Codex review).
+     */
+    public DescribedContract(JsonNode description, String scriptCborHex, TransitionFn fn, boolean strictWire) {
         this.description = description;
         this.x = description.get("x-joust");
         if (x == null || x.path("version").asInt() < 2) throw new BadCall("a JOUST description of version 2 is needed (with call recipes)");
         this.name = description.path("preamble").path("title").asText();
-        this.codec = new SchemaCodec(description);
+        this.codec = new SchemaCodec(description, strictWire);
         for (JsonNode k : x.path("keyed")) {
             if (!k.isObject()) continue;   // a description before ADR-0016 M3 names keyed types only
             int link = k.path("link").path("index").asInt();
@@ -79,12 +87,14 @@ public final class DescribedContract {
                     k.path("signedKey").asBoolean(), k.path("linkCooldownMs").asLong(), k.path("linkWindowMs").asLong(),
                     PlutusData.class, new PlutusData.ConstrData(link, List.of()), removeRedeemer));
         }
+        // Absent in a description means the default limit, an hour (StateContract.maxValidityMs).
+        long maxValidityMs = x.has("maxValidityMs") ? x.get("maxValidityMs").asLong() : 3_600_000L;
         this.spec = keyed.isEmpty()
                 ? ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
-                        x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
+                        x.get("maxDatumBytes").asInt(), maxValidityMs, x.path("stakeSelf").asBoolean(),
                         mapFields(refKey(x.get("state"))))
                 : ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
-                        x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
+                        x.get("maxDatumBytes").asInt(), maxValidityMs, x.path("stakeSelf").asBoolean(),
                         mapFields(refKey(x.get("state"))), List.copyOf(keyed.values()));
         // Every evaluation's inputs are checked against the declared types first (ADR-0020 S15).
         this.fn = new TransitionInputs(description, fn);
@@ -97,6 +107,11 @@ public final class DescribedContract {
 
     public JsonNode description() {
         return description;
+    }
+
+    /** The contract's spec as this description gives it (its limits, its keyed types). */
+    public ContractSpec<PlutusData> spec() {
+        return spec;
     }
 
     public SchemaCodec codec() {

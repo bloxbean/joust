@@ -16,22 +16,55 @@ register('data:text/javascript,' + encodeURIComponent(workerData.hooks), { data:
 import(workerData.entry).catch(e => { setImmediate(() => { throw e; }); });
 `;
 
+// A frame write that does not finish within this bound ends the session, as the JVM host's watchdog does (a client
+// that stops reading stdout would otherwise hold the host, its deadline and its exit, for as long as it likes).
+export const WRITE_STALL_MS = 10_000;
+
+// The watchdog runs on its own thread: on Linux a pipe write blocks the event loop, so no timer there could fire. It
+// reads the start of the oldest unfinished write and kills the process (SIGKILL: the main thread may be blocked, and
+// a project's SIGTERM handler would run there), after at most a second for the reason line on stderr.
+const WATCHDOG = `
+const { workerData } = require('node:worker_threads');
+const fs = require('node:fs');
+const { since, limit } = workerData;
+const kill = () => process.kill(process.pid, 'SIGKILL');
+const timer = setInterval(() => {
+  const start = Number(Atomics.load(since, 0));
+  if (start === 0 || Date.now() - start < limit) return;
+  clearInterval(timer);
+  setTimeout(kill, 1000);
+  fs.write(2, 'joust-host: stalled protocol write\\n', kill);
+}, 100);
+`;
+
 // The event loop owns the terminal latch. The worker may block on a reverse read or
 // execute Wasm, but cannot commit a transaction without an acknowledgement on its FIFO.
 // Worker is the constructor the guard captured before denying it; deferred, a launch failure for initialize.
-export function serve({ writeFrame, Worker, launch, deferred }) {
+export function serve({ writeFrame, Worker, launch, deferred, writeStallMs = WRITE_STALL_MS }) {
   let worker, active, generation = 0, initialized = false, deadline = 60_000, stopped = false, backpressure = false;
   const reader = frameReader(accept, stop);
+  // The start (epoch ms) of the oldest frame write not yet finished, 0 when none; writes finish in order.
+  const since = new BigInt64Array(new SharedArrayBuffer(8)), writes = [];
+  const watchdog = new Worker(WATCHDOG, { eval: true, workerData: { since, limit: writeStallMs }, stdout: true, stderr: true });
+  watchdog.unref();
   function stop(reason) {
     if (stopped) return;
     stopped = true;
+    // The reason line may block on a full stderr: the watchdog ends the process a second later.
+    Atomics.store(since, 0, BigInt(Date.now() - writeStallMs + 1000));
     if (reason) console.error('joust-host: ' + String(reason).replace(/[\r\n]/g, ' ').slice(0, 240));
     process.exit(reason ? 1 : 0);
   }
   function send(text, callback) {
     const frame = encode(text);
     if (!frame) return false;
-    const ready = writeFrame(frame, err => err ? stop('protocol write failed') : callback?.());
+    writes.push(Date.now());
+    if (writes.length === 1) Atomics.store(since, 0, BigInt(writes[0]));
+    const ready = writeFrame(frame, err => {
+      writes.shift();
+      if (!stopped) Atomics.store(since, 0, BigInt(writes[0] ?? 0));
+      err ? stop('protocol write failed') : callback?.();
+    });
     if (!ready && !backpressure) {
       backpressure = true;
       process.stdin.pause();
@@ -70,6 +103,7 @@ export function serve({ writeFrame, Worker, launch, deferred }) {
       if (state === 3) { call.latching = setImmediate(latch); return; }
       if (state !== 2 && Atomics.compareExchange(call.control, 0, state, 2) !== state) { latch(); return; }
       Atomics.notify(call.control, 0);
+      call.latched = true;
       // A blocked read can unwind immediately. Its response normally releases the generation
       // before a client that has received cancellation starts the next recorded call.
       if (waiting) call.wakeup = setTimeout(() => call.reportControl?.(), 50);
@@ -150,7 +184,9 @@ export function serve({ writeFrame, Worker, launch, deferred }) {
       return;
     }
     if (active) {
-      active.reportControl?.();
+      // The cancellation goes first only once latched: while the worker still holds the call (3), its report waits
+      // for the release, after this busy answer (#154 Codex review).
+      if (active.latched) active.reportControl?.();
       if (!send(error(msg.id, failure('bad', 'busy', 'another call is running')))) stop('response id exceeds frame budget');
       return;
     }
