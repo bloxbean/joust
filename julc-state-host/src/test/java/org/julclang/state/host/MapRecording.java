@@ -146,7 +146,11 @@ final class MapRecording {
                     for (var m : tx.getBody().getMint()) for (var a : m.getAssets()) carried.add(m.getPolicyId() + a.getNameAsHex().replace("0x", ""));
                 units.put(hash, carried);
                 var list = JSON.createArrayNode();
-                for (var red : tx.getWitnessSet().getRedeemers()) {
+                // A reference-script publication (the pre22 recordings start with them) carries no redeemers.
+                var witnesses = tx.getWitnessSet();
+                var spent = witnesses == null || witnesses.getRedeemers() == null
+                        ? List.<com.bloxbean.cardano.client.plutus.spec.Redeemer>of() : witnesses.getRedeemers();
+                for (var red : spent) {
                     String purpose = red.getTag().name().toLowerCase(Locale.ROOT);
                     byte[] bytes = red.getData().serializeToBytes();
                     String h = HexFormat.of().formatHex(Blake2bUtil.blake2bHash256(bytes));
