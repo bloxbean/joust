@@ -20,7 +20,7 @@ final class ClientVectors {
             "Dex-combined-reconstructed", "Dex-init", "Dex-publish-1", "Dex-publish-2", "Dex-publish-3",
             "HostCouncil-init", "HostCouncil-publish-1", "destroy-events", "owned-action", "owned-destroy",
             "owned-init", "quorum-caller", "quorum-two", "owned-quorum-caller", "owned-quorum-two", "owned-events-caller",
-            "owned-destroy-events", "dapp-0003", "dapp-0034", "permuted");
+            "owned-destroy-events", "dapp-0003", "dapp-0015", "permuted");
 
     static ObjectNode recording(String name) throws Exception {
         if (name.startsWith("dapp-")) {

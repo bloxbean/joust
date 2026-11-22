@@ -12,7 +12,7 @@
         },
         "clock" : {
           "zeroSlot" : 0,
-          "zeroTimeMs" : 1795146252000,
+          "zeroTimeMs" : 1795339145000,
           "slotLengthMs" : 1000
         },
         "network" : {
@@ -60,8 +60,8 @@
         "contracts" : [ {
           "name" : "org.julclang.state.examples.registry.Registry",
           "scriptHashes" : {
-            "spend" : "6dd1cca38bde10649ad09bef7f0910576d1aed68e9f0e64e21fa32ef",
-            "mint" : "6dd1cca38bde10649ad09bef7f0910576d1aed68e9f0e64e21fa32ef"
+            "spend" : "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f",
+            "mint" : "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f"
           },
           "served" : true
         } ]
@@ -1353,13 +1353,13 @@
       "id" : 3,
       "method" : "prepare",
       "params" : {
-        "now" : 1896,
+        "now" : 1886,
         "ttlSlots" : 20,
         "call" : {
           "contract" : "org.julclang.state.examples.registry.Registry",
           "kind" : "init",
           "method" : "init",
-          "address" : "addr_test1qzn03wdj63e9h0wn2vt3dt3pdkxssryk52u07tt20pche7xpuyp3w7zsv50qn8j7cr0k5208rca69hcej8cgv4zrensq7ssm8p",
+          "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
           "args" : { }
         }
       },

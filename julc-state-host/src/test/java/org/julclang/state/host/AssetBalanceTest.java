@@ -18,8 +18,6 @@ import static org.julclang.state.host.Wire.obj;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AssetBalanceTest {
-    private static final TransactionInput TOKEN = new TransactionInput(
-            "35abf00055528926c268d5888d984886c71860eaeb9849904ce25437472534e5", 0);
 
     private static JsonNode recording() throws Exception {
         try (var input = AssetBalanceTest.class.getResourceAsStream("/dex-add-liquidity-split-wallet.json")) {
@@ -31,24 +29,33 @@ class AssetBalanceTest {
         return Transaction.deserialize(HexFormat.of().parseHex(prepared.required("cbor").asText())).getBody();
     }
 
+    /**
+     * The fixed build on the same split wallet: its lovelace and its M1B in separate UTxOs. The supplied failing
+     * recording (the resource) was made with pre21 scripts, so the build is checked on the DevKit host vector of the
+     * same Dex addLiquidity, recorded under JuLC 0.1.0-pre22 (fixtures/host/Dex-addLiquidity.json).
+     */
     @Test void splitWalletPaysDexFromTheRecordedTokenInput() throws Exception {
-        var vector = recording();
+        var vector = JSON.readTree(HostVectorsTest.DIRECTORY.resolve("Dex-addLiquidity.json").toFile());
+        String policy = vector.at("/params/call/pay/assets/0/0").asText();
+        String unit = policy + vector.at("/params/call/pay/assets/0/1/0/0").asText();
         var answers = new HashMap<JsonNode, JsonNode>();
+        TransactionInput token = null;
         for (var read : vector.required("reads")) {
             var request = read.required("request");
-            var answer = read.required("answer");
-            answers.put(request, answer);
+            answers.put(request, read.required("answer"));
             if (request.path("address").equals(vector.at("/params/call/address"))) {
-                // The fixed build also resolves this input individually. Use its recorded D6 listing and tip.
-                var token = answer.required("value").required(1);
-                assertEquals(TOKEN.getTransactionId(), token.required("tx_hash").asText());
-                assertEquals(TOKEN.getIndex(), token.required("output_index").intValue());
-                var lookup = obj().put("kind", "output").put("ref", TOKEN.getTransactionId() + "#0");
-                var found = obj();
-                found.set("tip", answer.required("tip"));
-                answers.put(lookup, found.set("value", token));
+                // The wallet's listing: one UTxO holds the M1B, apart from its lovelace-only UTxOs.
+                for (var u : read.at("/answer/value")) {
+                    boolean carries = false;
+                    for (var a : u.required("amount")) carries |= a.required("unit").asText().equals(unit);
+                    if (carries) {
+                        assertNull(token, "one wallet UTxO holds the M1B");
+                        token = new TransactionInput(u.required("tx_hash").asText(), u.required("output_index").intValue());
+                    }
+                }
             }
         }
+        assertNotNull(token, "the recorded wallet holds the M1B");
         var response = HostVectorsTest.run(vector, q -> {
             var answer = answers.remove(q);
             assertNotNull(answer, q::toString);
@@ -56,11 +63,10 @@ class AssetBalanceTest {
         });
         var prepared = success(response).required("prepared");
         var tx = body(prepared);
-        assertTrue(tx.getInputs().contains(TOKEN), "wallet token UTxO must be spent");
+        assertTrue(tx.getInputs().contains(token), "wallet token UTxO must be spent");
         assertTrue(answers.isEmpty(), "unused chain reads");
-        assertEquals("f91543aac9cf1695c4c4d96a2807ddd183eaae8157bbd405da4e88604265708d", prepared.required("txHash").asText());
-        String unit = vector.at("/params/call/pay/assets/0/0").asText() + "4d3142";
-        assertEquals("100000", prepared.at("/plan/outputs/0/value").required(unit).asText());
+        assertEquals(vector.at("/expected/txHash").asText(), prepared.required("txHash").asText());
+        assertEquals(vector.at("/params/call/pay/assets/0/1/0/1").asText(), prepared.at("/plan/outputs/0/value").required(unit).asText());
         assertTrue(tx.getOutputs().getLast().getValue().getMultiAssets().isEmpty());
     }
 
