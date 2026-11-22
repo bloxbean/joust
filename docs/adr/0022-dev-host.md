@@ -200,7 +200,11 @@ on npm, D15), the difference is a **capability** in `initialize`'s answer, never
     **union** of the application's selected components and the two host components: `org.julclang` modules must be
     selected at exactly the plugin's version; every other declared module must be selected. If the application
     already selects `julc-state-serve` (an HTTP-server consumer), its copy is used when its version is the plugin's
-    and the task fails otherwise (`incompatible adapter`). Any unsatisfied dependency fails the task, naming it. The
+    and the task fails otherwise (`incompatible adapter`). Any application entry that carries a class of either tool
+    jar (a multi-release jar's `META-INF/versions/<n>/` entries included) must be that jar byte for byte, since it wins
+    class lookup; a partial or rebuilt copy is refused, and so is a composite build (`includeBuild`) that substitutes
+    `julc-state-serve` with its own output: develop the adapter against a published build, not through the dev host.
+    Any unsatisfied dependency fails the task, naming it. The
     host runs on precisely the graph the application runs on, plus two jars, and never ships with it.
   - **Ordered and complete** (r5, C44): every entry has a global `ordinal` (its position on the class path) and a
     `kind`; a directory lists every regular file with its digest; a jar has its digest. A jar whose manifest has a

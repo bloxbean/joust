@@ -11,7 +11,7 @@ absolute path and kind. A `dir` has a `files` object mapping relative POSIX path
 A `jar` has one `sha256`. The digest uses the fingerprint format below. Missing optional source-set outputs take
 no ordinal. Missing artifacts and jar manifest Class-Path additions fail the build.
 
-The client must obtain user trust and an explicit launch action. Validate the ordered launch spec, copy every entry into a private immutable snapshot, verify the digest, and retain the snapshot until the process exits. Launch the project's JDK 25+ toolchain from the project root with these arguments, each passed directly to the executable.
+The client must obtain user trust and an explicit launch action. Validate the ordered launch spec, copy every entry into a private immutable snapshot, verify the digest, and retain the snapshot until the process exits. Copy only regular files, opened without following links and without blocking (or under a deadline): a FIFO or device swapped in for an entry must not stall the launch. Launch the project's JDK 25+ toolchain from the project root with these arguments, each passed directly to the executable.
 
 ```text
 -XX:+DisplayVMOutputToStderr -Xlog:disable -Xlog:all=warning:stderr --enable-native-access=ALL-UNNAMED
