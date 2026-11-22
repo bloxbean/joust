@@ -258,10 +258,11 @@ Each must be `true` or `false`; `release.yml` refuses a missing or misspelled fl
 was still `true` (from the JuLC snapshot days) while the publish flags were on. JuLC is now pinned to a release, so it
 is `false`. A tag is permanent: the next release needs a new version (e.g. `-rc5`).
 
-**JuLC.** JOUST depends on JuLC `0.1.0-pre21-rc1` (`julc` in `gradle/libs.versions.toml`), a release in the BloxBean
-release repository (`https://repo.bloxbean.org/maven/releases`), **not on Maven Central**. A JOUST version published to
-Central therefore resolves for consumers only with the BloxBean release repository added (as the README shows), until
-the JuLC version it names is on Central too.
+**JuLC.** JOUST depends on JuLC `0.1.0-pre22` (`julc` in `gradle/libs.versions.toml`) and cardano-client-lib
+`0.8.0-pre8`, the version that JuLC release depends on. Both are on Maven Central; JuLC is also in the BloxBean release
+repository (`https://repo.bloxbean.org/maven/releases`). Pin JuLC releases only: a release candidate such as
+`0.1.0-pre21-rc1` is in the BloxBean release repository but **not on Maven Central**, so a JOUST version published to
+Central that names one resolves for consumers only with the BloxBean release repository added.
 
 ## Rehearsal
 
