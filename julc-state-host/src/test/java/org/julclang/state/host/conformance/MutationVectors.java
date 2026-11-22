@@ -181,6 +181,8 @@ public final class MutationVectors {
             new Case("extra-script-input",SPEND,"scriptInput/foreign",e -> e.extraScriptInput()),
             new Case("creation-script-input",BANK,"scriptInput/foreign",e -> e.extraScriptInput()),
             new Case("owned-instance-target",OWNED,"scriptInput/ownedInstance",e -> e.targetDatum(e.call("instance"),ELSEWHERE)),
+            // A destroy has no continuation: its spent holding alone binds it to the parent (#151 Codex review).
+            new Case("owned-destroy-wrong-parent","owned-destroy","scriptInput/ownedInstance",e -> e.targetDatum(e.call("instance"),ELSEWHERE)),
             new Case("target-datum",OWNED,"scriptInput/datum",e -> e.resolved(e.target()).put("inline_datum","00")),
             new Case("signed-by-other",OWNED,"signer/signedBy",e -> e.targetDatum(e.caller(),OTHER)),
             new Case("unknown-reference",SPEND,"referenceInput/allowed",e -> {
@@ -417,10 +419,29 @@ public final class MutationVectors {
                 for (int k : List.of(0,13,18)) e.body(k,e.ledger.b.get(k).tagged(258).raw());
             }),
             new Case("fee-at-derived-cap",SPEND,null,e -> {
+                // The fee at the cap, with the total collateral the ledger then requires (collateral_percent of the fee)
+                // taken from the collateral return: a positive must pass phase 1 (#153 Codex review). The cap depends on
+                // the encoded size, which both edits change, so repeat until the fee is the cap of the final body.
                 e.v.put("maxFee","100000000");
-                long fee=e.fee();
-                e.body(2,uint(e.feeCap()));
-                e.coin(1,fee-e.fee());
+                long percent=e.v.at("/protocolParams/collateral_percent").asLong();
+                for (int round=0;e.fee()!=e.feeCap();round++) {
+                    if (round>4) throw new IllegalStateException("the fee cap does not settle");
+                    long fee=e.fee(), cap=e.feeCap();
+                    e.body(2,uint(cap));
+                    e.coin(1,fee-cap);
+                    long total=e.ledger.b.get(17).integer().longValueExact(), need=(cap*percent+99)/100;
+                    if (total<need) {
+                        e.body(17,uint(need));
+                        var back=e.val(e.ledger.b.get(16));
+                        e.swap(back,uint(back.integer().longValueExact()-(need-total)));
+                    }
+                }
+            }),
+            // Rule 5 selects the pointer from ledger order: the same method with its target second (#153 Codex review;
+            // every pre22 recording spends the state output first). The wallet input is renamed to sort first.
+            new Case("pointer-at-one",SPEND,null,e -> {
+                e.renameInput(e.walletInput(),"00".repeat(32));
+                e.swap(e.rkey(0).at(1),"01");
             }),
             new Case("reencoded-hash",SPEND,"bodyHash/digest",e -> {
                 String canonical=e.prepared().required("txHash").asText();
@@ -565,14 +586,11 @@ public final class MutationVectors {
                 e.coin(0,-2_000_000);
                 e.outputs(List.of(e.out(0).raw(),e.out(1).raw(),e.out(2).raw(),"82581d60"+OTHER+uint(2_000_000)));
             }),
-            new Case("payout-to-third-party","owned-destroy",null,e -> e.address(0,"60"+OTHER)),
-            new Case("send-to-third-party",DEX,null,e -> {
-                // The send pays another party exactly what the script releases (1.5 ADA and the minted LP).
-                lovelaceSend(e);
-                long send=e.coin(1).integer().longValueExact();
-                e.coin(1,(RELEASE-PAID_IN)-send);
-                e.coin(2,send-(RELEASE-PAID_IN));
-                e.address(1,"60"+OTHER);
+            // Rule 6 holds for a claimed send to anyone: a third party's claimed output carries no payout tag either.
+            new Case("claimed-third-party-tagged",DEX,"walletOutput/claimedTag",e -> {
+                thirdPartySend(e);
+                var out=e.out(1);
+                e.swap(out,"a3"+"00"+out.at(0).raw()+"01"+out.at(1).raw()+"02"+"8201d818"+bytes(e.outRef(e.target())));
             }),
 
             // ---- SC2: unreadable or ambiguous bodies. The hash is the received body slice's.
@@ -627,6 +645,14 @@ public final class MutationVectors {
     }
 
     /** Dex-addLiquidity restated so that the call also releases 1.5 ADA through its claimed send to the caller. */
+    /** The send pays another party exactly what the script releases (1.5 ADA and the minted LP). */
+    static void thirdPartySend(Edit e) {
+        lovelaceSend(e);
+        long send=e.coin(1).integer().longValueExact();
+        e.coin(1,(RELEASE-PAID_IN)-send);
+        e.coin(2,send-(RELEASE-PAID_IN));
+        e.address(1,"60"+OTHER);
+    }
     static void lovelaceSend(Edit e) {
         e.lovelace(e.target(),e.amount(e.target(),"lovelace")+RELEASE);
         e.coin(1,RELEASE-PAID_IN);
@@ -803,6 +829,24 @@ public final class MutationVectors {
             inputs.forEach(i -> encoded.append(i.raw()));
             body(0,"d90102"+encoded+"825820"+"ff".repeat(32)+"00");
             coin(1,2_000_000);
+        }
+        /** Move {@code ref} (an input and maybe collateral) to transaction {@code txId}, in the body and the resolved view. */
+        void renameInput(String ref,String txId) {
+            String moved=txId+ref.substring(64);
+            var item=resolved(ref).deepCopy().put("tx_hash",txId);
+            v.withObject("/resolved").remove(ref);
+            v.withObject("/resolved").set(moved,item);
+            for (int key : List.of(0,13)) {
+                if (!ledger.b.containsKey(key)) continue;
+                var refs=new ArrayList<String>();
+                ledger.set(key).forEach(i -> refs.add(HEX.formatHex(HEX.parseHex(i.at(0).bytes()))+"#"+i.at(1).uint()));
+                if (!refs.contains(ref)) continue;
+                refs.replaceAll(r -> r.equals(ref) ? moved : r);
+                refs.sort(java.util.Comparator.comparing((String r) -> r.substring(0,64)).thenComparingLong(r -> Long.parseLong(r.substring(65))));
+                var encoded=new StringBuilder("d90102"+head(4,refs.size()));
+                for (String r : refs) encoded.append("825820").append(r,0,64).append(uint(Long.parseLong(r.substring(65))));
+                body(key,encoded.toString());
+            }
         }
         Cbor coin(int i) {
             var value=val(out(i));
