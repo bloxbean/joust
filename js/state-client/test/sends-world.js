@@ -157,19 +157,20 @@ export function cslOutput({ address, value, datumHex }) {
 }
 
 /**
- * {@code txHex} with its outputs replaced by {@code outputs(current)} (CSL outputs, from the current ones), its
+ * {@code txHex} with its outputs replaced by {@code outputs(current)} (CSL outputs, from the current ones), its inputs
+ * by {@code inputs(current)} and its mint by {@code mint(current)} (CSL values, when given), its
  * withdrawals by {@code withdrawals(current)} and its redeemers by {@code redeemers(current)} ([{ tag, index, dataHex,
  * exUnits }], from the current ones), every other body field kept, and the script data hash recomputed for the new
  * redeemers (PlutusV3, the snapshot's cost model), so the edited body is one the ledger would take.
  */
-export async function editTx(txHex, x, { outputs, redeemers, withdrawals } = {}) {
+export async function editTx(txHex, x, { outputs, redeemers, withdrawals, inputs, mint } = {}) {
   const tx = CSL.Transaction.from_hex(txHex);
   const b = tx.body();
   const current = [];
   for (let i = 0; i < b.outputs().len(); i++) current.push(b.outputs().get(i));
   const outs = CSL.TransactionOutputs.new();
   for (const o of outputs ? outputs(current) : current) outs.add(o);
-  const n = CSL.TransactionBody.new_tx_body(b.inputs(), outs, b.fee());
+  const n = CSL.TransactionBody.new_tx_body(inputs ? inputs(b.inputs()) : b.inputs(), outs, b.fee());
   if (b.ttl_bignum()) n.set_ttl(b.ttl_bignum());
   if (b.validity_start_interval_bignum()) n.set_validity_start_interval_bignum(b.validity_start_interval_bignum());
   if (b.collateral()) n.set_collateral(b.collateral());
@@ -178,7 +179,8 @@ export async function editTx(txHex, x, { outputs, redeemers, withdrawals } = {})
   if (b.required_signers()) n.set_required_signers(b.required_signers());
   if (b.reference_inputs()) n.set_reference_inputs(b.reference_inputs());
   if (b.network_id()) n.set_network_id(b.network_id());
-  if (b.mint()) n.set_mint(b.mint());
+  const m = mint ? mint(b.mint()) : b.mint();
+  if (m) n.set_mint(m);
   const w = withdrawals ? withdrawals(b.withdrawals()) : b.withdrawals();
   if (w) n.set_withdrawals(w);
   const ws = tx.witness_set();

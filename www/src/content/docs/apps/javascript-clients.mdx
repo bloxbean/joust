@@ -187,6 +187,12 @@ await rt.compose(buyer, [
 `verifyComposed` checks each call against its own description and deployment, then the transaction as a whole.
 `extra` may carry `onReview` (called with `{ calls, report, txHash }`) and `limits`.
 
+Others may receive only what the calls release beyond their payouts and sends to the wallet. What a call keeps of
+its payment is credited back, but only when the page can read the calls' input values from their producing
+transactions: all of them, or all but one. Only a provider that serves transaction CBOR (Blockfrost) offers that.
+On Ogmios, or on DevKit's Yaci Store (which saves no transaction CBOR by default), a composition with two or more
+spending calls gets no such credit. So one that pays into one call while another call pays others is refused there.
+
 ## Prepare services
 
 A prepare service is any object with `prepare(request)`. Clients do not care which one they get:

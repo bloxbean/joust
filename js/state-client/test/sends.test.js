@@ -536,7 +536,9 @@ test('composition: a deposit whose value the output verifier refuses (OutputVeri
   const ada = (q) => [B(''), Data.map([[B(''), Data.int(q)]])];
   const P = 'cd'.repeat(28);
   const deposit = (value) => Data.constr(0, [Data.int(1n), refData(w.stall), Data.map(value), w.memo]);
-  accepted(await w.verify(await w.build({ deposits: [deposit([ada(1n)])] })), 'a second, well-formed deposit');
+  // A second deposit by the Stall into the same Pot: the depositing validator wants one claim per deposit, each to a
+  // distinct destination, so it is refused whatever its value; the malformed values below come from the Stall too.
+  refused(await w.verify(await w.build({ deposits: [deposit([ada(1n)])] })), /two deposits claimed for .* into output 1/, 'a second deposit to the same receiver');
   const cases = [
     [[], 'an empty value'],
     [[ada(0n)], 'a zero quantity'],
@@ -584,4 +586,95 @@ test('one redeemer per purpose: a destroy\'s burn redeemer twice is refused', as
   const { r, chain, honest } = await lovelaceWorld();
   const spendTwice = await editTx(honest, r.x, { redeemers: (rds) => [...rds, rds.find((x) => x.tag === 'spend')] });
   refused(await verifyPrepared(inputsOf(r, { txHex: spendTwice, chain })), /two redeemers for the spend purpose at index/, 'a spend redeemer twice');
+});
+
+// paidAndReleased, restated so that the Stall's method also mints 5 tokens of its own policy into its continuation
+// (as a minting method's result may) while the page offers it 5 such tokens it takes no assets for, and the wallet's
+// own 5 go to others from a wallet input that holds them.
+test('composition: minted tokens kept by a call are not a kept payment; a method that takes no assets is offered none', async () => {
+  const c = recordedComposition('fees/004-undefined.json');
+  const tx = parseTx(c.cbor);
+  const [stall, pot] = tx.inputs;
+  const policy = c.steps[0].deployment.policy;
+  const X = policy + 'aa';
+  const extra = `${'ee'.repeat(32)}#0`;
+  const wallet = { ...c.wallet, utxos: new Map([...c.wallet.utxos, [extra, { address: c.wallet.addresses[0], value: new Map([['lovelace', 2n * ADA_], [X, 5n]]) }]]) };
+  const truth = chainOf(c.x, (ref, u) => (ref === pot ? { ...u, value: plus(u.value, 'lovelace', 7n * ADA_) } : u));
+  const chain = { ...truth, async verifiedOutput(ref) { return truth.utxo(ref); } };
+  const ov = tx.withdrawals.findIndex((x) => x.address === c.steps[0].deployment.outputVerifier.rewardAddress);
+  const deposits = tx.redeemers.find((x) => x.tag === 'reward' && x.index === ov).data.fields[1].list;
+  const payee = enterpriseAddress({ type: 'key', hash: c.wallet.keyHashes[0] }, 0);
+  const at = [...new Set([...tx.mint.keys(), X].map((u) => u.slice(0, 56)))].sort().indexOf(policy);
+  const hex = await editTx(c.cbor, c.x, {
+    inputs: (ins) => {
+      ins.add(CSL.TransactionInput.new(CSL.TransactionHash.from_hex('ee'.repeat(32)), 0));
+      return ins;
+    },
+    mint: (m) => {
+      const out = m ?? CSL.Mint.new();
+      const assets = CSL.MintAssets.new();
+      assets.insert(CSL.AssetName.new(Buffer.from('aa', 'hex')), CSL.Int.new_i32(5));
+      out.insert(CSL.ScriptHash.from_hex(policy), assets);
+      return out;
+    },
+    outputs: (cur) => {
+      const [s, p, change] = cur.map(partsOf);
+      return [{ ...s, value: plus(new Map([...s.value, [X, 0n]]), X, 5n) }, p, { ...change, value: plus(change.value, 'lovelace', 2n * ADA_) },
+        { address: payee, value: new Map([['lovelace', 4n * ADA_]]) },
+        { address: STRANGER, value: new Map([['lovelace', 3n * ADA_], [X, 5n]]) }].map(cslOutput);
+    },
+    redeemers: (rds) => [...withRegistry(ov, dataHex(Data.constr(0, [Data.list([Data.constr(0, [Data.int(3), refData(pot)])]), Data.list(deposits)])))(rds),
+      { tag: 'mint', index: at, dataHex: dataHex(Data.constr(0, [])) }],
+  });
+  const steps = c.steps.map((st, i) => (i === 0 ? { ...st, call: { ...st.call, meta: { ...st.call.meta, returns: { ...st.call.meta.returns, mint: true } },
+    pay: { ...st.call.pay, assets: [[policy, [['aa', 5n]]]] } } } : st));
+  const r = await verifyComposed({ steps, wallet, chain, txHex: hex });
+  refused(r, /sell: it takes no assets, but the page offers some/, 'an asset offer to a method without assetsIn');
+  refused(r, new RegExp(`others receive 5 of ${X}, more than the scripts release to them`), 'the wallet\'s tokens to others, the minted ones counted as kept');
+});
+
+// fees/004 with a second Stall (another instance of the same contract, sold in the same transaction): two depositors,
+// each depositing into the one Pot.
+test('composition: two depositors into one receiver are accepted', async () => {
+  const c = recordedComposition('fees/004-undefined.json');
+  const tx = parseTx(c.cbor);
+  const [stallA, pot] = tx.inputs;
+  const stallB = `${'dd'.repeat(32)}#0`;
+  const sell = c.steps[0];
+  const instanceB = 'ab'.repeat(32);
+  const uA = await c.chain.utxo(stallA);
+  const swap = (m) => new Map([...m].map(([k, v]) => [k === sell.deployment.policy + sell.call.instance ? sell.deployment.policy + instanceB : k, v]));
+  const chain = { ...c.chain, utxo: async (ref) => (ref === stallB ? { ...uA, value: swap(uA.value) } : c.chain.utxo(ref)) };
+  const ov = tx.withdrawals.findIndex((x) => x.address === sell.deployment.outputVerifier.rewardAddress);
+  const recordedDeposit = tx.redeemers.find((x) => x.tag === 'reward' && x.index === ov).data.fields[1].list[0];
+  const [, , dValue, memo] = recordedDeposit.fields;
+  const q = dValue.map[0][1].map[0][1].int;
+  const paid = BigInt(sell.call.pay.lovelace);
+  const sorted = [...tx.inputs, stallB].sort();
+  const hex = await editTx(c.cbor, c.x, {
+    inputs: (ins) => {
+      ins.add(CSL.TransactionInput.new(CSL.TransactionHash.from_hex('dd'.repeat(32)), 0));
+      return ins;
+    },
+    outputs: (cur) => {
+      const [sA, p, change] = cur.map(partsOf);
+      return [sA, { ...p, value: plus(p.value, 'lovelace', q) }, { ...change, value: plus(change.value, 'lovelace', -(paid - q) - q) },
+        { ...sA, value: swap(sA.value) }].map(cslOutput);
+    },
+    redeemers: (rds) => {
+      const spendA = rds.find((x) => x.tag === 'spend' && x.index === sorted.indexOf(stallA));
+      return [...rds.map((x) => (x.tag === 'reward' && x.index === ov ? { ...x, dataHex: dataHex(Data.constr(0, [Data.list([]),
+        Data.list([recordedDeposit, Data.constr(0, [Data.int(1n), refData(stallB), dValue, memo])])])) } : x)), { ...spendA, index: sorted.indexOf(stallB) }];
+    },
+  });
+  const steps = [sell, { ...sell, call: { ...sell.call, instance: instanceB } }, c.steps[1]];
+  const r = await verifyComposed({ steps, wallet: c.wallet, chain, txHex: hex });
+  accepted(r, 'two Stalls, each depositing into the Pot');
+});
+
+test('a single call whose method takes no assets is offered none', async () => {
+  const { r, chain, honest } = await lovelaceWorld();
+  const o = inputsOf(r, { txHex: honest, chain });
+  const offered = { ...o, call: { ...o.call, pay: { ...o.call.pay, assets: [['cd'.repeat(28), [['aa', 1n]]]] } } };
+  refused(await verifyPrepared(offered), /the call takes no assets, but the page offers some/, 'an offer to unlock');
 });

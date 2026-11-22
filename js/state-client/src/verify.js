@@ -221,6 +221,8 @@ export async function verifyPrepared(o) {
       return;
     }
     const argNames = new Set(call.meta.args.map((a) => a.name));
+    // An offer of assets binds only through the redeemer's assetsIn: a method without one takes none.
+    if (!alt.fields.some((f) => f.title === 'assetsIn') && [...pay.assets].length) problems.push('the call takes no assets, but the page offers some');
     alt.fields.forEach((f, i) => {
       const actual = fields[i];
       if (argNames.has(f.title)) {

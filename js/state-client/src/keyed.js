@@ -230,7 +230,7 @@ export async function verifyKeyed(o) {
       out = chain.verifiedOutput ? await chain.verifiedOutput(r) : null;
       authenticated = !!out;
     } catch (e) {
-      problems.push(`the chain API served a forged transaction for ${r}: ${e.message}`);
+      problems.push(`the chain API's transaction for ${r} could not be verified: ${e.message}`);
       continue;
     }
     if (!out) {

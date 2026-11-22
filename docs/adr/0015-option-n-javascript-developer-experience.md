@@ -878,7 +878,12 @@ direct `Tx` building, gated by S3.
     balance); a misstated value is refused, and a chain API that serves no transaction CBOR gives no credit. A
     deposit claim's value must be one the output verifier accepts (`OutputVerifier.positive` over `ValueAdapter.fromWire`'s
     rules: no empty value or token map, no repeated or out-of-order entry, positive quantities, no reserved names),
-    else the body could only fail on chain. With that credit,
+    else the body could only fail on chain, and so is a depositor's second claim to the same receiver. Deposit claims
+    shape the credit (a call that deposits more keeps less of its own), within what only the validators decide: the
+    page cannot tell a body whose call deposits 1.5 ADA from one that deposits 1, as the call's validator does from the
+    arguments the page verified. Either way the wallet loses at most the fee and its stated payments. Tokens the
+    transaction mints are not the wallet's, so none counts as kept, and a call whose method takes no assets (no
+    `assetsIn`) may be offered none. With that credit,
     others' receipts bound the wallet's net loss (the fee aside) by what the calls keep of their payments, less what
     the scripts send it back.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.

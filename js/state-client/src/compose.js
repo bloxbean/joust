@@ -134,7 +134,7 @@ export async function verifyComposed(o) {
     try {
       v = chain.verifiedOutput ? await chain.verifiedOutput(k.targetRef) : null;
     } catch (e) {
-      problems.push(`the chain API served a forged transaction for ${k.targetRef}: ${e.message}`);
+      problems.push(`the chain API's transaction for ${k.targetRef} could not be verified: ${e.message}`);
       continue;
     }
     if (!v) continue;
@@ -242,6 +242,11 @@ export async function verifyComposed(o) {
               problems.push(`${call.meta.name}: the redeemer has a field the page cannot check: ${f.title}`);
             }
           });
+          // An offer of assets binds only through the redeemer's assetsIn (the validator checks the call accepts exactly
+          // those): a method without one takes none, and an offer to it would only widen what the wallet may lose.
+          if (!got.alt.fields.some((f) => f.title === 'assetsIn') && [...k.pay.assets].length) {
+            problems.push(`${call.meta.name}: it takes no assets, but the page offers some`);
+          }
         }
       }
     }
@@ -327,8 +332,14 @@ export async function verifyComposed(o) {
   // come from the target of a call that declares deposits (its validator checks its claims exactly: their number, values,
   // memos and outputs) and land on the continuation of a call that receives them, both pinning this verifier. A deposit
   // by a wallet input would move the wallet's own funds to the receiver.
+  // A depositor's deposits go to distinct destinations, one claim each (the depositing validator's rule), so a repeated
+  // (by, output) pair is a body that cannot succeed on chain.
   for (const { registry, pinning } of registries) {
+    const pairs = new Set();
     for (const d of registry?.deposits ?? []) {
+      const pair = `${d.by}>${d.output}`;
+      if (pairs.has(pair)) problems.push(`two deposits claimed for ${d.by} into output ${d.output}`);
+      pairs.add(pair);
       const from = pinning.find((x) => x.targetRef === d.by);
       const into = pinning.find((x) => x.continuationIndex === d.output);
       if (!from || !from.call.meta.returns?.deposits) problems.push(`a deposit claimed for ${d.by}, not a composed call that deposits`);
@@ -407,6 +418,11 @@ export async function verifyComposed(o) {
       const cap = paid.get(unit) ?? 0n;
       if (q > 0n && cap > 0n) kept.set(unit, (kept.get(unit) ?? 0n) + (q < cap ? q : cap));
     }
+  }
+  // Tokens the transaction mints are not the wallet's: kept in a continuation, they are no payment kept (else an offer of
+  // them would let as many of the wallet's own go to others).
+  for (const [unit, q] of minted) {
+    if (q > 0n && kept.has(unit)) kept.set(unit, kept.get(unit) > q ? kept.get(unit) - q : 0n);
   }
   for (const [unit, q] of third) {
     const free = (released.get(unit) ?? 0n) + (kept.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);

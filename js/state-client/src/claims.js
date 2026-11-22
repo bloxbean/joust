@@ -28,8 +28,8 @@ const MAX_QUANTITY = (1n << 127n) - 1n;
 /**
  * A deposit's Value as Map unit -> bigint (policy hex + asset name hex; '' + '' is lovelace), or null when {@code d} is
  * not one the output verifier accepts (OutputVerifier.positive over ValueAdapter.fromWire's rules, on the wire's own
- * entries): a map of policies in strictly increasing order, each a non-empty map of distinct names (32 bytes at most,
- * the empty name only under the empty policy), every quantity positive and within 128 bits, the value not empty, and
+ * entries): a map of policies in strictly increasing order, each a non-empty map of distinct names (32 bytes at most;
+ * under the empty policy only the empty name), every quantity positive and within 128 bits, the value not empty, and
  * no reserved-kind name (32 bytes, or 29 bytes starting 0x4F or 0x49) under a token policy. Nothing is merged: a
  * redeemer the verifier would refuse is refused before the wallet signs it.
  */
