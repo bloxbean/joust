@@ -48,3 +48,36 @@ test('a keyed operation never designates a UTxO carrying a reference script', as
   wallet.utxos.delete('bb'.repeat(32) + '#0');
   assert.equal(designatedFor(wallet), null);
 });
+
+test('with none at the funding address, a keyed operation designates an ordinary UTxO at another of its addresses', async () => {
+  const { designatedFor, fromWallet } = await import('../src/client.js');
+  const other = baseAddress({ type: 'key', hash: '55'.repeat(28) }, { type: 'key', hash: '22'.repeat(28) }, 0);
+  const wallet = { change: address, addresses: [address, other], utxos: new Map([
+    ['aa'.repeat(32) + '#0', { address, value: new Map([['lovelace', 9_000_000n]]), referenceScriptHash: '44'.repeat(28) }],
+    ['bb'.repeat(32) + '#0', { address: other, value: new Map([['lovelace', 6_000_000n]]) }],
+  ]) };
+  const d = designatedFor(wallet);
+  assert.deepEqual([d.ref, d.address], ['bb'.repeat(32) + '#0', other]);
+  // The engine builds from that address.
+  assert.equal(fromWallet(wallet, d.address).address, other);
+  assert.deepEqual(fromWallet(wallet, d.address).walletUtxos.map((u) => u.txHash), ['bb'.repeat(32)]);
+});
+
+test('the DevKit wallet leaves out a UTxO carrying a reference script and reports a datum hash', async () => {
+  const { chainOf } = await import('../src/chain.js');
+  const { devWallet } = await import('../src/devwallet.js');
+  const listed = [];
+  const provider = { utxos: async (a) => listed.map((u) => ({ ...u, address: a })) };
+  const wallet = devWallet({ chain: chainOf(provider) });
+  const mine = wallet.address;
+  listed.push({ txHash: 'aa'.repeat(32), index: 0, value: [{ unit: 'lovelace', quantity: '9000000' }], datumHash: null,
+    inlineDatum: null, referenceScriptHash: '44'.repeat(28) });
+  listed.push({ txHash: 'bb'.repeat(32), index: 0, value: [{ unit: 'lovelace', quantity: '6000000' }], datumHash: '66'.repeat(32),
+    inlineDatum: null, referenceScriptHash: null });
+  listed.push({ txHash: 'cc'.repeat(32), index: 0, value: [{ unit: 'lovelace', quantity: '5000000' }], datumHash: null,
+    inlineDatum: null, referenceScriptHash: null });
+  const seen = (await wallet.getUtxos()).map(unspentOutput);
+  assert.deepEqual(seen.map((u) => u.ref), ['bb'.repeat(32) + '#0', 'cc'.repeat(32) + '#0']);
+  assert.equal(seen[0].datumHash, '66'.repeat(32));
+  assert.ok(mine);
+});

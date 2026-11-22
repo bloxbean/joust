@@ -58,8 +58,7 @@ export function httpService(baseUrl, { fetchImpl } = {}) {
  * getUtxos). A runtime engine builds from exactly those, so it never picks an input the wallet does not know (chain
  * APIs behind a load balancer can lag one another; a real wallet keeps its own index).
  */
-export function fromWallet(wallet) {
-  const address = fundingAddress(wallet);
+export function fromWallet(wallet, address = fundingAddress(wallet)) {
   const walletUtxos = [];
   for (const [ref, u] of wallet.utxos) {
     if (u.address !== address) continue;
@@ -324,19 +323,25 @@ async function untilSlot(chain, slot, maxMs = 15 * 60_000) {
 
 /**
  * The wallet input a keyed operation designates (ADR-0016 D7, D11): an ordinary (lovelace-only, no datum, no reference
- * script) UTxO of at least 5 ADA at the address the engine builds from (the funding address), the largest.
+ * script) UTxO of at least 5 ADA, the largest: at the funding address when it has one, else at another of the wallet's
+ * addresses (#165 Codex round 4). The engine then builds from that address ({@code record.address}).
  */
 export function designatedFor(wallet) {
-  const address = fundingAddress(wallet);
-  let best = null;
+  const funding = fundingAddress(wallet);
+  const best = new Map();
   for (const [ref, u] of wallet.utxos) {
     // Never one carrying a reference script (#165 Codex round 3): the runtime refuses it, as spending it consumes the script.
-    if (u.address !== address || u.value.size !== 1 || u.datumHash || u.inlineDatum || u.referenceScriptHash) continue;
+    if (u.value.size !== 1 || u.datumHash || u.inlineDatum || u.referenceScriptHash) continue;
+    if (u.address !== funding && !wallet.addresses?.includes(u.address)) continue;
     const l = u.value.get('lovelace') ?? 0n;
     if (l < 5_000_000n) continue;
-    if (!best || l > best.lovelace) best = { ref, address, lovelace: l };
+    const b = best.get(u.address);
+    if (!b || l > b.lovelace) best.set(u.address, { ref, address: u.address, lovelace: l });
   }
-  return best;
+  if (best.has(funding)) return best.get(funding);
+  let pick = null;
+  for (const b of best.values()) if (!pick || b.lovelace > pick.lovelace) pick = b;
+  return pick;
 }
 
 /**
@@ -428,7 +433,7 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
         prepared = await this.service.prepare({
           contract: this.description.preamble.title, kind: call.kind, method: call.meta.name,
           instance: call.instance ?? null, object: call.key ?? null, args: toJson(call.args ?? {}),
-          pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: [] }), ...fromWallet(wallet),
+          pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: [] }), ...fromWallet(wallet, rec.address ?? fundingAddress(wallet)),
           designated: rec.designated, pageLimits: [limits.maxStartSlots, limits.maxValiditySlots],
           ...(co.keys.length ? { cosigners: co.keys } : {}),
         });

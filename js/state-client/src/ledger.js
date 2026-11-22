@@ -353,11 +353,12 @@ export function valueCbor(value) {
   return Serialization.Value.fromCore(coreValue(value)).toCbor();
 }
 
-/** A UTxO ({ ref, address, value, inlineDatum? }) as CIP-30's CBOR hex of TransactionUnspentOutput. */
+/** A UTxO ({ ref, address, value, inlineDatum?, datumHash? }) as CIP-30's CBOR hex of TransactionUnspentOutput. */
 export function unspentOutputCbor(u) {
   const [txId, index] = u.ref.split('#');
   const output = { address: Cardano.PaymentAddress(u.address), value: coreValue(u.value) };
   if (u.inlineDatum) output.datum = Serialization.PlutusData.fromCbor(u.inlineDatum).toCore();
+  else if (u.datumHash) output.datumHash = u.datumHash;   // as a wallet reports it, so it is not taken for a plain UTxO
   return Serialization.TransactionUnspentOutput.fromCore([{ txId: Cardano.TransactionId(txId), index: Number(index) }, output]).toCbor();
 }
 

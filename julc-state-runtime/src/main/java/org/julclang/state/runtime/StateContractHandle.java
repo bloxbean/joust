@@ -502,30 +502,44 @@ public final class StateContractHandle<S> {
     }
 
     private Utxo seedOf(Account caller) {
+        Utxo seed = seedFrom(caller);
+        // The seed is the caller's because its listing gave it (#165 Codex round 4): checked against the chain later.
+        var cap = TxRunner.capture();
+        if (cap != null) cap.listedAt.put(Designation.ref(seed), caller.baseAddress());
+        return seed;
+    }
+
+    private Utxo seedFrom(Account caller) {
         try {
-            var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, 1);
-            if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) {
-                throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
-            }
             // Prefer a pure-ADA UTxO; any UTxO works, but never a keyed operation's designated input (ADR-0016 D7).
             var own = TxRunner.currentOperation();
             // A wallet's prepared creation in a keyed contract: the page's designated input is the seed (ADR-0016 D11).
             if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
-            // Not an input the composition spends already (an earlier call's asset input; R2).
             var cap = TxRunner.capture();
-            // Never one carrying a reference script (#165 Codex round 3): spending it would consume a deployment's script.
-            var free = r.getValue().stream().filter(u -> u.getReferenceScriptHash() == null)
-                    .filter(u -> Designation.pickable(u, own))
-                    .filter(u -> cap == null || !cap.inputs.contains(Designation.ref(u))).toList();
+            Utxo first = null;
+            boolean any = false;
+            // Every page until a pure-ADA seed (#165 Codex round 4): the first ones may all be excluded.
+            for (int page = 1; page <= 20; page++) {
+                var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, page);
+                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                any = true;
+                for (Utxo u : r.getValue()) {
+                    // Never one carrying a reference script (#165 Codex round 3): spending it would consume a script.
+                    if (u.getReferenceScriptHash() != null || !Designation.pickable(u, own)) continue;
+                    // Not an input the composition spends already (an earlier call's asset input; R2).
+                    if (cap != null && cap.inputs.contains(Designation.ref(u))) continue;
+                    if (u.getAmount().size() == 1) return u;
+                    if (first == null) first = u;
+                }
+                if (r.getValue().size() < 50) break;
+            }
+            if (!any) throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
             // F-W3: a creation after a call that paid assets from the caller's only UTxO finds none; in the other order
             // the seed is counted for the payment (alreadyIn). Refused with the remedy rather than reusing the input.
-            if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller carries a reference script, is"
-                    + " designated by a keyed operation or spent by the composition; put the creation before a call that pays assets from the same wallet,"
-                    + " or give the wallet another UTxO");
-            return free.stream()
-                    .filter(u -> u.getAmount().size() == 1)
-                    .findFirst()
-                    .orElse(free.get(0));
+            if (first == null) throw new JoustException("deploy: every UTxO of the caller carries a reference script, is"
+                    + " designated by a keyed operation or spent by the composition; put the creation before a call that pays"
+                    + " assets from the same wallet, or give the wallet another UTxO");
+            return first;
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {

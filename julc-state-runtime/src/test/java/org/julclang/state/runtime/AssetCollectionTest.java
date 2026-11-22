@@ -317,4 +317,71 @@ class AssetCollectionTest {
         var e = assertThrows(JoustException.class, () -> contract.pickSeedFor(only));
         assertTrue(e.getMessage().contains("carries a reference script"), e::getMessage);
     }
+
+    // ---------------------------------------------------------------- #165 Codex round 4
+
+    @Test
+    void aSeedIsTheCallersWhoseListingGaveIt() {
+        // B's listing gives a seed whose address field says A: it is B's (and the chain must say B too).
+        String payer = new Account(Networks.testnet()).baseAddress();
+        var b = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var seed = utxo(payer, "a4", 5_000_000, 0);
+        snapshot.utxos.put(b.baseAddress(), List.of(seed));
+        var cap = new TxRunner.Capture();
+        TxRunner.CAPTURE.set(cap);
+        try {
+            var picked = contract.pickSeedFor(b);
+            TxRunner.collect(cap.tx, picked, null);
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        assertEquals(b.baseAddress(), cap.regularOwners.get(Designation.ref(seed)));
+    }
+
+    @Test
+    void aCoCallersPaymentCountsWithoutAnInputAttributedToIt() {
+        // B pays in 40 tokens but no input is B's: the plan still holds B to its payment.
+        snapshot.protocolParams = pp();
+        String payer = new Account(Networks.testnet()).baseAddress();
+        String b = new Account(Networks.testnet()).baseAddress();
+        var cap = new TxRunner.Capture();
+        cap.paidAssets.put(b, new java.util.HashMap<>(Map.of(UNIT, BigInteger.valueOf(40))));
+        var paid = AssetTx.returnSurplus(rt, cap, payer);
+        assertEquals(Map.of(b, Assets.of(new byte[28], new byte[]{1}, BigInteger.valueOf(40))), paid);
+    }
+
+    @Test
+    void aReturnsIndexIsItsPlaceAmongTheOutputsAdded() {
+        // An output a call added without counting it (an intent cancellation's refund) comes before the return.
+        snapshot.protocolParams = pp();
+        String payer = new Account(Networks.testnet()).baseAddress();
+        var b = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        snapshot.utxos.put(b.baseAddress(), List.of(utxo(b.baseAddress(), "a5", 5_000_000, 100)));
+        var cap = new TxRunner.Capture();
+        TxRunner.CAPTURE.set(cap);
+        try {
+            cap.tx.payToAddress(payer, com.bloxbean.cardano.client.api.model.Amount.lovelace(BigInteger.valueOf(2_000_000)));
+            collect(b, 60, null);
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        AssetTx.returnSurplus(rt, cap, payer);
+        assertEquals(1, cap.returns.get(b.baseAddress()).index());
+    }
+
+    @Test
+    void aSeedIsFoundBeyondTheFirstPage() {
+        // 50 UTxOs carrying reference scripts, then an ordinary one.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var list = new ArrayList<Utxo>();
+        for (int i = 0; i < 50; i++) {
+            var u = utxo(wallet.baseAddress(), String.format("%02x", i), 5_000_000, 0);
+            u.setReferenceScriptHash("11".repeat(28));
+            list.add(u);
+        }
+        var plain = utxo(wallet.baseAddress(), "f1", 5_000_000, 0);
+        list.add(plain);
+        snapshot.utxos.put(wallet.baseAddress(), list);
+        assertEquals(Designation.ref(plain), Designation.ref(contract.pickSeedFor(wallet)));
+    }
 }

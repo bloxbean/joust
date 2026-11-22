@@ -86,6 +86,11 @@ final class TxRunner {
          * exact value (#165 Fable, Codex round 3).
          */
         final java.util.Map<String, Return> returns = new java.util.LinkedHashMap<>();
+        /**
+         * The address whose listing supplied a seed (by reference; #165 Codex round 4): the seed is that caller's,
+         * whatever address the provider writes in it, and the chain must agree.
+         */
+        final java.util.Map<String, String> listedAt = new java.util.HashMap<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
         /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
@@ -183,6 +188,17 @@ final class TxRunner {
     static final class RecordingTx extends Tx {
         final java.util.List<Utxo> spent = new java.util.ArrayList<>();
         final java.util.List<Utxo> read = new java.util.ArrayList<>();
+        /** The outputs added so far, in order: every payToAddress/payToContract overload comes through here. */
+        int outputs;
+
+        @Override
+        protected Tx payToAddress(String address, java.util.List<com.bloxbean.cardano.client.api.model.Amount> amounts,
+                                  byte[] datumHash, com.bloxbean.cardano.client.plutus.spec.PlutusData datum,
+                                  com.bloxbean.cardano.client.spec.Script scriptRef, byte[] scriptRefBytes) {
+            Tx t = super.payToAddress(address, amounts, datumHash, datum, scriptRef, scriptRefBytes);
+            outputs++;
+            return t;
+        }
 
         @Override
         public Tx collectFrom(Utxo utxo, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
@@ -225,7 +241,8 @@ final class TxRunner {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
         if (c != null && redeemer == null && c.regularInputs.putIfAbsent(Designation.ref(u), u) == null) {
-            if (u.getAddress() != null) c.regularOwners.put(Designation.ref(u), u.getAddress());
+            String owner = c.listedAt.getOrDefault(Designation.ref(u), u.getAddress());
+            if (owner != null) c.regularOwners.put(Designation.ref(u), owner);
         }
         return redeemer == null ? tx.collectFrom(java.util.List.of(u)) : tx.collectFrom(u, redeemer);
     }
@@ -1005,6 +1022,8 @@ final class TxRunner {
 
     private String submitPlain(Transaction signed, String what) {
         rt.built(what, signed, false);
+        // A publication's change can hold what several inputs held (#165 Codex round 4): sized like any other body.
+        BodyBalance.checkValueSizes(signed.getBody(), () -> protocolParams(rt, what), what);
         String txHash = TransactionUtil.getTxHash(signed);
         if (System.getProperty("joust.dumpTx") != null) {
             try {

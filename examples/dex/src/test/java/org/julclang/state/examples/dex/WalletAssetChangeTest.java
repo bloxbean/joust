@@ -760,4 +760,28 @@ class WalletAssetChangeTest {
                 .submit());
         assertTrue(e.getMessage().contains("above the ledger's maximum of 5000 bytes"), e::getMessage);
     }
+
+    // ---------------------------------------------------------------- #165 Codex round 4
+
+    /** A key-signed reference-script publication whose change is above the maximum value size: refused, not submitted. */
+    @Test
+    void aPublicationsChangeAboveTheMaximumValueSizeIsRefused() {
+        var f = new Fixture();
+        var handle = DexClient.contract(f.rt);
+        // The Dex reference script not on chain yet: the publication runs.
+        f.snapshot.utxos.get(handle.address()).removeIf(u -> u.getReferenceScriptHash() != null);
+        f.snapshot.outputs.values().removeIf(u -> u.getReferenceScriptHash() != null && handle.address().equals(u.getAddress()));
+        var key = new Account(Networks.testnet());
+        var one = named(f, "a6", 60_000, 0);   // their own references: nothing else in this class claims them
+        var two = named(f, "a7", 60_000, 80);
+        for (Utxo u : List.of(one, two)) {
+            u.setAddress(key.baseAddress());
+            var amounts = new ArrayList<Amount>();
+            for (Amount a : u.getAmount()) amounts.add(a.getUnit().equals("lovelace") ? Amount.lovelace(BigInteger.valueOf(60_000_000)) : a);
+            u.setAmount(amounts);
+        }
+        f.snapshot.utxos.put(key.baseAddress(), new ArrayList<>(List.of(one, two)));
+        var e = assertThrows(BodyBalance.UnbalancedException.class, () -> handle.ensureReferenceScript(key));
+        assertTrue(e.getMessage().contains("above the ledger's maximum of 5000 bytes"), e::getMessage);
+    }
 }

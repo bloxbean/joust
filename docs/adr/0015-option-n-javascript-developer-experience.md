@@ -851,14 +851,17 @@ direct `Tx` building, gated by S3.
     (the runtime signed for it). A body, prepared or submitted, may take nothing else from a co-caller's address, and
     an input whose provider gives no address is refused rather than assumed to be the payer's. Only the return the
     runtime made counts as a co-caller's return (the output at the index it was appended at: its address, no datum, the
-    exact value recorded), each input collected for a co-caller must be at that co-caller's address on the chain too,
-    and the check covers every co-caller the plan pays in for or returns to; the return is exactly what the co-caller's inputs hold less what it pays in: any other output there (a payout, a send, an
+    exact value recorded), each input collected for a co-caller (a seed counts as the caller's whose listing gave it) must be
+    at that co-caller's address on the chain too, and the check covers every co-caller the plan pays in for or returns
+    to; the return is exactly what the co-caller's inputs hold less what it pays in: any other output there (a payout, a send, an
     intent's refund) is owed by someone else and cannot cover a short return, and a larger return would give it the
     payer's value. The collateral is the payer's: every collateral input and the collateral return are at the payer's
     address. A key-signed call with co-signers (`@Quorum`, `@AuthorizedBy`) is checked the same way. A return above
     the ledger's maximum value size (inputs with many unrelated tokens) is refused, not split. A wallet's UTxOs keep
     their reference script hash from CIP-30's CBOR, so one carrying a script is never spent for its tokens, taken as a
-    creation's seed, or designated by a keyed call.
+    creation's seed (over every page of the listing), or designated by a keyed call (at another of the wallet's
+    addresses when the funding address has none; the engine then builds from that address). The DevKit wallet leaves out
+    a UTxO carrying a reference script (it knows only the hash) and reports datum hashes.
   - **Every body handed to a wallet** (`PreparedTx`, a prepared publication, the engine's governor stake
     registration) must balance per unit (`BodyBalance`):
     inputs + mint + withdrawals + certificate refunds = outputs + fee + certificate deposits + proposal deposits +
@@ -867,7 +870,7 @@ direct `Tx` building, gated by S3.
     value, in any spelling), which the bytes would keep once; nor an output or collateral return holding assets whose
     value is above the protocol's maximum value size (and with no maximum known, such an output is refused). The
     checks read a copy decoded from the body's bytes, which is what the wallet gets (and, for the runtime's own
-    key-signed submissions, what it signs and submits, value sizes included); an observer (`onBuilt`) gets a copy of its own and cannot
+    key-signed submissions, what it signs and submits, value sizes included, publications too); an observer (`onBuilt`) gets a copy of its own and cannot
     change either. Otherwise the body is refused. This is the runtime's self-check against bodies the ledger would reject. It
     says nothing about where value goes: the wallet's net outflow is the page verifier's to bound (ADR-0013).
 - **The snapshot backend** returns one object per output reference, whichever query found it: cardano-client-lib tells

@@ -403,15 +403,21 @@ final class AssetTx {
             if (owner.equals(payer)) continue;
             held.merge(owner, valueOf(e.getValue()), Assets::add);
         }
+        // What every caller other than the payer pays in, whether or not an input is attributed to it (#165 Codex round
+        // 4): one with none is still held to its payment (TxRunner.checkCoCallers).
         var paid = new LinkedHashMap<String, Value>();
+        for (var p : cap.paidAssets.entrySet()) {
+            if (p.getKey().equals(payer)) continue;
+            Value in = Assets.none();
+            for (var u : p.getValue().entrySet()) {
+                in = Assets.add(in, Assets.of(HEX.parseHex(u.getKey().substring(0, 56)), HEX.parseHex(u.getKey().substring(56)), u.getValue()));
+            }
+            paid.put(p.getKey(), in);
+        }
         if (held.isEmpty()) return paid;
         com.bloxbean.cardano.client.api.model.ProtocolParams pp = null;
         for (var e : held.entrySet()) {
-            Value in = Assets.none();
-            var units = cap.paidAssets.getOrDefault(e.getKey(), Map.of());
-            for (var u : units.entrySet()) {
-                in = Assets.add(in, Assets.of(HEX.parseHex(u.getKey().substring(0, 56)), HEX.parseHex(u.getKey().substring(56)), u.getValue()));
-            }
+            Value in = paid.getOrDefault(e.getKey(), Assets.none());
             paid.put(e.getKey(), in);
             Value back = Assets.subtract(e.getValue(), in);
             var amounts = new ArrayList<Amount>();
@@ -440,10 +446,12 @@ final class AssetTx {
                         + size + "-byte value, above the ledger's maximum of " + pp.getMaxValSize() + " bytes, and cannot"
                         + " go back to it in one output; compose with it as the payer, or pay from fewer UTxOs (T1)");
             }
+            // Checked by its place and value in the built body (TxRunner.checkCoCallers): its place in the outputs the
+            // calls actually added (#165 Codex round 4: a cancellation's refund is not counted in cap.outputs).
+            int index = cap.tx instanceof TxRunner.RecordingTx r ? r.outputs : cap.outputs;
             cap.tx.payToAddress(e.getKey(), amounts);
-            // Checked by its place and value in the built body (TxRunner.checkCoCallers); counted, as a call's outputs are.
-            cap.returns.put(e.getKey(), new TxRunner.Return(cap.outputs, back));
-            cap.outputs++;
+            cap.returns.put(e.getKey(), new TxRunner.Return(index, back));
+            cap.outputs = Math.max(cap.outputs, index) + 1;
         }
         return paid;
     }

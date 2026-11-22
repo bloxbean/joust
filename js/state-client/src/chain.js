@@ -46,10 +46,10 @@ export function chainOf(provider) {
         datumHash: o.datumHash, size: o.size };
     },
 
-    /** Unspent outputs at an address: [{ ref, address, value, inlineDatum }]. */
+    /** Unspent outputs at an address: [{ ref, address, value, inlineDatum, datumHash, referenceScriptHash }]. */
     async utxosAt(address) {
       return (await provider.utxos(address)).map((u) => ({ ref: `${u.txHash}#${u.index}`, address: u.address, value: amountMap(u.value),
-        inlineDatum: u.inlineDatum }));
+        inlineDatum: u.inlineDatum, datumHash: u.datumHash ?? null, referenceScriptHash: u.referenceScriptHash ?? null }));
     },
 
     /** The unspent output at {@code address} holding one {@code unit}, or null. */
