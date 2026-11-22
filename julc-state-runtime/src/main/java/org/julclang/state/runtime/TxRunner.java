@@ -203,7 +203,8 @@ final class TxRunner {
     /** Spends {@code u} (with {@code redeemer} if a script input); a composition refuses the same UTxO twice. */
     static Tx collect(Tx tx, Utxo u, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
         Capture c = CAPTURE.get();
-        if (c != null && !c.inputs.add(u.getTxHash() + "#" + u.getOutputIndex())) {
+        // One spelling of each reference (lower case, Designation.ref; #165 reviewer3 R3-2): readers compare it so.
+        if (c != null && !c.inputs.add(Designation.ref(u))) {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
         if (c != null && redeemer == null && c.regularInputs.putIfAbsent(Designation.ref(u), u) == null) {
@@ -734,7 +735,7 @@ final class TxRunner {
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null) continue;
-                    if (spent.contains(u.getTxHash() + "#" + u.getOutputIndex())) continue;
+                    if (spent.contains(Designation.ref(u))) continue;
                     if (!Designation.pickable(u, currentOperation())) continue;   // another operation's (ADR-0016 D7, F72)
                     BigInteger q = lovelace(u);
                     if (q.compareTo(BigInteger.valueOf(3_000_000)) < 0) continue;

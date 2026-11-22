@@ -304,6 +304,16 @@ final class AssetTx {
                 : cap.spareAssets.computeIfAbsent(caller.baseAddress(), k -> new java.util.HashMap<>());
         var counted = cap == null ? new java.util.HashSet<String>() : cap.countedInputs;
         if (alreadyIn != null && counted.add(key(alreadyIn))) addAssets(spare, alreadyIn);
+        // #165 reviewer3 R3-2: inputs earlier calls of this composition already spend from the caller's address (a
+        // seed, a designated input) count before any page is read, whatever their place in the listing and even when
+        // they carry a datum hash (the transaction spends them anyway): no token UTxO is pulled in for what they hold.
+        if (cap != null) {
+            for (var e : cap.regularInputs.entrySet()) {
+                if (caller.baseAddress().equals(cap.regularOwners.get(e.getKey())) && counted.add(key(e.getValue()))) {
+                    addAssets(spare, e.getValue());
+                }
+            }
+        }
         draw(missing, spare);
         var picked = new ArrayList<Utxo>();
         int passedOver = 0;
@@ -313,19 +323,21 @@ final class AssetTx {
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (counted.contains(key(u)) || !holdsAny(u, missing)) continue;
+                    String ref = Designation.ref(u);
+                    boolean spent = cap != null && cap.inputs.contains(ref);
                     // An inline datum at a key address is spendable as is (R9): tokens a contract sends a wallet with one
                     // can be paid in. Not a datum hash (conservative, as cardano-client-lib; F-W5), nor a reference
                     // script (it would be consumed).
-                    if (u.getReferenceScriptHash() != null || u.getDataHash() != null
-                            || !Designation.pickable(u, TxRunner.currentOperation())) {
+                    // Spent already (R3-2): it counts whatever it carries, since the transaction spends it anyway.
+                    if (!spent && (u.getReferenceScriptHash() != null || u.getDataHash() != null
+                            || !Designation.pickable(u, TxRunner.currentOperation()))) {
                         passedOver++;
                         continue;
                     }
-                    String ref = Designation.ref(u);
                     counted.add(key(u));
                     addAssets(spare, u);
                     // Spent already (another call's seed, a designated input): counted, not collected again.
-                    if (cap == null || !cap.inputs.contains(ref)) {
+                    if (!spent) {
                         picked.add(u);
                         if (cap != null) {
                             cap.inputs.add(ref);
@@ -366,7 +378,7 @@ final class AssetTx {
     }
 
     private static String key(Utxo u) {
-        return Designation.ref(u).toLowerCase();
+        return Designation.ref(u);   // lower case (T3, R3-2)
     }
 
     /**

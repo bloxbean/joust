@@ -190,11 +190,11 @@ final class Designation {
     }
 
     static String ref(Utxo u) {
-        return u.getTxHash() + "#" + u.getOutputIndex();
+        return u.getTxHash().toLowerCase(java.util.Locale.ROOT) + "#" + u.getOutputIndex();
     }
 
     static String ref(TransactionInput in) {
-        return in.getTransactionId() + "#" + in.getIndex();
+        return in.getTransactionId().toLowerCase(java.util.Locale.ROOT) + "#" + in.getIndex();
     }
 
     /** Some keyed operation of this JVM designated {@code ref} (still reserved). */

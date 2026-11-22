@@ -157,4 +157,87 @@ class AssetCollectionTest {
         assertEquals(java.util.Set.of(Designation.ref(a), Designation.ref(b)), cap.assetInputs);
         assertTrue(cap.inputs.containsAll(cap.assetInputs));
     }
+
+    @Test
+    void anEarlierCallsSpentSeedCountsWhereverItIsListedAndWithADatumHash() {
+        // #165 reviewer3 R3-2: the seed an earlier call spent holds 100 tokens; a token UTxO is listed before it, and the
+        // seed carries a datum hash. Neither pulls in another input.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var earlier = utxo(wallet.baseAddress(), "aa", 2_000_000, 100);
+        var seed = utxo(wallet.baseAddress(), "bb", 50_000_000, 100);
+        seed.setDataHash("22".repeat(32));
+        snapshot.utxos.put(wallet.baseAddress(), List.of(earlier, seed));
+        var cap = new TxRunner.Capture();
+        cap.inputs.add(Designation.ref(seed));
+        cap.regularInputs.put(Designation.ref(seed), seed);
+        cap.regularOwners.put(Designation.ref(seed), wallet.baseAddress());
+        TxRunner.CAPTURE.set(cap);
+        try {
+            assertEquals(List.of(), collect(wallet, 60, null), "the spent seed's tokens count");
+            assertEquals(List.of(earlier), collect(wallet, 60, null), "40 left of the seed, 20 from the token UTxO");
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        assertEquals(java.util.Set.of(Designation.ref(earlier)), cap.assetInputs);
+    }
+
+    @Test
+    void anInputSpelledInUpperCaseIsTheSpentOne() {
+        // #165 reviewer3 R3-2: a provider listing the spent input's transaction id in upper case lists the same output.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var spent = utxo(wallet.baseAddress(), "cc", 2_000_000, 100);
+        var listed = utxo(wallet.baseAddress(), "CC", 2_000_000, 100);
+        assertEquals(Designation.ref(spent), Designation.ref(listed));
+        snapshot.utxos.put(wallet.baseAddress(), List.of(listed));
+        var cap = new TxRunner.Capture();
+        cap.inputs.add(Designation.ref(spent));
+        TxRunner.CAPTURE.set(cap);
+        try {
+            assertEquals(List.of(), collect(wallet, 60, null), "counted, not collected again");
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        assertTrue(cap.assetInputs.isEmpty());
+    }
+
+    @Test
+    void anUpperCaseSeedCollectedByAnEarlierCallIsNotCollectedAgain() {
+        // #165 reviewer3 R3-2 (review: TxRunner.collect): a provider spelling ids in upper case; the seed an earlier call
+        // collected goes through TxRunner.collect, and a later call finds it spent by its lower-case reference.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var seed = utxo(wallet.baseAddress(), "DD", 50_000_000, 100);
+        seed.setDataHash("22".repeat(32));
+        snapshot.utxos.put(wallet.baseAddress(), List.of(seed));
+        var cap = new TxRunner.Capture();
+        TxRunner.CAPTURE.set(cap);
+        try {
+            TxRunner.collect(new Tx(), seed, null);
+            assertTrue(cap.inputs.contains("dd".repeat(32) + "#0"), cap.inputs::toString);
+            var e = assertThrows(JoustException.class, () -> TxRunner.collect(new Tx(), utxo(wallet.baseAddress(), "dd", 50_000_000, 100), null));
+            assertTrue(e.getMessage().contains("spent by two calls"), e::getMessage);
+            assertEquals(List.of(), collect(wallet, 60, null), "the spent seed counts, it is not collected again");
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+    }
+
+    @Test
+    void aSpentInputCountsBeforeTheDatumHashFilter() {
+        // #165 reviewer3 R3-2 (review r2): spent already, not pre-credited (no owner recorded), with a datum hash: it
+        // counts where it is listed instead of being passed over, and nothing else is pulled in.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var spent = utxo(wallet.baseAddress(), "ee", 50_000_000, 100);
+        spent.setDataHash("22".repeat(32));
+        var other = utxo(wallet.baseAddress(), "ff", 2_000_000, 100);
+        snapshot.utxos.put(wallet.baseAddress(), List.of(spent, other));
+        var cap = new TxRunner.Capture();
+        cap.inputs.add(Designation.ref(spent));
+        TxRunner.CAPTURE.set(cap);
+        try {
+            assertEquals(List.of(), collect(wallet, 60, null));
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        assertTrue(cap.assetInputs.isEmpty());
+    }
 }
