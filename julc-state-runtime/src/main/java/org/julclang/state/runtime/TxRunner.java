@@ -35,6 +35,18 @@ final class TxRunner {
     /** A send output (ADR-0007): at output {@code index}, exactly this address and datum, at least {@code value}. */
     record ExpectedSend(int index, String address, String inlineDatumHex, String datumHash, org.julclang.ledger.Value value) {}
 
+    /** A co-caller's return: the output at {@code index}, no datum, exactly {@code value}. */
+    record Return(int index, org.julclang.ledger.Value value) {}
+
+    /**
+     * What a body may take from each caller other than the payer (T1): the native assets it pays in, the return made to
+     * it, and the address each of its collected inputs was listed at (by reference), checked against the chain.
+     */
+    record CoCallers(java.util.Map<String, org.julclang.ledger.Value> paid, java.util.Map<String, Return> returns,
+                     java.util.Map<String, String> owners) {
+        static final CoCallers NONE = new CoCallers(java.util.Map.of(), java.util.Map.of(), java.util.Map.of());
+    }
+
     /** A payout output the built transaction must contain: at {@code address}, at least {@code lovelace}, tagged. */
     record ExpectedPayout(String address, BigInteger lovelace, PlutusData tag) {}
 
@@ -69,8 +81,11 @@ final class TxRunner {
         final java.util.Map<String, String> regularOwners = new java.util.HashMap<>();
         /** The native assets each caller's calls pay from its own inputs, by base address and unit (T1). */
         final java.util.Map<String, java.util.Map<String, BigInteger>> paidAssets = new java.util.HashMap<>();
-        /** The value {@code AssetTx.returnSurplus} returns to each caller other than the payer, by address (#165 Fable). */
-        final java.util.Map<String, org.julclang.ledger.Value> returns = new java.util.LinkedHashMap<>();
+        /**
+         * The output {@code AssetTx.returnSurplus} appends for each caller other than the payer, by address: its index and
+         * exact value (#165 Fable, Codex round 3).
+         */
+        final java.util.Map<String, Return> returns = new java.util.LinkedHashMap<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
         /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
@@ -248,10 +263,7 @@ final class TxRunner {
      * The native assets each caller other than the payer pays from its own inputs, by its address ({@code
      * AssetTx.returnSurplus}; T1): a prepared transaction may take nothing else from that address.
      */
-    java.util.Map<String, org.julclang.ledger.Value> coCallers = java.util.Map.of();
-
-    /** What {@code AssetTx.returnSurplus} returns to each caller other than the payer, by address (#165 Fable). */
-    java.util.Map<String, org.julclang.ledger.Value> coCallerReturns = java.util.Map.of();
+    CoCallers coCallers = CoCallers.NONE;
 
     /** The composition has callers or co-signers other than the payer: its body is checked by {@link #checkCoCallers} (R8). */
     boolean otherCallers;
@@ -310,7 +322,9 @@ final class TxRunner {
             // A composition with other callers, or a call with co-signers (key accounts the runtime signs for): it
             // takes from each only what its calls pay in (R8; #165 Opus P3: a co-signer too), and the collateral is the
             // caller's. Read only then, so other submissions read nothing more.
-            if (otherCallers || !cosigners.isEmpty()) checkCoCallers(signed, resolveInputs(rt, signed), caller.baseAddress(), coCallers, coCallerReturns, what);
+            if (otherCallers || !cosigners.isEmpty()) checkCoCallers(signed, resolveInputs(rt, signed), caller.baseAddress(), coCallers, what);
+            // The value sizes, as a prepared body's (#165 Codex round 3): nothing the node would refuse is submitted.
+            BodyBalance.checkValueSizes(signed.getBody(), () -> protocolParams(rt, what), what);
             verify(signed, expected, what);
             for (ExpectedState e : extraExpected) verify(signed, e, what);
             verifyPayouts(signed, payouts, what);
@@ -679,7 +693,7 @@ final class TxRunner {
             // Resolved once: the per-unit balance (#152) and the keys whose inputs the transaction spends.
             var spends = resolveInputs(rt, handed);
             checkBalance(rt, handed, spends, what);
-            checkCoCallers(handed, spends, payer.baseAddress(), coCallers, coCallerReturns, what);
+            checkCoCallers(handed, spends, payer.baseAddress(), coCallers, what);
             verify(handed, expected, what);
             for (ExpectedState e : extraExpected) verify(handed, e, what);
             verifyPayouts(handed, payouts, what);
@@ -852,9 +866,21 @@ final class TxRunner {
      */
     static void checkCoCallers(Transaction t,
                                java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> spends,
-                               String payer, java.util.Map<String, org.julclang.ledger.Value> paid,
-                               java.util.Map<String, org.julclang.ledger.Value> returns, String what) {
+                               String payer, CoCallers coCallers, String what) {
+        var paid = coCallers.paid();
+        var returns = coCallers.returns();
         var body = t.getBody();
+        // Each collected input of another caller is that caller's on the chain too (#165 Codex round 3): one the chain
+        // puts at the payer's address would leave the caller out of the accounting below.
+        for (var in : body.getInputs()) {
+            String listed = coCallers.owners().get(Designation.ref(in));
+            if (listed == null || listed.equals(payer)) continue;
+            Utxo u = spends.get(in);
+            if (u == null || u.getAddress() == null || !u.getAddress().equals(listed)) {
+                throw new JoustException(what + ": input " + in.getTransactionId() + "#" + in.getIndex() + " was listed at "
+                        + listed + " but the chain has it at " + (u == null ? "no address" : u.getAddress()) + "; refused");
+            }
+        }
         if (body.getCollateral() != null) {
             for (var in : body.getCollateral()) {
                 Utxo u = spends.get(in);
@@ -886,17 +912,24 @@ final class TxRunner {
                 m.merge(com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(a.getUnit()), a.getQuantity(), BigInteger::add);
             }
         }
+        // Every caller other than the payer: those whose inputs the body spends, and those the plan pays in for or returns
+        // to (#165 Codex round 3), even when none of the inputs resolves to it.
+        for (String a : paid.keySet()) if (!a.equals(payer)) net.computeIfAbsent(a, k -> new java.util.HashMap<>());
+        for (String a : returns.keySet()) if (!a.equals(payer)) net.computeIfAbsent(a, k -> new java.util.HashMap<>());
+        var outs = body.getOutputs();
         for (var e : net.entrySet()) {
             var back = returns.get(e.getKey());
             if (back == null) continue;
-            for (TransactionOutput o : body.getOutputs()) {
-                if (!o.getAddress().equals(e.getKey()) || o.getInlineDatum() != null || o.getDatumHash() != null) continue;
-                var v = valueOf(o);
-                if (!org.julclang.state.api.Assets.covers(v, back) || !org.julclang.state.api.Assets.covers(back, v)) continue;
-                for (var a : com.bloxbean.cardano.client.api.util.ValueUtil.toAmountList(o.getValue())) {
-                    e.getValue().merge(com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(a.getUnit()), a.getQuantity().negate(), BigInteger::add);
-                }
-                break;   // the one return
+            // The return by its place (#165 Codex round 3): an equal output elsewhere (a send) is not it.
+            TransactionOutput o = back.index() < outs.size() ? outs.get(back.index()) : null;
+            var v = o == null ? null : valueOf(o);
+            if (o == null || !o.getAddress().equals(e.getKey()) || o.getInlineDatum() != null || o.getDatumHash() != null
+                    || !org.julclang.state.api.Assets.covers(v, back.value()) || !org.julclang.state.api.Assets.covers(back.value(), v)) {
+                throw new JoustException(what + ": output " + back.index() + " is not the return to " + e.getKey()
+                        + " the composition made; refused (T1, #152)");
+            }
+            for (var a : com.bloxbean.cardano.client.api.util.ValueUtil.toAmountList(o.getValue())) {
+                e.getValue().merge(com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(a.getUnit()), a.getQuantity().negate(), BigInteger::add);
             }
         }
         for (var e : net.entrySet()) {

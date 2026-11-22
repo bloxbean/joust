@@ -37,3 +37,14 @@ test('walletView and fromWallet hand the script hash to the runtime', async () =
   assert.equal(byTx['aa'.repeat(32)], Serialization.Script.fromCore(script).hash());
   assert.equal(byTx['bb'.repeat(32)], null);
 });
+
+test('a keyed operation never designates a UTxO carrying a reference script', async () => {
+  const { designatedFor } = await import('../src/client.js');
+  const wallet = { change: address, addresses: [address], utxos: new Map([
+    ['aa'.repeat(32) + '#0', { address, value: new Map([['lovelace', 9_000_000n]]), referenceScriptHash: '44'.repeat(28) }],
+    ['bb'.repeat(32) + '#0', { address, value: new Map([['lovelace', 6_000_000n]]) }],
+  ]) };
+  assert.equal(designatedFor(wallet).ref, 'bb'.repeat(32) + '#0');
+  wallet.utxos.delete('bb'.repeat(32) + '#0');
+  assert.equal(designatedFor(wallet), null);
+});

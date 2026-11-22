@@ -298,4 +298,23 @@ class AssetCollectionTest {
         snapshot.utxos.put(a, List.of(utxo(a, "ac", 5_000_000, 0)));
         assertFalse(new Designation.Designated(upper, a).unspent(rt));
     }
+
+    // ---------------------------------------------------------------- #165 Codex round 3
+
+    @Test
+    void aSeedNeverCarriesAReferenceScript() {
+        // A creation spends its seed: one carrying a reference script would consume a deployment's script.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var script = utxo(wallet.baseAddress(), "a1", 20_000_000, 0);
+        script.setReferenceScriptHash("11".repeat(28));
+        var plain = utxo(wallet.baseAddress(), "a2", 5_000_000, 0);
+        snapshot.utxos.put(wallet.baseAddress(), List.of(script, plain));
+        assertEquals(Designation.ref(plain), Designation.ref(contract.pickSeedFor(wallet)));
+        var only = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var lone = utxo(only.baseAddress(), "a3", 20_000_000, 0);
+        lone.setReferenceScriptHash("11".repeat(28));
+        snapshot.utxos.put(only.baseAddress(), List.of(lone));
+        var e = assertThrows(JoustException.class, () -> contract.pickSeedFor(only));
+        assertTrue(e.getMessage().contains("carries a reference script"), e::getMessage);
+    }
 }

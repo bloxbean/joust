@@ -248,7 +248,7 @@ public final class BodyBalance {
     }
 
     /** Each output's and the collateral return's value within the protocol's maximum value size, when it holds assets. */
-    private static void checkValueSizes(TransactionBody body, java.util.function.Supplier<ProtocolParams> pp, String what) {
+    public static void checkValueSizes(TransactionBody body, java.util.function.Supplier<ProtocolParams> pp, String what) {
         var outs = new java.util.ArrayList<TransactionOutput>(body.getOutputs());
         if (body.getCollateralReturn() != null) outs.add(body.getCollateralReturn());
         Integer max = null;

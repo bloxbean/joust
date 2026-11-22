@@ -323,14 +323,15 @@ async function untilSlot(chain, slot, maxMs = 15 * 60_000) {
 }
 
 /**
- * The wallet input a keyed operation designates (ADR-0016 D7, D11): an ordinary (lovelace-only, no datum) UTxO of at
- * least 5 ADA at the address the engine builds from (the funding address), the largest.
+ * The wallet input a keyed operation designates (ADR-0016 D7, D11): an ordinary (lovelace-only, no datum, no reference
+ * script) UTxO of at least 5 ADA at the address the engine builds from (the funding address), the largest.
  */
 export function designatedFor(wallet) {
   const address = fundingAddress(wallet);
   let best = null;
   for (const [ref, u] of wallet.utxos) {
-    if (u.address !== address || u.value.size !== 1 || u.datumHash || u.inlineDatum) continue;
+    // Never one carrying a reference script (#165 Codex round 3): the runtime refuses it, as spending it consumes the script.
+    if (u.address !== address || u.value.size !== 1 || u.datumHash || u.inlineDatum || u.referenceScriptHash) continue;
     const l = u.value.get('lovelace') ?? 0n;
     if (l < 5_000_000n) continue;
     if (!best || l > best.lovelace) best = { ref, address, lovelace: l };

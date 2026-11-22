@@ -513,12 +513,14 @@ public final class StateContractHandle<S> {
             if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
             // Not an input the composition spends already (an earlier call's asset input; R2).
             var cap = TxRunner.capture();
-            var free = r.getValue().stream().filter(u -> Designation.pickable(u, own))
+            // Never one carrying a reference script (#165 Codex round 3): spending it would consume a deployment's script.
+            var free = r.getValue().stream().filter(u -> u.getReferenceScriptHash() == null)
+                    .filter(u -> Designation.pickable(u, own))
                     .filter(u -> cap == null || !cap.inputs.contains(Designation.ref(u))).toList();
             // F-W3: a creation after a call that paid assets from the caller's only UTxO finds none; in the other order
             // the seed is counted for the payment (alreadyIn). Refused with the remedy rather than reusing the input.
-            if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation"
-                    + " or spent by the composition; put the creation before a call that pays assets from the same wallet,"
+            if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller carries a reference script, is"
+                    + " designated by a keyed operation or spent by the composition; put the creation before a call that pays assets from the same wallet,"
                     + " or give the wallet another UTxO");
             return free.stream()
                     .filter(u -> u.getAmount().size() == 1)

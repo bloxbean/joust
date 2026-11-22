@@ -441,7 +441,9 @@ final class AssetTx {
                         + " go back to it in one output; compose with it as the payer, or pay from fewer UTxOs (T1)");
             }
             cap.tx.payToAddress(e.getKey(), amounts);
-            cap.returns.put(e.getKey(), back);   // checked by identity in the built body (TxRunner.checkCoCallers)
+            // Checked by its place and value in the built body (TxRunner.checkCoCallers); counted, as a call's outputs are.
+            cap.returns.put(e.getKey(), new TxRunner.Return(cap.outputs, back));
+            cap.outputs++;
         }
         return paid;
     }

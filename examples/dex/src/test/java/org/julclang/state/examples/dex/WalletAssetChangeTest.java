@@ -684,4 +684,80 @@ class WalletAssetChangeTest {
         assertTrue(body.getInputs().contains(new TransactionInput("aa".repeat(32), 0)), () -> "the token UTxO: " + body.getInputs());
         assertNoNegativeOutput(body);
     }
+
+    // ---------------------------------------------------------------- #165 Codex round 3
+
+    /** The snapshot backend, answering the outputs of {@code moved} (by transaction id) at {@code address} instead. */
+    static BackendService rehomed(Fixture f, Map<String, String> moved) {
+        var snapshot = new SnapshotBackend(f.snapshot);
+        UtxoService utxos = (UtxoService) Proxy.newProxyInstance(Fixture.class.getClassLoader(), new Class<?>[]{UtxoService.class},
+                (proxy, m, args) -> {
+                    Object r = m.invoke(snapshot.getUtxoService(), args);
+                    if (m.getName().equals("getTxOutput") && moved.containsKey((String) args[0])) {
+                        Utxo u = ((Result<Utxo>) r).getValue();
+                        return Result.success("ok").withValue(Utxo.builder().txHash(u.getTxHash()).outputIndex(u.getOutputIndex())
+                                .address(moved.get((String) args[0])).amount(u.getAmount()).build());
+                    }
+                    return r;
+                });
+        return (BackendService) Proxy.newProxyInstance(Fixture.class.getClassLoader(), new Class<?>[]{BackendService.class},
+                (proxy, m, args) -> m.getName().equals("getUtxoService") ? utxos : m.invoke(snapshot, args));
+    }
+
+    /** B's token UTxO, listed at B's address, resolves at the payer's: B would drop out of the accounting. Prepare. */
+    @Test
+    void aCoCallersInputResolvingToThePayerIsRefusedOnPrepare() {
+        var f = new Fixture();
+        f.wallet(List.of(f.utxo("bb", 500, 0)));
+        String b = new Account(Networks.testnet()).baseAddress();
+        f.snapshot.utxos.put(b, new ArrayList<>(List.of(walletOfB(f, b))));
+        var walletB = WalletAccount.of(b, Networks.testnet());
+        var rt = observed(f, rehomed(f, Map.of("ee".repeat(32), f.address)), new SnapshotBackend(f.snapshot), new AtomicReference<>());
+        var dex = DexClient.at(rt, f.instance);
+        var e = assertThrows(JoustException.class, () -> Compose.of(rt, f.payer)
+                .add(() -> dex.addLiquidity(walletB, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
+                .prepare());
+        assertTrue(e.getMessage().contains("was listed at " + b), e::getMessage);
+        assertReleased("ee".repeat(32) + "#0");
+    }
+
+    /** The same on the key-signed submit path. */
+    @Test
+    void aCoCallersInputResolvingToThePayerIsRefusedOnSubmit() {
+        var f = new Fixture();
+        var keyA = new Account(Networks.testnet());
+        var keyB = new Account(Networks.testnet());
+        f.snapshot.utxos.put(keyA.baseAddress(), new ArrayList<>(List.of(
+                Utxo.builder().txHash("bb".repeat(32)).outputIndex(0).address(keyA.baseAddress())
+                        .amount(List.of(Amount.lovelace(BigInteger.valueOf(500_000_000)))).build(),
+                Utxo.builder().txHash("cc".repeat(32)).outputIndex(0).address(keyA.baseAddress())
+                        .amount(List.of(Amount.lovelace(BigInteger.valueOf(6_000_000)))).build())));
+        f.snapshot.utxos.put(keyB.baseAddress(), new ArrayList<>(List.of(walletOfB(f, keyB.baseAddress()))));
+        var rt = observed(f, rehomed(f, Map.of("ee".repeat(32), keyA.baseAddress())), new SnapshotBackend(f.snapshot), new AtomicReference<>());
+        var dex = DexClient.at(rt, f.instance);
+        var e = assertThrows(JoustException.class, () -> Compose.of(rt, keyA)
+                .add(() -> dex.addLiquidity(keyB, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
+                .submit());
+        assertTrue(e.getMessage().contains("was listed at " + keyB.baseAddress()), e::getMessage);
+    }
+
+    /** A key-signed submit whose change is above the maximum value size is refused before submission. */
+    @Test
+    void aSubmittedChangeAboveTheMaximumValueSizeIsRefused() {
+        var f = new Fixture();
+        var key = new Account(Networks.testnet());
+        var big = Utxo.builder().txHash("bb".repeat(32)).outputIndex(0).address(key.baseAddress())
+                .amount(List.of(Amount.lovelace(BigInteger.valueOf(500_000_000)))).build();
+        var one = named(f, "aa", 60_000, 0);
+        var two = named(f, "cc", 60_000, 80);
+        one.setAddress(key.baseAddress());
+        two.setAddress(key.baseAddress());
+        f.snapshot.utxos.put(key.baseAddress(), new ArrayList<>(List.of(big, one, two)));
+        var rt = observed(f, new SnapshotBackend(f.snapshot), new AtomicReference<>());
+        var dex = DexClient.at(rt, f.instance);
+        var e = assertThrows(BodyBalance.UnbalancedException.class, () -> Compose.of(rt, key)
+                .add(() -> dex.addLiquidity(key, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
+                .submit());
+        assertTrue(e.getMessage().contains("above the ledger's maximum of 5000 bytes"), e::getMessage);
+    }
 }
