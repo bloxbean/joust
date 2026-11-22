@@ -220,4 +220,18 @@ class ReadsTest {
         failure("internal", "inconsistentRead", () -> backend(q -> value(JSON.createArrayNode().add(output), 10))
                 .getUtxoService().getUtxos(ADDRESS, 10, 1));
     }
+    @Test void nullableOutputFieldsKeepTheirWireFormat() {
+        var table = new Reservations(3, false, 0);
+        table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
+        for (var bad : List.<ObjectNode>of(output(0).put("data_hash", "unknown"), output(0).put("reference_script_hash", "x"),
+                output(0).put("inline_datum", "abc"), output(0).put("data_hash", 1))) {
+            var reads = new Reads(req -> new Call.Answer(obj().set("result", value(JSON.createArrayNode().add(bad), 204)), 128),
+                    199, 20, 10, 8192, 0, table::observe);
+            failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+            assertTrue(table.avoids("spend"), bad::toString);
+            assertTrue(table.avoids("collateral"), bad::toString);
+        }
+        var ok = output(0).put("data_hash", "c".repeat(64)).put("reference_script_hash", "d".repeat(56)).putNull("inline_datum");
+        assertDoesNotThrow(() -> backend(q -> value(JSON.createArrayNode().add(ok), 10)).getUtxoService().getUtxos(ADDRESS, 10, 1));
+    }
 }

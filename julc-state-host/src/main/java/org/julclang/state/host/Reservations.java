@@ -138,10 +138,18 @@ final class Reservations implements ClaimStore {
 
     void rewind(long tip) {
         entries.replaceAll((id, e) -> switch (e.state) {
-            case expired -> e.body.to > tip ? e.as(State.prepared, null) : e;
             case confirmed, shallow -> e.slot > tip ? e.as(State.prepared, null) : e.as(State.shallow, e.slot);
             default -> e;
         });
+        // One body, one live reservation: an expired entry rearms only when no other entry of its body is live, and
+        // of several such tombstones only the latest, so restore finds the one that holds the body (#149 Codex).
+        var live = new HashSet<String>();
+        for (var e : entries.values()) if (e.live()) live.add(e.body.hash);
+        var rearmed = new HashMap<String, String>();
+        for (var e : entries.values()) {
+            if (e.state == State.expired && e.body.to > tip && !live.contains(e.body.hash)) rearmed.put(e.body.hash, e.id);
+        }
+        entries.replaceAll((id, e) -> id.equals(rearmed.get(e.body.hash)) ? e.as(State.prepared, null) : e);
         reconcile = true;
     }
 
@@ -150,8 +158,8 @@ final class Reservations implements ClaimStore {
         fields(p, "transactions", "complete");
         boolean complete = bool(p, "complete");
         if (!p.path("transactions").isArray()) throw bad("transactions must be an array");
-        // One pass indexes the live bodies by hash, so a batch costs linear time in the table and the batch, and only the
-        // batch's additions are staged: restore never changes an existing entry (#149 Codex).
+        // One pass indexes the live bodies by hash (rewind keeps at most one per body), so a batch costs linear time in
+        // the table and the batch, and only the batch's additions are staged: restore never changes an entry (#149 Codex).
         var live = new HashMap<String, Entry>();
         if (!p.get("transactions").isEmpty()) for (var e : entries.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
         var added = new LinkedHashMap<String, Entry>();

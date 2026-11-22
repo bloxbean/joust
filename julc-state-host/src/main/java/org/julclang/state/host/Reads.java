@@ -173,7 +173,9 @@ final class Reads {
     private Utxo checkOutput(JsonNode n, String address, String wanted) {
         var index = n.path("output_index");
         if (!index.isIntegralNumber() || !index.canConvertToInt() || index.intValue() < 0
-                || !hex64(n.path("tx_hash")) || !n.path("amount").isArray())
+                || !hex64(n.path("tx_hash")) || !n.path("amount").isArray()
+                || !optional(n, "data_hash", "[0-9a-f]{64}") || !optional(n, "reference_script_hash", "[0-9a-f]{56}")
+                || !optional(n, "inline_datum", "(?:[a-fA-F0-9]{2})+"))
             throw inconsistent("malformed output");
         var units = new HashSet<String>();
         for (var asset : n.get("amount")) {
@@ -301,5 +303,10 @@ final class Reads {
     private void accepted() { observe.accept(greatestTip); }
     // A JSON string of 64 lowercase hex digits: a 64-digit number's text matches too (#149 Codex fix review).
     static boolean hex64(JsonNode n) { return n.isTextual() && n.textValue().matches("[0-9a-f]{64}"); }
+    // The wire schema's nullable output fields: absent, null, or a string of the field's format.
+    private static boolean optional(JsonNode n, String field, String pattern) {
+        var v = n.path(field);
+        return v.isMissingNode() || v.isNull() || v.isTextual() && v.textValue().matches(pattern);
+    }
     private static HostError inconsistent(String reason) { return HostError.internal("inconsistentRead", reason); }
 }
