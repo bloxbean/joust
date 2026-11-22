@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r11). Design only.
+**Status:** Proposed (r12). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -161,6 +161,12 @@ is `unsupported`, code `params` (protocol 1's answer); present but outside the d
   - **R fails** (X23, X34: the template was rebuilt, the name now resolves to another template, the `template` field
     is stale, or the params no longer give the policy): the host cannot tell a rebuild from a mislabelled record and
     does not try.
+  - **A record without `policy`** (X47: any protocol-1 record, or one written before its contract gained `@Params`)
+    is recognized by its shape, not by what its contract name resolves to today. If the named contract is still
+    unparameterized and its catalog hash is the policy the body's keyed tokens are under, ADR-0022's existing check
+    applies unchanged. Otherwise (the contract now takes params, was renamed or was rebuilt) the host cannot
+    re-derive the deployment and the entry is **retired**, as below, with the body's keyed tokens as its object; it
+    is never refused for lacking the new fields.
     It restores the entry as a **retired operation**: its out-refs and keyed tokens stay reserved, its attempts
     history is kept, any retry of it or new keyed operation on its keyed object is `bad`, code `operation` ("not
     re-derivable from this build"), and it is **never discarded** (it may have been handed out): it ends only as
@@ -299,8 +305,12 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
   (X24, T16): today a build with no validators leaves an earlier `validators.json` in place (F21), so the digest
   would cover, and the host would load, governors the project no longer has. M4c therefore changes the npm build to
   write `validators.json` on every successful build, as `[]` when there are no validators, and to remove stale
-  `<name>.plutus` files with it. **The lock binds the manifest's exact bytes** (X31): the build **removes the
-  previous `joust.lock.json` before writing anything else** (X41), and writes the new one **last** (after
+  `<name>.plutus` files with it. **The lock binds the manifest's exact bytes** (X31): **builds into one output
+  directory are serialized** (X48) by an exclusive build marker (`.joust-build`, created exclusively before anything
+  else and removed after the final rename); a second build that finds it waits or fails, and a marker left by a
+  crashed build is removed only after `joust.lock.json` is, so a stale lock can never be republished by an
+  overlapping writer. Under that marker the build **removes the previous `joust.lock.json` before writing anything
+  else** (X41), and writes the new one **last** (after
   `contracts.json` and `validators.json`, by a temporary file and rename) with
   `buildDigests: {contracts, validators}`, the SHA-256 of the exact `contracts.json` and `validators.json` bytes it
   wrote (X31, X37). Version 2 also digests `joust.lock.json`, after `validators.json`, and **both** host and client
@@ -332,7 +342,10 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
   integer or decimal string, `boolean` JSON boolean only, `PlutusData` CBOR hex), each within D2a's domain, encoded
   and applied as D3 says. Wrong arity or type, or a value outside the domain, is `bad`, code `governor`.
 - **`signers`**: the 28-byte payment key hashes the governor's own rules require (Guardian: `owner`). The client names
-  them; the host cannot know a governor's rules.
+  them; the host cannot know a governor's rules. **Count limit** (X50): `governor.signers` and the call's
+  `cosigners` together hold at most **64 distinct** keys, the M3b host's existing co-signer cap (`MAX_COSIGNERS`,
+  `Session.java:303` at `2ffaf41b`), checked on both hosts before any account is built; more is `bad`, code
+  `governor` (`bad/request` for `cosigners` alone, as today). The protocol-2 schema states the limit.
 
 The host applies the governor's params, refuses (`bad`, code `governor`) a governor whose applied hash differs from
 the credential in the contract's params or equals the contract's own hash or either shared verifier's (F16), and
@@ -459,8 +472,8 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | an npm client initializing with fingerprint version 1 (or none) on a project with `validators.json` | the version-1 digest; no `authorizedBy:script`; every other call as today |
 | a client sends `fingerprintVersion` to a host that does not ship this ADR (any M1–M3 host), to the JVM host, or without offering protocol 2 | `bad/request` at `initialize`; the client starts a fresh host process without the field (D4) |
 | a client sends `params`, `governor` or `operation.policy` to a host without the capability | `bad/request` (strict field lists); clients send them only after the capability (D2) |
-| `initialize` on a host with `params`, a parameterized contract | `unapplied` hash and `parameterized: true`, no `unsupported` (D2) |
-| `describe` of an `@AuthorizedBy` method | `served: true` when either credential branch is served; the call entry adds `authorizedBy: [{field, branches}]` so a client knows which branch its params will need |
+| `initialize` on a host with `params`, a parameterized contract **whose description carries the `formats` marker** | `unapplied` hash and `parameterized: true`, no `unsupported` (D2); an unmarked one keeps `unsupported: "params"` (row above) |
+| `describe` of an `@AuthorizedBy` method | `served: true` when **its contract is served (marked, D2) and the method passes its other support checks**, and either credential branch is served; otherwise its own `unsupported` code (`params` on an unmarked contract); the call entry adds `authorizedBy: [{field, branches}]` so a client knows which branch its params will need |
 
 ### D8. Verification and vectors
 
@@ -483,8 +496,9 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   (refused on both hosts) and at the type's maximum (accepted, same bytes); a params record reaching a `short` or
   `Byte` gets no marker and a processor warning; one protocol-2 session with a **marked and an unmarked**
   parameterized contract: the marked one is `parameterized: true` with its plain methods served, the unmarked one
-  `unsupported: "params"` in `initialize` and `describe`, and a `deployment` of it `unsupported/params`; a pre-M4a
-  artifact likewise.
+  `unsupported: "params"` in `initialize` and `describe`, **its governed (`@AuthorizedBy`) method
+  `unsupported: "params"` too, on a host advertising both `authorizedBy` branches** (X49), and a `deployment` of it
+  `unsupported/params`; a pre-M4a artifact likewise.
 - **Mutations** (recomputed hashes, one targeted rule each, proven by disabling it): other params (definite-array
   encoding of the same values included); another governor; an **ineligible** governor (a script credential in a
   params field no served `@AuthorizedBy` names) and either of two eligible ones (positive); the contract's own hash
@@ -522,7 +536,10 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   digest (`stageMismatch`), and changed **after** it (the running session keeps its loaded bytes); an old client
   (fingerprint version 1) and a new host on a project with the manifest (initializes, no `authorizedBy:script`); two
   packages with a `Guardian` (the Gradle qualified selector works; ambiguity fails closed).
-- **Keyed restore (X22, X23, X27, X28, X40), M4a:** a re-derivable keyed operation whose record keeps everything
+- **Keyed restore (X22, X23, X27, X28, X40, X47), M4a:** a **protocol-1-to-2 restart**: a pending keyed operation
+  recorded by an M3 client (no `policy`, `template` or `params`), its contract gaining `@Params` under the same name
+  before the restart (retired: attempts, inputs and keyed tokens held, the restore completes); the same restart with
+  the contract unchanged (ADR-0022's check, live); a re-derivable keyed operation whose record keeps everything
   but drops **only its current attempt** from `attempts` (live; `discarded` refused; held until margin-qualified
   expiry); a pending keyed `@Params` entry with its `operation` dropped
   (restored by D8's path: its inputs and keyed token stay held; `discarded` after restore is refused; a new keyed
@@ -537,7 +554,11 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   directory, launch: no `authorizedBy:script` and a Guardian lookup fails; a lock from an older toolchain (no
   `buildDigests`): no `authorizedBy:script`; a **validator-only** rebuild (remove Guardian, Treasury unchanged)
   interrupted right after a byte-identical `contracts.json` write, and one interrupted after `validators.json`: no
-  lock, so no `authorizedBy:script` (X41).
+  lock, so no `authorizedBy:script` (X41); **two overlapping builds** into one directory with identical contract bytes
+  and different validator manifests (the second waits or fails at the build marker; neither leaves a lock matching
+  the other's manifest, X48).
+- **Signer count (X50), both hosts:** 64 distinct keys across `governor.signers` and `cosigners` (accepted), 65
+  (`bad/governor` before any account is built), and duplicates across the two lists counted once.
 - **Differential:** the JVM host (through generated clients) and the Node host agree byte for byte on every M4 vector.
 - **Governor artifact resolution** (Y3): a refusal vector for each clause of D4's client rule (a second class with the
   same simple name in the first entry, missing resource, wrong `type`, wrong `purpose`, `params` arity and type; npm:
@@ -761,3 +782,11 @@ host's bodies already satisfy it.
     refuses it), D7, D8, I23;
   - X46 (baseline predates maps) → D1 (the final M3b host is the oracle), D8 (a map contract in the legacy
     session), I21.
+- **r12** (2026-11-22, responds to Codex review of `107ec9dc`; it confirmed X40, X43, X45 and X46 and Q6's gate; its
+  four findings are X47–X50):
+  - X47 (a protocol-1 record after its contract gains params) → D2 (records without `policy` recognized by shape;
+    retired when not re-derivable, never refused), D8;
+  - X48 (overlapping npm builds) → D4 (builds serialized per output directory by an exclusive marker), D8;
+  - X49 (D7 rows ignored the per-contract marker) → D7 (`initialize` and `describe` rows qualified), D8;
+  - X50 (no governor signer limit) → D4 (64 distinct keys across `governor.signers` and `cosigners`, before any
+    account is built), D8.
