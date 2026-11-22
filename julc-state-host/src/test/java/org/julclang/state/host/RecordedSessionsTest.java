@@ -139,7 +139,9 @@ class RecordedSessionsTest {
                 .set("frame",obj().put("jsonrpc","2.0").put("id","unsolicited").set("result",obj()))));
         out.put("duplicate-response",cut(frames,describe,obj().put("violation","duplicateResponse").put("again",true)
                 .set("frame",frames.get(initialized).required("host"))));
-        out.put("stray-bytes",cut(frames,describe,obj().put("violation","strayBytes").put("raw","stray output\n")));
+        // A complete (invalid) header, so a client reading headers refuses it at once, not at the partial-frame
+        // deadline the fake host would outwait (#153 Codex re-review).
+        out.put("stray-bytes",cut(frames,describe,obj().put("violation","strayBytes").put("raw","stray output\r\n\r\n")));
         out.put("malformed-frame",cut(frames,describe,obj().put("violation","malformedFrame").put("raw","Content-Length: 9\r\n\r\n{\"id\":3,}")));
         out.put("oversized-frame",cut(frames,describe,obj().put("violation","oversizedFrame").put("raw","Content-Length: 4194305\r\n\r\n")));
         out.put("eof-during-call",cut(frames,describe,obj().put("violation","eofDuringCall").put("eof",true)));
