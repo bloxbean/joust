@@ -284,7 +284,7 @@ final class AssetTx {
         // and its later fee selection only asks for lovelace. The fee input need not hold the tokens.
         // Only the default JVM claim store keeps the wallet shortcut; the dev host's store (ADR-0022 M1b) collects the
         // wallet's asset inputs, as the shortcut can leave negative token change. Issue #152 tracks the default path.
-        if (caller instanceof WalletAccount && contract.runtime.claimStore() == ClaimStore.jvm()) return;
+        if (caller instanceof WalletAccount && contract.runtime.claimStore() == JvmClaimStore.INSTANCE) return;
         // The seed of a creation is already an input: count what it holds, never collect it twice.
         if (alreadyIn != null) {
             for (Amount a : alreadyIn.getAmount()) {

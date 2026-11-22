@@ -367,7 +367,7 @@ class DevHostSeamsTest {
     void walletWithASessionStoreCollectsTheTokenBehindAdaAndReservedInputs() {
         var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
         checkAssetCollection(wallet, new HostStore(), true);
-        checkAssetCollection(wallet, ClaimStore.jvm(), false);
+        checkAssetCollection(wallet, JvmClaimStore.INSTANCE, false);
     }
 
     private void checkAssetCollection(Account payer, ClaimStore store, boolean collects) {
