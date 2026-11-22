@@ -537,7 +537,12 @@ public final class StateContractHandle<S> {
                 // on where reserved inputs fall (#145 Codex review 5).
                 Utxo mixed = null;
                 int eligible = 0;
+                String lastFirst = null;
                 for (int page = 1; ; page++) {
+                    // A repeated page (a provider that ignores the page) is the end, checked before filtering (#145 Codex).
+                    String first = Designation.ref(r.getValue().get(0));
+                    if (first.equals(lastFirst)) break;
+                    lastFirst = first;
                     for (Utxo u : r.getValue()) {
                         if (!Designation.pickable(store, u, own)) continue;
                         if (u.getAmount().size() == 1) return u;

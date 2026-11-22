@@ -285,12 +285,11 @@ a call proves `@AuthorizedBy` (ADR-0009 D3).
 | `InstanceNotFoundException` | `JoustException` | No UTxO holds the instance's thread token |
 
 A submission's answer decides between `SubmitException` and `PendingTransactionException`. Only a definite answer is a
-rejection: an HTTP 4xx with a body (other than 408, 425 and 429), or, for a call that is not a keyed operation's
-attempt, an answer without a status that gives a reason. A 5xx, a timeout, an empty body or a network error may hide
-an accepted transaction, so it is pending, with its inputs still claimed. A backend that reports the node's rejection
-as a 5xx (CCL's Ogmios 5 service does) therefore turns a lost race into a pending outcome: such a call is not retried,
-and its inputs stay claimed until its window ends. Prefer a backend that answers a rejection with a 4xx (Blockfrost,
-Yaci Store).
+rejection: an HTTP 4xx with a body (other than 408, 425 and 429). A 5xx, an answer without a status, a timeout, an
+empty body or a network error may hide an accepted transaction, so it is pending, with its inputs still claimed. A
+backend that reports the node's rejection that way (CCL's Ogmios 5 service answers a 500, its GraphQL service no
+status) therefore turns a lost race into a pending outcome: such a call is not retried, and its inputs stay claimed
+until its window ends. Prefer a backend that answers a rejection with a 4xx (Blockfrost, Yaci Store).
 
 ## Helpers
 

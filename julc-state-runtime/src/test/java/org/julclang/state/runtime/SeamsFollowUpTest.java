@@ -183,28 +183,152 @@ class SeamsFollowUpTest {
     // ------------------------------------------------------------------ submission answers (Fable F1, Opus F5)
 
     @Test
-    void anAnswerWithoutAStatusButWithAReason_isStillARejectionForAPlainSubmission() {
+    void anAnswerWithoutAStatus_isPendingWhateverItsText() {
+        // A status-less service (CCL's GraphQL) reports a lost reply and a refusal alike: taking its text for a refusal
+        // could run a call again on the state its first transaction advanced, so it stays pending (#145 Codex).
         var chain = new Chain();
         var payer = new Account(Networks.testnet());
         var u = utxo(payer.baseAddress(), 30_000_000);
         var submitted = new AtomicInteger();
         var store = new HostStore();
-        // A GraphQL-style service: no HTTP status, the node's reason in the body.
-        var answer = Result.<String>error("{\"error\":\"BadInputsUTxO\"}");
+        var answer = Result.<String>error("Apollo transport failure");
         var rt = StateRuntime.builder(failing(chain, null, answer, null, submitted)).chainTime(chain.time())
                 .network(Networks.testnet()).claimStore(store).build();
         var built = Designation.build(store, payer.baseAddress(), null, () -> spending(u));
-        assertThrows(SubmitException.class, () -> new TxRunner(rt).submitPlain(built, "publish"));
-        assertFalse(store.claims.contains(built.claim()), "a rejection ends the claim");
-        // No status and no reason: still unknown, so pending.
-        var empty = Result.<String>error("");
-        var store2 = new HostStore();
-        var rt2 = StateRuntime.builder(failing(chain, null, empty, null, submitted)).chainTime(chain.time())
-                .network(Networks.testnet()).claimStore(store2).build();
-        var built2 = Designation.build(store2, payer.baseAddress(), null, () -> spending(u));
-        assertThrows(PendingTransactionException.class, () -> new TxRunner(rt2).submitPlain(built2, "publish"));
-        // A keyed attempt's relays keep the strict rule (R-C10): no status is unknown.
-        assertEquals(Relay.Answer.UNKNOWN, Relay.classify(answer).answer());
+        assertThrows(PendingTransactionException.class, () -> new TxRunner(rt).submitPlain(built, "publish"));
+        assertTrue(store.claims.contains(built.claim()), "still claimed");
+    }
+
+    // ------------------------------------------------------------------ the latch at every callback (#145 Codex, follow-up round)
+
+    @Test
+    void aCaughtRefusalStopsTheNextCallbackFromRunningOrPublishing() {
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var submitted = new AtomicInteger();
+        var plain = StateRuntime.builder(failing(chain, null, null, submitted)).chainTime(chain.time()).network(Networks.testnet()).build();
+        var hosted = runtime(chain, b -> b.claimStore(new HostStore()));
+        Runnable swallowing = () -> {
+            try {
+                new TxRunner(hosted).submit(TxRunner.newTx(), payer, null, new byte[0][], null, List.of(), null, "a call");
+            } catch (RuntimeException ignored) {
+                // discarded
+            }
+        };
+        Runnable never = () -> fail("a call ran after the composition was refused");
+        assertThrows(TxRunner.EndsComposition.class, () -> Compose.of(plain, payer).add(swallowing).add(never).submit());
+        // Within the same callback: a publication after the caught refusal is refused before anything is sent.
+        Runnable publishesAfter = () -> {
+            swallowing.run();
+            new TxRunner(plain).submitPlain(new com.bloxbean.cardano.client.quicktx.Tx().payToAddress(payer.baseAddress(),
+                    com.bloxbean.cardano.client.api.model.Amount.ada(2)).from(payer.baseAddress()), payer, "publish");
+        };
+        assertThrows(TxRunner.EndsComposition.class, () -> Compose.of(plain, payer).add(publishesAfter).submit());
+        assertEquals(0, submitted.get(), "nothing broadcast");
+    }
+
+    @Test
+    void aCaughtPendingPrerequisiteEndsTheComposition() {
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var u = utxo(payer.baseAddress(), 30_000_000);
+        var submitted = new AtomicInteger();
+        var gateway = Result.<String>error("Gateway Timeout").code(504);
+        var rt = StateRuntime.builder(failing(chain, null, gateway, null, submitted)).chainTime(chain.time())
+                .network(Networks.testnet()).build();
+        var built = Designation.build(rt.claimStore(), payer.baseAddress(), null, () -> spending(u));
+        Runnable catching = () -> {
+            try {
+                new TxRunner(rt).submitPlain(built, "publish");
+            } catch (PendingTransactionException ignored) {
+                // a callback that hides the pending publication
+            }
+        };
+        Runnable never = () -> fail("a call ran after a pending publication");
+        var e = assertThrows(PendingTransactionException.class, () -> Compose.of(rt, payer).add(catching).add(never).submit());
+        assertEquals(TransactionUtil.getTxHash(built.tx()), e.txHash());
+        assertEquals(1, submitted.get(), "sent once");
+    }
+
+    @Test
+    void aScopedPreparedSubmitInsideACompositionIsLatchedFirst() {
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var rt = runtime(chain, b -> b);
+        var prepared = new PreparedTx(rt, spending(utxo(payer.baseAddress(), 5_000_000)), List.of(new byte[28]), null, "prepared");
+        Runnable catching = () -> {
+            try {
+                prepared.submit();
+            } catch (RuntimeException ignored) {
+                // discarded
+            }
+        };
+        var wallet = WalletAccount.of(payer.baseAddress(), Networks.testnet());
+        assertThrows(TxRunner.EndsComposition.class,
+                () -> rt.inScope(CallScope.at(10), () -> Compose.of(rt, wallet).add(catching).prepare()));
+    }
+
+    @Test
+    void aCallAbortFromThePostSendLogLeavesThePendingHash() {
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var submitted = new AtomicInteger();
+        var abort = new ReadFailed("deadline", "", "cancelled");
+        var rt = StateRuntime.builder(failing(chain, null, new ReadFailed("transaction", "h", "never read"), submitted))
+                .chainTime(chain.time()).network(Networks.testnet())
+                .log(m -> { if (m.contains("submitted")) throw abort; }).build();
+        Transaction tx = spending(utxo(payer.baseAddress(), 30_000_000));
+        var e = assertThrows(PendingTransactionException.class, () -> new TxRunner(rt).submitSigned(tx, "submit"));
+        assertEquals(TransactionUtil.getTxHash(tx), e.txHash());
+        assertSame(abort, e.getCause());
+    }
+
+    @Test
+    void aScopedPageReadThatThrowsIsAFailedRead_andARepeatedReservedPageEndsTheScan() throws Exception {
+        var payer = new Account(Networks.testnet());
+        var first = new ArrayList<Utxo>();
+        for (int i = 0; i < 100; i++) first.add(utxo(payer.baseAddress(), 5_000_000));
+        var reads = new AtomicInteger();
+        var utxos = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
+                (p, m, a) -> {
+                    reads.incrementAndGet();
+                    if ((Integer) a[2] == 1) return Result.<List<Utxo>>success("ok").withValue(first);
+                    throw new com.bloxbean.cardano.client.api.exception.ApiException("I/O failure");
+                });
+        var rt = StateRuntime.builder(utxosOnly(utxos)).chainTime(new Chain().time()).network(Networks.testnet()).build();
+        var pick = TxRunner.class.getDeclaredMethod("largestAdaOnly", String.class, Set.class);
+        pick.setAccessible(true);
+        var runner = new TxRunner(rt);
+        var thrown = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        rt.inScope(CallScope.at(10), () -> {
+            try {
+                pick.invoke(runner, payer.baseAddress(), Set.of());
+            } catch (java.lang.reflect.InvocationTargetException x) {
+                thrown.set(x.getCause());
+            } catch (ReflectiveOperationException x) {
+                throw new RuntimeException(x);
+            }
+        });
+        assertInstanceOf(ReadFailed.class, thrown.get());
+        // A custom store that avoids every input of a page the provider keeps repeating: the coin selection ends.
+        var store = new HostStore();
+        first.forEach(u -> store.avoid.add(Designation.ref(u)));
+        reads.set(0);
+        var same = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
+                (p, m, a) -> {
+                    if (reads.incrementAndGet() > 50) throw new AssertionError("still reading");
+                    return Result.<List<Utxo>>success("ok").withValue(first);
+                });
+        var session = StateRuntime.builder(utxosOnly(same)).chainTime(new Chain().time()).network(Networks.testnet())
+                .claimStore(store).build();
+        var contract = new StateContractHandle<>(session, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        var seedOf = StateContractHandle.class.getDeclaredMethod("seedOf", Account.class);
+        seedOf.setAccessible(true);
+        var seed = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> seedOf.invoke(contract, payer));
+        assertInstanceOf(JoustException.class, seed.getCause());
+        assertTrue(reads.get() <= 3, "reads: " + reads.get());
     }
 
     @Test
