@@ -628,12 +628,19 @@ class DevHostSeamsTest {
     /** A node that accepts every transaction, and a confirmation read that ends the call. */
     static com.bloxbean.cardano.client.backend.api.BackendService acceptingThenFailing(Chain chain, Error onConfirm,
                                                                                        java.util.concurrent.atomic.AtomicInteger submitted) {
+        return failing(chain, null, onConfirm, submitted);
+    }
+
+    /** As {@link #acceptingThenFailing}; {@code onSubmit}, if not null, ends the submission itself (after it was sent). */
+    static com.bloxbean.cardano.client.backend.api.BackendService failing(Chain chain, Error onSubmit, Error onConfirm,
+                                                                          java.util.concurrent.atomic.AtomicInteger submitted) {
         var base = chain.backend();
         var txs = (com.bloxbean.cardano.client.backend.api.TransactionService) java.lang.reflect.Proxy.newProxyInstance(
                 DevHostSeamsTest.class.getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.TransactionService.class},
                 (p, m, a) -> switch (m.getName()) {
                     case "submitTransaction" -> {
                         submitted.incrementAndGet();
+                        if (onSubmit != null) throw onSubmit;
                         yield com.bloxbean.cardano.client.api.model.Result.success("ok").withValue("h");
                     }
                     case "getTransaction" -> throw onConfirm;
@@ -675,6 +682,88 @@ class DevHostSeamsTest {
         var built2 = Designation.build(store2, payer.baseAddress(), null, () -> spending(u));
         assertSame(oom, assertThrows(OutOfMemoryError.class, () -> new TxRunner(rt2).submitPlain(built2, "publish")));
         assertTrue(store2.claims.contains(built2.claim()) && store2.expiries.containsKey(built2.claim()), "still claimed");
+    }
+
+    @Test
+    void anAbortWhileSubmitting_leavesTheTransactionPending_withItsInputsClaimed() {
+        // The backend sent the bytes, then the call was ended (a host's deadline, a failed read): the node may have it.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var u = utxo(payer.baseAddress(), 30_000_000);
+        var aborted = new ReadFailed("submit", "", "deadline");
+        var submitted = new java.util.concurrent.atomic.AtomicInteger();
+        var store = new HostStore();
+        var rt = StateRuntime.builder(failing(chain, aborted, null, submitted)).chainTime(chain.time())
+                .network(Networks.testnet()).claimStore(store).build();
+        var built = Designation.build(store, payer.baseAddress(), null, () -> spending(u));
+        var e = assertThrows(PendingTransactionException.class, () -> new TxRunner(rt).submitPlain(built, "publish"));
+        assertSame(aborted, e.getCause());
+        assertEquals(com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(built.tx()), e.txHash());
+        assertTrue(store.claims.contains(built.claim()) && store.expiries.containsKey(built.claim()), "still claimed");
+        var signed = assertThrows(PendingTransactionException.class, () -> new TxRunner(rt).submitSigned(spending(u), "submit"));
+        assertSame(aborted, signed.getCause());
+    }
+
+    @Test
+    void aPrerequisiteOfARuntimeWithAnotherStore_isRefusedInACompositionBeforeAnythingIsSent() {
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var submitted = new java.util.concurrent.atomic.AtomicInteger();
+        var hosted = StateRuntime.builder(failing(chain, null, null, submitted)).chainTime(chain.time())
+                .network(Networks.testnet()).claimStore(new HostStore()).build();
+        var plain = runtime(chain, b -> b);
+        var e = assertThrows(JoustException.class, () -> Compose.of(plain, payer)
+                .add(() -> new TxRunner(hosted).submitPlain(new Tx(), payer, "publish the reference script")).submit());
+        assertTrue(e.getMessage().contains("publish the reference script belongs to a runtime with another claim store"), e.getMessage());
+        assertEquals(0, submitted.get(), "nothing published");
+    }
+
+    @Test
+    void aCompositionKnowsAnInputByOneSpelling() {
+        var payer = new Account(Networks.testnet());
+        var u = utxo(payer.baseAddress(), 5_000_000);
+        String lower = u.getTxHash();
+        u.setTxHash(lower.toUpperCase(java.util.Locale.ROOT));   // as a provider may spell it
+        var cap = new TxRunner.Capture();
+        TxRunner.CAPTURE.set(cap);
+        try {
+            TxRunner.collect(cap.tx, u, null);
+            assertTrue(cap.inputs.contains(lower + "#0"), "the designation's spelling finds it: " + cap.inputs);
+            var twin = utxo(payer.baseAddress(), 5_000_000);
+            twin.setTxHash(lower);
+            var e = assertThrows(JoustException.class, () -> TxRunner.collect(cap.tx, twin, null));
+            assertTrue(e.getMessage().contains("is spent by two calls"));
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+    }
+
+    @Test
+    void aScopedCallFindsAPinBeyondTheFirstPage() {
+        var chain = new Chain();
+        var probe = runtime(chain, b -> b);
+        String holder = probe.outputVerifier().holder(), vhash = probe.outputVerifier().hash();
+        var pin = utxo(holder, 30_000_000);
+        pin.setReferenceScriptHash(vhash);
+        var pages = new ArrayList<List<Utxo>>();
+        for (int p = 0; p < 3; p++) {
+            var page = new ArrayList<Utxo>();
+            for (int i = 0; i < 20; i++) page.add(utxo(holder, 2_000_000));
+            pages.add(page);
+        }
+        pages.get(2).set(5, pin);
+        var utxos = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
+                (p, m, a) -> {
+                    int page = (Integer) a[2];
+                    return com.bloxbean.cardano.client.api.model.Result.success("ok")
+                            .withValue(page <= pages.size() ? pages.get(page - 1) : List.<Utxo>of());
+                });
+        var backend = (com.bloxbean.cardano.client.backend.api.BackendService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.BackendService.class},
+                (p, m, a) -> m.getName().equals("getUtxoService") ? utxos : chain.backend().getClass().getMethod(m.getName()).invoke(chain.backend()));
+        var rt = StateRuntime.builder(backend).chainTime(chain.time()).network(Networks.testnet()).referenceScript(pin).build();
+        assertEquals(Designation.ref(pin), Designation.ref(rt.inScope(CallScope.at(10), rt.outputVerifier()::reference)));
     }
 
     @Test
