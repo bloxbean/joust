@@ -26,7 +26,8 @@ export async function walletView(...args) {
   const utxos = new Map();
   for (const hex of (await api.getUtxos()) ?? []) {
     const u = unspentOutput(hex);
-    utxos.set(u.ref, { address: u.address, value: u.value, inlineDatum: u.inlineDatum, datumHash: u.datumHash });
+    utxos.set(u.ref, { address: u.address, value: u.value, inlineDatum: u.inlineDatum, datumHash: u.datumHash,
+      referenceScriptHash: u.referenceScriptHash });
   }
   return { api, networkId, change, addresses, keyHashes, utxos };
 }

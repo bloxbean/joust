@@ -65,7 +65,7 @@ export function fromWallet(wallet) {
     if (u.address !== address) continue;
     const [txHash, index] = ref.split('#');
     walletUtxos.push({ txHash, index: Number(index), address, value: [...u.value].map(([unit, q]) => ({ unit, quantity: String(q) })),
-      datumHash: u.datumHash ?? null, inlineDatum: u.inlineDatum ?? null, referenceScriptHash: null });
+      datumHash: u.datumHash ?? null, inlineDatum: u.inlineDatum ?? null, referenceScriptHash: u.referenceScriptHash ?? null });
   }
   return { address, walletUtxos };
 }

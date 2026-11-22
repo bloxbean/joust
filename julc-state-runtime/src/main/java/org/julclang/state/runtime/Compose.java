@@ -250,6 +250,7 @@ public final class Compose {
         runner.extraExpected = cap.expected.size() > 1 ? cap.expected.subList(1, cap.expected.size()) : List.of();
         runner.assetInputs = cap.assetInputs;
         runner.coCallers = coCallers;
+        runner.coCallerReturns = java.util.Map.copyOf(cap.returns);
         runner.otherCallers = cap.accounts.keySet().stream().anyMatch(a -> !a.equals(payer.baseAddress()));
         if (prepare) {
             return runner.prepare(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),

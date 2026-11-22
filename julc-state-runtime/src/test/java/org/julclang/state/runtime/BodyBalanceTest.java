@@ -42,6 +42,7 @@ class BodyBalanceTest {
         var p = new ProtocolParams();
         p.setKeyDeposit("2000000");
         p.setPoolDeposit("500000000");
+        p.setMaxValSize("5000");
         return p;
     }
 
@@ -160,24 +161,37 @@ class BodyBalanceTest {
         var spends = Map.of(IN_A, bIn, IN_B, utxo(a, "bb", 5_000_000, 0));
         var paid = Map.of(ADDR, org.julclang.state.api.Assets.of(new byte[28], new byte[]{1}, BigInteger.valueOf(40)));
         var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
+        var returns = Map.of(ADDR, back(10_000_000, 60));
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 60), outTo(a, 4_800_000, 40)));
-        TxRunner.checkCoCallers(t, spends, a, paid, "test");   // B gets back its lovelace and the 60 tokens it keeps
+        TxRunner.checkCoCallers(t, spends, a, paid, returns, "test");   // B gets back its lovelace and the 60 tokens it keeps
+        // Built from a 9 ADA listing (its return records 9 ADA): the 1 ADA the chain holds beyond it is taken from B.
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(9_000_000, 60), outTo(a, 5_800_000, 40)));
-        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, "test"));
-        assertTrue(e.getMessage().contains("1000000 lovelace"), e::getMessage);
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid,
+                Map.of(ADDR, back(9_000_000, 60)), "test"));
+        assertTrue(e.getMessage().contains("take 1000000 lovelace"), e::getMessage);
+        // Not the return recorded: nothing returned at all.
+        var none = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, returns, "test"));
+        assertTrue(none.getMessage().contains("would take 100 " + UNIT + " from " + ADDR), none::getMessage);
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 50), outTo(a, 4_800_000, 50)));
-        assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, "test"));
+        assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, Map.of(ADDR, back(10_000_000, 50)), "test"));
         // R8: an output unit in another spelling is the same unit.
         var upper = out(10_000_000, 0);
         upper.getValue().getMultiAssets().add(MultiAsset.builder().policyId(POLICY.toUpperCase())
                 .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.valueOf(60))))).build());
         t.setBody(body(List.of(IN_A, IN_B), 200_000, upper, outTo(a, 4_800_000, 40)));
-        TxRunner.checkCoCallers(t, spends, a, paid, "test");
+        TxRunner.checkCoCallers(t, spends, a, paid, returns, "test");
         // R7: a spent input without an address is refused, whoever it may belong to.
         var anonymous = utxo(null, "aa", 10_000_000, 100);
         var unknown = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, Map.of(IN_A, anonymous, IN_B, spends.get(IN_B)),
-                a, paid, "test"));
+                a, paid, returns, "test"));
         assertTrue(unknown.getMessage().contains("cannot tell whose input"), unknown::getMessage);
+    }
+
+    /** A return's value: {@code lovelace} and {@code tokens} of the test unit. */
+    static org.julclang.ledger.Value back(long lovelace, long tokens) {
+        var v = org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(lovelace));
+        return tokens == 0 ? v : org.julclang.state.api.Assets.add(v,
+                org.julclang.state.api.Assets.of(new byte[28], new byte[]{1}, BigInteger.valueOf(tokens)));
     }
 
     static TransactionOutput outTo(String address, long lovelace, long tokens) {
@@ -224,8 +238,9 @@ class BodyBalanceTest {
 
     @Test
     void theProtocolParametersAreReadOnlyForALegacyStakeCertificate() {
-        // R3: no read without such a certificate; a failed read is a JoustException, not an NPE.
-        BodyBalance.check(body(List.of(IN_A, IN_B), 200_000, out(3_000_000, 40), out(11_800_000, 60)), chain::get,
+        // R3: no read without such a certificate (nor an output holding assets, whose value size needs the maximum:
+        // #165 Codex); a failed read is a JoustException, not an NPE.
+        BodyBalance.check(body(List.of(IN_B), 200_000, out(4_800_000, 0)), chain::get,
                 () -> { throw new AssertionError("read"); }, "test");
         var r = body(List.of(IN_B), 200_000, out(2_800_000, 0));
         r.getCerts().add(new StakeRegistration(StakeCredential.fromKeyHash(new byte[28])));
@@ -318,25 +333,27 @@ class BodyBalanceTest {
     }
 
     @Test
-    void aPayoutOrASendToACoCallerIsNotItsReturn() {
-        // B's input resolves to 10 ADA. B's return is 8 ADA; a payout a contract owes B (tagged) brings B's outputs to
-        // 10 ADA, which must not count: B is 2 ADA short.
+    void onlyTheRecordedReturnIsACoCallersReturn() {
+        // B's input resolves to 10 ADA; its return, built from an 8 ADA listing, records 8 ADA. Another output to B (a
+        // tagged payout, a plain one: a send, an intent's refund to an enterprise address that is also a wallet's) brings
+        // B's outputs to 10 ADA but is owed to B by someone else: it must not cover the 2 ADA taken (#165 Codex, Fable).
         String a = new Account(Networks.testnet()).baseAddress();
         var spends = Map.of(IN_A, utxo(ADDR, "aa", 10_000_000, 0), IN_B, utxo(a, "bb", 5_000_000, 0));
         Map<String, org.julclang.ledger.Value> paid = Map.of();
+        var returns = Map.of(ADDR, back(8_000_000, 0));
         var payout = out(2_000_000, 0);
         payout.setInlineDatum(com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData.of(7));
         var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(8_000_000, 0), payout, outTo(a, 4_800_000, 0)));
-        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, "test"));
-        assertTrue(e.getMessage().contains("2000000 lovelace from " + ADDR), e::getMessage);
-        // A send to B (no datum, at a send's index) does not count either.
-        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(8_000_000, 0), out(2_000_000, 0), outTo(a, 4_800_000, 0)));
-        TxRunner.checkCoCallers(t, spends, a, paid, "test");   // a plain output: B's return
-        assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, java.util.Set.of(1), "test"));
-        // B's whole 10 ADA back, beside the payout: fine.
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, returns, "test"));
+        assertTrue(e.getMessage().contains("take 2000000 lovelace from " + ADDR), e::getMessage);
+        // A plain output beside the short return: not the return either.
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(2_000_000, 0), out(8_000_000, 0), outTo(a, 4_800_000, 0)));
+        var plain = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, paid, returns, "test"));
+        assertTrue(plain.getMessage().contains("take 2000000 lovelace from " + ADDR), plain::getMessage);
+        // B's whole 10 ADA back (so recorded), beside the payout: fine.
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 0), payout, outTo(a, 2_800_000, 0)));
-        TxRunner.checkCoCallers(t, spends, a, paid, "test");
+        TxRunner.checkCoCallers(t, spends, a, paid, Map.of(ADDR, back(10_000_000, 0)), "test");
     }
 
     @Test
@@ -349,14 +366,104 @@ class BodyBalanceTest {
         var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
         t.setBody(body(List.of(IN_B), 200_000, outTo(a, 4_800_000, 0)));
         t.getBody().getCollateral().add(IN_C);
-        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, Map.of(), "test"));
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, Map.of(), Map.of(), "test"));
         assertTrue(e.getMessage().contains("collateral input " + "cc".repeat(32) + "#0 is not at the payer's address"), e::getMessage);
         var own = Map.of(IN_B, utxo(a, "bb", 5_000_000, 0), IN_C, utxo(a, "cc", 5_000_000, 0));
-        TxRunner.checkCoCallers(t, own, a, Map.of(), "test");
+        TxRunner.checkCoCallers(t, own, a, Map.of(), Map.of(), "test");
         t.getBody().setCollateralReturn(out(4_000_000, 0));   // to ADDR, not the payer
-        var r = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, own, a, Map.of(), "test"));
+        var r = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, own, a, Map.of(), Map.of(), "test"));
         assertTrue(r.getMessage().contains("the collateral return goes to " + ADDR), r::getMessage);
         t.getBody().setCollateralReturn(outTo(a, 4_000_000, 0));
-        TxRunner.checkCoCallers(t, own, a, Map.of(), "test");
+        TxRunner.checkCoCallers(t, own, a, Map.of(), Map.of(), "test");
+    }
+
+    // ---------------------------------------------------------------- #165 Codex round 2 and the Opus review
+
+    @Test
+    void aCoCallerGetsBackExactlyWhatItsInputsHoldLessItsPayment() {
+        // B's input is listed at 5 ADA and resolves to 3 ADA: its return (5 ADA, from the listing) would give B 2 ADA of
+        // the payer's (whose input resolves 2 ADA over its listing, so the body balances).
+        String a = new Account(Networks.testnet()).baseAddress();
+        var spends = Map.of(IN_A, utxo(ADDR, "aa", 3_000_000, 0), IN_B, utxo(a, "bb", 12_000_000, 0));
+        var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(5_000_000, 0), outTo(a, 9_800_000, 0)));
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, Map.of(),
+                Map.of(ADDR, back(5_000_000, 0)), "test"));
+        assertTrue(e.getMessage().contains("would give 2000000 lovelace to " + ADDR), e::getMessage);
+        t.setBody(body(List.of(IN_A, IN_B), 200_000, out(3_000_000, 0), outTo(a, 11_800_000, 0)));
+        TxRunner.checkCoCallers(t, spends, a, Map.of(), Map.of(ADDR, back(3_000_000, 0)), "test");
+    }
+
+    @Test
+    void aPolicySpelledWithItsPrefixIsTheSamePolicy() {
+        // cardano-client-lib strips an optional 0x when it writes the key: "0x" + p and p are one policy in the bytes.
+        var twice = body(List.of(IN_A), 200_000, out(9_800_000, 50));
+        twice.getOutputs().getFirst().getValue().getMultiAssets().add(MultiAsset.builder().policyId("0x" + POLICY)
+                .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.valueOf(50))))).build());
+        refused(twice, "lists policy");
+        var mint = body(List.of(IN_B), 200_000, out(4_800_000, 2));
+        mint.getMint().add(MultiAsset.builder().policyId(POLICY).assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.ONE)))).build());
+        mint.getMint().add(MultiAsset.builder().policyId("0x" + POLICY).assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.ONE)))).build());
+        refused(mint, "the mint lists policy");
+    }
+
+    /** {@code n} distinct 32-byte names (from {@code from}) of another policy, one each, beside {@code lovelace}. */
+    static TransactionOutput many(long lovelace, int n) {
+        return many(lovelace, 0, n);
+    }
+
+    static TransactionOutput many(long lovelace, int from, int n) {
+        var assets = new ArrayList<Asset>();
+        for (int i = from; i < from + n; i++) assets.add(new Asset("0x" + String.format("%064x", i), BigInteger.ONE));
+        var v = Value.builder().coin(BigInteger.valueOf(lovelace)).multiAssets(new ArrayList<>(List.of(
+                MultiAsset.builder().policyId("11".repeat(28)).assets(assets).build()))).build();
+        return TransactionOutput.builder().address(ADDR).value(v).build();
+    }
+
+    @Test
+    void anOutputAboveTheMaximumValueSizeIsRefused() {
+        // 160 names of 32 bytes: a value above 5,000 bytes. The inputs hold them (balanced), the ledger refuses the output.
+        chain.put(IN_A, withAssets(utxo(ADDR, "aa", 30_000_000, 0), many(0, 160)));
+        refused(body(List.of(IN_A), 200_000, many(29_800_000, 160)), "above the ledger's maximum of 5000 bytes");
+        check(body(List.of(IN_A), 200_000, many(15_000_000, 0, 80), many(14_800_000, 80, 80)));   // two outputs fit
+        // The collateral return too.
+        var b = body(List.of(IN_B), 200_000, out(4_800_000, 0));
+        b.getCollateral().add(IN_A);
+        b.setCollateralReturn(many(29_000_000, 160));
+        b.setTotalCollateral(BigInteger.valueOf(1_000_000));
+        refused(b, "above the ledger's maximum");
+        // No maximum known: an output holding assets cannot be checked, so it is refused.
+        var e = assertThrows(JoustException.class, () -> BodyBalance.check(body(List.of(IN_A), 200_000, many(29_800_000, 160)),
+                chain::get, new ProtocolParams(), "test"));
+        assertTrue(e.getMessage().contains("no maximum value size"), e::getMessage);
+        var odd = pp();
+        odd.setMaxValSize("five thousand");
+        var n = assertThrows(JoustException.class, () -> BodyBalance.check(body(List.of(IN_A), 200_000, many(29_800_000, 160)),
+                chain::get, odd, "test"));
+        assertTrue(n.getMessage().contains("is not a number"), n::getMessage);
+    }
+
+    /** {@code u} holding {@code o}'s assets too. */
+    static Utxo withAssets(Utxo u, TransactionOutput o) {
+        var amounts = new ArrayList<>(u.getAmount());
+        for (var a : com.bloxbean.cardano.client.api.util.ValueUtil.toAmountList(o.getValue())) {
+            if (!a.getUnit().equals("lovelace")) amounts.add(a);
+        }
+        u.setAmount(amounts);
+        return u;
+    }
+
+    @Test
+    void anObserverGetsACopy() {
+        // #165 Codex: what an onBuilt observer does with its transaction, then or later, reaches nothing the runtime keeps.
+        var kept = new java.util.concurrent.atomic.AtomicReference<com.bloxbean.cardano.client.transaction.spec.Transaction>();
+        var rt = StateRuntime.builder(new org.julclang.state.runtime.snapshot.SnapshotBackend(new org.julclang.state.runtime.snapshot.Snapshot()))
+                .network(Networks.testnet()).chainTime(new SlotChainTime(0, 0, 1000, null))
+                .onBuilt(b -> { b.tx().getBody().getInputs().clear(); kept.set(b.tx()); }).build();
+        var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
+        t.setBody(body(List.of(IN_B), 200_000, out(4_800_000, 0)));
+        rt.built("test", t, true);
+        assertEquals(List.of(IN_B), t.getBody().getInputs());
+        assertNotSame(t, kept.get());
     }
 }

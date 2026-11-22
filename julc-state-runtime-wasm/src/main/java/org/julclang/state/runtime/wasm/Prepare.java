@@ -379,10 +379,12 @@ public final class Prepare {
     /** The unsigned transaction registering the stake credential of {@code reward}, paid from {@code payer}. */
     private static Result registration(SnapshotBackend backend, String reward, String payer) throws Exception {
         var tx = new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(reward).from(payer);
-        var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend).compose(tx)
+        // Checked and handed out as its bytes hold it, as the runtime's prepared bodies are (#165 Opus P3).
+        var built = org.julclang.state.runtime.BodyBalance.readBack(new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend)
+                .compose(tx)
                 .feePayer(payer)
                 .additionalSignersCount(1)
-                .build();
+                .build(), "register the stake credential");
         checkRegistration(built, backend);
         byte[] pkh = new com.bloxbean.cardano.client.address.Address(payer).getPaymentCredentialHash().orElseThrow();
         return new Result(true, com.bloxbean.cardano.client.util.HexUtil.encodeHexString(built.serialize()),

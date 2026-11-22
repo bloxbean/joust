@@ -137,6 +137,9 @@ public final class BodyBalance {
             throw unbalanced(what, "nested transactions or direct deposits are not checked here");
         }
         requireZero(balance, what, "");
+        // The ledger refuses an output whose value is above the maximum value size (#165 Codex): a change output or a
+        // return holding what several inputs held can be.
+        checkValueSizes(body, pp, what);
 
         // The phase-2 failure path: the collateral inputs pay the collateral return and the total collateral.
         if (body.getCollateral() == null || body.getCollateral().isEmpty()) {
@@ -224,6 +227,66 @@ public final class BodyBalance {
     }
 
     /**
+     * The transaction as its bytes hold it (#165 Codex): decoded from {@code built}'s serialisation, so a check of it
+     * reads what a wallet signs (a map key held twice by the object is one in CBOR) and nothing else holds it. Bytes
+     * that do not read back the same are refused.
+     */
+    public static com.bloxbean.cardano.client.transaction.spec.Transaction readBack(
+            com.bloxbean.cardano.client.transaction.spec.Transaction built, String what) {
+        try {
+            byte[] bytes = built.serialize();
+            var copy = com.bloxbean.cardano.client.transaction.util.TransactionUtil.createCopy(built);
+            if (!java.util.Arrays.equals(copy.serialize(), bytes)) {
+                throw new JoustException(what + ": the built transaction does not read back as written; refused");
+            }
+            return copy;
+        } catch (JoustException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new JoustException(what + ": cannot serialise the built transaction", e);
+        }
+    }
+
+    /** Each output's and the collateral return's value within the protocol's maximum value size, when it holds assets. */
+    private static void checkValueSizes(TransactionBody body, java.util.function.Supplier<ProtocolParams> pp, String what) {
+        var outs = new java.util.ArrayList<TransactionOutput>(body.getOutputs());
+        if (body.getCollateralReturn() != null) outs.add(body.getCollateralReturn());
+        Integer max = null;
+        for (TransactionOutput o : outs) {
+            if (o.getValue() == null || o.getValue().getMultiAssets() == null || o.getValue().getMultiAssets().isEmpty()) continue;
+            if (max == null) max = maxValueSize(pp.get(), what);
+            int size = valueSize(o.getValue(), what);
+            if (size > max) {
+                throw unbalanced(what, "an output to " + o.getAddress() + " holds a " + size + "-byte value, above the"
+                        + " ledger's maximum of " + max + " bytes");
+            }
+        }
+    }
+
+    /** The protocol's maximum value size; no number there is a refusal (an output holding assets cannot be checked). */
+    public static int maxValueSize(ProtocolParams pp, String what) {
+        String max = pp == null ? null : pp.getMaxValSize();
+        if (max == null) {
+            throw new JoustException(what + ": no maximum value size in the protocol parameters to check an output"
+                    + " holding assets; refused");
+        }
+        try {
+            return Integer.parseInt(max.trim());
+        } catch (NumberFormatException e) {
+            throw new JoustException(what + ": the protocol parameters' maximum value size is not a number: " + max + "; refused");
+        }
+    }
+
+    /** The size of {@code v} as the ledger measures it: its CBOR. */
+    public static int valueSize(Value v, String what) {
+        try {
+            return com.bloxbean.cardano.client.common.cbor.CborSerializationUtil.serialize(v.serialize()).length;
+        } catch (Exception e) {
+            throw new JoustException(what + ": cannot serialise a value", e);
+        }
+    }
+
+    /**
      * Each policy once, and each asset name once within it (#165 Codex): a value is a map of maps in CBOR, so a repeated
      * key would be counted here and dropped from the bytes the wallet signs.
      */
@@ -231,7 +294,10 @@ public final class BodyBalance {
                                         String where, String what) {
         var policies = new HashSet<String>();
         for (var ma : multiAssets) {
-            String policy = ma.getPolicyId() == null ? null : ma.getPolicyId().toLowerCase(java.util.Locale.ROOT);
+            // As the bytes key it (#165 Codex): 28 bytes, whatever the spelling ("0x", letter case).
+            String policy = ma.getPolicyId() == null ? null : com.bloxbean.cardano.client.util.HexUtil.encodeHexString(
+                    com.bloxbean.cardano.client.util.HexUtil.decodeHexString(ma.getPolicyId().startsWith("0x")
+                            ? ma.getPolicyId().substring(2) : ma.getPolicyId()));
             if (!policies.add(policy)) throw unbalanced(what, where + " lists policy " + ma.getPolicyId() + " twice");
             var names = new HashSet<String>();
             if (ma.getAssets() == null) continue;

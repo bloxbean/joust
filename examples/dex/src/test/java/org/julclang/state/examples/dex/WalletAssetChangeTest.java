@@ -648,4 +648,40 @@ class WalletAssetChangeTest {
         var reread = Transaction.deserialize(HexFormat.of().parseHex(prepared.cbor()));
         assertEquals(prepared.txHash(), com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(reread));
     }
+
+    // ---------------------------------------------------------------- #165 Codex round 2
+
+    /**
+     * The payer's tokens sit on two UTxOs, each with 80 unrelated 32-byte names: both are needed for the payment, and
+     * the change holding all 160 names is above the ledger's 5,000-byte maximum value size. Refused before hand-out.
+     */
+    @Test
+    void aChangeAboveTheMaximumValueSizeIsRefused() {
+        var f = new Fixture();
+        f.wallet(List.of(f.utxo("bb", 500, 0), named(f, "aa", 60_000, 0), named(f, "cc", 60_000, 80)));
+        var e = assertThrows(BodyBalance.UnbalancedException.class, f::addLiquidity);
+        assertTrue(e.getMessage().contains("above the ledger's maximum of 5000 bytes"), e::getMessage);
+    }
+
+    /** At the payer's address: 3 ADA, {@code qty} of the Dex token and 80 other names (from {@code first}). */
+    static Utxo named(Fixture f, String tag, long qty, int first) {
+        var u = f.utxo(tag, 3, qty);
+        var amounts = new ArrayList<>(u.getAmount());
+        for (int i = first; i < first + 80; i++) amounts.add(new Amount("12".repeat(28) + String.format("%064x", i), BigInteger.ONE));
+        u.setAmount(amounts);
+        return u;
+    }
+
+    /**
+     * A provider that spells transaction ids in upper case: the handed-out body's ids are lower case (the bytes have
+     * none), and the snapshot still resolves them.
+     */
+    @Test
+    void anUpperCaseSnapshotStillResolvesTheHandedOutInputs() {
+        var f = new Fixture();
+        f.wallet(List.of(f.utxo("BB", 500, 0), f.utxo("AA", 1.15, 100_000)));
+        var body = f.addLiquidity().transaction().getBody();
+        assertTrue(body.getInputs().contains(new TransactionInput("aa".repeat(32), 0)), () -> "the token UTxO: " + body.getInputs());
+        assertNoNegativeOutput(body);
+    }
 }

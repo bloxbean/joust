@@ -849,18 +849,24 @@ direct `Tx` building, gated by S3.
     what its collected inputs hold beyond the assets it pays in: one output with their lovelace and other tokens. The
     payer funds the lovelace paid in and the fee. Before #152 a key co-caller's surplus went to the payer's change
     (the runtime signed for it). A body, prepared or submitted, may take nothing else from a co-caller's address, and
-    an input whose provider gives no address is refused rather than assumed to be the payer's. Only plain outputs
-    count as a co-caller's return: a payout or a send to it is owed by a contract and cannot cover a short return.
-    The collateral is the payer's: every collateral input and the collateral return are at the payer's address. A
-    return above the ledger's maximum value size (inputs with many unrelated tokens) is refused, not split.
+    an input whose provider gives no address is refused rather than assumed to be the payer's. Only the return the
+    runtime made counts as a co-caller's return (one output at its address, no datum, the exact value recorded), and it
+    is exactly what the co-caller's inputs hold less what it pays in: any other output there (a payout, a send, an
+    intent's refund) is owed by someone else and cannot cover a short return, and a larger return would give it the
+    payer's value. The collateral is the payer's: every collateral input and the collateral return are at the payer's
+    address. A key-signed call with co-signers (`@Quorum`, `@AuthorizedBy`) is checked the same way. A return above
+    the ledger's maximum value size (inputs with many unrelated tokens) is refused, not split. A wallet's UTxOs keep
+    their reference script hash from CIP-30's CBOR, so one carrying a script is never spent for its tokens.
   - **Every body handed to a wallet** (`PreparedTx`, a prepared publication, the engine's governor stake
     registration) must balance per unit (`BodyBalance`):
     inputs + mint + withdrawals + certificate refunds = outputs + fee + certificate deposits + proposal deposits +
     donation. No quantity may be negative, zero (an asset) or outside the ledger's range, and no input may appear
     twice; nor a map key twice (two withdrawals from one reward account, a policy or an asset name listed twice in a
-    value), which the bytes would keep once. The checks read a copy decoded from the body's bytes, which is what the
-    wallet gets: an observer (`onBuilt`) that keeps the built object cannot change it. Otherwise the body is
-    refused. This is the runtime's self-check against bodies the ledger would reject. It
+    value, in any spelling), which the bytes would keep once; nor an output or collateral return holding assets whose
+    value is above the protocol's maximum value size (and with no maximum known, such an output is refused). The
+    checks read a copy decoded from the body's bytes, which is what the wallet gets (and, for the runtime's own
+    key-signed submissions, what it signs and submits); an observer (`onBuilt`) gets a copy of its own and cannot
+    change either. Otherwise the body is refused. This is the runtime's self-check against bodies the ledger would reject. It
     says nothing about where value goes: the wallet's net outflow is the page verifier's to bound (ADR-0013).
 - **The snapshot backend** returns one object per output reference, whichever query found it: cardano-client-lib tells
   UTxOs apart by equality.

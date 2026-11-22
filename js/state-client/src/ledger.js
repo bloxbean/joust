@@ -294,14 +294,20 @@ export function poolKeyHash(pool) {
 
 // ---------------------------------------------------------------------------------------------------- CIP-30 values
 
-/** A CIP-30 UTxO (hex CBOR of TransactionUnspentOutput) as { ref, address, value }. */
+/**
+ * A CIP-30 UTxO (hex CBOR of TransactionUnspentOutput) as { ref, address, value, inlineDatum, datumHash,
+ * referenceScriptHash }. The reference script's hash is kept (#165 Codex): a runtime never spends a wallet UTxO carrying
+ * one for its tokens (it would consume a deployment's script), and knows it only from this.
+ */
 export function unspentOutput(hex) {
   const u = Serialization.TransactionUnspentOutput.fromCbor(hex);
   const [input, output] = u.toCore();
   const datum = u.output().datum();
   const inline = datum?.asInlineData?.();
+  const script = u.output().scriptRef();
   return { ref: refOfCore(input), address: output.address, value: valueOf(output.value),
-    inlineDatum: inline ? inline.toCbor() : null, datumHash: datum?.asDataHash?.() ?? null };
+    inlineDatum: inline ? inline.toCbor() : null, datumHash: datum?.asDataHash?.() ?? null,
+    referenceScriptHash: script ? script.hash() : null };
 }
 
 /** The base address of a payment and a stake credential (bech32). */

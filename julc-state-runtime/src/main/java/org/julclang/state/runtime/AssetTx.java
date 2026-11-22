@@ -432,24 +432,18 @@ final class AssetTx {
             }
             // One output holds what several inputs held: it may exceed the ledger's maximum value size (#165 Codex).
             // Refused rather than split: a split changes the outputs a page sees and needs min ADA for each.
-            int size = valueSize(out.getValue());
-            if (pp.getMaxValSize() != null && size > Integer.parseInt(pp.getMaxValSize())) {
+            int size = out.getValue().getMultiAssets() == null || out.getValue().getMultiAssets().isEmpty() ? 0
+                    : BodyBalance.valueSize(out.getValue(), "composition");
+            int max = size == 0 ? 0 : BodyBalance.maxValueSize(pp, "composition");
+            if (size > max) {
                 throw new JoustException("composition: what " + e.getKey() + "'s inputs hold beyond its payment needs a "
                         + size + "-byte value, above the ledger's maximum of " + pp.getMaxValSize() + " bytes, and cannot"
                         + " go back to it in one output; compose with it as the payer, or pay from fewer UTxOs (T1)");
             }
             cap.tx.payToAddress(e.getKey(), amounts);
+            cap.returns.put(e.getKey(), back);   // checked by identity in the built body (TxRunner.checkCoCallers)
         }
         return paid;
-    }
-
-    /** The size of {@code v} as the ledger measures it: its CBOR. */
-    static int valueSize(com.bloxbean.cardano.client.transaction.spec.Value v) {
-        try {
-            return com.bloxbean.cardano.client.common.cbor.CborSerializationUtil.serialize(v.serialize()).length;
-        } catch (Exception e) {
-            throw new JoustException("composition: cannot serialise a value", e);
-        }
     }
 
     private static String unitOf(Amount a) {

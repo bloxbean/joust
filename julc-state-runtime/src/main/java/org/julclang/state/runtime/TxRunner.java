@@ -69,6 +69,8 @@ final class TxRunner {
         final java.util.Map<String, String> regularOwners = new java.util.HashMap<>();
         /** The native assets each caller's calls pay from its own inputs, by base address and unit (T1). */
         final java.util.Map<String, java.util.Map<String, BigInteger>> paidAssets = new java.util.HashMap<>();
+        /** The value {@code AssetTx.returnSurplus} returns to each caller other than the payer, by address (#165 Fable). */
+        final java.util.Map<String, org.julclang.ledger.Value> returns = new java.util.LinkedHashMap<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
         /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
@@ -248,6 +250,9 @@ final class TxRunner {
      */
     java.util.Map<String, org.julclang.ledger.Value> coCallers = java.util.Map.of();
 
+    /** What {@code AssetTx.returnSurplus} returns to each caller other than the payer, by address (#165 Fable). */
+    java.util.Map<String, org.julclang.ledger.Value> coCallerReturns = java.util.Map.of();
+
     /** The composition has callers or co-signers other than the payer: its body is checked by {@link #checkCoCallers} (R8). */
     boolean otherCallers;
 
@@ -295,15 +300,17 @@ final class TxRunner {
         } catch (Exception e) {
             throw new SubmitException(SubmitException.Kind.BUILD, what + ": could not build the transaction: " + rootMessage(e), e);
         }
-        Transaction signed = built.tx();
         boolean pending = false;
         boolean handedOut = false;
         try {
-            rt.built(what, signed, false);
+            rt.built(what, built.tx(), false);
+            // The bytes the runtime signs and submits, decoded: every check below reads them (#165 Opus P3).
+            Transaction signed = handedOut(built.tx(), what);
 
-            // A composition with other callers (key accounts the runtime signs for): it takes from each only what its
-            // calls pay in (R8). Read only then, so other submissions read nothing more.
-            if (otherCallers) checkCoCallers(signed, resolveInputs(rt, signed), caller.baseAddress(), coCallers, sendOutputs(sends), what);
+            // A composition with other callers, or a call with co-signers (key accounts the runtime signs for): it
+            // takes from each only what its calls pay in (R8; #165 Opus P3: a co-signer too), and the collateral is the
+            // caller's. Read only then, so other submissions read nothing more.
+            if (otherCallers || !cosigners.isEmpty()) checkCoCallers(signed, resolveInputs(rt, signed), caller.baseAddress(), coCallers, coCallerReturns, what);
             verify(signed, expected, what);
             for (ExpectedState e : extraExpected) verify(signed, e, what);
             verifyPayouts(signed, payouts, what);
@@ -657,7 +664,8 @@ final class TxRunner {
             // Built and claimed under the payer's lock (F63).
             built = Designation.build(payer.baseAddress(), null, finalCtx::build);
             unsigned = built.tx();
-            // ADR-0016 D11: a keyed call prepared for a wallet spends the page's designated input.
+            // ADR-0016 D11: a keyed call prepared for a wallet spends the page's designated input (checked again on the
+            // handed-out body below).
             if (designated != null) requireSpends(unsigned, designated.ref(), what);
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
@@ -667,10 +675,11 @@ final class TxRunner {
             rt.built(what, unsigned, true);
             // What the wallet will sign, decoded from its bytes: every check below reads it, and nothing else holds it.
             Transaction handed = handedOut(unsigned, what);
+            if (designated != null) requireSpends(handed, designated.ref(), what);
             // Resolved once: the per-unit balance (#152) and the keys whose inputs the transaction spends.
             var spends = resolveInputs(rt, handed);
             checkBalance(rt, handed, spends, what);
-            checkCoCallers(handed, spends, payer.baseAddress(), coCallers, sendOutputs(sends), what);
+            checkCoCallers(handed, spends, payer.baseAddress(), coCallers, coCallerReturns, what);
             verify(handed, expected, what);
             for (ExpectedState e : extraExpected) verify(handed, e, what);
             verifyPayouts(handed, payouts, what);
@@ -803,25 +812,7 @@ final class TxRunner {
      * kept the built object cannot change the handed-out one. Bytes that do not read back the same are refused.
      */
     static Transaction handedOut(Transaction built, String what) {
-        try {
-            byte[] bytes = built.serialize();
-            Transaction copy = TransactionUtil.createCopy(built);
-            if (!java.util.Arrays.equals(copy.serialize(), bytes)) {
-                throw new JoustException(what + ": the built transaction does not read back as written; refused");
-            }
-            return copy;
-        } catch (JoustException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new JoustException(what + ": cannot serialise the built transaction", e);
-        }
-    }
-
-    /** The output indices of the calls' sends (contractual outputs, not a co-caller's return). */
-    static java.util.Set<Integer> sendOutputs(java.util.List<ExpectedSend> sends) {
-        var out = new java.util.HashSet<Integer>();
-        for (ExpectedSend s : sends) out.add(s.index());
-        return out;
+        return BodyBalance.readBack(built, what);
     }
 
     /**
@@ -852,21 +843,17 @@ final class TxRunner {
      * A prepared transaction takes from no key address but the payer's more than its calls pay in from there (T1): per
      * unit, what the inputs at that address hold less what the outputs returning value to it hold is at most
      * {@code paid}'s quantity (nothing for lovelace; the payer funds lovelace and the fee). Defence in depth behind
-     * {@code AssetTx.returnSurplus}. Only a plain output (no datum, not a call's send) returns value: a payout (tagged)
-     * or a send to that address is owed to it by a contract and cannot stand in for its return (#165 Codex). The
-     * collateral is the payer's: every collateral input is at the payer's address and so is the collateral return
-     * (the phase-2 failure path takes from no one else; #165 Codex).
+     * {@code AssetTx.returnSurplus}. Only the return {@code returnSurplus} made counts, by identity: one output at that
+     * address, no datum, holding exactly the value it recorded ({@code returns}). Any other output there (a payout, a
+     * send, an intent's refund to an enterprise address that is also a wallet's) is owed to it by someone else and
+     * cannot stand in for a short return (#165 Codex, Fable). And exactly what it pays in (#165 Opus): a larger return
+     * would give it the payer's value. The collateral is the payer's: every collateral input is at the payer's address
+     * and so is the collateral return (the phase-2 failure path takes from no one else; #165 Codex).
      */
     static void checkCoCallers(Transaction t,
                                java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> spends,
-                               String payer, java.util.Map<String, org.julclang.ledger.Value> paid, String what) {
-        checkCoCallers(t, spends, payer, paid, java.util.Set.of(), what);
-    }
-
-    static void checkCoCallers(Transaction t,
-                               java.util.Map<com.bloxbean.cardano.client.transaction.spec.TransactionInput, Utxo> spends,
                                String payer, java.util.Map<String, org.julclang.ledger.Value> paid,
-                               java.util.Set<Integer> sendOutputs, String what) {
+                               java.util.Map<String, org.julclang.ledger.Value> returns, String what) {
         var body = t.getBody();
         if (body.getCollateral() != null) {
             for (var in : body.getCollateral()) {
@@ -899,15 +886,17 @@ final class TxRunner {
                 m.merge(com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(a.getUnit()), a.getQuantity(), BigInteger::add);
             }
         }
-        var outs = body.getOutputs();
-        for (int i = 0; i < outs.size(); i++) {
-            TransactionOutput o = outs.get(i);
-            var m = net.get(o.getAddress());
-            if (m == null) continue;
-            // Owed by a contract (a tagged payout, a send), not returned: it does not count as the co-caller's return.
-            if (o.getInlineDatum() != null || o.getDatumHash() != null || sendOutputs.contains(i)) continue;
-            for (var a : com.bloxbean.cardano.client.api.util.ValueUtil.toAmountList(o.getValue())) {
-                m.merge(com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(a.getUnit()), a.getQuantity().negate(), BigInteger::add);
+        for (var e : net.entrySet()) {
+            var back = returns.get(e.getKey());
+            if (back == null) continue;
+            for (TransactionOutput o : body.getOutputs()) {
+                if (!o.getAddress().equals(e.getKey()) || o.getInlineDatum() != null || o.getDatumHash() != null) continue;
+                var v = valueOf(o);
+                if (!org.julclang.state.api.Assets.covers(v, back) || !org.julclang.state.api.Assets.covers(back, v)) continue;
+                for (var a : com.bloxbean.cardano.client.api.util.ValueUtil.toAmountList(o.getValue())) {
+                    e.getValue().merge(com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(a.getUnit()), a.getQuantity().negate(), BigInteger::add);
+                }
+                break;   // the one return
             }
         }
         for (var e : net.entrySet()) {
@@ -917,11 +906,20 @@ final class TxRunner {
                 org.julclang.state.api.Assets.read(v).forEach((p, ts) -> ts.forEach((n, q) -> allowed.put(
                         p.isEmpty() ? "lovelace" : com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(p + n), q)));
             }
-            for (var u : e.getValue().entrySet()) {
-                if (u.getValue().compareTo(allowed.getOrDefault(u.getKey(), BigInteger.ZERO)) > 0) {
-                    throw new JoustException(what + ": the transaction would take " + u.getValue() + " " + u.getKey() + " from "
-                            + e.getKey() + ", which is not the payer and pays in only " + allowed.getOrDefault(u.getKey(),
-                            BigInteger.ZERO) + "; refused (T1, #152)");
+            // Exactly what it pays in (#165 Opus P2): less would take its value, more would give it someone else's (the
+            // payer's, when a listing and the chain disagree).
+            var units = new java.util.TreeSet<String>(e.getValue().keySet());
+            units.addAll(allowed.keySet());
+            for (String unit : units) {
+                BigInteger taken = e.getValue().getOrDefault(unit, BigInteger.ZERO);
+                BigInteger pays = allowed.getOrDefault(unit, BigInteger.ZERO);
+                if (taken.compareTo(pays) > 0) {
+                    throw new JoustException(what + ": the transaction would take " + taken + " " + unit + " from "
+                            + e.getKey() + ", which is not the payer and pays in only " + pays + "; refused (T1, #152)");
+                }
+                if (taken.compareTo(pays) < 0) {
+                    throw new JoustException(what + ": the transaction would give " + pays.subtract(taken) + " " + unit
+                            + " to " + e.getKey() + " beyond what its inputs return, which is not the payer; refused (T1, #152)");
                 }
             }
         }

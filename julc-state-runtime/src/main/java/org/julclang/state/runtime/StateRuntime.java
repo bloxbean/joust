@@ -100,9 +100,19 @@ public final class StateRuntime {
      */
     public long[] pageLimits() { return pageLimits == null ? null : pageLimits.clone(); }
     void log(String message) { log.accept(message); }
-    /** Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). */
+    /**
+     * Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). The observer gets a
+     * copy (#165 Codex): what it does with it, now or later, changes nothing the runtime checks, hands out or submits.
+     */
     void built(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {
-        if (onBuilt != null) onBuilt.accept(new BuiltTx(what, tx, prepared));
+        if (onBuilt == null) return;
+        com.bloxbean.cardano.client.transaction.spec.Transaction copy;
+        try {
+            copy = com.bloxbean.cardano.client.transaction.util.TransactionUtil.createCopy(tx);
+        } catch (RuntimeException e) {
+            throw new JoustException(what + ": cannot copy the built transaction for its observer", e);
+        }
+        onBuilt.accept(new BuiltTx(what, copy, prepared));
     }
     private volatile VerifierHandle mapVerifier;
     private volatile VerifierHandle outputVerifier;

@@ -121,6 +121,7 @@ class AssetCollectionTest {
         var p = new ProtocolParams();
         p.setCoinsPerUtxoSize("4310");
         p.setKeyDeposit("2000000");
+        p.setMaxValSize("5000");
         return p;
     }
 
