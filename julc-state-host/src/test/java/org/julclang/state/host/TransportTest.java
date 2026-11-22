@@ -171,4 +171,21 @@ class TransportTest {
         exit.accept(null);   // a clean exit writes nothing
         assertEquals(0, halts.poll(1, TimeUnit.SECONDS));
     }
+    @Test void aStopOnAnInterruptedThreadStillWritesItsReason() throws Exception {
+        var lines = new ByteArrayOutputStream();
+        var err = new PrintStream(new OutputStream() {
+            public void write(int b) {
+                try { Thread.sleep(lines.size() == 0 ? 100 : 0); } catch (InterruptedException ignored) {}
+                lines.write(b);
+            }
+        }, true);
+        var written = new LinkedBlockingQueue<String>();
+        var exit = HostMain.exit(err, code -> written.add(lines.toString(StandardCharsets.UTF_8)));
+        var stopping = Thread.ofPlatform().daemon().unstarted(() -> {
+            Thread.currentThread().interrupt();   // as a call's own thread after abandon()
+            exit.accept("protocol write failed");
+        });
+        stopping.start();
+        assertEquals("joust dev host: protocol write failed" + System.lineSeparator(), written.poll(3, TimeUnit.SECONDS));
+    }
 }

@@ -153,7 +153,7 @@ final class Reservations implements ClaimStore {
         // One pass indexes the live bodies by hash, so a batch costs linear time in the table and the batch, and only the
         // batch's additions are staged: restore never changes an existing entry (#149 Codex).
         var live = new HashMap<String, Entry>();
-        for (var e : entries.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
+        if (!p.get("transactions").isEmpty()) for (var e : entries.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
         var added = new LinkedHashMap<String, Entry>();
         var out = obj();
         var ids = out.putArray("reservations");

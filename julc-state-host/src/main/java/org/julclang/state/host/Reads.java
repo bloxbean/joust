@@ -173,7 +173,7 @@ final class Reads {
     private Utxo checkOutput(JsonNode n, String address, String wanted) {
         var index = n.path("output_index");
         if (!index.isIntegralNumber() || !index.canConvertToInt() || index.intValue() < 0
-                || !n.path("tx_hash").asText("").matches("[0-9a-f]{64}") || !n.path("amount").isArray())
+                || !hex64(n.path("tx_hash")) || !n.path("amount").isArray())
             throw inconsistent("malformed output");
         var units = new HashSet<String>();
         for (var asset : n.get("amount")) {
@@ -271,7 +271,7 @@ final class Reads {
         JsonNode tip = a.path("tip"), slot = tip.path("slot"), height = tip.path("height");
         if (!slot.isIntegralNumber() || !slot.canConvertToLong() || slot.longValue() < 0
                 || !height.isIntegralNumber() || !height.canConvertToLong() || height.longValue() < 0
-                || !tip.path("hash").asText("").matches("[0-9a-f]{64}")) throw inconsistent("invalid chain point");
+                || !hex64(tip.path("hash"))) throw inconsistent("invalid chain point");
         String hash = tip.get("hash").textValue();
         if (slot.longValue() < greatestTip || height.longValue() < lastHeight
                 || slot.longValue() == greatestTip && !hash.equals(lastHash)
@@ -299,5 +299,7 @@ final class Reads {
     // D8: a tip reaches the reservation table only from a read the host accepted, after its kind's own checks
     // (one chain point across chunks, output and script evidence). A refused answer releases nothing (#149 Codex).
     private void accepted() { observe.accept(greatestTip); }
+    // A JSON string of 64 lowercase hex digits: a 64-digit number's text matches too (#149 Codex fix review).
+    static boolean hex64(JsonNode n) { return n.isTextual() && n.textValue().matches("[0-9a-f]{64}"); }
     private static HostError inconsistent(String reason) { return HostError.internal("inconsistentRead", reason); }
 }

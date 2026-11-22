@@ -203,4 +203,21 @@ class ReadsTest {
         assertFalse(table.avoids("spend"));
         assertFalse(table.avoids("collateral"));
     }
+    @Test void hashesAreJsonStrings() {
+        var table = new Reservations(3, false, 0);
+        table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of("collateral"), 0, 200), 190));
+        // A 64-digit number's text matches the hex pattern; the wire schema's hash is a string.
+        var numeric = new java.math.BigInteger("1".repeat(64));
+        var reads = new Reads(req -> {
+            var a = obj().put("absent", true);
+            a.putObject("tip").put("hash", numeric).put("height", 204).put("slot", 204);
+            return new Call.Answer(obj().set("result", a), 128);
+        }, 199, 20, 10, 8192, 0, table::observe);
+        failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getTxOutput(HASH, 0));
+        assertTrue(table.avoids("spend"));
+        assertTrue(table.avoids("collateral"));
+        var output = output(0).put("tx_hash", numeric);
+        failure("internal", "inconsistentRead", () -> backend(q -> value(JSON.createArrayNode().add(output), 10))
+                .getUtxoService().getUtxos(ADDRESS, 10, 1));
+    }
 }

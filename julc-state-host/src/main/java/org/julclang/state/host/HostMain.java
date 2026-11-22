@@ -21,8 +21,14 @@ public final class HostMain {
             if (reason != null) {
                 String line = "joust dev host: " + reason.replaceAll("[\\p{Cntrl}]", " ");
                 var writer = Thread.ofPlatform().daemon().start(() -> err.println(line));
-                try { writer.join(REASON_MILLIS); }
-                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                // One monotonic deadline across interrupts: a stop on a call's own thread arrives interrupted (abandon).
+                long end = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(REASON_MILLIS);
+                boolean interrupted = false;
+                for (long left; writer.isAlive() && (left = end - System.nanoTime()) > 0; ) {
+                    try { writer.join(java.time.Duration.ofNanos(left)); }
+                    catch (InterruptedException e) { interrupted = true; }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
             }
             halt.accept(reason == null ? 0 : 1);
         };
