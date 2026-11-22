@@ -342,10 +342,11 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
   integer or decimal string, `boolean` JSON boolean only, `PlutusData` CBOR hex), each within D2a's domain, encoded
   and applied as D3 says. Wrong arity or type, or a value outside the domain, is `bad`, code `governor`.
 - **`signers`**: the 28-byte payment key hashes the governor's own rules require (Guardian: `owner`). The client names
-  them; the host cannot know a governor's rules. **Count limit** (X50): `governor.signers` and the call's
-  `cosigners` together hold at most **64 distinct** keys, the M3b host's existing co-signer cap (`MAX_COSIGNERS`,
-  `Session.java:303` at `2ffaf41b`), checked on both hosts before any account is built; more is `bad`, code
-  `governor` (`bad/request` for `cosigners` alone, as today). The protocol-2 schema states the limit.
+  them; the host cannot know a governor's rules. **Count limit** (X50): the M3b host already refuses more than 64
+  `cosigners` entries before building any account (`MAX_COSIGNERS`, `Session.java:303-310` at `2ffaf41b`,
+  `bad/request`); `governor.signers` takes the same cap, **at most 64 entries**, and the two lists together at most
+  **64 distinct** keys, all checked on both hosts before any account is built; a governor list or a union over the
+  cap is `bad`, code `governor`. The protocol-2 schema states the limits.
 
 The host applies the governor's params, refuses (`bad`, code `governor`) a governor whose applied hash differs from
 the credential in the contract's params or equals the contract's own hash or either shared verifier's (F16), and
@@ -557,8 +558,9 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   lock, so no `authorizedBy:script` (X41); **two overlapping builds** into one directory with identical contract bytes
   and different validator manifests (the second waits or fails at the build marker; neither leaves a lock matching
   the other's manifest, X48).
-- **Signer count (X50), both hosts:** 64 distinct keys across `governor.signers` and `cosigners` (accepted), 65
-  (`bad/governor` before any account is built), and duplicates across the two lists counted once.
+- **Signer count (X50), both hosts:** 64 and 65 `governor.signers` entries (accepted; `bad/governor`), 64 distinct
+  keys across `governor.signers` and `cosigners` (accepted), 65 (`bad/governor`), each refusal before any account is
+  built, and duplicates across the two lists counted once in the union.
 - **Differential:** the JVM host (through generated clients) and the Node host agree byte for byte on every M4 vector.
 - **Governor artifact resolution** (Y3): a refusal vector for each clause of D4's client rule (a second class with the
   same simple name in the first entry, missing resource, wrong `type`, wrong `purpose`, `params` arity and type; npm:
