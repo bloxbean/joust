@@ -116,6 +116,8 @@ public final class SchemaCodec {
 
     private PlutusData encode(JsonNode schema, JsonNode v, String path, int depth) {
         if (strict && depth > MAX_DEPTH) throw new DataError(path + ": nested too deeply");
+        // An absent value is missing, not None: only an explicit null clears an optional, as on the JVM host.
+        if (strict && (v == null || v.isMissingNode())) throw new DataError(path + ": missing");
         JsonNode s = resolve(schema);
         switch (kindOf(s)) {
             case "integer":

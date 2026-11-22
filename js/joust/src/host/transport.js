@@ -60,11 +60,12 @@ export function serve({ writeFrame, Worker, launch, deferred, writeStallMs = WRI
   function send(text, callback) {
     const frame = encode(text);
     if (!frame) return false;
-    writes.push(process.hrtime.bigint());
-    if (writes.length === 1) Atomics.store(since, 0, writes[0]);
+    // A queued frame's interval starts when it becomes the active write, not when it was queued (Codex review 3).
+    writes.push(true);
+    if (writes.length === 1) Atomics.store(since, 0, process.hrtime.bigint());
     const ready = writeFrame(frame, err => {
       writes.shift();
-      if (!stopped) Atomics.store(since, 0, writes[0] ?? 0n);
+      if (!stopped) Atomics.store(since, 0, writes.length ? process.hrtime.bigint() : 0n);
       err ? stop('protocol write failed') : callback?.();
     });
     if (!ready && !backpressure) {
