@@ -235,6 +235,7 @@ final class Session implements Transport.Handler {
             }
             var reply = runtime.inScope(scope, () -> method.equals("prepare")
                     ? prepare(p, reads, now + ttl, whileLive) : query(method, p, reads, now + ttl));
+            reads.settleHistory();
             return new Transport.Reply(reply.value(), () -> {
                 overlay.commitHistory();
                 reply.commit().run();

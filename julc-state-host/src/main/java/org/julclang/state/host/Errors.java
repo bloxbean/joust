@@ -54,6 +54,7 @@ public final class Errors {
             if (c instanceof StackOverflowError) return HostError.internal("tooDeep", "nested too deeply");
             if (c instanceof ReadFailed r) return HostError.internal("readFailed", r.reason());
             if (c instanceof Unsupported u) return HostError.unsupported("read:" + u.what(), u.getMessage());
+            if (c instanceof org.julclang.state.runtime.MerkleSupport.UnprovenState u) return HostError.internal("inconsistentRead", u.getMessage());
             if (c instanceof Need n) return HostError.internal("need", "the host's backend asked for a snapshot read: " + n.getMessage());
             if (c instanceof CallAbort && c.getCause() == null) return HostError.internal("internal", c.getClass().getSimpleName());
             if (c.getCause() == c) break;

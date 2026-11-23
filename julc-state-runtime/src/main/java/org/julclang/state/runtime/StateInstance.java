@@ -67,6 +67,7 @@ public final class StateInstance<S> {
     public <T> T view(java.util.function.Function<S, T> f) {
         S s = state();
         if (!contract.spec.layout().hasMaps()) return JscMessages.run(contract.spec, () -> f.apply(s));
+        MerkleSupport.requireStored(contract.spec.layout(), s);   // only the root is proven (#160 Codex re-review)
         return JscMessages.run(contract.spec, () -> new MerkleSupport(contract.runtime.mapProver(contract.policyId + instanceId)).run(() -> f.apply(s)));
     }
 

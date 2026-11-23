@@ -143,6 +143,9 @@ final class Reservations implements ClaimStore {
         this.network = network;
         this.margin = margin;
         this.reconcile = restoring;
+        // A restarted host has not seen the restore batches: map views stay fenced as after a rewound reset, until
+        // restore completes (#160 Codex re-review).
+        if (restoring) maps.rewound();
     }
 
     void allowBuild() {

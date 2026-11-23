@@ -71,7 +71,8 @@ final class MapMirrors {
 
     void transition(Reservations.Entry entry) {
         String id = entry.id();
-        if (!entry.live()) restored.remove(id);
+        // Restored claims outlive the reservation's final state: a rewind can revive it, and its re-import is still
+        // compared with them (#160 Codex re-review).
         var layer = staged.get(id);
         if (layer == null) return;
         switch (entry.state()) {
@@ -94,11 +95,12 @@ final class MapMirrors {
     }
 
     void reset(Collection<Reservations.Entry> entries) {
-        // A live restored reservation keeps its journaled claims across a reset between restore batches: a later batch
-        // is still compared with them (#160 Codex review).
-        var live = new HashSet<String>();
-        for (var entry : entries) if (entry.live()) live.add(entry.id());
-        restored.keySet().retainAll(live);
+        // A restored reservation keeps its journaled claims across a reset (between restore batches, or a rewind that
+        // revives a final one): a later batch is still compared with them (#160 Codex reviews). The table retains its
+        // final entries for a rewind, and these claims with them.
+        var held = new HashSet<String>();
+        for (var entry : entries) held.add(entry.id());
+        restored.keySet().retainAll(held);
         confirmed.clear();
         promoted.clear();
         staged.clear();

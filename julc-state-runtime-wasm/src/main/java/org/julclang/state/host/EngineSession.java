@@ -32,6 +32,7 @@ public final class EngineSession {
     public String execute(String frame, String setup, Function<String, String> reverse, BooleanSupplier live,
                           BooleanSupplier claim, Runnable release) {
         pending = null;
+        LIVE.set(live);
         try {
             var request = JSON.readTree(frame);
             String method = str(request, "method");
@@ -54,7 +55,21 @@ public final class EngineSession {
             return obj().set("result", pending.value()).toString();
         } catch (Throwable failure) {
             return obj().set("error", Errors.rpcError(failure)).toString();
+        } finally {
+            LIVE.remove();
         }
+    }
+
+    /**
+     * The current call's liveness, checked before each transition evaluation as well as at each chain read: read
+     * discovery evaluates a transition several times without a read in between, and a cancelled call must stop before
+     * the transport's drain timer ends the worker and the session with it (#160 Codex re-review).
+     */
+    private static final ThreadLocal<BooleanSupplier> LIVE = new ThreadLocal<>();
+
+    static void checkLive() {
+        var live = LIVE.get();
+        if (live != null && !live.getAsBoolean()) throw HostError.internal("cancelled", "call cancelled");
     }
 
     public void commit() {
@@ -117,6 +132,7 @@ public final class EngineSession {
             }
             public Run run(String method, PlutusData target, PlutusData shared,
                            PlutusData args, PlutusData ctx) {
+                checkLive();
                 var result = vm.evaluate(method, target, shared, args, ctx);
                 return switch (result.kind()) {
                     case STEP, REFUSAL -> result.run(); // Includes map-read discovery traces, also on a tentative refusal.

@@ -14,6 +14,9 @@ record MapReads(Reads reads) {
     List<String> history(String unit) {
         var txs = new LinkedHashSet<String>();
         var cursors = new HashSet<String>();
+        // A block hash names one chain point across every page: seen again at another slot or height, the history
+        // contradicts itself (#160 Codex re-review).
+        var points = new HashMap<String, JsonNode>();
         JsonNode point = null, previous = null;
         String cursor = null;
         do {
@@ -31,6 +34,8 @@ record MapReads(Reads reads) {
                 if (!tx.matches("[0-9a-f]{64}") || !txs.add(tx) || !chainPoint(block)
                         || !atOrBefore(block, point) || previous != null && !atOrBefore(previous, block))
                     throw inconsistent("duplicate, unordered or invalid history entry");
+                if (!points.computeIfAbsent(block.get("hash").textValue(), h -> block).equals(block))
+                    throw inconsistent("one block hash at two history points");
                 previous = block;
             }
             cursor = page.path("more").textValue();
@@ -59,7 +64,9 @@ record MapReads(Reads reads) {
 
     /**
      * As above; {@code reached}: whether the replay reached the root the call needs. Checked before the answers' tip
-     * counts, so an incomplete history cannot advance reservations (#160 Codex review).
+     * counts, so an incomplete history cannot advance reservations (#160 Codex review). Run once for each root the
+     * call lacks (a second root of the same unit replays the same, cached, answers); the tip counts only when the call
+     * ends ({@link Reads#settleHistory}).
      */
     void rebuild(String unit, String verifier, NodeStore store, java.util.function.BooleanSupplier reached) {
         var withdrawals = new ArrayList<byte[]>();
@@ -97,7 +104,9 @@ record MapReads(Reads reads) {
         try { MapHistory.replay(store, withdrawals); }
         catch (RuntimeException e) { throw inconsistent("malformed or inconsistent map history claim"); }
         if (!reached.getAsBoolean()) throw inconsistent("history does not reach the input datum root");
-        reads.accepted();   // the redeemers and datums replayed, up to the root the call needs
+        // The redeemers and datums replayed, up to this root. A call can need another root from the same history: the
+        // tip counts only once the call has every root it needs, when it ends (#160 Codex re-review).
+        reads.historyReplayed();
     }
 
     // A JSON string's text, else "" (which no hash pattern matches): a number's digits must not pass as hex.

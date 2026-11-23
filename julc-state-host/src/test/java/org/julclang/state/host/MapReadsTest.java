@@ -37,6 +37,138 @@ class MapReadsTest {
         }
     }
 
+    /** A view of the recorded Token instance at the later recording's tip, holding the first mint's recipient. */
+    static ObjectNode balanceView(JsonNode mint, JsonNode later) {
+        var view = obj().put("now", later.at("/params/now").asLong()).put("view", "balanceOf");
+        view.set("instance", mint.at("/params/call/instance"));
+        view.set("contract", mint.at("/params/call/contract"));
+        view.putObject("args").set("holder", mint.at("/params/call/args/to"));
+        return view;
+    }
+
+    @Test void restoringFencesMapViewsUntilTheRestoreCompletes() throws Exception {
+        // #160 Codex re-review: a restarted host (restoring) must not read and cache a map before the batch naming its
+        // pending transaction arrives, as a host that saw the rewind would not.
+        var mint = MapRecording.record("token", MapRecording.m3("token", "mint"));
+        var later = MapRecording.record("token", MapRecording.m3("token", "mint-2"));
+        var entry = M1bTest.entry(org.julclang.state.examples.token.TokenClient.class);
+        try (var client = new Client(new Handshake(List.of(entry)))) {
+            Client.success(client.rpc("initialize", Client.init(entry).put("restoring", true)));
+            var view = balanceView(mint, later);
+            var answers = RecordedSessionsTest.answers(later);
+            Client.error("refusal", "mapsStale", client.rpc("view", view, answers));
+            var batch = obj().put("complete", false);
+            batch.putArray("transactions");
+            Client.success(client.rpc("restore", batch));
+            Client.error("refusal", "mapsStale", client.rpc("view", view, answers));
+            batch.put("complete", true);
+            Client.success(client.rpc("restore", batch));
+            assertEquals("1000", Client.success(client.rpc("view", view, answers)).required("value").asText());
+        }
+    }
+
+    @Test void aRearmedTombstoneKeepsItsRestoredClaims() throws Exception {
+        // #160 Codex re-review: expiry, then a rewind below validTo revives the reservation; its re-import is still
+        // compared with the claims first restored under that body hash.
+        var honest = JSON.readTree(ClientVectors.DIRECTORY.resolve("token-m3-mint-2.json").toFile());
+        var mutated = JSON.readTree(ClientVectors.DIRECTORY.resolve("reject-map-policy.json").toFile());
+        String original = honest.at("/result/prepared/cbor").asText();
+        var tx = Transaction.deserialize(HexFormat.of().parseHex(original));
+        long to = tx.getBody().getTtl();
+        var other = Transaction.deserialize(HexFormat.of().parseHex(mutated.at("/result/prepared/cbor").asText()));
+        tx.setWitnessSet(other.getWitnessSet());
+        String changed = HexFormat.of().formatHex(tx.serialize());
+        var entry = M1bTest.entry(org.julclang.state.examples.token.TokenClient.class);
+        try (var client = new Client(new Handshake(List.of(entry)))) {
+            Client.success(client.rpc("initialize", Client.init(entry).put("restoring", true)));
+            var batch = obj().put("complete", true);
+            var item = batch.putArray("transactions").addObject().put("state", "prepared").put("cbor", original);
+            var restored = Client.success(client.rpc("restore", batch));
+            String id = restored.required("reservations").get(0).asText();
+            var expired = obj().put("reservation", id).put("status", "expired").put("tip", to + 1_000_000);
+            expired.set("txHash", honest.at("/result/prepared/txHash"));
+            assertEquals("expired", Client.success(client.rpc("settled", expired)).required("state").asText());
+            var reset = obj().put("now", to + 1_000_000);
+            reset.putObject("rewound").put("tip", to - 1);
+            Client.success(client.rpc("reset", reset));
+            item.put("cbor", changed);
+            Client.error("bad", "conflict", client.rpc("restore", batch));
+            item.put("cbor", original);
+            assertEquals(restored, Client.success(client.rpc("restore", batch)));
+        }
+    }
+
+    @Test void oneBlockHashNamesOnePointAcrossTheHistory() {
+        // #160 Codex re-review: a hash seen again after an intervening block, at a later slot and height.
+        var items = JSON.createArrayNode();
+        items.addObject().put("txHash", "01".repeat(32)).set("point", point(5));
+        items.addObject().put("txHash", "02".repeat(32)).set("point", point(6));
+        items.addObject().put("txHash", "03".repeat(32)).set("point", point(7).put("hash", "%064x".formatted(5)));
+        var reads = reads(q -> value(items, 10), 10, 8192);
+        failure("internal", "inconsistentRead", () -> new MapReads(reads).history("unit"));
+        // Several transactions at one identical point stay valid.
+        var same = JSON.createArrayNode();
+        same.addObject().put("txHash", "01".repeat(32)).set("point", point(5));
+        same.addObject().put("txHash", "02".repeat(32)).set("point", point(5));
+        assertEquals(2, new MapReads(reads(q -> value(same, 10), 10, 8192)).history("unit").size());
+    }
+
+    @Test void aHistoryThatMissesALaterRootAdvancesNoReservation() {
+        // #160 Codex re-review: a call that needs two cold roots. The replay reaches the first; until the call ends its
+        // tip stays provisional, and a second root it does not reach is an inconsistent read that advanced nothing.
+        var tips = new ArrayList<Long>();
+        var reads = new Reads(req -> new Call.Answer(obj().set("result", obj().put("absent", true).set("tip", point(30))), 128),
+                10, 20, 10, 8192, 0, tips::add);
+        var store = new org.julclang.state.runtime.InMemoryNodeStore();
+        var m = new MapReads(reads);
+        m.rebuild("unit", "ab".repeat(28), store, () -> true);
+        assertEquals(List.of(), tips, "the first root's replay is provisional");
+        failure("internal", "inconsistentRead", () -> m.rebuild("unit", "ab".repeat(28), store, () -> false));
+        assertEquals(List.of(), tips, "a history that misses the second root advances nothing");
+        reads.settleHistory();
+        assertEquals(List.of(30L), tips, "a call that reached every root it needs accepts the history's tip");
+    }
+
+    /** {@code answer} with every Token state datum's balances map given one pending entry in its reads or writes. */
+    static JsonNode pending(JsonNode answer, boolean writes, byte[] key) {
+        var copy = answer.deepCopy();
+        copy.findParents("inline_datum").forEach(o -> {
+            if (!o.path("inline_datum").isTextual()) return;
+            try {
+                var d = com.bloxbean.cardano.client.plutus.spec.PlutusData.deserialize(HexFormat.of().parseHex(o.get("inline_datum").asText()));
+                if (!(d instanceof com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData c) || c.getData().getPlutusDataList().size() != 3
+                        || !(c.getData().getPlutusDataList().get(2) instanceof com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData map)) return;
+                var entry = com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
+                        com.bloxbean.cardano.client.plutus.spec.BytesPlutusData.of(key),
+                        com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(1),
+                        com.bloxbean.cardano.client.plutus.spec.BytesPlutusData.of(new byte[] {0x07}));
+                map.getData().getPlutusDataList().set(writes ? 2 : 1, com.bloxbean.cardano.client.plutus.spec.ListPlutusData.of(entry));
+                ((ObjectNode) o).put("inline_datum", c.serializeToHex());
+                if (o.has("data_hash")) ((ObjectNode) o).put("data_hash", HexFormat.of().formatHex(
+                        com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(HexFormat.of().parseHex(c.serializeToHex()))));
+            } catch (Exception notState) { /* another datum */ }
+        });
+        return copy;
+    }
+
+    @Test void aViewRefusesAChainDatumWithPendingMapEntries() throws Exception {
+        // #160 Codex re-review: the view reads a datum's pending reads or writes before the prover, so a datum on chain
+        // (always root only) that carries either is an inconsistent read, not a balance the root does not prove.
+        var mint = MapRecording.record("token", MapRecording.m3("token", "mint"));
+        var later = MapRecording.record("token", MapRecording.m3("token", "mint-2"));
+        var entry = M1bTest.entry(org.julclang.state.examples.token.TokenClient.class);
+        var view = balanceView(mint, later);
+        byte[] holder = HexFormat.of().parseHex(view.at("/args/holder").asText());
+        var answers = RecordedSessionsTest.answers(later);
+        for (boolean writes : List.of(false, true)) {
+            try (var client = new Client(new Handshake(List.of(entry)))) {
+                Client.success(client.rpc("initialize", Client.init(entry)));
+                Client.error("internal", "inconsistentRead", client.rpc("view", view, q -> pending(answers.apply(q), writes, holder)));
+                assertEquals("1000", Client.success(client.rpc("view", view, answers)).required("value").asText());
+            }
+        }
+    }
+
     @Test void badHistoryCannotSupplyAProofForTheSpentRoot() throws Exception {
         var recording = MapRecording.record("token", MapRecording.m3("token", "mint-2"));
         var original = RecordedSessionsTest.answers(recording);

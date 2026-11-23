@@ -365,6 +365,11 @@ final class Reads {
     // D8: a tip reaches the reservation table only from a read the host accepted, after its kind's own checks
     // (one chain point across chunks, output and script evidence). A refused answer releases nothing (#149 Codex).
     void accepted() { observe.accept(greatestTip); }
+    private boolean replayed;
+    /** A map history replayed and checked for one root: its tip waits for the call's end (#160 Codex re-review). */
+    void historyReplayed() { replayed = true; }
+    /** The call reached every map root it needed: a replayed history's tip counts now. */
+    void settleHistory() { if (replayed) accepted(); }
     // A JSON string of 64 lowercase hex digits: a 64-digit number's text matches too (#149 Codex fix review).
     static boolean hex64(JsonNode n) { return n.isTextual() && n.textValue().matches("[0-9a-f]{64}"); }
     // The wire schema's nullable output fields: absent, null, or a string of the field's format.

@@ -21,6 +21,7 @@ import java.lang.reflect.RecordComponent;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -81,6 +82,53 @@ public final class MerkleSupport {
         } finally {
             if (previous == null) PEEKING.remove();
             else PEEKING.set(previous);
+        }
+    }
+
+    private static final ThreadLocal<Boolean> WARM = new ThreadLocal<>();
+
+    /**
+     * As {@link #peeking}, for a speculative lookup: a root the mirror lacks is not rebuilt from the chain but refused
+     * with {@link Cold}. Read discovery resolves a run's first unknown read normally (it is on the path); a later one
+     * may sit under a tentative answer, and must not end a call in a history read the path never needs (#160 Codex).
+     */
+    public static <T> T peekingWarm(Supplier<T> body) {
+        Boolean previous = WARM.get();
+        WARM.set(Boolean.TRUE);
+        try {
+            return peeking(body);
+        } finally {
+            if (previous == null) WARM.remove();
+            else WARM.set(previous);
+        }
+    }
+
+    /**
+     * A state read from the chain whose maps are not in their datum form {@code (32-byte root, [], [])}: a lookup
+     * consults a map's pending reads and writes before the prover, so such a datum could answer what its root does not
+     * prove (#160 Codex re-review). The validator stores only that form; a provider's datum that differs is inconsistent.
+     */
+    public static final class UnprovenState extends JoustException {
+        public UnprovenState(String message) {
+            super(message);
+        }
+    }
+
+    /** Refuses {@code state}, read from the chain, unless each of its maps is in datum form ({@link UnprovenState}). */
+    public static <S> void requireStored(Layout<S> layout, S state) {
+        for (int idx : layout.maps()) {
+            MerkleMap m;
+            try { m = layout.map(state, idx); }
+            catch (RuntimeException malformed) { throw new UnprovenState("a MerkleMap field is malformed"); }
+            if (m == null || m.root() == null || m.root().length != 32 || !m.reads().isEmpty() || !m.writes().isEmpty())
+                throw new UnprovenState("a MerkleMap field on chain is not a 32-byte root with no pending reads or writes");
+        }
+    }
+
+    /** A {@link #peekingWarm} lookup of a root the mirror lacks. */
+    public static final class Cold extends RuntimeException {
+        public Cold(String root) {
+            super("the MerkleMap mirror lacks root " + root, null, false, false);
         }
     }
 
@@ -338,16 +386,27 @@ public final class MerkleSupport {
         }
 
         private TrieProver(NodeStore store, java.util.function.Consumer<byte[]> rebuild) {
+            this(store, rebuild, false);
+        }
+
+        private TrieProver(NodeStore store, java.util.function.Consumer<byte[]> rebuild, boolean perRoot) {
             this.store = store;
             this.rebuild = rebuild;
+            this.perRoot = perRoot;
         }
 
-        /** Loads and checks the specific missing root through a caller-supplied history reader. */
+        /**
+         * Loads and checks each missing root through a caller-supplied history reader: asked once for every root the
+         * store lacks, so a call needing two roots that one replay does not both reach learns it at the second (#160
+         * Codex re-review).
+         */
         public static TrieProver withHistory(NodeStore store, java.util.function.Consumer<byte[]> rebuild) {
-            return new TrieProver(store, rebuild);
+            return new TrieProver(store, rebuild, true);
         }
 
+        private final boolean perRoot;
         private boolean rebuilt;
+        private final Set<String> asked = new HashSet<>();
 
         @Override
         public ReadProof read(byte[] root, byte[] key) {
@@ -376,9 +435,13 @@ public final class MerkleSupport {
         private MpfTrie trie(byte[] root) {
             if (Arrays.equals(root, Mpf.emptyRoot())) return new MpfTrie(store);
             // A root the store lacks: rebuild this map from the chain once (the history is checked, not trusted).
-            if (store.get(root) == null && rebuild != null && !rebuilt) {
-                rebuilt = true;
-                rebuild.accept(root);
+            if (store.get(root) == null && rebuild != null) {
+                // A speculative read (discovery's, beyond the first unknown one) never fetches a history (#160 Codex).
+                if (Boolean.TRUE.equals(WARM.get())) throw new Cold(hex(root));
+                if (perRoot ? asked.add(hex(root)) : !rebuilt) {
+                    rebuilt = true;
+                    rebuild.accept(root);
+                }
             }
             // An MpfTrie over a store missing this root's nodes answers "absent" for everything: refuse instead.
             if (store.get(root) == null) {
