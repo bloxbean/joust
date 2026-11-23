@@ -179,6 +179,22 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     } finally { await peer.close(); }
     assert.equal(peer.child.exitCode, 1);
   });
+  it('survives Plutus data nested as deeply as the strict wire allows (#154 review G3-4)', async () => {
+    // At the strict codec's 16,384-byte bound, 16,383 nested lists trapped the image, so arguments nest at most 256
+    // levels (SchemaCodec.MAX_DATA_DEPTH). No served contract takes a Data argument; decode reads its datum with the
+    // same recursive decoder.
+    const v = fixture('owned-action');
+    const { call } = v.params;
+    start(contracts.filter(c => JSON.parse(c.description).preamble.title === call.contract));
+    try {
+      await initialize({});
+      const deep = await peer.rpc('decode', { contract: call.contract, datum: '81'.repeat(256) + '00' });
+      assert.equal(deep.error?.data.kind, 'bad', JSON.stringify(deep));
+      assert.equal(deep.error.data.code, 'request');
+      const again = await peer.rpc('decode', { contract: call.contract, datum: '00' });
+      assert.equal(again.error?.data.code, 'request', 'the session still serves');
+    } finally { await peer.close(); }
+  });
   it('returns structured source sites for the refusing contract from its verified build bundle', async () => {
     const v = m0(history.find(f => f.startsWith('0003-')));
     const call = { ...v.params.call, args: { by: '0' } };

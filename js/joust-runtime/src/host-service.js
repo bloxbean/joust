@@ -41,6 +41,10 @@ export async function serve({ contracts, fingerprint, runtimeVersion }, service)
     if (['joust', 'engine', 'julc'].some(k => (c.built?.[k] ?? null) !== (build?.[k] ?? null)))
       throw Error('contracts have inconsistent build versions');
   }
+  // A build reads as this runtime's descriptions only when this runtime's toolchain made it: an earlier one may omit a
+  // field whose absence now means its default (x-joust.maxValidityMs, #154 review G3-2).
+  if (contracts.length && build?.joust !== runtimeVersion)
+    throw Error('contracts built by JOUST ' + (build?.joust ?? 'unknown') + ', the runtime package ' + runtimeVersion + ': rebuild with joust build');
   const setup = JSON.stringify({ fingerprint, contracts: programs,
     versions: { build, engine: { joust: runtimeVersion, image: info.joust ?? null, julc: info.julc, ccl: null, vmProvider: 'Java', vmVersion: null } } });
   return {

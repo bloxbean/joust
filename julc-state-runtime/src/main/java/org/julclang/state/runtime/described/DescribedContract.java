@@ -591,13 +591,19 @@ public final class DescribedContract {
         return Transition.full(base.next(), base.payouts(), sends, mint, accepted).withDeposits(deposits).withEvents(eventsOf(c, 6));
     }
 
-    /** Offered native assets: {@code [[policy, [[name, quantity]]]]} (hex), as the JS client sends them. */
+    /** Offered native assets: {@code [[policy, [[name, quantity]]]]} (lowercase hex), as the JS client sends them. */
     static org.julclang.ledger.Value assets(JsonNode json) {
         var v = org.julclang.state.api.Assets.none();
         if (json == null || json.isNull() || json.isMissingNode()) return v;
+        if (!json.isArray()) throw new BadCall("pay.assets: not an array");
         for (JsonNode p : json) {
+            if (!p.isArray() || p.size() != 2 || !p.get(0).asText("").matches("[0-9a-f]{56}") || !p.get(1).isArray())
+                throw new BadCall("pay.assets: not a [policy, tokens] pair");
             byte[] policy = HexFormat.of().parseHex(p.get(0).asText());
             for (JsonNode a : p.get(1)) {
+                if (!a.isArray() || a.size() != 2 || !a.get(0).isTextual() || !a.get(0).asText().matches("([0-9a-f]{2}){0,32}")
+                        || !(a.get(1).isIntegralNumber() || a.get(1).asText("").matches("-?[0-9]{1,200}")))
+                    throw new BadCall("pay.assets: not a [name, quantity] token");
                 v = org.julclang.state.api.Assets.add(v, org.julclang.state.api.Assets.of(policy, HexFormat.of().parseHex(a.get(0).asText()),
                         new BigInteger(a.get(1).asText())));
             }

@@ -52,6 +52,24 @@ class InspectionTest {
         assertEquals(List.of("State","Holding"),JSON.convertValue(datums.decode(u.getInlineDatum(),null).required("ambiguous"),List.class));
     }
 
+    @Test void intentsAreOmittedAndKeyedNamesCountOnlyInKeyedContracts() throws Exception {
+        var entry = M1bTest.entry(BankClient.class);
+        var c = Contracts.load(Launch.scan(entry.getParent(),List.of(entry)),getClass().getClassLoader())
+                .get(BankClient.class.getName().replaceFirst("Client$",""));
+        assertFalse(c.keyed());
+        var datums = new ContractDatums(c);
+        var r = ownedRecording();
+        var id = r.params().at("/call/object").asText();
+        var u = r.snapshot().utxos.values().stream().flatMap(List::stream)
+                .filter(item -> item.getAmount().stream().anyMatch(a -> a.getUnit().endsWith(id))).findFirst().orElseThrow();
+        var amounts = new ArrayList<>(u.getAmount());
+        amounts.add(com.bloxbean.cardano.client.api.model.Amount.builder().unit(c.hash()+"4b"+"00".repeat(28)).quantity(java.math.BigInteger.ONE).build());
+        u.setAmount(amounts);
+        assertEquals(id, datums.recognize(u).path("object").asText());
+        u.setAmount(List.of(com.bloxbean.cardano.client.api.model.Amount.builder().unit(c.hash()+"49"+"00".repeat(28)).quantity(java.math.BigInteger.ONE).build()));
+        assertNull(datums.recognize(u));
+    }
+
     private static ReplayTest.Recording ownedRecording() throws Exception {
         try (var files = java.nio.file.Files.list(ReplayTest.FIXTURES.resolve("dapp"))) {
             for (var file : files.sorted().toList())

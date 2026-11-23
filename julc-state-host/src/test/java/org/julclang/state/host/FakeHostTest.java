@@ -135,6 +135,11 @@ class FakeHostTest {
                 if (f.has("client")) assertTrue(writer.write(JSON.writeValueAsBytes(f.required("client"))));
                 else if (f.has("host")) assertEquals(f.required("host"),JSON.readTree(reader.next()));
                 else {
+                    // A client reads the fault to see it: drain the host's output from here on.
+                    Thread.ofPlatform().daemon().start(() -> {
+                        try { p.getInputStream().transferTo(java.io.OutputStream.nullOutputStream()); }
+                        catch (java.io.IOException ignored) { /* the host exited */ }
+                    });
                     for (var t : f.path("tolerate")) assertTrue(writer.write(JSON.writeValueAsBytes(t)));
                     if (!stops) assertTrue(writer.write(JSON.writeValueAsBytes(obj().put("jsonrpc","2.0").put("id","next")
                             .put("method","describe").set("params",obj().put("contract","x")))));

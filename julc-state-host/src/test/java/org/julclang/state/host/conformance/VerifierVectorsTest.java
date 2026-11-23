@@ -178,7 +178,12 @@ class VerifierVectorsTest {
      */
     static final Map<String,String> NEEDS_POSITIVE = Map.of(
             "netOutflow/third#target", "what the target releases to a third party",
-            "netOutflow/third#mint", "what a mint releases to a third party");
+            "netOutflow/third#mint", "what a mint releases to a third party",
+            "netOutflow/third#payment", "what a spend pays others out of the payment its redeemer binds (the recorded " +
+                    "Market.buy is still refused for the buyer-funded minimum ADA of its NFT send, #170)",
+            // The derived Registry payout to a stranger decided it, but the validator pays a release's refund to the
+            // entry's owner only, so that body fails the ledger gate (LedgerPositivesTest).
+            "netOutflow/keyedThird#released", "what a keyed removal releases to a third party");
 
     /**
      * DC10: equivalent parts whose reasons cite each other. Single-part mutation cannot see such a pair, so dropping both
