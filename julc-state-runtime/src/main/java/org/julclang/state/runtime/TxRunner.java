@@ -773,9 +773,14 @@ final class TxRunner {
     private Utxo largestAdaOnly(String address, java.util.Set<String> spent) {
         Utxo best = null;
         try {
-            for (int page = 1; page <= StateContractHandle.MAX_PAGES; page++) {   // to the listing's end (#165 Codex r6)
+            for (int page = 1; ; page++) {   // to the listing's end (#165 Codex r6, r7)
                 var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                if (!r.isSuccessful()) {
+                    if (page == 1) break;   // nothing listed, or the provider did not answer: no funding pick
+                    throw new JoustException("cannot read page " + page + " of the payer's UTxOs at " + address + ": "
+                            + r.getResponse());
+                }
+                if (r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
                     if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null) continue;
                     if (spent.contains(Designation.ref(u))) continue;
@@ -785,9 +790,16 @@ final class TxRunner {
                     if (best == null || q.compareTo(lovelace(best)) > 0) best = u;
                 }
                 if (r.getValue().size() < 100) break;
+                if (page == StateContractHandle.MAX_PAGES) {
+                    throw new JoustException("the payer's listing at " + address + " has more than " + StateContractHandle.MAX_PAGES
+                            + " pages; not read to its end");
+                }
             }
+        } catch (JoustException e) {
+            throw e;
         } catch (Exception e) {
-            return best;
+            // A listing that could not be read is not one without a candidate (#165 Codex round 7).
+            throw new JoustException("cannot read the payer's UTxOs at " + address, e);
         }
         return best;
     }

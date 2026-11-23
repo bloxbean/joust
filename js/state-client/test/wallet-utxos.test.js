@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Serialization, Cardano } from '@cardano-sdk/core';
 import { unspentOutput, unspentOutputCbor, baseAddress } from '../src/ledger.js';
+const lovelace = (q) => [{ unit: 'lovelace', quantity: String(q) }];
 import { walletView } from '../src/wallet.js';
 import { fromWallet } from '../src/client.js';
 
@@ -51,7 +52,8 @@ test('a keyed operation never designates a UTxO carrying a reference script', as
 
 test('with none at the funding address, a keyed operation designates an ordinary UTxO at another of its addresses', async () => {
   const { designatedFor, fromWallet } = await import('../src/client.js');
-  const other = baseAddress({ type: 'key', hash: '55'.repeat(28) }, { type: 'key', hash: '22'.repeat(28) }, 0);
+  // Another address of the same payment key (another stake key): the caller stays the same (#165 Codex round 7).
+  const other = baseAddress({ type: 'key', hash: '11'.repeat(28) }, { type: 'key', hash: '55'.repeat(28) }, 0);
   const wallet = { change: address, addresses: [address, other], utxos: new Map([
     ['aa'.repeat(32) + '#0', { address, value: new Map([['lovelace', 9_000_000n]]), referenceScriptHash: '44'.repeat(28) }],
     ['bb'.repeat(32) + '#0', { address: other, value: new Map([['lovelace', 6_000_000n]]) }],
@@ -117,4 +119,52 @@ test('Ogmios: a native reference script is seen, and the DevKit wallet leaves it
   assert.equal(listed[1].hasReferenceScript, true);
   const seen = (await wallet.getUtxos()).map(unspentOutput).map((u) => u.ref);
   assert.deepEqual(seen, ['f0'.repeat(32) + '#0']);
+});
+
+test('the fallback designation keeps the caller: only another address with the same payment key', async () => {
+  const { designatedFor, fromWallet } = await import('../src/client.js');
+  const { paymentKeyHash } = await import('../src/wallet.js');
+  // A: the change address (key 11), holding only a token UTxO. B: another key (88) with ADA. A2: key 11, another stake key.
+  const b = baseAddress({ type: 'key', hash: '88'.repeat(28) }, { type: 'key', hash: '22'.repeat(28) }, 0);
+  const a2 = baseAddress({ type: 'key', hash: '11'.repeat(28) }, { type: 'key', hash: '99'.repeat(28) }, 0);
+  const token = new Map([['lovelace', 2_000_000n], ['33'.repeat(28) + '01', 1n]]);
+  const wallet = { change: address, addresses: [address, b], utxos: new Map([
+    ['aa'.repeat(32) + '#0', { address, value: token }],
+    ['bb'.repeat(32) + '#0', { address: b, value: new Map([['lovelace', 9_000_000n]]) }],
+  ]) };
+  // An init through B would record key 88 as admin, and the next ordinary call (from A) signs with key 11.
+  assert.equal(designatedFor(wallet), null);
+  wallet.addresses.push(a2);
+  wallet.utxos.set('cc'.repeat(32) + '#0', { address: a2, value: new Map([['lovelace', 6_000_000n]]) });
+  const d = designatedFor(wallet);
+  assert.equal(d.address, a2);
+  // The keyed call (from the designated address) and an ordinary call (from the funding address) sign with one key.
+  assert.equal(paymentKeyHash(fromWallet(wallet, d.address).address), paymentKeyHash(fromWallet(wallet).address));
+});
+
+test('settling a keyed record: a provider spelling the id in upper case still shows the designated input', async () => {
+  const { chainOf } = await import('../src/chain.js');
+  const { settle } = await import('../src/retries.js');
+  const upper = 'AB'.repeat(32);
+  const provider = { tip: async () => ({ slot: 10_000 }),
+    utxos: async () => [{ txHash: upper, index: 0, address, value: lovelace(9_000_000), datumHash: null, inlineDatum: null, referenceScriptHash: null }] };
+  const chain = chainOf(provider);
+  assert.equal((await chain.utxosAt(address))[0].ref, 'ab'.repeat(32) + '#0');
+  const record = { designated: 'ab'.repeat(32) + '#0', address, attempts: [{ txHash: 'cd'.repeat(32), validTo: 100 }] };
+  const wallet = { utxos: new Map([['ab'.repeat(32) + '#0', { address, value: new Map([['lovelace', 9_000_000n]]) }]]) };
+  const s = await settle(record, chain, { clock: { zeroSlot: 0, zeroTimeMs: 0, slotLengthMs: 1000 }, wallet, nowMs: 10_000_000 });
+  assert.equal(s.outcome, 'failed');
+});
+
+test('Ogmios: a script in the Plutus language JOUST compiles to (V3) gets its hash', async () => {
+  const { ogmiosProvider, plutusScriptHash } = await import('../src/providers.js');
+  const cbor = '4e4d01000033222220051200120011';
+  const fetchImpl = async (_url, init) => {
+    const { id } = JSON.parse(init.body);
+    return { status: 200, text: async () => JSON.stringify({ jsonrpc: '2.0', id, result: [{ transaction: { id: 'aa'.repeat(32) }, index: 0,
+      address, value: { ada: { lovelace: 9_000_000 } }, script: { language: 'plutus:v3', cbor } }] }) };
+  };
+  const [u] = await ogmiosProvider('http://ogmios.test', { fetchImpl }).utxos(address);
+  // Keep ogmiosProvider's language map in step with JOUST's Plutus version: an unmapped one gets no hash.
+  assert.equal(u.referenceScriptHash, plutusScriptHash(cbor, 3));
 });

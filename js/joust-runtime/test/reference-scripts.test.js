@@ -3,6 +3,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fetchNeed, emptySnapshot } from '../src/snapshot.js';
+import { engineService } from '../src/service.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { devkitMint, devkitSweep } from '../src/devkit.js';
 import { devWallet } from '@julclang/state-client/devwallet';
 import { enterpriseAddress, parseTx } from '@julclang/state-client/ledger';
@@ -52,4 +56,21 @@ test('devkitMint and devkitSweep never fund from a UTxO carrying a reference scr
   const sweep = chainWith({ [probe.address]: base, [ent]: [at(ent, 'b1', 3_000_000), at(ent, 'b2', 9_000_000, { hasReferenceScript: true })] });
   await devkitSweep(sweep, devWallet({ chain: sweep }), 0);
   assert.deepEqual(inputsOf(sweep.sent[0]).sort(), ['a3'.repeat(32), 'b1'.repeat(32)].sort());
+});
+
+test('prepare with walletUtxos: an output carrying a reference script with no known hash never reaches the engine', async () => {
+  // A stand-in engine (the image's loading contract: onJulcReady), recording the snapshot it is asked to prepare from.
+  const dir = mkdtempSync(join(tmpdir(), 'joust-engine-'));
+  writeFileSync(join(dir, 'package.json'), '{"type":"commonjs"}');
+  writeFileSync(join(dir, 'joust-runtime.js'), `globalThis.onJulcReady({ joust: { prepare(r) {
+    globalThis.__joustSnapshot = JSON.parse(r.snapshot);
+    return { ok: true, cbor: null, txHash: 'tx', validTo: 0, signers: [], plan: null };
+  } } });`);
+  const svc = engineService({ contracts: [], engine: { dir }, clock: { zeroSlot: 0, zeroTimeMs: 0, slotLengthMs: 1000 },
+    api: { tip: async () => ({}) }, mapMirror: {} });
+  const row = (id, extra) => ({ txHash: id.repeat(32), index: 0, address: 'addr_test1x', value: lovelace(9_000_000), datumHash: null,
+    inlineDatum: null, referenceScriptHash: null, ...extra });
+  await svc.prepare({ contract: 'Test', kind: 'call', address: 'addr_test1x', walletUtxos: [
+    row('ee', { hasReferenceScript: true }), row('ef', { referenceScriptHash: '44'.repeat(28), hasReferenceScript: true }), row('f0', {})] });
+  assert.deepEqual(globalThis.__joustSnapshot.utxos['addr_test1x'].map((u) => u.tx_hash), ['ef'.repeat(32), 'f0'.repeat(32)]);
 });

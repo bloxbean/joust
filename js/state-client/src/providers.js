@@ -314,6 +314,8 @@ export function ogmiosProvider(url, { fetchImpl } = {}) {
       return j.result;
     }
   }
+  // Every Plutus language JOUST compiles to must be here (V3 today; keep in step, e.g. a future plutus:v4): an output
+  // whose script is in an unmapped language gets no hash, and the engine's snapshot leaves it out of listings (#165).
   const version = { 'plutus:v1': 1, 'plutus:v2': 2, 'plutus:v3': 3 };
   const utxo = (u) => {
     const value = [];

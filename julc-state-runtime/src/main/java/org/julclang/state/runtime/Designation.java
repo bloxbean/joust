@@ -360,9 +360,14 @@ final class Designation {
         Designated chosen = locked(address, () -> {
             var candidates = new ArrayList<Utxo>();
             try {
-                for (int page = 1; page <= StateContractHandle.MAX_PAGES; page++) {   // to the listing's end (#165 Codex r6)
+                for (int page = 1; ; page++) {   // to the listing's end (#165 Codex r6, r7)
                     var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                    if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                    if (!r.isSuccessful()) {
+                        if (page == 1) break;   // nothing listed, or the provider did not answer (refused below)
+                        throw new JoustException(what + ": cannot read page " + page + " of the payer's UTxOs at " + address
+                                + ": " + r.getResponse());
+                    }
+                    if (r.getValue() == null || r.getValue().isEmpty()) break;
                     for (Utxo u : r.getValue()) {
                         if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
                                 || u.getInlineDatum() != null || u.getDataHash() != null || u.getReferenceScriptHash() != null) {
@@ -372,7 +377,13 @@ final class Designation {
                         candidates.add(u);
                     }
                     if (r.getValue().size() < 100) break;
+                    if (page == StateContractHandle.MAX_PAGES) {
+                        throw new JoustException(what + ": the payer's listing at " + address + " has more than "
+                                + StateContractHandle.MAX_PAGES + " pages; not read to its end");
+                    }
                 }
+            } catch (JoustException e) {
+                throw e;
             } catch (Exception e) {
                 throw new JoustException(what + ": cannot read the payer's UTxOs", e);
             }

@@ -3,7 +3,7 @@
 // submits exactly as before; only the builder moved into the page or the Node process.
 
 import { loadEngine } from '#engine';
-import { emptySnapshot, fetchNeed, utxoJson } from './snapshot.js';
+import { emptySnapshot, fetchNeed, utxoJson, spendableListed } from './snapshot.js';
 import { mapMirror } from './mirror.js';
 import { explainRefusal, refusingContract } from './messages.js';
 import pkg from '../package.json' with { type: 'json' };
@@ -109,7 +109,8 @@ export function engineService(o) {
     const snapshot = emptySnapshot();
     const mapProofs = {};
     // The wallet's own UTxOs at its funding address (CIP-30): the engine builds from exactly those (D5).
-    if (call.walletUtxos && call.address) snapshot.utxos[call.address] = call.walletUtxos.map(utxoJson);
+    // Like a fetched listing (#165 Codex round 7): never an output carrying a reference script whose hash is unknown.
+    if (call.walletUtxos && call.address) snapshot.utxos[call.address] = call.walletUtxos.filter(spendableListed).map(utxoJson);
     if (o.prefetch) await o.prefetch(call, snapshot);
     for (let round = 1; round <= (o.maxRounds ?? 64); round++) {
       const mapNodes = maps ? { ...maps.all() } : {};

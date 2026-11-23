@@ -4,7 +4,7 @@
 
 import { codec, toJson } from './data.js';
 import { verifyPrepared } from './verify.js';
-import { walletView, assemble } from './wallet.js';
+import { walletView, assemble, paymentKeyHash } from './wallet.js';
 import { planOf, planDifference } from './plan.js';
 import { verifyIntent, verifyCancel, verifyBatch } from './intents.js';
 import { verifyPurpose, purposeOf } from './purposes.js';
@@ -324,15 +324,17 @@ async function untilSlot(chain, slot, maxMs = 15 * 60_000) {
 /**
  * The wallet input a keyed operation designates (ADR-0016 D7, D11): an ordinary (lovelace-only, no datum, no reference
  * script) UTxO of at least 5 ADA, the largest: at the funding address when it has one, else at another of the wallet's
- * addresses (#165 Codex round 4). The engine then builds from that address ({@code record.address}).
+ * addresses with the same payment key (#165 Codex rounds 4, 7). The engine then builds from that address
+ * ({@code record.address}); the caller (its payment key: ctx.caller(), an admin a creation records) stays the same.
  */
 export function designatedFor(wallet) {
   const funding = fundingAddress(wallet);
+  const key = paymentKeyHash(funding);
   const best = new Map();
   for (const [ref, u] of wallet.utxos) {
     // Never one carrying a reference script (#165 Codex round 3): the runtime refuses it, as spending it consumes the script.
     if (u.value.size !== 1 || u.datumHash || u.inlineDatum || u.referenceScriptHash) continue;
-    if (u.address !== funding && !wallet.addresses?.includes(u.address)) continue;
+    if (u.address !== funding && !(wallet.addresses?.includes(u.address) && key && paymentKeyHash(u.address) === key)) continue;
     const l = u.value.get('lovelace') ?? 0n;
     if (l < 5_000_000n) continue;
     const b = best.get(u.address);

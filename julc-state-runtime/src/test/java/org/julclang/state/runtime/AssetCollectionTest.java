@@ -500,4 +500,51 @@ class AssetCollectionTest {
         var s = assertThrows(JoustException.class, () -> handle.pickSeedFor(wallet));
         assertTrue(s.getMessage().contains("or the provider did not answer"), s::getMessage);
     }
+
+    // ---------------------------------------------------------------- #165 Codex round 7
+
+    /** A runtime whose provider answers page 1 of every listing with {@code page1} and fails every later page. */
+    private StateRuntime failingAfter(List<Utxo> page1) {
+        var failing = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
+                (proxy, m, args) -> {
+                    if (m.getName().equals("getUtxos") && args.length == 3) {
+                        return (Integer) args[2] == 1 ? com.bloxbean.cardano.client.api.model.Result.success("ok").withValue(page1)
+                                : com.bloxbean.cardano.client.api.model.Result.error("503");
+                    }
+                    throw new UnsupportedOperationException(m.getName());
+                });
+        var backend = (com.bloxbean.cardano.client.backend.api.BackendService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.BackendService.class},
+                (proxy, m, args) -> m.getName().equals("getUtxoService") ? failing : m.invoke(this.backend, args));
+        return StateRuntime.builder(backend).network(Networks.testnet()).chainTime(new SlotChainTime(0, 0, 1000, backend)).build();
+    }
+
+    private static List<Utxo> fullPage(String address, long lovelace, int seq) {
+        var page = new ArrayList<Utxo>();
+        for (int i = 0; i < 100; i++) {
+            var u = utxo(address, "00", lovelace, 0);
+            u.setTxHash(String.format("%064x", seq + i));
+            page.add(u);
+        }
+        return page;
+    }
+
+    @Test
+    void aFailedLaterPageIsAnErrorForTheReservationAndTheFundingPick() throws Exception {
+        // A full first page, then a 503: with a first-page candidate (6 ADA) and without one (2 ADA), never a choice
+        // from part of the listing, nor "no candidate".
+        var pick = TxRunner.class.getDeclaredMethod("largestAdaOnly", String.class, java.util.Set.class);
+        pick.setAccessible(true);
+        for (long ada : new long[]{6_000_000, 2_000_000}) {
+            var payer = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+            var failingRt = failingAfter(fullPage(payer.baseAddress(), ada, 50_000 + (int) (ada / 1_000_000) * 1_000));
+            var e = assertThrows(JoustException.class, () -> Designation.reserve(failingRt, payer, "test", java.util.Set.of()));
+            assertTrue(e.getMessage().contains("cannot read page 2 of the payer's UTxOs at " + payer.baseAddress()), e::getMessage);
+            var runner = new TxRunner(failingRt);
+            var thrown = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                    () -> pick.invoke(runner, payer.baseAddress(), java.util.Set.of()));
+            assertTrue(thrown.getCause().getMessage().contains("cannot read page 2"), () -> String.valueOf(thrown.getCause()));
+        }
+    }
 }

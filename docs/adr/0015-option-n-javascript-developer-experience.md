@@ -864,8 +864,13 @@ direct `Tx` building, gated by S3.
     a UTxO carrying a reference script (it knows only the hash, or with Ogmios perhaps only that there is one) and
     reports datum hashes, an inline datum `00` included. QuickTx's own funding and collateral selection can still spend
     a wallet UTxO carrying a reference script: tracked in #167. The caller's and payer's listings (seeds, token payments, the
-    funding pick, keyed reservations and designated inputs) are read to their end, a page the provider fails to answer
-    after the first being an error rather than the end. The engine's snapshot and the DevKit helpers (`devkitMint`,
+    funding pick, keyed reservations and designated inputs) are read to their end (up to 10,000 pages, beyond which the read is
+    refused as incomplete). A page after the first that the provider fails to answer is an error, not the end; a
+    failed first page reads as an empty listing, and the refusal says the provider may not have answered. One check
+    reads it the other way on purpose: a keyed retry's "is the designated input still unspent" counts an unreadable
+    listing as spent, so nothing is rebuilt on a guess. A page designates a keyed input only at an address with the
+    caller's payment key, so the caller a contract records (an admin) stays the wallet's. Retries compare transaction
+    ids in any letter case. The engine's snapshot (fetched listings and a request's `walletUtxos`) and the DevKit helpers (`devkitMint`,
     `devkitSweep`, the genesis top-up) never offer an output carrying a reference script for spending.
   - **Every body handed to a wallet** (`PreparedTx`, a prepared publication, the engine's governor stake
     registration) must balance per unit (`BodyBalance`):

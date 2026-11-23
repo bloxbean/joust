@@ -32,10 +32,10 @@ export async function devkitTopUp(address, ada, adminUrl = 'http://localhost:100
   await payFromGenesis(o.chain, address, BigInt(ada) * 1_000_000n);
 }
 
-/** Signs {@code txHex} with {@code wallet} (CIP-30), submits and waits; returns the hash. */
 /** A plain transaction's funding never spends an output carrying a reference script (#165 Codex round 6). */
 const plain = (utxos) => utxos.filter((u) => !u.referenceScriptHash && !u.hasReferenceScript);
 
+/** Signs {@code txHex} with {@code wallet} (CIP-30), submits and waits; returns the hash. */
 async function signAndSubmit(chain, wallet, txHex) {
   const signed = assemble(txHex, await wallet.signTx(txHex, true));
   const hash = await chain.submit(signed.cbor);
