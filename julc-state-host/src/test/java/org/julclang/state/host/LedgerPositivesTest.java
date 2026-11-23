@@ -89,6 +89,8 @@ class LedgerPositivesTest {
             var script = Objects.requireNonNull(scripts.get(u.getReferenceScriptHash()), "unknown reference script");
             referenceBytes += HexFormat.of().parseHex(script.getCborHex()).length - 3;
         }
+        // Linear only within the first Conway tier (25,600 bytes; each later tier costs 1.2 times more per byte).
+        assertTrue(referenceBytes <= 25_600, "reference scripts beyond the first fee tier: price the tiers");
         var minimum = BigInteger.valueOf(pp.getMinFeeA()).multiply(BigInteger.valueOf(size)).add(BigInteger.valueOf(pp.getMinFeeB()))
                 .add(execution).add(new BigDecimal(pp.getMinFeeRefScriptCostPerByte().toString()).toBigInteger().multiply(BigInteger.valueOf(referenceBytes)));
         assertTrue(fee.compareTo(minimum) >= 0, "fee " + fee + " below the minimum " + minimum);
