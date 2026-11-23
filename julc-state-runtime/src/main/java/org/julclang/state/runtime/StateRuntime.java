@@ -75,6 +75,13 @@ public final class StateRuntime {
         org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
     }
 
+    /**
+     * A runtime over {@code backend}. Its transaction service's answers decide a submission's outcome: only a definite
+     * one is a rejection (an HTTP 4xx with a body, other than 408, 425 and 429). Anything else, an answer without a
+     * status included, may hide an accepted transaction, so the call ends pending ({@link PendingTransactionException})
+     * and is not retried. A backend should therefore answer the node's rejection with a 4xx and its reason: CCL's
+     * Blockfrost and Yaci Store services do; its Ogmios 5 (a 500) and GraphQL (no status) services do not.
+     */
     public static Builder builder(BackendService backend) {
         return new Builder(backend);
     }

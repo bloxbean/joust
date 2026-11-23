@@ -84,7 +84,9 @@ public final class TxPlan {
 
     private static List<String> refs(List<TransactionInput> ins) {
         var out = new ArrayList<String>();
-        if (ins != null) for (TransactionInput i : ins) out.add(i.getTransactionId() + "#" + i.getIndex());
+        // The claim store's key (ClaimStore.ref), not the provider's spelling: a host's reservation table keyed by a plan
+        // then matches the runtime's queries (#145 Fable F5).
+        if (ins != null) for (TransactionInput i : ins) out.add(Designation.ref(i));
         return out;
     }
 

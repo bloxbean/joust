@@ -161,7 +161,7 @@ class HostSpecConsumerTest {
         assertTrue(error.contains("incompatible adapter") && error.contains("julc-state-serve-old.jar")
                 && error.contains("provides julc-state-serve classes"), error);
         error = runner(":joustHostSpec", "-PpartialAdapter").buildAndFail().getOutput();
-        assertTrue(error.contains("incompatible adapter") && error.contains("partial-1.jar") && error.contains("fixture:partial:1"), error);
+        assertTrue(error.contains("incompatible adapter") && error.contains("partial-1.jar") && error.contains("its bytes differ"), error);
         // The plugin's own adapter binary through another configuration is the adapter: accepted, and not added twice.
         runner(":joustHostSpec", "-PsecondAdapter=current").build();
         var twice = JSON.readTree(project.resolve("build/joust/host-spec.json").toFile()).required("launch").findValuesAsText("path")
@@ -173,6 +173,31 @@ class HostSpecConsumerTest {
         var names = spec.required("launch").findValuesAsText("path").stream().map(p -> Path.of(p).getFileName().toString()).toList();
         assertTrue(names.contains("julc-state-serve-" + VERSION + ".jar") && names.contains("julc-state-serve-" + VERSION + "-sources.jar"), names.toString());
         assertTrue(names.indexOf("julc-state-serve-" + VERSION + "-sources.jar") < names.indexOf("julc-state-serve-" + VERSION + ".jar"));
+    }
+
+    @Test void theAdapterIsKnownByItsBytes_notItsCoordinates() throws Exception {
+        // #150 reviews: a partial jar published under the adapter's own coordinates (a classifier) is not the adapter.
+        String error = runner(":joustHostSpec", "-PpartialSame").buildAndFail().getOutput();
+        assertTrue(error.contains("incompatible adapter") && error.contains("julc-state-serve-" + VERSION + "-partial.jar")
+                && error.contains("its bytes differ"), error);
+        // A local copy with exactly the adapter's bytes is the adapter: accepted, and the plugin's jar not added again.
+        Path adapter = Path.of(System.getProperty("joust.hostSpec.repository"), "org/julclang/julc-state-serve", VERSION,
+                "julc-state-serve-" + VERSION + ".jar");
+        Files.copy(adapter, project.resolve("adapter-copy.jar"));
+        runner(":joustHostSpec", "-PadapterCopy").build();
+        var names = JSON.readTree(project.resolve("build/joust/host-spec.json").toFile()).required("launch").findValuesAsText("path")
+                .stream().map(p -> Path.of(p).getFileName().toString()).toList();
+        assertTrue(names.contains("adapter-copy.jar") && !names.contains("julc-state-serve-" + VERSION + ".jar"), names.toString());
+        // A multi-release jar whose only adapter class sits under META-INF/versions/9 still wins class lookup for it.
+        var mf = new Manifest();
+        mf.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        mf.getMainAttributes().putValue("Multi-Release", "true");
+        try (var out = new JarOutputStream(Files.newOutputStream(project.resolve("mr.jar")), mf)) {
+            out.putNextEntry(new java.util.zip.ZipEntry("META-INF/versions/9/org/julclang/state/serve/ServedContract.class"));
+            out.closeEntry();
+        }
+        error = runner(":joustHostSpec", "-PmultiRelease").buildAndFail().getOutput();
+        assertTrue(error.contains("incompatible adapter") && error.contains("mr.jar"), error);
     }
     @Test void theHostsVmDependencyAndTheSpecsLocationAreChecked() throws Exception {
         String error = runner(":joustHostSpec", "-PnoVm").buildAndFail().getOutput();

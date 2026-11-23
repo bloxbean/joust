@@ -25,6 +25,9 @@ dependencies {
     if (project.hasProperty('missingFile')) runtimeOnly files('missing.jar')
     if (project.hasProperty('partialAdapter')) runtimeOnly 'fixture:partial:1'
     if (project.hasProperty('sourcesAdapter')) runtimeOnly "org.julclang:julc-state-serve:${joustVersion}:sources"
+    if (project.hasProperty('partialSame')) runtimeOnly "org.julclang:julc-state-serve:${joustVersion}:partial"
+    if (project.hasProperty('adapterCopy')) runtimeOnly files('adapter-copy.jar')
+    if (project.hasProperty('multiRelease')) runtimeOnly files('mr.jar')
 }
 // #150 Codex review: an older adapter through another configuration, ahead of the application's own graph.
 if (project.hasProperty('secondAdapter')) {
