@@ -22,10 +22,11 @@ function setup() {
 
 /** A transaction built with cardano-js-sdk (an implementation independent of the runtime's). */
 function rawTx({ inputs, outputs, fee, withdrawals = [], mint = null, nativeScripts = [], collateral = [], redeemers = [], plutusScripts = [],
-  referenceInputs = [], collateralReturn = null, totalCollateral, integrity, donation, certificates = [], datums = [] }) {
+  referenceInputs = [], collateralReturn = null, totalCollateral, integrity, donation, certificates = [], datums = [], networkId,
+  auxiliaryData, auxiliaryDataHash }) {
   const ref = (r) => ({ txId: Cardano.TransactionId(r.split('#')[0]), index: Number(r.split('#')[1]) });
   const txOut = (o) => ({ address: Cardano.PaymentAddress(o.address), value: { coins: o.lovelace, ...(o.assets ? { assets: o.assets } : {}) },
-    ...(o.datumHash ? { datumHash: o.datumHash } : {}) });
+    ...(o.datumHash ? { datumHash: o.datumHash } : {}), ...(o.scriptReference ? { scriptReference: o.scriptReference } : {}) });
   const body = {
     inputs: inputs.map(ref),
     outputs: outputs.map(txOut),
@@ -39,8 +40,11 @@ function rawTx({ inputs, outputs, fee, withdrawals = [], mint = null, nativeScri
     ...(certificates.length ? { certificates } : {}),
     ...(withdrawals.length ? { withdrawals: withdrawals.map((w) => ({ stakeAddress: Cardano.RewardAccount(w.address), quantity: w.amount })) } : {}),
     ...(mint ? { mint } : {}),
+    ...(networkId !== undefined ? { networkId } : {}),
+    ...(auxiliaryDataHash ? { auxiliaryDataHash } : {}),
   };
-  const tx = new Serialization.Transaction(Serialization.TransactionBody.fromCore(body), new Serialization.TransactionWitnessSet());
+  const tx = new Serialization.Transaction(Serialization.TransactionBody.fromCore(body), new Serialization.TransactionWitnessSet(),
+    auxiliaryData ? Serialization.AuxiliaryData.fromCore(auxiliaryData) : undefined);
   const ws = tx.witnessSet();
   if (nativeScripts.length) ws.setNativeScripts(Serialization.CborSet.fromCore(nativeScripts.map((s) => s.toCore()), Serialization.NativeScript.fromCore));
   if (redeemers.length) ws.setRedeemers(Serialization.Redeemers.fromCore(redeemers));
@@ -357,4 +361,167 @@ test('a supplemental datum may be named by the collateral return (C27)', async (
   const { hash } = await L.scriptIntegrityHash(L.ledgerTx(rawTx(base)).integrityParts, [], {});
   await ledger.submit(await signed(a, rawTx({ ...base, integrity: hash })));
   assert.equal(await ledger.output(ref), null);
+});
+
+// ---- ADR-0024 M1: output value size, networks, the auxiliary data hash, extraneous script witnesses; the inclusion
+// slot, the reference script read and the attack toggle (the playground's read adapter, D4, Q7).
+
+/** A native policy of a's key, and {@code n} units under it, each {@code q} (names of 32 bytes). */
+function tokens(a, n, q = 1n) {
+  const policy = Serialization.NativeScript.fromCore({ __type: Cardano.ScriptType.Native, kind: Cardano.NativeScriptKind.RequireSignature, keyHash: a.keyHash });
+  const units = new Map();
+  for (let i = 0; i < n; i++) units.set(Cardano.AssetId(policy.hash() + i.toString(16).padStart(64, '0')), q);
+  return { policy, units };
+}
+
+test('an output value over max_val_size is refused, the collateral return\'s too (OutputTooBigUTxO)', async () => {
+  const { ledger, a } = setup();
+  const mintTx = (n) => {
+    const { policy, units } = tokens(a, n);
+    return rawTx({ inputs: [ledger.fund(a.address, 100n * ADA)], outputs: [{ address: a.address, lovelace: 100n * ADA - 1_000_000n, assets: units }],
+      fee: 1_000_000n, mint: units, nativeScripts: [policy] });
+  };
+  const big = mintTx(150);
+  assert.ok(L.ledgerTx(big).rawOutputs[0].valueSize > Number(PARAMS.max_val_size));
+  await refused(ledger, await signed(a, big), 'OutputTooBigUTxO');
+  const fits = mintTx(100);
+  assert.ok(L.ledgerTx(fits).rawOutputs[0].valueSize <= Number(PARAMS.max_val_size));
+  await ledger.submit(await signed(a, fits));
+
+  // The collateral return: a ledger whose max_val_size holds one token, collateral holding two, both returned.
+  const one = tokens(a, 1).units;
+  const oneSize = L.ledgerTx(rawTx({ inputs: [`${'00'.repeat(32)}#0`], outputs: [{ address: a.address, lovelace: 2n * ADA, assets: one }], fee: 0n }))
+    .rawOutputs[0].valueSize;
+  const small = memoryLedger({ engine: stub, attacks: false, protocolParams: { ...PARAMS, max_val_size: String(oneSize) } });
+  const { policy, units } = tokens(a, 2);
+  const [u0, u1] = [...units.keys()];
+  const minted = await small.submit(await signed(a, rawTx({ inputs: [small.fund(a.address, 20n * ADA)], outputs: [
+    { address: a.address, lovelace: 5n * ADA, assets: new Map([[u0, 1n]]) }, { address: a.address, lovelace: 5n * ADA, assets: new Map([[u1, 1n]]) },
+    { address: a.address, lovelace: 10n * ADA - 300_000n }], fee: 300_000n, mint: units, nativeScripts: [policy] })));
+  const spend = (collateralReturn) => rawTx({ inputs: [small.fund(a.address, 10n * ADA)], outputs: [{ address: a.address, lovelace: 9_700_000n }],
+    fee: 300_000n, collateral: [`${minted}#0`, `${minted}#1`], collateralReturn, totalCollateral: 10n * ADA - collateralReturn.lovelace });
+  await refused(small, await signed(a, spend({ address: a.address, lovelace: 9n * ADA, assets: units })), 'OutputTooBigUTxO');
+  // Control: the same transaction, its collateral return within the bound (the other token is collateral, not returned).
+  await small.submit(await signed(a, spend({ address: a.address, lovelace: 9n * ADA, assets: new Map([[u0, 1n]]) })));
+});
+
+test('addresses and the body are on the ledger\'s network (WrongNetwork, WrongNetworkWithdrawal, WrongNetworkInTxBody)', async () => {
+  const { ledger, a } = setup();
+  const mainnet = L.enterpriseAddress({ type: 'key', hash: '22'.repeat(28) }, 1);
+  const testnet = L.enterpriseAddress({ type: 'key', hash: '22'.repeat(28) }, 0);
+  let ref = ledger.fund(a.address, 10n * ADA);
+  await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: mainnet, lovelace: 9_800_000n }], fee: 200_000n })), 'WrongNetwork');
+  await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: testnet, lovelace: 9_800_000n }], fee: 200_000n,
+    collateral: [ledger.fund(a.address, 5n * ADA)], collateralReturn: { address: mainnet, lovelace: 4_500_000n }, totalCollateral: 500_000n })), 'WrongNetwork');
+  await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: testnet, lovelace: 9_800_000n }], fee: 200_000n,
+    withdrawals: [{ address: L.rewardAddress({ type: 'key', hash: a.keyHash }, 1), amount: 0n }] })), 'WrongNetworkWithdrawal');
+  await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: testnet, lovelace: 9_800_000n }], fee: 200_000n,
+    networkId: Cardano.NetworkId.Mainnet })), 'WrongNetworkInTxBody');
+  assert.ok(await ledger.output(ref));
+  // Controls: the body's network_id on the ledger's network; a mainnet ledger takes mainnet addresses and withdrawals.
+  await ledger.submit(await signed(a, rawTx({ inputs: [ref], outputs: [{ address: testnet, lovelace: 9_800_000n }], fee: 200_000n,
+    networkId: Cardano.NetworkId.Testnet })));
+  const main = memoryLedger({ engine: stub, attacks: false, networkId: 1 });
+  const cred = { type: Cardano.CredentialType.KeyHash, hash: a.keyHash };
+  const deposit = BigInt(PARAMS.key_deposit);
+  ref = main.fund(a.address, 10n * ADA);
+  await refused(main, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: testnet, lovelace: 9_800_000n }], fee: 200_000n })), 'WrongNetwork');
+  await main.submit(await signed(a, rawTx({ inputs: [ref], outputs: [{ address: mainnet, lovelace: 10n * ADA - 300_000n - deposit }], fee: 300_000n,
+    certificates: [{ __typename: Cardano.CertificateType.Registration, stakeCredential: cred, deposit }] })));
+  const reward = L.rewardAddress({ type: 'key', hash: a.keyHash }, 1);
+  assert.equal((await main.account(reward)).registered, true);
+  await main.submit(await signed(a, rawTx({ inputs: [main.fund(a.address, 10n * ADA)], outputs: [{ address: mainnet, lovelace: 9_700_000n }],
+    fee: 300_000n, withdrawals: [{ address: reward, amount: 0n }], networkId: Cardano.NetworkId.Mainnet })));
+});
+
+test('the auxiliary data hash: present exactly with auxiliary data, of their own bytes (MissingTxBodyMetadataHash, MissingTxMetadata, ConflictingMetadataHash)', async () => {
+  const { ledger, a } = setup();
+  const aux = { blob: new Map([[674n, new Map([['msg', ['joust']]])]]) };
+  const auxHash = await L.blake2b256(Serialization.AuxiliaryData.fromCore(aux).toCbor());
+  const tx = (more) => rawTx({ inputs: [ledger.fund(a.address, 10n * ADA)], outputs: [{ address: a.address, lovelace: 9_700_000n }], fee: 300_000n, ...more });
+  await refused(ledger, await signed(a, tx({ auxiliaryData: aux })), 'MissingTxBodyMetadataHash');
+  await refused(ledger, await signed(a, tx({ auxiliaryDataHash: auxHash })), 'MissingTxMetadata');
+  await refused(ledger, await signed(a, tx({ auxiliaryData: aux, auxiliaryDataHash: 'ab'.repeat(32) })), 'ConflictingMetadataHash');
+  await ledger.submit(await signed(a, tx({ auxiliaryData: aux, auxiliaryDataHash: auxHash })));
+
+  // The hash is of the bytes the transaction carries: metadata {1: "abc"} as an indefinite-length map, which a
+  // re-encoding would write definite. Assembled by hand, so no encoder touches the auxiliary data.
+  const raw = 'bf0163616263ff';
+  const canonical = 'a10163616263';   // the same metadata, definite
+  assert.deepEqual(Serialization.AuxiliaryData.fromCbor(canonical).toCore(), Serialization.AuxiliaryData.fromCbor(raw).toCore());
+  const byHand = async (hash) => {
+    const body = Serialization.TransactionBody.fromCore({ inputs: [{ txId: Cardano.TransactionId(ledger.fund(a.address, 10n * ADA).split('#')[0]), index: 0 }],
+      outputs: [{ address: Cardano.PaymentAddress(a.address), value: { coins: 9_700_000n } }], fee: 300_000n, auxiliaryDataHash: hash }).toCbor();
+    const witnesses = await a.signTx('84' + body + 'a0f5' + raw, true);
+    return '84' + body + witnesses + 'f5' + raw;
+  };
+  const exact = await byHand(await L.blake2b256(raw));
+  assert.equal(L.ledgerTx(exact).auxiliaryDataCbor, raw);
+  await refused(ledger, await byHand(await L.blake2b256(canonical)), 'ConflictingMetadataHash');
+  await ledger.submit(exact);
+});
+
+const publishRef = async (ledger, a, scriptReference) => ledger.submit(await signed(a, rawTx({ inputs: [ledger.fund(a.address, 20n * ADA)],
+  outputs: [{ address: a.address, lovelace: 10n * ADA, scriptReference }, { address: a.address, lovelace: 10n * ADA - 300_000n }], fee: 300_000n })));
+
+test('a witness script no purpose needs is extraneous; a reference script never is (ExtraneousScriptWitnessesUTXOW)', async () => {
+  const { ledger, a } = setup();
+  const native = Serialization.NativeScript.fromCore({ __type: Cardano.ScriptType.Native, kind: Cardano.NativeScriptKind.RequireSignature, keyHash: a.keyHash });
+  const plain = (more) => rawTx({ inputs: [ledger.fund(a.address, 10n * ADA)], outputs: [{ address: a.address, lovelace: 9_700_000n }], fee: 300_000n, ...more });
+  await refused(ledger, await signed(a, plain({ nativeScripts: [native] })), 'ExtraneousScriptWitnessesUTXOW');
+  await refused(ledger, await signed(a, plain({ plutusScripts: [SCRIPT] })), 'ExtraneousScriptWitnessesUTXOW');
+  // A mint needs its policy, and no other script: one more is extraneous.
+  const { policy, units } = tokens(a, 1);
+  const other = Serialization.NativeScript.fromCore({ __type: Cardano.ScriptType.Native, kind: Cardano.NativeScriptKind.RequireAllOf, scripts: [] });
+  const mint = (nativeScripts) => rawTx({ inputs: [ledger.fund(a.address, 10n * ADA)], outputs: [{ address: a.address, lovelace: 9_700_000n, assets: units }],
+    fee: 300_000n, mint: units, nativeScripts });
+  await refused(ledger, await signed(a, mint([policy, other])), 'ExtraneousScriptWitnessesUTXOW');
+  await ledger.submit(await signed(a, mint([policy])));
+  // Control: a reference input carrying a script nothing runs is not a witness.
+  const h = await publishRef(ledger, a, SCRIPT);
+  await ledger.submit(await signed(a, plain({ referenceInputs: [`${h}#0`] })));
+});
+
+test('the inclusion slot: awaitTx resolves to it, inclusion() answers it (ADR-0024 D4)', async () => {
+  const { ledger, a } = setup();
+  ledger.advance(5_000);
+  const at = ledger.slot;
+  const h = await ledger.submit(await signed(a, rawTx({ inputs: [ledger.fund(a.address, 10n * ADA)], outputs: [{ address: a.address, lovelace: 9_800_000n }],
+    fee: 200_000n })));
+  assert.equal(ledger.slot, at + 1);
+  assert.deepEqual(await ledger.awaitTx(h), { slot: at });
+  assert.equal(ledger.inclusion(h), at);
+  assert.equal(ledger.inclusion('ee'.repeat(32)), null);
+  await assert.rejects(ledger.awaitTx('ee'.repeat(32)));
+});
+
+test('script(): a reference script\'s type and cborHex, null for a native or unknown one (ADR-0024 D4)', async () => {
+  const { ledger, a } = setup();
+  const v2 = { ...SCRIPT, version: Cardano.PlutusLanguageVersion.V2 };
+  await publishRef(ledger, a, SCRIPT);
+  await publishRef(ledger, a, v2);
+  const native = { __type: Cardano.ScriptType.Native, kind: Cardano.NativeScriptKind.RequireSignature, keyHash: a.keyHash };
+  await publishRef(ledger, a, native);
+  const hash = (s) => Serialization.Script.fromCore(s).hash();
+  // cardano-client-lib's cborHex: the serialised script (4d…, as a witness set carries it) in one more byte string.
+  assert.deepEqual(ledger.script(hash(SCRIPT)), { type: 'PlutusScriptV3', cborHex: '4e' + SCRIPT.bytes });
+  assert.deepEqual(ledger.script(hash(v2)), { type: 'PlutusScriptV2', cborHex: '4e' + SCRIPT.bytes });
+  assert.equal(ledger.script(hash(native)), null);
+  assert.equal(ledger.script('ee'.repeat(28)), null);
+});
+
+test('the attack suite can be switched off and on at run time (ADR-0024 Q7)', async () => {
+  const engine = { joust: { evaluate: ({ tx }) => ({ ok: true, redeemers: L.ledgerTx(tx).redeemers.map((r) => `${r.tag}:${r.index} 1 1`) }),
+    attacks: () => ({ ok: true, attacks: [{ name: 'stub', invariant: 'x', refused: true, detail: '' }] }) } };
+  const ledger = memoryLedger({ engine });
+  assert.equal(ledger.attacksEnabled, true);
+  assert.equal(memoryLedger({ engine, attacks: false }).attacksEnabled, false);
+  const a = devWallet({ chain: { utxos: (x) => ledger.utxos(x), submit: (c) => ledger.submit(c) }, mnemonic: DEVKIT_MNEMONIC, index: 7 });
+  const scriptAddr = L.enterpriseAddress({ type: 'script', hash: Serialization.Script.fromCore(SCRIPT).hash() }, 0);
+  ledger.attacksEnabled = false;
+  await ledger.submit(await scriptSpend(ledger, a, { locked: ledger.fund(scriptAddr, 10n * ADA), collateral: [ledger.fund(a.address, 5n * ADA)] }));
+  assert.deepEqual(ledger.attacks(), []);
+  ledger.attacksEnabled = true;
+  await ledger.submit(await scriptSpend(ledger, a, { locked: ledger.fund(scriptAddr, 10n * ADA), collateral: [ledger.fund(a.address, 5n * ADA)] }));
+  assert.equal(ledger.attacks().length, 1);
 });

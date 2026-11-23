@@ -15,7 +15,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { loadEngine, joustRuntime, devWallet } from '@julclang/joust-runtime';
-import { ledgerTx, verifyWitness, vkeyHash, addressParts, rewardAddress, scriptIntegrityHash, nativeScriptHolds }
+import { ledgerTx, verifyWitness, vkeyHash, addressParts, rewardAddress, scriptIntegrityHash, nativeScriptHolds, blake2b256 }
   from '@julclang/state-client/ledger';
 
 const PARAMS = JSON.parse(readFileSync(new URL('./protocol-params.json', import.meta.url), 'utf8'));
@@ -48,6 +48,16 @@ const ratio = (x) => {
   return [num, den];
 };
 const ceilDiv = (a, b) => (a + b - 1n) / b;
+/** A CBOR byte string's head for {@code n} bytes (hex). */
+const bytesHead = (n) => {
+  const hex = (x, w) => x.toString(16).padStart(w, '0');
+  if (n < 24) return hex(0x40 | n, 2);
+  if (n < 0x100) return '58' + hex(n, 2);
+  if (n < 0x10000) return '59' + hex(n, 4);
+  return '5a' + hex(n, 8);
+};
+// The dev-host protocol's script types (docs/protocol/dev-host-1.md, Reverse reads), by the ledger views' kinds.
+const SCRIPT_TYPES = { PlutusV1: 'PlutusScriptV1', PlutusV2: 'PlutusScriptV2', PlutusV3: 'PlutusScriptV3' };
 /** Conway's fee for reference scripts (floored): minFeeRefScriptCostPerByte per byte, x1.2 for each further 25 KiB. */
 const refScriptFee = (bytes, perByte) => {
   let [num, den] = ratio(perByte);
@@ -74,19 +84,29 @@ const DEREGISTER = new Set(['StakeDeregistration', 'UnRegistration']);
  * @param o.engine        the runtime engine (loadEngine()): it evaluates each script transaction (joust.evaluate)
  * @param o.zeroTimeMs    the POSIX time of slot 0 (default: now, rounded to a second)
  * @param o.slotLengthMs  default 1000
- * @param o.attacks       run the attack suite on every script transaction (default true): see attacks() and acceptedAttacks()
+ * @param o.attacks       run the attack suite on every script transaction (default true): see attacks() and acceptedAttacks();
+ *                        the `attacksEnabled` property switches it at run time (ADR-0024 Q7: a session's toggle)
+ * @param o.networkId     the ledger's network (default 0, a testnet): every address and the body's network_id must be on it
  *
  * The phase-1 rules it checks (review r2: #82 F1, S3, C8–C12), each with the name of the node's error:
  * - the transaction is tagged valid (an invalid-tagged one, which a node applies as a collateral loss, is refused: not
  *   modelled), at most max_tx_size bytes, with inputs, and only unspent inputs, reference inputs and collateral;
  * - the validity interval holds the current slot;
+ * - networks (ADR-0024 M1): every output's address and the collateral return's on the ledger's network (WrongNetwork),
+ *   every withdrawal's reward address too (WrongNetworkWithdrawal), and the body's network_id, when present, the
+ *   ledger's (WrongNetworkInTxBody); a Byron address's network is its protocol magic attribute's, as the node reads it;
+ * - each output's value, and the collateral return's, at most max_val_size bytes as the body encodes it (OutputTooBigUTxO;
+ *   a node measures its own re-encoding of the value, the same bytes for a canonically encoded one);
+ * - auxiliary data: the body's auxiliary_data_hash present exactly when the transaction has auxiliary data
+ *   (MissingTxBodyMetadataHash, MissingTxMetadata), and blake2b-256 of their encoded bytes (ConflictingMetadataHash);
  * - withdrawals: from registered reward accounts, of exactly their balance (always 0 here: no rewards are paid);
  * - the balance (inputs, withdrawals, mint = outputs, fee, deposits), each output's minimum ADA;
  * - the fee is at least min_fee_a x size + min_fee_b + the declared units' price + the reference scripts' fee;
  * - witnesses: a vkey witness for every key credential that must sign (key-locked inputs and collateral, required
  *   signers, key withdrawals and certificates); a script for every script credential that must authorise (script-locked
  *   inputs, mint policies, script withdrawals and certificates), from the witness set or a reference input or input;
- *   native scripts evaluated; a redeemer for every Plutus purpose and none without one; a witness datum for every
+ *   native scripts evaluated; no witness script that no purpose needs (ExtraneousScriptWitnessesUTXOW; a reference
+ *   script is never extraneous); a redeemer for every Plutus purpose and none without one; a witness datum for every
  *   spent datum hash;
  * - with Plutus scripts: collateral (key-locked, at most max_collateral_inputs, ADA only unless returned, at least
  *   collateral_percent of the fee, total_collateral if declared), the script integrity hash (PlutusV2/V3 language
@@ -97,16 +117,22 @@ const DEREGISTER = new Set(['StakeDeregistration', 'UnRegistration']);
  *   held); a certificate stating another amount is refused;
  * - concurrent submissions are applied one at a time, each checked against the ledger as the previous one left it.
  * Not modelled, and refused (`NotModelled`, review r3, r4): votes, proposals, treasury donations and values, and every
- * certificate but stake registration and deregistration (delegation, pools, DReps, the committee, genesis, MIR). Not modelled otherwise: rewards (withdrawals take 0), PlutusV1's integrity hash, and the
- * collateral loss of a phase-2 failure (a failing script refuses the whole transaction here).
+ * certificate but stake registration and deregistration (delegation, pools, DReps, the committee, genesis, MIR). Not modelled otherwise: rewards (withdrawals take 0), PlutusV1's integrity hash, the
+ * collateral loss of a phase-2 failure (a failing script refuses the whole transaction here), the auxiliary data's
+ * well-formedness (InvalidMetadata) and the size of a Byron address's attributes (OutputBootAddrAttrsTooBig).
+ *
+ * Besides the provider interface: inclusion(hash), the slot each transaction was applied at (awaitTx resolves to
+ * { slot }), and script(hash), a reference script's { type, cborHex } (ADR-0024 D4, the dev-host protocol's script read).
  */
 export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000) * 1000, slotLengthMs = 1000, attacks = true,
-  protocolParams = PARAMS } = {}) {
+  protocolParams = PARAMS, networkId = 0 } = {}) {
   if (!engine?.joust?.evaluate) throw new Error('memoryLedger needs the runtime engine with joust.evaluate (loadEngine())');
   let slot = 1000;
   let genesis = 0;
   const utxos = new Map();          // ref -> Utxo (unspent)
   const txs = new Map();            // hash -> cbor
+  const included = new Map();       // hash -> the slot it was applied at (ADR-0024 D4)
+  let attacksOn = attacks;          // the attack suite, switchable at run time (ADR-0024 Q7)
   const scripts = new Map();        // hash -> cbor
   const scriptViews = new Map();    // hash -> { kind, size, native? } (reference scripts, for phase 1)
   let queue = Promise.resolve();    // submissions, one at a time (review r2 C9)
@@ -169,6 +195,36 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     // The validity window holds the current slot.
     if (v.validFrom !== null && slot < Number(v.validFrom)) throw new LedgerRefusal('OutsideValidityIntervalUTxO', `slot ${slot} is before ${v.validFrom}`);
     if (v.ttl !== null && slot >= Number(v.ttl)) throw new LedgerRefusal('OutsideValidityIntervalUTxO', `slot ${slot} is at or after ${v.ttl}`);
+    // Networks (ADR-0024 M1): the outputs', the collateral return's and the withdrawals' addresses, and the body's own.
+    const outputs = v.collateralReturn ? [...v.outputs, v.collateralReturn] : v.outputs;
+    const foreign = outputs.map((o) => o.address).filter((a) => addressParts(a).networkId !== networkId);
+    if (foreign.length) throw new LedgerRefusal('WrongNetwork', `${foreign.join(', ')} is not on network ${networkId}`);
+    const foreignRewards = v.withdrawals.map((w) => w.address).filter((a) => addressParts(a).networkId !== networkId);
+    if (foreignRewards.length) throw new LedgerRefusal('WrongNetworkWithdrawal', `${foreignRewards.join(', ')} is not on network ${networkId}`);
+    if (v.networkId !== null && v.networkId !== undefined && Number(v.networkId) !== networkId) {
+      throw new LedgerRefusal('WrongNetworkInTxBody', `the body's network_id is ${v.networkId}, the ledger's ${networkId}`);
+    }
+    // Each output's value, as the body encodes it, within max_val_size (the collateral return's too).
+    const maxVal = Number(p.max_val_size);
+    v.rawOutputs.forEach((r, i) => {
+      if (r.valueSize > maxVal) throw new LedgerRefusal('OutputTooBigUTxO', `output ${i}'s value is ${r.valueSize} bytes, over max_val_size ${maxVal}`);
+    });
+    if (v.collateralReturnValueSize !== null && v.collateralReturnValueSize > maxVal) {
+      throw new LedgerRefusal('OutputTooBigUTxO', `the collateral return's value is ${v.collateralReturnValueSize} bytes, over max_val_size ${maxVal}`);
+    }
+    // The auxiliary data hash: present exactly when there are auxiliary data, and the hash of their own bytes.
+    if (v.auxiliaryDataCbor && !v.auxiliaryDataHash) {
+      throw new LedgerRefusal('MissingTxBodyMetadataHash', 'the transaction has auxiliary data and its body no auxiliary_data_hash');
+    }
+    if (!v.auxiliaryDataCbor && v.auxiliaryDataHash) {
+      throw new LedgerRefusal('MissingTxMetadata', `the body names auxiliary data ${v.auxiliaryDataHash}, and the transaction has none`);
+    }
+    if (v.auxiliaryDataCbor) {
+      const auxHash = await blake2b256(v.auxiliaryDataCbor);
+      if (auxHash !== v.auxiliaryDataHash) {
+        throw new LedgerRefusal('ConflictingMetadataHash', `the body's auxiliary_data_hash is ${v.auxiliaryDataHash}, the auxiliary data hash to ${auxHash}`);
+      }
+    }
     // Withdrawals: from a registered reward account, of exactly its balance (no rewards are paid here: 0).
     for (const w of v.withdrawals) {
       if (!registered.has(w.address)) throw new LedgerRefusal('WithdrawalsNotInRewardsCERTS', `${w.address} is not a registered reward account`);
@@ -190,7 +246,7 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     const split = Number(p.protocol_major_ver ?? 11) > 10;
     const accounts = new Map(registered);
     for (const c of v.certificates) {
-      const stake = rewardAddress(c.credential, 0);
+      const stake = rewardAddress(c.credential, networkId);
       if (REGISTER.has(c.kind)) {
         if (accounts.has(stake)) throw new LedgerRefusal('StakeKeyRegisteredDELEG', `${stake} is already registered`);
         if (c.deposit !== null && c.deposit !== undefined && c.deposit !== keyDeposit) {
@@ -262,6 +318,11 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
         available.set(h, view);
         refBytes += view.size;
       }
+    }
+    // A witness script no purpose needs is extraneous (reference scripts are not witnesses).
+    const neededScripts = new Set(purposes.map((x) => x.script));
+    for (const w of v.witnessScripts) {
+      if (!neededScripts.has(w.hash)) throw new LedgerRefusal('ExtraneousScriptWitnessesUTXOW', `the witness script ${w.hash} (${w.kind}) is needed by no purpose`);
     }
     const languages = [];
     const plutus = [];
@@ -354,7 +415,7 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
           throw new LedgerRefusal('ScriptFailure', `the redeemer ${tagIndex} declares ${r.mem} mem, ${r.steps} steps; its script uses ${usedMem}, ${used}`);
         }
       }
-      if (attacks) {
+      if (attacksOn) {
         const a = engine.joust.attacks({ tx: cbor, snapshot: snapshotJson(refs), zeroSlot: 0n, zeroTimeMs: BigInt(zeroTimeMs), slotLengthMs: BigInt(slotLengthMs) });
         if (!a.ok) throw new Error('the attack suite could not run: ' + a.error);
         for (const x of a.attacks) attackLog.push({ tx: v.hash, name: x.name, invariant: x.invariant, refused: x.refused, detail: x.detail });
@@ -377,11 +438,12 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     });
     for (const [unit] of v.mint) if (!history.get(unit)?.includes(v.hash)) (history.get(unit) ?? history.set(unit, []).get(unit)).push(v.hash);
     for (const c of v.certificates) {
-      const stake = rewardAddress(c.credential, 0);
+      const stake = rewardAddress(c.credential, networkId);
       if (REGISTER.has(c.kind)) registered.set(stake, BigInt(protocolParams.key_deposit));
       if (DEREGISTER.has(c.kind)) registered.delete(stake);
     }
     txs.set(v.hash, cbor);
+    included.set(v.hash, slot);   // the slot whose validity check it passed
     slot += 1;
   }
 
@@ -409,6 +471,29 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     },
     acceptedAttacks() {
       return attackLog.filter((a) => !a.refused);
+    },
+    /** Whether the attack suite runs on the script transactions applied from now on (the `attacks` option at first). */
+    get attacksEnabled() {
+      return attacksOn;
+    },
+    set attacksEnabled(on) {
+      attacksOn = !!on;
+    },
+    /** The slot at which the transaction {@code hash} was applied, or null (unknown). */
+    inclusion(hash) {
+      return included.get(hash) ?? null;
+    },
+    /**
+     * A reference script the ledger holds, as the dev-host protocol's script read answers it: { type: PlutusScriptV1 |
+     * PlutusScriptV2 | PlutusScriptV3, cborHex } (cborHex as cardano-client-lib's PlutusScript carries it: the
+     * serialised script wrapped in one more CBOR byte string), or null when unknown. A native reference script is null
+     * too: the protocol's script read names only Plutus types.
+     */
+    script(hash) {
+      const type = SCRIPT_TYPES[scriptViews.get(hash)?.kind];
+      const cbor = scripts.get(hash);
+      if (!type || !cbor) return null;
+      return { type, cborHex: bytesHead(cbor.length / 2) + cbor };
     },
 
     // ---- the provider interface (ADR-0015 §13.9)
@@ -445,6 +530,7 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     },
     async awaitTx(hash) {
       if (!txs.has(hash)) throw new Error(`the in-memory ledger has no transaction ${hash}`);
+      return { slot: included.get(hash) };
     },
     async txCbor(hash) {
       return txs.get(hash) ?? null;

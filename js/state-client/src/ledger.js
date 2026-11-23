@@ -136,7 +136,53 @@ export function ledgerTx(hex) {
     if (ref) r.scriptRef.view = scriptView(ref.toCore());
   });
   view.integrityParts = integrityParts(hex);
+  // ADR-0024 M1: the size of each output's value as the body encodes it (the ledger's max_val_size), and the auxiliary
+  // data's own bytes (its hash is of them, never of a re-encoding).
+  view.rawOutputs.forEach((r, i) => { r.valueSize = valueSize(outs[i].toCbor()); });
+  const collateralReturn = tx.body().collateralReturn();
+  view.collateralReturnValueSize = collateralReturn ? valueSize(collateralReturn.toCbor()) : null;
+  view.auxiliaryDataCbor = auxiliaryDataCbor(hex);
   return view;
+}
+
+/** The encoded size (bytes) of an output's value: field 1 of a post-Alonzo map, element 1 of a legacy array. */
+function valueSize(outputHex) {
+  const r = new Serialization.CborReader(hexToBytes(outputHex));
+  if (r.peekState() === Serialization.CborReaderState.StartArray) {
+    r.readStartArray();
+    r.readEncodedValue();                                   // the address
+    return r.readEncodedValue().length;
+  }
+  const n = r.readStartMap();
+  for (let i = 0; n === null ? r.peekState() !== Serialization.CborReaderState.EndMap : i < n; i++) {
+    const key = Number(r.readInt());
+    const value = r.readEncodedValue();
+    if (key === 1) return value.length;
+  }
+  throw new LedgerError('an output without a value');
+}
+
+/** The transaction's auxiliary data as it encodes them (hex), or null: [body, witnesses, is_valid, aux | null]. */
+function auxiliaryDataCbor(hex) {
+  const r = new Serialization.CborReader(hexToBytes(hex));
+  const n = r.readStartArray();
+  r.readEncodedValue();                                     // the body
+  r.readEncodedValue();                                     // the witness set
+  let left = n === null ? Infinity : n - 2;
+  while (left-- > 0 && r.peekState() !== Serialization.CborReaderState.EndArray) {
+    const state = r.peekState();
+    if (state === Serialization.CborReaderState.Boolean) { r.readBoolean(); continue; }        // is_valid
+    if (state === Serialization.CborReaderState.Null) { r.readNull(); return null; }
+    return bytesToHex(r.readEncodedValue());
+  }
+  return null;
+}
+
+/** blake2b-256 of hex bytes (hex): the auxiliary data hash. */
+export async function blake2b256(hex) {
+  const crypto = await import('@cardano-sdk/crypto');
+  await crypto.ready();
+  return crypto.blake2b.hash(hex, 32);
 }
 
 /** A script as the in-memory ledger reads it: { hash, kind: native | PlutusV1 | PlutusV2 | PlutusV3, size, native? }. */
