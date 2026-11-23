@@ -1,17 +1,12 @@
-// What the page can authenticate about the inputs it verifies (ADR-0015 D7, ADR-0013 §9.2): an input's value and datum
-// read from its producing transaction (the provider's CBOR, or a transaction the page submitted itself, kept across
-// reloads), the wallet's own UTxOs from a CIP-30 wallet, and at most one value the balance determines. A payment is
-// credited only where the redeemer binds it, and a claimed send is held to I30 (no JOUST tag of any input, not at a spent
-// script's credential). Recorded engine transactions (fixtures/m3, fixtures/m0), edited by CSL.
+// What the page binds about the inputs it verifies (ADR-0015 D7, ADR-0013 §9.2), the chain provider and the wallet
+// trusted: a payment is credited only where the redeemer binds it, an owned object's source instance is its input
+// datum's, and a claimed send is held to I30 (no JOUST tag of any input, not at a spent script's credential). Recorded
+// engine transactions (fixtures/m3), edited by CSL.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { verifyPrepared } from '../src/verify.js';
 import { verifyComposed } from '../src/compose.js';
-import { chainOf as chainView } from '../src/chain.js';
-import { memoryTxStore, defaultTxStore } from '../src/txstore.js';
-import { devWallet } from '../src/devwallet.js';
-import { walletView } from '../src/wallet.js';
-import { parseTx, txHash, enterpriseAddress } from '../src/ledger.js';
+import { parseTx, enterpriseAddress } from '../src/ledger.js';
 import { Data, dataHex } from '../src/pdata.js';
 import {
   recorded, recordedComposition, fixtureInputs, inputsOf, chainOf, editTx, cslOutput, partsOf, STRANGER,
@@ -26,40 +21,6 @@ const refData = (ref) => {
   return Data.constr(0, [Data.bytes(h), Data.int(BigInt(i))]);
 };
 const both = async (o) => [await verifyPrepared(o), await verifyComposed({ ...o, steps: [o] })];
-const UNAUTHENTICATED = /whose values the page cannot authenticate.*store\.transaction\.save-cbor=true/;
-
-// ------------------------------------------------------------------------- the page's own transactions, kept
-
-test('the transactions the page submitted are kept across reloads and chain views, bounded in number and age', async () => {
-  const { cbor } = recorded('fees/004-undefined.json');
-  const ref = `${txHash(cbor)}#0`;
-  const store = memoryTxStore();
-  await chainView({}, { txStore: store }).remember(cbor);
-  // A reload: a new chain view over the same store.
-  assert.equal((await chainView({}, { txStore: store }).verifiedOutput(ref)).address, parseTx(cbor).outputs[0].address);
-  // Without a store given, every chain view of the process shares one (IndexedDB in a browser).
-  await chainView({}).remember(cbor);
-  assert.ok(await chainView({}).verifiedOutput(ref), 'the process store');
-  assert.equal(defaultTxStore(), defaultTxStore());
-  // Bounded: the oldest go beyond maxEntries, and anything older than maxAgeMs.
-  const small = memoryTxStore({ maxEntries: 2, maxAgeMs: 1000 });
-  await small.put('a', 'A', 0);
-  await small.put('b', 'B', 10);
-  await small.put('c', 'C', 20);
-  assert.equal(await small.get('a', 20), null);
-  assert.equal(await small.get('c', 20), 'C');
-  assert.equal(await small.get('b', 2000), null, 'too old');
-  // A store that fails never fails the call: remember swallows it, verifiedOutput falls back to the provider.
-  const broken = { async get() { throw new Error('quota'); }, async put() { throw new Error('quota'); } };
-  await chainView({}, { txStore: broken }).remember(cbor);
-  assert.equal(await chainView({}, { txStore: broken }).verifiedOutput(`${'00'.repeat(32)}#0`), null);
-});
-
-test('a composition the page cannot authenticate is refused with what lifts it: transaction CBOR (save-cbor)', async () => {
-  const c = recordedComposition('fees/004-undefined.json');
-  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: { ...c.chain, verifiedOutput: undefined }, txHex: c.cbor }),
-    UNAUTHENTICATED, 'no transaction CBOR');
-});
 
 // ---------------------------------------------------------------- a payment is credited only where it is bound
 
@@ -85,36 +46,6 @@ test('a non-payable method is paid nothing alone either, and a payment no Ctx bi
   for (const r of await both(unmarked)) refused(r, /others receive/, 'a payment no Ctx binds');
 });
 
-// ----------------------------------------------- a wallet whose UTxOs come from the chain provider (devWallet)
-
-test('a development wallet reads its UTxOs from the provider: its view says so', async () => {
-  const chain = { async utxosAt() { return []; }, async submit() { return null; } };
-  const view = await walletView(devWallet({ chain }));
-  assert.equal(view.fromProvider, true);
-});
-
-test('with a wallet whose UTxOs come from the provider, the balance determines one unknown only', async () => {
-  // locker/003 alone: the wallet's inputs and the target, read from the provider. A lie moving 1 ADA from a wallet
-  // input to the target keeps the balance and would let the wallet lose 1 ADA more than the page sees.
-  const r = recorded('locker/003-unlock.json');
-  const base = inputsOf(r);
-  const wallet = { ...base.wallet, fromProvider: true };
-  const tx = parseTx(r.cbor);
-  const target = tx.inputs.find((ref) => !base.wallet.utxos.has(ref));
-  const truth = chainOf(r.x);
-  const serve = (refs) => ({ ...truth, async verifiedOutput(ref) { return refs.includes(ref) ? truth.utxo(ref) : null; } });
-  const walletInputs = tx.inputs.filter((ref) => base.wallet.utxos.has(ref));
-  for (const v of await both({ ...base, wallet, chain: serve([]) })) refused(v, UNAUTHENTICATED, 'nothing authenticated');
-  for (const v of await both({ ...base, wallet, chain: serve([target]) })) accepted(v, 'the target authenticated, the wallet by the balance');
-  for (const v of await both({ ...base, wallet, chain: serve(walletInputs) })) accepted(v, 'the wallet authenticated, the target by the balance');
-  // The lie, with the wallet's inputs authenticated: the wallet's input misstated.
-  const lyingWallet = { ...wallet, utxos: new Map([...wallet.utxos].map(([k, u]) => [k, k === walletInputs[0] ? { ...u, value: plus(u.value, 'lovelace', -ADA) } : u])) };
-  const lyingChain = { ...serve(walletInputs), async utxo(ref) { const u = await truth.utxo(ref); return ref === target ? { ...u, value: plus(u.value, 'lovelace', ADA) } : u; } };
-  for (const v of await both({ ...base, wallet: lyingWallet, chain: lyingChain })) refused(v, /misstates the value of/, 'a wallet input misstated');
-  // A CIP-30 wallet's UTxOs are the wallet's own: the target alone is determined by the balance, as before.
-  for (const v of await both({ ...base, chain: serve([]) })) accepted(v, 'a CIP-30 wallet');
-});
-
 // --------------------------------------------------------------------- an owned object's source instance
 
 /** guild/017: Guild.retire destroys an owned object (no continuation): its source instance is in its input's datum. */
@@ -125,18 +56,16 @@ function retire() {
   return { i, target };
 }
 
-test('an owned destroy binds its source instance by its input\'s producing transaction', async () => {
+test('an owned destroy binds its source instance by its input\'s datum', async () => {
   const { i, target } = retire();
   for (const v of await both(i)) accepted(v, 'the recorded retire');
-  // Without the producing transaction the datum is the chain API's word: refused (the object may have moved since).
-  for (const v of await both({ ...i, chain: { ...i.chain, verifiedOutput: undefined } })) refused(v, /its input's producing transaction/, 'no transaction CBOR');
-  // The authenticated datum names another instance than the call: refused.
+  // The input's datum names another instance than the call: refused.
   const other = 'ab'.repeat(32);
-  const moved = { ...i.chain, async verifiedOutput(ref) {
-    const v = await i.chain.verifiedOutput(ref);
-    return ref === target ? { ...v, inlineDatum: v.inlineDatum.replace(i.call.instance, other) } : v;
+  const moved = { ...i.chain, async utxo(ref) {
+    const u = await i.chain.utxo(ref);
+    return ref === target ? { ...u, inlineDatum: u.inlineDatum.replace(i.call.instance, other) } : u;
   } };
-  assert.ok((await i.chain.verifiedOutput(target)).inlineDatum.includes(i.call.instance));
+  assert.ok((await i.chain.utxo(target)).inlineDatum.includes(i.call.instance));
   for (const v of await both({ ...i, chain: moved })) refused(v, /held by another instance/, 'the object under another instance');
 });
 
@@ -147,15 +76,12 @@ test('a move binds its source instance too', async () => {
   const move = c.steps.find((s) => s.call.meta.policies?.into);
   const object = [];
   for (const r of tx.inputs) if (!c.wallet.utxos.has(r) && (await c.chain.utxo(r)).value.get(move.deployment.policy + move.call.object) === 1n) object.push(r);
-  // The object's authenticated datum names another instance than the move's source: refused.
-  const moved = { ...c.chain, async verifiedOutput(ref) {
-    const v = await c.chain.verifiedOutput(ref);
-    return object.includes(ref) ? { ...v, inlineDatum: v.inlineDatum.replace(move.call.instance, 'ab'.repeat(32)) } : v;
+  // The object's datum names another instance than the move's source: refused.
+  const moved = { ...c.chain, async utxo(ref) {
+    const u = await c.chain.utxo(ref);
+    return object.includes(ref) ? { ...u, inlineDatum: u.inlineDatum.replace(move.call.instance, 'ab'.repeat(32)) } : u;
   } };
   refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: moved, txHex: c.cbor }), /held by another instance/, 'a move from another instance');
-  // The move's target the one the balance determines: its datum unauthenticated, refused.
-  const partial = { ...c.chain, async verifiedOutput(ref) { return object.includes(ref) ? null : c.chain.verifiedOutput(ref); } };
-  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: partial, txHex: c.cbor }), /its input's producing transaction/, 'the move\'s input by the balance');
 });
 
 // ----------------------------------------------------------------------- claimed sends and I30, both halves

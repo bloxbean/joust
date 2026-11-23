@@ -153,6 +153,7 @@ export async function verifyPrepared(o) {
   let targetIndex = -1;
   let targetRef = null;
   let targetValue = new Map();
+  let targetDatum = null;
   const walletInputs = new Set();
   for (let i = 0; i < sorted.length; i++) {
     const r = sorted[i];
@@ -167,6 +168,7 @@ export async function verifyPrepared(o) {
       targetIndex = i;
       targetRef = r;
       targetValue = u.value;
+      targetDatum = u.inlineDatum ?? null;
       add(consumed, u.value);
     } else {
       problems.push(`an input that is neither the wallet's nor the ${call.kind.startsWith('owned') ? 'object' : 'instance'}: ${r}`);
@@ -174,27 +176,10 @@ export async function verifyPrepared(o) {
   }
   if (targetUnit && targetIndex < 0) problems.push('the pinned instance or object is not spent');
   report.targetRef = targetRef;
-  // What the page can authenticate of the inputs' values: the balance binds their sum, so at most one may be unknown
-  // (provenance below). The target's own producing transaction is read where it decides something: when the wallet's
-  // UTxOs are the provider's answer (the target and the wallet would be two unknowns), and for an owned destroy (its
-  // datum names the instance it is held by; nothing else in the body does).
-  let targetBound = false;
-  let targetDatum = null;
-  if (targetRef && (wallet.fromProvider || call.kind === 'ownedDestroy')) {
-    const v = await readVerified(chain, targetRef, problems);
-    if (v && (v.address !== deployment.address || !sameValue(v.value, targetValue))) problems.push(`the chain API misstates the value of ${targetRef}`);
-    else if (v) {
-      targetBound = true;
-      targetDatum = v.inlineDatum ?? null;
-    }
-  }
-  const walletUnknown = await walletUnknowns(wallet, walletInputs, chain, problems);
-  const unknowns = walletUnknown + (targetRef && !targetBound ? 1 : 0);
-  if (unknowns > 1) problems.push(unauthenticated('the target and the wallet\'s inputs', 'the balance binds only their sum'));
-  if (call.kind === 'ownedDestroy' && targetRef) {
-    const held = targetBound ? heldBy(c, xj, call, targetDatum) : undefined;
-    if (!targetBound) problems.push(`${call.meta.name}: the object's instance is bound only by its input's producing transaction, which the page cannot read (the chain API serves no transaction CBOR)`);
-    else if (held !== call.instance) problems.push(`${call.meta.name}: the object is held by another instance than the call's`);
+  // An owned destroy leaves no continuation: the object's input datum alone names the instance it is held by (the chain
+  // provider's UTxO, which the page trusts as it trusts it for every input), and it must be the call's.
+  if (call.kind === 'ownedDestroy' && targetRef && heldBy(c, xj, call, targetDatum) !== call.instance) {
+    problems.push(`${call.meta.name}: the object is held by another instance than the call's`);
   }
   // A method that is not payable takes no lovelace (as client.js and verifyComposed refuse).
   if (call.meta.payable === false && pay.lovelace !== 0n) problems.push(`${call.meta.name}: it is not payable, but the page pays ${pay.lovelace} lovelace`);
@@ -439,7 +424,7 @@ export async function verifyPrepared(o) {
   // method that sends the caller less than the minimum ADA and pays released lovelace to others should give the send
   // its own minimum ADA. A spending call may also forward what it does not keep of its payment, to the outputs bound
   // to it (its tagged payouts, its claimed sends), as in a composition (claims.js paymentCredit): a purchase paying its
-  // price to the seller (Market.buy). Its target is the one script input, so the balance binds its value.
+  // price to the seller (Market.buy). Its target's value is the chain provider's (trusted, ADR-0013 §9.2).
   const released = new Map(targetValue);
   add(released, continuation, -1n);
   add(released, minted);
@@ -719,23 +704,6 @@ export function decodeNext(c, xj, call, datum) {
   return holding.value;
 }
 
-/** Whether two values (Map unit -> bigint) are equal, zero entries aside. */
-export function sameValue(a, b) {
-  for (const [u, q] of a) if (q !== (b.get(u) ?? 0n)) return false;
-  for (const [u, q] of b) if (q !== (a.get(u) ?? 0n)) return false;
-  return true;
-}
-
-/** An output read from its producing transaction (chain.verifiedOutput), or null; a forged transaction is a problem. */
-export async function readVerified(chain, ref, problems) {
-  try {
-    return chain.verifiedOutput ? await chain.verifiedOutput(ref) : null;
-  } catch (e) {
-    problems.push(`the chain API's transaction for ${ref} could not be verified: ${e.message}`);
-    return null;
-  }
-}
-
 /**
  * The script hashes of {@code addresses}' payment credentials (the spent script inputs' credentials, for I30's claimed
  * sends: claims.js).
@@ -751,35 +719,6 @@ export function scriptHashesOf(addresses) {
     }
   }
   return out;
-}
-
-/**
- * Whether the wallet's spent inputs leave one unknown in the balance (1) or none (0). A CIP-30 wallet's UTxOs are its
- * own, independent of the page's chain provider: none. A wallet whose UTxOs are the provider's answer (devWallet,
- * {@code fromProvider}) could have one understated and the script inputs overstated by as much, the balance kept: each
- * spent one is read from its producing transaction where the page can (a misstatement is refused), and any it cannot
- * read make the wallet's sum one unknown (the inputs' split among the wallet's own changes nothing the page checks).
- */
-export async function walletUnknowns(wallet, refs, chain, problems) {
-  if (!wallet.fromProvider) return 0;
-  let unknown = 0;
-  for (const r of refs) {
-    const v = await readVerified(chain, r, problems);
-    const u = wallet.utxos.get(r);
-    if (!v) unknown = 1;
-    else if (v.address !== u.address || !sameValue(v.value, u.value)) problems.push(`the chain API misstates the value of ${r}`);
-  }
-  return unknown;
-}
-
-/**
- * The refusal for inputs whose values the page cannot authenticate: what lifts it. The transactions a page submitted
- * itself are kept (txstore.js); others are read from the provider's transaction CBOR.
- */
-export function unauthenticated(what, why) {
-  return `${what} whose values the page cannot authenticate (${why}; the chain API serves no transaction CBOR for them,`
-    + ' and the page did not submit them): use a chain provider that serves transaction CBOR (Blockfrost; Yaci Store with'
-    + ' store.transaction.save-cbor=true)';
 }
 
 /** The instance an owned object's datum (hex) says it is held by, or null when it does not decode as the call's Holding. */

@@ -48,10 +48,6 @@ export interface ChainProvider {
   output(ref: string): Promise<ProviderUtxo | null>;
   scriptCbor(hash: Hex): Promise<Hex | null>;
   submit(cbor: Hex): Promise<Hex>;
-  /** One output read from its producing transaction (a transaction the page submitted, or the provider's CBOR), or null. */
-  verifiedOutput(ref: string): Promise<{ address: string; value: Map<string, bigint>; inlineDatum: Hex | null } | null>;
-  /** Records a transaction the page submitted, for verifiedOutput. */
-  remember(cbor: Hex): Promise<void>;
   awaitTx(hash: Hex, o?: { timeoutMs?: number; intervalMs?: number }): Promise<boolean>;
   txCbor?(hash: Hex): Promise<Hex | null>;
   account?(stakeAddress: string): Promise<{ registered: boolean | undefined; rewards: bigint }>;
@@ -59,17 +55,7 @@ export interface ChainProvider {
 
 export declare function blockfrostProvider(baseUrl: string, o?: { projectId?: string; fetchImpl?: typeof fetch }): ChainProvider & { base: string; get(path: string, o?: { allow404?: boolean }): Promise<any> };
 export declare function ogmiosProvider(url: string, o?: { fetchImpl?: typeof fetch }): ChainProvider & { rpc(method: string, params?: object): Promise<any> };
-export declare function chainOf(provider: ChainProvider, o?: { txStore?: TxStore }): Chain;
-
-/** The transactions a page submitted, by hash (txstore.js): kept across reloads, bounded in number and age. */
-export interface TxStore {
-  get(hash: Hex): Promise<Hex | null>;
-  put(hash: Hex, cbor: Hex): Promise<void>;
-}
-export declare const TX_STORE_LIMITS: { maxEntries: number; maxAgeMs: number };
-export declare function memoryTxStore(limits?: { maxEntries?: number; maxAgeMs?: number }): TxStore;
-export declare function indexedDbTxStore(name?: string, limits?: { maxEntries?: number; maxAgeMs?: number }): TxStore;
-export declare function defaultTxStore(): TxStore;
+export declare function chainOf(provider: ChainProvider): Chain;
 
 export interface Chain {
   readonly provider?: ChainProvider;
@@ -81,10 +67,6 @@ export interface Chain {
   utxosAt(address: string): Promise<Array<{ ref: string; address: string; value: Map<string, bigint>; inlineDatum: Hex | null }>>;
   findUnit(address: string, unit: string): Promise<{ ref: string; address: string; value: Map<string, bigint>; inlineDatum: Hex | null } | null>;
   submit(cbor: Hex): Promise<Hex>;
-  /** One output read from its producing transaction (a transaction the page submitted, or the provider's CBOR), or null. */
-  verifiedOutput(ref: string): Promise<{ address: string; value: Map<string, bigint>; inlineDatum: Hex | null } | null>;
-  /** Records a transaction the page submitted, for verifiedOutput. */
-  remember(cbor: Hex): Promise<void>;
   awaitTx(hash: Hex, o?: { timeoutMs?: number; intervalMs?: number }): Promise<boolean>;
 }
 

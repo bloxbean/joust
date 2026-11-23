@@ -316,6 +316,11 @@ None of these improves what a JS developer sees, so they wait for the prerequisi
 - **The page verifier must grow with the runtime** before M2 enables the corresponding features: composition,
   verifier withdrawals and Reward redeemers, additional contract inputs, sends and mints. Each comes with tamper
   tests (I5).
+- **The verifier's trust model:** it guards against the prepare service, which is untrusted. The chain provider the
+  app chose (Blockfrost, Yaci Store, Ogmios, ...) and the wallet are trusted, as in any cardano-client-lib or MeshJS
+  app, since the page and the Java runtime already build transactions from the provider's UTxOs. Input values and
+  datums are the provider's (or the CIP-30 wallet's) answer, so the verifier works with what every supported provider
+  serves and never needs transaction CBOR. Defending against a lying provider is out of scope here (ADR-0013 §9.2).
 - **Node version:** whatever runs the engines without flags. F10 shows Node 22 needs
   `--experimental-wasm-exnref`, so the CLI re-launches with it there (Q5).
 
@@ -872,28 +877,11 @@ direct `Tx` building, gated by S3.
     receives them. What a call keeps of the wallet's payment is not released: its own intake (what its continuation
     gains, beyond the deposits it receives and net of those it gives) is credited back to what others may receive, up
     to its payment, so a payment into one call does not shrink what another releases to others (an adoption holds the
-    prior instance's value: it takes no payment and gets no credit). The credit rests on each target's own value,
-    which the balance does not bind (only the targets' sum), and the chain API's answer binds neither which input
-    holds which call's token: with two unbound targets it could transpose their tokens, the page would check each
-    call's redeemer against the other's target, and each call would run on the other's instance or object. So every
-    target but one must be read from its producing transaction (`verifiedOutput`: the provider's transaction CBOR, or
-    a transaction the page submitted itself, kept by its chain view, both hash-checked), the last following from the
-    balance (its token and its value); a misstated value is refused, and so is a composition with two or more unbound
-    targets (as ADR-0016 D11 refuses a keyed call's), before its redeemers are trusted. On a provider that serves no
-    transaction CBOR (Ogmios; Yaci Store unless `store.transaction.save-cbor=true`, which `joust dev` and DevKit do not
-    set) such compositions are refused unless the page itself created the inputs, and the refusal names what lifts it.
-    The chain view keeps the transactions the page submitted in a `txStore` (txstore.js: IndexedDB in a browser, so they
-    survive a reload; one memory store per Node process; at most 512, for 30 days); losing them only refuses more.
-    Wallet inputs count too when the wallet's UTxOs are the provider's answer: the dev wallet (`utxosFromProvider`) reads
-    them from the same chain view, so one understated wallet input and an equally overstated target would keep the
-    balance. The verifiers (single, composed, keyed) then read each spent wallet input from its producing transaction,
-    and if any cannot be read the wallet's sum is the one value the balance may determine. A CIP-30 wallet's UTxOs are
-    the wallet's own, independent of the page's provider, so its inputs are known. An owned destroy and a move leave
-    no continuation under their source instance, so only the object's input datum names the instance it is held by:
-    their target must be read from its producing transaction (not determined by the balance), and its `Holding` must
-    name the call's instance; alone too. A
-    deposit claim's value must be one the output verifier accepts (`OutputVerifier.positive` over `ValueAdapter.fromWire`'s
-    rules: no empty value or token map, no repeated or out-of-order entry, positive quantities, no reserved names),
+    prior instance's value: it takes no payment and gets no credit). The credit rests on each target's value as the
+    chain provider gives it (trusted, D7). An owned destroy and a move leave no continuation under their source
+    instance, so only the object's input datum (the provider's UTxO) names the instance it is held by: its `Holding`
+    must name the call's instance, alone too. A deposit claim's value must be one the output verifier accepts
+    (`OutputVerifier.positive` over `ValueAdapter.fromWire`'s rules: no empty value or token map, no repeated or out-of-order entry, positive quantities, no reserved names),
     else the body could only fail on chain, and so is a depositor's second claim to the same receiver or a claim into
     its own continuation (the depositing validator's `notSelf`). Deposit claims
     shape the credit (a call that deposits more keeps less of its own), within what only the validators decide: the
@@ -917,8 +905,8 @@ direct `Tx` building, gated by S3.
     states it (`received`, which the page checks against its payment and the validator against the transaction): a
     method without Ctx binds no payment, and one that is not payable is paid none, alone or composed. Claimed outputs
     are held to I30 whole, in claims.js for every verifier: no JOUST tag of any input the transaction spends (the bare
-    reference or `RefTag`, as `isTag`), and not at a spent script input's payment credential. A single spending call follows the same rule
-    (`verifyPrepared`): its target is the one script input, so the balance binds its value. fixtures/m0's recorded
+    reference or `RefTag`, as `isTag`), and not at a spent script input's payment credential. A single spending call
+    follows the same rule (`verifyPrepared`). fixtures/m0's recorded
     Market.buy is refused only by ADR-0013 §9.2's known limitation (its NFT send to the buyer carries the wallet's
     minimum ADA), alone and composed; main refused it too, for the forwarded price.
     Mints are owned per policy. A name the protocol reserves (an instance's, an owned object's, an intent's, a keyed
@@ -931,8 +919,7 @@ direct `Tx` building, gated by S3.
     other asset. A call whose method takes no assets (no `assetsIn`) may be offered none, and one that is not payable no
     lovelace. With that credit, others' receipts bound the wallet's net loss (the fee aside) by what the calls keep or
     forward of their payments, less what the scripts send it back. `test/recorded.test.js` verifies every recorded
-    call and composition of `fixtures/m3` the page takes (a composition's targets read from their producing
-    transactions, which the fixtures record), so an over-refusal of a recorded flow fails the suite.
+    call and composition of `fixtures/m3` the page takes, so an over-refusal of a recorded flow fails the suite.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.
     Deployments that deposit or receive now pin it.
   - Spending calls only for now (no creations in a composition).

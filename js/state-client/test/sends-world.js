@@ -1,13 +1,12 @@
 // The page verifier's inputs for a recorded engine transaction (fixtures/m3: the call, the chain reads behind it, the
 // contract's description and the prepared CBOR), and CSL edits of its body (an independent ledger library), so a test can
 // replay what a malicious prepare service could send instead. Used by sends.test.js (ADR-0007 sends, ADR-0013 D2).
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { codec as makeCodec } from '../src/data.js';
 import { rewardAddressOf } from '../src/governors.js';
 import { paymentKeyHash } from '../src/wallet.js';
-import { ledgerTx, scriptIntegrityHash, enterpriseAddress, parseTx, txHash } from '../src/ledger.js';
-import { dataHex } from '../src/pdata.js';
+import { ledgerTx, scriptIntegrityHash, enterpriseAddress, parseTx } from '../src/ledger.js';
 
 export { CSL };
 
@@ -28,37 +27,8 @@ export function recorded(name) {
   return { x, description, cbor: x.cbor };
 }
 
-let corpus = null;
-/** Every transaction fixtures/m3 recorded, by its hash (the producing transactions of the recorded calls' targets). */
-function recordedTransactions() {
-  if (corpus) return corpus;
-  corpus = new Map();
-  for (const dir of readdirSync(FIXTURES)) {
-    if (dir === 'contracts') continue;
-    for (const f of readdirSync(new URL(`${dir}/`, FIXTURES))) {
-      const cbor = JSON.parse(readFileSync(new URL(`${dir}/${f}`, FIXTURES), 'utf8')).cbor;
-      if (cbor) corpus.set(txHash(cbor), cbor);
-    }
-  }
-  return corpus;
-}
-
-/** An output read from its producing transaction among the recorded ones (as chain.js reads it), or null. */
-export async function recordedOutput(ref) {
-  const [hash, index] = ref.split('#');
-  const cbor = recordedTransactions().get(hash);
-  const o = cbor ? parseTx(cbor).outputs[Number(index)] : null;
-  return o ? { address: o.address, value: o.value, inlineDatum: o.datum ? dataHex(o.datum) : null } : null;
-}
-
-/**
- * The chain the snapshot recorded: every output it read, by reference; {@code edit(ref, u)} may restate one. Its
- * verifiedOutput reads an output from its producing transaction where fixtures/m3 recorded it; with an {@code edit}
- * (a world the test restates), it serves the restated outputs, as a provider serving transaction CBOR would.
- */
-export function chainOf(x, edit) {
-  const restated = !!edit;
-  edit ??= (r, u) => u;
+/** The chain the snapshot recorded: every output it read, by reference; {@code edit(ref, u)} may restate one. */
+export function chainOf(x, edit = (r, u) => u) {
   const outs = new Map();
   const put = (o) => outs.set(`${o.tx_hash}#${o.output_index}`, {
     address: o.address, value: valueOf(o.amount), referenceScriptHash: o.reference_script_hash ?? null, inlineDatum: o.inline_datum ?? null,
@@ -70,11 +40,6 @@ export function chainOf(x, edit) {
     tip: Number(x.snapshot.tip.slot),
     params: x.snapshot.protocolParams,
     async utxo(r) {
-      const u = outs.get(r);
-      return u ? edit(r, u) : null;
-    },
-    async verifiedOutput(r) {
-      if (!restated) return recordedOutput(r);
       const u = outs.get(r);
       return u ? edit(r, u) : null;
     },

@@ -2,11 +2,9 @@
 // unsigned, with the chain reads behind it, results content-addressed in blobs/). Those recordings carry no description
 // and no page call: the test names the contract's description (a copy in test/fixtures, see market.description.json)
 // and the call the page asked for. The chain is the recorded reads: outputs by reference (getTxOutput, getUtxos), the
-// tip, the protocol parameters; verifiedOutput reads an output from its producing transaction where the recording has
-// it (fixtures/m0 holds every transaction the flow built).
-import { readFileSync, readdirSync } from 'node:fs';
-import { parseTx, txHash } from '../src/ledger.js';
-import { dataHex } from '../src/pdata.js';
+// tip, the protocol parameters.
+import { readFileSync } from 'node:fs';
+import { parseTx } from '../src/ledger.js';
 import { paymentKeyHash } from '../src/wallet.js';
 import { rewardAddressOf } from '../src/governors.js';
 import { OUTPUT_VERIFIER } from './sends-world.js';
@@ -15,22 +13,7 @@ const M0 = new URL('../../../fixtures/m0/', import.meta.url);
 const blob = (ref) => JSON.parse(readFileSync(new URL(`blobs/${ref}.json`, M0), 'utf8')).value;
 const valueOf = (amount) => new Map(amount.map((a) => [a.unit, BigInt(a.quantity)]));
 
-let corpus = null;
-/** Every transaction fixtures/m0 recorded, by its hash. */
-function transactions() {
-  if (corpus) return corpus;
-  corpus = new Map();
-  for (const dir of readdirSync(M0, { withFileTypes: true })) {
-    if (!dir.isDirectory() || dir.name === 'blobs') continue;
-    for (const f of readdirSync(new URL(`${dir.name}/`, M0))) {
-      const x = JSON.parse(readFileSync(new URL(`${dir.name}/${f}`, M0), 'utf8'));
-      if (x.unsignedTx) corpus.set(txHash(x.unsignedTx), x.unsignedTx);
-    }
-  }
-  return corpus;
-}
-
-/** A recorded output's reads as the page's chain gives them, from producing transactions where recorded. */
+/** A recorded output's reads as the page's chain gives them. */
 export function m0Chain(x) {
   const outs = new Map();
   const put = (o) => outs.set(`${o.tx_hash}#${o.output_index}`, {
@@ -50,13 +33,6 @@ export function m0Chain(x) {
   return {
     outs, tip, params,
     async utxo(r) { return outs.get(r) ?? null; },
-    async verifiedOutput(r) {
-      const [hash, index] = r.split('#');
-      const cbor = transactions().get(hash);
-      if (!cbor) return null;
-      const o = parseTx(cbor).outputs[Number(index)];
-      return o ? { address: o.address, value: o.value, inlineDatum: o.datum ? dataHex(o.datum) : null } : null;
-    },
   };
 }
 

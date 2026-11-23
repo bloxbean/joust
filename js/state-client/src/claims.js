@@ -179,7 +179,7 @@ export function claimedSends(tx, registries, isWallet, problems, spentScripts = 
  * receive beyond what the scripts release. A call's payment ({@code paid}) goes into its continuation or out through
  * the outputs bound to it, as its validator checks: its continuation exact, its payouts paid by outputs to the payee's
  * key carrying its tag (I7), its sends by outputs its claims name (I29). So a call keeps its intake ({@code own}: what
- * its continuation gains, its target's value bound), up to its payment, and forwards the rest, but
+ * its continuation gains over its target's value), up to its payment, and forwards the rest, but
  * only up to what the outputs bound to it hold: an output paying a key with its tag (a payout), or one a claim names
  * for its target (a send), to anyone, the wallet included (a refund to the caller is part of the payment the call
  * forwards; the verifiers still subtract every tagged or claimed wallet output from what others may receive). Per call

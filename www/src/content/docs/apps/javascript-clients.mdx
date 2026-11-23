@@ -191,19 +191,11 @@ Others may receive only what the calls release beyond their payouts and sends to
 or forwards of its payment through its own payouts or claimed sends (a purchase paying the seller, a refund to the
 caller). A payment counts only where the call's Ctx states it, and a method that is not payable takes none.
 
-The page must know which input holds which call's instance or object, and what each holds. It reads the inputs from
-their producing transactions, all of them or all but one (the last then follows from the balance). The chain view has
-a transaction's CBOR when the provider serves it (Blockfrost; Yaci Store with `store.transaction.save-cbor=true`) or
-when the page submitted that transaction itself: the chain view keeps those (`txStore`: IndexedDB in a browser, so
-they survive a reload; one memory store per process in Node; at most 512, for 30 days). Otherwise (Ogmios, DevKit's
-Yaci Store by default, for inputs another page or an old session created) a composition with two or more spending
-calls is refused, naming what lifts the refusal: a hostile chain API could swap two inputs' tokens and each call would
-run on the other's instance. The same holds for an owned destroy and a move, alone or composed: only the object's
-input datum names the instance it is held by, so it must come from the producing transaction.
-
-The dev wallet's UTxOs are the chain view's answer, not a wallet's own (`utxosFromProvider`): the verifiers read the
-wallet inputs a transaction spends from their producing transactions too, and if they cannot, the wallet's inputs
-count as the one value the balance may determine. A CIP-30 wallet's UTxOs are its own.
+The verifier guards against the prepare service, which is untrusted. The chain provider the app chose (Blockfrost,
+Yaci Store, Ogmios, ...) and the wallet are trusted, as in any cardano-client-lib or MeshJS app: the page already
+builds transactions from the provider's UTxOs. Input values and datums (an owned object's `Holding`, which names the
+instance a destroy or move takes it from) are the provider's or the wallet's answer, so the verifier needs no
+transaction CBOR and works with every supported provider. Defending against a lying provider is out of scope.
 
 ## Prepare services
 

@@ -7,8 +7,7 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
-  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks, reservedName, sameValue, readVerified, walletUnknowns,
-  unauthenticated, heldBy, scriptHashesOf,
+  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks, reservedName, heldBy, scriptHashesOf,
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
@@ -102,13 +101,11 @@ export async function verifyComposed(o) {
   const sorted = ledgerOrder(tx.inputs);
   const spent = new Map();
   const consumed = new Map();
-  const walletInputs = [];
   for (let i = 0; i < sorted.length; i++) {
     const r = sorted[i];
     if (wallet.utxos.has(r)) {
       add(spent, wallet.utxos.get(r).value);
       add(consumed, wallet.utxos.get(r).value);
-      walletInputs.push(r);
       continue;
     }
     const u = await chain.utxo(r);
@@ -117,42 +114,18 @@ export async function verifyComposed(o) {
       k.targetIndex = i;
       k.targetRef = r;
       k.targetValue = u.value;
+      k.targetDatum = u.inlineDatum ?? null;
       add(consumed, u.value);
     } else {
       problems.push(`an input that is neither the wallet's nor a call's target: ${r}`);
     }
   }
   for (const k of calls) if (!k.creation && k.targetIndex < 0) problems.push(`${k.call.meta.name}: its instance or object is not spent`);
-  // Each target bound to its producing transaction (verifiedOutput), where the chain API serves it. A chain API's answer
-  // alone binds neither which input holds which call's token nor how the targets' sum (which the balance binds)
-  // splits between them, so with two such targets it could transpose their tokens: the page would check each call's
-  // redeemer against the other's target, and each call would run on the other's instance or object. A misstated value
-  // is refused; every target but one must be bound (the last then follows from the balance: its token and its value),
-  // else the composition is refused (as ADR-0016 D11 refuses a keyed call's unbound script inputs). A wallet whose
-  // UTxOs are the provider's answer is one more unknown unless its spent inputs are read so too (walletUnknowns).
-  for (const k of calls) {
-    if (k.creation || !k.targetRef) continue;
-    const v = await readVerified(chain, k.targetRef, problems);
-    if (!v) continue;
-    if (v.address !== k.deployment.address || !sameValue(v.value, k.targetValue)) problems.push(`the chain API misstates the value of ${k.targetRef}`);
-    else {
-      k.bound = true;
-      k.verifiedDatum = v.inlineDatum ?? null;
-    }
-  }
-  const unbound = calls.filter((k) => !k.creation && k.targetRef && !k.bound).length;
-  const walletUnknown = await walletUnknowns(wallet, walletInputs, chain, problems);
-  if (unbound > 1) {
-    problems.push(unauthenticated(`${unbound} targets`, 'a chain API could transpose their tokens, and each call would run on another\'s target'));
-  } else if (unbound + walletUnknown > 1) {
-    problems.push(unauthenticated('a target and the wallet\'s inputs', 'the balance binds only their sum'));
-  }
   // An owned destroy and a move leave no continuation under their source instance: the object's input datum alone
-  // names the instance it is held by, so it must be read from its producing transaction and be the call's.
+  // names the instance it is held by (the chain provider's UTxO, trusted as for every input), and it must be the call's.
   for (const k of calls) {
     if (!k.targetRef || !(k.call.kind === 'ownedDestroy' || k.call.meta.policies?.into)) continue;
-    if (!k.bound) problems.push(`${k.call.meta.name}: the object's instance is bound only by its input's producing transaction, which the page cannot read (the chain API serves no transaction CBOR)`);
-    else if (heldBy(k.c, k.xj, k.call, k.verifiedDatum) !== k.call.instance) problems.push(`${k.call.meta.name}: the object is held by another instance than the call's`);
+    if (heldBy(k.c, k.xj, k.call, k.targetDatum) !== k.call.instance) problems.push(`${k.call.meta.name}: the object is held by another instance than the call's`);
   }
   // An adoption (@Migrate, ADR-0011 D4): of the prior instance the page names, which its own @MigrateTo destroy spends
   // here, under the policy the adopting deployment's params name. Its token is named by that prior UTxO.
@@ -444,7 +417,7 @@ export async function verifyComposed(o) {
   // its claims exactly; a deposit funds its receiver from the depositor's release, not from the wallet), plus what it
   // burns as its policy's mint owner. assetsIn binds the assets a call accepts and its validator the continuation, so
   // tokens it mints change nothing here: of a call that accepts 400 X, mints 5 and sends 5, the wallet's 400 stayed.
-  // Every target is bound (above), so each intake rests on the target's own value. With the credit, others' receipts
+  // Each intake rests on the target's value as the chain provider gives it (trusted). With the credit, others' receipts
   // bound the wallet's net loss (the fee aside) by what the calls keep or forward of their payments, less what the
   // scripts send it back.
   const released = new Map();
@@ -612,8 +585,7 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
   const p = await service.prepare(request);
   const [tip, params] = await Promise.all([chain.tip(), chain.params()]);
   const { problems, report } = await verifyComposed({
-    CSL, txHex: p.cbor, wallet, limits,
-    chain: { tip, params, utxo: (r) => chain.utxo(r), verifiedOutput: chain.verifiedOutput ? (r) => chain.verifiedOutput(r) : undefined },
+    CSL, txHex: p.cbor, wallet, chain: { tip, params, utxo: (r) => chain.utxo(r) }, limits,
     steps: prepared.map(({ k, call }) => ({ description: k.description, deployment: k.deployment, call })),
   });
   if (problems.length) {
@@ -629,7 +601,6 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
   const signed = assemble(CSL, p.cbor, ...witnesses);
   if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
   await api.submitTx(signed.cbor);
-  await chain.remember?.(signed.cbor);
   await chain.awaitTx(signed.txHash);
   return { txHash: signed.txHash, report };
 }

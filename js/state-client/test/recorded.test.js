@@ -1,9 +1,9 @@
 // Every recorded engine transaction of fixtures/m3 that the page verifies through verifyPrepared or verifyComposed
 // (spending calls, creations, owned calls, compositions; a spending call also as a one-call composition) is accepted:
 // an over-refusal of a legitimate flow shows here, not in review. Keyed calls, intents, purposes and registrations have
-// their own verifiers and tests (keyed.test.js, sends.test.js). A composition's targets are read from their producing
-// transactions, which fixtures/m3 records too. fixtures/m0 (JVM-runtime recordings) carries no descriptions or page
-// calls; its Market.buy, a purchase that forwards the buyer's payment, is replayed with the Market's description.
+// their own verifiers and tests (keyed.test.js, sends.test.js). fixtures/m0 (JVM-runtime recordings) carries no
+// descriptions or page calls; its Market.buy, a purchase that forwards the buyer's payment, is replayed with the
+// Market's description.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';

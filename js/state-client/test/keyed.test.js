@@ -35,15 +35,6 @@ test('insert: honest, with and without transaction CBOR', async () => {
   accepted(await check(w, scn, undefined, { noCbor: true }), 'insert, the anchor solved by the balance equation');
 });
 
-test('insert with a wallet whose UTxOs are the provider\'s answer (devWallet): the balance solves one unknown only', async () => {
-  const w = world();
-  const scn = { ...insertScn(w) };
-  scn.wallet = { ...scn.wallet, fromProvider: true };
-  refused(await check(w, scn, undefined, { noCbor: true }), /a script input and the wallet's inputs whose values the page cannot authenticate/,
-    'the anchor and the wallet both by the balance');
-  accepted(await check(w, scn), 'with transaction CBOR');
-});
-
 test('a keyed call whose body commits to other redeemers (its script integrity hash) is refused', async () => {
   const w = world();
   const scn = insertScn(w);

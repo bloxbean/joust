@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { verifyPrepared, ledgerOrder } from '../src/verify.js';
+import { verifyPrepared } from '../src/verify.js';
 import { verifyComposed } from '../src/compose.js';
 import { verifyPurpose, purposeOf, rewardsData } from '../src/purposes.js';
 import { outputRegistry, rewardRefOf } from '../src/claims.js';
@@ -438,21 +438,7 @@ async function paidAndReleased() {
   const [stall, pot] = tx.inputs;
   const ov = tx.withdrawals.findIndex((w) => w.address === c.steps[0].deployment.outputVerifier.rewardAddress);
   const deposits = tx.redeemers.find((x) => x.tag === 'reward' && x.index === ov).data.fields[1].list;
-  const truth = chainOf(c.x, (ref, u) => (ref === pot ? { ...u, value: plus(u.value, 'lovelace', 7n * ADA_) } : u));
-  // The chain API the page reads: `lie` moves lovelace from the Stall's input to the Pot's in what it reports (the
-  // sum, which the balance binds, unchanged); `verified`: the inputs it also serves from their producing transactions
-  // (verifiedOutput: the truth, which a provider cannot invent).
-  const chainOver = ({ lie = 0n, verified = [stall, pot] } = {}) => ({
-    ...truth,
-    async utxo(ref) {
-      const u = await truth.utxo(ref);
-      if (ref === stall) return { ...u, value: plus(u.value, 'lovelace', -lie) };
-      if (ref === pot) return { ...u, value: plus(u.value, 'lovelace', lie) };
-      return u;
-    },
-    verifiedOutput: verified.length ? async (ref) => (verified.includes(ref) ? truth.utxo(ref) : null) : undefined,
-  });
-  const chain = chainOver();
+  const chain = chainOf(c.x, (ref, u) => (ref === pot ? { ...u, value: plus(u.value, 'lovelace', 7n * ADA_) } : u));
   const payee = enterpriseAddress({ type: 'key', hash: c.wallet.keyHashes[0] }, 0);
   // `edit`: of [stall, pot, change, send, stranger] parts.
   const build = ({ edit = (p) => p } = {}) => editTx(c.cbor, c.x, {
@@ -460,8 +446,8 @@ async function paidAndReleased() {
       { address: STRANGER, value: new Map([['lovelace', 3n * ADA_]]) }]).map(cslOutput),
     redeemers: withRegistry(ov, dataHex(Data.constr(0, [Data.list([Data.constr(0, [Data.int(3), refData(pot)])]), Data.list(deposits)]))),
   });
-  const verify = async (txHex, over = chain) => verifyComposed({ steps: c.steps, wallet: c.wallet, chain: over, txHex });
-  return { build, verify, chainOver, stall, pot };
+  const verify = async (txHex) => verifyComposed({ steps: c.steps, wallet: c.wallet, chain, txHex });
+  return { build, verify };
 }
 const ADA_ = 1_000_000n;
 
@@ -560,26 +546,6 @@ test('composition: a deposit whose value the output verifier refuses (OutputVeri
   }
 });
 
-test('composition: the kept-payment credit rests on input values the chain API cannot split at will', async () => {
-  const UNBOUND = /2 targets whose values the page cannot authenticate/;
-  const w = await paidAndReleased();
-  const honest = await w.build();
-  // The Stall keeping 1 ADA less of the payment, that ADA paid to others (refused on true values, above).
-  const passedOn = await w.build({ edit: ([s, p, change, send, other]) => [{ ...s, value: plus(s.value, 'lovelace', -ADA_) }, p, change, send,
-    { ...other, value: plus(other.value, 'lovelace', ADA_) }] });
-  // The chain API reports the Stall's input 1 ADA lower and the Pot's 1 ADA higher: balanced, and the Stall would seem
-  // to keep its whole payment. Without the producing transactions, refused (neither target bound); with them, the
-  // misstatement is refused.
-  refused(await w.verify(passedOn, w.chainOver({ lie: ADA_, verified: [] })), UNBOUND, 'a misstated split, no transaction CBOR');
-  refused(await w.verify(passedOn, w.chainOver({ lie: ADA_ })), /the chain API misstates the value of/, 'a misstated split, with the CBOR');
-  // Honest: credited when every target's value is bound, or all but one (the last then follows from the balance).
-  accepted(await w.verify(honest, w.chainOver()), 'both inputs verified');
-  accepted(await w.verify(honest, w.chainOver({ verified: [w.pot] })), 'the Pot verified, the Stall from the balance');
-  accepted(await w.verify(honest, w.chainOver({ verified: [w.stall] })), 'the Stall verified, the Pot from the balance');
-  // A provider that serves no transaction CBOR binds neither target: refused (fails closed; see the transposition test).
-  refused(await w.verify(honest, w.chainOver({ verified: [] })), UNBOUND, 'no transaction CBOR');
-});
-
 test('one redeemer per purpose: a destroy\'s burn redeemer twice is refused', async () => {
   const c = recordedComposition('upgrade/005-undefined.json');
   const destroy = c.steps.find((st) => st.call.kind === 'destroy');
@@ -604,8 +570,7 @@ test('composition: minted tokens kept by a call are not a kept payment; a method
   const X = policy + 'aa';
   const extra = `${'ee'.repeat(32)}#0`;
   const wallet = { ...c.wallet, utxos: new Map([...c.wallet.utxos, [extra, { address: c.wallet.addresses[0], value: new Map([['lovelace', 2n * ADA_], [X, 5n]]) }]]) };
-  const truth = chainOf(c.x, (ref, u) => (ref === pot ? { ...u, value: plus(u.value, 'lovelace', 7n * ADA_) } : u));
-  const chain = { ...truth, async verifiedOutput(ref) { return truth.utxo(ref); } };
+  const chain = chainOf(c.x, (ref, u) => (ref === pot ? { ...u, value: plus(u.value, 'lovelace', 7n * ADA_) } : u));
   const ov = tx.withdrawals.findIndex((x) => x.address === c.steps[0].deployment.outputVerifier.rewardAddress);
   const deposits = tx.redeemers.find((x) => x.tag === 'reward' && x.index === ov).data.fields[1].list;
   const payee = enterpriseAddress({ type: 'key', hash: c.wallet.keyHashes[0] }, 0);
@@ -705,7 +670,6 @@ async function mintAndKeep() {
     ...chainB,
     utxo: async (ref) => (ref === refA ? { address: addrA, value: new Map([['lovelace', 10n * ADA_], [PA + instance, 1n]]), referenceScriptHash: null } : chainB.utxo(ref)),
   };
-  chain.verifiedOutput = chain.utxo;
   const wallet = { ...base.wallet, utxos: new Map([...base.wallet.utxos].map(([k, u]) => [k, { ...u, value: swap(u.value) }])) };
   // The second contract: the Locker's description with a ByAction mint redeemer, its unlock minting.
   const descA = structuredClone(r.description);
@@ -792,7 +756,6 @@ async function lockMints({ minted, toStranger, claim = false, by, name, single =
   const X = PB + (name ?? names[0][0]);
   const refB = tx.inputs.find((i) => !base.wallet.utxos.has(i));
   const chain = chainOf(r.x, (ref, u) => ({ ...u, value: ref === refB ? plus(swap(u.value), 'lovelace', 2n * ADA_) : swap(u.value) }));
-  chain.verifiedOutput = chain.utxo;
   const wallet = { ...base.wallet, utxos: new Map([...base.wallet.utxos].map(([k, u]) => [k, { ...u, value: swap(u.value) }])) };
   const desc = mintingLocker(r.description, ['lock']);
   const step = { description: desc, deployment: base.deployment, call: { ...base.call, meta: desc['x-joust'].actions.find((a) => a.name === 'lock'), pay: { lovelace: 0n, assets: [[PB, names]] } } };
@@ -858,7 +821,6 @@ async function twoInstances({ by } = {}) {
     ...truth,
     utxo: async (ref) => (ref === refJ ? { address: base.deployment.address, value: new Map([['lovelace', 10n * ADA_], [P + J, 1n]]), referenceScriptHash: null } : truth.utxo(ref)),
   };
-  chain.verifiedOutput = chain.utxo;
   const desc = mintingLocker(r.description, ['lock']);
   const lock = desc['x-joust'].actions.find((a) => a.name === 'lock');
   const unlock = desc['x-joust'].actions.find((a) => a.name === 'unlock');
@@ -974,7 +936,7 @@ test('composition: a payment a call forwards through its payout (tagged for its 
   const tx = parseTx(c.cbor);
   const [stall] = tx.inputs;
   const SELLER = enterpriseAddress({ type: 'key', hash: 'ab'.repeat(28) }, 0);
-  const chain = { ...c.chain, verifiedOutput: c.chain.utxo };
+  const { chain } = c;
   const tagHex = dataHex(refData(stall));
   const build = ({ tagged = true, kept = 3n * ADA_, paid = 3n * ADA_ } = {}) => editTx(c.cbor, c.x, {
     outputs: (cur) => {
@@ -1043,30 +1005,16 @@ test('forwarding: a payment split between a seller\'s payout and a tagged refund
     { address: SELLER, value: lovelace(7n * ADA_), datumHex: tag }, { address: caller, value: lovelace(4n * ADA_), datumHex: tag }])), OTHERS_PLAIN, '11 of a 10 ADA payment');
 });
 
-test('composition: targets whose provenance the page cannot authenticate are refused when more than one could be transposed', async () => {
+test('composition: a service that swaps two calls\' spend redeemers is refused', async () => {
   // guild/005: Guild.transfer moves an object of one instance into another, whose Guild.admit consents; both targets
-  // are of one deployment. A hostile service swaps the two spend redeemers and a hostile chain API swaps the two
-  // targets' tokens: without the producing transactions the page would check each call against the other's target,
-  // and each would run on the other's.
+  // are of one deployment. A hostile service swaps the two spend redeemers: each call's redeemer then sits on the
+  // other's target.
   const c = recordedComposition('guild/005-undefined.json');
-  const tx = parseTx(c.cbor);
-  const [a, b] = ledgerOrder(tx.inputs.filter((r) => !c.wallet.utxos.has(r)));
+  accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), 'the recorded transfer');
   const swapped = await editTx(c.cbor, c.x, {
     redeemers: (rds) => rds.map((x) => (x.tag === 'spend' ? { ...x, dataHex: rds.find((y) => y.tag === 'spend' && y.index !== x.index).dataHex } : x)),
   });
-  const ua = await c.chain.utxo(a);
-  const ub = await c.chain.utxo(b);
-  const liar = { ...c.chain, async utxo(r) { return r === a ? ub : r === b ? ua : c.chain.utxo(r); } };
-  const noCbor = { ...liar, verifiedOutput: undefined };
-  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: noCbor, txHex: swapped }), /cannot authenticate/, 'transposed, no transaction CBOR');
-  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: liar, txHex: swapped }), /the chain API misstates the value of/, 'transposed, with the CBOR');
-  // Honest: accepted with the producing transactions (or all but one), refused without.
-  accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), 'the recorded transfer');
-  // b is the moved object (whose source instance only its own producing transaction binds, provenance.test.js), a the
-  // admitting instance.
-  const one = { ...c.chain, async verifiedOutput(r) { return r === b ? c.chain.verifiedOutput(r) : null; } };
-  accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: one, txHex: c.cbor }), 'one target bound, the other by the balance');
-  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: { ...c.chain, verifiedOutput: undefined }, txHex: c.cbor }), /cannot authenticate/, 'honest, no transaction CBOR');
+  refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: swapped }), /transfer: the redeemer is Admit, not the call the page asked for/, 'the swapped redeemers');
 });
 
 // fixtures/m0's recorded Market.buy (a JVM-runtime recording): the buyer pays the 100 ADA price; the listing (3.6 ADA,
@@ -1100,18 +1048,4 @@ test('a purchase alone forwards the stated payment to the parties its payouts an
   for (const r of await both({ ...i, txHex: await edit({ tagSeller: false }) })) refused(r, /others receive/, 'the seller untagged');
   // The royalty send (claimed) carrying the payout tag too: refused.
   for (const r of await both({ ...i, txHex: await edit({ tagRoyalty: true }) })) refused(r, /a claimed send output that carries a payout tag/, 'a claimed output with the tag');
-});
-
-test('the page\'s chain binds the outputs of transactions it submitted itself, on a provider that serves no transaction CBOR', async () => {
-  const { chainOf: chainView } = await import('../src/chain.js');
-  const { txHash } = await import('../src/ledger.js');
-  const { cbor } = recorded('fees/004-undefined.json');
-  const ref = `${txHash(cbor)}#0`;
-  const remembered = chainView({});
-  assert.equal(await remembered.verifiedOutput(ref), null, 'nothing known yet');
-  remembered.remember(cbor);
-  assert.deepEqual((await remembered.verifiedOutput(ref)).value, parseTx(cbor).outputs[0].value);
-  const submitted = chainView({ async submit() { return txHash(cbor); } });
-  await submitted.submit(cbor);
-  assert.equal((await submitted.verifiedOutput(ref)).address, parseTx(cbor).outputs[0].address);
 });

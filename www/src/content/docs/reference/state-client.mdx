@@ -120,10 +120,7 @@ ADR-0016. Guide:
 | `ogmiosProvider` | `ogmiosProvider(url, { fetchImpl? })` | a chain provider over Ogmios v6 (JSON-RPC over HTTP); also `rpc(method, params)` |
 | `ogmiosParams` | `ogmiosParams(params, epoch)` | Ogmios' protocol parameters as Blockfrost's object |
 | `plutusScriptHash` | `plutusScriptHash(cborHex, version = 3)` | a Plutus script's hash from its CBOR and language |
-| `chainOf` | `chainOf(provider, { txStore? })` | the chain view the verifier reads; `txStore` keeps the transactions the page submitted (default `defaultTxStore()`) |
-| `memoryTxStore` | `memoryTxStore({ maxEntries?, maxAgeMs? })` | a store of submitted transactions in memory, the oldest dropped beyond the bounds (`TX_STORE_LIMITS`: 512 entries, 30 days) |
-| `indexedDbTxStore` | `indexedDbTxStore(name = 'joust.transactions', { maxEntries?, maxAgeMs? })` | the same in IndexedDB: kept across reloads |
-| `defaultTxStore` | `defaultTxStore()` | IndexedDB in a browser, else one memory store shared by the process's chain views |
+| `chainOf` | `chainOf(provider)` | the chain view the verifier reads |
 | `blockfrostChain` | `blockfrostChain(baseUrl, { projectId?, fetchImpl? })` | `chainOf(blockfrostProvider(...))` |
 
 The provider interface is in [Networks and chain providers](/apps/networks-and-providers/#chain-providers).
@@ -136,8 +133,7 @@ The provider interface is in [Networks and chain providers](/apps/networks-and-p
 | `tip()` | the latest slot |
 | `params()` | protocol parameters (Blockfrost's object) |
 | `utxo(ref)` | `{ address, value: Map, referenceScriptHash, inlineDatum }` or `null` |
-| `verifiedOutput(ref)` | `{ address, value, inlineDatum, ... }` read from the producing transaction's CBOR, hash-checked: one this chain view submitted (or was given with `remember(cbor)`), else the provider's `txCbor`; `null` without either |
-| `remember(cbor)` | records a transaction the page submitted in its `txStore`, for `verifiedOutput` (`submit` and the clients' calls do it); never throws |
+| `verifiedOutput(ref)` | `{ address, inlineDatum }` read from the producing transaction's CBOR, hash-checked; `null` without `txCbor` |
 | `utxosAt(address)` | `[{ ref, address, value: Map, inlineDatum }]` |
 | `findUnit(address, unit)` | the UTxO at `address` holding one `unit`, or `null` |
 | `registered(stakeAddress)` | `true`, `false`, or `undefined` when the provider cannot tell |
@@ -149,7 +145,7 @@ The provider interface is in [Networks and chain providers](/apps/networks-and-p
 
 | Export | Signature | Description |
 |---|---|---|
-| `walletView` | `walletView(api)` | `{ api, networkId, change, addresses, keyHashes, utxos, fromProvider }` from a CIP-30 API; `fromProvider` when the API's UTxOs are the chain provider's answer (`utxosFromProvider`, as the dev wallet's) |
+| `walletView` | `walletView(api)` | `{ api, networkId, change, addresses, keyHashes, utxos }` from a CIP-30 API |
 | `assemble` | `assemble(cbor, ...witnessSets)` | `{ cbor, txHash }`: the transaction with vkey witnesses added, body bytes unchanged |
 | `paymentKeyHash` | `paymentKeyHash(bech32)` | the payment key hash of a base or enterprise key address, or `null` |
 
@@ -157,7 +153,7 @@ The provider interface is in [Networks and chain providers](/apps/networks-and-p
 
 | Export | Signature | Description |
 |---|---|---|
-| `devWallet` | `devWallet({ chain, mnemonic = DEVKIT_MNEMONIC, index = 0, networkId = 0, confirm? })` | a CIP-30 wallet for DevKit and tests; also `name`, `address`, `keyHash`, and `utxosFromProvider: true` (its UTxOs are the chain view's, so the verifiers authenticate the ones it spends) |
+| `devWallet` | `devWallet({ chain, mnemonic = DEVKIT_MNEMONIC, index = 0, networkId = 0, confirm? })` | a CIP-30 wallet for DevKit and tests; also `name`, `address`, `keyHash` |
 | `deriveAccount` | `deriveAccount(mnemonic, index = 0, networkId = 0)` | `{ privateKey, publicKey, address, reward, keyHash }` (CIP-1852, as cardano-client-lib) |
 | `DEVKIT_MNEMONIC` | constant | Yaci DevKit's default mnemonic (its genesis accounts are funded) |
 
