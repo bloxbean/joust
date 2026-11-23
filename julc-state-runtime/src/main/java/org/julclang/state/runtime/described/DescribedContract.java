@@ -298,7 +298,7 @@ public final class DescribedContract {
             if (fundsSlot >= 0) l.set(fundsSlot, PlutusDataAdapter.fromClientLib(PlutusDataAdapter.convert(funds)));
             return new PlutusData.ConstrData(0, l);
         };
-        PlutusData offeredData = offered.toPlutusData();
+        PlutusData offeredData = wire(offered);
         if (into != null) byName.put("into", PlutusData.bytes(HexFormat.of().parseHex(into)));
         boolean usesCtx = meta.path("ctx").asBoolean();
         String transition = recipe.get("transition").asText();
@@ -588,24 +588,46 @@ public final class DescribedContract {
         return Transition.full(base.next(), base.payouts(), sends, mint, accepted).withDeposits(deposits).withEvents(eventsOf(c, 6));
     }
 
-    /** Offered native assets: {@code [[policy, [[name, quantity]]]]} (lowercase hex), as the JS client sends them. */
+    /**
+     * Offered native assets: {@code [[policy, [[name, quantity]]]]} (hex), as the JS client sends them, as a value in
+     * ledger order. Only the shape is checked here, so nothing fails as internal; the host's wire rules are
+     * {@code Session.checkAssets}'.
+     */
     static org.julclang.ledger.Value assets(JsonNode json) {
         var v = org.julclang.state.api.Assets.none();
         if (json == null || json.isNull() || json.isMissingNode()) return v;
         if (!json.isArray()) throw new BadCall("pay.assets: not an array");
-        for (JsonNode p : json) {
-            if (!p.isArray() || p.size() != 2 || !p.get(0).asText("").matches("[0-9a-f]{56}") || !p.get(1).isArray())
-                throw new BadCall("pay.assets: not a [policy, tokens] pair");
-            byte[] policy = HexFormat.of().parseHex(p.get(0).asText());
-            for (JsonNode a : p.get(1)) {
-                if (!a.isArray() || a.size() != 2 || !a.get(0).isTextual() || !a.get(0).asText().matches("([0-9a-f]{2}){0,32}")
-                        || !(a.get(1).isIntegralNumber() || a.get(1).asText("").matches("-?[0-9]{1,200}")))
-                    throw new BadCall("pay.assets: not a [name, quantity] token");
-                v = org.julclang.state.api.Assets.add(v, org.julclang.state.api.Assets.of(policy, HexFormat.of().parseHex(a.get(0).asText()),
-                        new BigInteger(a.get(1).asText())));
+        try {
+            for (JsonNode p : json) {
+                if (!p.isArray() || p.size() != 2 || !p.get(1).isArray()) throw new BadCall("pay.assets: not a [policy, tokens] pair");
+                byte[] policy = HexFormat.of().parseHex(p.get(0).asText());
+                for (JsonNode a : p.get(1)) {
+                    if (!a.isArray() || a.size() != 2) throw new BadCall("pay.assets: not a [name, quantity] token");
+                    v = org.julclang.state.api.Assets.add(v, org.julclang.state.api.Assets.of(policy, HexFormat.of().parseHex(a.get(0).asText()),
+                            new BigInteger(a.get(1).asText())));
+                }
             }
+        } catch (BadCall e) {
+            throw e;
+        } catch (IllegalArgumentException e) {   // bad hex or quantity
+            throw new BadCall("pay.assets: " + e.getMessage(), e);
         }
         return v;
+    }
+
+    /**
+     * A value as a redeemer carries it ("the wire"): each policy's token names in canonical CBOR order (shorter first,
+     * then bytewise), as cardano-client-lib writes a map and the validator's {@code ValueAdapter.fromWire} reads it; the
+     * ledger orders names bytewise (#154 Codex final: {@code ff} before {@code 0000} on the wire, after it in the ledger).
+     */
+    static PlutusData wire(org.julclang.ledger.Value value) {
+        var policies = new ArrayList<PlutusData.Pair>();
+        for (var p : ((PlutusData.MapData) value.toPlutusData()).entries()) {
+            var tokens = new ArrayList<>(((PlutusData.MapData) p.value()).entries());
+            tokens.sort((a, b) -> SchemaCodec.compare(SchemaCodec.cbor(a.key()), SchemaCodec.cbor(b.key())));
+            policies.add(new PlutusData.Pair(p.key(), new PlutusData.MapData(tokens)));
+        }
+        return new PlutusData.MapData(policies);
     }
 
     /** What a creation makes. */

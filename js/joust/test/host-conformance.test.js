@@ -166,33 +166,22 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       assert.equal(failed.error.data.code, 'readFailed');
     } finally { await peer.close(); }
   });
-  it('answers CBOR nested past the engine stack as tooDeep, as the JVM host does, then ends the session', async () => {
+  it('refuses Plutus data nested past 256 CBOR levels before decoding it, and keeps serving (#154 review G3-4, F1)', async () => {
+    // 16,383 nested lists trapped the image (tooDeep, then the host exited): datums and Data arguments nest at most 256
+    // CBOR levels (SchemaCodec.checkNesting). No served contract takes a Data argument; decode reads its datum with the
+    // same recursive decoder, so it shows the image survives the bound.
     const v = fixture('owned-action');
     const { call } = v.params;
     start(contracts.filter(c => JSON.parse(c.description).preamble.title === call.contract));
     try {
       await initialize({});
-      const deep = await peer.rpc('decode', { contract: call.contract, datum: '81'.repeat(100_000) + '00' });
-      assert.equal(deep.error?.data.kind, 'internal', JSON.stringify(deep));
-      assert.equal(deep.error.data.code, 'tooDeep');
-      await assert.rejects(peer.receive(), /unexpected host EOF/);
-    } finally { await peer.close(); }
-    assert.equal(peer.child.exitCode, 1);
-  });
-  it('survives Plutus data nested as deeply as the strict wire allows (#154 review G3-4)', async () => {
-    // At the strict codec's 16,384-byte bound, 16,383 nested lists trapped the image, so arguments nest at most 256
-    // levels (SchemaCodec.MAX_DATA_DEPTH). No served contract takes a Data argument; decode reads its datum with the
-    // same recursive decoder.
-    const v = fixture('owned-action');
-    const { call } = v.params;
-    start(contracts.filter(c => JSON.parse(c.description).preamble.title === call.contract));
-    try {
-      await initialize({});
-      const deep = await peer.rpc('decode', { contract: call.contract, datum: '81'.repeat(256) + '00' });
-      assert.equal(deep.error?.data.kind, 'bad', JSON.stringify(deep));
-      assert.equal(deep.error.data.code, 'request');
-      const again = await peer.rpc('decode', { contract: call.contract, datum: '00' });
-      assert.equal(again.error?.data.code, 'request', 'the session still serves');
+      for (const datum of ['81'.repeat(100_000) + '00', '81'.repeat(257) + '00', '81'.repeat(256) + '00']) {
+        const r = await peer.rpc('decode', { contract: call.contract, datum });
+        assert.equal(r.error?.data.kind, 'bad', JSON.stringify(r).slice(0, 300));
+        assert.equal(r.error.data.code, 'request');
+      }
+      const holding = v.reads.flatMap(r => r.answer.value ?? []).find(u => u.inline_datum && u.amount?.some(a => a.unit.endsWith(call.object)));
+      assert.ok((await peer.rpc('decode', { contract: call.contract, datum: holding.inline_datum })).result, 'the session still serves');
     } finally { await peer.close(); }
   });
   it('returns structured source sites for the refusing contract from its verified build bundle', async () => {

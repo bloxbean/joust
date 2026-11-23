@@ -374,7 +374,9 @@ final class Session implements Transport.Handler {
     /**
      * pay.assets on the wire, before any read, for both hosts (#154 review G3-1): at most 1,024 [policy, [[name,
      * quantity]…]] pairs (and tokens per policy), a policy of 28 bytes and a name of at most 32 in lowercase hex, both in
-     * canonical order without repeats (a map on the strict wire), and a quantity under JsonValues' integer rules.
+     * canonical CBOR order without repeats (shorter first, then bytewise: a map on the strict wire), and a positive
+     * quantity under JsonValues' integer rules. The runtime converts the offer to ledger order (ServedContract,
+     * DescribedContract.assets), and the redeemer's assetsIn keeps the wire order.
      */
     static void checkAssets(JsonNode assets) {
         if (!assets.isArray() || assets.size() > 1024) throw bad("pay.assets: an array of at most 1,024 [policy, tokens] pairs");
@@ -391,7 +393,8 @@ final class Session implements Transport.Handler {
                     throw bad("pay.assets: each token is [name (at most 32 bytes of lowercase hex), quantity]");
                 if (name != null && canonical(name, a.get(0).textValue()) >= 0) throw bad("pay.assets: names not in canonical order, or repeated");
                 name = a.get(0).textValue();
-                JsonValues.fromJson(a.get(1), BigInteger.class, "pay.assets quantity");
+                if (((BigInteger) JsonValues.fromJson(a.get(1), BigInteger.class, "pay.assets quantity")).signum() <= 0)
+                    throw bad("pay.assets: a quantity must be positive");
             }
         }
     }
