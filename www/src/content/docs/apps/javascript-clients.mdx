@@ -233,7 +233,9 @@ Yaci Store, Ogmios, ...) and the wallet are trusted, as in any cardano-client-li
 builds transactions from the provider's UTxOs. Input values and datums are the provider's or the wallet's answer, so
 the verifier needs no transaction CBOR and works with every supported provider (keyed calls still read it where the
 provider serves it). Reach the provider directly, or through a host other than the prepare service: a provider
-proxied by the service is as untrusted as the service. Defending against a lying provider is out of scope.
+proxied by the service is as untrusted as the service. That rule is about a remote prepare service: `joust dev`
+serving `/chain` and `/joust/service` from one host is fine, since that host is your own machine. Defending against a
+lying provider is out of scope.
 
 | Call | Verifier (`@julclang/state-client`) |
 |---|---|
@@ -273,7 +275,9 @@ For a single call, `verifyPrepared` refuses:
 
 The pinned validator checks the rest on chain: that the next state is what the method computes, that payouts are paid
 and that the script's value is conserved. Rules the validators enforce that do not bound what the wallet can lose
-(claim order, I30, deposit values) are left to them: a body that breaks them fails on chain.
+(claim order, I30, deposit values) are left to them. An honest node refuses a body that breaks them at submission; at
+worst a block producer could include it phase-2-invalid and take the collateral, which the page bounds by
+`limits.maxCollateral`.
 
 ### `VerificationError`
 

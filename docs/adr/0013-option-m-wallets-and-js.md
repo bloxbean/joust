@@ -288,7 +288,9 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
   the provider's UTxOs. So an input's value and datum are the provider's (or the CIP-30 wallet's) answer, and the
   verifier needs no transaction CBOR (keyed calls, ADR-0016 D11, still read it where the provider serves it, as
   before). The provider must not be reached through the prepare service's host: proxied by the service, it is as
-  untrusted as the service. Defending against a lying provider is out of scope for JOUST (ADR-0015 §5; issue #169).
+  untrusted as the service. That rule is about a remote prepare service: `joust dev` serving `/chain` and
+  `/joust/service` from one host is fine, since that host is the developer's own machine. Defending against a lying
+  provider is out of scope for JOUST (ADR-0015 §5; issue #169).
 - **`verify.js` generalises `page.mjs`.** The page does not recompute the next state: the pinned validator already
   enforces `datum == method(state, args)`. It checks that the transaction makes exactly the call it asked for and
   that the wallet risks nothing else:

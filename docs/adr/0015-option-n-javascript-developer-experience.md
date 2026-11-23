@@ -375,8 +375,9 @@ Before anything goes to npmjs.org, the packages are built and tested as real npm
     cardano-client-lib or MeshJS app: the page and the Java runtime build transactions from the provider's UTxOs, and
     the page verifier takes input values and datums from the provider (or the CIP-30 wallet). It needs no transaction
     CBOR, so it works with what every supported provider serves. The provider must be reached directly or through a
-    host other than the prepare service's: a provider proxied by the service is as untrusted as the service. What is
-    still checked: protocol parameters are bounded by the page's limits (`maxFee`), and MerkleMap history and proofs
+    host other than the prepare service's: a provider proxied by the service is as untrusted as the service. The rule
+    is about a remote prepare service: `joust dev` serving `/chain` and `/joust/service` from one host is fine, since
+    that host is the developer's own machine. What is still checked: protocol parameters are bounded by the page's limits (`maxFee`), and MerkleMap history and proofs
     against on-chain roots. Keyed calls (ADR-0016 D11) still read script inputs from transaction CBOR where the
     provider serves it, as before this decision. A mode that does not trust the provider is issue #169.
 - **Untrusted:**
@@ -891,7 +892,8 @@ direct `Tx` building, gated by S3.
     refused; its user tokens are bounded per unit like any other asset.
   - **Left to the validators:** rules they enforce on chain that do not bound the wallet's loss (I30 for claimed
     outputs, claim order, deposit values, a repeated or self deposit, a collection's sends covering its rewards) are
-    not repeated in the page. A body that breaks them fails on chain and costs the wallet nothing.
+    not repeated in the page. An honest node refuses a body that breaks them at submission; at worst a block producer
+    could include it phase-2-invalid and take the collateral, which the page bounds by `limits.maxCollateral`.
   - An owned destroy's and a move's input datum (the object's `Holding`) must name the call's instance: a consistency
     check of the page's own call, alone too.
   - The known limitation of ADR-0013 §9.2 crosses calls: the wallet's top-up of any call's send to the caller counts
