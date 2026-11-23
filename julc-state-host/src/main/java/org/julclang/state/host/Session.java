@@ -217,7 +217,7 @@ final class Session implements Transport.Handler {
                 else fields(p, "now", "contract", "limit");
                 String owner = objects ? instance(p) : null;
                 int limit = Listings.limit(p);
-                return listings.start(method, c, owner, reads.outputs(handle.address()), reads.tipHash(), limit);
+                return listings.start(method, c, owner, reads.outputs(handle.address()), limit);
             }
             case "view" -> {
                 fields(p, "now", "contract", "instance", "view", "args");
@@ -308,16 +308,12 @@ final class Session implements Transport.Handler {
         new Prerequisites(c, handle, reads, reservations, true).requireReady();
         String spent = null;
         if (ownedSpend) {
-            // The object's token is unique: an answer holding it twice (or with a quantity other than one) contradicts
-            // itself, and the runtime would take whichever comes first (#151 Codex review).
+            // Reads refuses a listing holding the object's token twice before its tip counts; this only finds the one.
             var datums = new ContractDatums(c);
             String unit = c.hash() + object;
-            // Reads refuses a listing holding the token twice before its tip counts; this only finds the one holding.
             com.bloxbean.cardano.client.api.model.Utxo holding = null;
             for (var u : reads.outputs(handle.address())) {
-                if (u.getAmount().stream().noneMatch(a -> a.getUnit().equals(unit))) continue;
-                if (holding != null) throw HostError.internal("inconsistentRead", "the listing holds object " + object + " more than once");
-                holding = u;
+                if (u.getAmount().stream().anyMatch(a -> a.getUnit().equals(unit))) { holding = u; break; }
             }
             if (holding != null) {
                 var item = datums.recognize(holding);
@@ -326,7 +322,7 @@ final class Session implements Transport.Handler {
             }
         } else if (instance != null) {
             var target = handle.at(instance).utxo();
-            spent = target.getTxHash() + "#" + target.getOutputIndex();
+            spent = ClaimStore.ref(target.getTxHash(), target.getOutputIndex());
         }
         if (spent != null && reservations.avoids(spent)) throw HostError.refusal("pending", "reserved input " + spent);
         Object[] made = new Object[1];
@@ -369,7 +365,7 @@ final class Session implements Transport.Handler {
     static void requireUnreservedReferences(TransactionBody body, Reservations reservations) {
         if (body.getReferenceInputs() == null) return;
         for (var in : body.getReferenceInputs()) {
-            String ref = in.getTransactionId().toLowerCase(Locale.ROOT) + "#" + in.getIndex();
+            String ref = ClaimStore.ref(in.getTransactionId(), in.getIndex());
             if (reservations.avoids(ref))
                 throw HostError.refusal("pending", "reference input " + ref + " is spent by a pending transaction");
         }

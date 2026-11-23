@@ -199,6 +199,14 @@ class HostSpecConsumerTest {
         error = runner(":joustHostSpec", "-PmultiRelease").buildAndFail().getOutput();
         assertTrue(error.contains("incompatible adapter") && error.contains("mr.jar"), error);
     }
+    @Test void withTheConfigurationCacheAShadowingProjectClassIsRefusedOnTheFirstRun() throws Exception {
+        // #150 Codex final pass: the check must see the project's own classes, built in the same invocation.
+        Path own = Files.createDirectories(project.resolve("src/main/java/org/julclang/state/serve"));
+        Files.writeString(own.resolve("JsonValues.java"), "package org.julclang.state.serve; class JsonValues {}");
+        String error = runner(":joustHostSpec", "--configuration-cache").buildAndFail().getOutput();
+        assertTrue(error.contains("incompatible adapter") && error.contains("custom/classes")
+                && error.contains("provides julc-state-serve classes"), error);
+    }
     @Test void theHostsVmDependencyAndTheSpecsLocationAreChecked() throws Exception {
         String error = runner(":joustHostSpec", "-PnoVm").buildAndFail().getOutput();
         assertTrue(error.contains("Unsatisfied runtime dependency") && error.contains("julc-vm"), error);

@@ -193,7 +193,7 @@ final class SnapshotClient {
      * would otherwise block the copy before any digest or timeout applies (#150 Codex review).
      */
     static void copyJar(Path from, Path dest) throws IOException {
-        if (!Files.isRegularFile(from)) throw new IOException("launch file is not a regular file: " + from);
+        if (!Files.isRegularFile(from, LinkOption.NOFOLLOW_LINKS)) throw new IOException("launch file is not a regular file: " + from);
         Files.copy(from, dest);
     }
 }

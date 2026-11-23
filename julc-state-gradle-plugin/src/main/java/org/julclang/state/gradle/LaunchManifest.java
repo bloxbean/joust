@@ -32,10 +32,10 @@ record LaunchManifest(List<Map<String, Object>> entries, String digest) {
                     }
                 }
                 hashes.forEach((name, hash) -> line(fingerprint, hash, ordinal, "dir", name));
-                entries.add(Map.of("ordinal", ordinal, "kind", "dir", "path", file.getAbsolutePath(), "files", hashes));
+                entries.add(Map.of("ordinal", ordinal, "kind", "dir", "path", path.toString(), "files", hashes));
             } else {
                 if (!Files.isRegularFile(path)) throw new IOException("Non-regular jar: " + path);
-                try (var jar = new JarFile(file, false)) {
+                try (var jar = new JarFile(path.toFile(), false)) {
                     var manifest = jar.getManifest();
                     if (manifest != null && !manifest.getMainAttributes().getOrDefault(Attributes.Name.CLASS_PATH, "").equals("")) {
                         throw new IOException("manifest Class-Path in " + file);
@@ -43,7 +43,8 @@ record LaunchManifest(List<Map<String, Object>> entries, String digest) {
                 }
                 String hash = hash(path);
                 line(fingerprint, hash, ordinal, "jar", "");
-                entries.add(Map.of("ordinal", ordinal, "kind", "jar", "path", file.getAbsolutePath(), "sha256", hash));
+                // The resolved path, as hashed: a client opens it without following links (dev-host-1, #150 Codex).
+                entries.add(Map.of("ordinal", ordinal, "kind", "jar", "path", path.toString(), "sha256", hash));
             }
         }
         return new LaunchManifest(entries, HexFormat.of().formatHex(fingerprint.digest()));

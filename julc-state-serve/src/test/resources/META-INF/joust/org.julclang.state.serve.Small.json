@@ -1,0 +1,5 @@
+{"x-joust": {"contract": "Small", "views": [
+  {"name": "nextShort", "args": [{"name": "n"}]},
+  {"name": "nextByte", "args": [{"name": "n"}]},
+  {"name": "data", "args": [{"name": "d"}]}
+]}}

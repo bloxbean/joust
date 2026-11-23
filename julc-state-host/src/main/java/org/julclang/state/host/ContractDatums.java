@@ -16,9 +16,11 @@ final class ContractDatums {
     private final List<Type> types = new ArrayList<>();
     private final SchemaCodec codec;
     private final String policy;
+    private final boolean keyed;
 
     ContractDatums(Contracts.Contract contract) {
         policy = contract.hash();
+        keyed = contract.keyed();
         codec = new SchemaCodec(contract.description());
         var x = contract.description().path("x-joust");
         add("instance", x.path("state"));
@@ -55,6 +57,7 @@ final class ContractDatums {
         return decoded;
     }
 
+    /** A listing item, or null for an intent (a recognized kind that listings omit). */
     ObjectNode recognize(Utxo u) {
         String ref = u.getTxHash() + "#" + u.getOutputIndex();
         var unknown = obj().put("unrecognized", ref);
@@ -62,14 +65,13 @@ final class ContractDatums {
         for (var amount : u.getAmount()) {
             if (!amount.getUnit().startsWith(policy)) continue;
             String token = amount.getUnit().substring(policy.length());
-            String candidate = token.matches("[0-9a-f]{64}") ? "instance" :
-                    token.matches("4f[0-9a-f]{56}") ? "owned" : token.matches("4b[0-9a-f]{56}") ? "keyed" : null;
-            if (candidate == null) continue;
+            if (!Reads.reservedName(token, keyed)) continue;
             if (id != null || !BigInteger.ONE.equals(amount.getQuantity())) return unknown;
             id = token;
-            kind = candidate;
+            kind = token.length() == 64 ? "instance" : token.startsWith("4f") ? "owned" : token.startsWith("49") ? "intent" : "keyed";
         }
         if (id == null) return unknown;
+        if (kind.equals("intent")) return null;
         try {
             var item = decode(u.getInlineDatum(), kind);
             if (item.has("ambiguous")) return unknown;
