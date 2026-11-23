@@ -25,8 +25,8 @@ final class Reservations implements ClaimStore {
         }
         private static Set<String> refs(List<TransactionInput> ins) {
             var refs = new HashSet<String>();
-            // One spelling per input, as the runtime's claim keys (Designation.ref): lowercase hex.
-            if (ins != null) for (var in : ins) refs.add(in.getTransactionId().toLowerCase(Locale.ROOT) + "#" + in.getIndex());
+            // One spelling per input, as the runtime's claim keys.
+            if (ins != null) for (var in : ins) refs.add(ClaimStore.ref(in.getTransactionId(), in.getIndex()));
             return Set.copyOf(refs);
         }
         static Body decode(String cbor, int network) {

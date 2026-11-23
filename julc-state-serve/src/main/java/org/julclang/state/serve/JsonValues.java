@@ -42,11 +42,14 @@ public final class JsonValues {
      * strictly: a JSON number must be a safe integer (|n| at most 2^53 - 1, as the JavaScript codec's
      * {@code Number.isSafeInteger}; larger values are decimal strings), and a {@code String} argument's bytes must be
      * well-formed UTF-8, so the contract never receives other bytes than the client sent (#145 Codex review 3, 4).
+     * Plutus data nested deeper than the decoder's stack raises the {@link StackOverflowError} itself, which the host
+     * reports as {@code internal}/{@code tooDeep} (ADR-0022 D9).
      */
     public static final JsonValues TYPED = new JsonValues(true, true);
     /**
      * The HTTP service's codec, as it has always behaved: record reflection failures are bad values, a JSON number up
-     * to 2^53 in magnitude is accepted, and malformed UTF-8 is decoded with replacement characters.
+     * to 2^53 in magnitude is accepted, malformed UTF-8 is decoded with replacement characters, and Plutus data too
+     * deep to decode is a bad value.
      */
     public static final JsonValues BAD_VALUES = new JsonValues(false, false);
 
@@ -82,8 +85,11 @@ public final class JsonValues {
         if (json == null || json.isMissingNode()) throw new BadValue(path + ": missing");
         Class<?> raw = rawOf(type);
         if (raw == BigInteger.class) return integer(json, path);
-        if (raw == long.class || raw == Long.class) return strict ? exact(integer(json, path), path, true) : integer(json, path).longValueExact();
-        if (raw == int.class || raw == Integer.class) return strict ? (int) exact(integer(json, path), path, false) : integer(json, path).intValueExact();
+        if (raw == long.class || raw == Long.class) return strict ? exact(integer(json, path), path, 63, "long") : integer(json, path).longValueExact();
+        if (raw == int.class || raw == Integer.class) return strict ? (int) exact(integer(json, path), path, 31, "int") : integer(json, path).intValueExact();
+        // byte and short are integers in the description too (#145 Codex final pass).
+        if (raw == short.class || raw == Short.class) return (short) exact(integer(json, path), path, 15, "short");
+        if (raw == byte.class || raw == Byte.class) return (byte) exact(integer(json, path), path, 7, "byte");
         if (raw == boolean.class || raw == Boolean.class) {
             if (!json.isBoolean()) throw new BadValue(path + ": not a boolean");
             return json.booleanValue();
@@ -94,6 +100,8 @@ public final class JsonValues {
             try {
                 return PlutusDataCborDecoder.decode(hex(json, path));
             } catch (RuntimeException | StackOverflowError e) {   // the decoder recurses: deep nesting overflows
+                // The dev host reports an overflow as internal/tooDeep (ADR-0022 D9): let its per-call handler see it.
+                if (propagateAborts && e instanceof StackOverflowError overflow) throw overflow;
                 throw new BadValue(path + ": not Plutus data CBOR");
             }
         }
@@ -172,8 +180,8 @@ public final class JsonValues {
     }
 
     // A value out of the Java type's range is a bad value, not an internal ArithmeticException.
-    private static long exact(BigInteger n, String path, boolean isLong) {
-        if (n.bitLength() > (isLong ? 63 : 31)) throw new BadValue(path + ": out of range for " + (isLong ? "long" : "int"));
+    private static long exact(BigInteger n, String path, int bits, String name) {
+        if (n.bitLength() > bits) throw new BadValue(path + ": out of range for " + name);
         return n.longValue();
     }
 
@@ -216,7 +224,7 @@ public final class JsonValues {
     public JsonNode encode(Object v) {
         if (v == null) return JSON.nullNode();
         if (v instanceof BigInteger b) return JSON.getNodeFactory().textNode(b.toString());
-        if (v instanceof Long || v instanceof Integer) return JSON.getNodeFactory().textNode(v.toString());
+        if (v instanceof Long || v instanceof Integer || v instanceof Short || v instanceof Byte) return JSON.getNodeFactory().textNode(v.toString());
         if (v instanceof Boolean b) return JSON.getNodeFactory().booleanNode(b);
         if (v instanceof byte[] b) return JSON.getNodeFactory().textNode(HexUtil.encodeHexString(b));
         if (v instanceof String s) return JSON.getNodeFactory().textNode(HexUtil.encodeHexString(s.getBytes(StandardCharsets.UTF_8)));

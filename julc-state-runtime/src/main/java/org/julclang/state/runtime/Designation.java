@@ -420,13 +420,13 @@ final class Designation {
         String ownRef = selectableDesignation(store, own);
         UtxoSupplier free = new UtxoSupplier() {
             record Query(String address, int size, OrderEnum order) {}
-            class Pages {
+            class Cursor {
                 final List<Utxo> eligible = new ArrayList<>();
                 int next;
                 boolean finished;
                 String lastFirst;   // the previous raw page's first input: a provider that ignores the page repeats it
             }
-            private final Map<Query, Pages> pages = new java.util.HashMap<>();
+            private final Map<Query, Cursor> pages = new java.util.HashMap<>();
 
             @Override
             public List<Utxo> getPage(String address, Integer nrOfItems, Integer page, OrderEnum order) {
@@ -438,7 +438,7 @@ final class Designation {
                 int size = nrOfItems == null ? UtxoSupplier.DEFAULT_NR_OF_ITEMS_TO_FETCH : nrOfItems;
                 int start = Math.multiplyExact(page == null ? 0 : page, size);
                 int end = Math.addExact(start, size);
-                Pages cursor = pages.computeIfAbsent(new Query(address, size, order), key -> new Pages());
+                Cursor cursor = pages.computeIfAbsent(new Query(address, size, order), key -> new Cursor());
                 while (!cursor.finished && cursor.eligible.size() < end) {
                     var raw = all.getPage(address, size, cursor.next, order);
                     // A repeated page is the end of the answer, checked before filtering: a page every input of which
