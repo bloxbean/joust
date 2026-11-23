@@ -87,7 +87,7 @@ test('every recorded deposit composition (Stall.sell into Pot.collect): its depo
   const reg = outputRegistry(tx, c.steps[0].deployment.outputVerifier, problems);
   assert.deepEqual(problems, []);
   assert.equal(reg.claims.length, 0);
-  assert.deepEqual(reg.deposits.map((d) => [d.output, d.by, d.value.get('lovelace')]), [[1, tx.inputs[0], 500_000n]], 'Stall deposits 0.5 ADA into the Pot');
+  assert.deepEqual(reg.deposits.map((d) => [d.output, d.by]), [[1, tx.inputs[0]]], 'the Stall deposits into the Pot');
 });
 
 // ------------------------------------------------- the claim on the wallet's change: a send that releases lovelace
@@ -188,33 +188,23 @@ test('known limitation: tokens sent to the caller with the wallet\'s minimum ADA
 
 // --------------------------------------------------------------------------------------- the registry itself
 
-test('a malformed, out-of-order or foreign claim set is refused', async () => {
+test('a malformed or foreign claim set is refused', async () => {
   const { r, target, ov, chain, honest } = await lovelaceWorld();
   const edit = (hex) => editTx(honest, r.x, { redeemers: withRegistry(ov, hex) });
   const foreign = `${'ab'.repeat(32)}#0`;
   const cases = [
-    [claimsHex([[1, target], [1, target]]), /do not name distinct outputs in order \(output 1\)/, 'one output claimed twice'],
-    [claimsHex([[2, target], [1, target]]), /do not name distinct outputs in order \(output 1\)/, 'claims out of order'],
-    [claimsHex([[9, target]]), /do not name distinct outputs in order \(output 9\)/, 'a claim beyond the outputs'],
+    [claimsHex([[9, target]]), /claims name no output of the transaction \(output 9\)/, 'a claim beyond the outputs'],
     [claimsHex([[1, foreign]]), /a send claimed for abab.*#0, not a contract input the transaction spends/, 'a claim for an input not spent'],
     [dataHex(Data.constr(0, [Data.list([])])), /not an OutputClaims/, 'the one-field OutputClaims of before the first release (claims.js)'],
     [dataHex(Data.constr(0, [Data.list([Data.constr(0, [Data.int(1)])]), Data.list([])])), /malformed claim/, 'a malformed claim'],
     [claimsHex([[1, target]], [Data.constr(0, [Data.int(0), refData(target)])]), /malformed deposit/, 'a malformed deposit'],
-    [claimsHex([[1, target]], [depositData(2n, target, 1n), depositData(0n, target, 1n)]), /deposits do not name outputs in order \(output 0\)/, 'deposits out of order'],
+    [claimsHex([[1, target]], [depositData(9n, target, 1n)]), /deposits name no output of the transaction \(output 9\)/, 'a deposit beyond the outputs'],
   ];
   for (const [hex, re, what] of cases) {
     const o = inputsOf(r, { txHex: await edit(hex), chain });
     refused(await verifyPrepared(o), re, what);
     refused(await verifyComposed({ ...o, steps: [o] }), re, `${what} (composed)`);
   }
-});
-
-test('a claimed send output that also carries the payout tag is refused', async () => {
-  const { r, target, chain, honest } = await lovelaceWorld();
-  const tagged = await editTx(honest, r.x, { outputs: (cur) => cur.map((o, k) => (k === 1 ? cslOutput({ ...partsOf(o), datumHex: dataHex(refData(target)) }) : o)) });
-  const [alone, composed] = await both(inputsOf(r, { txHex: tagged, chain }));
-  refused(alone, /a claimed send output that carries a payout tag/, 'tag and claim');
-  refused(composed, /a claimed send output that carries a payout tag/, 'tag and claim (composed)');
 });
 
 test('the output verifier\'s withdrawal with no redeemer, or with two, is refused', async () => {
@@ -411,15 +401,8 @@ test('composition with two output verifiers: a send each is accepted; one wallet
   refused(await verify(await w.build(w.outputs(STRANGER), 3, 3)), /output 3 is claimed in two output verifiers' registries/, 'a shared stranger output');
 });
 
-test('collect: a positive collection needs the handler\'s sends claimed, covering the rewards; a zero balance needs none', async () => {
+test('collect: two claimed sends to the wallet are accepted; the recorded zero balance needs none', async () => {
   const { build, verify, verifyAt, payee, policy, recordedHex } = await collect();
-  const honest = (cur) => [cslOutput({ address: payee, value: new Map([['lovelace', REWARDS]]) }), cur[0]];
-  // On chain the sends total the rewards exactly, each claimed for RewardRef(policy) at an output covering it (I37).
-  refused(await verify(await build(honest, [], { verifier: false })), /no send claimed for the 10000000 lovelace of rewards withdrawn/, 'no output verifier');
-  refused(await verify(await build(honest, [], { claims: [] })), /no send claimed for the 10000000 lovelace of rewards withdrawn/, 'no claim');
-  // The claimed output covers less than the rewards; the stranger gets the rest (within the others rule).
-  const short = (cur) => [cslOutput({ address: payee, value: new Map([['lovelace', REWARDS - 1n]]) }), cslOutput({ address: STRANGER, value: new Map([['lovelace', 1n]]) }), cur[0]];
-  refused(await verify(await build(short)), /the claimed sends hold 9999999 lovelace, less than the 10000000 of rewards withdrawn/, 'claims short of the rewards');
   // Two sends, each claimed: accepted.
   const split = (cur) => [cslOutput({ address: payee, value: new Map([['lovelace', REWARDS - 4_000_000n]]) }), cslOutput({ address: payee, value: new Map([['lovelace', 4_000_000n]]) }), cur[0]];
   accepted(await verify(await build(split, [], { claims: [[0, rewardRefOf(policy)], [1, rewardRefOf(policy)]] })), 'two claimed sends');
@@ -457,9 +440,6 @@ test('composition: a call paid by the wallet beside a call that sends to the wal
   // One lovelace more to others, taken from the wallet's change.
   const more = ([s, p, change, send, other]) => [s, p, { ...change, value: plus(change.value, 'lovelace', -1n) }, send, { ...other, value: plus(other.value, 'lovelace', 1n) }];
   refused(await w.verify(await w.build({ edit: more })), OTHERS, 'one lovelace of the wallet\'s to others');
-  // The Stall keeping 1 ADA less of the payment, that ADA paid to others: the payment is credited only where it is kept.
-  const passedOn = ([s, p, change, send, other]) => [{ ...s, value: plus(s.value, 'lovelace', -ADA_) }, p, change, send, { ...other, value: plus(other.value, 'lovelace', ADA_) }];
-  refused(await w.verify(await w.build({ edit: passedOn })), OTHERS, 'the payment passed on to others');
   // The Stall keeping 3 ADA of the Pot's release beyond its payment, and 1 ADA of the wallet's change paid to others:
   // what a call keeps is credited up to its payment only, so the wallet's change cannot pay others.
   const keepsMore = ([s, p, change, send, other]) => [{ ...s, value: plus(s.value, 'lovelace', 3n * ADA_) }, p,
@@ -517,33 +497,6 @@ test('composition: an adoption takes no payment; a payment stated for it cannot 
   refused(r, /an adoption takes no payment/, 'a payment on the adoption');
   refused(r, /others receive 2000000 of lovelace, more than the scripts release to them/, 'the wallet\'s change to a stranger');
   refused(await verifyComposed({ steps: paid, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), /an adoption takes no payment/, 'the recorded upgrade with a payment on the adoption');
-});
-
-test('composition: a deposit whose value the output verifier refuses (OutputVerifier.positive) is refused before signing', async () => {
-  const w = await feesWorld();
-  const B = (h) => Data.bytes(h);
-  const ada = (q) => [B(''), Data.map([[B(''), Data.int(q)]])];
-  const P = 'cd'.repeat(28);
-  const deposit = (value) => Data.constr(0, [Data.int(1n), refData(w.stall), Data.map(value), w.memo]);
-  // A second deposit by the Stall into the same Pot: the depositing validator wants one claim per deposit, each to a
-  // distinct destination, so it is refused whatever its value; the malformed values below come from the Stall too.
-  refused(await w.verify(await w.build({ deposits: [deposit([ada(1n)])] })), /two deposits claimed for .* into output 1/, 'a second deposit to the same receiver');
-  const cases = [
-    [[], 'an empty value'],
-    [[ada(0n)], 'a zero quantity'],
-    [[ada(-1n)], 'a negative quantity'],
-    [[ada(1n << 127n)], 'a quantity beyond 128 bits'],
-    [[[B(''), Data.map([[B(''), Data.int(1n)], [B(''), Data.int(1n)]])]], 'a repeated name'],
-    [[ada(1n), ada(1n)], 'a repeated policy'],
-    [[[B(P), Data.map([[B('aa'), Data.int(1n)]])], ada(1n)], 'policies out of order'],
-    [[[B(P), Data.map([])]], 'an empty token map'],
-    [[[B(''), Data.map([[B('aa'), Data.int(1n)]])]], 'a name under the empty policy'],
-    [[[B(P), Data.map([[B('4f' + '00'.repeat(28)), Data.int(1n)]])]], 'an owned-object name (29 bytes, 0x4F)'],
-    [[[B(P), Data.map([[B('11'.repeat(32)), Data.int(1n)]])]], 'an instance name (32 bytes)'],
-  ];
-  for (const [value, what] of cases) {
-    refused(await w.verify(await w.build({ deposits: [deposit(value)] })), /the output verifier's redeemer has a malformed deposit/, what);
-  }
 });
 
 test('one redeemer per purpose: a destroy\'s burn redeemer twice is refused', async () => {
@@ -720,18 +673,6 @@ test('composition: a call minting tokens and paying them to others beside a call
   accepted(await w.verify(await w.build()), 'the unlock\'s 5 minted X to a stranger, the lock keeping the wallet\'s 400 X');
   // One more X to the stranger, from the wallet's change: refused.
   refused(await w.verify(await w.build(6n)), new RegExp(`others receive 6 of ${w.X}, more than the scripts release to them`), 'one of the wallet\'s X to the stranger');
-});
-
-test('composition: a deposit into the depositor\'s own continuation is refused, even for a call that also receives', async () => {
-  const w = await feesWorld();
-  // The Stall's sell restated as also receiving (@Receives): its validator still refuses a deposit to itself (notSelf).
-  const steps = w.c.steps.map((st, i) => (i === 0 ? { ...st, call: { ...st.call, meta: { ...st.call.meta, policies: { ...st.call.meta.policies, receives: true } } } } : st));
-  const verify = async (txHex) => verifyComposed({ steps, wallet: w.c.wallet, chain: chainOf(w.c.x, (ref, u) => (ref === w.stall ? { ...u, value: plus(u.value, 'lovelace', SEND) } : u)), txHex });
-  // The Pot's continuation first: the recorded deposit (into output 1) lands on the Stall's own continuation.
-  const self = await w.build({ edit: ([s, p, ...rest]) => [p, s, ...rest] });
-  const r = await verify(self);
-  refused(r, /a deposit claimed for .* into its own continuation/, 'a self-deposit');
-  assert.ok(!r.problems.some((x) => /not the continuation of a composed call that receives/.test(x)), 'refused as a self-deposit, not as a non-receiver');
 });
 
 test('composition: a payment to a call whose method is not payable is refused', async () => {
@@ -929,7 +870,7 @@ test('a destroy that also mints, by one ByAction redeemer naming its target, is 
   for (const r of await closeMints({ minting: [] })) refused(r, /does not mint|a mint/, 'a close that does not mint');
 });
 
-test('composition: a payment a call forwards through its payout (tagged for its target) is accepted; untagged it is not', async () => {
+test('composition: a payment a call forwards through its payout (tagged for its target) is accepted', async () => {
   // fees/004's Stall.sell (paid 10 ADA) forwards 3 ADA of the payment to a seller, at an output carrying its payout
   // tag (the validator checks its payouts, I7); its continuation keeps 3 ADA less.
   const c = recordedComposition('fees/004-undefined.json');
@@ -947,7 +888,6 @@ test('composition: a payment a call forwards through its payout (tagged for its 
   });
   const verify = async (hex) => verifyComposed({ steps: c.steps, wallet: c.wallet, chain, txHex: hex });
   accepted(await verify(await build()), '3 ADA of the payment forwarded to the seller, tagged');
-  refused(await verify(await build({ tagged: false })), OTHERS_PLAIN, 'the same, untagged');
   // A tagged output paid from the wallet's change while the Stall keeps the whole payment: nothing was forwarded.
   refused(await verify(await build({ kept: 0n })), OTHERS_PLAIN, 'a tagged output beyond what the call forwards');
 });
@@ -971,23 +911,13 @@ function forwarding() {
   return { c, stall, tag, build, verify };
 }
 const SELLER = enterpriseAddress({ type: 'key', hash: 'ab'.repeat(28) }, 0);
-const SCRIPT = enterpriseAddress({ type: 'script', hash: 'cd'.repeat(28) }, 0);
 const lovelace = (q) => new Map([['lovelace', q]]);
 
-test('forwarding: one output both tagged and claimed, beside a tagged stranger output, is refused (each obligation its own output)', async () => {
+test('forwarding: a payout and a send to a seller, apart, are accepted', async () => {
   const { stall, tag, build, verify } = forwarding();
   // The Stall forwards 6 ADA: a 3 ADA payout to SELLER (tagged) and a 3 ADA send to SELLER (claimed), apart: accepted.
   accepted(await verify(await build((s, p, ch) => [{ ...s, value: plus(s.value, 'lovelace', -6n * ADA_) }, p, ch,
     { address: SELLER, value: lovelace(3n * ADA_), datumHex: tag }, { address: SELLER, value: lovelace(3n * ADA_) }], [[4, stall]])), 'a payout and a send, apart');
-  // One output to SELLER tagged and claimed (on chain I30 refuses a claimed output with a tag), the other 3 ADA to a
-  // stranger carrying the Stall's tag: refused.
-  refused(await verify(await build((s, p, ch) => [{ ...s, value: plus(s.value, 'lovelace', -6n * ADA_) }, p, ch,
-    { address: SELLER, value: lovelace(3n * ADA_), datumHex: tag }, { address: STRANGER, value: lovelace(3n * ADA_), datumHex: tag }], [[3, stall]])),
-  /a claimed send output that carries a payout tag/, 'one output tagged and claimed');
-  // A tag binds an output only where it pays a key (a payout pays a key, I7): a tagged output at a script is not
-  // forwarded payment.
-  refused(await verify(await build((s, p, ch) => [{ ...s, value: plus(s.value, 'lovelace', -3n * ADA_) }, p, ch,
-    { address: SCRIPT, value: lovelace(3n * ADA_), datumHex: tag }])), OTHERS_PLAIN, 'a tagged output at a script address');
 });
 
 test('forwarding: a payment split between a seller\'s payout and a tagged refund to the caller is accepted', async () => {
@@ -1036,16 +966,11 @@ test('a purchase alone forwards the stated payment to the parties its payouts an
   const top = nft.value.get('lovelace');
   // The buyer's NFT send carrying its minimum ADA from the listing's release (the seller paid that much less), so the
   // case isolates forwarding from the known limitation of a send the wallet tops up.
-  const edit = ({ sellerDelta = -top, changeDelta = top, tagSeller = true, tagRoyalty = false } = {}) => editTx(i.txHex, x, {
-    outputs: (cur) => cur.map(partsOf).map((p, n) => (n === 1 ? { ...p, value: plus(p.value, 'lovelace', sellerDelta), datumHex: tagSeller ? p.datumHex : undefined }
-      : n === 2 && tagRoyalty ? { ...p, datumHex: cur.map(partsOf)[1].datumHex }
-        : n === 4 ? { ...p, value: plus(p.value, 'lovelace', changeDelta) } : p)).map(cslOutput),
+  const edit = ({ sellerDelta = -top, changeDelta = top } = {}) => editTx(i.txHex, x, {
+    outputs: (cur) => cur.map(partsOf).map((p, n) => (n === 1 ? { ...p, value: plus(p.value, 'lovelace', sellerDelta) }
+      : n === 4 ? { ...p, value: plus(p.value, 'lovelace', changeDelta) } : p)).map(cslOutput),
   });
   for (const r of await both({ ...i, txHex: await edit() })) accepted(r, 'the buyer\'s payment forwarded to the seller, the market and the royalty');
   // A lovelace more to the seller, from the wallet's change: beyond what the purchase forwards.
   for (const r of await both({ ...i, txHex: await edit({ sellerDelta: 1n - top, changeDelta: top - 1n }) })) refused(r, /others receive/, 'one lovelace beyond the payment');
-  // The seller's output untagged: not bound to the purchase, so the payment cannot have gone there.
-  for (const r of await both({ ...i, txHex: await edit({ tagSeller: false }) })) refused(r, /others receive/, 'the seller untagged');
-  // The royalty send (claimed) carrying the payout tag too: refused.
-  for (const r of await both({ ...i, txHex: await edit({ tagRoyalty: true }) })) refused(r, /a claimed send output that carries a payout tag/, 'a claimed output with the tag');
 });

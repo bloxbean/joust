@@ -120,10 +120,15 @@
       "scope": "joust",
       "score": 62.0
     },
-    "js/state-client/src/compose.js": {
-      "mutants": 1321,
+    "js/state-client/src/claims.js": {
+      "mutants": 150,
       "scope": "state-client",
-      "score": 58.0
+      "score": 82.7
+    },
+    "js/state-client/src/compose.js": {
+      "mutants": 1161,
+      "scope": "state-client",
+      "score": 56.7
     },
     "js/state-client/src/keyed.js": {
       "mutants": 1542,
@@ -136,14 +141,14 @@
       "score": 41.9
     },
     "js/state-client/src/purposes.js": {
-      "mutants": 435,
+      "mutants": 404,
       "scope": "state-client",
-      "score": 47.6
+      "score": 44.6
     },
     "js/state-client/src/verify.js": {
-      "mutants": 1003,
+      "mutants": 1201,
       "scope": "state-client",
-      "score": 8.6
+      "score": 60.2
     }
   }
 }

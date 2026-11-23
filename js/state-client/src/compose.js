@@ -7,11 +7,11 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
-  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks, reservedName, heldBy, scriptHashesOf,
+  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks, reservedName, heldBy, boundPayment,
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
-import { outputRegistry, claimedSends, paymentCredit } from './claims.js';
+import { outputRegistry, claimedSends } from './claims.js';
 
 /**
  * @param o.steps  [{ description, deployment, call: { kind, meta, args, pay, instance, object } }] in composition order
@@ -121,8 +121,8 @@ export async function verifyComposed(o) {
     }
   }
   for (const k of calls) if (!k.creation && k.targetIndex < 0) problems.push(`${k.call.meta.name}: its instance or object is not spent`);
-  // An owned destroy and a move leave no continuation under their source instance: the object's input datum alone
-  // names the instance it is held by (the chain provider's UTxO, trusted as for every input), and it must be the call's.
+  // A consistency check of the page's own calls: an owned destroy and a move leave no continuation under their source
+  // instance, so the object's input datum (its Holding, as the chain provider gives it) must name the call's instance.
   for (const k of calls) {
     if (!k.targetRef || !(k.call.kind === 'ownedDestroy' || k.call.meta.policies?.into)) continue;
     if (heldBy(k.c, k.xj, k.call, k.targetDatum) !== k.call.instance) problems.push(`${k.call.meta.name}: the object is held by another instance than the call's`);
@@ -291,13 +291,9 @@ export async function verifyComposed(o) {
   // and other parties'.
   const tags = calls.map((k) => (k.targetRef ? k.c.encode({ $ref: '#/definitions/org.julclang.ledger.TxOutRef' },
     { txId: k.targetRef.split('#')[0], index: k.targetRef.split('#')[1] }) : null)).filter(Boolean);
-  for (const k of calls) {
-    if (k.targetRef) k.tag = k.c.encode({ $ref: '#/definitions/org.julclang.ledger.TxOutRef' }, { txId: k.targetRef.split('#')[0], index: k.targetRef.split('#')[1] });
-  }
   const back = new Map();
   const tagged = new Map();
   const third = new Map();
-  const loose = [];               // every output that is no continuation: { index, value, datum, paysKey }
   // Each output verifier the calls pin, with its registry and the calls pinning it. The wallet outputs its claims name
   // (each for a target spent by one of those calls; ADR-0007 D5) are the scripts' sends to the wallet, never its change.
   const registries = [];
@@ -308,8 +304,7 @@ export async function verifyComposed(o) {
     registries.push({ verifier: v, registry: outputRegistry(tx, v, problems), pinning,
       owners: pinning.filter((x) => x.targetRef).map((x) => x.targetRef) });
   }
-  const claimed = claimedSends(tx, registries, isWallet, problems, scriptHashesOf(calls.filter((k) => !k.creation).map((k) => k.deployment.address)));
-  const claims = registries.flatMap(({ registry }) => registry?.claims ?? []);
+  const claimed = claimedSends(tx, registries, isWallet, problems);
   for (const [index, out] of tx.outputs.entries()) {
     const value = out.value;
     const bech = out.address;
@@ -348,33 +343,24 @@ export async function verifyComposed(o) {
       add(back, value);
       if (isTagged) add(tagged, value);
       if (pkh === null) problems.push('a wallet output without a payment key');
-      loose.push({ index, value, datum: out.datum, paysKey: pkh !== null });
       continue;
     }
     const pkh = paymentKeyHashOf(out.address);
     if (pkh && wallet.keyHashes.includes(pkh)) problems.push('an output to the wallet\'s key at an address the wallet does not use');
     report.outputs.push({ address: bech, value });
     add(third, value);
-    loose.push({ index, value, datum: out.datum, paysKey: pkh !== null });
   }
   // Deposits (ADR-0011 D3): a receiver credits every deposit claimed on its continuation, whatever its `by`, so each must
   // come from the target of a call that declares deposits (its validator checks its claims exactly: their number, values,
   // memos and outputs) and land on the continuation of a call that receives them, both pinning this verifier. A deposit
-  // by a wallet input would move the wallet's own funds to the receiver.
-  // A depositor's deposits go to distinct destinations, one claim each (the depositing validator's rule), so a repeated
-  // (by, output) pair is a body that cannot succeed on chain.
+  // by a wallet input would move the wallet's own funds to the receiver. Between composed calls deposits cancel out
+  // of what the scripts release (one's release, another's intake), so the bound on others below needs no deposit value.
   for (const { registry, pinning } of registries) {
-    const pairs = new Set();
     for (const d of registry?.deposits ?? []) {
-      const pair = `${d.by}>${d.output}`;
-      if (pairs.has(pair)) problems.push(`two deposits claimed for ${d.by} into output ${d.output}`);
-      pairs.add(pair);
       const from = pinning.find((x) => x.targetRef === d.by);
       const into = pinning.find((x) => x.continuationIndex === d.output);
       if (!from || !from.call.meta.returns?.deposits) problems.push(`a deposit claimed for ${d.by}, not a composed call that deposits`);
       if (!into || !into.call.meta.policies?.receives) problems.push(`a deposit into output ${d.output}, not the continuation of a composed call that receives`);
-      // The depositing validator refuses a deposit to its own instance (notSelf).
-      if (from && from === into) problems.push(`a deposit claimed for ${d.by} into its own continuation`);
     }
   }
   for (const k of calls) {
@@ -409,51 +395,18 @@ export async function verifyComposed(o) {
     if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)`);
     if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}`);
   }
-  // Others receive only what the scripts release beyond their payouts and claimed sends to the wallet, over all calls
-  // (the rule that protects the wallet, as in verify.js; deposits are bound to composed calls above), plus what the
-  // calls keep or forward of the wallet's payments (claims.js paymentCredit): else a payment into one call would shrink
-  // what another releases to others, and a purchase could not pay its price to the seller. A call's own intake is what
-  // its continuation gains beyond the deposits it receives and net of those it gives (each depositing validator checks
-  // its claims exactly; a deposit funds its receiver from the depositor's release, not from the wallet), plus what it
-  // burns as its policy's mint owner. assetsIn binds the assets a call accepts and its validator the continuation, so
-  // tokens it mints change nothing here: of a call that accepts 400 X, mints 5 and sends 5, the wallet's 400 stayed.
-  // Each intake rests on the target's value as the chain provider gives it (trusted). With the credit, others' receipts
-  // bound the wallet's net loss (the fee aside) by what the calls keep or forward of their payments, less what the
-  // scripts send it back.
+  // Others receive only what the scripts release beyond their payouts and claimed sends to the wallet, over all calls,
+  // plus the payments the calls take as their redeemers bind them (verify.js boundPayment; an adoption takes none): the
+  // rule that protects the wallet, as in verify.js. Each validator settles its call exactly and deposits move between
+  // composed calls only, so the release plus the payments is what the calls owe in payouts and sends.
   const released = new Map();
   for (const k of calls) {
     add(released, k.targetValue);
     add(released, k.continuation, -1n);
   }
   add(released, minted);
-  const gives = new Map(calls.map((k) => [k, new Map()]));
-  const gets = new Map(calls.map((k) => [k, new Map()]));
-  for (const { registry, pinning } of registries) {
-    for (const d of registry?.deposits ?? []) {
-      const from = pinning.find((x) => x.targetRef === d.by);
-      const into = pinning.find((x) => x.continuationIndex === d.output);
-      if (from && into) {
-        add(gives.get(from), d.value);
-        add(gets.get(into), d.value);
-      }
-    }
-  }
-  const paying = calls.filter((k) => !k.creation).map((k) => {     // an adoption takes no payment
-    // The payment: its lovelace, and the assets it offers where its redeemer's assetsIn binds them (else none).
-    // Lovelace only where the redeemer's Ctx states it (else nothing binds the payment to the call).
-    const paid = new Map([['lovelace', k.paymentBound ? k.pay.lovelace : 0n]]);
-    if (k.acceptsAssets) for (const [p, assets] of k.pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
-    const own = new Map();
-    add(own, k.continuation);
-    add(own, k.targetValue, -1n);
-    add(own, gives.get(k));
-    add(own, gets.get(k), -1n);
-    if (mintOwner.get(k.policy) === k) {
-      for (const [unit, q] of minted) if (q < 0n && unit.startsWith(k.policy) && !reserved(unit)) own.set(unit, (own.get(unit) ?? 0n) - q);
-    }
-    return { targetRef: k.targetRef, tag: k.tag, paid, own };
-  });
-  const kept = paymentCredit(paying, loose, claims);
+  const kept = new Map();
+  for (const k of calls) if (!k.creation) add(kept, boundPayment(k.pay, k.paymentBound, k.acceptsAssets));
   for (const [unit, q] of third) {
     const free = (released.get(unit) ?? 0n) + (kept.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
     const sends = claimed.indexes.size ? ' beyond their claimed sends to the wallet' : '';

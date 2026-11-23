@@ -286,8 +286,9 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
   service is untrusted. The chain provider the app chose (Blockfrost, Yaci Store, Ogmios, ...) and the wallet are
   trusted, as in any cardano-client-lib or MeshJS app: the page and the Java runtime already build transactions from
   the provider's UTxOs. So an input's value and datum are the provider's (or the CIP-30 wallet's) answer, and the
-  verifier needs no transaction CBOR. Defending against a lying provider is out of scope for JOUST; a separate layer
-  may add it later.
+  verifier needs no transaction CBOR (keyed calls, ADR-0016 D11, still read it where the provider serves it, as
+  before). The provider must not be reached through the prepare service's host: proxied by the service, it is as
+  untrusted as the service. Defending against a lying provider is out of scope for JOUST (ADR-0015 §5; issue #169).
 - **`verify.js` generalises `page.mjs`.** The page does not recompute the next state: the pinned validator already
   enforces `datum == method(state, args)`. It checks that the transaction makes exactly the call it asked for and
   that the wallet risks nothing else:
@@ -313,18 +314,17 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
     - exactly one continuation (none for a destroy), decoded for display;
     - outputs to other parties are allowed and listed in the review, but only up to what the script releases
       (the target's value, less the continuation, plus the mint) beyond its tagged payouts to the wallet and its
-      claimed sends to the wallet (below). A payout to the wallet can thus never hide the wallet's own funds going
-      elsewhere (r4). A spending call may also forward what it does not keep of its payment, to the outputs bound to
-      it (a purchase paying its price to the seller): ADR-0015 D7 states the rule, the same for one call and for a
-      composition. Lovelace is credited only where the redeemer's Ctx states it, and a method that is not payable is
-      paid none. An owned destroy's input datum (the provider's UTxO) must be a `Holding` naming the call's instance.
-      A claimed output carries no JOUST tag of any spent input (bare or `RefTag`) and is not at a spent script
-      input's credential (I30);
+      claimed sends to the wallet (below), plus the payment the call takes. A payout to the wallet can thus never hide
+      the wallet's own funds going elsewhere (r4). The payment counts only as the redeemer binds it (lovelace where
+      Ctx states it, assets where `assetsIn` names them), and a method that is not payable is paid none. The validator
+      settles the call exactly, so the release plus the payment is what the call owes in payouts and sends: a purchase
+      may forward its price to the seller (ADR-0015 §13.8 states the rule, the same for one call and a composition).
+      An owned destroy's input datum must be a `Holding` naming the call's instance (a consistency check);
     - **claimed sends** (ADR-0007 D5): when the transaction withdraws zero from the deployment's pinned output
       verifier, the page decodes that withdrawal's `OutputClaims` redeemer (its Reward redeemer, by the withdrawal's
-      ledger index). Every claim must name a distinct output in strictly increasing order and, as `by`, the target
-      the transaction spends; anything else (another shape, a malformed claim, an output twice or out of range,
-      another `by`) is refused, and so is a claimed output that also carries the payout tag. A single call carries no
+      ledger index). Every claim must name an output of the transaction and, as `by`, the target the transaction
+      spends; anything else (another shape, a malformed claim, an output out of range, another `by`) is refused. The
+      output verifier and the validators check the rest on chain (claim order, I30). A single call carries no
       deposit claims (a deposit needs its receiver in the same composition, ADR-0011 D3). On chain a send to the
       wallet accepts any output at its address that covers it, so a claim could name the wallet's own change: every
       claimed output at a wallet address is the script's send to the wallet, never its change, and its whole value is

@@ -126,17 +126,6 @@ export async function verifyPurpose(o) {
   const registry = op === 'collect' ? outputRegistry(tx, deployment.outputVerifier, problems) : null;
   if (registry?.deposits.length) problems.push('a deposit claim in a reward collection');
   const claimed = claimedSends(tx, [{ registry, owners: [rewardRefOf(policy)] }], isWallet, problems);
-  // A positive collection is fully allocated by the handler's sends, each claimed for RewardRef(policy) at an output
-  // covering it (I37): so its claims name outputs holding at least the rewards withdrawn. Without them the withdrawal
-  // validator refuses the transaction; the page does not ask the wallet to sign one that cannot succeed. A zero balance
-  // has no sends (and no output verifier's withdrawal).
-  if (op === 'collect' && withdrawn > 0n) {
-    const by = rewardRefOf(policy);
-    const mine = (registry?.claims ?? []).filter((cl) => cl.by === by);
-    const held = mine.reduce((s, cl) => s + (tx.outputs[cl.output].value.get('lovelace') ?? 0n), 0n);
-    if (mine.length === 0) problems.push(`no send claimed for the ${withdrawn} lovelace of rewards withdrawn`);
-    else if (held < withdrawn) problems.push(`the claimed sends hold ${held} lovelace, less than the ${withdrawn} of rewards withdrawn`);
-  }
   const produced = new Map();
   const back = new Map();
   let others = 0n;

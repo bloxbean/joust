@@ -1,14 +1,14 @@
 // Verifies a prepared transaction before a CIP-30 wallet signs it (ADR-0013 D2), against what the page knows itself:
 // the contract's bundled description and deployment (the pinned script), the wallet's own UTxOs, the chain (tip,
 // protocol parameters, the UTxOs the transaction reads), and the call the page asked for. The service that prepared
-// the transaction is not trusted for any of it.
+// the transaction is not trusted for any of it; the chain provider the app chose and the wallet are (ADR-0015 §5).
 //
 // What the page does not check, the pinned validator does: the next state (or object) is exactly what the contract's
 // method computes from the call, payouts are paid, and the script's value is conserved. So the page checks that the
 // transaction makes exactly the call it asked for, on the pinned script, and that the wallet risks nothing else: it
 // loses at most the payment, the fee and (for a creation) the new UTxO's minimum ADA; others are paid only from what the
-// script releases beyond its payouts and its claimed sends to the wallet, plus what a spending call forwards of its
-// payment to the outputs bound to it (claims.js).
+// script releases beyond its payouts and its claimed sends to the wallet, plus the payment the redeemer binds. Rules
+// the validators enforce on chain and that do not bound the wallet's loss are left to them.
 
 import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf, objectIdOf } from './tokens.js';
@@ -17,7 +17,7 @@ import { approvalsData, rewardAddressOf } from './governors.js';
 import { parseTx, addressParts, integrityHashOf } from './ledger.js';
 import { dataHex, decodeData } from './pdata.js';
 import { isKeyedCall, verifyKeyed } from './keyed.js';
-import { outputRegistry, claimedSends, paymentCredit } from './claims.js';
+import { outputRegistry, claimedSends } from './claims.js';
 
 export const DEFAULT_LIMITS = {
   maxCollateral: 5_000_000n,     // lovelace a failing script may cost
@@ -83,7 +83,8 @@ export function redeemerDefs(c, description) {
  * @param o.deployment   { policy, address (bech32), networkId, referenceScripts?: ["tx#i"] } (bundled with the page)
  * @param o.call         { kind, meta (the x-joust action or creation), args, pay: { lovelace, assets? }, instance, object }
  * @param o.wallet       { addresses: [bech32], keyHashes: [hex], utxos: Map ref -> { address, value: Map } }
- * @param o.chain        { tip (slot), params, utxo: async ref -> { address, value: Map, referenceScriptHash } | null }
+ * @param o.chain        { tip (slot), params (with a PlutusV3 cost model: the script integrity hash), utxo: async ref ->
+ *                       { address, value: Map, referenceScriptHash, inlineDatum (hex; an owned destroy's Holding) } | null }
  * @returns { problems: string[], report }
  */
 export async function verifyPrepared(o) {
@@ -176,8 +177,9 @@ export async function verifyPrepared(o) {
   }
   if (targetUnit && targetIndex < 0) problems.push('the pinned instance or object is not spent');
   report.targetRef = targetRef;
-  // An owned destroy leaves no continuation: the object's input datum alone names the instance it is held by (the chain
-  // provider's UTxO, which the page trusts as it trusts it for every input), and it must be the call's.
+  // A consistency check of the page's own call: an owned destroy leaves no continuation to decode, so the object's input
+  // datum (its Holding, as the chain provider gives it) must name the call's instance, as decodeNext checks for an owned
+  // action's continuation.
   if (call.kind === 'ownedDestroy' && targetRef && heldBy(c, xj, call, targetDatum) !== call.instance) {
     problems.push(`${call.meta.name}: the object is held by another instance than the call's`);
   }
@@ -337,19 +339,15 @@ export async function verifyPrepared(o) {
   // they need their receiver in the same composition (ADR-0011 D3), and a receiver credits any claim on its output.
   const registry = outputRegistry(tx, deployment.outputVerifier, problems);
   if (registry?.deposits.length) problems.push('a deposit claim in a single call (deposits are verified only in a composition with their receiver)');
-  const claimed = claimedSends(tx, [{ registry, owners: targetRef ? [targetRef] : [] }], isWallet, problems, scriptHashesOf([deployment.address]));
+  const claimed = claimedSends(tx, [{ registry, owners: targetRef ? [targetRef] : [] }], isWallet, problems);
   const third = new Map();         // outputs to anyone else
-  const loose = [];                // every output that is not the continuation: { index, value, datum, paysKey }
-  const claims = registry?.claims ?? [];
   let continuation = new Map();
   const continuingUnit = createdUnit ?? (DESTROYS.has(call.kind) ? null : targetUnit);
   let continuations = 0;
   let createdLovelace = 0n;
-  for (const [index, out] of tx.outputs.entries()) {
+  for (const out of tx.outputs) {
     const value = out.value;
     for (const unit of value.keys()) {
-      // Another token of the contract (another instance's or object's) may not move, except the tokens this call
-      // mints itself (a minting method's own tokens, ADR-0007 D4).
       // A thread token (a reserved name: an instance's, an owned object's, an intent's, a keyed object's) other than
       // the continuing one may not move. The contract's user tokens are bounded per unit like any other asset.
       if (unit.startsWith(policy) && unit !== continuingUnit && reservedName(unit.slice(56), !!xj.keyed)) problems.push('an output carries another token of the contract');
@@ -360,7 +358,6 @@ export async function verifyPrepared(o) {
       if (out.datum && !isTagged) problems.push('a wallet output with a datum');
       add(back, value);
       if (isTagged) add(tagged, value);
-      loose.push({ index, value, datum: out.datum, paysKey: paymentKeyHashOf(out.address) !== null });
       continue;
     }
     // The wallet's payment key at an address the wallet does not use (e.g. with a stranger's stake key): refused.
@@ -385,7 +382,6 @@ export async function verifyPrepared(o) {
     }
     report.outputs.push({ address: bech, value });
     add(third, value);
-    loose.push({ index, value, datum: out.datum, paysKey: pkh !== null });
   }
   if (continuingUnit && continuations !== 1) problems.push('not exactly one continuation of the instance or object');
 
@@ -416,31 +412,20 @@ export async function verifyPrepared(o) {
     if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)`);
     if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}`);
   }
-  // Other parties are paid only from what the script releases beyond its payouts and its claimed sends to the wallet:
-  // neither may hide the wallet's own funds, or the script's release to it, going elsewhere (review r4, Critical). This
-  // is the rule that protects the wallet: each continuation's value is exact on chain, so what the body does not pay
-  // others or the fee comes back to the wallet. A claimed send output is subtracted whole, including what the wallet
-  // added to bring a send below its minimum ADA up to it (the page cannot tell that from lovelace the script sends): a
-  // method that sends the caller less than the minimum ADA and pays released lovelace to others should give the send
-  // its own minimum ADA. A spending call may also forward what it does not keep of its payment, to the outputs bound
-  // to it (its tagged payouts, its claimed sends), as in a composition (claims.js paymentCredit): a purchase paying its
-  // price to the seller (Market.buy). Its target's value is the chain provider's (trusted, ADR-0013 §9.2).
+  // Other parties are paid only from what the script releases beyond its payouts and its claimed sends to the wallet,
+  // plus the payment the call takes (credit): neither may hide the wallet's own funds, or the script's release to it,
+  // going elsewhere (review r4, Critical). This is the rule that protects the wallet. The validator settles the call
+  // exactly (I3, I8, I26: continuation = target + received + accepted + mint - payouts - sends), so the release plus
+  // the payment is what the call owes in payouts and sends; others then receive exactly what is owed to them and
+  // nothing of the wallet's. The payment counts only where the redeemer binds it: lovelace where Ctx states it
+  // (`received`), assets where `assetsIn` names them. A claimed send output is subtracted whole, including what the
+  // wallet added to bring a send below its minimum ADA up to it (the page cannot tell that from lovelace the script
+  // sends): a method that sends the caller less than the minimum ADA and pays released lovelace to others should give
+  // the send its own minimum ADA.
   const released = new Map(targetValue);
   add(released, continuation, -1n);
   add(released, minted);
-  let credit = new Map();
-  if (SPEND_KINDS.has(call.kind) && targetRef) {
-    // Lovelace only where the redeemer's Ctx states it (else nothing binds the payment to the call).
-    const paid = new Map([['lovelace', paymentBound ? pay.lovelace : 0n]]);
-    if (acceptsAssets) for (const [p, assets] of pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
-    // Its intake: what its continuation gains, plus what it burns of its own user tokens (a minting method's ByAction).
-    const own = new Map(continuation);
-    add(own, targetValue, -1n);
-    if (call.meta.returns?.mint) {
-      for (const [unit, q] of minted) if (q < 0n && unit.startsWith(policy) && !reservedName(unit.slice(56), !!xj.keyed)) own.set(unit, (own.get(unit) ?? 0n) - q);
-    }
-    credit = paymentCredit([{ targetRef, tag: payoutTag, paid, own }], loose, claims);
-  }
+  const credit = SPEND_KINDS.has(call.kind) && targetRef ? boundPayment(pay, paymentBound, acceptsAssets) : new Map();
   for (const [unit, q] of third) {
     const free = (released.get(unit) ?? 0n) + (credit.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
     const sends = claimed.indexes.size ? ' beyond its claimed sends to the wallet' : '';
@@ -705,20 +690,14 @@ export function decodeNext(c, xj, call, datum) {
 }
 
 /**
- * The script hashes of {@code addresses}' payment credentials (the spent script inputs' credentials, for I30's claimed
- * sends: claims.js).
+ * The payment a call takes, as its redeemer binds it (Map unit -> bigint): its lovelace where Ctx states it
+ * ({@code ctxBound}: `received` equals the payment), its offered assets where `assetsIn` names them ({@code
+ * acceptsAssets}). Shared by verifyPrepared and verifyComposed.
  */
-export function scriptHashesOf(addresses) {
-  const out = [];
-  for (const a of addresses) {
-    try {
-      const p = addressParts(a).payment;
-      if (p?.type === 'script') out.push(p.hash);
-    } catch {
-      // not an address: nothing to add
-    }
-  }
-  return out;
+export function boundPayment(pay, ctxBound, acceptsAssets) {
+  const paid = new Map([['lovelace', ctxBound ? pay.lovelace : 0n]]);
+  if (acceptsAssets) for (const [p, assets] of pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
+  return paid;
 }
 
 /** The instance an owned object's datum (hex) says it is held by, or null when it does not decode as the call's Holding. */

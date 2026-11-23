@@ -1,15 +1,14 @@
-// What the page binds about the inputs it verifies (ADR-0015 D7, ADR-0013 §9.2), the chain provider and the wallet
-// trusted: a payment is credited only where the redeemer binds it, an owned object's source instance is its input
-// datum's, and a claimed send is held to I30 (no JOUST tag of any input, not at a spent script's credential). Recorded
-// engine transactions (fixtures/m3), edited by CSL.
+// What the page binds about the calls it verifies (ADR-0015 §5, ADR-0013 §9.2), the chain provider and the wallet
+// trusted: a payment is credited only where the redeemer binds it, and an owned object's source instance (its input
+// datum, a consistency check) is the call's. Recorded engine transactions (fixtures/m3), edited by CSL.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { verifyPrepared } from '../src/verify.js';
 import { verifyComposed } from '../src/compose.js';
-import { parseTx, enterpriseAddress } from '../src/ledger.js';
+import { parseTx } from '../src/ledger.js';
 import { Data, dataHex } from '../src/pdata.js';
 import {
-  recorded, recordedComposition, fixtureInputs, inputsOf, chainOf, editTx, cslOutput, partsOf, STRANGER,
+  recordedComposition, fixtureInputs, editTx, cslOutput, partsOf, STRANGER,
 } from './sends-world.js';
 
 const accepted = (r, what) => assert.deepEqual(r.problems, [], `${what}: ${r.problems.join('; ')}`);
@@ -82,41 +81,4 @@ test('a move binds its source instance too', async () => {
     return object.includes(ref) ? { ...u, inlineDatum: u.inlineDatum.replace(move.call.instance, 'ab'.repeat(32)) } : u;
   } };
   refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: moved, txHex: c.cbor }), /held by another instance/, 'a move from another instance');
-});
-
-// ----------------------------------------------------------------------- claimed sends and I30, both halves
-
-// locker/003 restated (the target releases 5 ADA more): the send, carrying it, to a stranger, claimed at output 1.
-async function strangerSend(edit = (p) => p) {
-  const r = recorded('locker/003-unlock.json');
-  const tx = parseTx(r.cbor);
-  const base = inputsOf(r);
-  const target = tx.inputs.find((ref) => !base.wallet.utxos.has(ref));
-  const chain = chainOf(r.x, (ref, u) => (ref === target ? { ...u, value: plus(u.value, 'lovelace', 5n * ADA) } : u));
-  const hex = await editTx(r.cbor, r.x, {
-    outputs: (cur) => {
-      const send = partsOf(cur[1]);
-      const change = partsOf(cur[2]);
-      change.value.set('lovelace', change.value.get('lovelace') + send.value.get('lovelace'));
-      const out = edit({ address: STRANGER, value: plus(send.value, 'lovelace', 5n * ADA - send.value.get('lovelace')) }, { target, base });
-      return [cur[0], cslOutput(out), cslOutput(change), ...cur.slice(3)];
-    },
-  });
-  return { ...base, txHex: hex, chain };
-}
-
-test('a claimed send carries no JOUST tag of any input: a refund tag, or a wallet input\'s tag', async () => {
-  for (const v of await both(await strangerSend())) accepted(v, 'the honest send to a stranger');
-  const refund = await strangerSend((o, { target }) => ({ ...o, datumHex: dataHex(Data.constr(0, [refData(target)])) }));
-  for (const v of await both(refund)) refused(v, /a claimed send output that carries a payout tag/, 'a refund tag of the target');
-  const walletTag = await strangerSend((o, { base }) => ({ ...o, datumHex: dataHex(refData([...base.wallet.utxos.keys()].find((k) => parseTx(base.txHex).inputs.includes(k)))) }));
-  for (const v of await both(walletTag)) refused(v, /a claimed send output that carries a payout tag/, 'the tag of a wallet input');
-});
-
-test('a claimed send is not at a spent input\'s script credential (I30)', async () => {
-  const atScript = await strangerSend((o, { base }) => ({ ...o, address: base.deployment.address }));
-  for (const v of await both(atScript)) refused(v, /at a spent input's script credential/, 'a send claimed at the contract\'s address');
-  // Another script's address is a send like any other.
-  const elsewhere = await strangerSend((o) => ({ ...o, address: enterpriseAddress({ type: 'script', hash: 'cd'.repeat(28) }, 0) }));
-  for (const v of await both(elsewhere)) accepted(v, 'a send to another script');
 });
