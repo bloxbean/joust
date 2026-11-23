@@ -126,6 +126,9 @@ sourceSets {
 }
 dependencies {
     wasmImplementation "org.julclang:julc-wasm:${libs.versions.julc.get()}"
+    // PlutusBytes, the runtime's iterative Plutus data decoder (transition arguments); the classes only: the image
+    // keeps what it reaches, and the runtime's own dependencies (backend, MPF stores) stay off its class path.
+    wasmImplementation(project(':julc-state-runtime')) { transitive = false }
     wasmCompileOnly 'org.graalvm.sdk:webimage-preview:25.3.4.1'
     wasmRuntimeOnly 'org.slf4j:slf4j-nop:2.0.17'
 }

@@ -1,7 +1,6 @@
 package org.julclang.state.runtime.snapshot;
 
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.types.JulcList;
 import org.julclang.state.api.MapEntry;
 import org.julclang.state.api.mpf.Mpf;
@@ -46,7 +45,7 @@ public final class SuppliedProver implements MerkleSupport.Prover {
         String v = proofs.get(key);
         if (v == null) throw new Need("mapProof", key);
         try {
-            return PlutusDataCborDecoder.decode(HEX.parseHex(v));
+            return org.julclang.state.runtime.PlutusBytes.decode(HEX.parseHex(v));
         } catch (RuntimeException e) {
             throw new JoustException("the mirror's answer to " + key + " is not Plutus data", e);
         }

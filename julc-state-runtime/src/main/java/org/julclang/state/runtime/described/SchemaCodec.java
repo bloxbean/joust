@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 
 import java.math.BigInteger;
@@ -145,7 +144,7 @@ public final class SchemaCodec {
             default:
                 if (v == null || !v.isTextual()) throw new DataError(path + ": Data is hex CBOR");
                 try {
-                    return PlutusDataCborDecoder.decode(HEX.parseHex(v.asText()));
+                    return org.julclang.state.runtime.PlutusBytes.decode(HEX.parseHex(v.asText()));
                 } catch (Exception e) {
                     throw new DataError(path + ": not CBOR Plutus data");
                 }

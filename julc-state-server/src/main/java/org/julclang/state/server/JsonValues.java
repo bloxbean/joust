@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 import org.julclang.core.types.JulcList;
 import org.julclang.core.types.JulcMap;
@@ -64,8 +63,8 @@ public final class JsonValues {
         if (raw == String.class) return new String(hex(json, path), StandardCharsets.UTF_8);
         if (PlutusData.class.isAssignableFrom(raw)) {
             try {
-                return PlutusDataCborDecoder.decode(hex(json, path));
-            } catch (RuntimeException | StackOverflowError e) {   // the decoder recurses: deep nesting overflows
+                return org.julclang.state.runtime.PlutusBytes.decode(hex(json, path));
+            } catch (RuntimeException e) {
                 throw new BadValue(path + ": not Plutus data CBOR");
             }
         }

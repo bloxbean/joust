@@ -128,19 +128,19 @@ public record KeyedType<R>(String name, int headTag, int keyIndex, int maxKeyByt
      * (ADR-0016 M3 review, R-F17, F99): cardano-client-lib keeps one entry per key when it decodes a Plutus map and writes
      * map entries in canonical key order, so a datum holding a map with a repeated key, or with its keys in another
      * order, would be relinked to different Data, which the page and the validator refuse. Checked by relinking the
-     * datum as the runtime does and comparing every other field with the original, decoded by JuLC (which keeps each
-     * entry in order). Such a node cannot be an anchor or a predecessor through this runtime.
+     * datum as the runtime does and comparing every other field with the original, decoded by {@link PlutusBytes}
+     * (which keeps each entry in order). Such a node cannot be an anchor or a predecessor through this runtime.
      */
     static void requireRelinkable(String inlineDatumHex, String what) {
         if (inlineDatumHex == null) return;
         byte[] bytes = com.bloxbean.cardano.client.util.HexUtil.decodeHexString(inlineDatumHex);
-        var original = org.julclang.core.cbor.PlutusDataCborDecoder.decode(bytes);
+        var original = PlutusBytes.decode(bytes);
         String reason = null;
         if (duplicateMapKeys(original)) {
             reason = "holds a Plutus map with a repeated key";
         } else {
             try {
-                var rewritten = org.julclang.core.cbor.PlutusDataCborDecoder.decode(
+                var rewritten = PlutusBytes.decode(
                         relinked((ConstrPlutusData) PlutusData.deserialize(bytes), new byte[0], BigInteger.ZERO).serializeToBytes());
                 if (!sameApartFromLink(original, rewritten)) reason = "holds a Plutus map whose keys are not in canonical order";
             } catch (Exception e) {
