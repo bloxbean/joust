@@ -183,7 +183,7 @@ final class Session implements Transport.Handler {
                     String instance = str(request, "instance");
                     if (!instance.matches("[0-9a-f]{64}")) throw bad("instance must be 32 bytes of hex");
                     var state = handle.at(instance).utxo();
-                    String ref = state.getTxHash() + "#" + state.getOutputIndex();
+                    String ref = ClaimStore.ref(state.getTxHash(), state.getOutputIndex());
                     if (reservations.avoids(ref)) throw HostError.refusal("pending", "reserved state input " + ref);
                 }
                 Object[] made = new Object[1];
