@@ -13,7 +13,9 @@ export function paymentKeyHash(...args) {
 }
 
 /**
- * A snapshot of the wallet: { api, networkId, change, addresses, keyHashes, utxos: Map ref -> { address, value } }.
+ * A snapshot of the wallet: { api, networkId, change, addresses, keyHashes, utxos: Map ref -> { address, value },
+ * fromProvider }. A CIP-30 wallet's UTxOs are its own; a wallet whose UTxOs are the page's chain provider's answer
+ * (devWallet: {@code utxosFromProvider}) is {@code fromProvider}, and the verifiers authenticate the ones it spends.
  * ({@code walletView(CSL, api)} still accepted: the ledger library is not needed.)
  */
 export async function walletView(...args) {
@@ -28,7 +30,7 @@ export async function walletView(...args) {
     const u = unspentOutput(hex);
     utxos.set(u.ref, { address: u.address, value: u.value, inlineDatum: u.inlineDatum, datumHash: u.datumHash });
   }
-  return { api, networkId, change, addresses, keyHashes, utxos };
+  return { api, networkId, change, addresses, keyHashes, utxos, fromProvider: !!api.utxosFromProvider };
 }
 
 /**

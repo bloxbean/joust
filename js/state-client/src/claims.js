@@ -8,7 +8,8 @@
 // validator then checks its claims exactly) into a composed call that receives them (compose.js).
 
 import { bytesToHex, hexToBytes } from './hex.js';
-import { dataEqual } from './pdata.js';
+import { Data, dataEqual } from './pdata.js';
+import { addressParts } from './ledger.js';
 import { blake2b } from '@noble/hashes/blake2.js';
 
 /** The claimant of a @Withdraw handler's sends (ADR-0010 I37): TxOutRef(blake2b_256(policy), -1), as "txId#-1". */
@@ -119,6 +120,16 @@ export function outputRegistry(tx, verifier, problems) {
   return { claims, deposits };
 }
 
+/** Whether {@code datum} is a JOUST tag of one of {@code refs}: the bare reference (a payout tag) or RefTag(ref) (I30). */
+export function isJoustTag(datum, refs) {
+  if (!datum) return false;
+  return refs.some((r) => {
+    const [h, i] = r.split('#');
+    const bare = Data.constr(0, [Data.bytes(h), Data.int(BigInt(i))]);
+    return dataEqual(datum, bare) || dataEqual(datum, Data.constr(0, [bare]));
+  });
+}
+
 /**
  * The outputs at a wallet address that the claims of {@code registries} ([{ registry, owners }]) name ({@code
  * indexes}) and their summed value ({@code value}): the scripts' sends to the wallet, so not value others may be paid
@@ -126,8 +137,12 @@ export function outputRegistry(tx, verifier, problems) {
  * the claims deliver); a claim for anything else is a problem. An output may be claimed in one registry only: each
  * output verifier checks distinct outputs within its own redeemer and each contract reads only its own verifier's, so
  * one output claimed in two registries (calls pinning different verifiers) would deliver two sends, at any address.
+ * A claimed output, at any address, is held to I30 as the validators' sendMatches holds it: it carries no JOUST tag of
+ * any input the transaction spends (else one output could be a payout and a send at once), and it does not sit at the
+ * payment credential of a spent script input ({@code spentScripts}: their script hashes), so never on a continuation's
+ * address. Such a body could only fail on chain.
  */
-export function claimedSends(tx, registries, isWallet, problems) {
+export function claimedSends(tx, registries, isWallet, problems, spentScripts = []) {
   const indexes = new Set();
   const value = new Map();
   const claimedIn = new Map();     // every claimed output (at any address) -> the registry naming it
@@ -143,6 +158,14 @@ export function claimedSends(tx, registries, isWallet, problems) {
       }
       claimedIn.set(output, r);
       const out = tx.outputs[output];
+      if (isJoustTag(out.datum, tx.inputs)) problems.push('a claimed send output that carries a payout tag or a refund tag of an input (I30)');
+      let payment = null;
+      try {
+        payment = addressParts(out.address).payment;
+      } catch {
+        payment = null;
+      }
+      if (payment?.type === 'script' && spentScripts.includes(payment.hash)) problems.push(`a send claimed at a spent input's script credential: output ${output} (I30)`);
       if (!isWallet(out.address)) continue;
       indexes.add(output);
       for (const [unit, q] of out.value) value.set(unit, (value.get(unit) ?? 0n) + q);

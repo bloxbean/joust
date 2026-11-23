@@ -7,18 +7,12 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
-  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks, reservedName,
+  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks, reservedName, sameValue, readVerified, walletUnknowns,
+  unauthenticated, heldBy, scriptHashesOf,
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
 import { outputRegistry, claimedSends, paymentCredit } from './claims.js';
-
-/** Whether two values (Map unit -> bigint) are equal, zero entries aside. */
-function sameValue(a, b) {
-  for (const [u, q] of a) if (q !== (b.get(u) ?? 0n)) return false;
-  for (const [u, q] of b) if (q !== (a.get(u) ?? 0n)) return false;
-  return true;
-}
 
 /**
  * @param o.steps  [{ description, deployment, call: { kind, meta, args, pay, instance, object } }] in composition order
@@ -108,11 +102,13 @@ export async function verifyComposed(o) {
   const sorted = ledgerOrder(tx.inputs);
   const spent = new Map();
   const consumed = new Map();
+  const walletInputs = [];
   for (let i = 0; i < sorted.length; i++) {
     const r = sorted[i];
     if (wallet.utxos.has(r)) {
       add(spent, wallet.utxos.get(r).value);
       add(consumed, wallet.utxos.get(r).value);
+      walletInputs.push(r);
       continue;
     }
     const u = await chain.utxo(r);
@@ -132,24 +128,31 @@ export async function verifyComposed(o) {
   // splits between them, so with two such targets it could transpose their tokens: the page would check each call's
   // redeemer against the other's target, and each call would run on the other's instance or object. A misstated value
   // is refused; every target but one must be bound (the last then follows from the balance: its token and its value),
-  // else the composition is refused (as ADR-0016 D11 refuses a keyed call's unbound script inputs).
+  // else the composition is refused (as ADR-0016 D11 refuses a keyed call's unbound script inputs). A wallet whose
+  // UTxOs are the provider's answer is one more unknown unless its spent inputs are read so too (walletUnknowns).
   for (const k of calls) {
     if (k.creation || !k.targetRef) continue;
-    let v = null;
-    try {
-      v = chain.verifiedOutput ? await chain.verifiedOutput(k.targetRef) : null;
-    } catch (e) {
-      problems.push(`the chain API's transaction for ${k.targetRef} could not be verified: ${e.message}`);
-      continue;
-    }
+    const v = await readVerified(chain, k.targetRef, problems);
     if (!v) continue;
     if (v.address !== k.deployment.address || !sameValue(v.value, k.targetValue)) problems.push(`the chain API misstates the value of ${k.targetRef}`);
-    else k.bound = true;
+    else {
+      k.bound = true;
+      k.verifiedDatum = v.inlineDatum ?? null;
+    }
   }
   const unbound = calls.filter((k) => !k.creation && k.targetRef && !k.bound).length;
+  const walletUnknown = await walletUnknowns(wallet, walletInputs, chain, problems);
   if (unbound > 1) {
-    problems.push(`${unbound} targets whose inputs the page cannot authenticate (the chain API serves no transaction CBOR): `
-      + 'it could transpose their tokens, and each call would run on another\'s target');
+    problems.push(unauthenticated(`${unbound} targets`, 'a chain API could transpose their tokens, and each call would run on another\'s target'));
+  } else if (unbound + walletUnknown > 1) {
+    problems.push(unauthenticated('a target and the wallet\'s inputs', 'the balance binds only their sum'));
+  }
+  // An owned destroy and a move leave no continuation under their source instance: the object's input datum alone
+  // names the instance it is held by, so it must be read from its producing transaction and be the call's.
+  for (const k of calls) {
+    if (!k.targetRef || !(k.call.kind === 'ownedDestroy' || k.call.meta.policies?.into)) continue;
+    if (!k.bound) problems.push(`${k.call.meta.name}: the object's instance is bound only by its input's producing transaction, which the page cannot read (the chain API serves no transaction CBOR)`);
+    else if (heldBy(k.c, k.xj, k.call, k.verifiedDatum) !== k.call.instance) problems.push(`${k.call.meta.name}: the object is held by another instance than the call's`);
   }
   // An adoption (@Migrate, ADR-0011 D4): of the prior instance the page names, which its own @MigrateTo destroy spends
   // here, under the policy the adopting deployment's params name. Its token is named by that prior UTxO.
@@ -282,6 +285,7 @@ export async function verifyComposed(o) {
             } else if (f.title === 'ctx') {
               if (!wallet.keyHashes.includes(got.decoded.ctx.caller)) problems.push(`${call.meta.name}: the caller is not this wallet`);
               if (got.decoded.ctx.received !== k.pay.lovelace) problems.push(`${call.meta.name}: it receives ${got.decoded.ctx.received} lovelace, not the ${k.pay.lovelace} the page pays`);
+              else k.paymentBound = true;
             } else if (f.title === 'assetsIn') {
               if (!dataEqual(c.encode(f, k.pay.assets, 'assetsIn'), actual)) problems.push(`${call.meta.name}: it offers other assets than the page pays`);
             } else if (f.title === 'into') {
@@ -331,11 +335,8 @@ export async function verifyComposed(o) {
     registries.push({ verifier: v, registry: outputRegistry(tx, v, problems), pinning,
       owners: pinning.filter((x) => x.targetRef).map((x) => x.targetRef) });
   }
-  const claimed = claimedSends(tx, registries, isWallet, problems);
-  // Every claimed output, at any address: a claimed output never carries a payout tag (I30), so one output cannot be a
-  // call's payout and a send at once.
+  const claimed = claimedSends(tx, registries, isWallet, problems, scriptHashesOf(calls.filter((k) => !k.creation).map((k) => k.deployment.address)));
   const claims = registries.flatMap(({ registry }) => registry?.claims ?? []);
-  const anyClaimed = new Set(claims.map((cl) => cl.output));
   for (const [index, out] of tx.outputs.entries()) {
     const value = out.value;
     const bech = out.address;
@@ -370,7 +371,6 @@ export async function verifyComposed(o) {
       if (out.hasScriptRef || out.datumHash) problems.push('a wallet output with a script or datum hash');
       const isTagged = out.datum && tags.some((t) => dataEqual(out.datum, t));
       if (out.datum && !isTagged) problems.push('a wallet output with a datum');
-      if (isTagged && claimed.indexes.has(index)) problems.push('a claimed send output that carries a payout tag');
       const pkh = paymentKeyHashOf(out.address);
       add(back, value);
       if (isTagged) add(tagged, value);
@@ -380,7 +380,6 @@ export async function verifyComposed(o) {
     }
     const pkh = paymentKeyHashOf(out.address);
     if (pkh && wallet.keyHashes.includes(pkh)) problems.push('an output to the wallet\'s key at an address the wallet does not use');
-    if (out.datum && anyClaimed.has(index) && tags.some((t) => dataEqual(out.datum, t))) problems.push('a claimed send output that carries a payout tag');
     report.outputs.push({ address: bech, value });
     add(third, value);
     loose.push({ index, value, datum: out.datum, paysKey: pkh !== null });
@@ -468,7 +467,8 @@ export async function verifyComposed(o) {
   }
   const paying = calls.filter((k) => !k.creation).map((k) => {     // an adoption takes no payment
     // The payment: its lovelace, and the assets it offers where its redeemer's assetsIn binds them (else none).
-    const paid = new Map([['lovelace', k.pay.lovelace]]);
+    // Lovelace only where the redeemer's Ctx states it (else nothing binds the payment to the call).
+    const paid = new Map([['lovelace', k.paymentBound ? k.pay.lovelace : 0n]]);
     if (k.acceptsAssets) for (const [p, assets] of k.pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
     const own = new Map();
     add(own, k.continuation);
@@ -629,7 +629,7 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
   const signed = assemble(CSL, p.cbor, ...witnesses);
   if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
   await api.submitTx(signed.cbor);
-  chain.remember?.(signed.cbor);
+  await chain.remember?.(signed.cbor);
   await chain.awaitTx(signed.txHash);
   return { txHash: signed.txHash, report };
 }

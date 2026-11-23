@@ -189,12 +189,21 @@ await rt.compose(buyer, [
 
 Others may receive only what the calls release beyond their payouts and sends to the wallet, plus what a call keeps
 or forwards of its payment through its own payouts or claimed sends (a purchase paying the seller, a refund to the
-caller). The page must know which input holds which call's instance or object: it reads the calls' inputs from their
-producing transactions, all of them or all but one (the last then follows from the balance). The chain view has a
-transaction's CBOR when the provider serves it (Blockfrost; Yaci Store with `store.transaction.save-cbor=true`) or
-when the page submitted that transaction itself in this session. Otherwise (Ogmios, DevKit's Yaci Store by default,
-for inputs others created) a composition with two or more spending calls is refused: a hostile chain API could swap
-two inputs' tokens and each call would run on the other's instance.
+caller). A payment counts only where the call's Ctx states it, and a method that is not payable takes none.
+
+The page must know which input holds which call's instance or object, and what each holds. It reads the inputs from
+their producing transactions, all of them or all but one (the last then follows from the balance). The chain view has
+a transaction's CBOR when the provider serves it (Blockfrost; Yaci Store with `store.transaction.save-cbor=true`) or
+when the page submitted that transaction itself: the chain view keeps those (`txStore`: IndexedDB in a browser, so
+they survive a reload; one memory store per process in Node; at most 512, for 30 days). Otherwise (Ogmios, DevKit's
+Yaci Store by default, for inputs another page or an old session created) a composition with two or more spending
+calls is refused, naming what lifts the refusal: a hostile chain API could swap two inputs' tokens and each call would
+run on the other's instance. The same holds for an owned destroy and a move, alone or composed: only the object's
+input datum names the instance it is held by, so it must come from the producing transaction.
+
+The dev wallet's UTxOs are the chain view's answer, not a wallet's own (`utxosFromProvider`): the verifiers read the
+wallet inputs a transaction spends from their producing transactions too, and if they cannot, the wallet's inputs
+count as the one value the balance may determine. A CIP-30 wallet's UTxOs are its own.
 
 ## Prepare services
 

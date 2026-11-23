@@ -210,7 +210,7 @@ export class JoustContract {
     });
     const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
     const { problems, report } = await verifyPurpose({ CSL, description: this.description, deployment: this.deployment,
-      txHex: prepared.cbor, wallet, chain: { tip, params, utxo: (r) => this.chain.utxo(r) }, op, ...what,
+      txHex: prepared.cbor, wallet, chain: { tip, params, utxo: (r) => this.chain.utxo(r), verifiedOutput: this.chain.verifiedOutput ? (r) => this.chain.verifiedOutput(r) : undefined }, op, ...what,
       cosignerKeys: co.keys, limits: this.limits });
     report.plan = planOf(CSL, prepared.cbor);
     if (prepared.plan) {
@@ -225,7 +225,7 @@ export class JoustContract {
     const signed = assemble(CSL, prepared.cbor, ...witnesses);
     if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
     const submitted = await api.submitTx(signed.cbor);
-    this.chain.remember?.(signed.cbor);
+    await this.chain.remember?.(signed.cbor);
     if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
     await this.chain.awaitTx(signed.txHash);
     return { txHash: signed.txHash, report };
@@ -289,7 +289,7 @@ export class JoustContract {
     const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
     const { problems, report } = await verifyPrepared({
       CSL, description: this.description, deployment: this.deployment, txHex: prepared.cbor, call,
-      wallet, chain: { tip, params, utxo: (r) => this.chain.utxo(r) }, limits: this.limits,
+      wallet, chain: { tip, params, utxo: (r) => this.chain.utxo(r), verifiedOutput: this.chain.verifiedOutput ? (r) => this.chain.verifiedOutput(r) : undefined }, limits: this.limits,
     });
     // The service's plan must describe exactly the transaction it sent (ADR-0013 D4).
     report.plan = planOf(CSL, prepared.cbor);
@@ -308,7 +308,7 @@ export class JoustContract {
     const signed = assemble(CSL, prepared.cbor, ...witnesses);
     if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
     const submitted = await api.submitTx(signed.cbor);
-    this.chain.remember?.(signed.cbor);
+    await this.chain.remember?.(signed.cbor);
     if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
     await this.chain.awaitTx(signed.txHash);
     return { txHash: signed.txHash, report };
@@ -504,7 +504,7 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
     // A link window may start a little ahead (at most the page's start limit): submitted once it has started.
     if (report.plan.validFrom) await untilSlot(this.chain, Number(report.plan.validFrom));
     const submitted = await api.submitTx(signed.cbor);
-    this.chain.remember?.(signed.cbor);
+    await this.chain.remember?.(signed.cbor);
     if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
     await this.chain.awaitTx(signed.txHash);
   } catch (e) {
@@ -575,7 +575,7 @@ JoustContract.prototype.runIntentOp = async function runIntentOp(api, request, v
   const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
   const { problems, report } = await verify({
     CSL, description: this.description, deployment: this.deployment, txHex: prepared.cbor, call: { ...call, address },
-    wallet, chain: { tip, params, utxo: (r) => this.chain.utxo(r) }, limits: this.limits,
+    wallet, chain: { tip, params, utxo: (r) => this.chain.utxo(r), verifiedOutput: this.chain.verifiedOutput ? (r) => this.chain.verifiedOutput(r) : undefined }, limits: this.limits,
   });
   report.plan = planOf(CSL, prepared.cbor);
   if (prepared.plan) {
@@ -588,7 +588,7 @@ JoustContract.prototype.runIntentOp = async function runIntentOp(api, request, v
   const signed = assemble(CSL, prepared.cbor, await api.signTx(prepared.cbor, true));
   if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
   const submitted = await api.submitTx(signed.cbor);
-  this.chain.remember?.(signed.cbor);
+  await this.chain.remember?.(signed.cbor);
   if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
   await this.chain.awaitTx(signed.txHash);
   return { txHash: signed.txHash, report, created: prepared.instance ?? prepared.created ?? null };

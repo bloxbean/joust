@@ -6,6 +6,7 @@
 // it (fixtures/m0 holds every transaction the flow built).
 import { readFileSync, readdirSync } from 'node:fs';
 import { parseTx, txHash } from '../src/ledger.js';
+import { dataHex } from '../src/pdata.js';
 import { paymentKeyHash } from '../src/wallet.js';
 import { rewardAddressOf } from '../src/governors.js';
 import { OUTPUT_VERIFIER } from './sends-world.js';
@@ -54,7 +55,7 @@ export function m0Chain(x) {
       const cbor = transactions().get(hash);
       if (!cbor) return null;
       const o = parseTx(cbor).outputs[Number(index)];
-      return o ? { address: o.address, value: o.value } : null;
+      return o ? { address: o.address, value: o.value, inlineDatum: o.datum ? dataHex(o.datum) : null } : null;
     },
   };
 }

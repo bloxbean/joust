@@ -7,6 +7,7 @@ import { codec as makeCodec } from '../src/data.js';
 import { rewardAddressOf } from '../src/governors.js';
 import { paymentKeyHash } from '../src/wallet.js';
 import { ledgerTx, scriptIntegrityHash, enterpriseAddress, parseTx, txHash } from '../src/ledger.js';
+import { dataHex } from '../src/pdata.js';
 
 export { CSL };
 
@@ -47,7 +48,7 @@ export async function recordedOutput(ref) {
   const [hash, index] = ref.split('#');
   const cbor = recordedTransactions().get(hash);
   const o = cbor ? parseTx(cbor).outputs[Number(index)] : null;
-  return o ? { address: o.address, value: o.value } : null;
+  return o ? { address: o.address, value: o.value, inlineDatum: o.datum ? dataHex(o.datum) : null } : null;
 }
 
 /**

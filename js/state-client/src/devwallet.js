@@ -48,6 +48,8 @@ export function devWallet({ chain, mnemonic = DEVKIT_MNEMONIC, index = 0, networ
   return {
     name: `DevKit #${index}`,
     address: bech32,
+    // Its UTxOs are the chain provider's answer, not a wallet's own view: the page authenticates them (verify.js).
+    utxosFromProvider: true,
     keyHash: acct.keyHash,
     async getNetworkId() {
       return networkId;

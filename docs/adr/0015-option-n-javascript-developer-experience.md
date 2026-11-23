@@ -880,8 +880,18 @@ direct `Tx` building, gated by S3.
     a transaction the page submitted itself, kept by its chain view, both hash-checked), the last following from the
     balance (its token and its value); a misstated value is refused, and so is a composition with two or more unbound
     targets (as ADR-0016 D11 refuses a keyed call's), before its redeemers are trusted. On a provider that serves no
-    transaction CBOR (Ogmios; Yaci Store unless `store.transaction.save-cbor=true`) such compositions are refused
-    unless the page itself created the inputs in the session. A
+    transaction CBOR (Ogmios; Yaci Store unless `store.transaction.save-cbor=true`, which `joust dev` and DevKit do not
+    set) such compositions are refused unless the page itself created the inputs, and the refusal names what lifts it.
+    The chain view keeps the transactions the page submitted in a `txStore` (txstore.js: IndexedDB in a browser, so they
+    survive a reload; one memory store per Node process; at most 512, for 30 days); losing them only refuses more.
+    Wallet inputs count too when the wallet's UTxOs are the provider's answer: the dev wallet (`utxosFromProvider`) reads
+    them from the same chain view, so one understated wallet input and an equally overstated target would keep the
+    balance. The verifiers (single, composed, keyed) then read each spent wallet input from its producing transaction,
+    and if any cannot be read the wallet's sum is the one value the balance may determine. A CIP-30 wallet's UTxOs are
+    the wallet's own, independent of the page's provider, so its inputs are known. An owned destroy and a move leave
+    no continuation under their source instance, so only the object's input datum names the instance it is held by:
+    their target must be read from its producing transaction (not determined by the balance), and its `Holding` must
+    name the call's instance; alone too. A
     deposit claim's value must be one the output verifier accepts (`OutputVerifier.positive` over `ValueAdapter.fromWire`'s
     rules: no empty value or token map, no repeated or out-of-order entry, positive quantities, no reserved names),
     else the body could only fail on chain, and so is a depositor's second claim to the same receiver or a claim into
@@ -903,7 +913,11 @@ direct `Tx` building, gated by S3.
     a JOUST tag): else one output would meet a payout and a send at once and free the other's share of the payment for
     a tagged stranger output. So each obligation has its own output, and an extra bound output is funded only beyond
     the payments (refused by the wallet's loss bound) or from the release. Per call and unit, kept and forwarded
-    together are at most its payment (`paymentCredit` in claims.js). A single spending call follows the same rule
+    together are at most its payment (`paymentCredit` in claims.js). Lovelace is credited only where the call's Ctx
+    states it (`received`, which the page checks against its payment and the validator against the transaction): a
+    method without Ctx binds no payment, and one that is not payable is paid none, alone or composed. Claimed outputs
+    are held to I30 whole, in claims.js for every verifier: no JOUST tag of any input the transaction spends (the bare
+    reference or `RefTag`, as `isTag`), and not at a spent script input's payment credential. A single spending call follows the same rule
     (`verifyPrepared`): its target is the one script input, so the balance binds its value. fixtures/m0's recorded
     Market.buy is refused only by ADR-0013 §9.2's known limitation (its NFT send to the buyer carries the wallet's
     minimum ADA), alone and composed; main refused it too, for the forwarded price.

@@ -14,7 +14,8 @@ import { bytesToHex, hexToBytes, utf8 } from './hex.js';
 import { parseTx, pageOutputSize } from './ledger.js';
 import { decodeData, dataHex, canonicalHex } from './pdata.js';
 import {
-  DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, envelopeChecks, isWalletEnterprise, paymentKeyHashOf,
+  DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, envelopeChecks, isWalletEnterprise, paymentKeyHashOf, walletUnknowns,
+  unauthenticated,
 } from './verify.js';
 
 /** The keyed call kinds of a description's x-joust (ADR-0016 D11). */
@@ -213,11 +214,13 @@ export async function verifyKeyed(o) {
   const spent = new Map();        // the wallet's inputs
   const consumed = new Map();     // every input
   const scripts = [];             // { ref, index, value, datum, unit, authenticated, out }
+  const walletInputs = [];
   for (let i = 0; i < sorted.length; i++) {
     const r = sorted[i];
     if (wallet.utxos.has(r)) {
       add(spent, wallet.utxos.get(r).value);
       add(consumed, wallet.utxos.get(r).value);
+      walletInputs.push(r);
       continue;
     }
     if (creation) {
@@ -648,9 +651,15 @@ export async function verifyKeyed(o) {
     }
   }
   const unbound = scripts.filter((s) => !s.authenticated && !(s === target && call.meta.ctx && ctx));
+  // A wallet whose UTxOs are the provider's answer (devWallet) is one more unknown unless its spent inputs are read
+  // from their producing transactions (verify.js walletUnknowns).
+  const walletUnknown = await walletUnknowns(wallet, walletInputs, chain, problems);
   if (unbound.length > 1) {
     problems.push(`${unbound.length} script inputs whose values the page cannot authenticate (the chain API serves no transaction`
-      + ' CBOR, and Ctx binds at most one): refused (D11)');
+      + ' CBOR, and Ctx binds at most one): refused (D11); a chain provider that serves transaction CBOR (Blockfrost; Yaci'
+      + ' Store with store.transaction.save-cbor=true) lifts it');
+  } else if (unbound.length + walletUnknown > 1) {
+    problems.push(unauthenticated('a script input and the wallet\'s inputs', 'the balance binds only their sum (D11)'));
   }
   for (const s of scripts) {
     add(consumed, s.value);

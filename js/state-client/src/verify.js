@@ -15,7 +15,7 @@ import { instanceIdOf, objectIdOf } from './tokens.js';
 import { bytesToHex } from './hex.js';
 import { approvalsData, rewardAddressOf } from './governors.js';
 import { parseTx, addressParts, integrityHashOf } from './ledger.js';
-import { dataHex } from './pdata.js';
+import { dataHex, decodeData } from './pdata.js';
 import { isKeyedCall, verifyKeyed } from './keyed.js';
 import { outputRegistry, claimedSends, paymentCredit } from './claims.js';
 
@@ -174,6 +174,30 @@ export async function verifyPrepared(o) {
   }
   if (targetUnit && targetIndex < 0) problems.push('the pinned instance or object is not spent');
   report.targetRef = targetRef;
+  // What the page can authenticate of the inputs' values: the balance binds their sum, so at most one may be unknown
+  // (provenance below). The target's own producing transaction is read where it decides something: when the wallet's
+  // UTxOs are the provider's answer (the target and the wallet would be two unknowns), and for an owned destroy (its
+  // datum names the instance it is held by; nothing else in the body does).
+  let targetBound = false;
+  let targetDatum = null;
+  if (targetRef && (wallet.fromProvider || call.kind === 'ownedDestroy')) {
+    const v = await readVerified(chain, targetRef, problems);
+    if (v && (v.address !== deployment.address || !sameValue(v.value, targetValue))) problems.push(`the chain API misstates the value of ${targetRef}`);
+    else if (v) {
+      targetBound = true;
+      targetDatum = v.inlineDatum ?? null;
+    }
+  }
+  const walletUnknown = await walletUnknowns(wallet, walletInputs, chain, problems);
+  const unknowns = walletUnknown + (targetRef && !targetBound ? 1 : 0);
+  if (unknowns > 1) problems.push(unauthenticated('the target and the wallet\'s inputs', 'the balance binds only their sum'));
+  if (call.kind === 'ownedDestroy' && targetRef) {
+    const held = targetBound ? heldBy(c, xj, call, targetDatum) : undefined;
+    if (!targetBound) problems.push(`${call.meta.name}: the object's instance is bound only by its input's producing transaction, which the page cannot read (the chain API serves no transaction CBOR)`);
+    else if (held !== call.instance) problems.push(`${call.meta.name}: the object is held by another instance than the call's`);
+  }
+  // A method that is not payable takes no lovelace (as client.js and verifyComposed refuse).
+  if (call.meta.payable === false && pay.lovelace !== 0n) problems.push(`${call.meta.name}: it is not payable, but the page pays ${pay.lovelace} lovelace`);
 
   // Redeemers: exactly the call (and a destroy's burn), on the pinned script.
   const rds = tx.redeemers;
@@ -200,6 +224,7 @@ export async function verifyPrepared(o) {
 
   let createdUnit = null;
   let acceptsAssets = false;
+  let paymentBound = false;      // the redeemer's Ctx states the payment (the validator checks it receives that)
   const callFields = (def, r, what) => {
     let decoded;
     try {
@@ -241,6 +266,7 @@ export async function verifyPrepared(o) {
         const ctx = decoded.ctx;
         if (!wallet.keyHashes.includes(ctx.caller)) problems.push('the call\'s caller is not this wallet');
         if (ctx.received !== pay.lovelace) problems.push(`the call receives ${ctx.received} lovelace, not the ${pay.lovelace} the page pays`);
+        else paymentBound = true;
       } else if (f.title === 'assetsIn') {
         const want = c.encode(f, pay.assets, 'assetsIn');
         if (!dataEqual(want, actual)) problems.push('the call offers other assets than the page pays');
@@ -326,7 +352,7 @@ export async function verifyPrepared(o) {
   // they need their receiver in the same composition (ADR-0011 D3), and a receiver credits any claim on its output.
   const registry = outputRegistry(tx, deployment.outputVerifier, problems);
   if (registry?.deposits.length) problems.push('a deposit claim in a single call (deposits are verified only in a composition with their receiver)');
-  const claimed = claimedSends(tx, [{ registry, owners: targetRef ? [targetRef] : [] }], isWallet, problems);
+  const claimed = claimedSends(tx, [{ registry, owners: targetRef ? [targetRef] : [] }], isWallet, problems, scriptHashesOf([deployment.address]));
   const third = new Map();         // outputs to anyone else
   const loose = [];                // every output that is not the continuation: { index, value, datum, paysKey }
   const claims = registry?.claims ?? [];
@@ -347,7 +373,6 @@ export async function verifyPrepared(o) {
       if (out.hasScriptRef || out.datumHash) problems.push('a wallet output with a script or datum hash');
       const isTagged = out.datum && payoutTag && dataEqual(out.datum, payoutTag);
       if (out.datum && !isTagged) problems.push('a wallet output with a datum');
-      if (isTagged && claimed.indexes.has(index)) problems.push('a claimed send output that carries a payout tag');
       add(back, value);
       if (isTagged) add(tagged, value);
       loose.push({ index, value, datum: out.datum, paysKey: paymentKeyHashOf(out.address) !== null });
@@ -356,10 +381,6 @@ export async function verifyPrepared(o) {
     // The wallet's payment key at an address the wallet does not use (e.g. with a stranger's stake key): refused.
     const pkh = paymentKeyHashOf(out.address);
     if (pkh && wallet.keyHashes.includes(pkh)) problems.push('an output to the wallet\'s key at an address the wallet does not use');
-    // A claimed output never carries a payout tag (I30): one output is not a payout and a send at once.
-    if (out.datum && payoutTag && dataEqual(out.datum, payoutTag) && claims.some((cl) => cl.output === index)) {
-      problems.push('a claimed send output that carries a payout tag');
-    }
     const bech = out.address;
     if (continuingUnit && atScript(bech) && value.get(continuingUnit) === 1n) {
       continuations++;
@@ -424,7 +445,8 @@ export async function verifyPrepared(o) {
   add(released, minted);
   let credit = new Map();
   if (SPEND_KINDS.has(call.kind) && targetRef) {
-    const paid = new Map([['lovelace', pay.lovelace]]);
+    // Lovelace only where the redeemer's Ctx states it (else nothing binds the payment to the call).
+    const paid = new Map([['lovelace', paymentBound ? pay.lovelace : 0n]]);
     if (acceptsAssets) for (const [p, assets] of pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
     // Its intake: what its continuation gains, plus what it burns of its own user tokens (a minting method's ByAction).
     const own = new Map(continuation);
@@ -695,4 +717,77 @@ export function decodeNext(c, xj, call, datum) {
   const holding = c.decode(owned.holding, datum);
   if (holding.instance !== call.instance) throw new Error('the object belongs to another instance');
   return holding.value;
+}
+
+/** Whether two values (Map unit -> bigint) are equal, zero entries aside. */
+export function sameValue(a, b) {
+  for (const [u, q] of a) if (q !== (b.get(u) ?? 0n)) return false;
+  for (const [u, q] of b) if (q !== (a.get(u) ?? 0n)) return false;
+  return true;
+}
+
+/** An output read from its producing transaction (chain.verifiedOutput), or null; a forged transaction is a problem. */
+export async function readVerified(chain, ref, problems) {
+  try {
+    return chain.verifiedOutput ? await chain.verifiedOutput(ref) : null;
+  } catch (e) {
+    problems.push(`the chain API's transaction for ${ref} could not be verified: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * The script hashes of {@code addresses}' payment credentials (the spent script inputs' credentials, for I30's claimed
+ * sends: claims.js).
+ */
+export function scriptHashesOf(addresses) {
+  const out = [];
+  for (const a of addresses) {
+    try {
+      const p = addressParts(a).payment;
+      if (p?.type === 'script') out.push(p.hash);
+    } catch {
+      // not an address: nothing to add
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether the wallet's spent inputs leave one unknown in the balance (1) or none (0). A CIP-30 wallet's UTxOs are its
+ * own, independent of the page's chain provider: none. A wallet whose UTxOs are the provider's answer (devWallet,
+ * {@code fromProvider}) could have one understated and the script inputs overstated by as much, the balance kept: each
+ * spent one is read from its producing transaction where the page can (a misstatement is refused), and any it cannot
+ * read make the wallet's sum one unknown (the inputs' split among the wallet's own changes nothing the page checks).
+ */
+export async function walletUnknowns(wallet, refs, chain, problems) {
+  if (!wallet.fromProvider) return 0;
+  let unknown = 0;
+  for (const r of refs) {
+    const v = await readVerified(chain, r, problems);
+    const u = wallet.utxos.get(r);
+    if (!v) unknown = 1;
+    else if (v.address !== u.address || !sameValue(v.value, u.value)) problems.push(`the chain API misstates the value of ${r}`);
+  }
+  return unknown;
+}
+
+/**
+ * The refusal for inputs whose values the page cannot authenticate: what lifts it. The transactions a page submitted
+ * itself are kept (txstore.js); others are read from the provider's transaction CBOR.
+ */
+export function unauthenticated(what, why) {
+  return `${what} whose values the page cannot authenticate (${why}; the chain API serves no transaction CBOR for them,`
+    + ' and the page did not submit them): use a chain provider that serves transaction CBOR (Blockfrost; Yaci Store with'
+    + ' store.transaction.save-cbor=true)';
+}
+
+/** The instance an owned object's datum (hex) says it is held by, or null when it does not decode as the call's Holding. */
+export function heldBy(c, xj, call, datumHex) {
+  try {
+    const owned = xj.owned.find((o) => o.type === call.meta.owned);
+    return owned && datumHex ? c.decode(owned.holding, decodeData(datumHex)).instance : null;
+  } catch {
+    return null;
+  }
 }

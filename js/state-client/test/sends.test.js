@@ -561,7 +561,7 @@ test('composition: a deposit whose value the output verifier refuses (OutputVeri
 });
 
 test('composition: the kept-payment credit rests on input values the chain API cannot split at will', async () => {
-  const UNBOUND = /2 targets whose inputs the page cannot authenticate/;
+  const UNBOUND = /2 targets whose values the page cannot authenticate/;
   const w = await paidAndReleased();
   const honest = await w.build();
   // The Stall keeping 1 ADA less of the payment, that ADA paid to others (refused on true values, above).
@@ -1062,7 +1062,9 @@ test('composition: targets whose provenance the page cannot authenticate are ref
   refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: liar, txHex: swapped }), /the chain API misstates the value of/, 'transposed, with the CBOR');
   // Honest: accepted with the producing transactions (or all but one), refused without.
   accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), 'the recorded transfer');
-  const one = { ...c.chain, async verifiedOutput(r) { return r === a ? c.chain.verifiedOutput(r) : null; } };
+  // b is the moved object (whose source instance only its own producing transaction binds, provenance.test.js), a the
+  // admitting instance.
+  const one = { ...c.chain, async verifiedOutput(r) { return r === b ? c.chain.verifiedOutput(r) : null; } };
   accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: one, txHex: c.cbor }), 'one target bound, the other by the balance');
   refused(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: { ...c.chain, verifiedOutput: undefined }, txHex: c.cbor }), /cannot authenticate/, 'honest, no transaction CBOR');
 });

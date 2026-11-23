@@ -310,7 +310,12 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
       claimed sends to the wallet (below). A payout to the wallet can thus never hide the wallet's own funds going
       elsewhere (r4). A spending call may also forward what it does not keep of its payment, to the outputs bound to
       it (a purchase paying its price to the seller): ADR-0015 D7 states the rule, the same for one call and for a
-      composition. The single target is the only script input, so the balance binds its value;
+      composition. The single target is the only script input, so the balance binds its value, with the wallet's
+      UTxOs known: a dev wallet's (the provider's answer) are read from their producing transactions, and the target
+      too where they cannot be (ADR-0015 D7). Lovelace is credited only where the redeemer's Ctx states it, and a
+      method that is not payable is paid none. An owned destroy's target is read from its producing transaction, its
+      `Holding` naming the call's instance. A claimed output carries no JOUST tag of any spent input (bare or
+      `RefTag`) and is not at a spent script input's credential (I30);
     - **claimed sends** (ADR-0007 D5): when the transaction withdraws zero from the deployment's pinned output
       verifier, the page decodes that withdrawal's `OutputClaims` redeemer (its Reward redeemer, by the withdrawal's
       ledger index). Every claim must name a distinct output in strictly increasing order and, as `by`, the target

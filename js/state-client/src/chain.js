@@ -4,22 +4,38 @@
 import { blockfrostProvider } from './providers.js';
 import { parseTx, txHash } from './ledger.js';
 import { dataHex } from './pdata.js';
+import { defaultTxStore } from './txstore.js';
 
 const amountMap = (value) => new Map(value.map((a) => [a.unit, BigInt(a.quantity)]));
 
-/** The page's chain view over {@code provider}. ({@code { CSL }} options are accepted and ignored.) */
-export function chainOf(provider) {
+/**
+ * The page's chain view over {@code provider}. {@code txStore} keeps the transactions the page submitted (txstore.js;
+ * default: IndexedDB in a browser, the process's memory store in Node). ({@code { CSL }} options are accepted and
+ * ignored.)
+ */
+export function chainOf(provider, { txStore = defaultTxStore() } = {}) {
   // The transactions this page signed and submitted, by hash: their outputs are as authentic as a provider's CBOR (the
-  // body hashes to the reference's transaction id), so a page binds the inputs it created itself on a provider that
-  // serves no transaction CBOR (DevKit's Yaci Store, Ogmios), within the session.
-  const built = new Map();
+  // body hashes to the reference's transaction id, checked on every read), so a page binds the inputs it created
+  // itself on a provider that serves no transaction CBOR (DevKit's Yaci Store, Ogmios), across reloads.
+  const remember = async (cbor) => {
+    try {
+      await txStore.put(txHash(cbor), cbor);
+    } catch {
+      // A store that fails only loses what the page could read later: it then refuses what it cannot authenticate.
+    }
+  };
+  const recalled = async (hash) => {
+    try {
+      return await txStore.get(hash);
+    } catch {
+      return null;
+    }
+  };
   return {
     provider,
 
-    /** Records a transaction this page submitted (its CBOR), for verifiedOutput. */
-    remember(cbor) {
-      built.set(txHash(cbor), cbor);
-    },
+    /** Records a transaction this page submitted (its CBOR), for verifiedOutput. Never throws. */
+    remember,
 
     /** The latest slot. */
     async tip() {
@@ -45,7 +61,7 @@ export function chainOf(provider) {
      */
     async verifiedOutput(ref) {
       const [hash, index] = ref.split('#');
-      const cbor = built.get(hash) ?? (provider.txCbor ? await provider.txCbor(hash) : null);
+      const cbor = (await recalled(hash)) ?? (provider.txCbor ? await provider.txCbor(hash) : null);
       if (!cbor) return null;
       if (txHash(cbor) !== hash) throw new Error(`the chain provider served another transaction for ${hash}`);
       const o = parseTx(cbor).outputs[Number(index)];
@@ -82,7 +98,7 @@ export function chainOf(provider) {
     /** Submits signed CBOR (hex); returns the transaction hash. */
     async submit(cborHex) {
       const hash = await provider.submit(cborHex);
-      built.set(txHash(cborHex), cborHex);
+      await remember(cborHex);
       return hash;
     },
 
