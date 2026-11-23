@@ -209,9 +209,12 @@ public final class SchemaCodec {
                 return encodeFields(s, v, path, depth);
             default:
                 if (v == null || !v.isTextual() || tooLong(v)) throw new DataError(path + ": Data is hex CBOR");
-                if (strict && v.asText().matches("([0-9a-f]{2})*")) checkNesting(HEX.parseHex(v.asText()), path);
+                if (strict && !v.asText().matches("([0-9a-f]{2})*")) throw new DataError(path + ": not lowercase hex");
+                byte[] cbor;
+                try { cbor = HEX.parseHex(v.asText()); } catch (IllegalArgumentException e) { throw new DataError(path + ": Data is hex CBOR"); }
+                if (strict) checkNesting(cbor, path);   // before the recursive decoder, on every strict value
                 try {
-                    return PlutusDataCborDecoder.decode(HEX.parseHex(v.asText()));
+                    return PlutusDataCborDecoder.decode(cbor);
                 } catch (Exception e) {
                     throw new DataError(path + ": not CBOR Plutus data");
                 }

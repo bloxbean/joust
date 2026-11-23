@@ -27,9 +27,8 @@ class InspectionTest {
             assertEquals("State", str(decoded,"type"));
             assertEquals(state, decoded.required("value"));
             error("bad","request",c.rpc("decode",p.put("datum","ff")));
-            // D9: CBOR nested past the stack is tooDeep, and the session goes on (the npm host answers the same, then
-            // ends its session: host-conformance.test.js).
-            error("internal","tooDeep",c.rpc("decode",p.put("datum","81".repeat(100_000) + "00")));
+            // Datums nest at most 256 CBOR levels, as arguments (#154 review F1): refused before the recursive decoder.
+            error("bad","request",c.rpc("decode",p.put("datum","81".repeat(100_000) + "00")));
             assertEquals("State", str(success(c.rpc("decode",p.put("datum",utxo.getInlineDatum()))),"type"));
         }
     }

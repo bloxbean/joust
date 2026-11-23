@@ -107,9 +107,16 @@ class WireParityTest {
     void payAssetsAreBounded() throws Exception {
         String policy = "\"" + "ab".repeat(28) + "\"";
         Session.checkAssets(json("[[" + policy + ",[[\"\",\"1\"],[\"4d31\",2]]]]"));
+        // #154 Codex final: canonical CBOR order is shorter first, so ff before 0000 (the ledger's is the reverse); the JVM
+        // host decodes it and converts the offer to ledger order, as the validator's fromWire does.
+        var twoTokens = json("[[" + policy + ",[[\"ff\",\"1\"],[\"0000\",\"2\"]]]]");
+        Session.checkAssets(twoTokens);
+        var offered = org.julclang.state.api.ValueAdapter.fromWire((org.julclang.ledger.Value) JsonValues.fromJson(twoTokens, org.julclang.ledger.Value.class, "$"));
+        org.julclang.state.api.Assets.check(offered, "the offer");
         for (String bad : new String[]{"[1]", "[[" + policy + ",[[\"\",\"" + "9".repeat(201) + "\"]]]]",
                 "[[\"" + "AB".repeat(28) + "\",[]]]", "[[" + policy + ",[[\"4d31\",1],[\"\",1]]]]", "[[" + policy + ",{}]]",
-                "[[" + policy + ",[[\"" + "00".repeat(33) + "\",1]]]]", "[[" + policy + ",[]],[" + policy + ",[]]]"}) {
+                "[[" + policy + ",[[\"" + "00".repeat(33) + "\",1]]]]", "[[" + policy + ",[]],[" + policy + ",[]]]", "[[" + policy + ",[[\"0000\",\"2\"],[\"ff\",\"1\"]]]]",
+                "[[" + policy + ",[[\"\",\"0\"]]]]", "[[" + policy + ",[[\"\",-1]]]]"}) {
             var e = assertThrows(Throwable.class, () -> Session.checkAssets(json(bad)), bad);
             assertTrue(e instanceof HostError h && h.code.equals("request") || e instanceof JsonValues.BadValue, bad);
         }
@@ -126,6 +133,11 @@ class WireParityTest {
         }
         assertTrue(engine(STRICT, data, JSON.getNodeFactory().textNode("9f" + "80".repeat(300) + "ff")));   // wide, not deep
         assertTrue(engine(LENIENT, data, JSON.getNodeFactory().textNode("81".repeat(257) + "00")));
+        // #154 Codex final: mixed case is refused before decoding, never decoded unchecked.
+        JsonNode upper = JSON.getNodeFactory().textNode("81".repeat(257) + "0A");   // 257 levels around the integer 10
+        assertFalse(engine(STRICT, data, upper));
+        assertFalse(jvm(upper, org.julclang.core.PlutusData.class));
+        assertFalse(engine(STRICT, data, JSON.getNodeFactory().textNode("81".repeat(256) + "0A")));
     }
 
     @Test

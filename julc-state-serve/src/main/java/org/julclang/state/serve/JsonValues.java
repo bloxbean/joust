@@ -42,8 +42,7 @@ public final class JsonValues {
      * strictly: a JSON number must be a safe integer (|n| at most 2^53 - 1, as the JavaScript codec's
      * {@code Number.isSafeInteger}; larger values are decimal strings), and a {@code String} argument's bytes must be
      * well-formed UTF-8, so the contract never receives other bytes than the client sent (#145 Codex review 3, 4).
-     * Plutus data nested deeper than the decoder's stack raises the {@link StackOverflowError} itself, which the host
-     * reports as {@code internal}/{@code tooDeep} (ADR-0022 D9).
+     * Plutus data nests at most 256 CBOR levels ({@code SchemaCodec.checkNesting}).
      */
     public static final JsonValues TYPED = new JsonValues(true, true);
     /**
@@ -104,9 +103,7 @@ public final class JsonValues {
             }
             try {
                 return PlutusDataCborDecoder.decode(cbor);
-            } catch (RuntimeException | StackOverflowError e) {   // the decoder recurses: deep nesting overflows
-                // The dev host reports an overflow as internal/tooDeep (ADR-0022 D9): let its per-call handler see it.
-                if (propagateAborts && e instanceof StackOverflowError overflow) throw overflow;
+            } catch (RuntimeException | StackOverflowError e) {   // the HTTP codec's decoder may overflow on deep nesting
                 throw new BadValue(path + ": not Plutus data CBOR");
             }
         }

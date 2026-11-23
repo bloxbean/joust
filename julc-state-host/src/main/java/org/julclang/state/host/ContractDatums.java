@@ -36,7 +36,11 @@ final class ContractDatums {
 
     static PlutusData parse(String hex) {
         if (hex == null || hex.isEmpty()) throw new IllegalArgumentException("missing datum");
-        try { return PlutusDataCborDecoder.decode(HexFormat.of().parseHex(hex)); }
+        try {
+            byte[] cbor = HexFormat.of().parseHex(hex);
+            SchemaCodec.checkNesting(cbor, "datum");   // a recursive decoder: the npm host would trap past its stack
+            return PlutusDataCborDecoder.decode(cbor);
+        }
         catch (RuntimeException malformed) { throw new IllegalArgumentException("invalid Plutus data", malformed); }
     }
 
