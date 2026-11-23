@@ -54,13 +54,17 @@ final class MapMirrors {
     // A journal carries claims but no verified trie. Keep those writes staged and the contract
     // fenced until final settlement and cold rebuild (ADR-0022 D8, restart).
     private final Map<String, MapWithdrawal.Restored> restored = new HashMap<>();
-    void checkRestored(String id, MapWithdrawal.Restored writes, MapWithdrawal.Restored sameBatch) {
-        var previous = sameBatch == null ? restored.get(id) : sameBatch;
+    // The same claims by body hash: a re-import under a new reservation id (a shallow inclusion of a body whose expired
+    // reservation a rewind did not rearm) is still compared with them (#160 Codex round 3).
+    private final Map<String, MapWithdrawal.Restored> restoredBodies = new HashMap<>();
+    void checkRestored(String id, String body, MapWithdrawal.Restored writes, MapWithdrawal.Restored sameBatch) {
+        var previous = sameBatch != null ? sameBatch : restored.containsKey(id) ? restored.get(id) : restoredBodies.get(body);
         if (previous != null && (writes == null || !previous.claimsCbor().equals(writes.claimsCbor())))
             throw HostError.bad("conflict", "restored map witness differs from the journaled transaction");
     }
-    void restore(String id, MapWithdrawal.Restored writes) {
+    void restore(String id, String body, MapWithdrawal.Restored writes) {
         restored.put(id, writes);
+        restoredBodies.put(body, writes);
         policies.merge(id, writes.policies(), (held, imported) -> {
             var both = new HashSet<>(held);
             both.addAll(imported);
@@ -99,8 +103,13 @@ final class MapMirrors {
         // revives a final one): a later batch is still compared with them (#160 Codex reviews). The table retains its
         // final entries for a rewind, and these claims with them.
         var held = new HashSet<String>();
-        for (var entry : entries) held.add(entry.id());
+        var bodies = new HashSet<String>();
+        for (var entry : entries) {
+            held.add(entry.id());
+            bodies.add(entry.body().hash());
+        }
         restored.keySet().retainAll(held);
+        restoredBodies.keySet().retainAll(bodies);
         confirmed.clear();
         promoted.clear();
         staged.clear();

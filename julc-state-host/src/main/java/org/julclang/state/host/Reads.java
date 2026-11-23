@@ -338,6 +338,8 @@ final class Reads {
             // A block hash names one point: seen again at another slot or height, an answer contradicts the call's
             // evidence and must not advance reservations (#149 Codex fix review).
             throw HostError.internal("chainMoved", "chain point rolled back or was replaced");
+        if (!point(hash, slot.longValue(), height.longValue()))
+            throw HostError.internal("chainMoved", "chain point rolled back or was replaced");
         seenHashes.add(hash);
         // The schema's closed result: a misspelled continuation (cursor for more) would end a listing early (#149 Codex).
         for (var names = a.fieldNames(); names.hasNext(); ) {
@@ -368,8 +370,19 @@ final class Reads {
     private boolean replayed;
     /** A map history replayed and checked for one root: its tip waits for the call's end (#160 Codex re-review). */
     void historyReplayed() { replayed = true; }
-    /** The call reached every map root it needed: a replayed history's tip counts now. */
-    void settleHistory() { if (replayed) accepted(); }
+    /**
+     * The tip a replayed map history lets the reservation table observe, or -1: applied only when the call's reply is
+     * committed, so a call that needs a root the history misses, or that is cancelled before its reply is written,
+     * advances nothing (#160 Codex reviews).
+     */
+    long historyTip() { return replayed ? greatestTip : -1; }
+
+    // One block hash, one chain point, across the call's tips and the history entries it reads (#160 Codex round 3).
+    private final Map<String, List<Long>> points = new HashMap<>();
+    /** Records {@code hash} at (slot, height); false if the call already saw it at another point. */
+    boolean point(String hash, long slot, long height) {
+        return points.computeIfAbsent(hash, h -> List.of(slot, height)).equals(List.of(slot, height));
+    }
     // A JSON string of 64 lowercase hex digits: a 64-digit number's text matches too (#149 Codex fix review).
     static boolean hex64(JsonNode n) { return n.isTextual() && n.textValue().matches("[0-9a-f]{64}"); }
     // The wire schema's nullable output fields: absent, null, or a string of the field's format.

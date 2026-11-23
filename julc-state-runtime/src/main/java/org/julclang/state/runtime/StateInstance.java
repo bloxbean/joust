@@ -120,6 +120,9 @@ public final class StateInstance<S> {
         var spec = contract.spec;
         String what = spec.name() + "." + call.name;
         S current = decode(stateUtxo);
+        // A chain datum's maps are root only: pending entries would answer before any proof, and differently on the
+        // JVM (the method reads them) and in the engine (discovery opens the maps afresh) (#160 Codex round 3).
+        if (contract.spec.layout().hasMaps()) MerkleSupport.requireStored(contract.spec.layout(), current);
         byte[] callerPkh = Keys.pkh(call.caller);
         BigInteger inLovelace = lovelaceOf(stateUtxo);
         BigInteger balance = call.kind == Call.Kind.DESTROY ? inLovelace : inLovelace.subtract(BigInteger.valueOf(spec.minAda()));
@@ -221,6 +224,9 @@ public final class StateInstance<S> {
         var spec = contract.spec;
         String what = spec.name() + "." + call.name;
         S current = decode(stateUtxo);
+        // A chain datum's maps are root only: pending entries would answer before any proof, and differently on the
+        // JVM (the method reads them) and in the engine (discovery opens the maps afresh) (#160 Codex round 3).
+        if (contract.spec.layout().hasMaps()) MerkleSupport.requireStored(contract.spec.layout(), current);
         byte[] callerPkh = Keys.pkh(call.caller);
         org.julclang.ledger.Value inValue = AssetTx.valueOf(stateUtxo);
         BigInteger inLovelace = lovelaceOf(stateUtxo);

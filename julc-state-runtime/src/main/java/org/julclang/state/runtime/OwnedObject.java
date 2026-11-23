@@ -286,6 +286,7 @@ public final class OwnedObject<S, R> {
         var spec = contract.spec;
         String what = spec.name() + "." + call.name;
         R current = decode(own);
+        if (codec.hasMaps()) MerkleSupport.requireStored(codec.layout(), current);   // root only (#160 Codex round 3)
         byte[] callerPkh = Keys.pkh(call.caller);
         BigInteger inLovelace = lovelaceOf(own);
         BigInteger balance = call.kind == Call.Kind.DESTROY ? inLovelace : inLovelace.subtract(BigInteger.valueOf(spec.minAda()));
@@ -378,6 +379,7 @@ public final class OwnedObject<S, R> {
         var spec = contract.spec;
         String what = spec.name() + "." + call.name;
         R current = decode(own);
+        if (codec.hasMaps()) MerkleSupport.requireStored(codec.layout(), current);   // root only (#160 Codex round 3)
         byte[] callerPkh = Keys.pkh(call.caller);
         org.julclang.ledger.Value inValue = AssetTx.valueOf(own);
         BigInteger inLovelace = lovelaceOf(own);

@@ -432,7 +432,7 @@ final class Reservations implements ClaimStore {
                 staged.put(e.id, e);
                 live.put(b.hash, e);
             }
-            maps.checkRestored(e.id, imported.writes(), restoredMaps.get(e.id));
+            maps.checkRestored(e.id, b.hash, imported.writes(), restoredMaps.get(e.id));
             if (imported.writes() != null) restoredMaps.put(e.id, imported.writes());
             if (record != null) {
                 records.put(e.id, record);
@@ -456,7 +456,7 @@ final class Reservations implements ClaimStore {
         }
         return new Transport.Reply(out, () -> {
             entries = staged;
-            restoredMaps.forEach(maps::restore);
+            restoredMaps.forEach((id, writes) -> maps.restore(id, staged.get(id).body.hash, writes));
             reconcile = !complete;
             if (complete) maps.reconciled();
         });

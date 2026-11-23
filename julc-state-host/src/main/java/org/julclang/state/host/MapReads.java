@@ -14,9 +14,6 @@ record MapReads(Reads reads) {
     List<String> history(String unit) {
         var txs = new LinkedHashSet<String>();
         var cursors = new HashSet<String>();
-        // A block hash names one chain point across every page: seen again at another slot or height, the history
-        // contradicts itself (#160 Codex re-review).
-        var points = new HashMap<String, JsonNode>();
         JsonNode point = null, previous = null;
         String cursor = null;
         do {
@@ -34,8 +31,10 @@ record MapReads(Reads reads) {
                 if (!tx.matches("[0-9a-f]{64}") || !txs.add(tx) || !chainPoint(block)
                         || !atOrBefore(block, point) || previous != null && !atOrBefore(previous, block))
                     throw inconsistent("duplicate, unordered or invalid history entry");
-                if (!points.computeIfAbsent(block.get("hash").textValue(), h -> block).equals(block))
-                    throw inconsistent("one block hash at two history points");
+                // A block hash names one chain point across every page and every tip of the call: seen again at
+                // another slot or height, the answers contradict each other (#160 Codex reviews).
+                if (!reads.point(block.get("hash").textValue(), block.get("slot").longValue(), block.get("height").longValue()))
+                    throw inconsistent("one block hash at two chain points");
                 previous = block;
             }
             cursor = page.path("more").textValue();

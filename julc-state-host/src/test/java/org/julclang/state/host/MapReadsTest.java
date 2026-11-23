@@ -113,6 +113,63 @@ class MapReadsTest {
         assertEquals(2, new MapReads(reads(q -> value(same, 10), 10, 8192)).history("unit").size());
     }
 
+    @Test void aHistoryBlockIsNotATipAtAnotherPoint() {
+        // #160 Codex round 3: a history entry in block H at slot 5, then a later answer whose tip claims H at slot 12.
+        var items = JSON.createArrayNode();
+        items.addObject().put("txHash", "01".repeat(32)).set("point", point(5));
+        var reads = reads(q -> q.path("kind").asText().equals("assetHistory") ? value(items, 10)
+                : value(JSON.createArrayNode(), 12).set("tip", point(12).put("hash", "%064x".formatted(5))), 10, 8192);
+        assertEquals(1, new MapReads(reads).history("unit").size());
+        failure("internal", "chainMoved", () -> reads.answer("redeemers", obj().put("txHash", "01".repeat(32))));
+    }
+
+    @Test void aShallowReimportUnderANewIdKeepsTheRestoredClaims() throws Exception {
+        // #160 Codex round 3: expiry, then a rewind to validTo (not rearmed), then the body restored as shallow at
+        // validTo - 1: a new reservation id, compared with the claims first restored under that body hash.
+        var honest = JSON.readTree(ClientVectors.DIRECTORY.resolve("token-m3-mint-2.json").toFile());
+        var mutated = JSON.readTree(ClientVectors.DIRECTORY.resolve("reject-map-policy.json").toFile());
+        String original = honest.at("/result/prepared/cbor").asText();
+        var tx = Transaction.deserialize(HexFormat.of().parseHex(original));
+        long to = tx.getBody().getTtl();
+        var other = Transaction.deserialize(HexFormat.of().parseHex(mutated.at("/result/prepared/cbor").asText()));
+        tx.setWitnessSet(other.getWitnessSet());
+        String changed = HexFormat.of().formatHex(tx.serialize());
+        var entry = M1bTest.entry(org.julclang.state.examples.token.TokenClient.class);
+        try (var client = new Client(new Handshake(List.of(entry)))) {
+            Client.success(client.rpc("initialize", Client.init(entry).put("restoring", true)));
+            var batch = obj().put("complete", true);
+            var item = batch.putArray("transactions").addObject().put("state", "prepared").put("cbor", original);
+            String id = Client.success(client.rpc("restore", batch)).required("reservations").get(0).asText();
+            var expired = obj().put("reservation", id).put("status", "expired").put("tip", to + 1_000_000);
+            expired.set("txHash", honest.at("/result/prepared/txHash"));
+            Client.success(client.rpc("settled", expired));
+            var reset = obj().put("now", to + 1_000_000);
+            reset.putObject("rewound").put("tip", to);
+            Client.success(client.rpc("reset", reset));
+            item.put("state", "shallow").put("slot", to - 1).put("cbor", changed);
+            Client.error("bad", "conflict", client.rpc("restore", batch));
+            item.put("cbor", original);
+            Client.success(client.rpc("restore", batch));
+        }
+    }
+
+    @Test void aPrepareRefusesAChainDatumWithPendingMapEntries() throws Exception {
+        // #160 Codex round 3: the JVM method would read the pending entries, the engine's discovery would not; both
+        // hosts refuse the datum before any history read.
+        var v = MapRecording.record("token", MapRecording.m3("token", "transfer"));
+        var original = RecordedSessionsTest.answers(v);
+        byte[] sender = HexFormat.of().parseHex("00".repeat(28));
+        for (boolean writes : List.of(false, true)) {
+            var kinds = new ArrayList<String>();
+            var result = HostVectorsTest.run(v, q -> {
+                kinds.add(str(q, "kind"));
+                return pending(original.apply(q), writes, sender);
+            });
+            Client.error("internal", "inconsistentRead", result);
+            assertFalse(kinds.contains("assetHistory"), kinds.toString());
+        }
+    }
+
     @Test void aHistoryThatMissesALaterRootAdvancesNoReservation() {
         // #160 Codex re-review: a call that needs two cold roots. The replay reaches the first; until the call ends its
         // tip stays provisional, and a second root it does not reach is an inconsistent read that advanced nothing.
@@ -125,8 +182,8 @@ class MapReadsTest {
         assertEquals(List.of(), tips, "the first root's replay is provisional");
         failure("internal", "inconsistentRead", () -> m.rebuild("unit", "ab".repeat(28), store, () -> false));
         assertEquals(List.of(), tips, "a history that misses the second root advances nothing");
-        reads.settleHistory();
-        assertEquals(List.of(30L), tips, "a call that reached every root it needs accepts the history's tip");
+        assertEquals(30, reads.historyTip(), "the tip a committed reply lets the table observe");
+        assertEquals(List.of(), tips, "observed only when the call's reply is committed");
     }
 
     /** {@code answer} with every Token state datum's balances map given one pending entry in its reads or writes. */
