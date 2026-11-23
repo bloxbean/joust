@@ -41,6 +41,9 @@ final class HostClasspath {
         project.getTasks().register("joustHostSpec", HostSpec.class, task -> {
             task.setGroup("build");
             task.setDescription("Writes the ordered dev host launch manifest to build/joust/host-spec.json");
+            // A configuration cache entry would evaluate getExtraJars (and its overlap check) when it is stored, before
+            // compileJava and sibling jars run: the check would miss what they build on the first run (#150 Codex).
+            task.notCompatibleWithConfigurationCache("checks the launch files after they are built");
             var main = java.getSourceSets().getByName("main");
             var application = project.files(project.provider(main::getRuntimeClasspath));
             var runtime = project.getConfigurations().getByName(main.getRuntimeClasspathConfigurationName());
