@@ -49,7 +49,7 @@ public abstract class HostSpec extends DefaultTask {
             if (!Files.isDirectory(dir)) continue;
             if (parent.startsWith(dir.toRealPath())) {
                 throw new org.gradle.api.GradleException("the host spec " + output + " is inside the launch directory " + file
-                        + ": move the directory out of " + output.getParent() + ", or the spec cannot be verified");
+                        + ": move the directory or the spec so that neither contains the other, or the spec cannot be verified");
             }
         }
         var manifest = LaunchManifest.scan(entries);

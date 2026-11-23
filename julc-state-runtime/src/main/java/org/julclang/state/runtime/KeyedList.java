@@ -159,10 +159,9 @@ public final class KeyedList<S, R> {
         var c = contract();
         var out = new TreeMap<String, Listed<R>>();
         try {
-            for (int page = 1; page <= 1_000; page++) {
-                var r = c.runtime.backend().getUtxoService().getUtxos(c.address, 100, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                for (Utxo u : r.getValue()) {
+            var walk = new Pages(c.runtime, c.address, 100, 1_000);
+            for (var list = walk.next(); list != null; list = walk.next()) {
+                for (Utxo u : list) {
                     Listed<R> l = validate(u);
                     if (l == null) continue;
                     if (out.put(HexUtil.encodeHexString(l.node().key()), l) != null) {
@@ -170,7 +169,6 @@ public final class KeyedList<S, R> {
                                 + HexUtil.encodeHexString(l.node().key()) + " held twice");
                     }
                 }
-                if (r.getValue().size() < 100) break;
             }
         } catch (JoustException e) {
             throw e;
