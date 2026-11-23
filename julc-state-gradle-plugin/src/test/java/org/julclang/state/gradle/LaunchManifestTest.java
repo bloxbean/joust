@@ -48,6 +48,22 @@ class LaunchManifestTest {
         assertTrue(error.getMessage().contains("manifest Class-Path") && error.getMessage().contains(jar.toString()));
     }
 
+    @Test void aSymlinkedJarIsListedByTheFileItHashes() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeFalse(System.getProperty("os.name").startsWith("Windows"));
+        var dir = Files.createDirectory(temp.resolve("classes"));
+        var target = temp.resolve("lib-1.2.jar");
+        HostSpecConsumerTest.jar(target, null);
+        var link = Files.createSymbolicLink(temp.resolve("current.jar"), target.getFileName());
+        var entry = LaunchManifest.scan(List.of(dir.toFile(), link.toFile())).entries().get(1);
+        assertEquals(1, entry.get("ordinal"));
+        assertEquals(target.toRealPath().toString(), entry.get("path"));
+        // #150 Codex final pass: a client opens the listed path without following links and reads the listed bytes.
+        var copy = temp.resolve("copy.jar");
+        SnapshotClient.copyJar(Path.of((String) entry.get("path")), copy);
+        assertEquals(entry.get("sha256"), hash(Files.readAllBytes(copy)));
+        assertThrows(IOException.class, () -> SnapshotClient.copyJar(link, temp.resolve("link-copy.jar")));
+    }
+
     private static String hash(byte[] bytes) throws Exception {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
     }

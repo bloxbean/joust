@@ -7,20 +7,20 @@ import java.util.*;
 import static org.julclang.state.host.Wire.*;
 
 final class Listings {
-    private record Snapshot(String method, String contract, String instance, String tip, List<ObjectNode> items) {}
+    private record Snapshot(String method, List<ObjectNode> items) {}
     // Insertion order is recency. Touch only once delivery commits (D10).
     private final LinkedHashMap<String, Snapshot> snapshots = new LinkedHashMap<>();
     private long sequence;
 
     void clear() { snapshots.clear(); }
 
-    Transport.Reply start(String method, Contracts.Contract contract, String instance, List<Utxo> utxos, String tip, int limit) {
+    Transport.Reply start(String method, Contracts.Contract contract, String instance, List<Utxo> utxos, int limit) {
         var datums = new ContractDatums(contract);
         var items = utxos.stream().sorted(Comparator.comparing(Utxo::getTxHash).thenComparingInt(Utxo::getOutputIndex))
-                .map(datums::recognize)
+                .map(datums::recognize).filter(Objects::nonNull)
                 .filter(i -> i.has("unrecognized") || (instance == null ? !i.has("object")
                         : i.has("object") && instance.equals(i.path("instance").asText()))).toList();
-        return page(Long.toString(++sequence), new Snapshot(method, contract.name(), instance, tip, items), 0, limit);
+        return page(Long.toString(++sequence), new Snapshot(method, items), 0, limit);
     }
 
     static int limit(JsonNode p) {
