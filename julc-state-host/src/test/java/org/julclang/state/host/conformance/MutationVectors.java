@@ -574,11 +574,13 @@ public final class MutationVectors {
             new Case("by-action-other-variant",DEX,"redeemer/mintRedeemer",e -> e.swap(e.rvalue(1).at(0),e.recordedRedeemer("Dex-init",1))),
             new Case("missing-spend-redeemer",SPEND,"redeemer/count",e -> e.dropRedeemer(0)),
             new Case("missing-reward-redeemer",DEX,"redeemer/count",e -> { e.sendToPayer(); e.dropRedeemer(3); }),
-            new Case("payment-diverted",OWNED,"netOutflow/third",e -> {
-                // The caller's 3 ADA leaves the continuation for a stranger; the wallet's own outflow is unchanged.
+            new Case("payment-diverted",OWNED,"netOutflow/third",List.of("netOutflow/third","netOutflow/wallet"),e -> {
+                // A stranger gets the caller's 3 ADA (which leaves the continuation) and 1 ADA of the wallet's change.
+                // The bound payment may reach others (the validator settles the continuation); nothing beyond it may.
                 long paid=e.v.at("/request/call/pay/lovelace").asLong();
                 e.coin(0,-paid);
-                e.outputs(List.of(e.out(0).raw(),e.out(1).raw(),"82581d60"+OTHER+uint(paid)));
+                e.coin(1,-1_000_000);
+                e.outputs(List.of(e.out(0).raw(),e.out(1).raw(),"82581d60"+OTHER+uint(paid+1_000_000)));
             }),
             new Case("payment-diverted-lovelace",DEX,"netOutflow/third",e -> {
                 e.coin(0,-2_000_000);
@@ -866,7 +868,7 @@ public final class MutationVectors {
         expected(mutation).forEach(violations::add);
         return e.v;
     }
-    static List<String> expected(Case mutation) { return mutation.sites().stream().map(Case::code).toList(); }
+    static List<String> expected(Case mutation) { return mutation.sites().stream().map(Case::code).distinct().toList(); }
     public static void main(String[] args) throws Exception {
         for (var mutation : cases()) {
             var vector=generate(mutation);
