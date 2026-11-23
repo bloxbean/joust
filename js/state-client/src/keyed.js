@@ -15,6 +15,7 @@ import { parseTx, pageOutputSize } from './ledger.js';
 import { decodeData, dataHex, canonicalHex } from './pdata.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, envelopeChecks, isWalletEnterprise, paymentKeyHashOf,
+  scriptBearingChecks,
 } from './verify.js';
 
 /** The keyed call kinds of a description's x-joust (ADR-0016 D11). */
@@ -162,6 +163,7 @@ export async function verifyKeyed(o) {
   } catch (e) {
     return { problems: ['not a transaction'], report };
   }
+  scriptBearingChecks(tx, wallet, problems);
   if (!isKeyedCall(description, call)) problems.push(`${call.kind} is not a keyed call`);
   let kt = null;
   if (!creation) {

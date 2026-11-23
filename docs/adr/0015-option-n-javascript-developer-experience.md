@@ -866,7 +866,11 @@ direct `Tx` building, gated by S3.
     addresses when the funding address has none; the engine then builds from that address). The DevKit wallet leaves out
     a UTxO carrying a reference script (it knows only the hash, or with Ogmios perhaps only that there is one) and
     reports datum hashes, an inline datum `00` included. QuickTx's own funding and collateral selection can still spend
-    a wallet UTxO carrying a reference script: tracked in #167. The caller's and payer's listings (seeds, token payments, the
+    a wallet UTxO carrying a reference script: tracked in #167. Whatever built the transaction, every page verifier
+    (single, keyed and composed calls, purposes, intents, a governor's registration) refuses one that spends, or puts
+    up as collateral, a wallet UTxO whose record carries a reference script (`referenceScriptHash`, or
+    `hasReferenceScript`) before the wallet signs: a prepare service could otherwise return its value as change while
+    the script is lost. The caller's and payer's listings (seeds, token payments, the
     funding pick, keyed reservations and designated inputs) are read to their end (up to 10,000 pages, beyond which the read is
     refused as incomplete). A page after the first that the provider fails to answer is an error, not the end; a
     failed first page reads as an empty listing, and the refusal (a seed's, a token payment's, a keyed reservation's)
