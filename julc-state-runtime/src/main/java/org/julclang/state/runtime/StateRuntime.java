@@ -114,6 +114,26 @@ public final class StateRuntime {
         }
         onBuilt.accept(new BuiltTx(what, copy, prepared));
     }
+
+    /**
+     * Reports a signed transaction the runtime refused before submitting it (#165 Codex round 8): the observer gets a
+     * copy without its signatures (vkey and bootstrap witnesses), so nothing it keeps can be submitted. The body, and
+     * so its hash, is the one refused.
+     */
+    void builtRefused(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx) {
+        if (onBuilt == null) return;
+        com.bloxbean.cardano.client.transaction.spec.Transaction copy;
+        try {
+            copy = com.bloxbean.cardano.client.transaction.util.TransactionUtil.createCopy(tx);
+        } catch (RuntimeException e) {
+            throw new JoustException(what + ": cannot copy the built transaction for its observer", e);
+        }
+        if (copy.getWitnessSet() != null) {
+            copy.getWitnessSet().setVkeyWitnesses(null);
+            copy.getWitnessSet().setBootstrapWitnesses(null);
+        }
+        onBuilt.accept(new BuiltTx(what, copy, false));
+    }
     private volatile VerifierHandle mapVerifier;
     private volatile VerifierHandle outputVerifier;
 

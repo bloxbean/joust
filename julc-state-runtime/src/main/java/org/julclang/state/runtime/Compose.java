@@ -184,6 +184,8 @@ public final class Compose {
         cap.walletOnly = prepare;
         cap.forced = window;
         cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
+        // Every call's reads, from the first pass: no call collects for its assets what a later call reads (#165 Codex r8).
+        if (probe.tx instanceof TxRunner.RecordingTx r) cap.knownReads.addAll(r.readRefs);
         // A page's designated input (ADR-0016 D11) may be a call's own input (a creation's seed): spent once, after the calls.
         boolean late = designated != null && designated.given();
         if (designated != null && !late) TxRunner.collect(cap.tx, designated.utxo(), null);

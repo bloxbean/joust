@@ -285,10 +285,12 @@ final class AssetTx {
      * Selection: never a UTxO with a reference script (spending it would consume a deployment's script; T2) or a datum
      * hash (a conservative choice, as cardano-client-lib's selection makes: at a key address the ledger needs no datum,
      * but whatever the hash commits to may matter to someone; F-W5); an inline datum at a key address is fine (R9). Nor
-     * one another keyed operation designates or holds ({@link Designation#pickable}; R2). Like every plain
-     * transaction's selection (Designation), it does not skip inputs an earlier, still-unexpired prepared transaction
-     * of this JVM claims (T4): the lovelace selection of the same body would reuse them anyway; two such bodies
-     * conflict and at most one lands, so nothing is lost, and a page prepares again after the first settles.
+     * one another keyed operation designates or holds ({@link Designation#pickable}; R2), nor a reference input of the
+     * transaction (this call's reads, applied before it; in a composition every call's, from the first pass; #165 Codex
+     * round 8). Like every plain transaction's selection (Designation), it does not skip inputs an earlier,
+     * still-unexpired prepared transaction of this JVM claims (T4): the lovelace selection of the same body would reuse
+     * them anyway; two such bodies conflict and at most one lands, so nothing is lost, and a page prepares again after
+     * the first settles.
      */
     static void collectAssets(Tx tx, StateContractHandle<?> contract, Account caller, Value needed, String what,
                               Utxo alreadyIn) {
@@ -315,6 +317,15 @@ final class AssetTx {
             }
         }
         draw(missing, spare);
+        // Never a reference input of the transaction (#165 Codex round 8: BabbageNonDisjointRefInputs): what this call
+        // reads (its reads are applied first), what earlier calls of a composition read, and what any of its calls read
+        // in the first pass.
+        var read = new java.util.HashSet<String>();
+        if (tx instanceof TxRunner.RecordingTx r) read.addAll(r.readRefs);
+        if (cap != null) {
+            if (cap.tx instanceof TxRunner.RecordingTx r) read.addAll(r.readRefs);
+            read.addAll(cap.knownReads);
+        }
         var picked = new ArrayList<Utxo>();
         int passedOver = 0;
         boolean unanswered = false;
@@ -344,7 +355,7 @@ final class AssetTx {
                     // only a hash without the inline datum is a datum hash (#165 Codex).
                     // Spent already (R3-2): it counts whatever it carries, since the transaction spends it anyway.
                     if (!spent && (u.getReferenceScriptHash() != null || u.getDataHash() != null && u.getInlineDatum() == null
-                            || !Designation.pickable(u, TxRunner.currentOperation()))) {
+                            || read.contains(ref) || !Designation.pickable(u, TxRunner.currentOperation()))) {
                         passedOver++;
                         continue;
                     }
@@ -373,7 +384,7 @@ final class AssetTx {
             throw new RequireException(what + ": the caller's base address does not hold " + missing
                     + (unanswered ? " (or the provider did not answer its listing)" : "")
                     + (passedOver == 0 ? "" : " in UTxOs it may spend (" + passedOver + " holding it carry a reference"
-                    + " script or a datum hash, or are held by a keyed operation)"));
+                    + " script or a datum hash, are held by a keyed operation, or are the transaction's reference inputs)"));
         }
         if (cap != null) {
             var paid = cap.paidAssets.computeIfAbsent(caller.baseAddress(), k -> new java.util.HashMap<>());

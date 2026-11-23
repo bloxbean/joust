@@ -504,7 +504,8 @@ class WalletAssetChangeTest {
                 Utxo.builder().txHash("cc".repeat(32)).outputIndex(0).address(keyA.baseAddress())
                         .amount(List.of(Amount.lovelace(BigInteger.valueOf(6_000_000)))).build())));
         f.snapshot.utxos.put(keyB.baseAddress(), new ArrayList<>(List.of(walletOfB(f, keyB.baseAddress()))));
-        var rt = observed(f, skewed(f, Map.of("ee".repeat(32), 1_000_000L, "bb".repeat(32), -1_000_000L)), new AtomicReference<>());
+        var seen = new AtomicReference<Transaction>();
+        var rt = observed(f, skewed(f, Map.of("ee".repeat(32), 1_000_000L, "bb".repeat(32), -1_000_000L)), seen);
         var dex = DexClient.at(rt, f.instance);
         var e = assertThrows(JoustException.class, () -> Compose.of(rt, keyA)
                 .add(() -> dex.addLiquidity(keyB, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), f.tokens(100_000)))
@@ -512,6 +513,45 @@ class WalletAssetChangeTest {
         assertTrue(e.getMessage().contains("1000000 lovelace from " + keyB.baseAddress()), e::getMessage);
         assertReleased("ee".repeat(32) + "#0");
         assertReleased("bb".repeat(32) + "#0");
+        // #165 Codex round 8: the observer saw the refused body, never its signatures (it could have submitted it).
+        assertNotNull(seen.get(), "the refused body is observed");
+        var vkeys = seen.get().getWitnessSet() == null ? null : seen.get().getWitnessSet().getVkeyWitnesses();
+        assertTrue(vkeys == null || vkeys.isEmpty(), () -> "the observer got " + vkeys.size() + " signatures of a refused body");
+    }
+
+    /**
+     * #165 Codex round 8: a call reading one of the wallet's token UTxOs (a reference input) pays its tokens from the
+     * other one: spending a reference input as well would be BabbageNonDisjointRefInputs.
+     */
+    @Test
+    void aTokenUtxoTheCallReadsIsNotSpentForItsAssets() {
+        var f = new Fixture();
+        var read = f.utxo("aa", 2, 100_000);
+        var other = f.utxo("cc", 2, 100_000);
+        f.wallet(List.of(read, other, f.utxo("bb", 500, 0)));
+        var pool = DexClient.contract(f.rt).at(f.instance);
+        BigInteger tokenIn = BigInteger.valueOf(100_000);
+        BigInteger pay = ADA.multiply(BigInteger.valueOf(100));
+        Value tokens = f.tokens(100_000);
+        var prepared = Compose.of(f.rt, f.payer)
+                .add(() -> pool.call(org.julclang.state.runtime.Call.<Dex.Pool>action("addLiquidity", f.payer)
+                        .usesCtx(true).received(pay).receivedAssets(tokens)
+                        .runAssets(false, (s, sh, ctx, funds) -> {
+                            var r = Dex.addLiquidity(s, tokenIn, ctx, funds);
+                            return org.julclang.state.runtime.Transition.full(r.state(), r.payouts(), r.sends(), r.mint(), r.accepted());
+                        })
+                        .byAction(ref -> new DexValidator.ByAction(ref))
+                        .redeemer(ctx -> new DexValidator.AddLiquidity(tokenIn, ctx, tokens.toPlutusData()))
+                        .referenceInputs(read)
+                        .build()))
+                .prepare();
+        TransactionBody body = prepared.transaction().getBody();
+        var readIn = new TransactionInput(read.getTxHash(), 0);
+        assertTrue(body.getReferenceInputs().contains(readIn), body.getReferenceInputs()::toString);
+        assertFalse(body.getInputs().contains(readIn), () -> "a reference input spent: " + body.getInputs());
+        assertTrue(body.getInputs().contains(new TransactionInput(other.getTxHash(), 0)), body.getInputs()::toString);
+        assertNoNegativeOutput(body);
+        assertBalanced(body, f.snapshot);
     }
 
     @Test

@@ -547,4 +547,92 @@ class AssetCollectionTest {
             assertTrue(thrown.getCause().getMessage().contains("cannot read page 2"), () -> String.valueOf(thrown.getCause()));
         }
     }
+
+    @Test
+    void aFailedFirstPageIsNamedInTheReservationsRefusal() {
+        // #165 Opus P3 (round 7): as the seed's and the token payment's refusals, the keyed reservation's says the
+        // provider may not have answered. A listing that answered with nothing does not say so.
+        var payer = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var failing = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
+                (proxy, m, args) -> {
+                    if (m.getName().equals("getUtxos") && args.length == 3) return com.bloxbean.cardano.client.api.model.Result.error("503");
+                    throw new UnsupportedOperationException(m.getName());
+                });
+        var backend = (com.bloxbean.cardano.client.backend.api.BackendService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.BackendService.class},
+                (proxy, m, args) -> m.getName().equals("getUtxoService") ? failing : m.invoke(this.backend, args));
+        var failingRt = StateRuntime.builder(backend).network(Networks.testnet()).chainTime(new SlotChainTime(0, 0, 1000, backend)).build();
+        var e = assertThrows(JoustException.class, () -> Designation.reserve(failingRt, payer, "test", java.util.Set.of()));
+        assertTrue(e.getMessage().contains("no ordinary UTxO of at least 5 ADA free to designate")
+                && e.getMessage().contains("(or the provider did not answer its listing)"), e::getMessage);
+        snapshot.utxos.put(payer.baseAddress(), List.of(utxo(payer.baseAddress(), "aa", 2_000_000, 0)));
+        var empty = assertThrows(JoustException.class, () -> Designation.reserve(rt, payer, "test", java.util.Set.of()));
+        assertFalse(empty.getMessage().contains("did not answer"), empty::getMessage);
+    }
+
+    // ---------------------------------------------------------------- #165 Codex round 8, finding 3
+
+    @Test
+    void aReferenceInputOfTheCallIsNeverCollected() {
+        // Two token UTxOs, the first also one of the call's reference inputs: spending it as well as reading it would be
+        // BabbageNonDisjointRefInputs. The second covers the payment.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var read = utxo(wallet.baseAddress(), "aa", 2_000_000, 100);
+        var other = utxo(wallet.baseAddress(), "bb", 2_000_000, 100);
+        snapshot.utxos.put(wallet.baseAddress(), List.of(read, other));
+        // A call's own transaction (TxRunner.newTx), its reads applied before its assets are collected.
+        var collected = new ArrayList<Utxo>();
+        var tx = new TxRunner.RecordingTx() {
+            @Override
+            public Tx collectFrom(List<Utxo> utxos) {
+                collected.addAll(utxos);
+                return super.collectFrom(utxos);
+            }
+        };
+        tx.readFrom(read);
+        AssetTx.collectAssets(tx, contract, wallet, Assets.of(new byte[28], new byte[]{1}, BigInteger.valueOf(100)), "test", null);
+        assertEquals(List.of(other), collected, "the second token UTxO, not the read one");
+        // Only the read one holds enough: refused, and the refusal says why it was passed over.
+        var e = assertThrows(RequireException.class, () -> AssetTx.collectAssets(tx, contract, wallet,
+                Assets.of(new byte[28], new byte[]{1}, BigInteger.valueOf(200)), "test", null));
+        assertTrue(e.getMessage().contains("1 holding it") && e.getMessage().contains("reference inputs"), e::getMessage);
+    }
+
+    @Test
+    void aCompositionNeverCollectsWhatAnyOfItsCallsReads() {
+        // In a composition the read may come from an earlier call (the shared transaction) or a later one (the first
+        // pass's reads): neither is collected.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var earlier = utxo(wallet.baseAddress(), "aa", 2_000_000, 100);
+        var later = utxo(wallet.baseAddress(), "bb", 2_000_000, 100);
+        var free = utxo(wallet.baseAddress(), "cc", 2_000_000, 100);
+        snapshot.utxos.put(wallet.baseAddress(), List.of(earlier, later, free));
+        var cap = new TxRunner.Capture();
+        cap.tx.readFrom(earlier);
+        cap.knownReads.add(Designation.ref(later));
+        TxRunner.CAPTURE.set(cap);
+        try {
+            assertEquals(List.of(free), collect(wallet, 100, null));
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        assertEquals(java.util.Set.of(Designation.ref(free)), cap.assetInputs);
+    }
+
+    @Test
+    void aBodySpendingOneOfItsReferenceInputsIsRefused() {
+        var in = new com.bloxbean.cardano.client.transaction.spec.TransactionInput("AA".repeat(32), 0);
+        var same = new com.bloxbean.cardano.client.transaction.spec.TransactionInput("aa".repeat(32), 0);
+        var body = com.bloxbean.cardano.client.transaction.spec.TransactionBody.builder()
+                .inputs(new ArrayList<>(List.of(in)))
+                .referenceInputs(new ArrayList<>(List.of(new com.bloxbean.cardano.client.transaction.spec.TransactionInput("bb".repeat(32), 0))))
+                .build();
+        var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
+        t.setBody(body);
+        TxRunner.requireDisjointReads(t, "test");
+        body.getReferenceInputs().add(same);
+        var e = assertThrows(JoustException.class, () -> TxRunner.requireDisjointReads(t, "test"));
+        assertTrue(e.getMessage().contains("spends and reads " + "aa".repeat(32) + "#0"), e::getMessage);
+    }
 }

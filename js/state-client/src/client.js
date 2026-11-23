@@ -417,7 +417,11 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
   }
   if (!rec) {
     const d = designatedFor(wallet);
-    if (!d) throw new Error('the wallet has no ordinary (ADA-only) UTxO of at least 5 ADA to designate for a keyed call (ADR-0016 D7)');
+    if (!d) {
+      // Where one must be (designatedFor: the caller's payment key): another key's address cannot take it (#165 Opus P3).
+      throw new Error('the wallet has no ordinary (ADA-only) UTxO of at least 5 ADA to designate for a keyed call (ADR-0016 D7)'
+        + ` at ${fundingAddress(wallet)} or another address with its payment key; move ADA there`);
+    }
     rec = newRecord(wallet, networkId, d, { contract: this.name, method: call.meta.name, instance: call.instance ?? null, key: call.key ?? null });
     await store.put(rec);
   }
@@ -452,7 +456,7 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
     const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
     const v = await verifyKeyed({
       description: this.description, deployment: this.deployment, txHex: prepared.cbor,
-      call: { ...call, designated: rec.designated, cosignerKeys: co.keys }, wallet, limits: this.limits,
+      call: { ...call, designated: rec.designated, ...(rec.address ? { designatedAddress: rec.address } : {}), cosignerKeys: co.keys }, wallet, limits: this.limits,
       chain: { tip, params, utxo: (r) => this.chain.utxo(r), verifiedOutput: this.chain.verifiedOutput ? (r) => this.chain.verifiedOutput(r) : undefined },
     });
     report = v.report;

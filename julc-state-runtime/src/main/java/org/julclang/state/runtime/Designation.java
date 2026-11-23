@@ -355,6 +355,7 @@ final class Designation {
     static Designated reserve(StateRuntime rt, Account payer, String what, Set<String> avoid) {
         String address = payer.baseAddress();
         purge();
+        boolean[] unanswered = {false};   // the first page failed: said in the refusal (#165 Opus P3, round 7)
         // Read and chosen under the address's lock (F63): no build of that address can spend and release a candidate
         // between the read and the designation.
         Designated chosen = locked(address, () -> {
@@ -363,7 +364,10 @@ final class Designation {
                 for (int page = 1; ; page++) {   // to the listing's end (#165 Codex r6, r7)
                     var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                     if (!r.isSuccessful()) {
-                        if (page == 1) break;   // nothing listed, or the provider did not answer (refused below)
+                        if (page == 1) {   // nothing listed, or the provider did not answer (refused below)
+                            unanswered[0] = true;
+                            break;
+                        }
                         throw new JoustException(what + ": cannot read page " + page + " of the payer's UTxOs at " + address
                                 + ": " + r.getResponse());
                     }
@@ -396,8 +400,9 @@ final class Designation {
             return null;
         });
         if (chosen != null) return chosen;
-        throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate (ADR-0016 D7:"
-                + " each concurrent keyed operation of a wallet needs its own)");
+        throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate"
+                + (unanswered[0] ? " (or the provider did not answer its listing)" : "")
+                + " (ADR-0016 D7: each concurrent keyed operation of a wallet needs its own)");
     }
 
     /**

@@ -72,6 +72,11 @@ final class TxRunner {
         /** Inputs whose native assets {@code collectAssets} counted, and what of them is left, by address and unit. */
         final java.util.Set<String> countedInputs = new java.util.HashSet<>();
         final java.util.Map<String, java.util.Map<String, BigInteger>> spareAssets = new java.util.HashMap<>();
+        /**
+         * What the first pass's calls read (reference inputs, by lower-case reference): a later call's read is never
+         * collected by an earlier call for its assets (#165 Codex round 8).
+         */
+        final java.util.Set<String> knownReads = new java.util.HashSet<>();
         /** Inputs spent without a redeemer (seeds, designated inputs, asset inputs), by reference, as collected (T1). */
         final java.util.Map<String, Utxo> regularInputs = new java.util.LinkedHashMap<>();
         /**
@@ -185,9 +190,11 @@ final class TxRunner {
      * depends on without each call reporting it (ADR-0016 D7: a failure is contention only if one of them moved; F68).
      * It only records: the transaction built is the same.
      */
-    static final class RecordingTx extends Tx {
+    static class RecordingTx extends Tx {
         final java.util.List<Utxo> spent = new java.util.ArrayList<>();
         final java.util.List<Utxo> read = new java.util.ArrayList<>();
+        /** Every reference input read, reference scripts included, by lower-case reference: never spent too (#165 Codex r8). */
+        final java.util.Set<String> readRefs = new java.util.HashSet<>();
         /** The outputs added so far, in order: every payToAddress/payToContract overload comes through here. */
         int outputs;
 
@@ -223,6 +230,7 @@ final class TxRunner {
         public Tx readFrom(Utxo... utxos) {
             // A reference script never moves; everything else read may (an instance, a foreign read).
             for (Utxo u : utxos) if (u != null && u.getReferenceScriptHash() == null) read.add(u);
+            for (Utxo u : utxos) if (u != null) readRefs.add(Designation.ref(u));
             return super.readFrom(utxos);
         }
     }
@@ -332,21 +340,29 @@ final class TxRunner {
         boolean pending = false;
         boolean handedOut = false;
         try {
+            // The bytes the runtime signs and submits, decoded: every check below reads them (#165 Opus P3). Observers see
+            // the signed transaction only once every check passed (#165 Codex round 8); a refused one without its
+            // signatures, so nothing an observer keeps can be submitted.
+            Transaction signed;
+            try {
+                signed = handedOut(built.tx(), what);
+                // A composition with other callers, or a call with co-signers (key accounts the runtime signs for): it
+                // takes from each only what its calls pay in (R8; #165 Opus P3: a co-signer too), and the collateral is
+                // the caller's. Read only then, so other submissions read nothing more.
+                if (otherCallers || !cosigners.isEmpty()) checkCoCallers(signed, resolveInputs(rt, signed), caller.baseAddress(), coCallers, what);
+                // The value sizes, as a prepared body's (#165 Codex round 3): nothing the node would refuse is submitted.
+                BodyBalance.checkValueSizes(signed.getBody(), () -> protocolParams(rt, what), what);
+                requireDisjointReads(signed, what);
+                verify(signed, expected, what);
+                for (ExpectedState e : extraExpected) verify(signed, e, what);
+                verifyPayouts(signed, payouts, what);
+                verifySends(signed, sends, what);
+                if (designated != null) requireSpends(signed, designated.ref(), what);
+            } catch (RuntimeException refused) {
+                observeRefused(rt, what, built.tx(), refused);
+                throw refused;
+            }
             rt.built(what, built.tx(), false);
-            // The bytes the runtime signs and submits, decoded: every check below reads them (#165 Opus P3).
-            Transaction signed = handedOut(built.tx(), what);
-
-            // A composition with other callers, or a call with co-signers (key accounts the runtime signs for): it
-            // takes from each only what its calls pay in (R8; #165 Opus P3: a co-signer too), and the collateral is the
-            // caller's. Read only then, so other submissions read nothing more.
-            if (otherCallers || !cosigners.isEmpty()) checkCoCallers(signed, resolveInputs(rt, signed), caller.baseAddress(), coCallers, what);
-            // The value sizes, as a prepared body's (#165 Codex round 3): nothing the node would refuse is submitted.
-            BodyBalance.checkValueSizes(signed.getBody(), () -> protocolParams(rt, what), what);
-            verify(signed, expected, what);
-            for (ExpectedState e : extraExpected) verify(signed, e, what);
-            verifyPayouts(signed, payouts, what);
-            verifySends(signed, sends, what);
-            if (designated != null) requireSpends(signed, designated.ref(), what);
 
             String txHash = TransactionUtil.getTxHash(signed);
             if (System.getProperty("joust.dumpTx") != null) {
@@ -665,6 +681,8 @@ final class TxRunner {
         if (designated == null && payouts.stream().anyMatch(p -> p.address().equals(payer.baseAddress()))) {
             var others = new java.util.HashSet<>(spent);
             others.removeAll(assetInputs);
+            // Nor a reference input the calls read (#165 Codex round 8).
+            if (tx instanceof RecordingTx r) others.addAll(r.readRefs);
             // Picked and claimed under the payer's lock, so no keyed operation designates it before the build (F63).
             Utxo funding = Designation.pick(payer.baseAddress(), PICK_CLAIM_MS, () -> largestAdaOnly(payer.baseAddress(), others));
             if (funding != null && !assetInputs.contains(Designation.ref(funding))) tx.collectFrom(java.util.List.of(funding));
@@ -710,6 +728,7 @@ final class TxRunner {
             // Resolved once: the per-unit balance (#152) and the keys whose inputs the transaction spends.
             var spends = resolveInputs(rt, handed);
             checkBalance(rt, handed, spends, what);
+            requireDisjointReads(handed, what);
             checkCoCallers(handed, spends, payer.baseAddress(), coCallers, what);
             verify(handed, expected, what);
             for (ExpectedState e : extraExpected) verify(handed, e, what);
@@ -856,6 +875,33 @@ final class TxRunner {
      */
     static Transaction handedOut(Transaction built, String what) {
         return BodyBalance.readBack(built, what);
+    }
+
+    /** Shows observers a signed body the runtime refused, without its signatures; an observer's failure is suppressed. */
+    private static void observeRefused(StateRuntime rt, String what, Transaction tx, RuntimeException refused) {
+        try {
+            rt.builtRefused(what, tx);
+        } catch (RuntimeException | Error e) {
+            refused.addSuppressed(e);
+        }
+    }
+
+    /**
+     * Refuses a body that spends one of its own reference inputs (#165 Codex round 8): the ledger rejects it
+     * ({@code BabbageNonDisjointRefInputs}). References compare in lower case (a provider may spell an id either way).
+     */
+    static void requireDisjointReads(Transaction t, String what) {
+        var refs = t.getBody().getReferenceInputs();
+        if (refs == null || refs.isEmpty() || t.getBody().getInputs() == null) return;
+        var read = new java.util.HashSet<String>();
+        for (var r : refs) read.add(r.getTransactionId().toLowerCase() + "#" + r.getIndex());
+        for (var in : t.getBody().getInputs()) {
+            String ref = in.getTransactionId().toLowerCase() + "#" + in.getIndex();
+            if (read.contains(ref)) {
+                throw new JoustException(what + ": the transaction spends and reads " + ref + " (the ledger refuses a"
+                        + " reference input that is also spent); refused");
+            }
+        }
     }
 
     /**
@@ -1033,9 +1079,15 @@ final class TxRunner {
     }
 
     private String submitPlain(Transaction signed, String what) {
-        rt.built(what, signed, false);
         // A publication's change can hold what several inputs held (#165 Codex round 4): sized like any other body.
-        BodyBalance.checkValueSizes(signed.getBody(), () -> protocolParams(rt, what), what);
+        // Observed signed only after the check (#165 Codex round 8).
+        try {
+            BodyBalance.checkValueSizes(signed.getBody(), () -> protocolParams(rt, what), what);
+        } catch (RuntimeException refused) {
+            observeRefused(rt, what, signed, refused);
+            throw refused;
+        }
+        rt.built(what, signed, false);
         String txHash = TransactionUtil.getTxHash(signed);
         if (System.getProperty("joust.dumpTx") != null) {
             try {

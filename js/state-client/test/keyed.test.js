@@ -455,3 +455,34 @@ test('F100: a mixed plain/keyed client dispatches each member to its own operati
   assert.deepEqual(calls, [['create', 'issue'], ['object', '00'], ['exists', 'Entry', 'aa'], ['keys', 'Entry'], ['insert', 'Entry', 'claim'],
     ['object', '01'], ['call', 'setOpen']]);
 });
+
+// ------------------------------------------------------------------------------------- #165 Codex round 8, finding 2
+
+test('the caller is the designated input\'s payment key: a two-key wallet spending A\'s input while naming B is refused', async () => {
+  const { keyAddr } = await import('./keyed-world.js');
+  const w = world();
+  const B = 'c3'.repeat(28);
+  const twoKeys = (scn) => {
+    scn.wallet = { ...scn.wallet, addresses: [...scn.wallet.addresses, keyAddr(B)], keyHashes: [...scn.wallet.keyHashes, B] };
+    return scn;
+  };
+  // A creation: designated a1 is at A's address (WK); the service names B as the caller and the required signer.
+  const cr = twoKeys(createScn(w));
+  accepted(await check(w, cr), 'a two-key wallet, A designated and A the caller');
+  const asB = (s) => {
+    s.mintRedeemer = mintR(w, 'CreateInstance', { seed: TxOutRef(ref('a1')), ctx: { ...w.ctx(0n, 0n), caller: B } });
+    s.signers = [B];
+    return s;
+  };
+  refused(await check(w, cr, asB), /not the payment key of the designated input/, 'a creation naming B for A\'s designated input');
+  // A keyed action likewise.
+  const act = twoKeys(actionScn(w));
+  refused(await check(w, act, (s) => {
+    s.inputs[1].redeemer = spendR(w, 'Upgrade', { tier: 2n, ctx: { ...w.ctx(10n * ADA, 100n * ADA - w.minAda), caller: B } });
+    s.signers = [B];
+    return s;
+  }), /not the payment key of the designated input/, 'an action naming B for A\'s designated input');
+  // The page's record of the designation's address must be the wallet's: a record naming B's address is refused.
+  refused(await check(w, { ...cr, call: { ...cr.call, designatedAddress: keyAddr(B) } }), /designated input .* is at /,
+    'a record whose address is not where the wallet reports the input');
+});

@@ -843,7 +843,10 @@ direct `Tx` building, gated by S3.
     cardano-client-lib's selection makes. An inline datum at a key address is spendable as is, so tokens sent to a
     wallet with one can be paid in (also when the provider gives the inline datum's hash beside it, as Yaci Store does). A creation's seed is never an input the composition already spends: a creation
     after a call that paid assets from the caller's only UTxO is refused, while the other order works (the seed is
-    counted for the payment). Like every plain selection (`Designation`), it does not skip a UTxO an earlier, still-open prepare claims:
+    counted for the payment). It never takes one of the transaction's reference inputs (the call's reads are applied
+    before its assets are collected; in a composition, every call's reads from the first pass count), and every body,
+    prepared or submitted, is refused if it spends one of its reference inputs (the ledger's
+    `BabbageNonDisjointRefInputs`). Like every plain selection (`Designation`), it does not skip a UTxO an earlier, still-open prepare claims:
     two such bodies conflict and at most one lands.
   - **A caller that is not the payer** (a composition's co-caller, wallet or key account) gets back, at its own address,
     what its collected inputs hold beyond the assets it pays in: one output with their lovelace and other tokens. The
@@ -866,10 +869,13 @@ direct `Tx` building, gated by S3.
     a wallet UTxO carrying a reference script: tracked in #167. The caller's and payer's listings (seeds, token payments, the
     funding pick, keyed reservations and designated inputs) are read to their end (up to 10,000 pages, beyond which the read is
     refused as incomplete). A page after the first that the provider fails to answer is an error, not the end; a
-    failed first page reads as an empty listing, and the refusal says the provider may not have answered. One check
+    failed first page reads as an empty listing, and the refusal (a seed's, a token payment's, a keyed reservation's)
+    says the provider may not have answered; the funding pick then picks nothing, and the build selects as before. One check
     reads it the other way on purpose: a keyed retry's "is the designated input still unspent" counts an unreadable
     listing as spent, so nothing is rebuilt on a guess. A page designates a keyed input only at an address with the
-    caller's payment key, so the caller a contract records (an admin) stays the wallet's. Retries compare transaction
+    caller's payment key, so the caller a contract records (an admin) stays the wallet's, and the page's verifier
+    requires the call's caller to be the payment key of the designated input's address (not just any key of the
+    wallet); with no such input the refusal names the funding address. Retries compare transaction
     ids in any letter case. The engine's snapshot (fetched listings and a request's `walletUtxos`) and the DevKit helpers (`devkitMint`,
     `devkitSweep`, the genesis top-up) never offer an output carrying a reference script for spending.
   - **Every body handed to a wallet** (`PreparedTx`, a prepared publication, the engine's governor stake
@@ -881,7 +887,8 @@ direct `Tx` building, gated by S3.
     value is above the protocol's maximum value size (and with no maximum known, such an output is refused). The
     checks read a copy decoded from the body's bytes, which is what the wallet gets (and, for the runtime's own
     key-signed submissions, what it signs and submits, value sizes included, publications too); an observer (`onBuilt`) gets a copy of its own and cannot
-    change either. Otherwise the body is refused. This is the runtime's self-check against bodies the ledger would reject. It
+    change either. A signed transaction reaches observers only after every check of its body passed; a refused one
+    reaches them without its signatures, so nothing an observer keeps can be submitted. Otherwise the body is refused. This is the runtime's self-check against bodies the ledger would reject. It
     says nothing about where value goes: the wallet's net outflow is the page verifier's to bound (ADR-0013).
 - **The snapshot backend** returns one object per output reference, whichever query found it: cardano-client-lib tells
   UTxOs apart by equality.
