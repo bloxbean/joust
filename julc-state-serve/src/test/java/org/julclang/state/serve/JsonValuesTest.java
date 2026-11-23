@@ -90,12 +90,14 @@ class JsonValuesTest {
     }
 
     /**
-     * #145 Codex final pass: Plutus data too deep for the decoder's stack reaches the dev host's per-call handler as
-     * the StackOverflowError (internal/tooDeep, ADR-0022 D9); the HTTP codec keeps calling it a bad value.
+     * Plutus data nested past the strict wire's bound (256 levels, #154 review G3-4) is a bad value before the
+     * decoder recurses; the HTTP codec keeps calling a decoder overflow a bad value too.
      */
-    @Test void tooDeepPlutusDataOverflowsOnlyInTheTypedCodec() throws Exception {
+    @Test void tooDeepPlutusDataIsABadValue() throws Exception {
         String deep = "{\"d\": \"" + "81".repeat(16000) + "80\"}";
-        assertInstanceOf(StackOverflowError.class, onASmallStack(() -> view(JsonValues.TYPED, "data", deep)));
+        var typed = onASmallStack(() -> view(JsonValues.TYPED, "data", deep));
+        assertInstanceOf(JsonValues.BadValue.class, typed);
+        assertTrue(typed.getMessage().contains("nested too deeply"), typed.getMessage());
         assertInstanceOf(JsonValues.BadValue.class, onASmallStack(() -> view(JsonValues.BAD_VALUES, "data", deep)));
         assertEquals("0", view(JsonValues.TYPED, "data", "{\"d\": \"8180\"}").textValue());
     }

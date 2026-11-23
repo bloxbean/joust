@@ -91,8 +91,8 @@ export function serve(o, service) {
 
   return {
     /** As a prepare service: { cbor, txHash, validTo, signers, plan, instance | object }. */
-    async prepare(request, scope) {
-      const r = await run(request, scope);
+    async prepare(request) {
+      const r = await run(request);
       const out = { cbor: r.cbor, txHash: r.txHash, validTo: Number(r.validTo), signers: r.signers, plan: r.plan ? JSON.parse(r.plan) : null };
       if (request.calls) out.created = r.created ? JSON.parse(r.created) : [];
       else if (request.kind === 'init' && r.created) out.instance = r.created;
@@ -117,8 +117,8 @@ export function serve(o, service) {
      * A governor script (ADR-0009 D3): {@code deployment} gives { script (parameters applied), hash, rewardAddress };
      * {@code register} the unsigned transaction registering its stake credential, paid from {@code address}.
      */
-    async governor(kind, script, params, address, scope) {
-      const r = await run({ contract: 'joust:governor', kind, script, params, address }, scope);
+    async governor(kind, script, params, address) {
+      const r = await run({ contract: 'joust:governor', kind, script, params, address });
       if (kind === 'deployment') return JSON.parse(r.plan);
       return { cbor: r.cbor, txHash: r.txHash, signers: r.signers, plan: JSON.parse(r.plan) };
     },

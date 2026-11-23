@@ -292,7 +292,7 @@ final class Session implements Transport.Handler {
         Account[] signers = signers(wallet, request, quorum);
         checkAddressArguments(request.path("args"));
         var pay = request.has("pay") ? fields(request.get("pay"), "lovelace", "assets") : obj();
-        if (pay.has("assets") && !pay.get("assets").isArray()) throw bad("expected pay.assets array");
+        if (pay.has("assets")) checkAssets(pay.get("assets"));
         var amount = pay.has("lovelace") ? (BigInteger) JsonValues.fromJson(pay.get("lovelace"), BigInteger.class, "pay.lovelace") : BigInteger.ZERO;
         // A field the call kind does not take is refused, not ignored (final review F-B4), before any chain read. Only
         // an owned spend names an object; an ownedInit derives its new one (#151 Codex review).
@@ -369,6 +369,36 @@ final class Session implements Transport.Handler {
             if (reservations.avoids(ref))
                 throw HostError.refusal("pending", "reference input " + ref + " is spent by a pending transaction");
         }
+    }
+
+    /**
+     * pay.assets on the wire, before any read, for both hosts (#154 review G3-1): at most 1,024 [policy, [[name,
+     * quantity]…]] pairs (and tokens per policy), a policy of 28 bytes and a name of at most 32 in lowercase hex, both in
+     * canonical order without repeats (a map on the strict wire), and a quantity under JsonValues' integer rules.
+     */
+    static void checkAssets(JsonNode assets) {
+        if (!assets.isArray() || assets.size() > 1024) throw bad("pay.assets: an array of at most 1,024 [policy, tokens] pairs");
+        String policy = null;
+        for (var p : assets) {
+            if (!p.isArray() || p.size() != 2 || !p.get(0).isTextual() || !p.get(0).textValue().matches("[0-9a-f]{56}")
+                    || !p.get(1).isArray() || p.get(1).size() > 1024)
+                throw bad("pay.assets: each pair is [policy (28 bytes of lowercase hex), at most 1,024 [name, quantity] tokens]");
+            if (policy != null && canonical(policy, p.get(0).textValue()) >= 0) throw bad("pay.assets: policies not in canonical order, or repeated");
+            policy = p.get(0).textValue();
+            String name = null;
+            for (var a : p.get(1)) {
+                if (!a.isArray() || a.size() != 2 || !a.get(0).isTextual() || !a.get(0).textValue().matches("([0-9a-f]{2}){0,32}"))
+                    throw bad("pay.assets: each token is [name (at most 32 bytes of lowercase hex), quantity]");
+                if (name != null && canonical(name, a.get(0).textValue()) >= 0) throw bad("pay.assets: names not in canonical order, or repeated");
+                name = a.get(0).textValue();
+                JsonValues.fromJson(a.get(1), BigInteger.class, "pay.assets quantity");
+            }
+        }
+    }
+
+    /** Canonical (RFC 8949) order of two byte strings in lowercase hex: the shorter first, then bytewise. */
+    private static int canonical(String a, String b) {
+        return a.length() != b.length() ? Integer.compare(a.length(), b.length()) : a.compareTo(b);
     }
 
     private void checkAddressArguments(JsonNode n) {

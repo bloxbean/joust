@@ -329,6 +329,19 @@ test('D4 rejects an engine image stamped with another JOUST version (#154 review
   assert.match(r.error.message, /image is JOUST 0\.0\.1/);
 });
 
+test('D4 refuses contracts another JOUST version built (#154 review G3-2)', async t => {
+  const { root } = probe(t);
+  const runtime = JSON.parse(readFileSync(join(root, 'node_modules/@julclang/joust-runtime/package.json'), 'utf8')).version;
+  const other = runtime.replace(/^(\d+\.\d+)\..*/, '$1.99');   // the same minor: the description check passes
+  const description = { preamble: { title: 'probe.Probe' }, 'x-joust': { version: 2 } };
+  const peer = client(root);
+  t.after(() => peer.close());
+  const r = await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params,
+    build: bundle(root, [{ description, script: '', built: { joust: other } }]) });
+  assert.equal(r.error.data.code, 'runtimeVersion');
+  assert.match(r.error.message, /contracts built by JOUST .*: rebuild with joust build/);
+});
+
 test('D3 checks transitive runtime imports before evaluating the imported module', async t => {
   const { root } = probe(t);
   const outside = mkdtempSync(join(tmpdir(), 'joust-transitive-'));
