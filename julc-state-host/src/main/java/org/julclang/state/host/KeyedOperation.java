@@ -4,10 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.*;
 import static org.julclang.state.host.Wire.*;
 
-/** The client's persisted intent. Attempts contain only transactions handed out for submission or export. */
+/**
+ * A keyed call's persisted record (ADR-0022 D11): its identity, which must equal the call, and the attempts the client
+ * handed out ({@code txHash} to exclusive {@code validTo}), which hold the operation until {@code validTo + settlementSlots}.
+ */
 record KeyedOperation(Identity identity, Map<String, Long> attempts) {
     record Identity(String designated, String contract, String method, String instance, String key) {}
-    static HostError mismatch() { return HostError.bad("operation", "operation differs from the call or its attempt history"); }
+    static HostError mismatch() { return HostError.bad("operation", "operation differs from the call"); }
 
     static KeyedOperation parse(JsonNode o) {
         try {
@@ -17,7 +20,7 @@ record KeyedOperation(Identity identity, Map<String, Long> attempts) {
             String instance = nullable(o, "instance", "[0-9a-f]{64}");
             String key = nullable(o, "key", "(?:[0-9a-f]{2})+");
             if (key != null && instance == null) throw mismatch();
-            var attempts = new LinkedHashMap<String, Long>();
+            var attempts = new HashMap<String, Long>();
             for (var a : o.get("attempts")) {
                 fields(a, "txHash", "validTo");
                 String hash = str(a, "txHash");
@@ -31,11 +34,6 @@ record KeyedOperation(Identity identity, Map<String, Long> attempts) {
         String value = str(o, field);
         if (!value.matches(pattern)) throw mismatch();
         return value;
-    }
-    KeyedOperation handedOut(String hash, long to) {
-        var history = new HashMap<>(attempts);
-        history.put(hash,to);
-        return new KeyedOperation(identity,Map.copyOf(history));
     }
     static KeyedOperation fromCall(JsonNode call) {
         if (!call.hasNonNull("designated")) throw HostError.refusal("needsDesignated", "choose and persist a designated wallet input");

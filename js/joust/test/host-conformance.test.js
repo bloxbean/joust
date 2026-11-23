@@ -301,7 +301,7 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       } finally { await peer.close(); }
     });
   }
-  it('restores keyed operation identity and its designation before settlement', async () => {
+  it('restores a keyed attempt and its designation before settlement', async () => {
     const v = fixture('verifier/registry-m3-release');
     const p = structuredClone(v.request);
     const { cbor, txHash, validTo } = v.result.prepared;
@@ -310,17 +310,16 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     start(contracts);
     try {
       await initialize({ clock: v.clock, restoring: true });
-      const restore = await peer.rpc('restore', { transactions: [{ cbor, operation, state: 'prepared' }], complete: true });
+      const restore = await peer.rpc('restore', { transactions: [{ cbor, state: 'prepared' }], complete: true });
       assert.ok(restore.result, JSON.stringify(restore.error));
       const wallet = v.orderedReads[0];
       const answer = q => { assert.deepEqual(q, wallet.request); return wallet.answer; };
       assert.equal((await peer.rpc('prepare', p, answer)).error.data.code, 'pending');
       const other = structuredClone(p);
       other.call.instance = other.call.operation.instance = 'ab'.repeat(32);
-      assert.equal((await peer.rpc('prepare', other, answer)).error.data.code, 'operation');
+      assert.equal((await peer.rpc('prepare', other, answer)).error.data.code, 'pending');
       const reservation = restore.result.reservations[0];
       const settle = (status, tip, extra = {}) => peer.rpc('settled', { reservation, txHash, status, tip, ...extra });
-      assert.equal((await settle('discarded', p.now)).error.data.code, 'conflict');
       assert.equal((await peer.rpc('prepare', p, q => ({ ...answer(q), value: [] }))).error.data.code, 'mayHaveLanded');
       const slot = v.result.prepared.validFrom;
       assert.equal((await settle('confirmed', slot + 2, { slot })).result.state, 'shallow');
@@ -328,29 +327,28 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       assert.equal((await settle('expired', validTo + 2)).error.data.code, 'notExpired');
       assert.equal((await settle('expired', validTo + 3)).result.state, 'expired');
       assert.deepEqual((await peer.rpc('reset', { now: p.now, rewound: { tip: p.now } })).result, {});
-      assert.deepEqual((await peer.rpc('restore', { transactions: [{ cbor, operation, state: 'prepared' }],
+      assert.deepEqual((await peer.rpc('restore', { transactions: [{ cbor, state: 'prepared' }],
         complete: true })).result, restore.result);
       assert.equal((await settle('confirmed', slot + 3, { slot })).result.state, 'confirmed');
       assert.equal((await settle('rolledBack', slot + 3)).error.data.code, 'deepRollback');
       assert.equal((await peer.rpc('prepare', p)).error.data.code, 'deepRollback');
     } finally { await peer.close(); }
   });
-  it('restores a retry past an unacknowledged attempt after either rewind (final review F-K1)', async () => {
-    // A: the recorded removal, prepared and expired before it was handed out. B: a retry (the late-start variant)
-    // with the unchanged record. After a rewind at or above A's validTo A stays expired; below it A is revived.
+  it('restores a retry after either rewind of an expired attempt', async () => {
+    // A: the recorded removal, prepared and expired. B: a retry (the late-start variant). After a rewind at or above
+    // A's validTo A stays expired; below it A is revived.
     const a = fixture('verifier/registry-m3-release'), b = fixture('verifier/reject-keyed-late-start');
-    const operation = structuredClone(a.request.call.operation);
     const A = a.result.prepared, B = b.result.prepared;
     for (const rewound of [A.validTo + 3, A.validTo - 1]) {
       start(contracts);
       try {
         await initialize({ clock: a.clock, restoring: true });
-        const first = await peer.rpc('restore', { transactions: [{ cbor: A.cbor, operation, state: 'prepared' }], complete: true });
+        const first = await peer.rpc('restore', { transactions: [{ cbor: A.cbor, state: 'prepared' }], complete: true });
         assert.ok(first.result, JSON.stringify(first.error));
         const reservation = first.result.reservations[0];
         assert.equal((await peer.rpc('settled', { reservation, txHash: A.txHash, status: 'expired', tip: A.validTo + 3 })).result.state, 'expired');
         assert.deepEqual((await peer.rpc('reset', { now: a.request.now, rewound: { tip: rewound } })).result, {});
-        const retry = await peer.rpc('restore', { transactions: [{ cbor: B.cbor, operation, state: 'prepared' }], complete: true });
+        const retry = await peer.rpc('restore', { transactions: [{ cbor: B.cbor, state: 'prepared' }], complete: true });
         assert.ok(retry.result, `${rewound}: ${JSON.stringify(retry.error)}`);
       } finally { await peer.close(); }
     }

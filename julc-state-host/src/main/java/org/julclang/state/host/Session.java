@@ -83,7 +83,7 @@ final class Session implements Transport.Handler {
                 catch (IllegalArgumentException e) { throw bad("invalid or unrecognized contract datum"); }
             }
             case "registered" -> reservations.registered(p);
-            case "restore" -> reservations.restore(p, contracts);
+            case "restore" -> reservations.restore(p);
             case "settled" -> reservations.settled(p, whileLive);
             case "reset" -> reset(p);
             case "shutdown" -> {
@@ -196,16 +196,12 @@ final class Session implements Transport.Handler {
             if (building) scope = scope.ttlSlots(ttl);
             if (method.equals("prepare")) {
                 var call = p.path("call");
-                if (call.has("designated") || call.has("pageLimits")) {
-                    long start = 60, validity = 900;
-                    if (call.has("pageLimits")) {
-                        var page = call.get("pageLimits");
-                        if (!page.isArray() || page.size() != 2 || !page.get(0).isIntegralNumber() ||
-                                !page.get(1).isIntegralNumber() || !page.get(0).canConvertToLong() || !page.get(1).canConvertToLong())
-                            throw bad("expected pageLimits [maxStartSlots, maxValiditySlots]");
-                        start = page.get(0).longValue();
-                        validity = page.get(1).longValue();
-                    }
+                if (call.has("pageLimits")) {    // absent: CallScope.hosted's defaults
+                    var page = call.get("pageLimits");
+                    if (!page.isArray() || page.size() != 2 || !page.get(0).isIntegralNumber() ||
+                            !page.get(1).isIntegralNumber() || !page.get(0).canConvertToLong() || !page.get(1).canConvertToLong())
+                        throw bad("expected pageLimits [maxStartSlots, maxValiditySlots]");
+                    long start = page.get(0).longValue(), validity = page.get(1).longValue();
                     if (start < 0 || validity < 1 || validity > Long.MAX_VALUE - now || start > Long.MAX_VALUE - now)
                         throw bad("invalid keyed page limits");
                     scope = scope.pageLimits(start, validity);
@@ -316,8 +312,6 @@ final class Session implements Transport.Handler {
             boolean spend = !creation && !kind.equals("keyedInit");
             if (creation == (operation.identity().instance() != null) || spend != (operation.identity().key() != null))
                 throw KeyedOperation.mismatch();
-            // Before any chain read: a failed or late read must not lose the handoff this retry reports (#156 Codex).
-            whileLive.accept(() -> reservations.acknowledge(operation));
         }
         var wallet = wallet(str(request, "address"));
         boolean quorum = meta.at("/policies/quorum").isObject();
@@ -391,27 +385,19 @@ final class Session implements Transport.Handler {
         result.set("plan", plan);
         out.set("predicted", Effects.of(c, meta, plan, built, handle.address(),
                 kind.equals("init") ? created : instance, kind.equals("ownedInit") ? created : object, spent));
-        if (keyed) {
-            long now = p.required("now").longValue();
-            long start = built.validFromSlot().orElse(-1);
-            long end = built.validToSlot().orElse(-1);
-            long[] page = runtime.pageLimits();
-            if (start < now || start - now > page[0] || end <= start || end - start > ceiling - now || end - now > page[1])
-                throw HostError.refusal("window", "keyed validity interval exceeds the requested limits");
-            ceiling = end;
-        }
+        if (keyed) ceiling = Long.MAX_VALUE;   // Compose bounded the keyed window by the page limits (D7)
         BodyBalance.checkCall(built.transaction().getBody(),
                 Set.of(handle.rewardAddress(), handle.runtime().outputVerifier().rewardAddress()), handle.policyId());
-        return prepared(built, out, reads, ceiling, null, operation);
+        return prepared(built, out, reads, ceiling, null, keyed ? operation.identity().designated() : null);
     }
 
-    private Transport.Reply prepared(PreparedTx built, ObjectNode out, Reads reads, long ceiling, String credential, KeyedOperation operation) {
+    private Transport.Reply prepared(PreparedTx built, ObjectNode out, Reads reads, long ceiling, String credential, String designated) {
         long end = built.validToSlot().orElseThrow(() -> HostError.refusal("window", "no validity upper bound"));
         if (end > ceiling) throw HostError.refusal("window", "upper bound exceeds the call ceiling");
         var tx = built.transaction();
         reads.checkBalance(tx.getBody());
         requireUnreservedReferences(tx.getBody(), reservations);
-        var entry = reservations.prepare(Reservations.Body.of(tx, built.txHash(), network.getNetworkId()), reads.greatestTip, operation);
+        var entry = reservations.prepare(Reservations.Body.of(tx, built.txHash(), network.getNetworkId()), reads.greatestTip, designated);
         var result = out.withObject("/prepared").put("reservation", entry.id()).put("cbor", built.cbor())
                 .put("txHash", built.txHash()).put("validTo", end);
         if (built.validFromSlot().isPresent()) result.put("validFrom", built.validFromSlot().getAsLong());

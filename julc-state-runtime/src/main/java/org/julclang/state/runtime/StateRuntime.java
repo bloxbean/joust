@@ -184,13 +184,16 @@ public final class StateRuntime {
      */
     public long settlementSlots() { return settlementSlots; }
     /**
-     * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null: keyed
-     * calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
+     * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null (never
+     * in a hosted call): keyed calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
      */
     public long[] pageLimits() {
         Scoped s = scope.get();
         long[] limits = s == null ? null : s.scope().pageLimits();
         if (limits == null && pageLimits != null) limits = pageLimits.clone();
+        // A hosted call always has limits: the scope's, the runtime's, or the defaults.
+        if (limits == null && s != null && s.scope().hosted())
+            limits = new long[]{CallScope.DEFAULT_MAX_START_SLOTS, CallScope.DEFAULT_MAX_VALIDITY_SLOTS};
         // A hosted cooldown must leave at least one slot before the absolute end ceiling (D7).
         if (limits != null && s != null && s.scope().hosted()) limits[0] = Math.min(limits[0], limits[1] - 1);
         return limits;

@@ -1,6 +1,6 @@
 # ADR-0022: A dev host — the project's own JOUST, driven by an IDE over stdio
 
-**Status:** Proposed (r7). Design only.
+**Status:** Proposed (r8). Design only.
 **Date:** 2026-11-19
 **Builds on:** ADR-0013 (WalletAccount, `Compose.prepare()`, the prepare service D2, the plan D4, the wallet verifier
 §9.2), ADR-0015 (the call request and the snapshot D5/D6, the engine and `engineService`), ADR-0016 (keyed calls,
@@ -313,7 +313,7 @@ bind a class loaded lazily between them; r4's stage under `build/` could be prun
 | `objects` | `{now, contract, instance, limit}` / `{listing, after, limit}` → `{listing, items, next}` | owned and keyed objects (capability `objects`, D15) |
 | `decode` | `{contract, datum}` → `{type, value} \| {ambiguous: [types]}` | a datum's CBOR hex to the description's JSON encoding (D15) |
 | `settled` | `{reservation, txHash, status, tip, slot?}` → `{state}` | chain-evidenced settlement; answers the reservation's state after the event (D8) |
-| `restore` | `{transactions: [{cbor, state, slot?, operation?}], complete}` → `{reservations}` | pending work after a restart or a rewind; building waits for `complete` (D8, D11) |
+| `restore` | `{transactions: [{cbor, state, slot?}], complete}` → `{reservations}` | pending work after a restart or a rewind; building waits for `complete` (D8, D11) |
 | `registered` | `{credential, evidence}` → `{}` | the client asserts a stake credential is registered (D14) |
 | `reset` | `{now, clock?, rewound?: {tip}}` → `{}` | drops caches, listing snapshots and map mirrors and rebuilds clock-derived state; **keeps reservations**; `rewound` also re-arms what the rewind may revive and fences building until `restore` completes (D8) |
 | `shutdown` / `exit` | → `{}` / notification | as LSP: stop accepting calls, then exit |
@@ -452,7 +452,7 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
 - **Reservations, not the runtime's static claims** (F15). The host gives the runtime a claim store driven by the
   reservation table (a runtime seam, §6; the static default stays for other users). Each reservation has a
   session-unique **`reservation` id**, the `txHash`, every input the transaction spends **and its collateral**, its
-  `validTo`, its state, and (M3) its keyed operation (D11). Coin selection avoids reserved inputs; a prepare whose
+  and its `validTo` and state. Coin selection avoids reserved inputs; a prepare whose
   instance or object state input is reserved is refused (`refusal`, code `pending`). The host's refusal is
   authoritative; a client also keeps its own pending set (IntelliAda H11).
 - **Before the commit point** (r5, C42): a body whose `validTo` is not above the greatest tip observed during the call
@@ -525,7 +525,8 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
   refuses one without an upper bound (`bad`, code `unbounded`), and returns their reservation ids. Batches are
   idempotent (a transaction already restored keeps its id). `restore` is open while `initialize` said `restoring:
   true` or after a rewound `reset`; building calls are refused (`reconcile`) until a batch with `complete: true`;
-  after that, `restore` is `bad`, code `restoreClosed`. Keyed ones carry their `operation` (D11). Map writes of a
+  after that, `restore` is `bad`, code `restoreClosed`. A keyed body needs no record: its designated input is one of
+  its inputs (D11). Map writes of a
   restored transaction are not rebuilt: a map contract with restored pending work is `mapsStale` until it settles and
   `reset` rebuilds the mirrors.
 - **`reset` and map overlays** (r4, DES-D26): `reset` drops the mirrors and every staged or promoted overlay with
@@ -590,24 +591,27 @@ persisted record of the logical operation and every attempt it handed out (**han
 exported or submitted, as in D8; an attempt the user declined is `discarded`, r5). Keyed kinds and the `object`-as-key mapping
 for actions, removals and retirements follow the engine's (`DescribedContract.java:376-419`). The host prepares with
 `Compose.designate(ref)` and refuses without it (`refusal`, code `needsDesignated`).
-- **The designated input is reserved** (r4, DES-D24) at the **commit point** of the operation's first successful
-  prepare (D8), as part of that attempt's reservation, and stays reserved while any attempt of the operation is
-  unreleased, so no other prepare selects it. A different operation touching the same object is refused `pending`.
-- **Operation identity** (r4, C37) is the full persisted record: `designated`, contract, method, **instance** and key.
-  A new attempt of the **same operation** is allowed once every earlier attempt in `operation.attempts` is released
-  by D8's chain-evidenced rules; the host checks the attempts it holds against the record and refuses a mismatch
-  (`bad`, code `operation`).
+- **The designated input is what makes a retry safe** (r8). Every attempt spends it, so the ledger lets at most one
+  attempt of an operation land; the host keeps no attempt history of its own. The client's node and journal are
+  trusted (as a wallet's provider is in any CCL or MeshJS app; a lying provider is bloxbean/joust#169), so the host
+  applies four rules to a keyed prepare and does not check the journal against itself:
+  1. the record's identity (`designated`, contract, method, instance, key) equals the call's (`bad`, code `operation`);
+  2. the body spends the designation (`bad`, code `operation`);
+  3. `refusal`, code `pending`, while a live reservation spends the designation or holds the call's keyed token
+     (another operation on the same object included), or while an attempt in `operation.attempts` is within its
+     `validTo + settlementSlots`;
+  4. `refusal`, code `mayHaveLanded`, when the designation is missing from the payer's complete `utxos` answer
+     (one of the attempts landed **or** another transaction spent it): the client decides from its node and settles
+     each attempt as `confirmed` or lets it expire.
 - **A first attempt that is refused** produces no transaction and, by D8's commit point, reserves nothing: it ends
   atomically at the host, and the client removes its local record without any settlement call.
-- **Outcomes need chain evidence** (r3, C20): an operation **failed definitely** only when the designated input is
-  still in its address's `utxos` answer at a tip past every attempt's `validTo + settlementSlots`. A designated input
-  that is **spent** means one of the attempts landed **or** another transaction spent it: a further attempt is
-  refused (`refusal`, code `mayHaveLanded`), and the client decides from its node (an attempt's outputs exist, or not)
-  and settles each attempt as `confirmed` or lets it expire. Attempts that were handed out are never `discarded`.
+- **A rejected attempt** (r8). An attempt the node rejected (ADR-0016's contested gap: the predecessor moved) may be
+  settled `discarded` and left out of `attempts`; the next prepare rebuilds at once. Should it land after all, the
+  rebuilt attempt fails at the ledger, since both spend the designation.
 - **Cooldowns:** under page limits, a cooldown yields either a window that starts later (D7's keyed rule; the client
   submits at its start) or a refusal with `retryAtSlot` (D9).
-- **Restart:** `restore` carries each pending keyed transaction with its `operation`, so the designated input and the
-  attempts are reserved again.
+- **Restart:** `restore` carries each pending keyed transaction like any other; the designated input is one of its
+  inputs, so it is reserved again.
 - Until M3, keyed calls answer `unsupported`, code `keyed`.
 
 ### D12. What the host never does
@@ -1097,3 +1101,10 @@ Also for IntelliAda:
   high-water mark of `validTo + settlementSlots` over every handed-out body, persisted before handoff and surviving
   the loss of the journal; a later session's smaller limits do not lower it), I13. The ADR index's ADR-0019 row,
   changed to r6 by mistake in r6, is restored to r5.
+- **r8** (2026-11-23, implementation amendment from the M3 reviews of #156, maintainer's decision). D11: the host
+  keeps no attempt history; a keyed prepare follows four rules on the designated input (identity equals the call;
+  the body spends the designation; `pending` while it or the object's token is reserved or a listed attempt is within
+  `validTo + settlementSlots`; `mayHaveLanded` when the designation is spent). A rejected attempt may be discarded
+  and rebuilt at once. `restore` drops `operation`. Removed: handoff acknowledgements, the cross-checks of restored
+  records and the rule that a handed-out attempt is never `discarded`; each guarded only the consistency of the
+  client's own journal.
