@@ -773,7 +773,7 @@ final class TxRunner {
     private Utxo largestAdaOnly(String address, java.util.Set<String> spent) {
         Utxo best = null;
         try {
-            for (int page = 1; page <= 20; page++) {
+            for (int page = 1; page <= StateContractHandle.MAX_PAGES; page++) {   // to the listing's end (#165 Codex r6)
                 var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                 if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {

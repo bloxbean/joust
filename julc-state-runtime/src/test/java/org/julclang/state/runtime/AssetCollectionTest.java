@@ -367,6 +367,9 @@ class AssetCollectionTest {
         }
         AssetTx.returnSurplus(rt, cap, payer);
         assertEquals(1, cap.returns.get(b.baseAddress()).index());
+        // The undercount stays visible (#165 Codex round 6): the return adds one to each count, so Compose refuses.
+        assertEquals(1, cap.outputs);
+        assertEquals(2, ((TxRunner.RecordingTx) cap.tx).outputs);
     }
 
     @Test
@@ -451,5 +454,50 @@ class AssetCollectionTest {
         assertTrue(e.getMessage().contains("cannot read page 2"), e::getMessage);
         var s = assertThrows(JoustException.class, () -> handle.pickSeedFor(wallet));
         assertTrue(s.getMessage().contains("cannot read page 2"), s::getMessage);
+    }
+
+    // ---------------------------------------------------------------- #165 Codex round 6
+
+    @Test
+    void aDesignatedInputOnThe21stPageIsFound() {
+        // 2,000 UTxOs (20 pages of 100) before the page's designated input.
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var list = new ArrayList<Utxo>();
+        for (int i = 0; i < 2_000; i++) {
+            var u = utxo(wallet.baseAddress(), "00", 6_000_000, 0);
+            u.setTxHash(String.format("%064x", 40_000 + i));
+            list.add(u);
+        }
+        var designated = utxo(wallet.baseAddress(), "f4", 9_000_000, 0);
+        list.add(designated);
+        snapshot.utxos.put(wallet.baseAddress(), list);
+        var d = Designation.given(rt, wallet, Designation.ref(designated));
+        try {
+            assertEquals(Designation.ref(designated), d.ref());
+            assertTrue(d.unspent(rt), "found on page 21 too");
+        } finally {
+            d.release();
+        }
+    }
+
+    @Test
+    void anUnansweredFirstPageSaysSo() {
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var failing = (com.bloxbean.cardano.client.backend.api.UtxoService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.UtxoService.class},
+                (proxy, m, args) -> {
+                    if (m.getName().equals("getUtxos")) return com.bloxbean.cardano.client.api.model.Result.error("429");
+                    throw new UnsupportedOperationException(m.getName());
+                });
+        var backend = (com.bloxbean.cardano.client.backend.api.BackendService) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{com.bloxbean.cardano.client.backend.api.BackendService.class},
+                (proxy, m, args) -> m.getName().equals("getUtxoService") ? failing : m.invoke(this.backend, args));
+        var failingRt = StateRuntime.builder(backend).network(Networks.testnet()).chainTime(new SlotChainTime(0, 0, 1000, backend)).build();
+        var handle = new StateContractHandle<>(failingRt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        var e = assertThrows(RequireException.class, () -> AssetTx.collectAssets(new Collecting(), handle, wallet,
+                Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null));
+        assertTrue(e.getMessage().contains("or the provider did not answer"), e::getMessage);
+        var s = assertThrows(JoustException.class, () -> handle.pickSeedFor(wallet));
+        assertTrue(s.getMessage().contains("or the provider did not answer"), s::getMessage);
     }
 }

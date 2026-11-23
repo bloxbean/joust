@@ -863,8 +863,10 @@ direct `Tx` building, gated by S3.
     addresses when the funding address has none; the engine then builds from that address). The DevKit wallet leaves out
     a UTxO carrying a reference script (it knows only the hash, or with Ogmios perhaps only that there is one) and
     reports datum hashes, an inline datum `00` included. QuickTx's own funding and collateral selection can still spend
-    a wallet UTxO carrying a reference script: tracked in #167. Listings are read to their end, a page the provider fails
-    to answer being an error rather than the end.
+    a wallet UTxO carrying a reference script: tracked in #167. The caller's and payer's listings (seeds, token payments, the
+    funding pick, keyed reservations and designated inputs) are read to their end, a page the provider fails to answer
+    after the first being an error rather than the end. The engine's snapshot and the DevKit helpers (`devkitMint`,
+    `devkitSweep`, the genesis top-up) never offer an output carrying a reference script for spending.
   - **Every body handed to a wallet** (`PreparedTx`, a prepared publication, the engine's governor stake
     registration) must balance per unit (`BodyBalance`):
     inputs + mint + withdrawals + certificate refunds = outputs + fee + certificate deposits + proposal deposits +

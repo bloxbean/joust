@@ -189,15 +189,14 @@ public final class Compose {
         if (designated != null && !late) TxRunner.collect(cap.tx, designated.utxo(), null);
         run(cap);
         if (late && !cap.inputs.contains(designated.ref())) TxRunner.collect(cap.tx, designated.utxo(), null);
+        // Every output index the calls computed (state outputs, sends, deposits' claims) counts on cap.outputs: it must be
+        // the outputs the calls really added, or one of those indices is wrong (#165 Opus P3-2). Checked before the
+        // returns, which add to both counts, and again after them (#165 Codex r6, Fable P3-5).
+        requireCounted(cap);
         // What the calls collected at a caller's address other than the payer's, less what they pay in, goes back there
         // (T1): the payer's change would take it otherwise.
         var coCallers = AssetTx.returnSurplus(runtime, cap, payer.baseAddress());
-        // Every output index the calls computed (state outputs, sends, deposits' claims, returns) counts on cap.outputs:
-        // it must be the outputs the calls really added, or one of those indices is wrong (#165 Opus P3-2).
-        if (cap.tx instanceof TxRunner.RecordingTx r && r.outputs != cap.outputs) {
-            throw new JoustException("composition: the calls added " + r.outputs + " outputs but counted " + cap.outputs
-                    + " (an output index would be wrong); refused");
-        }
+        requireCounted(cap);
         if (!sharedSigners) {
             for (var e : cap.signerCalls.entrySet()) {
                 if (e.getValue().size() > 1) {
@@ -268,6 +267,14 @@ public final class Compose {
         return runner.submit(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),
                 cap.expected.isEmpty() ? null : cap.expected.get(0), cap.payouts, cap.sends,
                 cap.scripts.values().toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusScript[0]), "composed transaction");
+    }
+
+    /** The outputs counted are the outputs the calls added (#165 Opus P3-2, Codex r6). */
+    private static void requireCounted(TxRunner.Capture cap) {
+        if (cap.tx instanceof TxRunner.RecordingTx r && r.outputs != cap.outputs) {
+            throw new JoustException("composition: the calls added " + r.outputs + " outputs but counted " + cap.outputs
+                    + " (an output index would be wrong); refused");
+        }
     }
 
     /** Runs every call, even after one fails; returns the first failure. */

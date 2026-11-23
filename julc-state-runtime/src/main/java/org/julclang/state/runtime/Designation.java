@@ -157,7 +157,7 @@ final class Designation {
         /** Still unspent, as far as the provider shows; an unreadable answer counts as spent (nothing is rebuilt). */
         boolean unspent(StateRuntime rt) {
             try {
-                for (int page = 1; page <= 20; page++) {
+                for (int page = 1; page <= StateContractHandle.MAX_PAGES; page++) {   // to the listing's end (#165 Codex r6)
                     var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                     if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) return false;
                     // One output however the listing spells its transaction id (T3, #165 Codex).
@@ -307,7 +307,7 @@ final class Designation {
         String address = payer.baseAddress();
         boolean complete = false;
         try {
-            for (int page = 1; page <= 20; page++) {
+            for (int page = 1; page <= StateContractHandle.MAX_PAGES; page++) {   // to the listing's end (#165 Codex r6)
                 var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                 if (!r.isSuccessful()) {
                     throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref + ": " + r.getResponse());
@@ -340,8 +340,8 @@ final class Designation {
             throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref, e);
         }
         if (!complete) {
-            throw new JoustException("the payer " + address + " has more UTxOs than the 2,000 read; the designated input " + ref
-                    + " was not among them (R-G3)");
+            throw new JoustException("the payer " + address + " has more UTxOs than the " + StateContractHandle.MAX_PAGES
+                    + " pages read; the designated input " + ref + " was not among them (R-G3)");
         }
         throw new JoustException("the designated input " + ref + " is not an unspent UTxO of the payer " + address
                 + " (spent: an earlier attempt of the operation may have landed; ADR-0016 D11)");
@@ -360,7 +360,7 @@ final class Designation {
         Designated chosen = locked(address, () -> {
             var candidates = new ArrayList<Utxo>();
             try {
-                for (int page = 1; page <= 20; page++) {
+                for (int page = 1; page <= StateContractHandle.MAX_PAGES; page++) {   // to the listing's end (#165 Codex r6)
                     var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                     if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
                     for (Utxo u : r.getValue()) {

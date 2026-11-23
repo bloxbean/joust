@@ -521,12 +521,17 @@ public final class StateContractHandle<S> {
             var cap = TxRunner.capture();
             Utxo first = null;
             boolean any = false;
+            boolean unanswered = false;
             // Every page until a pure-ADA seed or the listing's end (#165 Codex rounds 4, 5): the first ones may all be
             // excluded. A page the provider fails to answer is an error, not the end.
             for (int page = 1; page <= MAX_PAGES; page++) {
                 var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, page);
                 if (!r.isSuccessful()) {
-                    if (page == 1) break;   // as before: no UTxO to use (some providers answer an empty address so)
+                    // As before: no UTxO to use (some providers answer an empty address so), or the provider did not answer.
+                    if (page == 1) {
+                        unanswered = true;
+                        break;
+                    }
                     throw new JoustException("deploy: cannot read page " + page + " of the caller's UTxOs: " + r.getResponse());
                 }
                 if (r.getValue() == null || r.getValue().isEmpty()) break;
@@ -542,7 +547,8 @@ public final class StateContractHandle<S> {
                 if (r.getValue().size() < 50) break;
                 if (page == MAX_PAGES) throw new JoustException("deploy: the caller's listing has more than " + MAX_PAGES + " pages");
             }
-            if (!any) throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
+            if (!any) throw new JoustException("deploy: the caller's address has no UTxO to use as seed"
+                    + (unanswered ? " (or the provider did not answer its listing)" : ""));
             // F-W3: a creation after a call that paid assets from the caller's only UTxO finds none; in the other order
             // the seed is counted for the payment (alreadyIn). Refused with the remedy rather than reusing the input.
             if (first == null) throw new JoustException("deploy: every UTxO of the caller carries a reference script, is"

@@ -317,6 +317,7 @@ final class AssetTx {
         draw(missing, spare);
         var picked = new ArrayList<Utxo>();
         int passedOver = 0;
+        boolean unanswered = false;
         try {
             // Every page until the payment is covered or the listing ends (#165 Codex round 5); a page the provider
             // fails to answer is an error, not the end.
@@ -326,7 +327,10 @@ final class AssetTx {
                 }
                 var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 100, page);
                 if (!r.isSuccessful()) {
-                    if (page == 1) break;   // as before: nothing listed (RequireException below)
+                    if (page == 1) {   // as before: nothing listed (RequireException below), or the provider did not answer
+                        unanswered = true;
+                        break;
+                    }
                     throw new JoustException(what + ": cannot read page " + page + " of the caller's UTxOs: " + r.getResponse());
                 }
                 if (r.getValue() == null || r.getValue().isEmpty()) break;
@@ -367,6 +371,7 @@ final class AssetTx {
         }
         if (!missing.isEmpty()) {
             throw new RequireException(what + ": the caller's base address does not hold " + missing
+                    + (unanswered ? " (or the provider did not answer its listing)" : "")
                     + (passedOver == 0 ? "" : " in UTxOs it may spend (" + passedOver + " holding it carry a reference"
                     + " script or a datum hash, or are held by a keyed operation)"));
         }
@@ -462,7 +467,7 @@ final class AssetTx {
             int index = cap.tx instanceof TxRunner.RecordingTx r ? r.outputs : cap.outputs;
             cap.tx.payToAddress(e.getKey(), amounts);
             cap.returns.put(e.getKey(), new TxRunner.Return(index, back));
-            cap.outputs = Math.max(cap.outputs, index) + 1;
+            cap.outputs++;   // counted on its own (#165 Codex r6): Compose compares the two counts before and after
         }
         return paid;
     }
