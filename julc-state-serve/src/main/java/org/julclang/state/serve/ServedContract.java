@@ -271,7 +271,12 @@ public final class ServedContract implements ContractCalls {
         for (int i = 0; i < names.size(); i++) out.add(codec.decode(args.get(names.get(i)), types[offset + i], names.get(i)));
         int next = offset + names.size();
         if (payable) out.add(lovelace);
-        if (takesAssets) out.add(codec.decode(assets == null ? JsonValues.JSON.createArrayNode() : assets, types[next + (payable ? 1 : 0)], "assets"));
+        if (takesAssets) {
+            Object offered = codec.decode(assets == null ? JsonValues.JSON.createArrayNode() : assets, types[next + (payable ? 1 : 0)], "assets");
+            // The wire orders a policy's token names as canonical CBOR (shorter first); the runtime's values are in
+            // ledger order (bytewise), so convert, as the validator does (#154 Codex final).
+            out.add(offered instanceof org.julclang.ledger.Value v ? org.julclang.state.api.ValueAdapter.fromWire(v) : offered);
+        }
         return out;
     }
 
