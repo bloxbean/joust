@@ -30,7 +30,7 @@ export interface Prepared { cbor: string; txHash: string; validTo: number; signe
 export interface ChainApi { base: string; get(path: string, o?: { allow404?: boolean }): Promise<any> }
 export interface CallScope { now: number; ttlSlots: number; pageLimits?: [number, number] }
 export interface EngineService {
-  prepare(request: object, scope?: CallScope): Promise<Prepared>;
+  prepare(request: object): Promise<Prepared>;
   deployment(contract: string, address?: string, params?: object): Promise<Deployment>;
   publish(contract: string, address: string, params?: object, scope?: CallScope): Promise<{ cbor: string; txHash: string; signers: string[]; plan: unknown } | null>;
   readonly rounds: number[];

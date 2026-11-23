@@ -17,10 +17,17 @@ public final class TranscriptFrames implements AutoCloseable {
 
     public TranscriptFrames() {
         timer.scheduleAtFixedRate(() -> {
+            long now = System.nanoTime();   // before the samples, as the host's watchdog
             long started = reader.startedAt();
-            if (started != 0 && System.nanoTime()-started >= Frames.STALL_NANOS) {
+            if (started != 0 && now-started >= Frames.STALL_NANOS) {
                 System.err.println("stalled frame");
                 System.exit(2);
+            }
+            // A client that never reads a host frame blocks its write: end with a diagnostic, as the host does.
+            long writing = writer.writingSince();
+            if (writing != 0 && now-writing >= Frames.STALL_NANOS) {
+                System.err.println("client did not read a host frame");
+                System.exit(4);
             }
         },50,50,TimeUnit.MILLISECONDS);
     }

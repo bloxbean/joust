@@ -20,6 +20,7 @@ final class CallRules {
     private final BigInteger payment;
     private final JsonNode datumSchema;
     private final Set<Integer> claimed = new HashSet<>();
+    private boolean paymentBound, assetsBound;   // the redeemer's ctx.received states the payment; its assetsIn the offer
 
     CallRules(ReferenceChecker c) {
         this.c = c;
@@ -121,10 +122,13 @@ final class CallRules {
                     case "ctx" -> {
                         var ctx = decoded.required(name);
                         c.test("redeemer/ctxCaller",c.caller.equals(ctx.required("caller").asText()));
-                        c.test("redeemer/ctxReceived",payment.equals(n(ctx,"received")));
+                        paymentBound = payment.equals(n(ctx,"received"));
+                        c.test("redeemer/ctxReceived",paymentBound);
                     }
-                    case "assetsIn" -> c.test("redeemer/assetsIn",matches(field,codec.encode(f,pay.has("assets") ?
-                            pay.get("assets") : Ledger.JSON.createArrayNode())));
+                    case "assetsIn" -> {
+                        assetsBound = matches(field,codec.encode(f,pay.has("assets") ? pay.get("assets") : Ledger.JSON.createArrayNode()));
+                        c.test("redeemer/assetsIn",assetsBound);
+                    }
                     case "events" -> { /* Fully decoded by the anchored schema. The validator checks their values. */ }
                     case "anchor" -> c.test("redeemer/anchor",anchor != null && anchor.equals(ref(decoded.required(name))));
                     case "instance" -> c.test("redeemer/instance",call.required("instance").equals(decoded.required(name)));
@@ -262,9 +266,15 @@ final class CallRules {
                 .add(c.creation ? (c.enabled("netOutflow/wallet#creation") ? created : ZERO) : (c.enabled("netOutflow/wallet#payment") ? payment : ZERO)));
         c.test("netOutflow/wallet",within(net,allowed));
         // What the script releases: the target's value, less the continuation, plus mint, less what it pays the wallet.
+        // A spend may also pay others out of the payment its redeemer binds (lovelace where ctx.received states it,
+        // assets where assetsIn names them): the validator settles the call exactly, so they receive what it owes them.
         var released = c.enabled("netOutflow/third#target") ? new HashMap<>(c.targetValue) : new HashMap<String,BigInteger>();
         if (c.enabled("netOutflow/third#continuation")) add(released,continuation,-1);
         if (c.enabled("netOutflow/third#mint")) add(released,c.minted,1);
+        if (!c.creation && c.spent != null && c.enabled("netOutflow/third#payment")) {
+            if (paymentBound) add(released,Map.of("lovelace",payment),1);
+            if (assetsBound) add(released,offer,1);
+        }
         if (c.enabled("netOutflow/third#tagged")) add(released,tagged,-1);
         add(released,sends,-1); // switched by netOutflow/claims
         c.test("netOutflow/third",within(third,released));

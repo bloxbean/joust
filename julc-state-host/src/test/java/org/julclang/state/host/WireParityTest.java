@@ -83,6 +83,51 @@ class WireParityTest {
         assertTrue(engine(LENIENT, opt, null));                       // the lenient codec, unchanged
     }
 
+    record Id(byte[] v) {}
+    @SuppressWarnings("unused") private static org.julclang.core.types.JulcMap<byte[], BigInteger> map;
+
+    /** #154 review G3-3: records and maps read alike (a record as an object; a map in canonical order, no repeats). */
+    @Test
+    void recordsAndMapsAgree() throws Exception {
+        String id = "{\"title\":\"Id\",\"anyOf\":[{\"title\":\"Id\",\"dataType\":\"constructor\",\"index\":0,\"fields\":[{\"title\":\"v\",\"dataType\":\"bytes\"}]}]}";
+        String bytesToInt = "{\"dataType\":\"map\",\"keys\":" + BYTES + ",\"values\":" + INT + "}";
+        Type mapType = WireParityTest.class.getDeclaredField("map").getGenericType();
+        for (String v : new String[]{"{\"v\":\"abcd\"}", "\"abcd\""})
+            assertEquals(engine(STRICT, id, json(v)), jvm(json(v), Id.class), v);
+        assertFalse(jvm(json("\"abcd\""), Id.class));
+        assertTrue(jvm(json("\"" + "ab".repeat(28) + "\""), org.julclang.ledger.PolicyId.class));   // a newtype is its bytes
+        for (String v : new String[]{"[[\"01\",1],[\"02\",2]]", "[[\"02\",1],[\"01\",2]]", "[[\"01\",1],[\"01\",2]]", "[[\"0101\",1],[\"02\",2]]"})
+            assertEquals(engine(STRICT, bytesToInt, json(v)), jvm(json(v), mapType), v);
+        assertFalse(engine(STRICT, bytesToInt, json("[[\"02\",1],[\"01\",2]]")));
+        assertTrue(engine(LENIENT, bytesToInt, json("[[\"02\",1],[\"01\",2]]")));   // pages may send any order
+    }
+
+    /** #154 review G3-1: pay.assets is checked once, before any read, for both hosts. */
+    @Test
+    void payAssetsAreBounded() throws Exception {
+        String policy = "\"" + "ab".repeat(28) + "\"";
+        Session.checkAssets(json("[[" + policy + ",[[\"\",\"1\"],[\"4d31\",2]]]]"));
+        for (String bad : new String[]{"[1]", "[[" + policy + ",[[\"\",\"" + "9".repeat(201) + "\"]]]]",
+                "[[\"" + "AB".repeat(28) + "\",[]]]", "[[" + policy + ",[[\"4d31\",1],[\"\",1]]]]", "[[" + policy + ",{}]]",
+                "[[" + policy + ",[[\"" + "00".repeat(33) + "\",1]]]]", "[[" + policy + ",[]],[" + policy + ",[]]]"}) {
+            var e = assertThrows(Throwable.class, () -> Session.checkAssets(json(bad)), bad);
+            assertTrue(e instanceof HostError h && h.code.equals("request") || e instanceof JsonValues.BadValue, bad);
+        }
+    }
+
+    /** #154 review G3-4: Plutus data nests at most 256 levels on both hosts (a trap ends the npm session). */
+    @Test
+    void dataNestingAgrees() throws Exception {
+        String data = "{}";   // no dataType: Plutus data as hex CBOR
+        for (int depth : new int[]{256, 257, 16_383}) {
+            JsonNode v = JSON.getNodeFactory().textNode("81".repeat(depth) + "00");
+            assertEquals(depth <= 256, jvm(v, org.julclang.core.PlutusData.class), "jvm " + depth);
+            assertEquals(depth <= 256, engine(STRICT, data, v), "engine " + depth);
+        }
+        assertTrue(engine(STRICT, data, JSON.getNodeFactory().textNode("9f" + "80".repeat(300) + "ff")));   // wide, not deep
+        assertTrue(engine(LENIENT, data, JSON.getNodeFactory().textNode("81".repeat(257) + "00")));
+    }
+
     @Test
     void nestingAgrees() throws Exception {
         // 33 nested lists around an integer: one level more than either host reads.

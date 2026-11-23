@@ -58,6 +58,44 @@ public final class SchemaCodec {
 
     static final long MAX_SAFE_INTEGER = (1L << 53) - 1;
     static final int MAX_DEPTH = 32, MAX_ITEMS = 1024, MAX_DIGITS = 200, MAX_HEX_BYTES = 16384;
+    /** Plutus data nested deeper than this is refused on the strict wire: the decoder recurses, and on the Web Image a
+     *  stack overflow is a trap that ends the session (#154 review G3-4: 16,383 levels trap there). */
+    public static final int MAX_DATA_DEPTH = 256;
+
+    /**
+     * Refuses CBOR whose arrays, maps and tags nest deeper than {@link #MAX_DATA_DEPTH}, by a linear scan before the
+     * recursive decoder. Malformed input passes: the decoder refuses it.
+     */
+    public static void checkNesting(byte[] b, String path) {
+        var open = new java.util.ArrayDeque<long[]>();   // items left in each open container; -1: indefinite
+        int i = 0;
+        while (i < b.length) {
+            int head = b[i++] & 0xff, major = head >>> 5, info = head & 31;
+            if (head == 0xff) { if (open.isEmpty()) return; open.pop(); }
+            else {
+                long n = info;
+                int size = info == 24 ? 1 : info == 25 ? 2 : info == 26 ? 4 : info == 27 ? 8 : 0;
+                if (info > 27 && info != 31 || i + size > b.length) return;
+                if (size > 0) { n = 0; for (int k = 0; k < size; k++) n = n << 8 | (b[i++] & 0xff); }
+                if ((major == 2 || major == 3) && info != 31) {
+                    if (n < 0 || n > b.length - i) return;
+                    i += (int) n;
+                } else if (major == 4 || major == 5 || major == 6) {
+                    long items = info == 31 ? -1 : major == 5 ? 2 * n : major == 6 ? 1 : n;
+                    if (items != 0) {
+                        open.push(new long[]{items});
+                        if (open.size() > MAX_DATA_DEPTH) throw new DataError(path + ": Plutus data nested too deeply");
+                        continue;
+                    }
+                } else if (info == 31) {   // an indefinite byte or text string: its chunks, then a break
+                    open.push(new long[]{-1});
+                    continue;
+                }
+            }
+            // One item ended: count it against the containers it completes.
+            while (!open.isEmpty() && open.peek()[0] > 0 && --open.peek()[0] == 0) open.pop();
+        }
+    }
 
     public JsonNode resolve(JsonNode s) {
         if (s == null) return JSON.createObjectNode();
@@ -148,10 +186,13 @@ public final class SchemaCodec {
                     entries.add(new PlutusData.Pair(encode(s.get("keys"), e.get(0), path + "[" + i + "][0]", depth + 1),
                             encode(s.get("values"), e.get(1), path + "[" + i + "][1]", depth + 1)));
                 }
-                // Canonical order (RFC 8949 length-first, as CCL writes inline datums), no duplicates.
-                entries.sort((a, b) -> compare(cbor(a.key()), cbor(b.key())));
+                // Canonical order (RFC 8949 length-first, as CCL writes inline datums), no duplicates. The strict wire
+                // takes the order as given, as the JVM host does (#154 review G3-3); pages may send any order.
+                if (!strict) entries.sort((a, b) -> compare(cbor(a.key()), cbor(b.key())));
                 for (int i = 1; i < entries.size(); i++) {
-                    if (compare(cbor(entries.get(i - 1).key()), cbor(entries.get(i).key())) == 0) throw new DataError(path + ": duplicate key");
+                    int order = compare(cbor(entries.get(i - 1).key()), cbor(entries.get(i).key()));
+                    if (order == 0) throw new DataError(path + ": duplicate key");
+                    if (order > 0) throw new DataError(path + ": map keys not in canonical order");
                 }
                 return new PlutusData.MapData(entries);
             }
@@ -168,6 +209,7 @@ public final class SchemaCodec {
                 return encodeFields(s, v, path, depth);
             default:
                 if (v == null || !v.isTextual() || tooLong(v)) throw new DataError(path + ": Data is hex CBOR");
+                if (strict && v.asText().matches("([0-9a-f]{2})*")) checkNesting(HEX.parseHex(v.asText()), path);
                 try {
                     return PlutusDataCborDecoder.decode(HEX.parseHex(v.asText()));
                 } catch (Exception e) {
