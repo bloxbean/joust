@@ -71,12 +71,6 @@ public final class MapHistory {
         return out;
     }
 
-    /** Replay one identified map-verifier withdrawal from an ordered protocol-1 history.
-     * The caller checks the datum hash and supplies a private store for this read generation. */
-    public static void replay(NodeStore store, byte[] redeemer) {
-        replay(store, List.of(redeemer));
-    }
-
     /**
      * Replay a unit's whole protocol-1 history: every withdrawal is decoded and its proofs verified first, then the
      * claims are applied together, in any order (as {@link #rebuild} does), so the result does not depend on the

@@ -315,7 +315,7 @@ bind a class loaded lazily between them; r4's stage under `build/` could be prun
 | `settled` | `{reservation, txHash, status, tip, slot?}` → `{state}` | chain-evidenced settlement; answers the reservation's state after the event (D8) |
 | `restore` | `{transactions: [{cbor, state, slot?}], complete}` → `{reservations}` | pending work after a restart or a rewind; building waits for `complete` (D8, D11) |
 | `registered` | `{credential, evidence}` → `{}` | the client asserts a stake credential is registered (D14) |
-| `reset` | `{now, clock?, rewound?: {tip}}` → `{}` | drops caches, listing snapshots and map mirrors and rebuilds clock-derived state; **keeps reservations**; `rewound` also re-arms what the rewind may revive and fences building until `restore` completes (D8) |
+| `reset` | `{now, clock?, rewound?: {tip}}` → `{}` | drops caches, listing snapshots and the map node store and rebuilds clock-derived state; **keeps reservations**; `rewound` also re-arms what the rewind may revive and fences building until `restore` completes (D8) |
 | `shutdown` / `exit` | → `{}` / notification | as LSP: stop accepting calls, then exit |
 
 `prepared` is `{reservation, cbor, txHash, validFrom, validTo, signers, plan, instance?, object?}`. **`validFrom` and
@@ -439,7 +439,7 @@ Two slots, never confused (r3):
 - The host never reads the machine clock for chain time or for releasing reservations (D8). RPC deadlines (D10) use
   the monotonic clock.
 - `reset({now, clock})` takes a new clock after a devnet's epoch shift (Yano moves the genesis start), rebuilds what
-  derives from it (the evaluator's slot configuration included), and drops caches and map mirrors.
+  derives from it (the evaluator's slot configuration included), and drops caches and the map node store.
 - **Publications are bounded** (D14).
 
 ### D8. State the host keeps, and settlement (H11)
@@ -469,12 +469,12 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
 
   | From | Event | To | Effect |
   |---|---|---|---|
-  | prepared | `confirmed` (slot) | shallow | ordinary inputs spent; inputs and collateral stay reserved; map writes promoted |
+  | prepared | `confirmed` (slot) | shallow | ordinary inputs spent; inputs and collateral stay reserved |
   | shallow | `confirmed` with the same slot | shallow | none (idempotent); a different slot is `bad`, code `conflict` |
   | shallow | an observed `tip > slot + settlementSlots` (this event's or any later call's) | confirmed (final) | released and tombstoned; collateral free |
-  | shallow | `rolledBack` | prepared | promoted map writes reverted; still reserved: it may land again |
+  | shallow | `rolledBack` | prepared | still reserved: it may land again |
   | prepared | `rolledBack` | prepared | none: it may land again until its window closes |
-  | prepared | an observed `tip > validTo + settlementSlots`, or `expired` with such a tip | expired (final) | released and tombstoned; staged writes dropped. `expired` with an earlier tip is `bad`, code `notExpired` |
+  | prepared | an observed `tip > validTo + settlementSlots`, or `expired` with such a tip | expired (final) | released and tombstoned. `expired` with an earlier tip is `bad`, code `notExpired` |
   | prepared | `discarded` | discarded (final) | released at once. For a body that will not land: declined before it was handed out for signing, submission or export, or a keyed attempt the node rejected (D11) |
   | confirmed (final) | `rolledBack` | – | **a rollback deeper than `settlementSlots`**: outside the model. The host stops building (every building call is refused, `refusal`, code `deepRollback`) until it is restarted; the client restarts it and `restore`s what is still pending |
 
@@ -566,7 +566,7 @@ stable strings listed in the protocol document (M1a).
   an execution thread; the Node host runs the engine in a worker thread, so the event loop always receives frames,
   cancellations and timers.
 - **Generations** (r3): every execution gets a fresh generation number, used in its reverse-request ids and stamped on
-  every per-call write (claims, staged map writes, snapshot recording); writes from a generation that is no longer
+  every per-call write (claims, snapshot recording); writes from a generation that is no longer
   current are rejected.
 - `$/cancelRequest {id}` and the host's deadline (`callDeadlineMs`, on the monotonic clock) end a forward call. **One
   terminal cause is latched** (r3): the first of cancellation, deadline, failure or result wins. A control event

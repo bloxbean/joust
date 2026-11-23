@@ -43,8 +43,9 @@ record MapReads(Reads reads) {
      */
     void rebuild(String unit, String verifier, NodeStore store, java.util.function.BooleanSupplier reached) {
         var txs = history(unit);
-        // About two reads per history transaction (its redeemers and the map verifier's datum).
-        long needed = 2L * txs.size();
+        // About two reads per history transaction not yet answered in this call (its redeemers and the map verifier's
+        // datum); a call rebuilding two units may share transactions (#160 review F5).
+        long needed = 2L * txs.stream().filter(tx -> !reads.hasMapAnswer("redeemers", obj().put("txHash", tx))).count();
         if (needed > reads.remainingReads())
             throw HostError.bad("readLimit", "rebuilding the map history of " + unit + " (" + txs.size()
                     + " transactions) needs up to " + (reads.readLimit() - reads.remainingReads() + needed)

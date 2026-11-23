@@ -28,6 +28,10 @@ final class Reads {
         request.put("kind", kind);
         return mapAnswers.computeIfAbsent(request, key -> answer(kind, request));
     }
+    /** Whether this call already holds the answer (it then costs no read). */
+    boolean hasMapAnswer(String kind, ObjectNode request) {
+        return mapAnswers.containsKey(request.put("kind", kind));
+    }
     private final Peer peer;
     private final long now, ahead, maxCount, maxBytes;
     private final int network;
