@@ -58,11 +58,12 @@ final class SnapshotClient {
                 // The tree is exactly the manifest's regular files (by name, not count) and directories: a FIFO or
                 // device would block the copy before any digest or timeout applies (#150 Codex re-review).
                 var actual = new ArrayList<String>();
-                try (var tree = Files.walk(from)) {
+                // The directory itself as the plugin scanned it (LaunchManifest resolves a symlinked launch directory).
+                try (var tree = Files.walk(from.toRealPath())) {
                     for (var p : (Iterable<Path>) tree::iterator) {
                         if (Files.isDirectory(p, LinkOption.NOFOLLOW_LINKS)) continue;
                         if (!Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) throw new IOException("not a regular file: " + p);
-                        actual.add(from.relativize(p).toString().replace(File.separatorChar, '/'));
+                        actual.add(from.toRealPath().relativize(p).toString().replace(File.separatorChar, '/'));
                     }
                 }
                 actual.sort((a,b) -> Arrays.compareUnsigned(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8)));

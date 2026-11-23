@@ -222,8 +222,8 @@ class ForkedSessionTest {
      * {@code at} suffix is grouped on its own: {@code mkdirat?} matched {@code mkdira} but not {@code mkdir} (#150 Codex).
      */
     static boolean mutatesFiles(String line) {
-        return line.matches(".* (creat|mkdir(at)?|rmdir|unlink(at)?|rename(at2?)?|f?truncate|link(at)?|symlink(at)?"
-                + "|f?chmod(at)?|utimensat|mknod(at)?|[lf]?setxattr|[lf]?removexattr)\\(.*");
+        return line.matches(".* (creat|mkdir(at)?|rmdir|unlink(at)?|rename(at2?)?|f?truncate|fallocate|link(at)?|symlink(at)?"
+                + "|f?chmod(at2?)?|[fl]?chown(at)?|utimensat|utimes?|futimesat|mknod(at)?|[lf]?setxattr|[lf]?removexattr)\\(.*");
     }
 
     // The first stdin read marks the serving interval, after the JVM's own launch and perf-data setup.

@@ -96,7 +96,7 @@ public final class Compose {
         if (prepare && !(payer instanceof WalletAccount)) throw new JoustException("prepare(): the payer must be a WalletAccount");
         if (outer != null) {
             refuseDesignatedOutsidePrepare("a nested composition");
-            outer.requireStore(runtime, "a nested composition");
+            outer.requireStore(runtime, "a nested composition");   // latched on the outer capture too
             // Nested in another composition: the calls join the outer transaction, which submits them all (or none).
             String saved = outer.group;
             if (sharedSigners && saved == null) outer.group = "composed calls #" + System.identityHashCode(this);
@@ -111,10 +111,12 @@ public final class Compose {
                         if (TxRunner.endsComposition(e)) throw e;   // sent, or refused: never run the rest (#145 Codex)
                         if (first == null) first = e;
                     }
+                    outer.rethrowRefusal();   // a refusal the call caught: no later call runs (#145 Codex)
                 }
             } finally {
                 outer.group = saved;
             }
+            outer.rethrowRefusal();   // a refusal a callback caught still ends the outer composition (#145 reviews)
             if (first != null) throw first;
             return null;
         }
@@ -237,6 +239,7 @@ public final class Compose {
             }
             if (!(payer instanceof WalletAccount)) throw new JoustException("prepare(): the payer must be a WalletAccount");
         }
+        cap.rethrowRefusal();
         var runner = new TxRunner(runtime, prepare ? List.of() : signers);
         runner.designated = designated;   // a keyed composition's attempt (ADR-0016 D7)
         runner.extraExpected = cap.expected.size() > 1 ? cap.expected.subList(1, cap.expected.size()) : List.of();
@@ -263,19 +266,27 @@ public final class Compose {
                     if (TxRunner.endsComposition(e)) throw e;   // sent, or refused: never run the rest (#145 Codex)
                     if (first == null) first = e;
                 }
+                cap.rethrowRefusal();   // a refusal the call caught: no later call runs, and none publishes (#145 Codex)
             }
         } finally {
             TxRunner.CAPTURE.remove();
         }
+        // A refusal a callback caught (a foreign store, a key held for a wallet's prepare): the composition ends with it,
+        // whatever the callback returned, since part of the refused call is already in the shared transaction (#145 reviews).
+        cap.rethrowRefusal();
         return first;
     }
 
     private void run(TxRunner.Capture cap) {
         TxRunner.CAPTURE.set(cap);
         try {
-            for (Runnable call : calls) call.run();
+            for (Runnable call : calls) {
+                call.run();
+                cap.rethrowRefusal();
+            }
         } finally {
             TxRunner.CAPTURE.remove();
         }
+        cap.rethrowRefusal();   // as in runTolerant: never build after a refusal, caught or not
     }
 }

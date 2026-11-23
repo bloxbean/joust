@@ -79,6 +79,17 @@ afterEvaluate {
 
 // TestKit injects the plugin implementation. Stage this checkout's binary publications and their actual
 // Maven/Gradle runtime metadata where the consumer can resolve them, including the processor classifier.
+// A partial adapter under the adapter's own coordinates (classifier "partial"): one adapter class, published like the
+// real one, so the consumer test can check the adapter is known by its bytes (#150 reviews).
+def servePartialJar = tasks.register('servePartialJar', Jar) {
+    def serve = project(':julc-state-serve')
+    archiveBaseName = serve.name
+    archiveVersion = serve.version.toString()
+    archiveClassifier = 'partial'
+    destinationDirectory = layout.buildDirectory.dir('fixture-jars')
+    from(serve.sourceSets.main.output) { include 'org/julclang/state/serve/JsonValues.class' }
+}
+
 def hostSpecRepo = tasks.register('hostSpecTestRepository', Sync) {
     into layout.buildDirectory.dir('host-spec-test-repository')
     for (String suffix : ['api', 'processor', 'runtime', 'verifier', 'serve', 'host', 'server']) {
@@ -91,6 +102,7 @@ def hostSpecRepo = tasks.register('hostSpecTestRepository', Sync) {
             if (suffix == 'api') from(module.tasks.named('onchainJar').flatMap { it.archiveFile })
             // A classifier-only adapter dependency (#150 Codex review): its sources jar must not count as the adapter.
             if (suffix == 'serve') from(module.tasks.named('sourcesJar').flatMap { it.archiveFile })
+            if (suffix == 'serve') from(servePartialJar.flatMap { it.archiveFile })
             from(module.layout.buildDirectory.file('publications/mavenJava/pom-default.xml')) { rename { "${artifact}.pom" } }
             from(module.layout.buildDirectory.file('publications/mavenJava/module.json')) { rename { "${artifact}.module" } }
         }

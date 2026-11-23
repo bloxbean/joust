@@ -75,7 +75,6 @@ final class HostClasspath {
                                         Configuration metadata, String version) {
         var selected = applicationComponents(runtime, application);
         var tools = toolJars(host, version);
-        var owners = artifactOwners(runtime);
         var extra = new ArrayList<File>();
         for (String name : TOOLS) {
             if (!tools.containsKey(name)) throw new GradleException("Missing joustHost jar: " + name);
@@ -86,32 +85,50 @@ final class HostClasspath {
             }
             // The launch order is the application's files, then the extra jars: an application entry with any of the
             // tool's classes wins class lookup for it, whatever configuration put it there. Such an entry must be the
-            // tool's own binary (the plugin's resolved jar, or the expected component's artifact); only one that is
-            // replaces the tool jar, so a sources jar or a partial copy never stands in for it (#150 Codex reviews).
+            // tool's own binary, decided by content: the plugin's resolved jar, or a file with exactly its bytes. Only
+            // that replaces the tool jar, so a sources jar, a partial copy (even one published under the expected
+            // coordinates) or a composite build's own output never stands in for it (#150 Codex and Claude reviews).
             File tool = tools.get(name);
             Set<String> classes = classEntries(tool);
             String expected = GROUP + ":" + name + ":" + version;
+            String toolDigest = null;
             boolean provided = false;
             for (File file : application) {
                 if (!overlaps(file, classes)) continue;
-                String owner = owners.get(file);
-                if (!sameFile(file, tool) && !expected.equals(owner)) {
-                    throw new GradleException((name.equals(SERVE) ? "incompatible adapter" : "incompatible host")
-                            + ": " + file + " on the application classpath provides " + name + " classes"
-                            + (owner == null ? " from no verifiable component" : " from " + owner)
-                            + ", plugin requires " + expected);
+                if (!sameFile(file, tool)) {
+                    if (toolDigest == null) toolDigest = sha256(tool);
+                    if (!file.isFile() || !toolDigest.equals(sha256(file))) {
+                        throw new GradleException((name.equals(SERVE) ? "incompatible adapter" : "incompatible host")
+                                + ": " + file + " on the application classpath provides " + name + " classes but is not"
+                                + " the plugin's " + expected + " jar (its bytes differ)");
+                    }
                 }
                 provided = true;
             }
             if (!provided) extra.add(tool);
         }
         checkRuntimeDependencies(metadata, selected, version);
-        // The metadata check sees components, not classes: a classifier-only julc-vm satisfies it but cannot run.
+        requireVmProvider(application);
+        return extra;
+    }
+
+    /** The metadata check sees components, not classes: a classifier-only julc-vm satisfies it but cannot run. */
+    static void requireVmProvider(Set<File> application) {
         if (application.stream().noneMatch(f -> hasEntry(f, VM_PROVIDER))) {
             throw new GradleException("Unsatisfied runtime dependency of the host: org.julclang:julc-vm provides no"
                     + " " + VM_PROVIDER.replace('/', '.').replace(".class", "") + " on the application classpath");
         }
-        return extra;
+    }
+
+    private static String sha256(File file) {
+        try (var in = java.nio.file.Files.newInputStream(file.toPath())) {
+            var md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[65536];
+            for (int n; (n = in.read(buf)) > 0; ) md.update(buf, 0, n);
+            return java.util.HexFormat.of().formatHex(md.digest());
+        } catch (java.io.IOException | java.security.NoSuchAlgorithmException e) {
+            throw new GradleException("Cannot read " + file, e);
+        }
     }
 
     private static boolean sameFile(File a, File b) {
@@ -134,30 +151,35 @@ final class HostClasspath {
         return out;
     }
 
-    /** Whether the jar or class directory {@code file} has any of {@code classes}. */
-    private static boolean overlaps(File file, Set<String> classes) {
+    /**
+     * Whether the jar or class directory {@code file} has any of {@code classes}. In a multi-release jar, an entry under
+     * {@code META-INF/versions/<n>/} is the class it names: the JVM loads it from there on a release at least {@code n}.
+     * Every {@code n} counts, whatever the spec's java, which errs toward refusal (#150 reviews, Codex open item 2).
+     */
+    static boolean overlaps(File file, Set<String> classes) {
         if (file.isDirectory()) {
             for (String c : classes) if (new File(file, c).isFile()) return true;
             return false;
         }
         if (!file.isFile()) return false;
-        try (var zip = new java.util.zip.ZipFile(file)) {
-            return zip.stream().anyMatch(e -> classes.contains(e.getName()));
+        try (var jar = new java.util.jar.JarFile(file, false)) {
+            var manifest = jar.getManifest();
+            boolean multiRelease = manifest != null
+                    && "true".equalsIgnoreCase(manifest.getMainAttributes().getValue("Multi-Release"));
+            return jar.stream().map(java.util.zip.ZipEntry::getName)
+                    .anyMatch(n -> classes.contains(multiRelease ? versioned(n) : n));
         } catch (java.io.IOException e) {
             return false;   // not a jar: LaunchManifest refuses it when it scans the entries
         }
     }
 
-    /** Each resolved artifact of {@code runtime}, by file: its component as group:module:version. */
-    private static Map<File, String> artifactOwners(Configuration runtime) {
-        var owners = new HashMap<File, String>();
-        for (var artifact : runtime.getIncoming().getArtifacts().getArtifacts()) {
-            if (artifact.getId().getComponentIdentifier() instanceof ModuleComponentIdentifier id) {
-                owners.put(artifact.getFile(), id.getGroup() + ":" + id.getModule() + ":" + id.getVersion());
-            }
-        }
-        return owners;
+    /** {@code META-INF/versions/<n>/x} as {@code x}; any other name unchanged. */
+    private static String versioned(String name) {
+        var m = VERSIONED.matcher(name);
+        return m.matches() ? m.group(1) : name;
     }
+
+    private static final java.util.regex.Pattern VERSIONED = java.util.regex.Pattern.compile("META-INF/versions/[0-9]+/(.+)");
 
     /** Whether the jar or class directory {@code file} has {@code entry}. */
     private static boolean hasEntry(File file, String entry) {
