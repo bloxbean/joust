@@ -302,7 +302,7 @@ final class Session implements Transport.Handler {
             }
         } else if (instance != null) {
             var target = handle.at(instance).utxo();
-            spent = target.getTxHash() + "#" + target.getOutputIndex();
+            spent = ClaimStore.ref(target.getTxHash(), target.getOutputIndex());
         }
         if (spent != null && reservations.avoids(spent)) throw HostError.refusal("pending", "reserved input " + spent);
         Object[] made = new Object[1];
@@ -345,7 +345,7 @@ final class Session implements Transport.Handler {
     static void requireUnreservedReferences(TransactionBody body, Reservations reservations) {
         if (body.getReferenceInputs() == null) return;
         for (var in : body.getReferenceInputs()) {
-            String ref = in.getTransactionId().toLowerCase(Locale.ROOT) + "#" + in.getIndex();
+            String ref = ClaimStore.ref(in.getTransactionId(), in.getIndex());
             if (reservations.avoids(ref))
                 throw HostError.refusal("pending", "reference input " + ref + " is spent by a pending transaction");
         }
