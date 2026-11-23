@@ -1,0 +1,523 @@
+// ADR-0024 M1: the offline playground of an npm project. The server, its sessions over the real npm dev host and a
+// memoryLedger, and the page in Chromium (when Playwright's Chromium is installed).
+//   I1  no key or mnemonic reaches the server        I2  every signature after the page's checks (the walkthrough;
+//   I3  an offline session makes no network request       the publication vectors: state-client's tests)
+//   I5  token, Host and Origin on every route        I6  a stale session prepares nothing
+//   I8  unsupported calls and types shown, never encoded   I9  sessions are independent   I10 the project untouched
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join, relative } from 'node:path';
+import net from 'node:net';
+import { request } from 'node:http';
+import { install, repo } from './host/client.js';
+import { offlineSession, ledgerReads } from '../src/playground/session.js';
+import { startPlayground, TOKEN_HEADER } from '../src/playground/server.js';
+import { launchNpmHost } from '../src/playground/host.js';
+import { classify, encode, unsupportedPaths, canonicalPairs } from '../playground/form.js';
+
+const images = existsSync(join(repo, 'js/joust/engine/joust-toolchain.js.wasm'))
+  && existsSync(join(repo, 'js/joust-runtime/engine/joust-runtime.js.wasm'));
+const skip = !images && 'requires the packaged runtime and toolchain images';
+const COUNTER = 'app.Counter';
+const JAVA = join(repo, 'js/create-joust/template/contracts/app/Counter.java');
+const JSC = join(repo, 'js/create-joust/variants/jsc/contracts/app');
+
+/** A trusted npm project (the host packages installed in it, as the host tests do), built. */
+async function project(kind = 'java') {
+  const root = install();
+  mkdirSync(join(root, 'contracts/app'), { recursive: true });
+  if (kind === 'java') cpSync(JAVA, join(root, 'contracts/app/Counter.java'));
+  else for (const f of ['Counter.jsc', 'Counter.abi.json']) cpSync(join(JSC, f), join(root, 'contracts/app', f));
+  writeFileSync(join(root, 'joust.config.json'), '{ "contracts": "contracts" }');
+  const { build } = await import('../src/build.js');
+  const r = await build({ root, log: () => {} });
+  assert.ok(r.ok, JSON.stringify(r.diagnostics));
+  return root;
+}
+let engine;
+const theEngine = async () => (engine ??= await (await import('@julclang/joust-runtime')).loadEngine());
+
+async function wallet() {
+  const { devWallet } = await import('@julclang/state-client/devwallet');
+  const { generateMnemonic } = await import('@scure/bip39');
+  const { wordlist } = await import('@scure/bip39/wordlists/english');
+  const mnemonic = generateMnemonic(wordlist, 256);
+  return { mnemonic, w: devWallet({ chain: null, mnemonic }) };
+}
+async function signed(w, prepared) {
+  const { assemble } = await import('@julclang/state-client/ledger');
+  return assemble(prepared.cbor, await w.signTx(prepared.cbor)).cbor;
+}
+/** Publishes the prerequisites and creates a counter, as Alice, through a session's own methods. */
+async function createCounter(s, w) {
+  for (const p of await s.prerequisites(COUNTER)) {
+    const r = await s.publish(COUNTER, p.id, w.address);
+    await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+  }
+  const init = await s.prepare({ contract: COUNTER, kind: 'init', method: 'init', address: w.address, args: {} });
+  await s.submit(init.prepared.reservation, await signed(w, init.prepared));
+  return init.prepared.instance;
+}
+
+describe('ADR-0024 M1 sessions', { skip }, () => {
+  let root;
+  before(async () => { root = await project('java'); });
+  after(() => rmSync(root, { recursive: true, force: true }));
+
+  test('I3: an offline session makes no network request and starts nothing but its host', async (t) => {
+    const e = await theEngine();
+    const fetches = [];
+    const connects = [];
+    t.mock.method(globalThis, 'fetch', async (...a) => { fetches.push(a); throw new Error('no network offline'); });
+    t.mock.method(net.Socket.prototype, 'connect', function (...a) { connects.push(a); throw new Error('no sockets offline'); });
+    let launches = 0;
+    const launch = (o) => { launches++; return launchNpmHost(o); };
+    const s = await offlineSession({ id: 's1', root, engine: e, launch });
+    try {
+      const { w } = await wallet();
+      s.fund(w.address, 1_000_000_000n);
+      const instance = await createCounter(s, w);
+      const inc = await s.prepare({ contract: COUNTER, kind: 'action', method: 'increment', instance, address: w.address, args: { by: '5' } });
+      const res = await s.submit(inc.prepared.reservation, await signed(w, inc.prepared));
+      assert.equal(res.state, 'confirmed');
+      assert.ok(res.attacks > 0, 'the attack suite ran (Q7: on by default)');
+      assert.deepEqual(res.acceptedAttacks, []);
+      assert.deepEqual((await s.view(COUNTER, instance)).value.count, '5');
+    } finally {
+      await s.close();
+    }
+    assert.equal(launches, 1);
+    assert.deepEqual(fetches, []);
+    assert.deepEqual(connects, []);
+  });
+
+  test('D4: the read adapter answers in the protocol encoding; map history reads are unsupported offline', async () => {
+    const { memoryLedger } = await import('../src/test/offline.js');
+    const ledger = memoryLedger({ engine: await theEngine() });
+    const { w } = await wallet();
+    const ref = ledger.fund(w.address, 5_000_000n);
+    const read = ledgerReads(ledger);
+    const tip = await read({ kind: 'tip' });
+    assert.deepEqual(Object.keys(tip.value).sort(), ['hash', 'height', 'slot']);
+    const utxos = await read({ kind: 'utxos', address: w.address });
+    assert.deepEqual(utxos.value.map((u) => `${u.tx_hash}#${u.output_index}`), [ref]);
+    assert.deepEqual(utxos.value[0].amount, [{ unit: 'lovelace', quantity: '5000000' }]);
+    assert.equal((await read({ kind: 'utxos', address: 'addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz' })).absent, true);
+    assert.equal((await read({ kind: 'output', ref: '00'.repeat(32) + '#0' })).absent, true);
+    assert.equal((await read({ kind: 'script', hash: '00'.repeat(28) })).absent, true);
+    assert.deepEqual((await read({ kind: 'stakeRegistration', credential: '00'.repeat(28) })).value, { registered: false });
+    for (const kind of ['redeemers', 'datum', 'somethingElse']) assert.equal((await read({ kind })).unsupported, true);
+  });
+
+  test('I9: resetting one session leaves another unchanged', async () => {
+    const page = { 'index.html': Buffer.from('<!doctype html>') };
+    const server = await startPlayground({ root, engine: await theEngine(), page });
+    try {
+      const call = (route, body) => post(server, route, body).then((r) => r.json);
+      const a = (await call('sessions/new', {})).result;
+      const b = (await call('sessions/new', {})).result;
+      const { w } = await wallet();
+      await call('fund', { session: b.session, address: w.address, lovelace: '7000000' });
+      await call('advance', { session: b.session, ms: 5000 });
+      const before = [(await call('utxos', { session: b.session, address: w.address })).result, (await call('session', { session: b.session })).result.slot];
+      const reset = (await call('session/reset', { session: a.session })).result;
+      assert.notEqual(reset.session, a.session);
+      assert.equal((await call('session', { session: a.session })).error.code, 'unknownSession');
+      const after = [(await call('utxos', { session: b.session, address: w.address })).result, (await call('session', { session: b.session })).result.slot];
+      assert.deepEqual(after, before);
+      assert.equal(server.sessions.get(b.session).host.alive, true);
+      // At most four sessions: the least recently used ends first.
+      for (let i = 0; i < 4; i++) await call('sessions/new', {});
+      assert.equal(server.sessions.size, 4);
+      assert.equal((await call('session', { session: b.session })).error.code, 'unknownSession');
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('I6: after a rebuild a session is stale and prepares nothing', async () => {
+    const r2 = await project('java');
+    try {
+      const s = await offlineSession({ id: 's1', root: r2, engine: await theEngine() });
+      try {
+        const { w } = await wallet();
+        s.fund(w.address, 1_000_000_000n);
+        assert.equal(s.stale(), false);
+        const src = join(r2, 'contracts/app/Counter.java');
+        writeFileSync(src, readFileSync(src, 'utf8').replace('"increment must be positive"', '"increment must be above zero"'));
+        const { build } = await import('../src/build.js');
+        assert.ok((await build({ root: r2, log: () => {} })).ok);
+        assert.equal(s.stale(), true);
+        await assert.rejects(s.prepare({ contract: COUNTER, kind: 'init', method: 'init', address: w.address, args: {} }),
+          (e) => e.stage === 'session' && e.code === 'stale');
+        const pre = (await s.prerequisites(COUNTER))[0];
+        await assert.rejects(s.publish(COUNTER, pre.id, w.address), (e) => e.code === 'stale');
+        // A new session on the new build has another fingerprint, and may keep the old ledger (D2).
+        const s2 = await offlineSession({ id: 's2', root: r2, engine: await theEngine(), ledger: s.ledger });
+        try {
+          assert.notEqual(s2.fingerprint, s.fingerprint);
+          assert.equal((await s2.utxos(w.address)).length, 1);
+        } finally {
+          await s2.close();
+        }
+      } finally {
+        await s.close();
+      }
+    } finally {
+      rmSync(r2, { recursive: true, force: true });
+    }
+  });
+
+  test('refusals reach the page at their stage: host (a require), ledger, session', async () => {
+    const s = await offlineSession({ id: 's1', root, engine: await theEngine() });
+    try {
+      const alice = (await wallet()).w;
+      const bob = (await wallet()).w;
+      s.fund(alice.address, 1_000_000_000n);
+      s.fund(bob.address, 1_000_000_000n);
+      const instance = await createCounter(s, alice);
+      await assert.rejects(s.prepare({ contract: COUNTER, kind: 'action', method: 'increment', instance, address: alice.address, args: { by: '0' } }),
+        (e) => e.stage === 'host' && e.kind === 'refusal' && /positive/.test(e.message));
+      // Bob resets Alice's counter: the host refuses before any signature (@OnlyOwner).
+      await assert.rejects(s.prepare({ contract: COUNTER, kind: 'action', method: 'reset', instance, address: bob.address, args: {} }),
+        (e) => e.stage === 'host' && e.kind === 'refusal');
+      // A body signed by the wrong key: the ledger refuses it, and the host gets it discarded (its inputs free again).
+      const inc = await s.prepare({ contract: COUNTER, kind: 'action', method: 'increment', instance, address: alice.address, args: { by: '1' } });
+      await assert.rejects(s.submit(inc.prepared.reservation, await signed(bob, inc.prepared)),
+        (e) => e.stage === 'ledger' && e.rule === 'MissingVKeyWitnessesUTXOW');
+      const again = await s.prepare({ contract: COUNTER, kind: 'action', method: 'increment', instance, address: alice.address, args: { by: '1' } });
+      assert.equal((await s.submit(again.prepared.reservation, await signed(alice, again.prepared))).state, 'confirmed');
+      // Only the reserved body is submitted.
+      const other = await s.prepare({ contract: COUNTER, kind: 'action', method: 'increment', instance, address: alice.address, args: { by: '2' } });
+      await assert.rejects(s.submit('999', await signed(alice, other.prepared)), (e) => e.code === 'unknownReservation');
+      await s.discard(other.prepared.reservation);
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+// ---- the server's surface (D8, I5)
+
+function post(server, route, body, { headers = {}, method = 'POST', path } = {}) {
+  return new Promise((resolve, reject) => {
+    const text = body === undefined ? '' : typeof body === 'string' ? body : JSON.stringify(body);
+    const req = request({ host: '127.0.0.1', port: server.port, method, path: path ?? '/api/' + route,
+      headers: { host: `127.0.0.1:${server.port}`, 'content-type': 'application/json', [TOKEN_HEADER]: server.token,
+        'content-length': Buffer.byteLength(text), ...headers } }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString();
+        let json = null;
+        try { json = JSON.parse(raw); } catch { /* not JSON */ }
+        resolve({ status: res.statusCode, headers: res.headers, json, raw });
+      });
+    });
+    req.on('error', reject);
+    req.end(text);
+  });
+}
+
+describe('ADR-0024 D8: the server surface', { skip }, () => {
+  let root, server, created = 0;
+  const makeSession = async (o) => { created++; return offlineSession(o); };
+  before(async () => {
+    root = await project('java');
+    server = await startPlayground({ root, engine: await theEngine(), session: makeSession,
+      page: { 'index.html': Buffer.from('<!doctype html><title>t</title>'), 'assets/a.js': Buffer.from('1') } });
+  });
+  after(async () => {
+    await server?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const ROUTES = ['sessions/new', 'session', 'session/end', 'session/reset', 'session/attacks', 'contract', 'deployment',
+    'prerequisites', 'publish', 'prepare', 'view', 'instances', 'objects', 'page', 'decode', 'discard', 'submit', 'utxos',
+    'outputs', 'protocolParams', 'fund', 'advance', 'history'];
+
+  test('I5: every route refuses a missing or wrong token, a foreign Host or Origin, before any work', async () => {
+    const id = (await post(server, 'sessions/new', {})).json.result.session;
+    const baseline = created;
+    const body = { session: id, contract: COUNTER, address: 'addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz', lovelace: '1', ms: 1000 };
+    const cases = [
+      [{ [TOKEN_HEADER]: '' }, 401], [{ [TOKEN_HEADER]: 'x'.repeat(43) }, 401], [{ [TOKEN_HEADER]: server.token + 'a' }, 401],
+      [{ host: `evil.example:${server.port}` }, 421], [{ host: `127.0.0.1.nip.io:${server.port}` }, 421],
+      [{ host: '127.0.0.1:1' }, 421], [{ origin: 'http://evil.example' }, 403], [{ origin: `http://127.0.0.1:${server.port + 1}` }, 403],
+      [{ origin: 'null' }, 403], [{ 'sec-fetch-site': 'cross-site' }, 403],
+      [{ 'content-type': 'text/plain' }, 415],   // a cross-origin form or simple request
+    ];
+    for (const route of ROUTES) {
+      for (const [headers, status] of cases) {
+        const r = await post(server, route, body, { headers });
+        assert.equal(r.status, status, `${route} ${JSON.stringify(headers)}`);
+        assert.equal(r.json?.result, undefined);
+        assert.equal(r.headers['access-control-allow-origin'], undefined);
+      }
+      assert.equal((await post(server, route, body, { method: 'GET' })).status, 405);
+      assert.equal((await post(server, route, undefined, { method: 'OPTIONS', headers: { origin: 'http://evil.example' } })).status, 403);
+    }
+    assert.equal(created, baseline, 'no refused request started a session');
+    assert.equal((await post(server, 'session', { session: id })).json.result.slot, 1000, 'no refused request moved the clock');
+    assert.equal((await post(server, '', undefined, { method: 'OPTIONS', path: '/api/session' })).status, 405);
+    // The page's own files need the Host check too, and carry the CSP.
+    assert.equal((await post(server, '', undefined, { method: 'GET', path: '/', headers: { host: 'evil.example' } })).status, 421);
+    const page = await post(server, '', undefined, { method: 'GET', path: '/' });
+    assert.equal(page.status, 200);
+    assert.match(page.headers['content-security-policy'], /default-src 'self'/);
+    assert.match(page.headers['content-security-policy'], /frame-ancestors 'none'/);
+    for (const path of ['/../package.json', '/%2e%2e/package.json', '/build/joust/contracts.json', '/assets/../index.html2']) {
+      assert.equal((await post(server, '', undefined, { method: 'GET', path })).status, 404, path);
+    }
+    assert.equal((await post(server, '', undefined, { method: 'POST', path: '/' })).status, 405);
+  });
+
+  test('D8: bounded JSON bodies; no path, command or URL is taken', async () => {
+    assert.equal((await post(server, 'session', 'x'.repeat(1024 * 1024 + 1))).status, 413);
+    assert.equal((await post(server, 'session', '{')).status, 400);
+    assert.equal((await post(server, 'session', '[]')).status, 400);
+    const id = (await post(server, 'sessions/new', {})).json.result.session;
+    const bad = async (route, body) => assert.equal((await post(server, route, { session: id, ...body })).json.error.code, 'bad', route);
+    await bad('contract', { contract: '../../etc/passwd' });
+    await bad('utxos', { address: 'http://example.com/' });
+    await bad('decode', { contract: COUNTER, datum: 'zz' });
+    await bad('outputs', { refs: ['/etc/passwd'] });
+    assert.equal((await post(server, 'fund', { session: id, address: 'addr1vx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgs68faae', lovelace: '1' })).json.error.code, 'bad');
+    assert.equal((await post(server, 'fund', { session: id, address: 'addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz', lovelace: '9999999999999999' })).json.error.code, 'amount');
+  });
+});
+
+// ---- forms (D6, I8)
+
+describe('ADR-0024 D6: forms', () => {
+  const defs = {
+    'p.R': { title: 'R', anyOf: [{ title: 'R', dataType: 'constructor', index: 0, fields: [{ title: 'a', dataType: 'integer' }, { title: 'b', dataType: 'bytes' }] }] },
+    'p.S': { title: 'S', anyOf: [{ title: 'X', dataType: 'constructor', index: 0, fields: [] }, { title: 'Y', dataType: 'constructor', index: 1, fields: [{ title: 'n', dataType: 'integer' }] }] },
+    'p.Bool': { title: 'Bool', anyOf: [{ title: 'False', dataType: 'constructor', index: 0, fields: [] }, { title: 'True', dataType: 'constructor', index: 1, fields: [] }] },
+    'p.Opt': { title: 'Optional', anyOf: [{ title: 'Some', dataType: 'constructor', index: 0, fields: [{ dataType: 'integer' }] }, { title: 'None', dataType: 'constructor', index: 1, fields: [] }] },
+    'p.Loop': { title: 'Loop', anyOf: [{ title: 'Loop', dataType: 'constructor', index: 0, fields: [{ title: 'next', $ref: '#/definitions/p.Loop' }] }] },
+  };
+  const c = (schema) => classify(schema, defs, 'args.x');
+
+  test('I8: every schema shape maps to D6\'s table, anything else is UNSUPPORTED with its path', () => {
+    assert.equal(c({ dataType: 'integer' }).kind, 'integer');
+    assert.equal(c({ dataType: 'bytes', title: 'ownerKeyHash' }).keyHash, true);
+    assert.equal(c({ $ref: '#/definitions/p.Bool' }).kind, 'bool');
+    assert.equal(c({ $ref: '#/definitions/p.Opt' }).kind, 'optional');
+    assert.equal(c({ $ref: '#/definitions/p.R' }).kind, 'constructor');
+    assert.equal(c({ $ref: '#/definitions/p.S' }).sum, true);
+    assert.equal(c({ dataType: 'list', items: { dataType: 'integer' } }).kind, 'list');
+    assert.equal(c({ dataType: 'map', keys: { dataType: 'bytes' }, values: { dataType: 'integer' } }).kind, 'map');
+    assert.equal(c({ title: 'Value', dataType: 'map', keys: { dataType: 'bytes' }, values: { dataType: 'map', keys: { dataType: 'bytes' }, values: { dataType: 'integer' } } }).kind, 'value');
+    for (const [schema, why] of [[{}, /untyped Plutus data/], [{ title: 'Data' }, /untyped/], [{ dataType: 'string' }, /outside/],
+      [{ $ref: '#/definitions/p.Missing' }, /unresolved/], [{ dataType: 'list', items: [{ dataType: 'integer' }] }, /one item type/],
+      [{ dataType: 'map', keys: { $ref: '#/definitions/p.R' }, values: { dataType: 'integer' } }, /keys/],
+      [{ $ref: '#/definitions/p.Loop' }, /too deep/]]) {
+      const u = unsupportedPaths(c(schema));
+      assert.ok(u.length, JSON.stringify(schema));
+      assert.match(u[0].why, why);
+      assert.match(u[0].path, /^args\.x/);
+      assert.throws(() => encode(c(schema), 'x'), /UNSUPPORTED/);
+    }
+    // A record with an unsupported field: its path names the field.
+    const nested = classify({ anyOf: [{ title: 'T', dataType: 'constructor', index: 0, fields: [{ title: 'd' }] }] }, defs, 'args.t');
+    assert.deepEqual(unsupportedPaths(nested).map((u) => u.path), ['args.t.d']);
+  });
+
+  test('values encode in the description\'s JSON encoding', () => {
+    assert.equal(encode(c({ dataType: 'integer' }), ' -12_000 '), '-12000');
+    assert.throws(() => encode(c({ dataType: 'integer' }), '1.5'), /integer/);
+    assert.throws(() => encode(c({ dataType: 'integer' }), '1e3'), /integer/);
+    assert.equal(encode(c({ dataType: 'bytes' }), '0xAB'), 'ab');
+    assert.throws(() => encode(c({ dataType: 'bytes' }), 'abc'), /hex/);
+    assert.equal(encode(c({ $ref: '#/definitions/p.Bool' }), true), true);
+    assert.equal(encode(c({ $ref: '#/definitions/p.Opt' }), { some: false }), null);
+    assert.equal(encode(c({ $ref: '#/definitions/p.Opt' }), { some: true, inner: '3' }), '3');
+    assert.deepEqual(encode(c({ $ref: '#/definitions/p.R' }), { variant: 0, fields: { a: '1', b: 'ff' } }), { a: '1', b: 'ff' });
+    assert.deepEqual(encode(c({ $ref: '#/definitions/p.S' }), { variant: 1, fields: { n: '2' } }), { n: '2', $variant: 'Y' });
+    // Map keys in canonical CBOR order: shorter first, then bytewise (ff before 0000); repeats refused.
+    const m = c({ dataType: 'map', keys: { dataType: 'bytes' }, values: { dataType: 'integer' } });
+    assert.deepEqual(encode(m, [['0000', '1'], ['ff', '2'], ['01', '3']]), [['01', '3'], ['ff', '2'], ['0000', '1']]);
+    assert.throws(() => encode(m, [['ff', '1'], ['FF', '2']]), /twice/);
+    assert.deepEqual(canonicalPairs('integer', [['-1', 'a'], ['24', 'b'], ['0', 'c'], ['23', 'd']]).map(([k]) => k), ['0', '23', '-1', '24']);
+    const v = c({ title: 'Value', dataType: 'map', keys: { dataType: 'bytes' }, values: { dataType: 'map' } });
+    const policy = 'ab'.repeat(28);
+    assert.deepEqual(encode(v, [{ policy, name: '0000', quantity: '1' }, { policy, name: 'ff', quantity: '2' }]), [[policy, [['ff', '2'], ['0000', '1']]]]);
+    assert.throws(() => encode(v, [{ policy: 'ab', name: '', quantity: '1' }]), /28 bytes/);
+  });
+});
+
+// ---- the page in Chromium: the Counter walkthrough (M1 exit), Java and .jsc
+
+let chromium = null;
+try {
+  ({ chromium } = await import('playwright'));
+  const b = await chromium.launch();
+  await b.close();
+} catch (e) {
+  // CI installs Chromium for this suite (JOUST_REQUIRE_CHROMIUM): there a missing browser fails instead of skipping.
+  if (process.env.JOUST_REQUIRE_CHROMIUM) throw e;
+  chromium = null;
+}
+
+function treeHash(root) {
+  const lines = [];
+  const walk = (d) => {
+    for (const name of readdirSync(d).sort()) {
+      const p = join(d, name);
+      const rel = relative(root, p);
+      if (rel === 'node_modules' || rel === 'build') continue;
+      if (statSync(p).isDirectory()) walk(p);
+      else lines.push(rel + ' ' + createHash('sha256').update(readFileSync(p)).digest('hex'));
+    }
+  };
+  walk(root);
+  return createHash('sha256').update(lines.join('\n')).digest('hex') + ` (${lines.length} files)`;
+}
+
+for (const kind of ['java', 'jsc']) {
+  describe(`ADR-0024 M1 walkthrough in Chromium (${kind} Counter)`, { skip: skip || (!chromium && 'Playwright\'s Chromium is not installed') }, () => {
+    let root, server, browser, page, before0;
+    const bodies = [];
+    const errors = [];
+    before(async () => {
+      root = await project(kind);
+      before0 = treeHash(root);
+      const { pageFiles } = await import('../src/playground/page.js');
+      server = await startPlayground({ root, engine: await theEngine(), page: await pageFiles() });
+      browser = await chromium.launch();
+      page = await browser.newPage();
+      page.on('pageerror', (e) => errors.push(String(e.stack ?? e)));
+      page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+      page.on('request', (r) => { if (r.method() === 'POST') bodies.push({ url: r.url(), body: r.postData() ?? '' }); });
+      await page.goto(server.url);
+      await page.waitForSelector('body[data-ready=true]', { timeout: 120_000 });
+    });
+    after(async () => {
+      await browser?.close();
+      await server?.close();
+      if (root) rmSync(root, { recursive: true, force: true });
+    });
+
+    const history = () => page.locator('#history').innerText();
+    async function approveAll(until, arg = null) {
+      for (let i = 0; i < 6; i++) {
+        // Whichever comes first: a review to approve, or the outcome. The loser is left to time out quietly.
+        const done = await Promise.race([
+          page.waitForSelector('#approve', { timeout: 120_000 }).then(() => false, () => null),
+          page.waitForFunction(until, arg, { timeout: 120_000 }).then(() => true, () => null),
+        ]);
+        if (done === null) assert.fail(`timed out\n${await page.locator('#log').innerText()}`);
+        if (done) return;
+        await page.click('#approve');
+      }
+    }
+    const confirmedCount = () => page.locator('#history li.ok').count();
+
+    test('the token leaves the URL; the mode banner says offline and what it means', async () => {
+      assert.equal(new URL(page.url()).hash, '');
+      const banner = await page.locator('#banner').innerText();
+      assert.match(banner, /OFFLINE/);
+      assert.match(banner, /not a node's acceptance/);
+      assert.equal(await page.locator('#identities li').count(), 3);
+    });
+
+    test('create as Alice, increment as Alice, refused as Bob, an unsupported view, reset', async () => {
+      await page.click(`[data-contract="${COUNTER}"]`);
+      await page.waitForSelector('[data-call="init:init"] button.run');
+      // The named view is unsupported on the npm host: shown disabled with its code (I8).
+      assert.match(await page.locator('[data-call="view:count"]').innerText(), /unsupported: views/i);
+      // Alice creates: the reference-script publication, then the creation, each reviewed and approved.
+      await page.click('[data-call="init:init"] button.run');
+      await approveAll(() => document.querySelectorAll('#history li.ok').length >= 2);
+      assert.match(await history(), /Alice: init\s+confirmed/);
+      assert.match(await history(), /attacks run: \d+; accepted by the scripts: 0/);
+      await page.waitForSelector('#instances li.selected');
+      // Alice increments by 5.
+      await page.fill('[data-call="action:increment"] input[data-kind=integer]', '5');
+      const n = await confirmedCount();
+      await page.click('[data-call="action:increment"] button.run');
+      await approveAll((k) => document.querySelectorAll('#history li.ok').length > k, n);
+      await page.waitForFunction(() => /"count": "5"/.test(document.querySelector('#instances li.selected pre')?.textContent ?? ''));
+      // A form error is stage arguments, and nothing is prepared.
+      await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1.5');
+      await page.click('[data-call="action:increment"] button.run');
+      await page.waitForFunction(() => /stage arguments/.test(document.querySelector('#history').innerText));
+      // Bob resets Alice's counter: refused at stage host, nothing signed.
+      await page.check('input[data-identity=Bob]');
+      await page.click('[data-call="action:reset"] button.run');
+      await page.waitForFunction(() => /Bob: reset\s+failed\s+at stage host/.test(document.querySelector('#history').innerText));
+      assert.equal(await page.locator('#review').isHidden(), true);
+      // A declined review is discarded: the next prepare is not blocked by its reservation.
+      await page.check('input[data-identity=Alice]');
+      await page.fill('[data-call="action:increment"] input[data-kind=integer]', '2');
+      await page.click('[data-call="action:increment"] button.run');
+      await page.click('#decline');
+      await page.waitForFunction(() => /declined/.test(document.querySelector('#history').innerText));
+      const m = await confirmedCount();
+      await page.click('[data-call="action:increment"] button.run');
+      await approveAll((k) => document.querySelectorAll('#history li.ok').length > k, m);
+      await page.waitForFunction(() => /"count": "7"/.test(document.querySelector('#instances li.selected pre')?.textContent ?? ''));
+      // Advance time, then reset the ledger: no instance any more.
+      await page.fill('#advance-seconds', '120');
+      await page.click('#advance');
+      await page.waitForFunction(() => /time advanced 120 s/.test(document.querySelector('#log').innerText));
+      await page.click('#reset');
+      await page.waitForFunction(() => /No instance yet/.test(document.querySelector('#instances').innerText));
+      assert.deepEqual(errors, []);
+    });
+
+    test('I1: no request carries a mnemonic or a key; I10: the project is untouched', async () => {
+      const { wordlist } = await import('@scure/bip39/wordlists/english');
+      const words = new Set(wordlist);
+      const allowed = new Set(['session', 'contract', 'call', 'address', 'lovelace', 'ms', 'refs', 'reservation', 'cbor', 'prerequisite',
+        'instance', 'limit', 'enabled', 'keepLedgerOf', 'attacks', 'view', 'args', 'listing', 'after', 'method', 'datum']);
+      assert.ok(bodies.length > 10);
+      for (const { url, body } of bodies) {
+        const json = JSON.parse(body || '{}');
+        for (const k of Object.keys(json)) assert.ok(allowed.has(k), `${url} sends ${k}`);
+        const strings = [];
+        JSON.stringify(json, (_k, v) => { if (typeof v === 'string') strings.push(v); return v; });
+        for (const s of strings) {
+          assert.ok(s.split(/\s+/).filter((w) => words.has(w)).length < 12, `${url} sends a mnemonic-like string`);
+          assert.ok(!/^ed25519_sk|^xprv|^acct_xsk/.test(s), `${url} sends a key`);
+        }
+      }
+      assert.equal(treeHash(root), before0);
+    });
+  });
+}
+
+// ---- joust playground (D3, I10): the ABI gate, offline only
+
+describe('ADR-0024 D3: joust playground', { skip }, () => {
+  test('I10: a changed .jsc interface fails the playground\'s build unless --accept-abi is given; DevKit mode is not offered yet', async () => {
+    const root = await project('jsc');
+    try {
+      const { playground } = await import('../src/playground/index.js');
+      const { loadConfig } = await import('../src/config.js');
+      const config = loadConfig(root);
+      const abi = join(root, 'contracts/app/Counter.abi.json');
+      const committed = readFileSync(abi);
+      const src = join(root, 'contracts/app/Counter.jsc');
+      writeFileSync(src, readFileSync(src, 'utf8').replace('action reset() only owner {', 'action reset(to: Int) only owner {')
+        .replace('return { ...state, count: 0 }', 'return { ...state, count: to }'));
+      const quiet = () => {};
+      await assert.rejects(playground({ config, root, open: false, log: quiet }), /build failed/);
+      assert.deepEqual(readFileSync(abi), committed, 'the ABI manifest is untouched without the flag');
+      const p = await playground({ config, root, open: false, acceptAbi: true, log: quiet });
+      try {
+        assert.notDeepEqual(readFileSync(abi), committed, 'accepted with the flag');
+        assert.match(p.url, /^http:\/\/127\.0\.0\.1:\d+\/#token=[A-Za-z0-9_-]{43}$/);
+      } finally {
+        await p.close();
+      }
+      await assert.rejects(playground({ config, root, mode: 'devkit', open: false, log: quiet }), /only --mode offline/);
+      await assert.rejects(playground({ config, root, networkName: 'devkit', open: false, log: quiet }), /only --mode offline/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

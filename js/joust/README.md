@@ -8,6 +8,7 @@ npm create joust my-app && cd my-app && npm install
 npx joust build      # contracts/ -> build/joust/ (validators, descriptions, typed clients, contracts.json)
 npx joust test       # build, then test/*.test.js offline (an in-memory ledger: @julclang/joust/test)
 npx joust deploy     # publishes the reference scripts; writes build/joust/deployments.<network>.json
+npx joust playground # build, then a browser playground: every contract, test identities, an offline ledger
 ```
 
 A `.jsc` contract's ABI manifest (`<Contract>.abi.json`, beside it) is committed; a build whose manifest is missing or
@@ -51,6 +52,52 @@ replaced; elsewhere only `NODE_OPTIONS` itself is. So no inherited flag sets the
 `loadToolchain()` runs builds on the caller's thread, which needs a stack of at
 least 8 MB; `buildInWorker` provides one. On Node 22 the engines turn on Wasm exception references
 (`--experimental-wasm-exnref`) themselves; newer Node has them on by default, and the flag is not set there (it would only print a warning).
+
+## `joust playground`
+
+```sh
+npx joust playground                 # build, then open the playground (offline: an in-memory ledger, no node)
+npx joust playground --no-open --port 5180
+```
+
+A generated page for every contract the project builds, Java or `.jsc`, with no page or client code to write
+(ADR-0024). It runs **offline**: an in-memory ledger (`@julclang/joust/test`'s) that checks the node's phase-1 rules it
+models and evaluates the scripts with JuLC's VM, with the attack suite on every script transaction (a toggle in the
+banner). It never attaches to or starts a network. DevKit mode and Connect wallet come in a later milestone.
+
+A two-identity Counter walkthrough:
+
+1. `npx joust playground` builds through the usual gates (a changed `.jsc` ABI or `joust.lock` fails unless
+   `--accept-abi` or `--accept-lock` is given) and opens the page. Alice, Bob and Carol are created in the page with
+   1,000 ADA each.
+2. Choose **Counter**. Each call the contract has is listed. One the dev host does not serve is shown disabled with its
+   code: on npm, named views say `unsupported: views`.
+3. As Alice, **init**. The first use publishes the contract's reference script. Each transaction is shown for review
+   (fee, validity, required signers, the predicted state), signed by Alice only after **Approve**, submitted and
+   confirmed. The history shows how many attacks ran and whether the scripts accepted any.
+4. As Alice, **increment** by 5: the instance shows `count: 5`.
+5. Choose Bob and **reset** Alice's counter: refused at stage `host` (`must be called by the key in 'owner'`), and
+   nothing is signed.
+6. **Advance time** moves the ledger's clock. **Reset ledger** starts a new ledger and dev host with the same identities.
+
+How it works: the playground server launches the project's dev host (`joust-host --stdio`, protocol 1) and answers its
+chain reads from the ledger. The page renders what the host describes, checks every body itself with the page verifier
+(publications included) before an identity signs it, and asks the server to submit. Keys never leave the page: the
+server learns addresses only. A reload starts a new session with new identities.
+
+The server listens on `127.0.0.1` only. The URL it prints carries a per-run session token in its fragment: every request
+needs it, and requests with another `Host` or `Origin` are refused. Do not share the link.
+
+What offline success means: the dev host built the transaction with this project's JOUST, the page's checks passed, the
+ledger's modelled rules passed and the scripts accepted it. It is not a node's acceptance. The ledger refuses votes,
+proposals, treasury donations and every certificate but stake (de)registration as `NotModelled` ("not modelled offline:
+try DevKit"), and does not model rewards or collateral loss.
+
+Supported in this version: init, actions, destroy and owned calls; argument forms for integers, bytes (with a UTF-8
+helper and identities' key hashes), Bool, Optional, records and sum types, lists, maps with integer or byte-string keys,
+and Values. Anything else (untyped Plutus data, other map keys) is shown as UNSUPPORTED with the argument's path. Calls
+the dev host refuses (`keyed`, `params`, `authorizedBy`, `unverifiable`), `@Quorum` co-signing and calls that need a
+shared verifier (sends, MerkleMaps) are shown disabled.
 
 ## `joust dev`
 

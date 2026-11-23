@@ -23,3 +23,6 @@ js/joust/reports/
 **/*Inputs/**/oom-*
 js/state-client/reports/
 js/*/stryker-output-*.json
+
+### The playground page (ADR-0024): a release may prebuild it here; a checkout builds it in memory ###
+js/joust/playground/dist/
