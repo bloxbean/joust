@@ -208,7 +208,7 @@ final class Session implements Transport.Handler {
                 }
             }
             return runtime.inScope(scope, () -> method.equals("prepare")
-                    ? prepare(p, reads, now + ttl, whileLive) : query(method, p, reads, now + ttl));
+                    ? prepare(p, reads, now + ttl) : query(method, p, reads, now + ttl));
         } finally {
             evaluating.remove();
             reading.remove();
@@ -289,7 +289,7 @@ final class Session implements Transport.Handler {
         return accounts.values().toArray(Account[]::new);
     }
 
-    private Transport.Reply prepare(JsonNode p, Reads reads, long ceiling, java.util.function.Consumer<Runnable> whileLive) {
+    private Transport.Reply prepare(JsonNode p, Reads reads, long ceiling) {
         fields(p, "now", "ttlSlots", "call");
         var request = fields(p.path("call"), "contract", "kind", "method", "instance", "object", "args", "pay", "address", "cosigners", "designated", "pageLimits", "operation");
         var c = served(request);
@@ -338,7 +338,7 @@ final class Session implements Transport.Handler {
             String designated = operation.identity().designated();
             boolean unspent = reads.outputs(wallet.baseAddress()).stream()
                     .anyMatch(u -> designated.equals(u.getTxHash() + "#" + u.getOutputIndex()));
-            whileLive.accept(() -> reservations.checkOperation(operation, unspent, reads.greatestTip, keyedUnit));
+            reservations.checkOperation(operation, unspent, reads.greatestTip, keyedUnit);
         }
         new Prerequisites(c, handle, reads, reservations, true).requireReady();
         String spent = null;

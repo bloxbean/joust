@@ -101,10 +101,12 @@ The designated input makes retries safe: every attempt spends it, so at most one
 3. While a live reservation spends the designation or holds the call's keyed token, or while a listed attempt is within its `validTo + settlementSlots`, the answer is `refusal/pending`. So is an insert whose key a live reservation holds, which may still roll back.
 4. When the designation is missing from the payer's complete address listing, the answer is `refusal/mayHaveLanded`.
 
+The designation alone keeps the host safe: every attempt spends it, so at most one lands. `attempts` only delays a rebuild while an earlier attempt may still land, for the user's benefit; the host reads only each attempt's `validTo`, and `txHash` is for the client.
+
 The client's duties:
 
 1. Journal each attempt signed for submission, exported or submitted as `{txHash, validTo}` in `attempts`, using the body's exclusive upper slot, and persist the per-chain recovery high-water mark before handoff.
-2. Settle a declined unsigned attempt `discarded` and leave it out of `attempts`. An attempt the node rejected can be settled `discarded` too; left out of `attempts`, it is rebuilt at once (ADR-0016's contested gap). An attempt that expired unsigned needs no settlement.
+2. Settle a declined unsigned attempt `discarded` and leave it out of `attempts`. An attempt the node rejected can be settled `discarded` too; left out of `attempts`, it is rebuilt at once (ADR-0016's contested gap). An attempt that expired unsigned needs no settlement, but its reservation holds the designation until an observed tip passes its `validTo + settlementSlots`, unless it is settled `discarded`.
 3. On `mayHaveLanded`, check the node for each attempt's outputs. When no attempt was handed out, something else spent the designation: choose and persist a new one and start a new operation.
 4. A refused first attempt needs no settlement. Restore keyed transactions like any other; the designation is one of their inputs.
 
@@ -166,7 +168,7 @@ A result carries only `tip`, its one outcome and, for a `utxos` value chunk, `mo
 
 ## Reservation journal (D8)
 
-Reserve all spending and collateral inputs of the final body. A body whose reference inputs include an input a live reservation spends is `refusal/pending`: it would read a version that the pending transaction replaces. A reference reserves nothing, so bodies that only read the same input stay independent. A successful write of the complete prepared response is the commit point. Cancellation, failure, an oversized response and a failed write reserve nothing. A body with validTo at or below the greatest tip seen during the call is expiredOnArrival. A client declining a result settles it discarded only if it never handed it out for signing/submission or export.
+Reserve all spending and collateral inputs of the final body. A body whose reference inputs include an input a live reservation spends is `refusal/pending`: it would read a version that the pending transaction replaces. A reference reserves nothing, so bodies that only read the same input stay independent. A successful write of the complete prepared response is the commit point. Cancellation, failure, an oversized response and a failed write reserve nothing. A body with validTo at or below the greatest tip seen during the call is expiredOnArrival. A client settles `discarded` a body that will not land: one it declined before handing it out for signing, submission or export, or a keyed attempt the node rejected (below).
 
 | Current state | Event or observed chain evidence | Result |
 | --- | --- | --- |

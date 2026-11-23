@@ -475,7 +475,7 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
   | shallow | `rolledBack` | prepared | promoted map writes reverted; still reserved: it may land again |
   | prepared | `rolledBack` | prepared | none: it may land again until its window closes |
   | prepared | an observed `tip > validTo + settlementSlots`, or `expired` with such a tip | expired (final) | released and tombstoned; staged writes dropped. `expired` with an earlier tip is `bad`, code `notExpired` |
-  | prepared | `discarded` | discarded (final) | released at once. Only for a transaction the client never signed for submission, exported or submitted |
+  | prepared | `discarded` | discarded (final) | released at once. For a body that will not land: declined before it was handed out for signing, submission or export, or a keyed attempt the node rejected (D11) |
   | confirmed (final) | `rolledBack` | – | **a rollback deeper than `settlementSlots`**: outside the model. The host stops building (every building call is refused, `refusal`, code `deepRollback`) until it is restarted; the client restarts it and `restore`s what is still pending |
 
   Expiry and depth use **tips the client observed**, never `now`: a `now` that runs ahead of the chain releases
@@ -492,7 +492,7 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
   `rewound: {tip}` (the restored chain's tip), and the host then:
   - **keeps every reservation it holds** and re-arms what the rewind may revive, from the tombstones (each keeps
     its transaction's inputs, collateral, `validTo` and inclusion slot for the session):
-    - a **discarded** one stays released: it was never handed out;
+    - a **discarded** one stays released (the client settled it as a body that will not land, above);
     - an **expired** one whose `validTo` is above the restored tip becomes **prepared** again;
     - a **confirmed** or **shallow** one whose inclusion slot is above the restored tip (the rewind removed it)
       becomes **prepared** again, if its `validTo` is above the restored tip;
