@@ -368,10 +368,9 @@ final class Designation {
         Designated chosen = locked(address, () -> {
             var candidates = new ArrayList<Utxo>();
             try {
-                for (int page = 1; page <= 20; page++) {
-                    var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                    if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                    for (Utxo u : r.getValue()) {
+                var walk = new Pages(rt, address, 100, 20);
+                for (var list = walk.next(); list != null; list = walk.next()) {
+                    for (Utxo u : list) {
                         if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
                                 || u.getInlineDatum() != null || u.getDataHash() != null || u.getReferenceScriptHash() != null) {
                             continue;
@@ -379,7 +378,6 @@ final class Designation {
                         if (u.getAmount().get(0).getQuantity().compareTo(BigInteger.valueOf(5_000_000)) < 0) continue;
                         candidates.add(u);
                     }
-                    if (r.getValue().size() < 100) break;
                 }
             } catch (Exception e) {
                 throw new JoustException(what + ": cannot read the payer's UTxOs", e);
@@ -426,6 +424,7 @@ final class Designation {
                 final List<Utxo> eligible = new ArrayList<>();
                 int next;
                 boolean finished;
+                String lastFirst;   // the previous raw page's first input: a provider that ignores the page repeats it
             }
             private final Map<Query, Pages> pages = new java.util.HashMap<>();
 
@@ -442,6 +441,14 @@ final class Designation {
                 Pages cursor = pages.computeIfAbsent(new Query(address, size, order), key -> new Pages());
                 while (!cursor.finished && cursor.eligible.size() < end) {
                     var raw = all.getPage(address, size, cursor.next, order);
+                    // A repeated page is the end of the answer, checked before filtering: a page every input of which
+                    // is reserved would otherwise be read again and again under the payer's lock (#145 Codex).
+                    String first = raw.isEmpty() ? null : ref(raw.get(0));
+                    if (first != null && first.equals(cursor.lastFirst)) {
+                        cursor.finished = true;
+                        break;
+                    }
+                    cursor.lastFirst = first;
                     cursor.eligible.addAll(free(store, raw, ownRef, owner));
                     cursor.next++;
                     cursor.finished = raw.size() < size;

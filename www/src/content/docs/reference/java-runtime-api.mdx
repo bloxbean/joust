@@ -62,7 +62,6 @@ Contracts with keyed types (ADR-0016) get, per keyed type `T`, `<t>List()`, `<t>
 | `ttlMs()` | `long` | The effective TTL in milliseconds. Inside a scope, `callScope().ttlSlots()` gives the optional slot count |
 | `inScope(CallScope scope, Supplier<T> body)` | `T` | Runs one call with its own clock, TTL and page limits (ADR-0022 D7); on this thread only, until `body` ends |
 | `callScope()` | `CallScope` | The scope active on this thread, or null |
-| `claimStore()` | `ClaimStore` | Where claims and designated inputs are kept (ADR-0022 D8) |
 | `maxRetries()` | `int` | |
 | `confirmTimeout()` | `Duration` | |
 | `mapVerifier()` | `VerifierHandle` | The shared MerkleMap verifier on this network (ADR-0002 D9) |
@@ -282,8 +281,15 @@ a call proves `@AuthorizedBy` (ADR-0009 D3).
 | `JoustException` | `RuntimeException` | Base class of the runtime's failures |
 | `SubmitException` | `JoustException` | The builder failed or the node rejected the transaction; nothing was accepted |
 | `ContentionException` | `JoustException` | The state kept moving; gave up after `maxRetries`. For a keyed operation, `attempts()` and `designatedInput()` name what was tried |
-| `PendingTransactionException` | `JoustException` | Submitted but not seen on chain in time; `txHash()` gives the hash. Do not resubmit blindly. For a keyed operation, `attempts()` lists every attempt handed out and `designatedInput()` the input they all spend |
+| `PendingTransactionException` | `JoustException` | Submitted but not seen on chain in time, or the node's answer was not a definite rejection (see below); `txHash()` gives the hash. Do not resubmit blindly. For a keyed operation, `attempts()` lists every attempt handed out and `designatedInput()` the input they all spend |
 | `InstanceNotFoundException` | `JoustException` | No UTxO holds the instance's thread token |
+
+A submission's answer decides between `SubmitException` and `PendingTransactionException`. Only a definite answer is a
+rejection: an HTTP 4xx with a body (other than 408, 425 and 429). A 5xx, an answer without a status, a timeout, an
+empty body or a network error may hide an accepted transaction, so it is pending, with its inputs still claimed. A
+backend that reports the node's rejection that way (CCL's Ogmios 5 service answers a 500, its GraphQL service no
+status) therefore turns a lost race into a pending outcome: such a call is not retried, and its inputs stay claimed
+until its window ends. Prefer a backend that answers a rejection with a 4xx (Blockfrost, Yaci Store).
 
 ## Helpers
 

@@ -31,9 +31,18 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public interface ClaimStore {
 
+    /**
+     * The key every method here names an input by: the lowercase hex of the transaction id's bytes, {@code #}, the output
+     * index. A provider's spelling (upper case, a leading {@code 0x}) is the same input under this key; a host that keeps
+     * its own table of reservations keys it this way, or a reservation it holds never matches the runtime's query.
+     */
+    static String ref(String txHash, int index) {
+        return Designation.txKey(txHash) + "#" + index;
+    }
+
     // ------------------------------------------------------------------ designated inputs (ADR-0016 D7)
 
-    /** Designates {@code ref} ({@code txHash#index}) for a keyed operation; false if it is designated already. */
+    /** Designates {@code ref} (a {@link #ref} key) for a keyed operation; false if it is designated already. */
     boolean designate(String ref);
 
     /** Whether {@code ref} is designated (and not yet released). */

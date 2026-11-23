@@ -311,11 +311,10 @@ final class AssetTx {
         int pages = hosted ? 1 : 19;
         int size = hosted ? Integer.MAX_VALUE : 100;
         try {
-            for (int page = 1; page <= pages && !missing.isEmpty(); page++) {
-                var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), size, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                var cap = TxRunner.CAPTURE.get();
-                for (Utxo u : r.getValue()) {
+            var walk = new Pages(contract.runtime, caller.baseAddress(), size, pages);
+            var cap = TxRunner.CAPTURE.get();
+            for (var list = missing.isEmpty() ? null : walk.next(); list != null; list = missing.isEmpty() ? null : walk.next()) {
+                for (Utxo u : list) {
                     if (contract.runtime.claimStore().avoids(Designation.ref(u))) continue;
                     // Never a published script (spending it ends what references it), never an input an earlier call
                     // of the composition already spends (#151 Codex re-review).
