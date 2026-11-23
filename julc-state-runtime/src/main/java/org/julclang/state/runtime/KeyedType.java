@@ -165,41 +165,92 @@ public record KeyedType<R>(String name, int headTag, int keyIndex, int maxKeyByt
         return true;
     }
 
+    /** Whether a map anywhere in {@code d} repeats a key (as JuLC encodes it). Iterative: deep data must not overflow. */
     private static boolean duplicateMapKeys(org.julclang.core.PlutusData d) {
-        if (d instanceof org.julclang.core.PlutusData.ConstrData c) {
-            for (var f : c.fields()) if (duplicateMapKeys(f)) return true;
-        } else if (d instanceof org.julclang.core.PlutusData.ListData l) {
-            for (var x : l.items()) if (duplicateMapKeys(x)) return true;
-        } else if (d instanceof org.julclang.core.PlutusData.MapData m) {
-            var seen = new java.util.HashSet<String>();
-            for (var e : m.entries()) {
-                if (!seen.add(java.util.HexFormat.of().formatHex(org.julclang.core.cbor.PlutusDataCborEncoder.encode(e.key())))) return true;
-                if (duplicateMapKeys(e.key()) || duplicateMapKeys(e.value())) return true;
+        var stack = new java.util.ArrayDeque<org.julclang.core.PlutusData>();
+        stack.push(d);
+        while (!stack.isEmpty()) {
+            var x = stack.pop();
+            if (x instanceof org.julclang.core.PlutusData.ConstrData c) {
+                c.fields().forEach(stack::push);
+            } else if (x instanceof org.julclang.core.PlutusData.ListData l) {
+                l.items().forEach(stack::push);
+            } else if (x instanceof org.julclang.core.PlutusData.MapData m) {
+                var seen = new java.util.HashSet<String>();
+                for (var e : m.entries()) {
+                    if (!seen.add(java.util.HexFormat.of().formatHex(org.julclang.core.cbor.PlutusDataCborEncoder.encode(e.key())))) return true;
+                    stack.push(e.key());
+                    stack.push(e.value());
+                }
             }
         }
         return false;
     }
 
-    /** {@code d} rebuilt so that it encodes canonically: lists (and constructor fields) indefinite, maps definite. */
+    /**
+     * {@code d} rebuilt so that it encodes canonically: lists (and constructor fields) indefinite, maps definite. Built
+     * bottom up with an explicit stack of open lists, constructors and maps, so deep data cannot overflow the stack.
+     */
     static PlutusData canonical(PlutusData d) {
-        if (d instanceof ConstrPlutusData c) {
-            var fs = new java.util.ArrayList<PlutusData>();
-            for (PlutusData f : c.getData().getPlutusDataList()) fs.add(canonical(f));
-            return constr((int) c.getAlternative(), fs);
+        if (!(d instanceof ConstrPlutusData || d instanceof ListPlutusData
+                || d instanceof com.bloxbean.cardano.client.plutus.spec.MapPlutusData)) return canonicalLeaf(d);
+        var top = new CanonicalFrame(null, d);
+        while (true) {
+            if (top.index < top.children.size()) {
+                PlutusData child = top.children.get(top.index++);
+                if (child instanceof ConstrPlutusData || child instanceof ListPlutusData
+                        || child instanceof com.bloxbean.cardano.client.plutus.spec.MapPlutusData) {
+                    top = new CanonicalFrame(top, child);
+                } else {
+                    top.out.add(canonicalLeaf(child));
+                }
+            } else {
+                PlutusData done = top.result();
+                if (top.parent == null) return done;
+                top = top.parent;
+                top.out.add(done);
+            }
         }
-        if (d instanceof ListPlutusData l) {
-            var items = new java.util.ArrayList<PlutusData>();
-            for (PlutusData x : l.getPlutusDataList()) items.add(canonical(x));
-            return new ListPlutusData(items, true);
-        }
-        if (d instanceof com.bloxbean.cardano.client.plutus.spec.MapPlutusData m) {
-            var out = new java.util.LinkedHashMap<PlutusData, PlutusData>();
-            for (var e : m.getMap().entrySet()) out.put(canonical(e.getKey()), canonical(e.getValue()));
-            return com.bloxbean.cardano.client.plutus.spec.MapPlutusData.builder().map(out).build();
-        }
+    }
+
+    private static PlutusData canonicalLeaf(PlutusData d) {
         if (d instanceof BytesPlutusData b) return BytesPlutusData.of(b.getValue());
         if (d instanceof BigIntPlutusData i) return BigIntPlutusData.of(i.getValue());
         return d;
+    }
+
+    /** An open list, constructor or map of {@link #canonical}: its children (a map's keys and values in turn), rebuilt. */
+    private static final class CanonicalFrame {
+        final CanonicalFrame parent;
+        final PlutusData source;
+        final List<PlutusData> children;
+        final List<PlutusData> out = new java.util.ArrayList<>();
+        int index;
+
+        CanonicalFrame(CanonicalFrame parent, PlutusData source) {
+            this.parent = parent;
+            this.source = source;
+            if (source instanceof ConstrPlutusData c) {
+                children = c.getData().getPlutusDataList();
+            } else if (source instanceof ListPlutusData l) {
+                children = l.getPlutusDataList();
+            } else {
+                var kv = new java.util.ArrayList<PlutusData>();
+                for (var e : ((com.bloxbean.cardano.client.plutus.spec.MapPlutusData) source).getMap().entrySet()) {
+                    kv.add(e.getKey());
+                    kv.add(e.getValue());
+                }
+                children = kv;
+            }
+        }
+
+        PlutusData result() {
+            if (source instanceof ConstrPlutusData c) return constr((int) c.getAlternative(), out);
+            if (source instanceof ListPlutusData) return new ListPlutusData(out, true);
+            var map = new java.util.LinkedHashMap<PlutusData, PlutusData>();
+            for (int i = 0; i < out.size(); i += 2) map.put(out.get(i), out.get(i + 1));
+            return com.bloxbean.cardano.client.plutus.spec.MapPlutusData.builder().map(map).build();
+        }
     }
 
     static PlutusData constr(int tag, List<PlutusData> fields) {

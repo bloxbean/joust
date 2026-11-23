@@ -60,6 +60,25 @@ class PlutusBytesTest {
     }
 
     @Test
+    void dataNestedInKeyPositionDecodesOnASmallStack() throws Exception {
+        // {{{...{0: 0}...: 0}: 0}: 0}: each map's one key is the next map.
+        int n = 50_000;
+        byte[] bytes = HEX.parseHex(repeat("a1", n) + "00" + repeat("00", n));
+        var result = onSmallStack(() -> PlutusBytes.decode(bytes));
+        if (result.error != null) throw new AssertionError("key position", result.error);
+        PlutusData d = result.value;
+        int levels = 0;
+        while (d instanceof PlutusData.MapData m) {
+            assertEquals(1, m.entries().size());
+            assertEquals(new PlutusData.IntData(0), m.entries().getFirst().value());
+            d = m.entries().getFirst().key();
+            levels++;
+        }
+        assertEquals(n, levels);
+        assertEquals(new PlutusData.IntData(0), d);
+    }
+
+    @Test
     void theRecursiveDecoderOverflowsWhereTheHelperDoesNot() throws Exception {
         // What the helper replaces (documents why; if JuLC's decoder becomes iterative this is merely true of both).
         byte[] deep = HEX.parseHex(repeat("81", 50_000) + "00");
@@ -137,6 +156,8 @@ class PlutusBytesTest {
                 "d866 82 00 00", "d866 00", "d81e 82 01 02", "d826 82 61 61 61 62", "f4", "f5", "f6", "f7", "f9 0000",
                 "fa 00000000", "fb 0000000000000000", "81 f6", "a1 f6 00", "82 00", "a1 00", "bf 00 ff", "9f 00",
                 "1c", "5c", "f8 00", "81 ff", "c6 80", "d9d9f7 00",
+                // A 102 constructor's indefinite outer array must hold exactly [alternative, fields].
+                "d8669fff", "d8669f00ff", "d8669f008000ff", "9fd8669f008001ffff",
         };
         for (String v : accepted) {
             byte[] b = HEX.parseHex(v.replace(" ", ""));

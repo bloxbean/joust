@@ -15,8 +15,9 @@ import java.util.Objects;
  * {@code decodeData}: exactly one item; byte strings in chunks of at most 64 bytes; bignums only in the heads
  * {@code c2}/{@code c3}; constructors 121-127, 1280-1400 and 102 {@code [alternative, fields]}; no text strings, simple
  * values, floats or other tags), but that decoder recurses once per level, so deeply nested data (some 16,000 levels
- * fit in a transaction) overflows the stack: on the JVM a {@link StackOverflowError}, in a GraalVM Web Image (the npm
- * engines) a trap that cannot be caught.
+ * fit in a transaction) overflows the stack: on the JVM a {@link StackOverflowError}; in a GraalVM Web Image (the npm
+ * engines) the call fails (on Node, from about 1,000 levels, as {@code TypeError: type incompatibility when
+ * transforming from/to JS} through the JS bridge).
  * <p>
  * Here the bytes are read through cardano-client-lib's {@link CborSpan}, whose walker keeps containers on an explicit
  * stack: {@link CborSpan#of(byte[])} first checks, in one pass, that they are exactly one well-formed item (RFC 8949
@@ -65,7 +66,12 @@ public final class PlutusBytes {
         } catch (RuntimeException e) {
             throw new CborDecodingException("CBOR decoding failed: " + e.getMessage(), e);
         }
-        return new Reader(cbor).read();
+        try {
+            return new Reader(cbor).read();
+        } catch (IndexOutOfBoundsException | ArithmeticException e) {
+            // Unreachable while CborSpan.of guarantees what Reader relies on (see Reader); kept a decoding error if not.
+            throw new CborDecodingException("CBOR decoding failed: " + e, e);
+        }
     }
 
     /**
@@ -105,7 +111,13 @@ public final class PlutusBytes {
         }
     }
 
-    /** Reads bytes that {@link CborSpan#of(byte[])} has walked, so every head and item in them is well-formed. */
+    /**
+     * Reads bytes that {@link CborSpan#of(byte[])} has walked, and relies on what that walk guarantees, so it checks no
+     * bounds of its own: the bytes are exactly one well-formed item (RFC 8949 section 5.3), so every head is complete and
+     * has additional information 0-27 or 31, every indefinite container ends with a BREAK before the end of the bytes,
+     * string chunks are definite strings of the same major type, and every declared count is at most the remaining
+     * input (so it fits an int).
+     */
     private static final class Reader {
         private final byte[] buffer;
         private int pos;
@@ -173,6 +185,8 @@ public final class PlutusBytes {
 
         private Object tagged(Frame parent, int initial, long tag) {
             int content = pos;
+            // Message only (as also below where marked): the check after it rejects the same inputs; this one gives
+            // JuLC's message.
             if (at() >>> 5 == MAJOR_TAG) throw reject("Nested CBOR tags are not PlutusData");
             if (initial == BIGNUM_POSITIVE || initial == BIGNUM_NEGATIVE) {
                 // cborg reads tags 2 and 3 as bignums only in the heads c2/c3.
@@ -181,7 +195,7 @@ public final class PlutusBytes {
                 BigInteger n = new BigInteger(1, boundedBytes(leaf(content)));
                 return new PlutusData.IntData(initial == BIGNUM_POSITIVE ? n : n.add(BigInteger.ONE).negate());
             }
-            if (Long.compareUnsigned(tag, 3) <= 0) throw reject("Unrecognized tag " + tag);
+            if (Long.compareUnsigned(tag, 3) <= 0) throw reject("Unrecognized tag " + tag);   // message only
             head();
             if (major != MAJOR_ARRAY) throw reject("Tag " + Long.toUnsignedString(tag) + " must wrap an array");
             if (tag >= 121 && tag <= 127) return new Frame(parent, false, BigInteger.valueOf(tag - 121), false, count(1));
@@ -195,12 +209,12 @@ public final class PlutusBytes {
                 throw reject("Constr general encoding expects [tag, fields], got " + Long.toUnsignedString(argument)
                         + " elements");
             }
-            if (at() == BREAK) throw reject("Constr general encoding expects [tag, fields], got 0 elements");
+            if (at() == BREAK) throw reject("Constr general encoding expects [tag, fields], got 0 elements");   // message only
             int alternative = pos;
             head();
             if (major != MAJOR_UNSIGNED) throw reject("Expected unsigned Word64 for Constr tag");
             BigInteger value = leaf(alternative).asBigInteger();
-            if (at() == BREAK) throw reject("Constr general encoding expects [tag, fields], got 1 elements");
+            if (at() == BREAK) throw reject("Constr general encoding expects [tag, fields], got 1 elements");   // message only
             head();
             if (major != MAJOR_ARRAY) throw reject("Expected array for Constr fields in general encoding");
             return new Frame(parent, false, value, outerIndefinite, count(1));

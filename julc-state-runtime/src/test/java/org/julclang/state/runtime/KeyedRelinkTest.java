@@ -60,4 +60,47 @@ class KeyedRelinkTest {
             assertDoesNotThrow(() -> KeyedType.requireRelinkable(pre + m + "ffff", "remove"), m);
         }
     }
+
+    /**
+     * #173 review: a neighbour whose datum holds a deeply nested field is checked (repeated keys, canonical relink)
+     * without recursion, on a small stack, with the same outcomes as for shallow data.
+     */
+    @Test
+    void aDeepFieldIsCheckedOnASmallStack() throws Exception {
+        int n = 50_000;
+        String pre = "d8799f" + "4101" + "40" + "00" + "81".repeat(n);
+        assertNull(onSmallStack(() -> KeyedType.requireRelinkable(pre + "00" + "ff", "probe")), "a deep field relinks");
+        Throwable repeated = onSmallStack(() -> KeyedType.requireRelinkable(pre + "a200000001" + "ff", "probe"));
+        assertInstanceOf(org.julclang.state.api.RequireException.class, repeated);
+        assertTrue(repeated.getMessage().contains("repeated key"), repeated.getMessage());
+        Throwable unordered = onSmallStack(() -> KeyedType.requireRelinkable(pre + "a202000100" + "ff", "probe"));
+        assertInstanceOf(org.julclang.state.api.RequireException.class, unordered);
+        assertTrue(unordered.getMessage().contains("not in canonical order"), unordered.getMessage());
+        // The relink itself rebuilds the deep field canonically (definite lists become indefinite).
+        Throwable relink = onSmallStack(() -> {
+            var node = (ConstrPlutusData) PlutusData.deserialize(HexUtil.decodeHexString(pre + "00" + "ff"));
+            String hex = HexUtil.encodeHexString(KeyedType.relinked(node, new byte[] {0x62}, BigInteger.ONE).serializeToBytes());
+            assertEquals("d8799f" + "4101" + "4162" + "01" + "9f".repeat(n) + "00" + "ff".repeat(n) + "ff", hex);
+        });
+        assertNull(relink, () -> String.valueOf(relink));
+    }
+
+    interface Check {
+        void run() throws Exception;
+    }
+
+    /** Runs {@code check} on a thread with a 256 KB stack; what it threw, or null. */
+    static Throwable onSmallStack(Check check) throws InterruptedException {
+        var thrown = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        Thread t = new Thread(null, () -> {
+            try {
+                check.run();
+            } catch (Throwable e) {
+                thrown.set(e);
+            }
+        }, "small-stack", 256 * 1024);
+        t.start();
+        t.join();
+        return thrown.get();
+    }
 }
