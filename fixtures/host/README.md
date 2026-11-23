@@ -42,4 +42,4 @@ Start an isolated fresh DevKit with its default Yaci Store configuration. The ma
 ./gradlew :julc-state-host:check :julc-state-host:nodeHostConformance -PnoDevnet
 ```
 
-The fresh-chain replay skips until `Token-init.json` exists. Offline signing vectors reconstruct bounded calls from the first M0 Token mint and the M3 Token and Locker snapshots. Their history answers use the earlier transactions' witness bytes and their recorded build tips as reconstructed inclusion points. The historical M1b `unsupported-maps.json` request now reaches prerequisite discovery on a host advertising maps. The compatibility test supplies an unsupported UTxO read and checks its typed result.
+The fresh-chain replay skips until `Token-init.json` exists. Offline signing vectors reconstruct bounded calls from the first M0 Token mint and the M3 Token and Locker snapshots. Their history answers list the earlier transactions that carry the unit, with their witness bytes. The historical M1b `unsupported-maps.json` request now reaches prerequisite discovery on a host advertising maps. The compatibility test supplies an unsupported UTxO read and checks its typed result.

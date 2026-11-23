@@ -67,7 +67,6 @@ public final class StateInstance<S> {
     public <T> T view(java.util.function.Function<S, T> f) {
         S s = state();
         if (!contract.spec.layout().hasMaps()) return JscMessages.run(contract.spec, () -> f.apply(s));
-        MerkleSupport.requireStored(contract.spec.layout(), s);   // only the root is proven (#160 Codex re-review)
         return JscMessages.run(contract.spec, () -> new MerkleSupport(contract.runtime.mapProver(contract.policyId + instanceId)).run(() -> f.apply(s)));
     }
 
@@ -120,9 +119,6 @@ public final class StateInstance<S> {
         var spec = contract.spec;
         String what = spec.name() + "." + call.name;
         S current = decode(stateUtxo);
-        // A chain datum's maps are root only: pending entries would answer before any proof, and differently on the
-        // JVM (the method reads them) and in the engine (discovery opens the maps afresh) (#160 Codex round 3).
-        if (contract.spec.layout().hasMaps()) MerkleSupport.requireStored(contract.spec.layout(), current);
         byte[] callerPkh = Keys.pkh(call.caller);
         BigInteger inLovelace = lovelaceOf(stateUtxo);
         BigInteger balance = call.kind == Call.Kind.DESTROY ? inLovelace : inLovelace.subtract(BigInteger.valueOf(spec.minAda()));
@@ -224,9 +220,6 @@ public final class StateInstance<S> {
         var spec = contract.spec;
         String what = spec.name() + "." + call.name;
         S current = decode(stateUtxo);
-        // A chain datum's maps are root only: pending entries would answer before any proof, and differently on the
-        // JVM (the method reads them) and in the engine (discovery opens the maps afresh) (#160 Codex round 3).
-        if (contract.spec.layout().hasMaps()) MerkleSupport.requireStored(contract.spec.layout(), current);
         byte[] callerPkh = Keys.pkh(call.caller);
         org.julclang.ledger.Value inValue = AssetTx.valueOf(stateUtxo);
         BigInteger inLovelace = lovelaceOf(stateUtxo);

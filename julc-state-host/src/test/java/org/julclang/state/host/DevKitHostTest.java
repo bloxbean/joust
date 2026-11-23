@@ -92,13 +92,7 @@ class DevKitHostTest {
                             else {
                                 assertTrue(r.isSuccessful(), r::getResponse);
                                 var list = a.putArray("value");
-                                for (var t : r.getValue()) {
-                                    var block = backend.getBlockService().getBlockByNumber(java.math.BigInteger.valueOf(t.getBlockHeight()));
-                                    assertTrue(block.isSuccessful(), block::getResponse);
-                                    var b = block.getValue();
-                                    list.addObject().put("txHash", t.getTxHash()).putObject("point")
-                                            .put("slot",b.getSlot()).put("height",b.getHeight()).put("hash",b.getHash());
-                                }
+                                for (var t : r.getValue()) list.addObject().put("txHash", t.getTxHash());
                                 if (r.getValue().size() == 100) a.put("more",Integer.toString(page+1));
                             }
                         }
@@ -329,7 +323,8 @@ class DevKitHostTest {
                 for (var assertion : evidence) success(restarted.rpc("registered",assertion));
                 var restore = JSON.readTree(mapJournal.toFile());
                 var id = success(restarted.rpc("restore",restore)).at("/reservations/0");
-                error("refusal","mapsStale",restarted.rpc("prepare",params(mint)));
+                // The restored mint holds the state input.
+                error("refusal","pending",restarted.rpc("prepare",params(mint),this::answer));
                 ObjectNode imported = pending.deepCopy();
                 imported.set("reservation",id);
                 submit(restarted,imported);

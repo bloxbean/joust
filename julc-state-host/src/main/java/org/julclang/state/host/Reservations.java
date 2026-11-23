@@ -82,22 +82,14 @@ final class Reservations implements ClaimStore {
             return Set.copyOf(refs);
         }
         static Body decode(String cbor, int network) {
-            return imported(cbor, network, null, null).body();
-        }
-        record Imported(Body body, MapWithdrawal.Restored writes) {}
-        static Imported imported(String cbor, int network, String reward, Contracts catalog) {
             try {
                 byte[] bytes = HexFormat.of().parseHex(cbor);
-                var tx = Transaction.deserialize(bytes);
-                return new Imported(of(tx, TransactionUtil.getTxHash(bytes), network), MapWithdrawal.restored(tx, reward, catalog));
+                return of(Transaction.deserialize(bytes), TransactionUtil.getTxHash(bytes), network);
             } catch (Exception e) { throw bad("invalid transaction CBOR"); }
         }
     }
-    record Entry(String id, Body body, State state, Long slot, KeyedOperation operation) {
-        Entry as(State state, Long slot) {
-            var op = operation != null && state == State.shallow ? operation.handedOut(body.hash, body.to) : operation;
-            return new Entry(id, body, state, slot, op);
-        }
+    record Entry(String id, Body body, State state, Long slot) {
+        Entry as(State state, Long slot) { return new Entry(id, body, state, slot); }
         boolean live() { return state == State.prepared || state == State.shallow; }
     }
     private Map<String, Entry> entries = new LinkedHashMap<>();
@@ -128,12 +120,6 @@ final class Reservations implements ClaimStore {
         return new Transport.Reply(obj(), () -> assertions.computeIfAbsent(hash, ignored -> new HashSet<>()).add(credential));
     }
 
-    final MapMirrors maps = new MapMirrors();
-    void resetMirrors(boolean rewound) {
-        maps.reset(entries.values());
-        if (rewound) maps.rewound();
-    }
-
     private final long margin;
     private final int network;
     private boolean reconcile;
@@ -143,9 +129,6 @@ final class Reservations implements ClaimStore {
         this.network = network;
         this.margin = margin;
         this.reconcile = restoring;
-        // A restarted host has not seen the restore batches: map views stay fenced as after a rewound reset, until
-        // restore completes (#160 Codex re-review).
-        if (restoring) maps.rewound();
     }
 
     void allowBuild() {
@@ -155,15 +138,15 @@ final class Reservations implements ClaimStore {
     Entry prepare(Body body, long tip) {
         return prepare(body, tip, null);
     }
-    Entry prepare(Body body, long tip, KeyedOperation operation) {
-        if (operation != null && !body.inputs.contains(operation.identity().designated())) throw KeyedOperation.mismatch();
+    /** {@code designated}: a keyed call's designated input, which the body must spend (ADR-0022 D11), else null. */
+    Entry prepare(Body body, long tip, String designated) {
+        if (designated != null && !body.inputs.contains(designated)) throw KeyedOperation.mismatch();
         if (body.inputs.stream().anyMatch(this::avoids) || body.collateral.stream().anyMatch(this::avoids))
             throw HostError.refusal("pending", "transaction touches a reserved input");
-        if (operation != null && entries.values().stream().anyMatch(e -> e.live() &&
-                !Collections.disjoint(body.keyedTokens,e.body.keyedTokens)))
+        if (designated != null && body.keyedTokens.stream().anyMatch(this::reservesToken))
             throw HostError.refusal("pending", "a keyed object is still reserved");
         if (body.to <= tip) throw HostError.refusal("expiredOnArrival", "transaction is already past its upper bound");
-        return new Entry(Long.toString(++lastId), body, State.prepared, null, operation);
+        return new Entry(Long.toString(++lastId), body, State.prepared, null);
     }
     void commit(Entry e) { entries.put(e.id, e); }
 
@@ -204,60 +187,18 @@ final class Reservations implements ClaimStore {
     @Override public void undesignate(String ref, Expiry when) { throw new Unsupported("undesignate"); }
 
     /**
-     * A retry acknowledges the handoff of every attempt its record lists with that attempt's own deadline, even when the
-     * prepare then fails or answers pending. Retained across rollback, so a later discarded notification cannot release
-     * signed inputs. The session takes it before any chain read, and for an attempt that already expired too: a failed
-     * read must not lose it, and a rewind can revive the attempt (#156 Codex review).
+     * ADR-0022 D11's retry rules, after the call's identity matched its record (rule 1); the body's spending of the
+     * designation (rule 2) is {@link #prepare}'s. {@code unspent}: the designation is in the payer's complete listing.
      */
-    void acknowledge(KeyedOperation op) {
-        var id = op.identity();
-        entries.replaceAll((rid,e) -> e.state != State.discarded && e.operation != null && id.equals(e.operation.identity())
-                && Objects.equals(op.attempts().get(e.body.hash), e.body.to) && !e.operation.attempts().containsKey(e.body.hash)
-                ? new Entry(rid,e.body,e.state,e.slot,e.operation.handedOut(e.body.hash,e.body.to)) : e);
-    }
-
-    // Use the chain point of the complete wallet listing, never now or an output-by-ref lookup.
     void checkOperation(KeyedOperation op, boolean unspent, long tip, String objectUnit) {
-        var id = op.identity();
-        boolean pending = false;
-        boolean landed = false;
-        boolean known = false;
-        var expected = new HashMap<String,Long>();
-        for (var e : entries.values()) {
-            Long supplied = op.attempts().get(e.body.hash);
-            if (e.operation == null || !id.equals(e.operation.identity())) {
-                if (supplied != null && e.state != State.discarded) throw KeyedOperation.mismatch();
-                if (e.live() && objectUnit != null && e.body.keyedTokens.contains(objectUnit)) pending = true;
-                continue;
-            }
-            known = true;
-            expected.putAll(e.operation.attempts());
-            if (e.state == State.discarded) continue; // An identical re-prepare can have the same body hash.
-            // An attempt never acknowledged as handed out (neither its own record nor this one lists it): expired, it
-            // cannot land and was never signed, so it does not hold the operation (#156 review K2); still prepared
-            // (awaiting approval, or revived by a rewind) it holds it as a live attempt: pending (final review F-K3).
-            if (supplied == null && !e.operation.attempts().containsKey(e.body.hash)) {
-                if (e.state == State.expired) continue;
-                if (e.state == State.prepared) { pending = true; continue; }
-            }
-            expected.put(e.body.hash,e.body.to);
-            if (supplied == null || supplied != e.body.to) throw KeyedOperation.mismatch();
-            pending |= e.live();
-            landed |= e.state == State.confirmed;
-        }
-        if (known && !expected.equals(op.attempts())) throw KeyedOperation.mismatch();
-        acknowledge(op);
-        if (!unspent || landed) throw HostError.refusal("mayHaveLanded", "designated input spent or an attempt confirmed");
-        if (pending || avoids(id.designated()) || op.attempts().values().stream().anyMatch(to -> tip - to <= margin))
+        if (!unspent) throw HostError.refusal("mayHaveLanded", "designated input spent");
+        if (avoids(op.identity().designated()) || objectUnit != null && reservesToken(objectUnit)
+                || op.attempts().values().stream().anyMatch(to -> tip - to <= margin))
             throw HostError.refusal("pending", "a previous attempt or an input is still reserved");
     }
 
     void observe(long tip) {
-        if (!reconcile) entries.replaceAll((id, e) -> {
-            var next = advance(e, tip);
-            if (next != e) maps.transition(next);
-            return next;
-        });
+        if (!reconcile) entries.replaceAll((id, e) -> advance(e, tip));
     }
     private Entry advance(Entry e, long tip) {
         if (e.state == State.prepared && tip - e.body.to > margin) return e.as(State.expired, null);
@@ -274,13 +215,6 @@ final class Reservations implements ClaimStore {
         fields(p, "reservation", "txHash", "status", "slot", "tip");
         var e = entries.get(str(p, "reservation"));
         if (e == null) throw HostError.bad("unknownReservation", "unknown reservation");
-        try { return settle(e, p, whileLive); }
-        catch (HostError err) {
-            if (err.code.equals("conflict") || err.code.equals("deepRollback")) whileLive.accept(() -> maps.conflict(e.id));
-            throw err;
-        }
-    }
-    private Transport.Reply settle(Entry e, JsonNode p, java.util.function.Consumer<Runnable> whileLive) {
         if (!e.body.hash.equals(str(p, "txHash"))) throw conflict();
         long tip = number(p, "tip", 0);
         String status = str(p, "status");
@@ -312,7 +246,6 @@ final class Reservations implements ClaimStore {
                 yield e.as(State.expired, null);
             }
             case "discarded" -> {
-                if (e.operation != null && e.operation.attempts().containsKey(e.body.hash)) throw conflict();
                 if (e.state != State.prepared && e.state != State.discarded) throw conflict();
                 yield e.as(State.discarded, null);
             }
@@ -322,7 +255,6 @@ final class Reservations implements ClaimStore {
         return new Transport.Reply(obj().put("state", finalState.state.name()), () -> {
             if (status.equals("rolledBack")) assertions.remove(e.body.hash);
             commit(finalState);
-            maps.transition(finalState);
             observe(tip);
         });
     }
@@ -347,118 +279,40 @@ final class Reservations implements ClaimStore {
     }
 
     Transport.Reply restore(JsonNode p) {
-        return restore(p,null,null);
-    }
-
-    Transport.Reply restore(JsonNode p, Contracts contracts, String mapReward) {
         if (!reconcile) throw HostError.bad("restoreClosed", "restore is closed");
         fields(p, "transactions", "complete");
         boolean complete = bool(p, "complete");
         if (!p.path("transactions").isArray()) throw bad("transactions must be an array");
-        var staged = new LinkedHashMap<>(entries);
-        var restoredMaps = new HashMap<String, MapWithdrawal.Restored>();
-        // The live bodies, indexed by hash (rewind keeps at most one per body): finding a restored body's entry takes no
-        // scan of the table (#149 Codex).
+        // One pass indexes the live bodies by hash (rewind keeps at most one per body), so a batch costs linear time in
+        // the table and the batch, and only the batch's additions are staged: restore never changes an entry (#149 Codex).
         var live = new HashMap<String, Entry>();
-        if (!p.get("transactions").isEmpty()) for (var e : staged.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
+        if (!p.get("transactions").isEmpty()) for (var e : entries.values()) if (e.live()) live.putIfAbsent(e.body.hash, e);
+        var added = new LinkedHashMap<String, Entry>();
         var out = obj();
         var ids = out.putArray("reservations");
-        // The record each entry of this batch carried: the protocol journals one record per operation (#156 Codex).
-        var records = new HashMap<String, KeyedOperation>();
         for (var t : p.get("transactions")) {
-            fields(t, "cbor", "state", "slot", "operation");
-            var imported = Body.imported(str(t, "cbor"), network, mapReward, contracts);
-            Body b = imported.body();
-            var op = t.has("operation") ? KeyedOperation.parse(t.get("operation")) : null;
-            if (op != null && (!b.inputs.contains(op.identity().designated()) ||
-                    op.attempts().getOrDefault(b.hash, b.to) != b.to)) throw KeyedOperation.mismatch();
-            if (contracts != null) {
-                for (var c : contracts.all().values()) {
-                    if (c.keyed() && b.keyedTokens.stream().anyMatch(u -> u.startsWith(c.hash())) &&
-                            (op == null || !op.identity().contract().equals(c.name()))) throw KeyedOperation.mismatch();
-                }
-            }
-            for (var held : staged.values()) {
-                if (held.state == State.discarded) continue;
-                var previous = held.operation;
-                boolean same = op != null && previous != null && op.identity().equals(previous.identity());
-                Long deadline = op == null ? null : op.attempts().get(held.body.hash);
-                Long priorDeadline = previous == null ? null : previous.attempts().get(b.hash);
-                // As in checkOperation: another attempt of this operation that was never acknowledged and that the
-                // restored record does not list, expired (K2) or prepared (awaiting approval, or revived by a rewind
-                // below its validTo), does not refuse the client's record; a prepared one stays reserved, and the
-                // next prepare answers pending until it is discarded or expires (final review F-K1).
-                // Only the listing is exempt: what the held record already acknowledges is checked in either order
-                // (#156 Codex review).
-                boolean unlisted = same && !held.body.hash.equals(b.hash) && deadline == null;
-                boolean exempt = unlisted && !previous.attempts().containsKey(held.body.hash)
-                        && (held.state == State.expired || held.state == State.prepared);
-                if (deadline != null && (!same || deadline != held.body.to) ||
-                        priorDeadline != null && (!same || priorDeadline != b.to)) throw KeyedOperation.mismatch();
-                if (same && (!op.attempts().entrySet().containsAll(previous.attempts().entrySet()) || unlisted && !exempt))
-                    throw KeyedOperation.mismatch();
-                var carried = records.get(held.id);
-                if (op != null && carried != null && carried.identity().equals(op.identity())
-                        && !carried.attempts().equals(op.attempts())) throw KeyedOperation.mismatch();
-            }
-            var record = op;
+            fields(t, "cbor", "state", "slot");
+            Body b = Body.decode(str(t, "cbor"), network);
             State state = switch (str(t, "state")) {
                 case "prepared" -> State.prepared;
                 case "shallow" -> State.shallow;
                 default -> throw bad("invalid restore state");
             };
-            if (state == State.shallow && op != null) op = op.handedOut(b.hash,b.to);
             Long slot = state == State.shallow ? inclusion(b, t) : null;
             if (slot == null && t.has("slot")) throw bad("prepared transaction has no inclusion slot");
             Entry e = live.get(b.hash);
             if (e != null) {
                 if (e.state != state || !Objects.equals(e.slot, slot)) throw conflict();
-                if (!Objects.equals(e.operation, op)) {
-                    // A rewind can re-import our prepared result after the client handed it out.
-                    // The client's record may know later attempts (#156 review K1): same identity, and every attempt
-                    // the entry knew (now including this one) with the same deadline; the fuller record is kept.
-                    // Only what the entry acknowledged (a retry's record, or its own inclusion) is required: an attempt
-                    // revived by a rewind before it was handed out is not part of the history (#156 Codex review).
-                    var known = e.operation == null ? null
-                            : e.state == State.shallow ? e.operation.handedOut(b.hash,b.to) : e.operation;
-                    if (known == null || op == null || !known.identity().equals(op.identity())
-                            || !op.attempts().entrySet().containsAll(known.attempts().entrySet())) throw KeyedOperation.mismatch();
-                    e = new Entry(e.id,b,state,slot,op);
-                    staged.put(e.id,e);
-                    live.put(b.hash,e);
-                }
             } else {
-                e = new Entry(Long.toString(++lastId), b, state, slot, op);
-                staged.put(e.id, e);
+                e = new Entry(Long.toString(++lastId), b, state, slot);
+                added.put(e.id, e);
                 live.put(b.hash, e);
-            }
-            maps.checkRestored(e.id, b.hash, imported.writes(), restoredMaps.get(e.id));
-            if (imported.writes() != null) restoredMaps.put(e.id, imported.writes());
-            if (record != null) {
-                records.put(e.id, record);
-                // The fuller record is kept on every entry of the operation, so one restored from an earlier batch
-                // with an older record takes this one's acknowledgements (#156 Codex review).
-                var fuller = record;
-                var upgraded = new ArrayList<Entry>();
-                for (var held : staged.values()) {
-                    if (held.state == State.discarded || held.operation == null || held.id.equals(e.id)
-                            || !held.operation.identity().equals(fuller.identity())
-                            || held.operation.attempts().equals(fuller.attempts())) continue;
-                    var op2 = held.state == State.shallow ? fuller.handedOut(held.body.hash, held.body.to) : fuller;
-                    upgraded.add(new Entry(held.id, held.body, held.state, held.slot, op2));
-                }
-                for (var u : upgraded) {
-                    staged.put(u.id, u);
-                    if (live.get(u.body.hash) != null && live.get(u.body.hash).id.equals(u.id)) live.put(u.body.hash, u);
-                }
             }
             ids.add(e.id);
         }
         return new Transport.Reply(out, () -> {
-            entries = staged;
-            restoredMaps.forEach((id, writes) -> maps.restore(id, staged.get(id).body.hash, writes));
+            entries.putAll(added);
             reconcile = !complete;
-            if (complete) maps.reconciled();
         });
     }
 }

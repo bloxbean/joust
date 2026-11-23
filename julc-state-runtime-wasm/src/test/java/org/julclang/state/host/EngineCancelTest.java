@@ -40,13 +40,19 @@ class EngineCancelTest {
         return r.contracts().stream().filter(c -> c.name().equals("Token")).findFirst().orElseThrow();
     }
 
-    /** Answers the vector's reads in order; {@code read} is set after each answer, before the session's liveness check. */
+    /**
+     * Answers the vector's reads by request (a retry after a cancellation reads no history: the nodes the cancelled call
+     * replayed stay in the session's store); {@code read} is set after each answer, before the session's liveness check.
+     */
     static Function<String, String> reverse(JsonNode vector, boolean[] read) {
-        int[] i = {0};
         return params -> {
-            var pair = vector.get("orderedReads").get(i[0]++);
-            read[0] = true;
-            return JSON.createObjectNode().set("result", pair.get("answer")).toString();
+            JsonNode request;
+            try { request = JSON.readTree(params); } catch (Exception e) { throw new AssertionError(e); }
+            for (var pair : vector.get("orderedReads")) if (pair.get("request").equals(request)) {
+                read[0] = true;
+                return JSON.createObjectNode().set("result", pair.get("answer")).toString();
+            }
+            throw new AssertionError("unrecorded read " + params);
         };
     }
 
@@ -83,11 +89,11 @@ class EngineCancelTest {
             return true;
         }, yes, () -> {}));
         assertEquals(vector.at("/result/prepared/txHash"), done.at("/result/prepared/txHash"), done.toString());
-        // The first discovery: two rounds (from and to, then none) and the final path (from, to, then the terminal
-        // run, reused); later evaluations replay the step with its claims while the transaction is built.
-        assertTrue(evaluations[0] >= 5, "evaluations: " + evaluations[0]);
+        // The first discovery walks the path (from, to, then the final run); later evaluations replay the step with its
+        // claims while the transaction is built.
+        assertTrue(evaluations[0] >= 4, "evaluations: " + evaluations[0]);
 
-        // Cancelled at the fourth evaluation, inside the path's reconstruction: latched, as the transport latches it.
+        // Cancelled at the fourth evaluation: latched, as the transport latches it.
         boolean[] cancelled = {false};
         int[] seen = {0};
         read[0] = false;

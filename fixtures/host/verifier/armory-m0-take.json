@@ -1906,26 +1906,11 @@
         "hash" : "ee18cf875e13a3bef909673af96d09da383664c8b35d9f8bb7bc0f4a716ba6ff"
       },
       "value" : [ {
-        "txHash" : "3e0aaeae4faad05c5244d1c44785804756f04cef51b0635dddf4b82d3c921e35",
-        "point" : {
-          "slot" : 39642,
-          "height" : 37851,
-          "hash" : "564908dc178d54655d06ea99d5fb55edf9727648c54a6a750cb62b03d61c7b33"
-        }
+        "txHash" : "3e0aaeae4faad05c5244d1c44785804756f04cef51b0635dddf4b82d3c921e35"
       }, {
-        "txHash" : "3d6203cfc6d48c38eb1ad5684a8291f23a34195f94fa375d868e33ca73bbc399",
-        "point" : {
-          "slot" : 39643,
-          "height" : 37852,
-          "hash" : "58e597b6f82b06f6f0a553e04646ba792118368ad7ce9ac689eb80708e08ef50"
-        }
+        "txHash" : "3d6203cfc6d48c38eb1ad5684a8291f23a34195f94fa375d868e33ca73bbc399"
       }, {
-        "txHash" : "277455d1755863950f81adc5c53357e3d422c52a812b53675867582f31bd3fc4",
-        "point" : {
-          "slot" : 39644,
-          "height" : 37853,
-          "hash" : "ee18cf875e13a3bef909673af96d09da383664c8b35d9f8bb7bc0f4a716ba6ff"
-        }
+        "txHash" : "277455d1755863950f81adc5c53357e3d422c52a812b53675867582f31bd3fc4"
       } ]
     }
   }, {

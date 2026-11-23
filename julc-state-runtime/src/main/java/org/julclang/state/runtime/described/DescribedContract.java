@@ -740,120 +740,56 @@ public final class DescribedContract {
             return r.step();
         }
         var known = new java.util.LinkedHashMap<String, List<org.julclang.state.api.MapEntry>>();
-        var witnessed = new java.util.HashSet<String>();
         for (int idx : layout.maps()) {
             var m = layout.map(target, idx);
-            String root = HexFormat.of().formatHex(m.root());
-            var list = known.computeIfAbsent(root, k -> new ArrayList<>());
-            for (var e : m.reads()) {
-                list.add(e);
-                witnessed.add(root + " " + HexFormat.of().formatHex(e.key()));
-            }
+            var list = known.computeIfAbsent(HexFormat.of().formatHex(m.root()), k -> new ArrayList<>());
+            for (var e : m.reads()) list.add(e);
         }
-        java.util.function.Function<java.util.Map<String, List<org.julclang.state.api.MapEntry>>, TransitionFn.Run> runWith = k -> {
+        var r = walk(known, k -> {
             var reads = new ArrayList<JulcList<org.julclang.state.api.MapEntry>>();
             for (int idx : layout.maps()) {
-                var list = k.getOrDefault(HexFormat.of().formatHex(layout.map(target, idx).root()), List.of());
+                var list = k.get(HexFormat.of().formatHex(layout.map(target, idx).root()));
                 JulcList<org.julclang.state.api.MapEntry> l = JulcList.empty();
                 for (int i = list.size() - 1; i >= 0; i--) l = l.prepend(list.get(i));
                 reads.add(l);
             }
             return fn.run(transition, layout.opened(target, reads), shared, args, ctx);
-        };
-        for (int round = 1; round <= MAX_READ_ROUNDS; round++) {
+        }, (root, key) -> org.julclang.state.api.MerkleMaps.read(HexFormat.of().parseHex(root), HexFormat.of().parseHex(key)),
+                transition);
+        r.raise();   // a failure counts only on the final path: a key answered as absent may change it
+        if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
+        return r.step();
+    }
+
+    /**
+     * The path walk of read discovery: a run answers a key {@code known} lacks as absent and reports it
+     * ({@code joust:read}); its first report is the path's next lookup (every earlier one was answered as on chain), so
+     * it is {@code read} (the call's ReadSource records and proves it, as the JVM host's run would) and added for the
+     * next run. Both hosts write the same claims in the same order. A guarded lookup aborts its run, so a call takes
+     * one run per read plus the final one, which is returned.
+     */
+    static TransitionFn.Run walk(java.util.Map<String, List<org.julclang.state.api.MapEntry>> known,
+                                 java.util.function.Function<java.util.Map<String, List<org.julclang.state.api.MapEntry>>, TransitionFn.Run> runWith,
+                                 java.util.function.BiFunction<String, String, org.julclang.state.api.MapEntry> read, String what) {
+        for (int n = 0; n <= MAX_MAP_READS; n++) {
             var r = runWith.apply(known);
-            if (!resolve(reads(r.traces()), known)) {
-                // The final path's reads, in the order it reaches them: the reads the JVM host records (#160 Codex).
-                // Its terminal run is the call's run (#160 Codex re-review: no further evaluation).
-                var path = path(known, witnessed, runWith);
-                r = path.run();
-                r.raise();
-                if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
-                for (var e : path.reads().entrySet()) {
-                    for (var entry : e.getValue()) {
-                        String key = HexFormat.of().formatHex(entry.key());
-                        if (!witnessed.contains(e.getKey() + " " + key))
-                            org.julclang.state.api.MerkleMaps.read(HexFormat.of().parseHex(e.getKey()), entry.key());
-                    }
+            String[] next = null;
+            for (String t : r.traces()) {
+                if (!t.startsWith("joust:read ")) continue;
+                String[] p = t.split(" ");
+                String key = p.length > 2 ? p[2] : "";
+                if (known.getOrDefault(p[1], List.of()).stream().noneMatch(e -> HexFormat.of().formatHex(e.key()).equals(key))) {
+                    next = new String[] {p[1], key};
+                    break;
                 }
-                return r.step();
             }
+            if (next == null) return r;
+            known.computeIfAbsent(next[0], k -> new ArrayList<>()).add(read.apply(next[0], next[1]));
         }
-        throw new org.julclang.state.api.RequireException(transition + ": more than " + MAX_READ_ROUNDS
-                + " rounds of MerkleMap reads (ADR-0015 D3)");
+        throw new org.julclang.state.api.RequireException(what + ": more than " + MAX_MAP_READS
+                + " MerkleMap reads in one call (ADR-0015 D3)");
     }
 
-    /** The {@code joust:read} reports of a run's traces: {root hex, key hex}. */
-    static List<String[]> reads(List<String> traces) {
-        var out = new ArrayList<String[]>();
-        for (String t : traces) {
-            if (!t.startsWith("joust:read ")) continue;
-            String[] p = t.split(" ");
-            out.add(new String[] {p[1], p.length > 2 ? p[2] : ""});
-        }
-        return out;
-    }
-
-    /**
-     * Adds a run's {@code reported} reads that {@code known} lacks, tentatively (unrecorded; the final path decides);
-     * returns whether any was new. The first is on the path (every earlier lookup was answered as on chain) and is read
-     * as the JVM host would, from the chain's history if its root is cold. A later one may sit under a tentative answer:
-     * it is read only from a warm mirror, else left for a later round, where it is reported again if the path reaches
-     * it (#160 Codex re-review).
-     */
-    static boolean resolve(List<String[]> reported, java.util.Map<String, List<org.julclang.state.api.MapEntry>> known) {
-        boolean fresh = false;
-        for (String[] read : reported) {
-            var list = known.computeIfAbsent(read[0], k -> new ArrayList<>());
-            if (list.stream().anyMatch(e -> HexFormat.of().formatHex(e.key()).equals(read[1]))) continue;
-            java.util.function.Supplier<org.julclang.state.api.MapEntry> lookup = () -> org.julclang.state.api.MerkleMaps.read(
-                    HexFormat.of().parseHex(read[0]), HexFormat.of().parseHex(read[1]));
-            if (!fresh) list.add(org.julclang.state.runtime.MerkleSupport.peeking(lookup));
-            else {
-                try { list.add(org.julclang.state.runtime.MerkleSupport.peekingWarm(lookup)); }
-                catch (org.julclang.state.runtime.MerkleSupport.Cold cold) { continue; }
-            }
-            fresh = true;
-        }
-        return fresh;
-    }
-
-    /** The final path's reads by root, in lookup order, and the run that reports no unknown read. */
-    record Path(java.util.LinkedHashMap<String, List<org.julclang.state.api.MapEntry>> reads, TransitionFn.Run run) {}
-
-    /**
-     * The reads the run's path reaches, in the order it reaches them, from the converged {@code known} reads: starting
-     * from the {@code witnessed} reads alone, each run's first unknown read is the path's next lookup (every earlier one
-     * is answered as on chain), so it is added from {@code known} until a run reports none. A key read under an earlier
-     * round's absent answer is off the final path and stays out; the order is the JVM host's lookup order, so both hosts
-     * write the same claims (#160 Codex review). A key the path reaches but {@code known} lacks cannot occur after
-     * convergence; it is refused.
-     */
-    static Path path(
-            java.util.Map<String, List<org.julclang.state.api.MapEntry>> known, java.util.Set<String> witnessed,
-            java.util.function.Function<java.util.Map<String, List<org.julclang.state.api.MapEntry>>, TransitionFn.Run> runWith) {
-        var path = new java.util.LinkedHashMap<String, List<org.julclang.state.api.MapEntry>>();
-        for (var e : known.entrySet()) {
-            var list = path.computeIfAbsent(e.getKey(), k -> new ArrayList<>());
-            for (var entry : e.getValue())
-                if (witnessed.contains(e.getKey() + " " + HexFormat.of().formatHex(entry.key()))) list.add(entry);
-        }
-        int limit = 1;
-        for (var list : known.values()) limit += list.size();
-        for (int step = 0; step < limit; step++) {
-            var run = runWith.apply(path);
-            var reported = reads(run.traces());
-            if (reported.isEmpty()) return new Path(path, run);
-            String[] next = reported.get(0);
-            var entry = known.getOrDefault(next[0], List.of()).stream()
-                    .filter(e -> HexFormat.of().formatHex(e.key()).equals(next[1])).findFirst()
-                    .orElseThrow(() -> new IllegalStateException("map read discovery: the final path reads an unknown key"));
-            path.computeIfAbsent(next[0], k -> new ArrayList<>()).add(entry);
-        }
-        throw new IllegalStateException("map read discovery: the final path does not settle");
-    }
-
-    /** The round limit of read discovery (ADR-0015 D3). */
     // ------------------------------------------------------------------ other purposes (ADR-0010; ADR-0015 M3)
 
     /** The purpose handler of {@code purpose} (withdraw, certify, vote, propose). */
@@ -1055,7 +991,8 @@ public final class DescribedContract {
         return out;
     }
 
-    static final int MAX_READ_ROUNDS = 4;
+    /** The read limit of one call's MerkleMap read discovery (ADR-0015 D3), far above what one transaction can prove. */
+    static final int MAX_MAP_READS = 128;
 
     /** The current state of {@code instance}, as JSON by the description's state schema. */
     public JsonNode state(StateRuntime runtime, String instance) {

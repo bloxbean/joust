@@ -17,7 +17,7 @@ class KeyedReservationTest {
         record.withArray("attempts").addObject().put("txHash",hash).put("validTo",end);
         var op = KeyedOperation.parse(record);
         var restore = obj().put("complete",true);
-        restore.putArray("transactions").addObject().put("state","prepared").put("cbor",cbor).set("operation",record);
+        restore.putArray("transactions").addObject().put("state","prepared").put("cbor",cbor);
         var table = new Reservations(2,true,0);
         var restored = table.restore(restore);
         code("reconcile",table::allowBuild);
@@ -28,8 +28,6 @@ class KeyedReservationTest {
         assertTrue(table.avoids(ref));
         code("pending",() -> table.checkOperation(op,true,start,null));
         code("mayHaveLanded",() -> table.checkOperation(op,false,start,null));
-        code("operation",() -> table.checkOperation(KeyedOperation.parse(record.deepCopy().put("instance","aa".repeat(32))),true,start,null));
-        code("conflict",() -> table.settled(event.put("status","discarded").put("tip",start),Runnable::run));
         assertEquals("shallow",settle(table,event.put("status","confirmed").put("slot",start).put("tip",start+2)));
         assertEquals("shallow",settle(table,event));
         event.remove("slot");
@@ -44,25 +42,24 @@ class KeyedReservationTest {
         assertTrue(table.avoids(ref));
         assertEquals("confirmed",settle(table,event.put("status","confirmed").put("slot",start).put("tip",start+3)));
         assertFalse(table.avoids(ref));
-        code("mayHaveLanded",() -> table.checkOperation(op,true,end+3,null));
+        code("mayHaveLanded",() -> table.checkOperation(op,false,end+3,null));
         event.remove("slot");
         code("deepRollback",() -> settle(table,event.put("status","rolledBack")));
         code("deepRollback",table::allowBuild);
     }
 
-    @Test void unsignedDiscardDoesNotBecomePartOfTheHandedOutHistory() throws Exception {
+    @Test void aDiscardedAttemptIsPreparedAgain() throws Exception {
         var v = ClientVectors.recording("registry-m3-release");
         var op = KeyedOperation.parse(v.at("/params/call/operation"));
         var b = Reservations.Body.decode(v.at("/expected/cbor").asText(),0);
         var table = new Reservations(2,false,0);
-        var first = table.prepare(b,b.from(),op);
+        var first = table.prepare(b,b.from(),op.identity().designated());
         assertFalse(table.avoids(op.identity().designated()));
         table.commit(first);
         var event = obj().put("reservation",first.id()).put("txHash",b.hash()).put("status","discarded").put("tip",b.from());
         assertEquals("discarded",settle(table,event));
         table.checkOperation(op,true,b.from(),null);
-        code("operation",() -> table.checkOperation(op.handedOut(b.hash(),b.to()),true,b.from(),null));
-        var again = table.prepare(b,b.from(),op);
+        var again = table.prepare(b,b.from(),op.identity().designated());
         table.commit(again);
         assertNotEquals(first.id(),again.id());
         assertEquals("discarded",settle(table,event));

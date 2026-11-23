@@ -40,7 +40,7 @@
           "properties": {
             "kind": {"const": "refusal"},
             "code": {
-              "enum": ["pending", "mapsStale", "window", "prerequisite", "reconcile", "deepRollback", "expiredOnArrival", "runtime", "require", "cooldown", "needsDesignated", "mayHaveLanded"]
+              "enum": ["pending", "window", "prerequisite", "reconcile", "deepRollback", "expiredOnArrival", "runtime", "require", "cooldown", "needsDesignated", "mayHaveLanded"]
             }
           }
         },

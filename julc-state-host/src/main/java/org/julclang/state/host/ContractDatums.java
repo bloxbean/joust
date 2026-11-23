@@ -16,13 +16,11 @@ final class ContractDatums {
     private final List<Type> types = new ArrayList<>();
     private final SchemaCodec codec;
     private final String policy;
-    private final JsonNode keyedTypes;
 
     ContractDatums(Contracts.Contract contract) {
         policy = contract.hash();
         codec = new SchemaCodec(contract.description());
         var x = contract.description().path("x-joust");
-        keyedTypes = x.path("keyed");
         add("instance", x.path("state"));
         if (x.has("intents")) add("intent", x.at("/intents/datum"));
         for (var owned : x.path("owned")) add("owned", owned.path("holding"));
@@ -79,24 +77,7 @@ final class ContractDatums {
             if (kind.equals("instance")) return item.put("instance", id);
             String owner = item.at("/value/instance").asText("");
             if (!owner.matches("[0-9a-f]{64}")) return unknown;
-            if (kind.equals("keyed") && !matchesKeyed(item,id,owner)) return unknown;
             return item.put("object", id).put("instance", owner);
         } catch (RuntimeException | StackOverflowError malformed) { return unknown; }
     }
-    private boolean matchesKeyed(ObjectNode item, String token, String instance) {
-        var value = item.required("value");
-        for (var t : keyedTypes) for (var role : List.of("head","node","retired")) {
-            if (!codec.resolve(t.required(role)).required("title").equals(item.required("type"))) continue;
-            String key = switch (role) {
-                case "head" -> "";
-                case "retired" -> value.required("key").asText();
-                default -> value.required("value").required(t.required("key").asText()).asText();
-            };
-            var hex = HexFormat.of();
-            byte[] identity = hex.parseHex(instance + t.required("typeId").asText() + key);
-            return token.equals("4b" + hex.formatHex(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash224(identity)));
-        }
-        return false;
-    }
-
 }

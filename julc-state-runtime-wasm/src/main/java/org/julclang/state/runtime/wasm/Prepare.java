@@ -97,7 +97,8 @@ public final class Prepare {
             throw new IllegalArgumentException("the call request is not JSON", e);
         }
         if (pl.isMissingNode() || pl.isNull()) {
-            b.pageLimits(60, 900);
+            b.pageLimits(org.julclang.state.runtime.CallScope.DEFAULT_MAX_START_SLOTS,
+                    org.julclang.state.runtime.CallScope.DEFAULT_MAX_VALIDITY_SLOTS);
         } else {
             // R-G4: two integers, a start limit of at least 0 and a validity limit of at least 1 slot.
             if (!pl.isArray() || pl.size() != 2 || !pl.get(0).canConvertToLong() || !pl.get(1).canConvertToLong()

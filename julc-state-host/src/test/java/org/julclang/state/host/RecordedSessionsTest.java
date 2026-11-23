@@ -82,20 +82,19 @@ class RecordedSessionsTest {
         var restore = obj().put("complete",true);
         restore.putArray("transactions").addObject().put("state","prepared").set("cbor",previous.required("cbor"));
         var ids = success(c.rpc("restore",restore)).required("reservations");
-        error("refusal","mapsStale",c.rpc("prepare",p));
+        // The chain already holds the restored mint's output: the next mint builds on it, its root rebuilt from history.
+        var next = success(c.rpc("prepare",p,answers(recording))).required("prepared");
+        assertEquals(recording.at("/expected/cbor"),next.required("cbor"));
+        error("refusal","pending",c.rpc("prepare",p,answers(recording)));
         var settled = obj().put("reservation",ids.get(0).asText()).put("status","confirmed").put("slot",now-3).put("tip",now);
         settled.set("txHash",previous.required("txHash"));
         assertEquals("confirmed",success(c.rpc("settled",settled)).required("state").asText());
-        error("refusal","mapsStale",c.rpc("prepare",p));
-        success(c.rpc("reset",obj().put("now",now)));
-        var next = success(c.rpc("prepare",p,answers(recording))).required("prepared");
-        assertEquals(recording.at("/expected/cbor"),next.required("cbor"));
         settled.put("status","discarded").remove("slot");
         error("bad","conflict",c.rpc("settled",settled));
-        error("refusal","mapsStale",c.rpc("prepare",p));
         settled.set("reservation",next.required("reservation"));
         settled.set("txHash",next.required("txHash"));
         success(c.rpc("settled",settled));
+        // A reset drops the session's trie nodes: the next prepare rebuilds them from the history.
         success(c.rpc("reset",obj().put("now",now)));
         assertEquals(next.required("cbor"),success(c.rpc("prepare",p,answers(recording))).at("/prepared/cbor"));
     }
@@ -122,8 +121,6 @@ class RecordedSessionsTest {
         var attempts = call.withObject("/operation").withArray("attempts");
         attempts.addObject().setAll(((ObjectNode)built).deepCopy().retain("txHash","validTo"));
         error("refusal","pending",c.rpc("prepare",p,answers));
-        error("bad","conflict",c.rpc("settled",obj().put("status","discarded").put("tip",p.required("now").asLong())
-                .put("reservation",str(built,"reservation")).put("txHash",str(built,"txHash"))));
         secondInstance(c,recording,p);
         error("refusal","mayHaveLanded",c.rpc("prepare",p,q -> {
             ObjectNode answer = answers.apply(q).deepCopy();
@@ -131,6 +128,13 @@ class RecordedSessionsTest {
             answer.putArray("value");
             return answer;
         }));
+        // The node rejected the attempt (ADR-0016's contested gap). Discarded, it still holds the operation while the
+        // record lists it; left out of the record, it is rebuilt at once.
+        success(c.rpc("settled",obj().put("status","discarded").put("tip",p.required("now").asLong())
+                .put("reservation",str(built,"reservation")).put("txHash",str(built,"txHash"))));
+        error("refusal","pending",c.rpc("prepare",p,answers));
+        attempts.removeAll();
+        assertEquals(built.get("txHash"),success(c.rpc("prepare",p,answers)).at("/prepared/txHash"));
     }
 
     // Two instances at one script address, each with an Entry named "other" after "name".

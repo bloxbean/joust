@@ -1807,19 +1807,9 @@
         "hash" : "188c696e7847602b2522fe5810073bacc7031165d8b376eae24a3caeef5ea9cc"
       },
       "value" : [ {
-        "txHash" : "8af735b9e1f5bb18f00d9df10e4c669f08ca50ac6bb29420bbbedb9dc3b413b7",
-        "point" : {
-          "slot" : 38779,
-          "height" : 36988,
-          "hash" : "fcf2af6b9f108bb2a3afa04424bd39f5ac2394bab69d128aeb2930194a96fc02"
-        }
+        "txHash" : "8af735b9e1f5bb18f00d9df10e4c669f08ca50ac6bb29420bbbedb9dc3b413b7"
       }, {
-        "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d",
-        "point" : {
-          "slot" : 38780,
-          "height" : 36989,
-          "hash" : "a21b1f6ea87a6831f350eb39541ae4fde7b194fc20329dc0ed08b7a05c39a539"
-        }
+        "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d"
       } ]
     }
   }, {

@@ -9,9 +9,9 @@ import static org.julclang.state.host.Client.*;
 import static org.julclang.state.host.Wire.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-/** #160 review Q2: a map history rebuild does not depend on the order of transactions within a block. */
+/** #160 review Q2: a map history rebuild does not depend on the order of the history's transactions. */
 class MapHistoryOrderTest {
-    @Test void transactionsOfOneBlockInAnyOrderRebuildTheSameTrie() throws Exception {
+    @Test void historyTransactionsInAnyOrderRebuildTheSameTrie() throws Exception {
         var v = MapRecording.record("token", MapRecording.m3("token", "transfer"));
         var original = RecordedSessionsTest.answers(v);
         var hashes = new ArrayList<String>();
@@ -19,11 +19,10 @@ class MapHistoryOrderTest {
             var reply = HostVectorsTest.run(v, q -> {
                 ObjectNode a = original.apply(q).deepCopy();
                 if (str(q, "kind").equals("assetHistory")) {
-                    // The whole history in one block, the creation first and the later transactions swapped.
+                    // The creation first and the later transactions swapped.
                     ArrayNode txs = a.withArray("value");
-                    var point = txs.get(txs.size() - 1).get("point").deepCopy();
                     var list = new ArrayList<JsonNode>();
-                    for (var t : txs) { ((ObjectNode) t).set("point", point.deepCopy()); list.add(t); }
+                    for (var t : txs) list.add(t);
                     var tail = new ArrayList<>(list.subList(1, list.size()));
                     if (reversed) Collections.reverse(tail);
                     txs.removeAll();
@@ -35,6 +34,6 @@ class MapHistoryOrderTest {
             hashes.add(success(reply).at("/prepared/txHash").asText());
         }
         assertEquals(v.at("/expected/txHash").asText(), hashes.get(0));
-        assertEquals(hashes.get(0), hashes.get(1), "the same body whatever the order within the block");
+        assertEquals(hashes.get(0), hashes.get(1), "the same body whatever the order");
     }
 }

@@ -40,8 +40,7 @@ record Window(long fromSlot, long toSlot, BigInteger fromMs, BigInteger toMs) {
         if (cap != null && cap.walletOnly && rt.hostedCall() && (cap.keyed || cap.keyedCreation)) {
             // A hosted keyed prepare ends its final window within the page's maxValiditySlots (Compose, D7): the first
             // pass's window must too, or a transition that bounds its own window refuses before that pass (#156 Codex).
-            long[] limits = rt.pageLimits();
-            to = Math.min(to, Math.addExact(time.currentSlot(), limits == null ? 900 : limits[1]));
+            to = Math.min(to, Math.addExact(time.currentSlot(), rt.pageLimits()[1]));   // a hosted scope has limits
         }
         for (var rule : notAfter) {
             long deadline = rule.time().apply(state).longValueExact();

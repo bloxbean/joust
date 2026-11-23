@@ -13,7 +13,7 @@ import java.util.*;
 import static org.julclang.state.host.Wire.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Reduced map ledger from the recorded transactions. History points use the recorded build tips.
+/** Reduced map ledger from the recorded transactions.
  * All redeemer hashes and datum bytes come from the witnesses, never from the engine fixture's proofs. */
 final class MapRecording {
     /**
@@ -135,9 +135,7 @@ final class MapRecording {
                 if (file.getFileName().toString().equals(name + ".json")) break;
                 var previous = JSON.readTree(file.toFile());
                 String hash = str(previous, "txHash");
-                var point = previous.at("/snapshot/tip");
-                history.addObject().put("txHash", hash).putObject("point").put("slot", point.required("slot").asLong())
-                        .put("height", point.required("height").asLong()).set("hash", point.required("hash"));
+                history.addObject().put("txHash", hash);
                 var tx = Transaction.deserialize(HexFormat.of().parseHex(str(previous, "cbor")));
                 var carried = new HashSet<String>();
                 for (var o : tx.getBody().getOutputs()) if (o.getValue().getMultiAssets() != null)
@@ -272,7 +270,7 @@ final class MapRecording {
         call.set("args", args);
         if (pay != null) call.set("pay", pay);
         // The history of any unit: the earlier transactions that carry it, at their build tips.
-        record Past(String hash, JsonNode point, Set<String> units, JsonNode redeemers) {}
+        record Past(String hash, Set<String> units, JsonNode redeemers) {}
         var past = new ArrayList<Past>();
         var data = new HashMap<String, String>();
         try (var files = Files.list(dir)) {
@@ -280,7 +278,6 @@ final class MapRecording {
                 if (path.getFileName().toString().equals(file + ".json")) break;
                 var previous = org.julclang.state.examples.devkit.Fixtures.read(path);
                 if (!previous.hasNonNull("unsignedTx")) continue;
-                var tip = org.julclang.state.examples.devkit.Fixtures.snapshot(previous).tip;
                 var tx = Transaction.deserialize(HexFormat.of().parseHex(str(previous, "unsignedTx")));
                 var units = new HashSet<String>();
                 for (var o : tx.getBody().getOutputs()) if (o.getValue().getMultiAssets() != null)
@@ -303,11 +300,7 @@ final class MapRecording {
                     list.addObject().put("purpose", purpose).put("index", red.getIndex().intValueExact())
                             .put("scriptHash", scriptHash).put("dataHash", h);
                 }
-                // Its inclusion point where a later lookup recorded it, else its build tip.
-                JsonNode at = included.containsKey(str(previous, "txHash")) ? included.get(str(previous, "txHash"))
-                        : tip != null ? obj().put("slot", tip.getSlot()).put("height", tip.getHeight()).put("hash", tip.getHash())
-                        : Objects.requireNonNull(here);
-                past.add(new Past(str(previous, "txHash"), at, units, list));
+                past.add(new Past(str(previous, "txHash"), units, list));
             }
         }
         var point = Objects.requireNonNull(here, "no chain point recorded");
@@ -324,7 +317,7 @@ final class MapRecording {
                 case "stakeRegistration" -> a.set("value", obj().put("registered",true));
                 case "assetHistory" -> {
                     var carrying = JSON.createArrayNode();
-                    for (var t : past) if (t.units().contains(str(q,"unit"))) carrying.addObject().put("txHash", t.hash()).set("point", t.point());
+                    for (var t : past) if (t.units().contains(str(q,"unit"))) carrying.addObject().put("txHash", t.hash());
                     yield a.set("value", carrying);
                 }
                 case "redeemers" -> {

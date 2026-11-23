@@ -692,127 +692,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : 4,
-      "error" : {
-        "code" : -32001,
-        "message" : "settle pending map work and reset",
-        "data" : {
-          "kind" : "refusal",
-          "code" : "mapsStale",
-          "message" : "settle pending map work and reset",
-          "retryAtSlot" : null,
-          "sites" : [ ]
-        }
-      }
-    }
-  }, {
-    "client" : {
-      "id" : 5,
-      "method" : "settled",
-      "params" : {
-        "reservation" : "1",
-        "status" : "confirmed",
-        "slot" : 38779,
-        "tip" : 38782,
-        "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d"
-      },
-      "jsonrpc" : "2.0"
-    }
-  }, {
-    "host" : {
-      "jsonrpc" : "2.0",
-      "id" : 5,
-      "result" : {
-        "state" : "confirmed"
-      }
-    }
-  }, {
-    "client" : {
-      "id" : 6,
-      "method" : "prepare",
-      "params" : {
-        "now" : 38782,
-        "ttlSlots" : 20,
-        "call" : {
-          "contract" : "org.julclang.state.examples.token.Token",
-          "kind" : "action",
-          "method" : "mint",
-          "instance" : "69d1b2304bbfa88a8c986d2493fbc4303ab17e40a67f1b90759e0df8f46c560a",
-          "object" : null,
-          "args" : {
-            "to" : "71ad24c832f00cc3be74be984edac966b229e62661a68a3fd9db381c",
-            "amount" : "500"
-          },
-          "pay" : {
-            "lovelace" : "0",
-            "assets" : [ ]
-          },
-          "address" : "addr_test1qrfwmzvl9u6yryudj43szlgg2aq3xuh0nmdpc7cykzjz4fume3a5fuxthcrrwmnj26anc9lnqh88zpr80xm5287vysesvgyesd"
-        }
-      },
-      "jsonrpc" : "2.0"
-    }
-  }, {
-    "host" : {
-      "jsonrpc" : "2.0",
-      "id" : 6,
-      "error" : {
-        "code" : -32001,
-        "message" : "settle pending map work and reset",
-        "data" : {
-          "kind" : "refusal",
-          "code" : "mapsStale",
-          "message" : "settle pending map work and reset",
-          "retryAtSlot" : null,
-          "sites" : [ ]
-        }
-      }
-    }
-  }, {
-    "client" : {
-      "id" : 7,
-      "method" : "reset",
-      "params" : {
-        "now" : 38782
-      },
-      "jsonrpc" : "2.0"
-    }
-  }, {
-    "host" : {
-      "jsonrpc" : "2.0",
-      "id" : 7,
-      "result" : { }
-    }
-  }, {
-    "client" : {
-      "id" : 8,
-      "method" : "prepare",
-      "params" : {
-        "now" : 38782,
-        "ttlSlots" : 20,
-        "call" : {
-          "contract" : "org.julclang.state.examples.token.Token",
-          "kind" : "action",
-          "method" : "mint",
-          "instance" : "69d1b2304bbfa88a8c986d2493fbc4303ab17e40a67f1b90759e0df8f46c560a",
-          "object" : null,
-          "args" : {
-            "to" : "71ad24c832f00cc3be74be984edac966b229e62661a68a3fd9db381c",
-            "amount" : "500"
-          },
-          "pay" : {
-            "lovelace" : "0",
-            "assets" : [ ]
-          },
-          "address" : "addr_test1qrfwmzvl9u6yryudj43szlgg2aq3xuh0nmdpc7cykzjz4fume3a5fuxthcrrwmnj26anc9lnqh88zpr80xm5287vysesvgyesd"
-        }
-      },
-      "jsonrpc" : "2.0"
-    }
-  }, {
-    "host" : {
-      "jsonrpc" : "2.0",
-      "id" : "8.1",
+      "id" : "4.1",
       "method" : "chain/read",
       "params" : {
         "address" : "addr_test1wq8glzmxpp4g76znv0pj57q942umu79scucjr0e3rqxpswgdcu3we",
@@ -821,7 +701,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.1",
+      "id" : "4.1",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -860,7 +740,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.2",
+      "id" : "4.2",
       "method" : "chain/read",
       "params" : {
         "address" : "addr_test1wqkh0fv8cxd3s5fhg6g22svva7arpdtc2me7jddveye8t3cqcf2fg",
@@ -869,7 +749,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.2",
+      "id" : "4.2",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -894,7 +774,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.3",
+      "id" : "4.3",
       "method" : "chain/read",
       "params" : {
         "credential" : "2d77a587c19b1851374690a5418cefba30b57856f3e935acc93275c7",
@@ -903,7 +783,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.3",
+      "id" : "4.3",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -919,7 +799,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.4",
+      "id" : "4.4",
       "method" : "chain/read",
       "params" : {
         "unit" : "0e8f8b66086a8f685363c32a7805aab9be78b0c73121bf31180c183969d1b2304bbfa88a8c986d2493fbc4303ab17e40a67f1b90759e0df8f46c560a",
@@ -928,7 +808,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.4",
+      "id" : "4.4",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -936,19 +816,9 @@
           "hash" : "188c696e7847602b2522fe5810073bacc7031165d8b376eae24a3caeef5ea9cc"
         },
         "value" : [ {
-          "txHash" : "8af735b9e1f5bb18f00d9df10e4c669f08ca50ac6bb29420bbbedb9dc3b413b7",
-          "point" : {
-            "slot" : 38779,
-            "height" : 36988,
-            "hash" : "fcf2af6b9f108bb2a3afa04424bd39f5ac2394bab69d128aeb2930194a96fc02"
-          }
+          "txHash" : "8af735b9e1f5bb18f00d9df10e4c669f08ca50ac6bb29420bbbedb9dc3b413b7"
         }, {
-          "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d",
-          "point" : {
-            "slot" : 38780,
-            "height" : 36989,
-            "hash" : "a21b1f6ea87a6831f350eb39541ae4fde7b194fc20329dc0ed08b7a05c39a539"
-          }
+          "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d"
         } ]
       },
       "jsonrpc" : "2.0"
@@ -956,7 +826,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.5",
+      "id" : "4.5",
       "method" : "chain/read",
       "params" : {
         "txHash" : "8af735b9e1f5bb18f00d9df10e4c669f08ca50ac6bb29420bbbedb9dc3b413b7",
@@ -965,7 +835,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.5",
+      "id" : "4.5",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -989,7 +859,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.6",
+      "id" : "4.6",
       "method" : "chain/read",
       "params" : {
         "hash" : "6b526f30b6189980002629d509433154eb90901971a405034b42d92a7f2bd5c8",
@@ -998,7 +868,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.6",
+      "id" : "4.6",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -1012,7 +882,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.7",
+      "id" : "4.7",
       "method" : "chain/read",
       "params" : {
         "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d",
@@ -1021,7 +891,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.7",
+      "id" : "4.7",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -1045,7 +915,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.8",
+      "id" : "4.8",
       "method" : "chain/read",
       "params" : {
         "hash" : "bd099346848814785055c99f1b429943b1202d13d5e80f40abf65d1024e27e05",
@@ -1054,7 +924,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.8",
+      "id" : "4.8",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -1068,7 +938,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.9",
+      "id" : "4.9",
       "method" : "chain/read",
       "params" : {
         "kind" : "protocolParams"
@@ -1076,7 +946,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.9",
+      "id" : "4.9",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2172,7 +2042,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.10",
+      "id" : "4.10",
       "method" : "chain/read",
       "params" : {
         "address" : "addr_test1qrfwmzvl9u6yryudj43szlgg2aq3xuh0nmdpc7cykzjz4fume3a5fuxthcrrwmnj26anc9lnqh88zpr80xm5287vysesvgyesd",
@@ -2181,7 +2051,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.10",
+      "id" : "4.10",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2206,7 +2076,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.11",
+      "id" : "4.11",
       "method" : "chain/read",
       "params" : {
         "ref" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d#0",
@@ -2215,7 +2085,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.11",
+      "id" : "4.11",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2243,7 +2113,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.12",
+      "id" : "4.12",
       "method" : "chain/read",
       "params" : {
         "ref" : "85dd0079ef9dd56f165f2a475239d34b4abe6acc1b18eb7dab2b610a0e492a15#0",
@@ -2252,7 +2122,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.12",
+      "id" : "4.12",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2277,7 +2147,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.13",
+      "id" : "4.13",
       "method" : "chain/read",
       "params" : {
         "ref" : "ab9eed3b0f9c5e65f79f4a725c372039be784ff54801abaace810ee6fdf80b60#0",
@@ -2286,7 +2156,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.13",
+      "id" : "4.13",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2311,7 +2181,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.14",
+      "id" : "4.14",
       "method" : "chain/read",
       "params" : {
         "hash" : "0e8f8b66086a8f685363c32a7805aab9be78b0c73121bf31180c1839",
@@ -2320,7 +2190,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.14",
+      "id" : "4.14",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2337,7 +2207,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.15",
+      "id" : "4.15",
       "method" : "chain/read",
       "params" : {
         "hash" : "2d77a587c19b1851374690a5418cefba30b57856f3e935acc93275c7",
@@ -2346,7 +2216,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.15",
+      "id" : "4.15",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2363,7 +2233,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "8.16",
+      "id" : "4.16",
       "method" : "chain/read",
       "params" : {
         "ref" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d#1",
@@ -2372,7 +2242,7 @@
     }
   }, {
     "client" : {
-      "id" : "8.16",
+      "id" : "4.16",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2397,7 +2267,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : 8,
+      "id" : 4,
       "result" : {
         "prepared" : {
           "plan" : {
@@ -2494,35 +2364,7 @@
     }
   }, {
     "client" : {
-      "id" : 9,
-      "method" : "settled",
-      "params" : {
-        "reservation" : "1",
-        "status" : "discarded",
-        "tip" : 38782,
-        "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d"
-      },
-      "jsonrpc" : "2.0"
-    }
-  }, {
-    "host" : {
-      "jsonrpc" : "2.0",
-      "id" : 9,
-      "error" : {
-        "code" : -32602,
-        "message" : "settlement conflicts with the reservation",
-        "data" : {
-          "kind" : "bad",
-          "code" : "conflict",
-          "message" : "settlement conflicts with the reservation",
-          "retryAtSlot" : null,
-          "sites" : [ ]
-        }
-      }
-    }
-  }, {
-    "client" : {
-      "id" : 10,
+      "id" : 5,
       "method" : "prepare",
       "params" : {
         "now" : 38782,
@@ -2549,84 +2391,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : 10,
-      "error" : {
-        "code" : -32001,
-        "message" : "settle pending map work and reset",
-        "data" : {
-          "kind" : "refusal",
-          "code" : "mapsStale",
-          "message" : "settle pending map work and reset",
-          "retryAtSlot" : null,
-          "sites" : [ ]
-        }
-      }
-    }
-  }, {
-    "client" : {
-      "id" : 11,
-      "method" : "settled",
-      "params" : {
-        "reservation" : "2",
-        "status" : "discarded",
-        "tip" : 38782,
-        "txHash" : "0c728a20576b7d7a155292bcf2ec11371a865525a16e43e4409048bd8988c2ba"
-      },
-      "jsonrpc" : "2.0"
-    }
-  }, {
-    "host" : {
-      "jsonrpc" : "2.0",
-      "id" : 11,
-      "result" : {
-        "state" : "discarded"
-      }
-    }
-  }, {
-    "client" : {
-      "id" : 12,
-      "method" : "reset",
-      "params" : {
-        "now" : 38782
-      },
-      "jsonrpc" : "2.0"
-    }
-  }, {
-    "host" : {
-      "jsonrpc" : "2.0",
-      "id" : 12,
-      "result" : { }
-    }
-  }, {
-    "client" : {
-      "id" : 13,
-      "method" : "prepare",
-      "params" : {
-        "now" : 38782,
-        "ttlSlots" : 20,
-        "call" : {
-          "contract" : "org.julclang.state.examples.token.Token",
-          "kind" : "action",
-          "method" : "mint",
-          "instance" : "69d1b2304bbfa88a8c986d2493fbc4303ab17e40a67f1b90759e0df8f46c560a",
-          "object" : null,
-          "args" : {
-            "to" : "71ad24c832f00cc3be74be984edac966b229e62661a68a3fd9db381c",
-            "amount" : "500"
-          },
-          "pay" : {
-            "lovelace" : "0",
-            "assets" : [ ]
-          },
-          "address" : "addr_test1qrfwmzvl9u6yryudj43szlgg2aq3xuh0nmdpc7cykzjz4fume3a5fuxthcrrwmnj26anc9lnqh88zpr80xm5287vysesvgyesd"
-        }
-      },
-      "jsonrpc" : "2.0"
-    }
-  }, {
-    "host" : {
-      "jsonrpc" : "2.0",
-      "id" : "13.1",
+      "id" : "5.1",
       "method" : "chain/read",
       "params" : {
         "address" : "addr_test1wq8glzmxpp4g76znv0pj57q942umu79scucjr0e3rqxpswgdcu3we",
@@ -2635,7 +2400,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.1",
+      "id" : "5.1",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2674,7 +2439,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.2",
+      "id" : "5.2",
       "method" : "chain/read",
       "params" : {
         "address" : "addr_test1wqkh0fv8cxd3s5fhg6g22svva7arpdtc2me7jddveye8t3cqcf2fg",
@@ -2683,7 +2448,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.2",
+      "id" : "5.2",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2708,7 +2473,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.3",
+      "id" : "5.3",
       "method" : "chain/read",
       "params" : {
         "credential" : "2d77a587c19b1851374690a5418cefba30b57856f3e935acc93275c7",
@@ -2717,7 +2482,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.3",
+      "id" : "5.3",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2733,7 +2498,240 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.4",
+      "id" : 5,
+      "error" : {
+        "code" : -32001,
+        "message" : "reserved input 9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d#0",
+        "data" : {
+          "kind" : "refusal",
+          "code" : "pending",
+          "message" : "reserved input 9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d#0",
+          "retryAtSlot" : null,
+          "sites" : [ ]
+        }
+      }
+    }
+  }, {
+    "client" : {
+      "id" : 6,
+      "method" : "settled",
+      "params" : {
+        "reservation" : "1",
+        "status" : "confirmed",
+        "slot" : 38779,
+        "tip" : 38782,
+        "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d"
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : 6,
+      "result" : {
+        "state" : "confirmed"
+      }
+    }
+  }, {
+    "client" : {
+      "id" : 7,
+      "method" : "settled",
+      "params" : {
+        "reservation" : "1",
+        "status" : "discarded",
+        "tip" : 38782,
+        "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d"
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : 7,
+      "error" : {
+        "code" : -32602,
+        "message" : "settlement conflicts with the reservation",
+        "data" : {
+          "kind" : "bad",
+          "code" : "conflict",
+          "message" : "settlement conflicts with the reservation",
+          "retryAtSlot" : null,
+          "sites" : [ ]
+        }
+      }
+    }
+  }, {
+    "client" : {
+      "id" : 8,
+      "method" : "settled",
+      "params" : {
+        "reservation" : "2",
+        "status" : "discarded",
+        "tip" : 38782,
+        "txHash" : "0c728a20576b7d7a155292bcf2ec11371a865525a16e43e4409048bd8988c2ba"
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : 8,
+      "result" : {
+        "state" : "discarded"
+      }
+    }
+  }, {
+    "client" : {
+      "id" : 9,
+      "method" : "reset",
+      "params" : {
+        "now" : 38782
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : 9,
+      "result" : { }
+    }
+  }, {
+    "client" : {
+      "id" : 10,
+      "method" : "prepare",
+      "params" : {
+        "now" : 38782,
+        "ttlSlots" : 20,
+        "call" : {
+          "contract" : "org.julclang.state.examples.token.Token",
+          "kind" : "action",
+          "method" : "mint",
+          "instance" : "69d1b2304bbfa88a8c986d2493fbc4303ab17e40a67f1b90759e0df8f46c560a",
+          "object" : null,
+          "args" : {
+            "to" : "71ad24c832f00cc3be74be984edac966b229e62661a68a3fd9db381c",
+            "amount" : "500"
+          },
+          "pay" : {
+            "lovelace" : "0",
+            "assets" : [ ]
+          },
+          "address" : "addr_test1qrfwmzvl9u6yryudj43szlgg2aq3xuh0nmdpc7cykzjz4fume3a5fuxthcrrwmnj26anc9lnqh88zpr80xm5287vysesvgyesd"
+        }
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : "10.1",
+      "method" : "chain/read",
+      "params" : {
+        "address" : "addr_test1wq8glzmxpp4g76znv0pj57q942umu79scucjr0e3rqxpswgdcu3we",
+        "kind" : "utxos"
+      }
+    }
+  }, {
+    "client" : {
+      "id" : "10.1",
+      "result" : {
+        "tip" : {
+          "slot" : 38782,
+          "height" : 36991,
+          "hash" : "188c696e7847602b2522fe5810073bacc7031165d8b376eae24a3caeef5ea9cc"
+        },
+        "value" : [ {
+          "tx_hash" : "85dd0079ef9dd56f165f2a475239d34b4abe6acc1b18eb7dab2b610a0e492a15",
+          "output_index" : 0,
+          "address" : "addr_test1wq8glzmxpp4g76znv0pj57q942umu79scucjr0e3rqxpswgdcu3we",
+          "amount" : [ {
+            "unit" : "lovelace",
+            "quantity" : 44324120
+          } ],
+          "data_hash" : null,
+          "inline_datum" : null,
+          "reference_script_hash" : "0e8f8b66086a8f685363c32a7805aab9be78b0c73121bf31180c1839"
+        }, {
+          "tx_hash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d",
+          "output_index" : 0,
+          "address" : "addr_test1wq8glzmxpp4g76znv0pj57q942umu79scucjr0e3rqxpswgdcu3we",
+          "amount" : [ {
+            "unit" : "lovelace",
+            "quantity" : 2300000
+          }, {
+            "unit" : "0e8f8b66086a8f685363c32a7805aab9be78b0c73121bf31180c183969d1b2304bbfa88a8c986d2493fbc4303ab17e40a67f1b90759e0df8f46c560a",
+            "quantity" : 1
+          } ],
+          "data_hash" : "2c5e5654d66d9ed78ab05b07fc5b56d3e4b363f3090de01bb0b5eac552fe89c9",
+          "inline_datum" : "d8799f581cd2ed899f2f3441938d9563017d0857411372ef9eda1c7b04b0a42aa71903e8d8799f582070b0a6a6e0cc76de4e9d822868b45c48109a5d3ce021f6bb91badd25638c046a8080ffff",
+          "reference_script_hash" : null
+        } ]
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : "10.2",
+      "method" : "chain/read",
+      "params" : {
+        "address" : "addr_test1wqkh0fv8cxd3s5fhg6g22svva7arpdtc2me7jddveye8t3cqcf2fg",
+        "kind" : "utxos"
+      }
+    }
+  }, {
+    "client" : {
+      "id" : "10.2",
+      "result" : {
+        "tip" : {
+          "slot" : 38782,
+          "height" : 36991,
+          "hash" : "188c696e7847602b2522fe5810073bacc7031165d8b376eae24a3caeef5ea9cc"
+        },
+        "value" : [ {
+          "tx_hash" : "ab9eed3b0f9c5e65f79f4a725c372039be784ff54801abaace810ee6fdf80b60",
+          "output_index" : 0,
+          "address" : "addr_test1wqkh0fv8cxd3s5fhg6g22svva7arpdtc2me7jddveye8t3cqcf2fg",
+          "amount" : [ {
+            "unit" : "lovelace",
+            "quantity" : 20869100
+          } ],
+          "data_hash" : null,
+          "inline_datum" : null,
+          "reference_script_hash" : "2d77a587c19b1851374690a5418cefba30b57856f3e935acc93275c7"
+        } ]
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : "10.3",
+      "method" : "chain/read",
+      "params" : {
+        "credential" : "2d77a587c19b1851374690a5418cefba30b57856f3e935acc93275c7",
+        "kind" : "stakeRegistration"
+      }
+    }
+  }, {
+    "client" : {
+      "id" : "10.3",
+      "result" : {
+        "tip" : {
+          "slot" : 38782,
+          "height" : 36991,
+          "hash" : "188c696e7847602b2522fe5810073bacc7031165d8b376eae24a3caeef5ea9cc"
+        },
+        "value" : {
+          "registered" : true
+        }
+      },
+      "jsonrpc" : "2.0"
+    }
+  }, {
+    "host" : {
+      "jsonrpc" : "2.0",
+      "id" : "10.4",
       "method" : "chain/read",
       "params" : {
         "unit" : "0e8f8b66086a8f685363c32a7805aab9be78b0c73121bf31180c183969d1b2304bbfa88a8c986d2493fbc4303ab17e40a67f1b90759e0df8f46c560a",
@@ -2742,7 +2740,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.4",
+      "id" : "10.4",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2750,19 +2748,9 @@
           "hash" : "188c696e7847602b2522fe5810073bacc7031165d8b376eae24a3caeef5ea9cc"
         },
         "value" : [ {
-          "txHash" : "8af735b9e1f5bb18f00d9df10e4c669f08ca50ac6bb29420bbbedb9dc3b413b7",
-          "point" : {
-            "slot" : 38779,
-            "height" : 36988,
-            "hash" : "fcf2af6b9f108bb2a3afa04424bd39f5ac2394bab69d128aeb2930194a96fc02"
-          }
+          "txHash" : "8af735b9e1f5bb18f00d9df10e4c669f08ca50ac6bb29420bbbedb9dc3b413b7"
         }, {
-          "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d",
-          "point" : {
-            "slot" : 38780,
-            "height" : 36989,
-            "hash" : "a21b1f6ea87a6831f350eb39541ae4fde7b194fc20329dc0ed08b7a05c39a539"
-          }
+          "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d"
         } ]
       },
       "jsonrpc" : "2.0"
@@ -2770,7 +2758,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.5",
+      "id" : "10.5",
       "method" : "chain/read",
       "params" : {
         "txHash" : "8af735b9e1f5bb18f00d9df10e4c669f08ca50ac6bb29420bbbedb9dc3b413b7",
@@ -2779,7 +2767,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.5",
+      "id" : "10.5",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2803,7 +2791,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.6",
+      "id" : "10.6",
       "method" : "chain/read",
       "params" : {
         "hash" : "6b526f30b6189980002629d509433154eb90901971a405034b42d92a7f2bd5c8",
@@ -2812,7 +2800,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.6",
+      "id" : "10.6",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2826,7 +2814,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.7",
+      "id" : "10.7",
       "method" : "chain/read",
       "params" : {
         "txHash" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d",
@@ -2835,7 +2823,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.7",
+      "id" : "10.7",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2859,7 +2847,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.8",
+      "id" : "10.8",
       "method" : "chain/read",
       "params" : {
         "hash" : "bd099346848814785055c99f1b429943b1202d13d5e80f40abf65d1024e27e05",
@@ -2868,7 +2856,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.8",
+      "id" : "10.8",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -2882,7 +2870,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.9",
+      "id" : "10.9",
       "method" : "chain/read",
       "params" : {
         "kind" : "protocolParams"
@@ -2890,7 +2878,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.9",
+      "id" : "10.9",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -3986,7 +3974,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.10",
+      "id" : "10.10",
       "method" : "chain/read",
       "params" : {
         "address" : "addr_test1qrfwmzvl9u6yryudj43szlgg2aq3xuh0nmdpc7cykzjz4fume3a5fuxthcrrwmnj26anc9lnqh88zpr80xm5287vysesvgyesd",
@@ -3995,7 +3983,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.10",
+      "id" : "10.10",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -4020,7 +4008,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.11",
+      "id" : "10.11",
       "method" : "chain/read",
       "params" : {
         "ref" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d#0",
@@ -4029,7 +4017,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.11",
+      "id" : "10.11",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -4057,7 +4045,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.12",
+      "id" : "10.12",
       "method" : "chain/read",
       "params" : {
         "ref" : "85dd0079ef9dd56f165f2a475239d34b4abe6acc1b18eb7dab2b610a0e492a15#0",
@@ -4066,7 +4054,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.12",
+      "id" : "10.12",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -4091,7 +4079,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.13",
+      "id" : "10.13",
       "method" : "chain/read",
       "params" : {
         "ref" : "ab9eed3b0f9c5e65f79f4a725c372039be784ff54801abaace810ee6fdf80b60#0",
@@ -4100,7 +4088,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.13",
+      "id" : "10.13",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -4125,7 +4113,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.14",
+      "id" : "10.14",
       "method" : "chain/read",
       "params" : {
         "hash" : "0e8f8b66086a8f685363c32a7805aab9be78b0c73121bf31180c1839",
@@ -4134,7 +4122,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.14",
+      "id" : "10.14",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -4151,7 +4139,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.15",
+      "id" : "10.15",
       "method" : "chain/read",
       "params" : {
         "hash" : "2d77a587c19b1851374690a5418cefba30b57856f3e935acc93275c7",
@@ -4160,7 +4148,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.15",
+      "id" : "10.15",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -4177,7 +4165,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : "13.16",
+      "id" : "10.16",
       "method" : "chain/read",
       "params" : {
         "ref" : "9d59ed62e0cdbcbd8db0416cc90560ae11a4092f302633dc41cc8d8bf2ec5e3d#1",
@@ -4186,7 +4174,7 @@
     }
   }, {
     "client" : {
-      "id" : "13.16",
+      "id" : "10.16",
       "result" : {
         "tip" : {
           "slot" : 38782,
@@ -4211,7 +4199,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : 13,
+      "id" : 10,
       "result" : {
         "prepared" : {
           "plan" : {
@@ -4308,7 +4296,7 @@
     }
   }, {
     "client" : {
-      "id" : 14,
+      "id" : 11,
       "method" : "shutdown",
       "params" : { },
       "jsonrpc" : "2.0"
@@ -4316,7 +4304,7 @@
   }, {
     "host" : {
       "jsonrpc" : "2.0",
-      "id" : 14,
+      "id" : 11,
       "result" : { }
     }
   }, {

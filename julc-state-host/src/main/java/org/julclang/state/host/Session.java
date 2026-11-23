@@ -35,7 +35,6 @@ final class Session implements Transport.Handler {
     private final ThreadLocal<Reads> reading = new ThreadLocal<>();
     private final ThreadLocal<TransactionEvaluator> evaluating = new ThreadLocal<>();
     private final BackendService backend = Reads.backend(reading::get);
-    private final ThreadLocal<MapMirrors.Overlay> mapOverlay = new ThreadLocal<>();
     private Limits limits;
     private Network network;
     private Clock clock;
@@ -84,7 +83,7 @@ final class Session implements Transport.Handler {
                 catch (IllegalArgumentException e) { throw bad("invalid or unrecognized contract datum"); }
             }
             case "registered" -> reservations.registered(p);
-            case "restore" -> reservations.restore(p, contracts, hasMaps(contracts) ? runtime.mapVerifier().rewardAddress() : null);
+            case "restore" -> reservations.restore(p);
             case "settled" -> reservations.settled(p, whileLive);
             case "reset" -> reset(p);
             case "shutdown" -> {
@@ -160,19 +159,16 @@ final class Session implements Transport.Handler {
     }
 
     private StateRuntime runtime(Network net, Clock time, Reservations table, Limits config) {
-        var store = new com.bloxbean.cardano.vds.core.api.NodeStore() {
-            public byte[] get(byte[] key) { return mapOverlay.get().get(key); }
-            public void put(byte[] key, byte[] value) { mapOverlay.get().put(key, value); }
-            public void delete(byte[] key) { mapOverlay.get().delete(key); }
-        };
+        // One content-addressed node store per runtime, so per session until reset (ADR-0022 D8): a node a prepare or a
+        // history replay writes belongs to its own root, and a lookup starts from the root a chain datum names.
+        var store = new MapNodes();
         return StateRuntime.builder(backend).network(net)
                 .chainTime(new SlotChainTime(time.zeroSlot, time.zeroMs, time.length, backend))
                 .evaluator((tx, utxos) -> evaluating.get().evaluateTx(tx, utxos))
                 .claimStore(table).settlementSlots(config.margin).mapStore(store)
-                .unitProver(unit -> MerkleSupport.TrieProver.withHistory(store, root -> {
-                    new MapReads(reading.get()).rebuild(unit, runtime.mapVerifier().hash(), mapOverlay.get().historyStore(),
-                            () -> store.get(root) != null);
-                })).build();
+                .unitProver(unit -> new MerkleSupport.TrieProver(store, root ->
+                    new MapReads(reading.get()).rebuild(unit, runtime.mapVerifier().hash(), store, () -> store.get(root) != null)))
+                .build();
     }
 
     private Transport.Reply reset(JsonNode p) {
@@ -187,7 +183,6 @@ final class Session implements Transport.Handler {
             clock = time;
             runtime = rt;
             if (tip != null) reservations.rewind(tip);
-            reservations.resetMirrors(tip != null);
         });
     }
 
@@ -208,8 +203,6 @@ final class Session implements Transport.Handler {
                 limits.bytes, network.getNetworkId(), tip -> whileLive.accept(() -> reservations.observe(tip)))
                 .uniqueTokens(contracts.policies());
         reading.set(reads);
-        var overlay = reservations.maps.new Overlay();
-        mapOverlay.set(overlay);
         evaluating.set(new JulcTransactionEvaluator(new DefaultUtxoSupplier(backend.getUtxoService()),
                 new DefaultProtocolParamsSupplier(backend.getEpochService()), new DefaultScriptSupplier(backend.getScriptService()),
                 new SlotConfig(clock.zeroSlot, clock.zeroMs, clock.length)));
@@ -218,33 +211,22 @@ final class Session implements Transport.Handler {
             if (building) scope = scope.ttlSlots(ttl);
             if (method.equals("prepare")) {
                 var call = p.path("call");
-                if (call.has("designated") || call.has("pageLimits")) {
-                    long start = 60, validity = 900;
-                    if (call.has("pageLimits")) {
-                        var page = call.get("pageLimits");
-                        if (!page.isArray() || page.size() != 2 || !page.get(0).isIntegralNumber() ||
-                                !page.get(1).isIntegralNumber() || !page.get(0).canConvertToLong() || !page.get(1).canConvertToLong())
-                            throw bad("expected pageLimits [maxStartSlots, maxValiditySlots]");
-                        start = page.get(0).longValue();
-                        validity = page.get(1).longValue();
-                    }
+                if (call.has("pageLimits")) {    // absent: CallScope.hosted's defaults
+                    var page = call.get("pageLimits");
+                    if (!page.isArray() || page.size() != 2 || !page.get(0).isIntegralNumber() ||
+                            !page.get(1).isIntegralNumber() || !page.get(0).canConvertToLong() || !page.get(1).canConvertToLong())
+                        throw bad("expected pageLimits [maxStartSlots, maxValiditySlots]");
+                    long start = page.get(0).longValue(), validity = page.get(1).longValue();
                     if (start < 0 || validity < 1 || validity > Long.MAX_VALUE - now || start > Long.MAX_VALUE - now)
                         throw bad("invalid keyed page limits");
                     scope = scope.pageLimits(start, validity);
                 }
             }
-            var reply = runtime.inScope(scope, () -> method.equals("prepare")
+            return runtime.inScope(scope, () -> method.equals("prepare")
                     ? prepare(p, reads, now + ttl, whileLive) : query(method, p, reads, now + ttl));
-            long historyTip = reads.historyTip();
-            return new Transport.Reply(reply.value(), () -> {
-                overlay.commitHistory();
-                if (historyTip >= 0) reservations.observe(historyTip);
-                reply.commit().run();
-            });
         } finally {
             evaluating.remove();
             reading.remove();
-            mapOverlay.remove();
         }
     }
 
@@ -269,7 +251,6 @@ final class Session implements Transport.Handler {
             case "view" -> {
                 fields(p, "now", "contract", "instance", "view", "args");
                 if (!p.path("args").isObject()) throw bad("expected view arguments");
-                if (c.maps()) reservations.maps.allow(c.hash());
                 String view = p.path("view").isNull() ? null : str(p, "view");
                 if (view == null && !p.get("args").isEmpty()) throw bad("state takes no arguments");
                 checkAddressArguments(p.get("args"));
@@ -288,7 +269,7 @@ final class Session implements Transport.Handler {
         if (reservations.publishing(part.id()))
             throw HostError.refusal("pending", "a publication of " + part.id() + " is still pending; settle it first");
         var built = prerequisites.publish(part, payer, ceiling);
-        return prepared(built, obj(), reads, ceiling, part.registration(), null, null);
+        return prepared(built, obj(), reads, ceiling, part.registration(), null);
     }
 
     private static String instance(JsonNode request) {
@@ -337,7 +318,6 @@ final class Session implements Transport.Handler {
         if (code != null) throw HostError.unsupported(code, code.equals("keyed") ?
                 c.keyedLimitation(kind,meta)
                 : "unsupported call " + method);
-        if (c.maps()) reservations.maps.allow(c.hash());
         boolean keyed = kind.startsWith("keyed") || c.keyed() && kind.equals("init");
         KeyedOperation operation = keyed ? KeyedOperation.fromCall(request) : null;
         if (!keyed && (request.has("designated") || request.has("operation") || request.has("pageLimits")))
@@ -347,8 +327,6 @@ final class Session implements Transport.Handler {
             boolean spend = !creation && !kind.equals("keyedInit");
             if (creation == (operation.identity().instance() != null) || spend != (operation.identity().key() != null))
                 throw KeyedOperation.mismatch();
-            // Before any chain read: a failed or late read must not lose the handoff this retry reports (#156 Codex).
-            whileLive.accept(() -> reservations.acknowledge(operation));
         }
         var wallet = wallet(str(request, "address"));
         boolean quorum = meta.at("/policies/quorum").isObject();
@@ -422,41 +400,29 @@ final class Session implements Transport.Handler {
         result.set("plan", plan);
         out.set("predicted", Effects.of(c, meta, plan, built, handle.address(),
                 kind.equals("init") ? created : instance, kind.equals("ownedInit") ? created : object, spent, built.sends().isEmpty() ? null : runtime.outputVerifier().rewardAddress()));
-        if (keyed) {
-            long now = p.required("now").longValue();
-            long start = built.validFromSlot().orElse(-1);
-            long end = built.validToSlot().orElse(-1);
-            long[] page = runtime.pageLimits();
-            if (start < now || start - now > page[0] || end <= start || end - start > ceiling - now || end - now > page[1])
-                throw HostError.refusal("window", "keyed validity interval exceeds the requested limits");
-            ceiling = end;
-        }
+        if (keyed) ceiling = Long.MAX_VALUE;   // Compose bounded the keyed window by the page limits (D7)
         // #151 review SB3: a call's withdrawals are zero ones from the contract's, the output verifier's or (a map
         // contract) the map verifier's reward account.
         var rewards = new java.util.HashSet<>(Set.of(handle.rewardAddress(), handle.runtime().outputVerifier().rewardAddress()));
         if (c.maps()) rewards.add(runtime.mapVerifier().rewardAddress());
         BodyBalance.checkCall(built.transaction().getBody(), rewards, handle.policyId());
-        return prepared(built, out, reads, ceiling, null, operation, c.maps() && MapWithdrawal.pointer(built.transaction(), runtime.mapVerifier().rewardAddress()) >= 0 ? c.hash() : null);
+        return prepared(built, out, reads, ceiling, null, keyed ? operation.identity().designated() : null);
     }
 
-    private Transport.Reply prepared(PreparedTx built, ObjectNode out, Reads reads, long ceiling, String credential, KeyedOperation operation, String mapPolicy) {
+    private Transport.Reply prepared(PreparedTx built, ObjectNode out, Reads reads, long ceiling, String credential, String designated) {
         long end = built.validToSlot().orElseThrow(() -> HostError.refusal("window", "no validity upper bound"));
         if (end > ceiling) throw HostError.refusal("window", "upper bound exceeds the call ceiling");
         var tx = built.transaction();
         reads.checkBalance(tx.getBody());
         requireUnreservedReferences(tx.getBody(), reservations);
-        var entry = reservations.prepare(Reservations.Body.of(tx, built.txHash(), network.getNetworkId()), reads.greatestTip, operation);
+        var entry = reservations.prepare(Reservations.Body.of(tx, built.txHash(), network.getNetworkId()), reads.greatestTip, designated);
         var result = out.withObject("/prepared").put("reservation", entry.id()).put("cbor", built.cbor())
                 .put("txHash", built.txHash()).put("validTo", end);
         if (built.validFromSlot().isPresent()) result.put("validFrom", built.validFromSlot().getAsLong());
         else result.putNull("validFrom");
         result.set("signers", JSON.valueToTree(built.requiredSigners()));
         if (!result.has("plan")) result.set("plan", JSON.valueToTree(built.plan()));
-        var layer = mapOverlay.get();
-        return new Transport.Reply(out, () -> {
-            reservations.commit(entry, credential);
-            if (mapPolicy != null) reservations.maps.stage(entry.id(), mapPolicy, layer);
-        });
+        return new Transport.Reply(out, () -> reservations.commit(entry, credential));
     }
 
     private static String keyedToken(StateContractHandle<?> handle, JsonNode meta, String instance, String key) {

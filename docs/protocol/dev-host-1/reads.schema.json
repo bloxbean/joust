@@ -132,8 +132,8 @@
         "properties": {
           "tip": {"$ref": "#/$defs/chainPoint"}, "more": {"type": "string", "minLength": 1},
           "value": {"type": "array", "items": {
-            "type": "object", "properties": {"txHash": {"$ref": "#/$defs/hash32"}, "point": {"$ref": "#/$defs/chainPoint"}},
-            "required": ["txHash", "point"], "additionalProperties": false
+            "type": "object", "properties": {"txHash": {"$ref": "#/$defs/hash32"}},
+            "required": ["txHash"], "additionalProperties": false
           }}
         },
         "required": ["tip", "value"], "additionalProperties": false
