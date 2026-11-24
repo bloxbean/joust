@@ -441,7 +441,9 @@ when the maintainer asked for M2 to be implemented (2026-11-24, r3).
   chain. A replaced tab is told so.
 - **D3 (Gradle):** the playground requires a settings file in the trusted build root (Gradle would otherwise search
   parent directories), takes the wrapper only from directories the user owns or lists in `JOUST_SAFE_DIRS`, requires
-  `java` to be a JDK 25+ (`release` file), and judges a session stale by content. The native `joust`'s per-user cache
+  `java` to be a JDK 25+ (`release` file), and judges a session stale by content. These checks keep the playground
+  from taking a build root, settings file or wrapper from outside the user's control; the project's own build files
+  (`build.gradle`, `buildSrc`, …) are the user's build and are trusted as `./gradlew build` trusts them. The native `joust`'s per-user cache
   is used only when it and every ancestor are this user's (or root's) and not writable by others.
 - **D5 (Connect wallet):** the payer is the wallet's change address; before each signature the page re-reads the
   wallet's network, change address and UTxOs.
