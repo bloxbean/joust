@@ -1262,6 +1262,82 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     }
   });
 
+  test('final pass FE2 (probe B): a host read past the margin of a body that landed fails, the watcher tells it first: no fence', async () => {
+    const { L, chain, s, w } = await ready({ startTime: 960 });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      chain.hold = true;
+      const a = await increment(s, w, instance);
+      const validTo = Number(parseTx(a.prepared.cbor).ttl);
+      await s.submit(a.prepared.reservation, await signed(w, a.prepared));
+      advanceSlots(L, validTo - 2 - L.slot);
+      await chain.release();   // lands at validTo - 2
+      chain.hold = false;
+      advanceSlots(L, SETTLEMENT_SLOTS + 3);   // the watcher lagged
+      await assert.rejects(s.view(COUNTER, instance), /not told yet|try again/);
+      await s.tick();
+      assert.equal(s.fenced, null, s.fenced);
+      assert.equal((await s.view(COUNTER, instance)).value.count, '1');
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('final pass (probe A): a journaled body the chain shows final is settled during a handout, never a false pending', async () => {
+    const { L, s, w } = await ready({ startTime: 961 });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      const a = await increment(s, w, instance);
+      await s.submit(a.prepared.reservation, await signed(w, a.prepared));
+      await s.tick();
+      assert.equal(s.journal.find(a.prepared.reservation).state, 'shallow');
+      advanceSlots(L, SETTLEMENT_SLOTS + 1);   // past A's margin; the watcher has not ticked
+      await increment(s, w, instance);
+      assert.equal(s.journal.find(a.prepared.reservation), null, 'A settled final');
+      assert.equal(s.fenced, null);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('final pass FE3: a discard after the body passed its expiry margin is told expired, not discarded', async () => {
+    const { L, s, w } = await ready({ startTime: 962 });
+    try {
+      const instance = await create(s, w);
+      const r = await increment(s, w, instance);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.discard(r.prepared.reservation);
+      assert.equal(s.txStatus(r.prepared.txHash).status, 'expired');
+      assert.equal(s.fenced, null, s.fenced);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('final pass FE4: a handout refused as pending is told discarded to the host (its answer checked), so the next one goes out', async () => {
+    const { L, s, w } = await ready({ startTime: 963 });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      // A live journaled body over every wallet output: whatever the honest host picks overlaps it.
+      const refs = (await s.utxos(w.address)).map((u) => `${u.tx_hash}#${u.output_index}`);
+      const cbor = buildPlainTx({ inputs: refs.map((ref) => ({ ref, value: new Map([['lovelace', 10_000_000n]]) })),
+        change: enterpriseAddress({ type: 'key', hash: '00'.repeat(28) }, 0), params: PARAMS, ttl: L.slot + 20 });
+      s.journal.record({ reservation: 'blocker', txHash: parseTx(cbor).hash, cbor, validTo: L.slot + 20, validFrom: null });
+      await assert.rejects(increment(s, w, instance), (e) => e.code === 'pending');
+      assert.equal(s.fenced, null, 'the honest host answered discarded');
+      s.journal.remove('blocker');
+      await increment(s, w, instance);   // the host released the refused body's inputs
+    } finally {
+      await s.close();
+    }
+  });
+
   test('#179 r3: one provider attempt per check; a retry waits cancellably and a close stops it before any second POST', async () => {
     // The production adapter: a 400 BadInputsUTxO answer is one POST, no provider retry.
     let posts = 0;
@@ -1355,8 +1431,10 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       await new Promise((ok) => setTimeout(ok, 200));
       assert.equal(s.journal.find(r.prepared.reservation), null, 'the host and the journal: settled at once');
       assert.notEqual(s.txStatus(r.prepared.txHash).status, 'final', 'the page: not before the indexes');
+      await pass;   // the pass does not wait for the indexes (final pass FE2)
+      assert.notEqual(s.txStatus(r.prepared.txHash).status, 'final');
       open();
-      await pass;
+      await new Promise((ok) => setTimeout(ok, 50));
       assert.equal(s.txStatus(r.prepared.txHash).status, 'final');
     } finally {
       chain.indexed = async () => {};
@@ -1530,6 +1608,114 @@ describe('ADR-0024 M3: the server in DevKit mode, mounted as joust dev mounts it
 });
 
 // ---- the browser path over the controlled chain (#179 r2 P2s): the page itself, in Chromium
+
+describe('final pass FE1 (probe C): a registration Yaci Store cannot tell is learned again in a new session, never a loop', { skip }, () => {
+  let root, state;
+  before(async () => {
+    root = install();
+    mkdirSync(join(root, 'contracts/app'), { recursive: true });
+    writeFileSync(join(root, 'contracts/app/Box.java'), `package app;
+import java.math.BigInteger;
+import org.julclang.state.api.Action;
+import org.julclang.state.api.Init;
+import org.julclang.state.api.MerkleMap;
+import org.julclang.state.api.MerkleMaps;
+import org.julclang.state.api.StateContract;
+@StateContract
+public class Box {
+    public record State(BigInteger n, MerkleMap m) {}
+    @Init
+    public static State init() { return new State(BigInteger.ZERO, MerkleMaps.empty()); }
+    @Action
+    public static State bump(State s, BigInteger by) { return new State(s.n().add(by), s.m()); }
+}
+`);
+    writeFileSync(join(root, 'joust.config.json'), '{ "contracts": "contracts" }');
+    const { build } = await import('../src/build.js');
+    const r = await build({ root, log: () => {} });
+    assert.ok(r.ok, JSON.stringify(r.diagnostics));
+    state = mkdtempSync(join(tmpdir(), 'joust-state-'));
+  });
+  after(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(state, { recursive: true, force: true });
+  });
+  const open = (L, chain, startTime) => devkitSession({ id: 's1', root, net: net(L), identity: identity(startTime), chain, state, ttlSlots: TTL,
+    clock: L.clock, nowSlot: () => L.slot, topUp: async (a, ada) => L.fund(a, BigInt(ada) * ADA), pollMs: 3_600_000 });
+  const yaciLike = async (startTime) => {
+    const L = memoryLedger({ engine: await theEngine(), attacks: false });
+    const chain = fakeChain(L, startTime);
+    chain.stakeRegistered = async () => undefined;   // Yaci Store: registered and unknown answer alike
+    return { L, chain };
+  };
+  /** Publishes the outstanding prerequisites one by one, each final before the next. */
+  async function publishAll(s, L, w) {
+    for (let round = 0; round < 6; round++) {
+      const [p] = await s.prerequisites('app.Box');
+      if (!p) return;
+      const r = await s.publish('app.Box', p.id, w.address);
+      if (!r?.prepared) continue;
+      await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+      await s.tick();
+      advanceSlots(L, SETTLEMENT_SLOTS + 2);
+      await s.tick();
+    }
+    assert.fail('the prerequisites did not settle');
+  }
+
+  test('session 1 publishes and finalises; session 2 is refused "already registered", learns it, and lists nothing more', async () => {
+    const { L, chain } = await yaciLike(970);
+    const w = await wallet();
+    L.fund(w.address, 1000n * ADA);
+    let s = await open(L, chain, 970);
+    try {
+      await publishAll(s, L, w);
+      assert.deepEqual(await s.prerequisites('app.Box'), []);
+    } finally {
+      await s.close();
+    }
+    s = await open(L, chain, 970);
+    try {
+      const pre = await s.prerequisites('app.Box');
+      const reg = pre.find((p) => p.id.startsWith('stakeRegistration'));
+      assert.ok(reg, 'a new host cannot tell the registration: listed again');
+      const r = await s.publish('app.Box', reg.id, w.address);
+      await assert.rejects(s.submit(r.prepared.reservation, await signed(w, r.prepared)), (e) => e.code === 'alreadyRegistered');
+      assert.ok(!(await s.prerequisites('app.Box')).some((p) => p.id.startsWith('stakeRegistration')), 'learned: no loop');
+      assert.equal(s.fenced, null);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('a registration that became final while no playground ran is told to the restored host', async () => {
+    const { L, chain } = await yaciLike(971);
+    const w = await wallet();
+    L.fund(w.address, 1000n * ADA);
+    let s = await open(L, chain, 971);
+    try {
+      for (let round = 0; round < 6; round++) {
+        const [p] = await s.prerequisites('app.Box');
+        assert.ok(p);
+        const r = await s.publish('app.Box', p.id, w.address);
+        await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+        await s.tick();
+        if (p.id.startsWith('stakeRegistration')) break;   // shallow: the session closes before it is final
+        advanceSlots(L, SETTLEMENT_SLOTS + 2);
+        await s.tick();
+      }
+    } finally {
+      await s.close();
+    }
+    advanceSlots(L, SETTLEMENT_SLOTS + 2);   // final while no playground runs
+    s = await open(L, chain, 971);
+    try {
+      assert.ok(!(await s.prerequisites('app.Box')).some((p) => p.id.startsWith('stakeRegistration')));
+    } finally {
+      await s.close();
+    }
+  });
+});
 
 const chromium = await chromiumOrNull();
 describe('ADR-0024 M3 in Chromium over the controlled chain: late refusals, a CIP-30 input that is gone', {

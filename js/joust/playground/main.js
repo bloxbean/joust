@@ -686,7 +686,13 @@ async function prerequisites(signer) {
         throw new StageFailure({ stage: 'verification', code: 'refused', message: 'the page refused to sign the publication: ' + v.problems.join('; '), label });
       }
       Object.assign(report, host.report);
-      await reviewSignSubmit(r, label, signer, { publication: p, report });
+      try {
+        await reviewSignSubmit(r, label, signer, { publication: p, report });
+      } catch (e) {
+        // DevKit: the registration was there already (Yaci Store cannot tell); the host knows now: list them again.
+        if (e.code !== 'alreadyRegistered') throw e;
+        note(`${label}: already registered on the chain; the prerequisites are listed again`);
+      }
     } finally {
       if (!report.submitted) await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
     }
@@ -750,7 +756,7 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
             // host that ended, a malformed transaction) must not leave the instance pending.
             // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its
             // inputs (the server refuses that discard as well). A failure before the node saw it is still released.
-            if (devkit() && e.code === 'nodeRefused') report.submitted = true;
+            if (devkit() && (e.code === 'nodeRefused' || e.code === 'alreadyRegistered')) report.submitted = true;
             throw labelled(e, 'ledger', label);
           }
         }
