@@ -769,6 +769,24 @@ for (const kind of ['java', 'jsc']) {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+    test('#174 final FF1/FF2: after a rebuild, a new session lists the new build\'s contracts; no "null" text', async () => {
+      if (kind !== 'java') return;   // one language is enough: the page code is shared
+      const noNull = async () => {
+        for (const sel of ['#banner', '#instances']) assert.doesNotMatch(await page.locator(sel).innerText(), /\bnull\b/, sel);
+      };
+      await noNull();
+      // Rebuild with a second contract (the project changes: this runs after the I10 tree check).
+      writeFileSync(join(root, 'contracts/app/Tally.java'),
+        readFileSync(join(root, 'contracts/app/Counter.java'), 'utf8').replaceAll('Counter', 'Tally'));
+      const { build } = await import('../src/build.js');
+      assert.ok((await build({ root, log: () => {} })).ok);
+      await page.click('#advance');   // any refresh shows the stale banner
+      await page.waitForSelector('#stale');
+      await page.click('#stale button:first-of-type');   // New session, keep the ledger
+      await page.waitForSelector('[data-contract="app.Tally"]', { timeout: 120_000 });
+      assert.equal(await page.locator('#stale').count(), 0);
+      await noNull();
+    });
   });
 }
 
