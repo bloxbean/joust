@@ -472,6 +472,51 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
     }
   });
 
+  test('final pass (Codex): a first run retried after a failed directory sync still syncs every directory it created', async () => {
+    const fs = (await import('node:fs')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'joust-first-retry-')));
+    const deep = join(base, 'home', '.joust', 'state');
+    const fsync = fs.fsyncSync;
+    const openFn = fs.openSync;
+    let failOnce = true;
+    fs.fsyncSync = (fd) => {
+      if (failOnce && fs.fstatSync(fd).isDirectory()) {
+        failOnce = false;
+        throw Object.assign(new Error('EIO: a directory sync failed'), { code: 'EIO' });
+      }
+      return fsync(fd);
+    };
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(openJournal({ root: '/p/retry', chain: identity(19), state: deep }), /EIO/);
+    } finally {
+      fs.fsyncSync = fsync;
+      syncBuiltinESMExports();
+    }
+    // The directories exist now; the retry cannot tell which still need their parent synced: it syncs them all.
+    for (const f of readdirSync(join(deep, 'chains', '0-42-19'))) if (f.endsWith('.lock')) unlinkSync(join(deep, 'chains', '0-42-19', f));
+    for (const f of readdirSync(join(deep, 'chains'))) if (f.endsWith('.lock')) unlinkSync(join(deep, 'chains', f));
+    const opened = [];
+    fs.openSync = (path, flags, ...rest) => { if (flags === 'r') opened.push(String(path)); return openFn(path, flags, ...rest); };
+    syncBuiltinESMExports();
+    let j;
+    try {
+      j = await openJournal({ root: '/p/retry', chain: identity(19), state: deep });
+    } finally {
+      fs.openSync = openFn;
+      syncBuiltinESMExports();
+    }
+    try {
+      for (const parent of [base, join(base, 'home'), join(base, 'home', '.joust'), deep, join(deep, 'chains')]) {
+        assert.ok(opened.includes(parent), `${parent} synced on the retry`);
+      }
+    } finally {
+      j.close();
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test('FD4: a lock held by a running playground is refused naming its file', async () => {
     const j = await open('/p/held', 17);
     try {
