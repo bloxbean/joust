@@ -317,6 +317,18 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     assert.deepEqual(applyOperation([sameInputNewTx], { action: 'removeIfFinal', id: 'op', designated: watched.designated, txHash: 'ab'.repeat(32) }).rows,
       [sameInputNewTx], 'another attempt: kept');
   });
+  test('reconcile judges each attempt by its own lookup\'s tip; a rollback between lookups keeps it pending (Codex M4 last4)', async () => {
+    const absent = (tip) => ({ landed: false, final: false, slot: null, tip });
+    const two = { attempts: [{ txHash: 'a', validTo: 50 }, { txHash: 'b', validTo: 100 }] };
+    // Codex's case: the first lookup at tip 111, a rollback, the second at 99 while b is valid through 100.
+    assert.deepEqual(await reconcile(two, { lookup: async (h) => absent(h === 'a' ? 111 : 99), settlementSlots: 10 }),
+      { state: 'pending', until: null }, 'a lower tip on a later lookup: pending, never ambiguous');
+    // Without a rollback: b checked against its own tip (105) is live, a (50 + 10 < 105) is not.
+    assert.deepEqual(await reconcile(two, { lookup: async (h) => absent(h === 'a' ? 100 : 105), settlementSlots: 10 }),
+      { state: 'pending', until: 110 });
+    assert.deepEqual(await reconcile(two, { lookup: async (h) => absent(h === 'a' ? 200 : 201), settlementSlots: 10 }),
+      { state: 'ambiguous' }, 'both expired at rising tips');
+  });
   test('reconcile looks every attempt up: an unknown observation keeps it pending, never ambiguous; a final one closes (Codex M4 last3)', async () => {
     const two = { attempts: [{ txHash: 'a', validTo: 10 }, { txHash: 'b', validTo: 10 }] };
     const answers = { a: { landed: false, final: false, slot: null, tip: null }, b: { landed: false, final: false, slot: null, tip: 999 } };

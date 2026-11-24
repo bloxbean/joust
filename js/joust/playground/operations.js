@@ -44,8 +44,9 @@ export function operationRequest(r) {
  *              known: wait
  *   ambiguous  none is and none can land by the observed tip: the user must acknowledge before anything new
  *   fresh      no attempt was handed out
- * {@code lookup(txHash)}: { landed, tip } from the trusted chain, the tip observed with that lookup; the decision uses the
- * last tip observed after the lookups (never one read before them).
+ * {@code lookup(txHash)}: { landed, tip } from the trusted chain, the tip observed with that lookup. Each attempt's
+ * expiry is judged against the tip of its own lookup (never one read before it); a tip that went down between lookups
+ * (a rollback) keeps the operation pending.
  */
 export async function reconcile(record, { lookup, settlementSlots = 0 }) {
   if (!record.attempts.length) return { state: 'fresh' };
@@ -53,7 +54,9 @@ export async function reconcile(record, { lookup, settlementSlots = 0 }) {
   // shallow inclusion waits, and any lookup without a stable observation keeps it pending (never ambiguous).
   let tip = null;
   let unknown = false;
+  let rolledBack = false;
   let shallow = null;
+  const seen = [];
   for (const a of record.attempts) {
     const r = await lookup(a.txHash);
     if (r?.landed && r.final !== false) return { state: 'closed', txHash: a.txHash };
@@ -61,12 +64,16 @@ export async function reconcile(record, { lookup, settlementSlots = 0 }) {
       unknown = true;
       continue;
     }
-    tip = Math.max(tip ?? r.tip, r.tip);
+    // A tip lower than an earlier lookup's is a rollback between lookups: an attempt seen expired may be live again.
+    if (tip !== null && r.tip < tip) rolledBack = true;
+    tip = r.tip;
+    seen.push({ a, tip: r.tip });
     if (r.landed && !shallow) shallow = { txHash: a.txHash, until: Number.isSafeInteger(r.slot) ? r.slot + settlementSlots : null };
   }
   if (shallow) return { state: 'pending', until: shallow.until, shallow: shallow.txHash };
-  if (unknown || tip === null) return { state: 'pending', until: null };
-  const live = record.attempts.filter((a) => safeSlot(a.validTo) + settlementSlots >= tip);
+  if (unknown || rolledBack || tip === null) return { state: 'pending', until: null };
+  // Each absent attempt's expiry against the tip observed with its own lookup.
+  const live = seen.filter(({ a, tip: t }) => safeSlot(a.validTo) + settlementSlots >= t).map(({ a }) => a);
   return live.length ? { state: 'pending', until: Math.max(...live.map((a) => safeSlot(a.validTo) + settlementSlots)) } : { state: 'ambiguous' };
 }
 
