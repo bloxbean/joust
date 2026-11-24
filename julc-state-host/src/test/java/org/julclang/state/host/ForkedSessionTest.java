@@ -65,7 +65,11 @@ class ForkedSessionTest {
         int vectors = 0;
         try (var files = Files.list(HostVectorsTest.DIRECTORY)) {
             for (var f : files.filter(v -> v.toString().endsWith(".json")).sorted().toList()) {
-                success(hello(root, entries, fingerprint, JSON.readTree(f.toFile())));
+                var v = JSON.readTree(f.toFile());
+                // The historical M1b maps refusal is superseded: a maps host asks for prerequisite evidence first
+                // (HostVectorsTest.replay keeps its own check).
+                if ("maps".equals(v.path("feature").textValue())) continue;
+                success(hello(root, entries, fingerprint, v));
                 vectors++;
             }
         }

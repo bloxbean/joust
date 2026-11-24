@@ -315,7 +315,7 @@ bind a class loaded lazily between them; r4's stage under `build/` could be prun
 | `settled` | `{reservation, txHash, status, tip, slot?}` → `{state}` | chain-evidenced settlement; answers the reservation's state after the event (D8) |
 | `restore` | `{transactions: [{cbor, state, slot?}], complete}` → `{reservations}` | pending work after a restart or a rewind; building waits for `complete` (D8, D11) |
 | `registered` | `{credential, evidence}` → `{}` | the client asserts a stake credential is registered (D14) |
-| `reset` | `{now, clock?, rewound?: {tip}}` → `{}` | drops caches, listing snapshots and map mirrors and rebuilds clock-derived state; **keeps reservations**; `rewound` also re-arms what the rewind may revive and fences building until `restore` completes (D8) |
+| `reset` | `{now, clock?, rewound?: {tip}}` → `{}` | drops caches, listing snapshots and the map node store and rebuilds clock-derived state; **keeps reservations**; `rewound` also re-arms what the rewind may revive and fences building until `restore` completes (D8) |
 | `shutdown` / `exit` | → `{}` / notification | as LSP: stop accepting calls, then exit |
 
 `prepared` is `{reservation, cbor, txHash, validFrom, validTo, signers, plan, instance?, object?}`. **`validFrom` and
@@ -439,7 +439,7 @@ Two slots, never confused (r3):
 - The host never reads the machine clock for chain time or for releasing reservations (D8). RPC deadlines (D10) use
   the monotonic clock.
 - `reset({now, clock})` takes a new clock after a devnet's epoch shift (Yano moves the genesis start), rebuilds what
-  derives from it (the evaluator's slot configuration included), and drops caches and map mirrors.
+  derives from it (the evaluator's slot configuration included), and drops caches and the map node store.
 - **Publications are bounded** (D14).
 
 ### D8. State the host keeps, and settlement (H11)
@@ -469,20 +469,19 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
 
   | From | Event | To | Effect |
   |---|---|---|---|
-  | prepared | `confirmed` (slot) | shallow | ordinary inputs spent; inputs and collateral stay reserved; map writes promoted |
+  | prepared | `confirmed` (slot) | shallow | ordinary inputs spent; inputs and collateral stay reserved |
   | shallow | `confirmed` with the same slot | shallow | none (idempotent); a different slot is `bad`, code `conflict` |
   | shallow | an observed `tip > slot + settlementSlots` (this event's or any later call's) | confirmed (final) | released and tombstoned; collateral free |
-  | shallow | `rolledBack` | prepared | promoted map writes reverted; still reserved: it may land again |
+  | shallow | `rolledBack` | prepared | still reserved: it may land again |
   | prepared | `rolledBack` | prepared | none: it may land again until its window closes |
-  | prepared | an observed `tip > validTo + settlementSlots`, or `expired` with such a tip | expired (final) | released and tombstoned; staged writes dropped. `expired` with an earlier tip is `bad`, code `notExpired` |
+  | prepared | an observed `tip > validTo + settlementSlots`, or `expired` with such a tip | expired (final) | released and tombstoned. `expired` with an earlier tip is `bad`, code `notExpired` |
   | prepared | `discarded` | discarded (final) | released at once. For a body that will not land: declined before it was handed out for signing, submission or export, or a keyed attempt the node rejected (D11) |
   | confirmed (final) | `rolledBack` | – | **a rollback deeper than `settlementSlots`**: outside the model. The host stops building (every building call is refused, `refusal`, code `deepRollback`) until it is restarted; the client restarts it and `restore`s what is still pending |
 
   Expiry and depth use **tips the client observed**, never `now`: a `now` that runs ahead of the chain releases
   nothing. A final reservation keeps a tombstone for the session (with its inputs, collateral, `validTo` and inclusion
   slot, for a rewind); repeating its final status is accepted; any other
-  status for it is `bad`, code `conflict`, and if it touched maps the mirrors are **stale**: every later map call is
-  refused (`refusal`, code `mapsStale`) until `reset` rebuilds them. An unknown reservation is `bad`, code
+  status for it is `bad`, code `conflict`. An unknown reservation is `bad`, code
   `unknownReservation`. Because ids are unique, a late status for a discarded reservation can never name a later
   reservation of the same body.
 - **`reset` keeps reservations** (DES-D16): a devnet time control does not undo what may still land.
@@ -498,7 +497,7 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
       becomes **prepared** again, if its `validTo` is above the restored tip;
     - a **confirmed** one whose inclusion slot is at or below the restored tip becomes **shallow** again, until an
       observed tip passes `slot + settlementSlots`, so its collateral stays reserved through that margin (r6, C53);
-  - marks every map mirror stale and stops advancing anything by tip;
+  - stops advancing anything by tip;
   - refuses every building call (`refusal`, code `reconcile`) until `restore` completes.
   The client then re-imports, through `restore`, whatever the host does not hold (after a restart, everything):
   - every transaction it handed out (signed for submission, exported or submitted) whose `validTo` is above the
@@ -526,14 +525,14 @@ listing snapshots (D15); and **MerkleMap mirrors** for map contracts (capability
   idempotent (a transaction already restored keeps its id). `restore` is open while `initialize` said `restoring:
   true` or after a rewound `reset`; building calls are refused (`reconcile`) until a batch with `complete: true`;
   after that, `restore` is `bad`, code `restoreClosed`. A keyed body needs no record: its designated input is one of
-  its inputs (D11). Map writes of a
-  restored transaction are not rebuilt: a map contract with restored pending work is `mapsStale` until it settles and
-  `reset` rebuilds the mirrors.
-- **`reset` and map overlays** (r4, DES-D26): `reset` drops the mirrors and every staged or promoted overlay with
-  them; a map contract with pending work is then `mapsStale` until that work is final and the mirrors are rebuilt.
-- **Map writes** (M3): the runtime writes trie nodes while preparing (`MerkleSupport.java:334-345`), and the JS engine
-  stages node CBOR before returning. The host keeps them in a per-reservation overlay, staged at the commit point and
-  promoted on `confirmed`; shared content-addressed nodes are never dropped while another reservation references them.
+  its inputs (D11). A restored map transaction needs nothing more: its
+  input reservation keeps other calls off the state it spends, and once it lands the next call rebuilds its root from
+  the history.
+- **Map nodes** (r8, replacing r4's overlays and DES-D26's fences): the host keeps **one content-addressed node store
+  per session**, written by history replays and by prepares (the runtime writes trie nodes while preparing,
+  `MerkleSupport.java:334-345`), and dropped by `reset`. A node is keyed by its hash and every lookup starts from the
+  root a chain datum names, so a node left by a transaction that never lands changes no proof; no layer, fence or
+  `mapsStale` refusal is needed. A root the store lacks is rebuilt from the unit's history, which must reach it.
 - **Determinism (I6)** holds for an identical initial session state and an identical sequence of forward calls,
   answers and settlements: D8 deliberately changes the result of repeating a prepare while the first is pending.
 
@@ -544,7 +543,7 @@ Every failure is a JSON-RPC error whose `data` is:
 { "kind": "refusal | bad | internal | unsupported", "code": "…", "message": "…", "sites": [], "retryAtSlot": null }
 ```
 - **`refusal`:** the contract or runtime refused the call (`Require`, a policy, contention, `pending`, `window`,
-  `mapsStale`, `prerequisite`, `deepRollback`, `reconcile`, `mayHaveLanded`, `expiredOnArrival`, a cooldown with
+  `prerequisite`, `deepRollback`, `reconcile`, `mayHaveLanded`, `expiredOnArrival`, a cooldown with
   `retryAtSlot`, F13). `sites` carries the `.jsc` message-map sites as
   structured values the runtime passes up before it formats any message text (a runtime seam, §6).
 - **`bad`:** the request is wrong (unknown contract or method, bad argument, `busy`, `network`, `nowDecreased`,
@@ -567,7 +566,7 @@ stable strings listed in the protocol document (M1a).
   an execution thread; the Node host runs the engine in a worker thread, so the event loop always receives frames,
   cancellations and timers.
 - **Generations** (r3): every execution gets a fresh generation number, used in its reverse-request ids and stamped on
-  every per-call write (claims, staged map writes, snapshot recording); writes from a generation that is no longer
+  every per-call write (claims, snapshot recording); writes from a generation that is no longer
   current are rejected.
 - `$/cancelRequest {id}` and the host's deadline (`callDeadlineMs`, on the monotonic clock) end a forward call. **One
   terminal cause is latched** (r3): the first of cancellation, deadline, failure or result wins. A control event
@@ -1108,3 +1107,8 @@ Also for IntelliAda:
   and rebuilt at once. `restore` drops `operation`. Removed: handoff acknowledgements, the cross-checks of restored
   records and the rule that a handed-out attempt is never `discarded`; each guarded only the consistency of the
   client's own journal.
+  D8 and Q3 (#160, MerkleMap contracts): one content-addressed node store per session replaces the confirmed, staged
+  and promoted overlays, their fences and `refusal/mapsStale`; restore keeps no map claims. History entries are
+  `{txHash}` (no block point); history answers do not advance reservations; the host checks only that the replay
+  reaches the input datum's root, the claims' proofs, each datum's hash, the redeemer size cap and one map verifier
+  withdrawal per transaction. The provider is trusted (bloxbean/joust#169).

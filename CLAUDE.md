@@ -272,6 +272,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   (`Offline.java`; only a script's refusal counts). Nested `node --test` runs need `NODE_TEST_CONTEXT` removed.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
+- Decode Plutus data CBOR with `org.julclang.state.runtime.PlutusBytes` (iterative, reads the original bytes, keeps
+  repeated map keys), never JuLC's `PlutusDataCborDecoder` (recursive: overflows the stack on deep data, and traps in
+  the Wasm engines from about 1,000 levels). Values fed to the VM or the dev host's strict wire keep their own
+  256-level bound (`SchemaCodec.checkNesting`).
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).
 - JuLC's subset: immutable locals (except loop accumulators), no `Function.apply`, records and sealed interfaces only.
 - JuLC treats `@StateContract` exactly like `@OnchainLibrary` (a fixed alias, bloxbean/julc#311): contracts need no

@@ -29,7 +29,11 @@ class VerifierVectorsTest {
             Map.entry("scriptInput/keyedAnchor", "a second predecessor's unit must be continued (continuingOutput/keyedConsumed) or burnt (mint/keyedRemove)"),
             Map.entry("scriptInput/keyedInput", "its parts are equivalent: see EQUIVALENT"),
             Map.entry("scriptInput/keyedRoles", "its parts are equivalent: see EQUIVALENT"),
-            Map.entry("scriptInput/keyedTarget", "two inputs cannot carry the target key's one unit"));
+            Map.entry("scriptInput/keyedTarget", "two inputs cannot carry the target key's one unit"),
+            Map.entry("mapClaims/encoding", "the typed MapClaims conversion itself refuses extra fields and other alternatives (mapClaims/decode)"));
+
+    /** Checks with no vector yet and no proof that another check decides their bodies: follow-ups. */
+    static final Map<String,String> UNCOVERED_CHECKS = Map.of();
 
     @TestFactory List<DynamicTest> isolatedRejections() {
         return cases().stream().map(m -> DynamicTest.dynamicTest(m.name(), () -> {
@@ -86,8 +90,10 @@ class VerifierVectorsTest {
         for (var m : cases()) if (m.site()!=null && m.site().contains("/")) targeted.add(m.site());
         var expected = new TreeSet<>(targeted);
         expected.addAll(IMPLIED.keySet());
+        expected.addAll(UNCOVERED_CHECKS.keySet());
         assertEquals(expected,sites,"every check has a vector of its own, or is listed as implied");
         for (String site : IMPLIED.keySet()) assertFalse(targeted.contains(site),site);
+        for (String site : UNCOVERED_CHECKS.keySet()) assertFalse(targeted.contains(site),site+" has a vector now: remove it from UNCOVERED_CHECKS");
         var vectors = new ArrayList<JsonNode>();
         try (var files = Files.list(DIR)) { for (var f : files.sorted().toList()) vectors.add(JSON.readTree(f.toFile())); }
         return targeted.stream().map(site -> DynamicTest.dynamicTest(site,() -> {
@@ -148,7 +154,9 @@ class VerifierVectorsTest {
             Map.entry("scriptInput/keyedInput#address", "an input elsewhere is not the contract's, which scriptInput/foreign refuses"),
             Map.entry("scriptInput/keyedInput#quantity", "a list unit is one per output (continuingOutput/keyedOutput#single); more cannot balance"),
             Map.entry("scriptInput/keyedRoles#anchor", "without its predecessor the removal or insert dereferences it and the body is malformed"),
-            Map.entry("scriptInput/keyedRoles#target", "without its target the call's spend redeemer cannot be found and the body is malformed"));
+            Map.entry("scriptInput/keyedRoles#target", "without its target the call's spend redeemer cannot be found and the body is malformed"),
+            Map.entry("mapWithdrawal/withdrawal#present", "without the map verifier's withdrawal its claims cannot be found (mapClaims/decode)"),
+            Map.entry("mapWithdrawal/withdrawal#account", "another reward account on a map call needs a redeemer of its own (redeemer/count) or takes the claims' pointer"));
 
     /**
      * Parts with no deciding vector yet, and no proof of equivalence. Follow-ups: each must still change no verdict, so a

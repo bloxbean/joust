@@ -7,7 +7,7 @@ import { rewardAddressOf } from '../src/governors.js';
 
 const dir = new URL('../../../fixtures/host/verifier/', import.meta.url);
 const common = new Set(['mint', 'fee', 'balance', 'signer', 'pointer', 'redeemer', 'collateral', 'deposit',
-  'continuingOutput', 'netOutflow', 'walletOutput', 'scriptInput', 'auxiliaryData', 'withdrawal', 'upperBound', 'lowerBound', 'isValid', 'governance', 'referenceInput', 'budget', 'designatedInput', 'keyedToken', 'keyedRedeemer', 'keyedLink', 'keyedInputValue']);
+  'mapWithdrawal', 'continuingOutput', 'netOutflow', 'walletOutput', 'scriptInput', 'auxiliaryData', 'withdrawal', 'upperBound', 'lowerBound', 'isValid', 'governance', 'referenceInput', 'budget', 'designatedInput', 'keyedToken', 'keyedRedeemer', 'keyedLink', 'keyedInputValue']);
 
 // Negative vectors (by `mutation`) whose protocol-1 check the page verifier does not make yet: the page accepts them
 // where the reference refuses. Each still runs and must still be accepted, so an entry fails once verify.js gains the
@@ -34,6 +34,7 @@ const pageGaps = {
   'short-signer': 'required signers are key hashes',
   'keyed-designated-record': 'the designated input equals the persisted operation record\'s',
   'keyed-signed-by': 'signedBy against the keyed target\'s state',
+  'map-verifier-reference': 'the map verifier script supplied',
   // #153 Codex review: the kit refuses these two; the page does not yet (bloxbean/joust#162).
   'claimed-third-party-tagged': claims, 'owned-destroy-wrong-parent': 'the owned target names the call\'s instance',
   // #156 Codex review: keyed change at the caller's enterprise address (protocol rule 6); keyed.js counts that address
@@ -64,13 +65,14 @@ for (const file of readdirSync(dir).filter(f => f.endsWith('.json'))) {
     const payer = call.address;
     const wallet = { addresses: [payer], keyHashes: [paymentKeyHashOf(payer)],
       utxos: new Map([...utxos].filter(([, u]) => u.address === payer)) };
-    const verifierRefs = [...utxos].filter(([, u]) => u.address === outputVerifier.address &&
-      u.referenceScriptHash === outputVerifier.hash).map(([r]) => r);
+    const pinned = anchor => ({ rewardAddress: rewardAddressOf(anchor.hash, v.networkId),
+      referenceScripts: [...utxos].filter(([, u]) => u.address === anchor.address &&
+        u.referenceScriptHash === anchor.hash).map(([r]) => r) });
     if (v.clock) t.mock.method(Date, 'now', () =>
       v.clock.zeroTimeMs + (v.request.now - v.clock.zeroSlot) * v.clock.slotLengthMs);
     const { problems, report } = await verifyPrepared({ description, txHex: v.result.prepared.cbor,
-      deployment: { policy, address, slotConfig: v.clock, networkId: v.networkId, outputVerifier: {
-        rewardAddress: rewardAddressOf(outputVerifier.hash, v.networkId), referenceScripts: verifierRefs } },
+      deployment: { policy, address, slotConfig: v.clock, networkId: v.networkId, outputVerifier: pinned(outputVerifier),
+        mapVerifier: v.anchors.mapVerifier && pinned(v.anchors.mapVerifier) },
       wallet, call: { ...call, key: call.object, meta, cosignerKeys: call.cosigners },
       chain: { tip: v.request.now, params: v.protocolParams, utxo: async r => utxos.get(r) },
       limits: { maxFee: BigInt(v.maxFee), maxValiditySlots: call.pageLimits?.[1] ?? (v.clock ? 900 : v.request.ttlSlots),

@@ -4,7 +4,7 @@ import com.bloxbean.cardano.client.api.model.Utxo;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
+import org.julclang.state.runtime.PlutusBytes;
 import org.julclang.state.runtime.described.SchemaCodec;
 import java.math.BigInteger;
 import java.util.*;
@@ -38,8 +38,8 @@ final class ContractDatums {
         if (hex == null || hex.isEmpty()) throw new IllegalArgumentException("missing datum");
         try {
             byte[] cbor = HexFormat.of().parseHex(hex);
-            SchemaCodec.checkNesting(cbor, "datum");   // a recursive decoder: the npm host would trap past its stack
-            return PlutusDataCborDecoder.decode(cbor);
+            SchemaCodec.checkNesting(cbor, "datum");   // the protocol's nesting bound (D2), as for every strict value
+            return PlutusBytes.decode(cbor);
         }
         catch (RuntimeException malformed) { throw new IllegalArgumentException("invalid Plutus data", malformed); }
     }

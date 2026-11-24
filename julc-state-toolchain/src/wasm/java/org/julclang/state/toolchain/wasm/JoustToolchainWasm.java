@@ -198,7 +198,7 @@ public final class JoustToolchainWasm {
         var hex = java.util.HexFormat.of();
         var program = org.julclang.clientlib.JulcScriptAdapter.toProgram(request.program());
         var args = new java.util.ArrayList<org.julclang.core.PlutusData>();
-        for (String a : request.args()) args.add(org.julclang.core.cbor.PlutusDataCborDecoder.decode(hex.parseHex(a)));
+        for (String a : request.args()) args.add(org.julclang.state.runtime.PlutusBytes.decode(hex.parseHex(a)));
         var r = VM.evaluateWithArgs(program, org.julclang.vm.LedgerEvaluationTarget.pv11(org.julclang.vm.PlutusLanguage.PLUTUS_V3),
                 args, new org.julclang.vm.ExBudget(10_000_000_000L, 14_000_000L), org.julclang.vm.EvalOptions.DEFAULT);
         if (r instanceof org.julclang.vm.EvalResult.Success s) {

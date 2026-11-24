@@ -23,6 +23,7 @@ record Contracts(Map<String, Contract> all) {
     record Contract(String name, JsonNode description, boolean keyed, boolean stakeSelf, JsonNode messages,
                     org.julclang.state.serve.ContractCalls adapter,
                     String hash, String unsupported, boolean views) {
+        boolean maps() { return description.path("definitions").has("org.julclang.state.api.MerkleMap"); }
         JsonNode meta(String kind, String method) {
             var x = description.path("x-joust");
             for (String group : List.of("creations", "actions", "views", "purposes")) {
@@ -85,7 +86,7 @@ record Contracts(Map<String, Contract> all) {
             var script = com.bloxbean.cardano.client.plutus.spec.PlutusV3Script.builder()
                     .cborHex(ValidatorScripts.output(spec.validatorClass()).cborHex()).build();
             String hash = HexFormat.of().formatHex(script.getScriptHash());
-            String code = x.has("params") ? "params" : desc.path("definitions").has("org.julclang.state.api.MerkleMap") ? "maps" : null;
+            String code = x.has("params") ? "params" : null;
             var adapter = code == null ? ServedContract.of(client) : null;
             all.put(name, new Contract(name, desc, spec.hasKeyed(), spec.stakeSelf(), JscMessages.messageMap(spec), adapter, hash, code, true));
         }

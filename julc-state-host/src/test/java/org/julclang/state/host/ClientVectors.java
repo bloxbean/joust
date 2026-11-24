@@ -23,12 +23,45 @@ final class ClientVectors {
             "HostCouncil-init", "HostCouncil-publish-1", "destroy-events", "owned-action", "owned-destroy",
             "owned-init", "quorum-caller", "quorum-two", "owned-quorum-caller", "owned-quorum-two", "owned-events-caller",
             "owned-destroy-events", "dapp-0003", "dapp-0015", "permuted",
+            // Map vectors by role (MapRecording.m3/m0: the N-th recording of a method), not by file number.
+            "locker-m3-unlock", "guild-m3-recruit", "guild-m3-levelUp", "guild-m3-levelUp-2", "guild-m3-retire",
+            "armory-m0-openVault", "armory-m0-stash", "armory-m0-stash-2", "armory-m0-take", "armory-m0-closeVault",
+            "safes-m0-openSafe", "token-m0-mint", "token-m3-create", "token-m3-mint", "token-m3-mint-2", "token-m3-transfer",
             "registry-m3-init", "registry-m3-upgrade", "registry-m3-claim", "registry-m3-release", "registry-m3-retire"));
         for (String name : HostVectorsTest.REGISTRY) if (!name.equals("Registry-cooldown") && Files.exists(HOST.resolve(name+".json"))) names.add(name);
+        for (String name : HostVectorsTest.TOKEN) if (Files.exists(HOST.resolve(name+".json"))) names.add(name);
         return List.copyOf(names);
     }
 
     static ObjectNode recording(String name) throws Exception {
+        if (name.startsWith("locker-m3-")) return MapRecording.record("locker", MapRecording.m3("locker", name.substring(10)));
+        if (name.startsWith("guild-m3-")) return MapRecording.record("guild", MapRecording.m3("guild", name.substring(9)));
+        if (name.startsWith("armory-m0-")) {
+            String role = name.substring(10), file = MapRecording.m0("guild", "Armory." + role);
+            // The object is the vault the recorded transaction carries (or burns); a creation names none.
+            String object = role.equals("openVault") ? null : MapRecording.ownedObject("guild", file);
+            String method = role.replaceFirst("-\\d+$", "");
+            return switch (role) {
+                case "openVault" -> MapRecording.m0Armory(file, "ownedInit", "openVault", null, obj());
+                case "stash" -> MapRecording.m0Armory(file, "ownedAction", method, object, obj().put("item", "73776f7264").put("count", "3"));
+                // A vault that already holds items: the host rebuilds its map from the object unit's history.
+                case "stash-2" -> MapRecording.m0Armory(file, "ownedAction", method, object, obj().put("item", "67656d").put("count", "5"));
+                case "take" -> MapRecording.m0Armory(file, "ownedAction", method, object, obj().put("item", "73776f7264").put("count", "1"));
+                case "closeVault" -> MapRecording.m0Armory(file, "ownedDestroy", method, object, obj());
+                default -> throw new AssertionError(name);
+            };
+        }
+        // A creation that writes into its map: Safes.openSafe notes the deposited token.
+        if (name.equals("safes-m0-openSafe")) {
+            String file = MapRecording.m0("locker", "Safes.openSafe");
+            String policy = MapRecording.policyOf("locker", file, "474f4c44");
+            var pay = obj().put("lovelace", "0");
+            pay.putArray("assets").addArray().add(policy).addArray().addArray().add("474f4c44").add("70");
+            return MapRecording.m0Owned("locker", org.julclang.state.examples.locker.SafesClient.class, file, "ownedInit",
+                    "openSafe", null, obj().put("tokenPolicy", policy).put("tokenName", "474f4c44").put("qty", "70"), pay);
+        }
+        if (name.equals("token-m0-mint")) return MapRecording.firstM0Mint();
+        if (name.startsWith("token-m3-")) return MapRecording.record("token", MapRecording.m3("token", name.substring(9)));
         if (name.startsWith("registry-m3-")) return RegistryRecording.record(name.substring("registry-m3-".length()));
         if (name.startsWith("dapp-")) {
             var r = ReplayTest.Recording.read(ReplayTest.FIXTURES.resolve("dapp/" + name.substring(5) + "-composed_transaction.json"));
@@ -91,6 +124,12 @@ final class ClientVectors {
         anchors.put("language",script.required("type").asText()).put("policy", hash).put("address", scriptAddress(hash, x.path("stakeSelf").asBoolean()));
         var shared = anchors.putObject("outputVerifier").put("language",verifier.required("type").asText()).put("hash",scriptHash(verifier));
         shared.put("address", scriptAddress(shared.required("hash").asText(),false));
+        if (description.path("definitions").has("org.julclang.state.api.MerkleMap")) {
+            var scriptFile = resource(M1bTest.entry(OutputVerifier.class),"META-INF/plutus/MapVerifier.plutus.json");
+            String mapHash = scriptHash(scriptFile);
+            anchors.putObject("mapVerifier").put("language","PlutusScriptV3").put("hash", mapHash)
+                    .put("address", scriptAddress(mapHash, false));
+        }
         var resolved = vector.putObject("resolved");
         var status = vector.putObject("node");
         var reads = v.required("reads").iterator();
@@ -115,8 +154,8 @@ final class ClientVectors {
         }));
         assertFalse(reads.hasNext());
         assertEquals(v.at("/expected/cbor"), result.at("/prepared/cbor"));
-        if (call.has("operation")) vector.set("clock", v.required("clock"));
-        if (name.startsWith("registry-") || name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
+        if (call.has("operation") || name.startsWith("locker-") || name.startsWith("guild-") || name.startsWith("armory-") || name.startsWith("safes-") || name.startsWith("token-")) vector.set("clock", v.required("clock"));
+        if (name.startsWith("registry-") || name.startsWith("locker-") || name.startsWith("guild-") || name.startsWith("armory-") || name.startsWith("safes-") || name.startsWith("token-") || name.equals("permuted") || name.equals("Bank-publish-1")) vector.set("orderedReads",v.required("reads"));
         vector.set("result", result);
         vector.putArray("violations");
         return vector;

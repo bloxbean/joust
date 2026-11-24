@@ -41,6 +41,10 @@ public final class ReferenceChecker {
     final String payer, caller, policy, address, kind;
     final boolean publish, creation, destroy, owned;
     boolean keyed;
+    List<String> mapFields = List.of();
+    List<String> rewards = List.of();
+    boolean mapContract() { return description.required("definitions").has("org.julclang.state.api.MerkleMap"); }
+    String reward(String verifier) { return "f" + Integer.toHexString(network) + anchors.at("/"+verifier+"/hash").asText(); }
     final int network;
     final Set<String> disabled, problems = new LinkedHashSet<>();
     final Map<String,BigInteger> consumed = new HashMap<>(), walletIn = new HashMap<>(), targetValue = new HashMap<>();
@@ -146,7 +150,7 @@ public final class ReferenceChecker {
     private boolean classify() {
         boolean knownContract = holds("notVerifiable/classify#contract",description.at("/preamble/title").asText().equals(call.required("contract").asText())) &&
                 holds("notVerifiable/classify#params",!x.hasNonNull("params")) &&
-                holds("notVerifiable/classify#maps",!description.required("definitions").has("org.julclang.state.api.MerkleMap"));
+                holds("notVerifiable/classify#maps",!mapContract() || anchors.at("/mapVerifier/hash").asText().matches("[0-9a-f]{56}"));
         if (publish) return knownContract;
         if (!"prepare".equals(v.required("method").textValue()) ||
                 !Set.of("init","action","destroy","ownedInit","ownedAction","ownedDestroy","keyedInit","keyedAction","keyedRemove","keyedRetire").contains(kind)) return false;
@@ -154,6 +158,15 @@ public final class ReferenceChecker {
             if (kind.equals(m.required("kind").textValue()) && call.required("method").equals(m.required("name"))) meta = m;
         }
         if (meta == null) return false;
+        if (mapContract()) {
+            var codec = new org.julclang.state.runtime.described.SchemaCodec(description);
+            var schema = owned ? codec.definition(meta.required("owned").asText()) : codec.resolve(x.required("state"));
+            var names = new ArrayList<String>();
+            for (var field : schema.at("/anyOf/0/fields"))
+                if (field.path("$ref").asText().equals("#/definitions/org.julclang.state.api.MerkleMap"))
+                    names.add(field.required("title").asText());
+            mapFields = List.copyOf(names);
+        }
         var p = meta.path("policies");
         var recipe = meta.path("recipe");
         boolean keyedInit = kind.equals("init") && !x.path("keyed").isEmpty();
@@ -204,7 +217,8 @@ public final class ReferenceChecker {
             byte[] bytes = HEX.parseHex("03"+script.bytes());
             scripts.add(digest(224,bytes,0,bytes.length));
         }
-        test("referenceInput/witnessScript",scripts.stream().allMatch(h -> h.equals(policy) || h.equals(anchors.at("/outputVerifier/hash").textValue())));
+        test("referenceInput/witnessScript",scripts.stream().allMatch(h -> h.equals(policy) || h.equals(anchors.at("/outputVerifier/hash").textValue()) ||
+                mapContract() && h.equals(anchors.at("/mapVerifier/hash").textValue())));
         boolean resolvedAll = true;
         for (String ref : strings(plan.required("referenceInputs"))) {
             var u = resolved.path(ref);
@@ -214,13 +228,23 @@ public final class ReferenceChecker {
             var verifier = anchors.path("outputVerifier");
             boolean holder = address.equals(addr) && policy.equals(hash);
             boolean shared = addr.equals(verifier.path("address").textValue()) && Objects.equals(hash,verifier.path("hash").textValue()) && hash != null;
+            var map = anchors.path("mapVerifier");
+            shared |= mapContract() && addr.equals(map.path("address").textValue()) && hash != null && hash.equals(map.path("hash").textValue());
             boolean instance = address.equals(addr) && call.hasNonNull("instance") && (!keyed || meta.at("/recipe/shared").asBoolean()) &&
                     ONE.equals(utxoValue(u).get(policy + call.get("instance").asText()));
             test("referenceInput/allowed", holds("referenceInput/allowed#call",!publish) && holds("referenceInput/allowed#pinned",holder || shared || instance));
             if (holder || shared) scripts.add(hash);
         }
         if (!publish && resolvedAll) test("referenceInput/scripts",holds("referenceInput/scripts#policy",scripts.contains(policy)) &&
-                holds("referenceInput/scripts#verifier",!ledger.b.containsKey(5) || scripts.contains(anchors.at("/outputVerifier/hash").asText())));
+                holds("referenceInput/scripts#verifier",!usesOutputVerifier() || scripts.contains(anchors.at("/outputVerifier/hash").asText())) &&
+                holds("referenceInput/scripts#mapVerifier",mapFields.isEmpty() || scripts.contains(anchors.at("/mapVerifier/hash").asText())));
+    }
+
+    private boolean usesOutputVerifier() {
+        var ws = ledger.b.get(5);
+        if (ws == null) return false;
+        for (int i = 0; i < ws.items.size(); i += 2) if (ws.items.get(i).bytes().equals(reward("outputVerifier"))) return true;
+        return false;
     }
 
     private void envelope() {
@@ -345,22 +369,40 @@ public final class ReferenceChecker {
     }
     private void withdrawals() {
         var ws = ledger.b.get(5);
-        if (ws == null) return;
+        boolean mapCall = !mapFields.isEmpty();
+        if (ws == null) {
+            test("mapWithdrawal/withdrawal", holds("mapWithdrawal/withdrawal#present", !mapCall));
+            return;
+        }
         require(ws.major==5);
-        String reward = "f" + Integer.toHexString(network) + anchors.at("/outputVerifier/hash").asText();
-        test("withdrawal/allowed",holds("withdrawal/allowed#call",!publish) && holds("withdrawal/allowed#sends",meta.at("/returns/sends").asBoolean()) &&
-                holds("withdrawal/allowed#single",ws.items.size()==2));
+        String reward = reward("outputVerifier"), mapReward = mapCall ? reward("mapVerifier") : null;
+        // Ledger refuses a reward account named twice, so each verifier withdraws at most once.
+        test("withdrawal/allowed",holds("withdrawal/allowed#call",!publish) && holds("withdrawal/allowed#single",ws.items.size()<=(mapCall ? 4 : 2)));
+        var accounts = new ArrayList<String>();
         for (int i=0;i<ws.items.size();i+=2) {
+            String account = ws.items.get(i).bytes();
+            accounts.add(account);
             var coin = ws.items.get(i+1).integer();
-            test("withdrawal/account",ws.items.get(i).bytes().equals(reward));
-            test("withdrawal/amount",coin.signum()==0);
+            if (!mapCall || account.equals(reward)) {
+                test("withdrawal/allowed",holds("withdrawal/allowed#sends",!publish && meta.at("/returns/sends").asBoolean()));
+                test("withdrawal/account",account.equals(reward));
+                test("withdrawal/amount",coin.signum()==0);
+            } else {
+                test("mapWithdrawal/withdrawal",holds("mapWithdrawal/withdrawal#account",account.equals(mapReward)));
+                test("mapWithdrawal/amount",coin.signum()==0);
+            }
             if (enabled("balance/conserved#withdrawals")) consumed.merge("lovelace",coin,BigInteger::add);
         }
+        accounts.sort(String::compareTo);
+        rewards = List.copyOf(accounts);
+        if (mapCall) test("mapWithdrawal/withdrawal",holds("mapWithdrawal/withdrawal#present",accounts.contains(mapReward)));
     }
 
     private void publication() {
         String kind = prerequisiteKind(), hash = prerequisiteHash();
         var verifier = anchors.path("outputVerifier");
+        boolean map = mapContract() && hash.equals(anchors.at("/mapVerifier/hash").textValue());
+        if (map) verifier = anchors.required("mapVerifier");
         boolean shared = hash.equals(verifier.path("hash").textValue());
         boolean sends = false, withdraw = false;
         for (String group : List.of("creations","actions","purposes")) for (var m : x.path(group)) {
@@ -371,7 +413,7 @@ public final class ReferenceChecker {
         boolean holder = !kind.equals("stakeRegistration");
         boolean registration = !kind.equals("referenceScript");
         test("publicationShape/kind",holds("publicationShape/kind#known",Set.of("stakeRegistration","referenceScript","verifier").contains(kind)) &&
-                (shared ? holds("publicationShape/kind#sends",sends) : holds("publicationShape/kind#policy",hash.equals(policy)) &&
+                (shared ? holds("publicationShape/kind#sends",map || sends) : holds("publicationShape/kind#policy",hash.equals(policy)) &&
                         holds("publicationShape/kind#verifierShared",!kind.equals("verifier")) && holds("publicationShape/kind#withdraw",!registration || withdraw)));
         String target = shared ? verifier.required("address").textValue() : address;
         var node = v.required("node");

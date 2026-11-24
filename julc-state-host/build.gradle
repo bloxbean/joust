@@ -38,6 +38,8 @@ dependencies {
     testImplementation project(':examples:counter')
     testImplementation project(':examples:escrow')
     testImplementation project(':examples:token')
+    testImplementation project(':examples:locker')
+    testImplementation project(':examples:guild')
     testImplementation project(':examples:bank')
     testImplementation project(':examples:treasury')
     testImplementation project(':examples:devkit')
@@ -52,6 +54,8 @@ dependencies {
 tasks.withType(Test).configureEach {
     inputs.files(rootProject.fileTree('fixtures/m3') { include 'escrow/*.json', 'dex/*.json' })
             .withPropertyName('m3Recordings').withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(rootProject.fileTree('fixtures/m3') { include 'token/*.json', 'locker/*.json', 'guild/*.json' })
+            .withPropertyName('mapRecordings').withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('fixtures/m0')).withPropertyName('fixturesM0').withPathSensitivity(PathSensitivity.RELATIVE)
     // The forked-host tests (fd 1 diversion, no side effects) launch `java` from this toolchain.
     def launcher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
@@ -89,6 +93,7 @@ tasks.named('test', Test) {
     systemProperty 'joust.host.vectors', vectors.absolutePath
     if (providers.gradleProperty('joustHostFixtures').isPresent()) {
         systemProperty 'joust.host.record', 'true'
+        systemProperty 'joust.host.mapsOnly', providers.gradleProperty('joustHostFixtures').get() == 'maps'
         systemProperty 'joust.host.keyedOnly', providers.gradleProperty('joustHostFixtures').get() == 'keyed'
         outputs.upToDateWhen { false }
     }
@@ -125,6 +130,8 @@ publishing.publications.withType(MavenPublication).configureEach {
     if (name == 'mavenJava') artifact(clientKit)
 }
 tasks.named('test') {
+    inputs.dir(rootProject.file('fixtures/m3/token'))
+    inputs.dir(rootProject.file('fixtures/m3/locker'))
     inputs.dir(rootProject.file('fixtures/m3/registry'))
     inputs.dir(rootProject.file('fixtures/host/verifier'))
     inputs.dir(rootProject.file('fixtures/host/sessions'))

@@ -24,8 +24,8 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     root = install();
     const src = join(root, 'contracts');
     mkdirSync(src);
-    for (const name of ['Counter', 'Bank', 'Dex', 'HostCouncil', 'HostClub', 'Registry', 'Token', 'Treasury', 'Pool']) {
-      const dir = name.toLowerCase();
+    for (const name of ['Counter', 'Bank', 'Dex', 'HostCouncil', 'HostClub', 'Registry', 'Token', 'Locker', 'Safes', 'Guild', 'Armory', 'Treasury', 'Pool']) {
+      const dir = name === 'Armory' ? 'guild' : name === 'Safes' ? 'locker' : name.toLowerCase();
       const folder = name.startsWith('Host') ? 'julc-state-host/src/test/java/org/julclang/state/host/fixture'
         : 'examples/' + dir + '/src/main/java/org/julclang/state/examples/' + dir;
       cpSync(join(repo, folder, name + '.java'), join(src, name + '.java'));
@@ -72,7 +72,7 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       check(negative, { ...result, prepared });
     }
   }
-  for (const [recording, name] of [['bank', 'Bank'], ['keyed', 'Registry']]) it('replays every ' + name + ' client and host frame', async () => {
+  for (const [recording, name] of [['bank', 'Bank'], ['keyed', 'Registry'], ['maps', 'Token']]) it('replays every ' + name + ' client and host frame', async () => {
     start(contracts.filter(c => JSON.parse(c.description).preamble.title.endsWith('.' + name)));
     try {
       for (const original of fixture('sessions/' + recording).frames) {
@@ -168,8 +168,8 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
   });
   it('refuses Plutus data nested past 256 CBOR levels before decoding it, and keeps serving (#154 review G3-4, F1)', async () => {
     // 16,383 nested lists trapped the image (tooDeep, then the host exited): datums and Data arguments nest at most 256
-    // CBOR levels (SchemaCodec.checkNesting). No served contract takes a Data argument; decode reads its datum with the
-    // same recursive decoder, so it shows the image survives the bound.
+    // CBOR levels (SchemaCodec.checkNesting). No served contract takes a Data argument; decode reads its datum under the
+    // same bound, so it shows the image survives it.
     const v = fixture('owned-action');
     const { call } = v.params;
     start(contracts.filter(c => JSON.parse(c.description).preamble.title === call.contract));
@@ -272,6 +272,14 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
     try {
       await initialize({ clock: v.clock, time: v.time, network: v.network, limits: v.limits });
       for (const e of v.initialSession.registered) assert.deepEqual((await peer.rpc('registered', e)).result, {});
+      if (v.feature === 'maps') {
+        const m = await peer.rpc(v.method, v.params, q => {
+          assert.equal(q.kind, 'utxos');
+          return { tip: { slot: v.params.now, height: 1, hash: 'aa'.repeat(32) }, unsupported: true };
+        });
+        assert.equal(m.error?.data.code, 'read:utxos');
+        return;
+      }
       let i = 0;
       const m = await peer.rpc(v.method, v.params, q => {
         const r = reads[i++]; assert.deepEqual(q, r?.request); return r.answer;
@@ -288,7 +296,7 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       }
     } finally { await peer.close(); }
   });
-  for (const name of readdirSync(join(path, 'verifier')).filter(f => f.startsWith('registry-')).map(f => f.slice(0,-5))) {
+  for (const name of readdirSync(join(path, 'verifier')).filter(f => (f.startsWith('registry-') || f.startsWith('token-') || f.startsWith('locker-') || f.startsWith('guild-') || f.startsWith('armory-') || f.startsWith('safes-'))).map(f => f.slice(0,-5))) {
     it('checks the live ' + name + ' result and isolated mutations', async () => {
       const v = fixture('verifier/' + name);
       start(contracts.filter(c => JSON.parse(c.description).preamble.title === v.request.call.contract));
@@ -306,6 +314,46 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
       } finally { await peer.close(); }
     });
   }
+  it('refuses inconsistent map history and preserves the typed map read errors', async () => {
+    const v = fixture('verifier/token-m3-mint-2');
+    start(contracts.filter(c => JSON.parse(c.description).preamble.title === v.request.call.contract));
+    try {
+      await initialize({ clock: v.clock });
+      for (const [kind, change, code] of [
+        ['assetHistory', a => ({ ...a, value: [] }), 'inconsistentRead'],
+        ['redeemers', a => ({ tip: a.tip, absent: true }), 'inconsistentRead'],
+        ['datum', a => ({ ...a, value: '00' }), 'inconsistentRead'],
+        ['datum', a => ({ tip: a.tip, unsupported: true }), 'read:datum'],
+      ]) {
+        let i = 0;
+        const m = await peer.rpc('prepare', v.request, q => {
+          const pair = v.orderedReads[i++];
+          assert.deepEqual(q, pair.request);
+          return q.kind === kind ? change(pair.answer) : pair.answer;
+        });
+        assert.equal(m.error?.data.code, code, JSON.stringify(m));
+      }
+    } finally { await peer.close(); }
+  });
+  it('replays the fresh DevKit Token workflow', { skip: !names.includes('Token-init') && 'requires fresh DevKit maps recording' }, () => {
+    for (const n of ['Token-publish-1', 'Token-publish-2', 'Token-publish-3', 'Token-init', 'Token-mint', 'Token-transfer', 'Token-mint-again'])
+      assert.ok(names.includes(n), n);
+  });
+  it('restores a pending transfer with nonempty MPF paths', async () => {
+    const v = fixture('verifier/token-m3-transfer');
+    start(contracts.filter(c => JSON.parse(c.description).preamble.title === v.request.call.contract));
+    try {
+      await initialize({ clock: v.clock, restoring: true });
+      const transactions = [{ cbor: v.result.prepared.cbor, state: 'prepared' }];
+      const first = await peer.rpc('restore', { transactions, complete: false });
+      assert.equal(first.result?.reservations.length, 1, JSON.stringify(first.error));
+      const repeat = await peer.rpc('restore', { transactions, complete: true });
+      assert.deepEqual(repeat.result, first.result);
+      // The restored transfer holds the state input.
+      const refused = await peer.rpc('prepare', v.request, q => v.orderedReads.find(r => isDeepStrictEqual(r.request, q)).answer);
+      assert.equal(refused.error?.data.code, 'pending', JSON.stringify(refused));
+    } finally { await peer.close(); }
+  });
   it('restores a keyed attempt and its designation before settlement', async () => {
     const v = fixture('verifier/registry-m3-release');
     const p = structuredClone(v.request);

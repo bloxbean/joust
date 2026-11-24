@@ -774,6 +774,84 @@ public final class MutationVectors {
                 }
             }));
         }
+        // ADR-0014 maps (#160): the map verifier's withdrawal, claims and datum roots. Swapping the map and output
+        // claims of a call with both (Locker unlock) is refused by mapClaims and redeemer/claimsShape together.
+        String token = "token-m3-mint-2";
+        cases.add(new Case("map-withdrawal",token,"mapWithdrawal/withdrawal", e -> e.body(5,"a1581df0"+OTHER+"00")));
+        cases.add(new Case("map-policy",token,"mapClaims/claim", e -> e.swap(e.mapClaim().at(0),"581c"+OTHER)));
+        cases.add(new Case("map-owner",token,"mapClaims/claim", e -> e.swap(e.mapClaim().at(1).tagged(121).at(0),"5820"+"12".repeat(32))));
+        cases.add(new Case("map-field",token,"mapClaims/claim", e -> e.swap(e.mapClaim().at(2),"01")));
+        cases.add(new Case("map-proof",token,"mapClaims/claim", e -> {
+            var after = e.mapClaim().at(5).at(0).tagged(121).at(1).tagged(121);
+            e.swap(after.at(2),"4101");
+        }));
+        cases.add(new Case("map-output-root",token,"mapDatum/root", e -> {
+            var datum = e.out(0).fields().get(2).at(1).tagged(24);
+            String root = e.mapClaim().at(6).bytes();
+            e.swap(datum,datum.raw().replace(root,"ab".repeat(32)));
+        }));
+        // Owned-object maps (Armory vaults, #160 Q1): the claim's owner is the creation's seed or the object input.
+        cases.add(new Case("owned-map-owner-instance","armory-m0-openVault","mapClaims/claim", e -> {
+            String unit = e.v.at("/anchors/policy").asText()+e.call("instance");
+            String ref = null;
+            for (var r : e.ledger.plan.required("referenceInputs")) {
+                var u = e.resolved(r.asText());
+                for (var a : u.required("amount")) if (unit.equals(a.required("unit").asText())) ref = r.asText();
+            }
+            e.swap(e.mapClaim().at(1), e.outRef(Objects.requireNonNull(ref, "no instance reference input")));
+        }));
+        cases.add(new Case("owned-map-owner-wallet","armory-m0-stash-2","mapClaims/claim",
+                e -> e.swap(e.mapClaim().at(1), e.outRef(e.walletInput()))));
+        // Q7: a destroy whose claim writes (an insert into the vault's empty map, with its new root recomputed), and a
+        // continuation whose map still lists a pending read at the right root.
+        cases.add(new Case("map-destroy-write","armory-m0-closeVault","mapClaims/destroyWrites", e -> {
+            org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
+            var claims = org.julclang.clientlib.PlutusDataAdapter.convert(org.julclang.clientlib.PlutusDataAdapter.toClientLib(
+                    CallRules.data(e.rewardData(0).raw())), org.julclang.state.api.mpf.MapClaims.class);
+            var c = claims.claims().head();
+            byte[] key = HEX.parseHex("73776f7264"), value = HEX.parseHex("01");
+            var empty = org.julclang.core.types.JulcList.<org.julclang.state.api.mpf.ProofStep>empty();
+            var write = new org.julclang.state.api.mpf.WriteProof(new org.julclang.state.api.MapEntry(key, false, new byte[0]),
+                    new org.julclang.state.api.MapEntry(key, true, value), empty);
+            byte[] root = org.julclang.state.api.mpf.Mpf.insert(c.oldRoot(), key, value, empty);
+            var claim = new org.julclang.state.api.mpf.MapClaim(c.policy(), c.owner(), c.field(), c.oldRoot(), c.reads(),
+                    org.julclang.core.types.JulcList.of(write), root);
+            var encoded = org.julclang.clientlib.PlutusDataAdapter.convert(new org.julclang.state.api.mpf.MapClaims(org.julclang.core.types.JulcList.of(claim)));
+            e.swap(e.rewardData(0), encoded.serializeToHex());
+        }));
+        cases.add(new Case("map-pending-read","armory-m0-stash-2","mapDatum/root", e -> {
+            String root = e.mapClaim().at(6).bytes();
+            for (int i = 0; i < e.ledger.outputs.size(); i++) {
+                String datum = e.ledger.plan.at("/outputs/"+i+"/datum").asText("");
+                if (datum.contains("5820"+root+"8080"))
+                    e.outDatum(i, datum.replace("5820"+root+"8080", "5820"+root+"9fd8799f4161d87a804101ffff"+"80"));
+            }
+        }));
+        cases.add(new Case("map-no-claims",token,"mapClaims/count", e -> e.swap(e.rewardData(0).tagged(121).at(0),"80")));
+        cases.add(new Case("map-claims-decode",token,"mapClaims/decode", e -> e.swap(e.rewardData(0),"d87980")));
+        cases.add(new Case("map-creation-root","token-m3-create","mapClaims/creationRoot", e -> {
+            // A new instance whose map starts at another root: no writes, old and new root equal, the datum agreeing.
+            String zero = "00".repeat(32), root = "ab".repeat(32);
+            e.swap(e.mapClaim().at(6),"5820"+root);
+            e.swap(e.mapClaim().at(3),"5820"+root);
+            e.outDatum(0,e.outDatum(0).replace("5820"+zero+"8080","5820"+root+"8080"));
+        }));
+        cases.add(new Case("map-withdrawal-amount",token,"mapWithdrawal/amount", e -> {
+            var ws = e.ledger.b.get(5);
+            e.swap(ws.items.get(1),"01");
+            e.coin(e.ledger.outputs.size()-1,1);
+        }));
+        cases.add(new Case("map-verifier-reference",token,"referenceInput/scripts", e -> {
+            var refs=e.ledger.b.get(18).tagged(258);
+            String shared=e.v.at("/anchors/mapVerifier/address").asText();
+            var kept=new StringBuilder();
+            int n=0;
+            for (var r : refs.items) {
+                String ref=r.at(0).bytes()+"#"+r.at(1).uint();
+                if (!shared.equals(e.resolved(ref).required("address").asText())) { kept.append(r.raw()); n++; }
+            }
+            e.body(18,"d90102"+head(4,n)+kept);
+        }));
         return cases;
     }
 
@@ -1033,6 +1111,15 @@ public final class MutationVectors {
             pairs.forEach((k,value) -> buf.append(uint(k)).append(value));
             swap(obj,buf.toString());
         }
+        Cbor rewardData(int index) {
+            var rs = redeemers();
+            for (int i=0;i<rs.items.size();i+=2) {
+                var pointer = rs.items.get(i);
+                if (pointer.at(0).uint()==3 && pointer.at(1).uint()==index) return rs.items.get(i+1).at(0);
+            }
+            throw new AssertionError("missing reward pointer " + index);
+        }
+        Cbor mapClaim() { return rewardData(0).tagged(121).at(0).at(0).tagged(121); }
         void swap(Cbor item,String hex) { ledger=new Ledger(splice(item,hex)); }
         String splice(Cbor item,String hex) {
             if (item.source!=ledger.tx.source) throw new IllegalArgumentException("stale edit offset");

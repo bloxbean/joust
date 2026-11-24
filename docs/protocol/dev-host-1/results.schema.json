@@ -34,7 +34,7 @@
         "capabilities": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "reads": {
           "type": "array",
-          "items": {"enum": ["utxos", "output", "tip", "protocolParams", "script", "stakeRegistration"]}
+          "items": {"enum": ["utxos", "output", "tip", "protocolParams", "script", "stakeRegistration", "assetHistory", "redeemers", "datum"]}
         },
         "versions": {
           "type": "object",
@@ -276,7 +276,9 @@
           "properties": {
             "contract": {"type": "string", "minLength": 1},
             "reward": {"type": "string", "minLength": 1},
+            "mapVerifier": {"type": "string", "minLength": 1},
             "outputVerifier": {"type": "string", "minLength": 1},
+            "mapVerifierReward": {"type": "string", "minLength": 1},
             "outputVerifierReward": {"type": "string", "minLength": 1}
           },
           "required": ["contract"],
@@ -294,6 +296,7 @@
             "spend": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
             "mint": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
             "stake": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+            "mapVerifier": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
             "outputVerifier": {"type": "string", "pattern": "^[0-9a-f]{56}$"}
           },
           "required": ["spend", "mint"],
@@ -303,6 +306,7 @@
           "type": "object",
           "properties": {
             "contract": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"},
+            "mapVerifier": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"},
             "outputVerifier": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"}
           },
           "required": [],

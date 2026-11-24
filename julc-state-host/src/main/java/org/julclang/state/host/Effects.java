@@ -14,7 +14,7 @@ import static org.julclang.state.host.Wire.*;
 /** D5a projections of the balanced body. Runtime metadata supplies only attribution and amounts owed. */
 final class Effects {
     static ObjectNode of(Contracts.Contract c, JsonNode meta, JsonNode plan, PreparedTx prepared, String address,
-                         String instance, String object, String spent) {
+                         String instance, String object, String spent, String outputReward) {
         var out = obj().putNull("state");
         var objects = out.putArray("objects");
         var events = out.putArray("events");
@@ -64,22 +64,18 @@ final class Effects {
             // As for sends: a payout the build recorded must be in the body (final review F-B1).
             if (!found) throw new IllegalStateException("a recorded payout has no output in the body");
         }
-        sends(prepared, plan, outputs, spent, sends);
+        sends(prepared, plan, outputs, spent, sends, outputReward);
         if (meta.at("/returns/events").asBoolean()) events(c, meta, plan, spent, events);
         return out;
     }
 
-    private static void sends(PreparedTx prepared, JsonNode plan, JsonNode outputs, String spent, ArrayNode sends) {
+    private static void sends(PreparedTx prepared, JsonNode plan, JsonNode outputs, String spent, ArrayNode sends, String outputReward) {
         if (prepared.sends().isEmpty()) return;
         var metadata = new HashMap<Integer, PreparedTx.Send>();
         prepared.sends().forEach(s -> metadata.put(s.index(), s));
-        // M1 permits only the output verifier's zero withdrawal on a send (BodyBalance.checkCall), so its reward
-        // pointer is 0. A body with another withdrawal fails closed here until the pointer is located (#151 DB7).
-        var withdrawals = prepared.transaction().getBody().getWithdrawals();
-        if (withdrawals == null || withdrawals.size() != 1)
-            throw new IllegalStateException("a send needs exactly the output verifier's withdrawal");
+        int pointer = MapWithdrawal.pointer(prepared.transaction(), outputReward);
         for (var r : plan.required("redeemers")) {
-            if (!"reward".equals(r.path("tag").asText()) || r.required("index").asInt() != 0) continue;
+            if (!"reward".equals(r.path("tag").asText()) || r.required("index").asInt() != pointer) continue;
             var claims = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(ContractDatums.parse(str(r, "data"))),
                     OutputClaims.class);
             for (var claim : claims.claims()) {

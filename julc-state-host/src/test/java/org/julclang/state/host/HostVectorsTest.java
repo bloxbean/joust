@@ -69,6 +69,12 @@ class HostVectorsTest {
     }
 
     static void replay(JsonNode v) throws Exception {
+        if ("maps".equals(v.path("feature").textValue())) {
+            // Preserve the historical M1b request. A maps host now asks for prerequisite evidence.
+            var current = run(v,q -> obj().put("unsupported",true).set("tip",ReadsTest.point(v.at("/params/now").asLong())));
+            error("unsupported","read:utxos",current);
+            return;
+        }
         var reads = v.required("reads").elements();
         var response = run(v, q -> {
             assertTrue(reads.hasNext(), q::toString);
@@ -120,6 +126,14 @@ class HostVectorsTest {
         }
         Assumptions.assumeFalse(tests.isEmpty(), "no DevKit host vectors recorded");
         return tests;
+    }
+
+    static final List<String> TOKEN = List.of("Token-publish-1","Token-publish-2","Token-publish-3","Token-init",
+            "Token-mint","Token-transfer","Token-mint-again");
+
+    @Test void freshDevKitTokenWorkflow() throws Exception {
+        Assumptions.assumeTrue(Files.exists(DIRECTORY.resolve("Token-init.json")), "record maps on a fresh DevKit");
+        for (var name : TOKEN) replay(JSON.readTree(DIRECTORY.resolve(name+".json").toFile()));
     }
 
     static final List<String> REGISTRY = List.of("Registry-publish-1","Registry-init","Registry-grant-62","Registry-grant-61",
@@ -178,7 +192,6 @@ class HostVectorsTest {
         var vectors = new LinkedHashMap<String, ObjectNode>();
         for (var example : List.of(
                 new Example("params", org.julclang.state.examples.treasury.TreasuryClient.class,"action","pay"),
-                new Example("maps", org.julclang.state.examples.token.TokenClient.class,"init","create"),
                 new Example("authorizedBy", org.julclang.state.host.fixture.HostCouncilClient.class,"action","veto"),
                 new Example("unverifiable", org.julclang.state.examples.pool.PoolClient.class,"action","donate"))) {
             var p = obj().put("now",now).put("ttlSlots",ttl);
@@ -197,7 +210,7 @@ class HostVectorsTest {
 
     @Test void everyUnsupportedFeatureReplaysWithItsTypedCodeBeforeARead() throws Exception {
         var r = IntegrationTest.record();
-        assertEquals(4, unsupportedVectors(init(),r.params().required("now").asLong(),20,
+        assertEquals(3, unsupportedVectors(init(),r.params().required("now").asLong(),20,
                 r.params().at("/call/address").asText()).size());
     }
 

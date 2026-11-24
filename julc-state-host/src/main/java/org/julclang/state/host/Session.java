@@ -124,7 +124,12 @@ final class Session implements Transport.Handler {
         if (namedViews) capabilities.add("views");
         capabilities.add("objects").add("quorum");
         if (entries.all().values().stream().anyMatch(c -> c.keyed() && c.unsupported() == null)) capabilities.add("keyed");
-        out.set("reads", JSON.valueToTree(Reads.KINDS));
+        var kinds = new ArrayList<>(Reads.BASE_KINDS);
+        if (hasMaps(entries)) {
+            capabilities.add("maps");
+            kinds.addAll(Reads.MAP_KINDS);
+        }
+        out.set("reads", JSON.valueToTree(kinds));
         out.set("versions", versions.get());
         out.set("contracts", entries.summary());
         return new Transport.Reply(out, () -> {
@@ -135,6 +140,10 @@ final class Session implements Transport.Handler {
             reservations = table;
             runtime = rt;
         });
+    }
+
+    private static boolean hasMaps(Contracts entries) {
+        return entries.all().values().stream().anyMatch(c -> c.maps() && c.unsupported() == null);
     }
 
     private static JsonNode jvmVersions() {
@@ -150,10 +159,16 @@ final class Session implements Transport.Handler {
     }
 
     private StateRuntime runtime(Network net, Clock time, Reservations table, Limits config) {
+        // One content-addressed node store per runtime, so per session until reset (ADR-0022 D8): a node a prepare or a
+        // history replay writes belongs to its own root, and a lookup starts from the root a chain datum names.
+        var store = new MapNodes();
         return StateRuntime.builder(backend).network(net)
                 .chainTime(new SlotChainTime(time.zeroSlot, time.zeroMs, time.length, backend))
                 .evaluator((tx, utxos) -> evaluating.get().evaluateTx(tx, utxos))
-                .claimStore(table).settlementSlots(config.margin).mapStore(new InMemoryNodeStore()).build();
+                .claimStore(table).settlementSlots(config.margin).mapStore(store)
+                .unitProver(unit -> new MerkleSupport.TrieProver(store, root ->
+                    new MapReads(reading.get()).rebuild(unit, runtime.mapVerifier().hash(), store, () -> store.get(root) != null)))
+                .build();
     }
 
     private Transport.Reply reset(JsonNode p) {
@@ -380,10 +395,13 @@ final class Session implements Transport.Handler {
         var plan = JSON.valueToTree(built.plan());
         result.set("plan", plan);
         out.set("predicted", Effects.of(c, meta, plan, built, handle.address(),
-                kind.equals("init") ? created : instance, kind.equals("ownedInit") ? created : object, spent));
+                kind.equals("init") ? created : instance, kind.equals("ownedInit") ? created : object, spent, built.sends().isEmpty() ? null : runtime.outputVerifier().rewardAddress()));
         if (keyed) ceiling = Long.MAX_VALUE;   // Compose bounded the keyed window by the page limits (D7)
-        BodyBalance.checkCall(built.transaction().getBody(),
-                Set.of(handle.rewardAddress(), handle.runtime().outputVerifier().rewardAddress()), handle.policyId());
+        // #151 review SB3: a call's withdrawals are zero ones from the contract's, the output verifier's or (a map
+        // contract) the map verifier's reward account.
+        var rewards = new java.util.HashSet<>(Set.of(handle.rewardAddress(), handle.runtime().outputVerifier().rewardAddress()));
+        if (c.maps()) rewards.add(runtime.mapVerifier().rewardAddress());
+        BodyBalance.checkCall(built.transaction().getBody(), rewards, handle.policyId());
         return prepared(built, out, reads, ceiling, null, keyed ? operation.identity().designated() : null);
     }
 
