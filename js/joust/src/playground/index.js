@@ -10,9 +10,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../build.js';
 import { attach } from '../dev.js';
-import { checkDevkitNetwork, DEFAULT_TTL_MS, devkitIdentity, sameChain, yaciChain } from './devkit.js';
 import { pageFiles } from './page.js';
-import { startPlayground } from './server.js';
 import { gradleBuild, gradleSource, isGradleProject, readSpecBytes, runGradle } from './gradle.js';
 
 /**
@@ -24,7 +22,9 @@ export function devkitOptions(config, net) {
   if (base !== undefined && !(Number.isSafeInteger(base) && base >= 0 && base < 2 ** 31 - 64)) {
     throw new Error('joust.config.json: playground.identityBase is an account index');
   }
-  return { net, ttlSlots: Math.max(1, Math.ceil((config.playground?.ttlMs ?? DEFAULT_TTL_MS) / net.clock.slotLengthMs)), identityBase: base };
+  // No ttlMs: the session's own default (devkit.js's DEFAULT_TTL_MS), so this module loads devkit.js only in DevKit mode.
+  const ttlMs = config.playground?.ttlMs;
+  return { net, ttlSlots: ttlMs === undefined ? undefined : Math.max(1, Math.ceil(ttlMs / net.clock.slotLengthMs)), identityBase: base };
 }
 
 /**
@@ -47,6 +47,9 @@ export async function playground({ config, root = process.cwd(), mode = 'offline
   // The ABI and lock gates, as joust build: a changed ABI or lock fails here unless its flag is given (I10).
   const r = await build({ root, src: config.contracts, out: config.out, acceptAbi, acceptLock, log });
   if (!r.ok) throw new Error('joust playground: the build failed (see above)');
+  // Loaded only now: the server's offline ledger needs this package's own dependencies, which a refusal above (a
+  // Gradle build without its wrapper, a failed build) must not.
+  const { startPlayground } = await import('./server.js');
   const engine = mode === 'offline' ? await (await import('@julclang/joust-runtime')).loadEngine() : null;
   const page = await pageFiles();
   return announce((o) => startPlayground({ root, engine, page, port: port ?? 0, log, mode,
@@ -56,6 +59,7 @@ export async function playground({ config, root = process.cwd(), mode = 'offline
 /** DevKit mode's network (I4): checked before anything is attached or built, then attached as joust dev does. */
 async function devkitNetwork(config, networkName, log) {
   const name = networkName ?? config.network;
+  const { checkDevkitNetwork, devkitIdentity, sameChain, yaciChain } = await import('./devkit.js');
   checkDevkitNetwork(config.networks?.[name], name);
   const net = await attach(config, name, { log });
   // D-1, M3-S1: the chain API must serve the admin API's chain (a public network's API behind a DevKit admin fails).
@@ -126,6 +130,7 @@ async function gradlePlayground({ root, config, port, acceptAbi, acceptLock, ope
   }
   // The spec this gated build wrote: the first session runs it, or builds again (gates included) if it changed since.
   const source = gradleSource(build.project, { log, gatedSpec: readSpecBytes(build.project) });
+  const { startPlayground } = await import('./server.js');
   const engine = mode === 'offline' ? await (await import('@julclang/joust-runtime')).loadEngine() : null;
   const page = await pageFiles();
   return announce((o) => startPlayground({ root: build.project, engine, page, port: port ?? 0, log, source, mode,

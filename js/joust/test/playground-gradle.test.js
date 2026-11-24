@@ -1016,7 +1016,14 @@ describe('ADR-0024 M2 I6: a Gradle rebuild during a session', { skip: missing ||
         assert.equal(contract.describe.calls.find((c) => c.kind === 'view').served, true);
         // Rebuild with a changed build (one more class), as the user would in another terminal.
         writeFileSync(join(dir, 'src/main/java/app/Rebuilt.java'), 'package app;\n\nfinal class Rebuilt {}\n');
-        const r = spawnSync(join(dir, 'gradlew'), ['build', 'joustHostSpec', '-q'], { cwd: dir, encoding: 'utf8' });
+        // Asynchronously: a synchronous spawn would stall this process's event loop, server included, so the fetch
+        // after it could reuse a kept-alive socket whose idle timeout fired meanwhile (ECONNRESET on a slow build).
+        const r = await new Promise((done, fail) => {
+          const p = spawn(join(dir, 'gradlew'), ['build', 'joustHostSpec', '-q'], { cwd: dir, stdio: ['ignore', 'ignore', 'pipe'] });
+          let stderr = '';
+          p.stderr.setEncoding('utf8').on('data', (d) => { stderr += d; });
+          p.on('error', fail).on('close', (status) => done({ status, stderr }));
+        });
         assert.equal(r.status, 0, r.stderr);
         assert.equal((await post('session', { session: a.session })).result.stale, true);
         const refused = await post('prepare', { session: a.session, call: { contract: COUNTER, kind: 'init', method: 'init',
