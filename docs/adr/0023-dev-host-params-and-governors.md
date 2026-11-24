@@ -1,6 +1,6 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r20). Design only.
+**Status:** Proposed (r21). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
@@ -122,10 +122,11 @@ its own schemas (`docs/protocol/dev-host-2/`, protocol 1's with those additions)
   first, so Treasury's `deployment` with `params` is `unsupported/params`; `prepare` checks the call's field list
   first and `decode` its fields before the contract lookup, so Treasury's `prepare` with `call.params` and `decode`
   with `params` are `bad/request`. **The oracle is protocol 1's own recorded material** (r19, replacing r10–r11's
-  pinned M3 host binary, X39, X46; named precisely in r20): the final M3b host recordings (`fixtures/host`, replayed
-  against a host as `js/joust/test/host-conformance.test.js` does) and the `dev-host-1` result schemas, run unchanged
-  against a host that ships this ADR and is offered `[1]`, plus the three precedence examples above as plain
-  vectors. (The published `dev-host-1` conformance kit is a client kit and does not test a host.) `fingerprint` and `versions` are checked against each launch (ADR-0022 D4: they name the actual
+  pinned M3 host binary, X39, X46; named precisely in r20, r21): the final M3b host recordings (`fixtures/host`)
+  replayed through the **pinned final M3b harness** `js/joust/test/host-conformance.test.js` with its host-specific
+  comparisons (the npm host omits the `views` capability, and `describe`'s named view entries become
+  `unsupported: "views"`), and the `dev-host-1` result schemas, against a host that ships this ADR and is offered
+  `[1]`, plus the three precedence examples above as plain vectors. (The published `dev-host-1` conformance kit is a client kit and does not test a host.) `fingerprint` and `versions` are checked against each launch (ADR-0022 D4: they name the actual
   snapshot and runtime). M3b adds `maps` to `capabilities` and `assetHistory`, `redeemers` and `datum` to `reads` for
   map contracts, so the rules above cite `4335773d` (M3a) for the precedence they quote, and M4a re-verifies that
   precedence at the final M3b head.
@@ -454,7 +455,7 @@ governor, D6), `governorWithdrawal`, `governorRedeemer`, `governorSigner`, `gove
 | a script-credential call on a host without `authorizedBy:script` | `unsupported/authorizedBy` ("script governors") |
 | a governor whose resolved artifact, with `governor.params` applied, does not hash to the credential in the params (a stale, changed or ambiguous manifest included) | `bad/governor` at the host; a body with no witness script hashing to the credential is refused by the client (`governorWitness`) (D4, D5) |
 | `validators.json` absent, or not parseable, on the npm host (protocol 2) | absent: no validators; not parseable: requests naming a `governor` `bad/governor`, every other request answered as usual (D4) |
-| a keyed retry naming other params than an earlier attempt of the same operation (a keyed contract's `init`) | ADR-0022 D11 unchanged: `pending` while the first attempt is within its window; prepared with the same unspent designation after it expires; `mayHaveLanded` once the designation is spent (D2) |
+| a keyed retry naming other params than an earlier attempt of the same operation (a keyed contract's `init`) | ADR-0022 D11 unchanged: `pending` while **any** recorded attempt is within its settlement margin (tip ≤ `validTo` + `settlementSlots`) or a conflicting reservation is live; prepared with the same unspent designation once every recorded attempt has passed its margin; `mayHaveLanded` once the designation is spent (D2; `Reservations.checkOperation` at `4b599e6b`, r21) |
 | a client sends `params` or `governor` to a host without the capability | `bad/request` (strict field lists); clients send them only after the capability (D2) |
 | `initialize` on a host with `params`, a parameterized contract **whose description carries the `formats` marker** | `unapplied` hash and `parameterized: true`, no `unsupported` (D2); an unmarked one keeps `unsupported: "params"` (row above) |
 | `describe` of an `@AuthorizedBy` method | `served: true` when **its contract is served (marked, D2) and the method passes its other support checks**, and either credential branch is served; otherwise its own `unsupported` code (`params` on an unmarked contract); the call entry adds `authorizedBy: [{field, branches}]` so a client knows which branch its params will need |
@@ -531,7 +532,8 @@ governor, D6), `governorWithdrawal`, `governorRedeemer`, `governorSigner`, `gove
   restored after a restart (its inputs, the designation among them, reserved again; a new keyed operation on the
   object `pending`); a restart with a pending **reference-script publication** of a parameterized contract (restored,
   positive, by ADR-0022 D8's path); a keyed contract's `init` retried with other params (X65): `pending` within the
-  first attempt's window, prepared with the same unspent designation after it expires.
+  first attempt's window, prepared with the same unspent designation after it expires, and a third request while
+  that second attempt is still within its margin `pending` (X68).
 - **Governor identity tests (M4c; moved from M4a in r19):** a restart with a pending **bounded governor
   registration** (restored, positive); two packages with a `Guardian` (the Gradle qualified selector picks each;
   positive; ambiguity is in the lookup vectors below).
@@ -552,7 +554,8 @@ governor, D6), `governorWithdrawal`, `governorRedeemer`, `governorSigner`, `gove
 - **Capability gating** (Y1, Y2): a new client against an M3 host (the field-gating rows of D7), and `initialize`/
   `describe` of Treasury with and without `params`.
 - **Legacy session (X20, X32, X38, X39, X46), both hosts, against the final M3b host recordings** (`fixtures/host`,
-  replayed as `js/joust/test/host-conformance.test.js` does; r19, r20): a client offering `[1]` to a host that ships this ADR, on a project with
+  replayed through the pinned M3b harness `js/joust/test/host-conformance.test.js` and its host-specific comparisons;
+  r19, r20, r21): a client offering `[1]` to a host that ships this ADR, on a project with
   Treasury **and a servable unparameterized map contract** (its `maps` capability, `assetHistory`, `redeemers` and
   `datum` read kinds, and its `deployment` compared too):
   every `initialize`, `describe` and `deployment` reply validates against the **unmodified** `dev-host-1` result
@@ -567,7 +570,7 @@ governor, D6), `governorWithdrawal`, `governorRedeemer`, `governorSigner`, `gove
 
 | Milestone | Scope | Entry | Exit |
 |---|---|---|---|
-| **M4a** | Protocol 2 and its schemas (D1); `@Params` contracts on both hosts (D2, D2a, D3, D4's JVM path for params); the `@Quorum` eligibility count and quorum-kind parity (D5); the processor's params `formats` marker (D2a); application, input-domain and format vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved, and ADR-0022 r8 merged on this ADR's base (r19); the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract, with a `signedKey` keyed type for X62, and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit; the final M3b host recordings (`fixtures/host`) and `dev-host-1` schemas pinned as the protocol-1 oracle (X46, r19, r20); and, from r9, owned and keyed `@Quorum` fixture contracts whose object council differs from the parent's), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths); and from the Fable final review: F-Y1 (an application vector for an asset-aware script such as Stall, with an oracle for scripts Aiken's binding cannot decode) | application vectors agree across JuLC, Aiken (or the stated oracle) and the kit; the input-domain boundary vectors give the same answer on both hosts; Treasury's non-governed calls served and checked on both hosts, including the quorum-eligibility vectors; the legacy-session and capability-gating vectors (D7, D8) pass; the M4a identity vectors pass (D8); the signed-key insert pair (X62) passes; I16, I19 (for these calls), I20, I21, I22, I23 |
+| **M4a** | Protocol 2 and its schemas (D1); `@Params` contracts on both hosts (D2, D2a, D3, D4's JVM path for params); the `@Quorum` eligibility count and quorum-kind parity (D5); the processor's params `formats` marker (D2a); application, input-domain and format vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved, and ADR-0022 r8 merged on this ADR's base (r19); the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract, with a `signedKey` keyed type for X62, and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit; the final M3b host recordings (`fixtures/host`), its replay harness `js/joust/test/host-conformance.test.js` and the `dev-host-1` schemas pinned as the protocol-1 oracle (X46, r19, r20, r21); and, from r9, owned and keyed `@Quorum` fixture contracts whose object council differs from the parent's), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths); and from the Fable final review: F-Y1 (an application vector for an asset-aware script such as Stall, with an oracle for scripts Aiken's binding cannot decode) | application vectors agree across JuLC, Aiken (or the stated oracle) and the kit; the input-domain boundary vectors give the same answer on both hosts; Treasury's non-governed calls served and checked on both hosts, including the quorum-eligibility vectors; the legacy-session and capability-gating vectors (D7, D8) pass; the M4a identity vectors pass (D8); the signed-key insert pair (X62) passes; I16, I19 (for these calls), I20, I21, I22, I23 |
 | **M4b** | Key-credential `@AuthorizedBy` (D4, D5 signers) | M4a | key vectors and mutations on both hosts, **including the non-caller key-holder positive** (X26); capability `authorizedBy:key`; I17, I19 |
 | **M4c** | Plutus governors (D4, D5, D6), the client's phase-2 evaluation of governor calls (D5, Q6 (a)), with the engine's `Offline.evaluate` fixed to evaluate the received bytes (D5, X59), and the npm build writing or emptying `validators.json` (D4, F21) | M4b; the reference checker's evaluator and its pinned cost models chosen and recorded with the vectors; JuLC confirmed to derive `TxInfo.id` from the bytes it is given (D5); F-Y5 (F7 and the host's artifact lookup re-verified at the JuLC and CCL versions JOUST then pins, recorded with the vectors; moved from M4a in r19) | Treasury + Guardian recorded on a fresh DevKit (registration, `freeze`, payer ≠ owner); every D5/D8 mutation rejected with its code, **the evaluation vectors included**, with the received-bytes seam test on both client paths; the stale, absent and malformed manifest vectors and the governor identity vectors pass; capability `authorizedBy:script`; I18, I19, I24 |
 
@@ -580,7 +583,7 @@ governor, D6), `governorWithdrawal`, `governorRedeemer`, `governorSigner`, `gove
 | I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, exactly one V3 witness script hashing to it, and at that withdrawal's pointer a redeemer equal to `Approvals[Approval(policy, instance, tag)]` for this policy, instance and action; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
 | I19 | For the calls this ADR serves, the body's required signers equal exactly D5's signer set | D5 | M4a signed-key insert, M4b/M4c mutations, payer ≠ owner |
 | I20 | Reservations exclude out-refs across all parameterizations in a session; listings, caches and decoded views are keyed by the applied policy; keyed calls of parameterized contracts follow ADR-0022 D11 (r8) unchanged, and restore is ADR-0022 D8's | D2 | identity tests |
-| I21 | A protocol-1 session with a host that ships this ADR is indistinguishable from one with an M3 host: apart from `fingerprint` and `versions` (checked against the launch), it replays the final M3b host recordings unchanged, its capability list is protocol 1's, its error codes follow M3's per-method precedence for the recordings' sessions and the three precedence examples, and every reply validates against the unmodified `dev-host-1` schemas | D1, D2, D7 | `fixtures/host` replay (`js/joust/test/host-conformance.test.js`), the precedence examples, capability-gating vectors |
+| I21 | A protocol-1 session with a host that ships this ADR is indistinguishable from one with an M3 host: apart from `fingerprint` and `versions` (checked against the launch), it passes the final M3b host recordings as the pinned M3b harness compares them (its host-specific comparisons included: the npm host omits `views`, and its `describe` view entries are `unsupported: "views"`), its capability list is protocol 1's, its error codes follow M3's per-method precedence for the recordings' sessions and the three precedence examples, and every reply validates against the unmodified `dev-host-1` schemas | D1, D2, D7 | `fixtures/host` replayed through the pinned M3b `js/joust/test/host-conformance.test.js`, the precedence examples, capability-gating vectors |
 | I22 | Both hosts accept exactly D2a's input domain for `params` and governor params, formats and the raw-Data constructor-index cap included, refusing the rest with the same code and path; neither serves, advertises or describes as served a parameterized contract whose description lacks the `formats` marker | D2, D2a | input-domain boundary and format vectors; mixed marked/unmarked session |
 | I23 | A `@Quorum` call is accepted only if at least `threshold` distinct required signers are in `keys`, both read by the client from its own params or from the input record of the object whose method runs (by call kind; `removed` for `keyedRemove`); both hosts prepare exactly the protocol-2 quorum call kinds | D5 | quorum-eligibility vectors (instance, owned, keyed, removal), through both dispatchers |
 | I24 | A script-governor call is signed or exported only after the client's own phase-2 evaluation of the exact transaction, as received, passes, with inputs resolved through its own node, its node's cost models, and each redeemer's declared units as its budget; other calls keep ADR-0022 D13's structural checks | D5 | M4c evaluation vectors |
@@ -745,8 +748,10 @@ history. "(withdrawn r18)" marks rules r18 removed.*
     changed); "old-client vectors" renamed (D9, I21); r2–r17 collapsed to one line each;
   - Opus P3-5 (exactly one approval goes beyond the chain; reversed in r20, X67) → D5 (`Approvals` containing the approval; extras inert),
     T13, I18, D8 (an extra approval is no longer a mutation);
-  - Fable P3-7 (I21's oracle; named precisely in r20) → D1, D8 legacy session, D9 M4a entry, I21: the final M3b `dev-host-1` kit and schemas
-    run unchanged plus the three precedence examples, instead of a pinned M3b host binary;
+  - Fable P3-7 (I21's oracle; named precisely in r20, r21) → D1, D8 legacy session, D9 M4a entry, I21: protocol 1's
+    recorded material plus the three precedence examples, instead of a pinned M3b host binary (r19 wrote "the
+    `dev-host-1` kit", which is a client kit; r20 named the host recordings, `fixtures/host`, and r21 their replay
+    harness);
   - Fable P3-8 (D2a's parity machinery) → recorded in D2a as the first cut if M4a proves heavy; no change now.
 - **r20** (2026-11-24, responds to the reviews of r19 `5acf0870`: Codex (three mediums, X65–X67 here), Fable
   (approved, P3s 9–11) and Opus (P2-4, P3-7, P3-8)):
@@ -767,3 +772,11 @@ history. "(withdrawn r18)" marks rules r18 removed.*
   - Opus P3-8 (tidy) → Q3 wording, D4's `validator` bullet reduced to the selector, D8's duplicate ambiguity vector
     removed, I21 scoped to what its test shows, the protocol-1 oracle named as `fixtures/host` and
     `js/joust/test/host-conformance.test.js` (D1, D8, D9, I21).
+- **r21** (2026-11-24, responds to the reviews of r20 `c8de93d0`: Opus and Fable approved; Codex two mediums, X68–X69
+  here; Fable P3-12):
+  - X68 (readiness of a keyed retry rested on the first attempt only) → D7 row (pending while any recorded attempt is
+    within `validTo` + `settlementSlots` or a conflicting reservation is live, as `Reservations.checkOperation` at
+    `4b599e6b`), D8 X65 vector (a third request while the second attempt is pending: `pending`);
+  - X69 (a raw replay would reject the conforming npm host) → D1, D8 legacy session, D9 M4a entry, I21: the oracle is
+    the recordings replayed through the pinned M3b harness with its host-specific comparisons (`views`);
+  - Fable P3-12 (the r19 history bullet for Fable P3-7 named the client kit) → that bullet reworded.
