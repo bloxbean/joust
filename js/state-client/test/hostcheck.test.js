@@ -1,7 +1,8 @@
 // verifyHostResult (src/hostcheck.js), the dev-host client's pre-sign check, against every vector of the protocol's
 // verifier fixtures (fixtures/host/verifier, decided by the conformance kit's ReferenceChecker): the same problem codes
-// for each, positive and negative, prepare and publish (ADR-0024 I2).
-// Map calls included: their claims and MPF proofs are checked as the reference checks them (ADR-0024 M4).
+// for each, positive and negative, prepare and publish (ADR-0024 I2). The claim is agreement on these vectors' problem
+// codes (not on each check site, nor beyond the vectors). Map calls are among them: their claims and MPF proofs are
+// checked by the reference's rules (ADR-0024 M4).
 
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';

@@ -789,8 +789,11 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
           // no tip: the reservation expires with its window
         }
       }
+      // When it is released (Fable FM2): an included body after its settlement margin, else after its window and margin.
+      const until = Number.isSafeInteger(e.slot) ? e.slot + settlementSlots : Number.isSafeInteger(e.validTo) ? e.validTo + settlementSlots : null;
       return new StageError('host', 'pending', `the body spends an input or collateral the journaled body `
-        + `${e.txHash.slice(0, 16)}… still reserves: prepare again once it settles`);
+        + `${e.txHash.slice(0, 16)}… still reserves: ${until === null ? 'prepare again once it settles' : `try again after slot ${until}`}`,
+      { retryAtSlot: until });
     };
     const first = problemOf();
     if (first) throw refuse(first);
@@ -1075,14 +1078,16 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         // host is told, with the refusal as evidence, and the page lists the prerequisites again (final pass FE1).
         if (/StakeKeyRegistered|already registered|StakeKeyAlreadyRegistered/i.test(message) && /^publish (?:stakeRegistration|verifier):/.test(e.label ?? '')) {
           await learnRegistration(e, { message: message.slice(0, 500) });
-          throw new StageError('ledger', 'alreadyRegistered', `already registered: ${message}`, { note: 'the prerequisites are listed again' });
+          // Its inputs stay reserved until the body's window and the settlement margin pass (Fable FM1: say when).
+          const until = Number.isSafeInteger(e.validTo) ? e.validTo + settlementSlots : null;
+          throw new StageError('ledger', 'alreadyRegistered', `already registered: ${message}`
+            + (until === null ? '' : ` (its inputs are released after slot ${until})`), { note: 'the prerequisites are listed again', retryAtSlot: until });
         }
         throw new StageError('ledger', 'nodeRefused', message, { note: 'its inputs stay reserved until the body expires' });
       }
       observed(hash, { transport: 'accepted' });
       return { ...out, transport: 'accepted' };
     }),
-    /** A body's settlement as the chain shows it (I7), with the submission's transport outcome beside it. */
     /**
      * Whether a transaction is on the chain (by its slot, from the trusted provider), and the chain tip read after the
      * lookup: keyed operations reconcile their attempts with this observation (null tip: not known).
@@ -1095,6 +1100,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     /** The page's keyed operation records, kept in this chain's journal (operations.js). */
     operations: () => journal.operations,
     operate: (step) => journal.operate(step),
+    /** A body's settlement as the chain shows it (I7), with the submission's transport outcome beside it. */
     txStatus(txHash) {
       const s = status.get(txHash);
       if (!s) throw new StageError('session', 'unknownTransaction', 'no such transaction in this session');
@@ -1143,7 +1149,11 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         const before = sum(await chain.utxos(address));
         if (before >= TOPUP_BELOW) return { toppedUp: false };
         try {
-          await topUp(address, Number(q / ADA));
+          // Two outputs (two top-ups), so a body that still reserves one (a refusal, an expiring attempt) does not lock
+          // the identity out of its next call until that one is released (Fable FM1).
+          const half = q / ADA / 2n;
+          if (half > 0n) await topUp(address, Number(half));
+          await topUp(address, Number(q / ADA - half));
         } catch (err) {
           throw new StageError('session', 'faucet', `the DevKit faucet did not pay: ${err.message ?? err}`);
         }

@@ -88,11 +88,6 @@ public final class Offline {
     }
 
     /**
-     * The attack suite on {@code tx} (ADR-0001 D16, as the JVM testkit's {@code Attacks} does on its transaction model):
-     * every mutation that applies to it, evaluated against the snapshot. A mutation the scripts accept is an
-     * invariant's hole; the offline tests expect none. {@code network}: 0 test networks, 1 mainnet.
-     */
-    /**
      * {@link #attacks(EvaluateRequest, int)}'s request with the caller's hint: {@code untimedWindow} true says no script
      * reads the transaction's validity window (a keyed action or retire whose method reads no time, from the anchored
      * description), so the range attacks are not run. Absent or false: they run whenever both bounds are there.
@@ -104,6 +99,11 @@ public final class Offline {
                 Boolean.TRUE.equals(r.untimedWindow()));
     }
 
+    /**
+     * The attack suite on {@code tx} (ADR-0001 D16, as the JVM testkit's {@code Attacks} does on its transaction model):
+     * every mutation that applies to it, evaluated against the snapshot. A mutation the scripts accept is an
+     * invariant's hole; the offline tests expect none. {@code network}: 0 test networks, 1 mainnet.
+     */
     public static AttackResult attacks(EvaluateRequest r, int network) {
         return attacks(r, network, false);
     }

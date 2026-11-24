@@ -65,7 +65,13 @@ async function api(route, body = {}) {
   if (j.error) throw new StageFailure(j.error);
   return j.result;
 }
-const sapi = (route, body = {}) => api(route, { session: state.session.session, ...body });
+const sapi = async (route, body = {}) => {
+  const r = await api(route, { session: state.session.session, ...body });
+  // The log's [slot N] is the latest slot an answer told (a prepare's now, a status's slot), never a stale one.
+  const slot = Number.isSafeInteger(r?.now) ? r.now : Number.isSafeInteger(r?.slot) ? r.slot : null;
+  if (slot !== null && state.session && slot > (state.session.slot ?? -1)) state.session.slot = slot;
+  return r;
+};
 
 // ---- DOM helpers (text only)
 /** replaceChildren without the holes: replaceChildren(null) would insert the text "null". */
@@ -277,7 +283,9 @@ async function startSession(opts = {}) {
   if (!state.identities.length) for (let i = 0; i < 3; i++) state.identities.push(newIdentity(i));
   if (!opts.keepLedgerOf || devkit()) for (const id of state.identities) await fund(id);
   state.instance = null;
-  state.scenario = { steps: [], created: [] };
+  // A session that kept an earlier ledger cannot be exported: its scenario would miss the calls that made that ledger
+  // (Fable FM5).
+  state.scenario = { steps: [], created: [], keptLedger: !!opts.keepLedgerOf, cip30: 0 };
   // A new session may run a rebuilt project: its contracts are the new build's (a removed one is dropped).
   drawContracts();
   if (state.contract && !state.session.contracts.some((c) => c.name === state.contract.name && c.served)) {
@@ -347,8 +355,9 @@ function drawBanner() {
         await refresh();
       }) }),
       h('span', { class: 'sep' }),
-      h('button', { id: 'export-scenario', text: 'Export scenario', title: 'the calls so far, as data: no keys, no transaction bytes',
-        onclick: () => guard(exportCurrent) }),
+      h('button', { id: 'export-scenario', text: 'Export scenario', disabled: !!state.scenario?.keptLedger,
+        title: state.scenario?.keptLedger ? 'this session kept an earlier ledger: its scenario would miss the calls that made it'
+          : 'the calls so far, as data: no keys, no transaction bytes', onclick: () => guard(exportCurrent) }),
       h('label', { class: 'inline button', title: 'replay a scenario in a fresh offline session, with new identities' }, 'Import scenario ',
         h('input', { type: 'file', id: 'import-scenario', accept: 'application/json,.json', onchange: (e) => {
           const f = e.target.files?.[0];
@@ -364,7 +373,7 @@ function drawBanner() {
         for (const id of state.identities) await sapi('fund', { address: id.address, lovelace: String(FUND_ADA * ADA) });
         state.instance = null;
         state.history = [];
-        state.scenario = { steps: [], created: [] };
+        state.scenario = { steps: [], created: [], keptLedger: false, cip30: 0 };
         drawHistory();
         note('the ledger and the dev host were reset; identities funded again');
         await refresh();
@@ -720,10 +729,10 @@ async function call1(request, meta, signer, cosigners, label) {
     { sorted: quorumKeyNames(state.contract?.description) }) };
   try {
     const created = await call2(request, meta, signer, cosigners, label);
-    recordStep({ ...step, expect: 'confirmed' }, created);
+    recordStep({ ...step, expect: 'confirmed' }, created, signer);
   } catch (e) {
     // A declined review is no outcome of the contract's: not a step.
-    if (!(e.code === 'declined' && e.stage === 'wallet')) recordStep({ ...step, expect: outcomeOf(e) }, null);
+    if (!(e.code === 'declined' && e.stage === 'wallet')) recordStep({ ...step, expect: outcomeOf(e) }, null, signer);
     throw e;
   }
 }
@@ -733,8 +742,14 @@ function stripped(request) {
   void address; void designated; void operation;
   return rest;
 }
-function recordStep(step, created) {
+function recordStep(step, created, signer = null) {
   if (state.replaying) return;
+  // A step a CIP-30 wallet signed cannot be replayed (a scenario's identities are new keys): it is left out, and the
+  // export says so (Fable FM4).
+  if (signer?.cip30) {
+    state.scenario.cip30 = (state.scenario.cip30 ?? 0) + 1;
+    return;
+  }
   state.scenario.steps.push(step);
   state.scenario.created.push(created ?? null);
 }
@@ -1154,6 +1169,10 @@ async function contractHashes() {
   return out;
 }
 async function exportCurrent() {
+  if (state.scenario.keptLedger) {
+    throw new StageFailure({ stage: 'arguments', code: 'scenario', message: 'this session kept an earlier session\'s ledger: its scenario '
+      + 'would miss the calls that made that ledger, so it cannot be exported (start a new session with an empty ledger)' });
+  }
   // Every identity by label (a step may name one it does not sign as, a recipient's key hash say).
   const text = exportScenario({ fingerprint: state.session.fingerprint, contracts: await contractHashes(),
     identities: state.identities.filter((i) => !i.cip30).map((i) => i.label), clock: state.session.clock, steps: state.scenario.steps });
@@ -1162,6 +1181,9 @@ async function exportCurrent() {
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   note(`scenario exported: ${state.scenario.steps.length} step(s)`, 'ok');
+  if (state.scenario.cip30) {
+    note(`${state.scenario.cip30} call(s) signed by a CIP-30 wallet are not in the scenario (a replay has only new identities)`, 'warn');
+  }
 }
 /** Replays a scenario in a fresh offline session, with new identities (one per label), comparing each step's outcome. */
 async function replay(text) {

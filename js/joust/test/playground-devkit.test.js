@@ -845,9 +845,10 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       const w = await wallet();
       const [x, y] = await Promise.all([s.fund(w.address, String(1000n * ADA)), s.fund(w.address, String(1000n * ADA))]);
       assert.deepEqual([x, y], [{ toppedUp: true }, { toppedUp: true }]);
-      assert.equal(calls, 1, 'coalesced');
+      assert.equal(calls, 2, 'coalesced: one top-up, paid as two outputs');
+      assert.equal((await L.utxos(w.address)).length, 2, 'two outputs: one reserved body does not lock the identity out (Fable FM1)');
       assert.deepEqual(await s.fund(w.address, String(1000n * ADA)), { toppedUp: false }, 'already holds 100 ADA or more');
-      assert.equal(calls, 1);
+      assert.equal(calls, 2);
       dry = true;
       const v = await wallet();
       await assert.rejects(s.fund(v.address, String(1000n * ADA)), (e) => e.code === 'faucet' && /dry/.test(e.message));

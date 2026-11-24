@@ -147,7 +147,11 @@ calls wait for ADR-0023) are shown disabled with the host's code.
   bytes. Files over 1 MiB are refused. "Import scenario" replays one in a
   fresh offline session on the scenario's own clock (so a deadline in it means what it meant) with new identities, running every step through the same checks (without the review panel), and
   reports which steps had the same outcome. A scenario from another build is replayed with a warning naming the
-  contracts whose scripts differ.
+  contracts whose scripts differ. A replay keeps each argument's positions and roles (a map entry stays key and
+  value); it re-sorts only a @Quorum's key list (an argument named like a method's `@Quorum(keys = …)` field, and the
+  co-signers) and puts map arguments back in canonical key order. Calls signed by a CIP-30 wallet are left out of an
+  export (a replay has only new identities), and a session that kept an earlier ledger cannot be exported (its scenario
+  would miss the calls that made that ledger). A scenario has at most 16 identities and 500 steps.
 
 ### DevKit mode
 

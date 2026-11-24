@@ -168,7 +168,8 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     const entry = entries.find((e) => JSON.parse(e.description).preamble?.title === call.contract);
     const x = entry ? JSON.parse(entry.description)['x-joust'] : null;
     const meta = (x?.actions ?? []).find((m) => m.kind === call.kind && m.name === call.method);
-    return !!meta && !meta.ctx && !(meta.policies?.validAfter?.length) && !(meta.policies?.validBefore?.length);
+    return !!meta && !meta.ctx && !(meta.policies?.validAfter?.length) && !(meta.policies?.validBefore?.length)
+      && !(meta.policies?.authorizedBy?.length);
   };
   const remember = (prepared, kind, untimedWindow = false) => {
     if (prepared?.reservation) reservations.set(prepared.reservation, { txHash: prepared.txHash, validTo: prepared.validTo, kind, untimedWindow });
