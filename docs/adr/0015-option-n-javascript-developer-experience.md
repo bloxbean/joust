@@ -855,9 +855,9 @@ direct `Tx` building, gated by S3.
     an input whose provider gives no address is refused rather than assumed to be the payer's. Only the return the
     runtime made counts as a co-caller's return (the output at the index it was appended at: its address, no datum, the
     exact value recorded), and the check covers every co-caller the plan pays in for or returns to (the chain provider is
-    trusted for where an input is; #169 tracks a trustless mode); the return is exactly what the co-caller's inputs hold less what it pays in: any other output there (a payout, a send, an
-    intent's refund) is owed by someone else and cannot cover a short return, and a larger return would give it the
-    payer's value. The collateral is the payer's: every collateral input and the collateral return are at the payer's
+    trusted for where an input is; #169 tracks a trustless mode); the return is exactly what the co-caller's inputs hold
+    less what it pays in: any other output there (a payout, a send, an intent's refund) is owed by someone else and
+    cannot cover a short return, and a larger return would give it the payer's value. The collateral is the payer's: every collateral input and the collateral return are at the payer's
     address. A key-signed call with co-signers (`@Quorum`, `@AuthorizedBy`) is checked the same way. A return above
     the ledger's maximum value size (inputs with many unrelated tokens) is refused, not split. A wallet's UTxOs keep
     their reference script hash from CIP-30's CBOR, so one carrying a script is never spent for its tokens, taken as a

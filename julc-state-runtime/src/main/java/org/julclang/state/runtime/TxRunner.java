@@ -997,8 +997,7 @@ final class TxRunner {
                 org.julclang.state.api.Assets.read(v).forEach((p, ts) -> ts.forEach((n, q) -> allowed.put(
                         p.isEmpty() ? "lovelace" : com.bloxbean.cardano.client.api.util.AssetUtil.normalizeUnit(p + n), q)));
             }
-            // Exactly what it pays in (#165 Opus P2): less would take its value, more would give it someone else's (the
-            // payer's, when a listing and the chain disagree).
+            // Exactly what it pays in (#165 Opus P2): less would take its value, more would give it the payer's.
             var units = new java.util.TreeSet<String>(e.getValue().keySet());
             units.addAll(allowed.keySet());
             for (String unit : units) {
