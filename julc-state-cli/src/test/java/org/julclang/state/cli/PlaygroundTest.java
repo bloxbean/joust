@@ -390,7 +390,8 @@ class PlaygroundTest {
         FakeSys s = sys(project);
         s.env.put(Playground.HOME_ENV, open.resolve("cache").toString());
         assertThat(runOn(s)).isEqualTo(1);
-        assertThat(s.errText()).contains("group-writable").contains("writable by others and not sticky");
+        assertThat(s.errText()).contains("group-writable").contains("writable by others and not sticky")
+                .containsPattern("run chmod go-w \\S*group-writable ");
         assertThat(mode(open)).isEqualTo("rwxrwxr-x");
         assertThat(open.resolve("cache")).doesNotExist();
         // Sticky (as /tmp): others cannot replace what this user puts there.

@@ -219,8 +219,11 @@ final class Playground {
             try {
                 int mode = (Integer) Files.getAttribute(a, "unix:mode", LinkOption.NOFOLLOW_LINKS);
                 if ((mode & 0022) != 0 && (mode & 01000) == 0) {
-                    throw new Refused(a + " (above the playground's cache " + abs + ") is writable by others and not sticky: set "
-                            + HOME_ENV + " to a directory under your own");
+                    // Yours: say how to fix it (keep it refused until then); another's (root's): choose another home.
+                    String fix = owner.isPresent() && owner.get().equals(sys.user())
+                            ? "run chmod go-w " + a + " (or set " + HOME_ENV + " to a directory under your own)"
+                            : "set " + HOME_ENV + " to a directory under your own";
+                    throw new Refused(a + " (above the playground's cache " + abs + ") is writable by others and not sticky: " + fix);
                 }
             } catch (UnsupportedOperationException | IllegalArgumentException | IOException ignored) {
                 // not POSIX: the user's profile directory is private already
