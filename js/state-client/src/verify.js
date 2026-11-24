@@ -110,6 +110,7 @@ export async function verifyPrepared(o) {
   } catch (e) {
     return { problems: ['not a transaction'], report };
   }
+  scriptBearingChecks(tx, wallet, problems);
 
   if (call.meta.needsService && !verifiableWithoutService(call.meta, description, deployment)) {
     problems.push(`${call.meta.name} needs data only the service computes; the page cannot verify it`);
@@ -452,6 +453,20 @@ export async function verifyPrepared(o) {
   }
 
   return { problems, report };
+}
+
+/**
+ * No wallet UTxO carrying a reference script is spent or put up as collateral (#165 Codex r9): its value could come
+ * back as change while the published script is lost. The wallet's record says so (CIP-30's output keeps its
+ * referenceScriptHash; a provider's record may give only hasReferenceScript). Shared by every page verifier.
+ */
+export function scriptBearingChecks(tx, wallet, problems) {
+  const bearing = (r) => {
+    const u = wallet.utxos.get(r);
+    return !!u && !!(u.referenceScriptHash || u.hasReferenceScript);
+  };
+  for (const r of tx.inputs) if (bearing(r)) problems.push(`spends the wallet's ${r}, which carries a reference script`);
+  for (const r of tx.collateral ?? []) if (bearing(r)) problems.push(`collateral ${r} of the wallet's carries a reference script`);
 }
 
 /**

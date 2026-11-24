@@ -58,7 +58,7 @@ const plus = (m, unit, q) => new Map([...m].map(([k, v]) => [k, k === unit ? v +
 // ------------------------------------------------------------------------------------------- recorded, accepted
 
 // The recorded sends and the outputs their JVM-written OutputClaims name (each for the call's target).
-const SENDS = { 'dex/002-addLiquidity': [1], 'dex/003-swapAdaForToken': [1], 'dex/005-removeLiquidity': [2], 'locker/003-unlock': [1], 'locker/004-unlock': [1] };
+const SENDS = { 'dex/003-addLiquidity': [1], 'dex/004-swapAdaForToken': [1], 'dex/006-removeLiquidity': [2], 'locker/005-unlock': [1], 'locker/006-unlock': [1] };
 
 test('every recorded call with sends: its claims decode, and it is accepted alone and composed', async () => {
   for (const [f, outputs] of Object.entries(SENDS)) {
@@ -71,17 +71,17 @@ test('every recorded call with sends: its claims decode, and it is accepted alon
     accepted(composed, `${f} (composed)`);
   }
   // Calls without sends are verified as before.
-  for (const f of ['dex/004-swapTokenForAda', 'dex/006-close', 'locker/002-lock', 'locker/005-close']) accepted(await verifyPrepared(inputsOf(recorded(`${f}.json`))), f);
+  for (const f of ['dex/005-swapTokenForAda', 'dex/007-close', 'locker/004-lock', 'locker/007-close']) accepted(await verifyPrepared(inputsOf(recorded(`${f}.json`))), f);
 });
 
-const FEES = ['004', '005', '006', '007', '008', '009', '010', '011', '012', '013', '014', '015', '016'];
+const FEES = ['005', '006', '007', '008', '009', '010', '011', '012', '013', '014', '015', '016', '017'];
 
 test('every recorded deposit composition (Stall.sell into Pot.collect): its deposit decodes, and it is accepted', async () => {
   for (const n of FEES) {
     const c = recordedComposition(`fees/${n}-undefined.json`);
     accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), `fees/${n}`);
   }
-  const c = recordedComposition('fees/004-undefined.json');
+  const c = recordedComposition('fees/005-undefined.json');
   const tx = parseTx(c.cbor);
   const problems = [];
   const reg = outputRegistry(tx, c.steps[0].deployment.outputVerifier, problems);
@@ -97,7 +97,7 @@ test('every recorded deposit composition (Stall.sell into Pot.collect): its depo
 // the instance input holds 5 ADA more than the continuation. The page cannot tell what a method sends; the validator
 // checks it. (A send carrying lovelace: a withdrawal paid by a send, a @Withdraw handler's rewards, ...)
 const EXTRA = 5_000_000n;
-const LOCKER = 'locker/003-unlock.json';
+const LOCKER = 'locker/005-unlock.json';
 
 async function lovelaceWorld(extra = EXTRA) {
   const r = recorded(LOCKER);
@@ -144,7 +144,10 @@ test('regression (refused before this change too): the claim left on the change 
   const res = await verifyPrepared(inputsOf(r, { txHex: evil }));
   // Main's wording too (no claimed-sends suffix), so this pins behaviour rather than the new message (V5).
   refused(res, /others receive \d+ of lovelace, more than the scripts? releases? to them/, 'the stranger paid more than the release');
-  refused(res, /the wallet loses 1671919 lovelace/, 'the wallet funds the stranger\'s minimum ADA');
+  // The wallet loses the fee and the send's minimum ADA (its own, on the claimed output that now goes to the stranger).
+  const { fee, outputs } = parseTx(r.cbor);
+  const loss = fee + outputs[1].value.get('lovelace');
+  refused(res, new RegExp(`the wallet loses ${loss} lovelace`), 'the wallet funds the stranger\'s minimum ADA');
 });
 
 test('a claimed send to another party, paying exactly what the script releases, is accepted', async () => {
@@ -227,13 +230,13 @@ test('a deposit claim in a single call is refused', async () => {
 
 // ------------------------------------------------------------- deposits in a composition (Stall.sell + Pot.collect)
 
-// The recorded composition fees/004 (Stall.sell deposits 0.5 ADA into Pot.collect; outputs: 0 the Stall, 1 the Pot, 2 the
+// The recorded composition fees/005 (Stall.sell deposits 0.5 ADA into Pot.collect; outputs: 0 the Stall, 1 the Pot, 2 the
 // change), restated so that Stall.sell also sends 2 ADA it releases to the caller's enterprise address (output 3,
 // claimed for the Stall input).
 const SEND = 2_000_000n;
 
 async function feesWorld() {
-  const c = recordedComposition('fees/004-undefined.json');
+  const c = recordedComposition('fees/005-undefined.json');
   const tx = parseTx(c.cbor);
   const stall = tx.inputs[0];
   const pot = tx.inputs[1];
@@ -412,11 +415,11 @@ test('collect: two claimed sends to the wallet are accepted; the recorded zero b
 
 // ------------------------------------------------------------------- a payment into one call, a release from another
 
-// The recorded composition fees/004 (Stall.sell is paid 10 ADA by the wallet and deposits 0.5 ADA into Pot.collect),
+// The recorded composition fees/005 (Stall.sell is paid 10 ADA by the wallet and deposits 0.5 ADA into Pot.collect),
 // restated so that the Pot's instance also releases 7 ADA: 4 sent to the caller (claimed for the Pot input), 3 to others.
 // What the Stall keeps of the wallet's payment is not released, so it may not shrink what the Pot releases to others.
 async function paidAndReleased() {
-  const c = recordedComposition('fees/004-undefined.json');
+  const c = recordedComposition('fees/005-undefined.json');
   const tx = parseTx(c.cbor);
   const [stall, pot] = tx.inputs;
   const ov = tx.withdrawals.findIndex((w) => w.address === c.steps[0].deployment.outputVerifier.rewardAddress);
@@ -483,10 +486,10 @@ test('a witness set that repeats a key is not a transaction the page reads (one 
   refused(composed, /not a transaction/, 'the redeemers twice (composed)');
 });
 
-// The recorded upgrade (fixtures/m3/upgrade/005: a destroy migrating to an adoption under a new policy). An adoption
+// The recorded upgrade (fixtures/m3/upgrade/007: a destroy migrating to an adoption under a new policy). An adoption
 // holds exactly the prior instance's value, so it takes no payment; none is credited to it as kept.
 test('composition: an adoption takes no payment; a payment stated for it cannot carry the wallet\'s change to others', async () => {
-  const c = recordedComposition('upgrade/005-undefined.json');
+  const c = recordedComposition('upgrade/007-undefined.json');
   accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), 'the recorded upgrade');
   const change = parseTx(c.cbor).outputs.findIndex((o) => c.wallet.addresses.includes(o.address));
   const P = 2_000_000n;
@@ -500,7 +503,7 @@ test('composition: an adoption takes no payment; a payment stated for it cannot 
 });
 
 test('one redeemer per purpose: a destroy\'s burn redeemer twice is refused', async () => {
-  const c = recordedComposition('upgrade/005-undefined.json');
+  const c = recordedComposition('upgrade/007-undefined.json');
   const destroy = c.steps.find((st) => st.call.kind === 'destroy');
   const tx = parseTx(c.cbor);
   const policies = [...new Set([...tx.mint.keys()].map((u) => u.slice(0, 56)))].sort();
@@ -516,7 +519,7 @@ test('one redeemer per purpose: a destroy\'s burn redeemer twice is refused', as
 // (as a minting method's result may) while the page offers it 5 such tokens it takes no assets for, and the wallet's
 // own 5 go to others from a wallet input that holds them.
 test('composition: minted tokens kept by a call are not a kept payment; a method that takes no assets is offered none', async () => {
-  const c = recordedComposition('fees/004-undefined.json');
+  const c = recordedComposition('fees/005-undefined.json');
   const tx = parseTx(c.cbor);
   const [stall, pot] = tx.inputs;
   const policy = c.steps[0].deployment.policy;
@@ -556,10 +559,10 @@ test('composition: minted tokens kept by a call are not a kept payment; a method
   refused(r, new RegExp(`others receive 5 of ${X}, more than the scripts release to them`), 'the wallet\'s tokens to others, the minted ones counted as kept');
 });
 
-// fees/004 with a second Stall (another instance of the same contract, sold in the same transaction): two depositors,
+// fees/005 with a second Stall (another instance of the same contract, sold in the same transaction): two depositors,
 // each depositing into the one Pot.
 test('composition: two depositors into one receiver are accepted', async () => {
-  const c = recordedComposition('fees/004-undefined.json');
+  const c = recordedComposition('fees/005-undefined.json');
   const tx = parseTx(c.cbor);
   const [stallA, pot] = tx.inputs;
   const stallB = `${'dd'.repeat(32)}#0`;
@@ -606,7 +609,7 @@ test('a single call whose method takes no assets is offered none', async () => {
 // is X under a second contract's policy (a copy of the Locker whose unlock mints, by its ByAction redeemer), composed
 // with that contract's unlock minting 5 X and paying them, with 2 ADA its instance releases, to a stranger.
 async function mintAndKeep() {
-  const r = recorded('locker/002-lock.json');
+  const r = recorded('locker/004-lock.json');
   const base = inputsOf(r);
   const tx = parseTx(r.cbor);
   const [GOLD] = base.call.pay.assets[0];
@@ -688,7 +691,7 @@ test('composition: a payment to a call whose method is not payable is refused', 
 // (ByAction naming its target) and a stranger gets `toStranger` X with 2 ADA the instance releases (claimed for the lock
 // when `claim`); the wallet's change makes up the difference.
 async function lockMints({ minted, toStranger, claim = false, by, name, single = false } = {}) {
-  const r = recorded('locker/002-lock.json');
+  const r = recorded('locker/004-lock.json');
   const base = inputsOf(r);
   const tx = parseTx(r.cbor);
   const [GOLD, names] = base.call.pay.assets[0];
@@ -749,7 +752,7 @@ test('composition: a call that accepts the wallet\'s tokens and sends what it mi
 // Two instances of one Locker deployment in one transaction: the lock (on the recorded instance) mints 5 X under the
 // policy, by its ByAction redeemer, and a stranger gets them with 2 ADA the second instance's unlock releases.
 async function twoInstances({ by } = {}) {
-  const r = recorded('locker/002-lock.json');
+  const r = recorded('locker/004-lock.json');
   const base = inputsOf(r);
   const tx = parseTx(r.cbor);
   const P = base.deployment.policy;
@@ -805,7 +808,7 @@ test('composition: one instance mints by its ByAction redeemer beside another in
 });
 
 test('composition: a user-token mint needs its ByAction redeemer to name a composed call\'s target', async () => {
-  const r = recorded('dex/002-addLiquidity.json');
+  const r = recorded('dex/003-addLiquidity.json');
   const o = inputsOf(r);
   accepted(await verifyComposed({ ...o, steps: [o] }), 'the recorded addLiquidity, composed');
   const wrong = await editTx(r.cbor, r.x, { redeemers: (rds) => rds.map((x) => (x.tag === 'mint' ? { ...x, dataHex: dataHex(Data.constr(2, [refData(`${'ab'.repeat(32)}#0`)])) } : x)) });
@@ -825,7 +828,7 @@ test('a mint of a reserved-kind name by a ByAction redeemer is refused, alone an
 test('a partial burn: the wallet\'s remaining tokens of the contract come back as change, alone and composed', async () => {
   // The recorded removeLiquidity burns the 100 000 000 LP tokens the wallet offers; the wallet held one more, which
   // returns in its change (a user token of the contract, not a thread token: bounded per unit like any other).
-  const r = recorded('dex/005-removeLiquidity.json');
+  const r = recorded('dex/006-removeLiquidity.json');
   const base = inputsOf(r);
   const LP = [...parseTx(r.cbor).mint.keys()][0];
   const wallet = { ...base.wallet, utxos: new Map([...base.wallet.utxos].map(([k, u]) => [k, { ...u, value: plus(new Map([...u.value, [LP, u.value.get(LP) ?? 0n]]), LP, 1n) }])) };
@@ -840,7 +843,7 @@ test('a partial burn: the wallet\'s remaining tokens of the contract come back a
 // the policy, with one ByAction redeemer (the runtime's AssetTx; the policy's mintMatches checks the two together), the
 // 5 X going to the wallet.
 async function closeMints({ byAction = true, minting = ['close'] } = {}) {
-  const r = recorded('locker/005-close.json');
+  const r = recorded('locker/007-close.json');
   const base = inputsOf(r);
   const P = base.deployment.policy;
   const ref = parseTx(r.cbor).inputs.find((i) => !base.wallet.utxos.has(i));
@@ -871,9 +874,9 @@ test('a destroy that also mints, by one ByAction redeemer naming its target, is 
 });
 
 test('composition: a payment a call forwards through its payout (tagged for its target) is accepted', async () => {
-  // fees/004's Stall.sell (paid 10 ADA) forwards 3 ADA of the payment to a seller, at an output carrying its payout
+  // fees/005's Stall.sell (paid 10 ADA) forwards 3 ADA of the payment to a seller, at an output carrying its payout
   // tag (the validator checks its payouts, I7); its continuation keeps 3 ADA less.
-  const c = recordedComposition('fees/004-undefined.json');
+  const c = recordedComposition('fees/005-undefined.json');
   const tx = parseTx(c.cbor);
   const [stall] = tx.inputs;
   const SELLER = enterpriseAddress({ type: 'key', hash: 'ab'.repeat(28) }, 0);
@@ -894,10 +897,10 @@ test('composition: a payment a call forwards through its payout (tagged for its 
 
 // --------------------------------------------------- forwarding: one output per obligation, refunds, purchases alone
 
-// fees/004's Stall.sell (paid 10 ADA, both targets bound) forwarding part of its payment: `outs(s, p, change)` gives
+// fees/005's Stall.sell (paid 10 ADA, both targets bound) forwarding part of its payment: `outs(s, p, change)` gives
 // the outputs, `claims` the OutputClaims claims ([output, by]) beside the recorded deposit.
 function forwarding() {
-  const c = recordedComposition('fees/004-undefined.json');
+  const c = recordedComposition('fees/005-undefined.json');
   const tx = parseTx(c.cbor);
   const [stall] = tx.inputs;
   const ov = tx.withdrawals.findIndex((w) => w.address === c.steps[0].deployment.outputVerifier.rewardAddress);
@@ -936,10 +939,10 @@ test('forwarding: a payment split between a seller\'s payout and a tagged refund
 });
 
 test('composition: a service that swaps two calls\' spend redeemers is refused', async () => {
-  // guild/005: Guild.transfer moves an object of one instance into another, whose Guild.admit consents; both targets
+  // guild/006: Guild.transfer moves an object of one instance into another, whose Guild.admit consents; both targets
   // are of one deployment. A hostile service swaps the two spend redeemers: each call's redeemer then sits on the
   // other's target.
-  const c = recordedComposition('guild/005-undefined.json');
+  const c = recordedComposition('guild/006-undefined.json');
   accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), 'the recorded transfer');
   const swapped = await editTx(c.cbor, c.x, {
     redeemers: (rds) => rds.map((x) => (x.tag === 'spend' ? { ...x, dataHex: rds.find((y) => y.tag === 'spend' && y.index !== x.index).dataHex } : x)),
@@ -951,12 +954,12 @@ test('composition: a service that swaps two calls\' spend redeemers is refused',
 // the NFT) ends; the market's fee (2.5 ADA, output 0) and the seller's payout (96.1 ADA, output 1) are tagged, the
 // royalty (5 ADA at a script, output 2) and the NFT (to the buyer with the wallet's 1.02147 ADA minimum, output 3) are
 // claimed sends; output 4 is the change.
-const BUYER = 'addr_test1qzf4l8rrxcqla29qzy7curspnpttanpyuc6fgdv0djc5ygqgr6hw09v402suvtx69tq6xugjddy9mww9kz9g5re4qclswstdts';
+const BUYER = 'addr_test1qp7wful8sjxgjvpaw8kmal9zj90etff6u4kx963jwy8z9nk079k7ucj6puhs64pmhhyqy9ynespgvakzrq7yr5qlpz3qj6yt43';
 function marketBuy() {
   const description = JSON.parse(readFileSync(new URL('./fixtures/market.description.json', import.meta.url), 'utf8'));
   return m0Inputs('market/0004-Market.buy.json', { description, walletAddress: BUYER, call: {
-    method: 'buy', instance: 'ee7b4388074a7276c17f057636a8331523b65ae83e0c5662eb0a909f67cd8882',
-    object: '4f414a2479f419704d8e85f80bce6b6da8514c9d358b2ffba64c588b11', pay: { lovelace: 100_000_000n } } });
+    method: 'buy', instance: '96c648b15a79c0c01c608df74e1bca7e4b40879b5224878d26ca5186c60bac95',
+    object: '4fcf8e814ebf338a288ea23b452636e1585ac576764fcf506bbf97285b', pay: { lovelace: 100_000_000n } } });
 }
 
 test('a purchase alone forwards the stated payment to the parties its payouts and claims name', async () => {

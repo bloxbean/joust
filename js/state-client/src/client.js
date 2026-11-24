@@ -4,7 +4,7 @@
 
 import { codec, toJson } from './data.js';
 import { verifyPrepared } from './verify.js';
-import { walletView, assemble } from './wallet.js';
+import { walletView, assemble, paymentKeyHash } from './wallet.js';
 import { planOf, planDifference } from './plan.js';
 import { verifyIntent, verifyCancel, verifyBatch } from './intents.js';
 import { verifyPurpose, purposeOf } from './purposes.js';
@@ -58,14 +58,13 @@ export function httpService(baseUrl, { fetchImpl } = {}) {
  * getUtxos). A runtime engine builds from exactly those, so it never picks an input the wallet does not know (chain
  * APIs behind a load balancer can lag one another; a real wallet keeps its own index).
  */
-export function fromWallet(wallet) {
-  const address = fundingAddress(wallet);
+export function fromWallet(wallet, address = fundingAddress(wallet)) {
   const walletUtxos = [];
   for (const [ref, u] of wallet.utxos) {
     if (u.address !== address) continue;
     const [txHash, index] = ref.split('#');
     walletUtxos.push({ txHash, index: Number(index), address, value: [...u.value].map(([unit, q]) => ({ unit, quantity: String(q) })),
-      datumHash: u.datumHash ?? null, inlineDatum: u.inlineDatum ?? null, referenceScriptHash: null });
+      datumHash: u.datumHash ?? null, inlineDatum: u.inlineDatum ?? null, referenceScriptHash: u.referenceScriptHash ?? null });
   }
   return { address, walletUtxos };
 }
@@ -323,19 +322,28 @@ async function untilSlot(chain, slot, maxMs = 15 * 60_000) {
 }
 
 /**
- * The wallet input a keyed operation designates (ADR-0016 D7, D11): an ordinary (lovelace-only, no datum) UTxO of at
- * least 5 ADA at the address the engine builds from (the funding address), the largest.
+ * The wallet input a keyed operation designates (ADR-0016 D7, D11): an ordinary (lovelace-only, no datum, no reference
+ * script) UTxO of at least 5 ADA, the largest: at the funding address when it has one, else at another of the wallet's
+ * addresses with the same payment key (#165 Codex rounds 4, 7). The engine then builds from that address
+ * ({@code record.address}); the caller (its payment key: ctx.caller(), an admin a creation records) stays the same.
  */
 export function designatedFor(wallet) {
-  const address = fundingAddress(wallet);
-  let best = null;
+  const funding = fundingAddress(wallet);
+  const key = paymentKeyHash(funding);
+  const best = new Map();
   for (const [ref, u] of wallet.utxos) {
-    if (u.address !== address || u.value.size !== 1 || u.datumHash || u.inlineDatum) continue;
+    // Never one carrying a reference script (#165 Codex round 3): the runtime refuses it, as spending it consumes the script.
+    if (u.value.size !== 1 || u.datumHash || u.inlineDatum || u.referenceScriptHash) continue;
+    if (u.address !== funding && !(wallet.addresses?.includes(u.address) && key && paymentKeyHash(u.address) === key)) continue;
     const l = u.value.get('lovelace') ?? 0n;
     if (l < 5_000_000n) continue;
-    if (!best || l > best.lovelace) best = { ref, address, lovelace: l };
+    const b = best.get(u.address);
+    if (!b || l > b.lovelace) best.set(u.address, { ref, address: u.address, lovelace: l });
   }
-  return best;
+  if (best.has(funding)) return best.get(funding);
+  let pick = null;
+  for (const b of best.values()) if (!pick || b.lovelace > pick.lovelace) pick = b;
+  return pick;
 }
 
 /**
@@ -409,7 +417,11 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
   }
   if (!rec) {
     const d = designatedFor(wallet);
-    if (!d) throw new Error('the wallet has no ordinary (ADA-only) UTxO of at least 5 ADA to designate for a keyed call (ADR-0016 D7)');
+    if (!d) {
+      // Where one must be (designatedFor: the caller's payment key): another key's address cannot take it (#165 Opus P3).
+      throw new Error('the wallet has no ordinary (ADA-only) UTxO of at least 5 ADA to designate for a keyed call (ADR-0016 D7)'
+        + ` at ${fundingAddress(wallet)} or another address with its payment key; move ADA there`);
+    }
     rec = newRecord(wallet, networkId, d, { contract: this.name, method: call.meta.name, instance: call.instance ?? null, key: call.key ?? null });
     await store.put(rec);
   }
@@ -427,7 +439,7 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
         prepared = await this.service.prepare({
           contract: this.description.preamble.title, kind: call.kind, method: call.meta.name,
           instance: call.instance ?? null, object: call.key ?? null, args: toJson(call.args ?? {}),
-          pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: [] }), ...fromWallet(wallet),
+          pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: [] }), ...fromWallet(wallet, rec.address ?? fundingAddress(wallet)),
           designated: rec.designated, pageLimits: [limits.maxStartSlots, limits.maxValiditySlots],
           ...(co.keys.length ? { cosigners: co.keys } : {}),
         });
@@ -444,7 +456,7 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
     const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
     const v = await verifyKeyed({
       description: this.description, deployment: this.deployment, txHex: prepared.cbor,
-      call: { ...call, designated: rec.designated, cosignerKeys: co.keys }, wallet, limits: this.limits,
+      call: { ...call, designated: rec.designated, ...(rec.address ? { designatedAddress: rec.address } : {}), cosignerKeys: co.keys }, wallet, limits: this.limits,
       chain: { tip, params, utxo: (r) => this.chain.utxo(r), verifiedOutput: this.chain.verifiedOutput ? (r) => this.chain.verifiedOutput(r) : undefined },
     });
     report = v.report;

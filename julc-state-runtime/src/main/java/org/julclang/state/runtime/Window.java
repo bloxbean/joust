@@ -24,12 +24,12 @@ record Window(long fromSlot, long toSlot, BigInteger fromMs, BigInteger toMs) {
             Window w = cap.forced;
             for (var rule : notAfter) {
                 if (BigInteger.valueOf(time.slotToPosixMs(w.toSlot())).compareTo(rule.time().apply(state)) > 0) {
-                    throw new RequireException(what + ": the composed window ends after the deadline in '" + rule.field() + "'");
+                    throw refusal(rt, what + ": the composed window ends after the deadline in '" + rule.field() + "'");
                 }
             }
             for (var rule : notBefore) {
                 if (w.fromMs().compareTo(rule.time().apply(state)) < 0) {
-                    throw new RequireException(what + ": the composed window starts before '" + rule.field() + "'");
+                    throw refusal(rt, what + ": the composed window starts before '" + rule.field() + "'");
                 }
             }
             return w;
@@ -37,24 +37,33 @@ record Window(long fromSlot, long toSlot, BigInteger fromMs, BigInteger toMs) {
         long from = cap != null && !cap.windows.isEmpty() ? cap.windows.get(0).fromSlot() : time.tipSlot();
         long ttl = Math.min(rt.ttlMs(), spec.maxValidityMs());
         long to = from + Math.max(1, ttl / time.slotLengthMs());
+        if (cap != null && cap.walletOnly && rt.hostedCall() && (cap.keyed || cap.keyedCreation)) {
+            // A hosted keyed prepare ends its final window within the page's maxValiditySlots (Compose, D7): the first
+            // pass's window must too, or a transition that bounds its own window refuses before that pass (#156 Codex).
+            to = Math.min(to, Math.addExact(time.currentSlot(), rt.pageLimits()[1]));   // a hosted scope has limits
+        }
         for (var rule : notAfter) {
             long deadline = rule.time().apply(state).longValueExact();
             long last = time.posixMsToSlotFloor(deadline);   // slotToPosix(last) <= deadline
             if (last < to) to = last;
             if (to <= from) {
-                throw new RequireException(what + ": too late, the deadline in '" + rule.field() + "' has passed");
+                throw refusal(rt, what + ": too late, the deadline in '" + rule.field() + "' has passed");
             }
         }
         long fromMs = time.slotToPosixMs(from);
         for (var rule : notBefore) {
             BigInteger t = rule.time().apply(state);
             if (BigInteger.valueOf(fromMs).compareTo(t) < 0) {
-                throw new RequireException(what + ": too early, the time in '" + rule.field() + "' has not been reached");
+                throw refusal(rt, what + ": too early, the time in '" + rule.field() + "' has not been reached");
             }
         }
         Window w = new Window(from, to, BigInteger.valueOf(fromMs), BigInteger.valueOf(time.slotToPosixMs(to)));
         if (cap != null) cap.windows.add(w);
         return w;
+    }
+
+    private static RequireException refusal(StateRuntime runtime, String message) {
+        return runtime.hostedCall() ? new CallScope.Refusal("window", message) : new RequireException(message);
     }
 
     /** The intersection of windows that share their start; null if empty. */

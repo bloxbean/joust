@@ -12,9 +12,10 @@ export { CSL };
 
 const FIXTURES = new URL('../../../fixtures/m3/', import.meta.url);
 
-// JOUST's shared verifiers on the recorded network (their reference scripts are among each fixture's snapshot outputs).
-export const OUTPUT_VERIFIER = '393c2b778515b1a9e3820b899d0899e3aee76b2b6c27036205c04021';
-export const MAP_VERIFIER = '060302c4936fbaf6b2f360ae536e84544dfd0e61bb99da3fb86f926d';
+// JOUST's shared verifiers on the recorded network (their reference scripts are among each fixture's snapshot outputs;
+// the same hashes the protocol-1 vectors of fixtures/host/verifier anchor as outputVerifier and mapVerifier).
+export const OUTPUT_VERIFIER = 'dd15fe5da434a91d00aa7f3a6891b77a59cfd4e442506d47189b703d';
+export const MAP_VERIFIER = '2d77a587c19b1851374690a5418cefba30b57856f3e935acc93275c7';
 export const STRANGER = enterpriseAddress({ type: 'key', hash: 'ee'.repeat(28) }, 0);
 
 const valueOf = (amount) => new Map(amount.map((a) => [a.unit, BigInt(a.quantity)]));

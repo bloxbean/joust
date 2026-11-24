@@ -36,6 +36,8 @@ class KeyedSeriesTest {
     /** A scripted provider: the wallet's UTxOs (mutable), units that answer by asset, a tip, and a count of reads. */
     static final class Chain {
         final List<Utxo> wallet = new ArrayList<>();
+        /** When set, an address listing answers {@code count} items per page, as a provider does; else all on page 1. */
+        volatile boolean paged;
         final List<Utxo> script = new ArrayList<>();
         final AtomicLong tip = new AtomicLong(1_000);
         final AtomicInteger reads = new AtomicInteger();
@@ -43,14 +45,29 @@ class KeyedSeriesTest {
         BackendService backend() {
             UtxoService utxos = (UtxoService) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{UtxoService.class},
                     (p, m, a) -> {
+                        if (m.getName().equals("getTxOutput")) {
+                            synchronized (this) {
+                                for (Utxo u : wallet) if (Designation.ref(u).equals(a[0] + "#" + a[1])) return Result.success("ok").withValue(u);
+                                for (Utxo u : script) if (Designation.ref(u).equals(a[0] + "#" + a[1])) return Result.success("ok").withValue(u);
+                            }
+                            return Result.error("not found");
+                        }
                         if (!m.getName().equals("getUtxos")) throw new UnsupportedOperationException(m.getName());
                         reads.incrementAndGet();
                         List<Utxo> out = new ArrayList<>();
                         if (a.length == 3 || a.length == 4 && a[1] instanceof Integer) {
                             int page = (Integer) a[2];
                             synchronized (this) {
-                                for (Utxo u : wallet) if (u.getAddress().equals(a[0]) && page == 1) out.add(u);
-                                for (Utxo u : script) if (u.getAddress().equals(a[0]) && page == 1) out.add(u);
+                                if (paged) {
+                                    var all = new ArrayList<Utxo>();
+                                    for (Utxo u : wallet) if (u.getAddress().equals(a[0])) all.add(u);
+                                    for (Utxo u : script) if (u.getAddress().equals(a[0])) all.add(u);
+                                    long from = (long) (page - 1) * (Integer) a[1];
+                                    for (long i = from; i < Math.min(all.size(), from + (Integer) a[1]); i++) out.add(all.get((int) i));
+                                } else {
+                                    for (Utxo u : wallet) if (u.getAddress().equals(a[0]) && page == 1) out.add(u);
+                                    for (Utxo u : script) if (u.getAddress().equals(a[0]) && page == 1) out.add(u);
+                                }
                             }
                         } else {
                             String unit = (String) a[1];
@@ -103,6 +120,15 @@ class KeyedSeriesTest {
         amounts.addAll(List.of(more));
         u.setAmount(amounts);
         return u;
+    }
+
+    /** Spends {@code u} (lovelace only) into one output at {@code to}, less a fee of 1. */
+    static Transaction balanced(Utxo u, String to) {
+        var t = spending(u);
+        t.getBody().getOutputs().add(com.bloxbean.cardano.client.transaction.spec.TransactionOutput.builder().address(to)
+                .value(com.bloxbean.cardano.client.transaction.spec.Value.builder()
+                        .coin(u.getAmount().getFirst().getQuantity().subtract(BigInteger.ONE)).build()).build());
+        return t;
     }
 
     static Transaction spending(Utxo... inputs) {
@@ -749,12 +775,27 @@ class KeyedSeriesTest {
         var claimed = Designation.build(a, null, () -> spending(u));
         assertThrows(AssertionError.class, () -> TxRunner.exportPrepared(rt, "publish", claimed));
         assertFalse(Designation.isClaimed(Designation.ref(u)), "released");
-        // Returned: claimed for the fixed bound.
+        // Returned: claimed for the fixed bound. Returned only balanced (#152): the input resolves, its value is paid out.
+        chain.wallet.add(u);
         var ok = StateRuntime.builder(chain.backend()).chainTime(chain.time()).network(Networks.testnet()).build();
-        var again = Designation.build(a, null, () -> spending(u));
+        var again = Designation.build(a, null, () -> balanced(u, a));
         assertNotNull(TxRunner.exportPrepared(ok, "publish", again));
         assertTrue(Designation.isClaimed(Designation.ref(u)));
         again.claim().release();
+    }
+
+    @Test
+    void anExportedBodyThatDoesNotBalanceIsRefusedAndReleasesItsClaim() {
+        // R5 (#152): the export path refuses its own unbalanced body (30 ADA spent into nothing) and ends the claim.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var u = utxo(payer.baseAddress(), 30_000_000);
+        chain.wallet.add(u);
+        var rt = StateRuntime.builder(chain.backend()).chainTime(chain.time()).network(Networks.testnet()).build();
+        var claimed = Designation.build(payer.baseAddress(), null, () -> spending(u));
+        var e = assertThrows(BodyBalance.UnbalancedException.class, () -> TxRunner.exportPrepared(rt, "publish", claimed));
+        assertTrue(e.getMessage().contains("value is not conserved"), e::getMessage);
+        assertFalse(Designation.isClaimed(Designation.ref(u)), "released");
     }
 
     @Test

@@ -11,10 +11,13 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Everything a generated client needs to talk to a network: backend, optional script evaluator, network id, clock,
  * TTL, retry policy and an address book for payout recipients. Immutable; build with {@link #builder(BackendService)}.
+ * A caller may run one call with its own clock, TTL and page limits ({@link #inScope}); outside a scope the builder's
+ * settings apply, as always.
  */
 public final class StateRuntime {
 
@@ -30,6 +33,7 @@ public final class StateRuntime {
     private volatile com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
     private final String mapStorePath;
     private final MerkleSupport.Prover mapProver;
+    private final Function<String, MerkleSupport.Prover> unitProver;
     private final Consumer<BuiltTx> onBuilt;
     private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts;
     private final java.util.List<Relay> relays;
@@ -37,6 +41,11 @@ public final class StateRuntime {
     private final long topUpAllowance;
     private final Duration relayTimeout;
     private final long settlementSlots;
+    private final ClaimStore claimStore;
+    /** The call scope active on each thread for this runtime (ADR-0022 D7); none by default. */
+    private final ThreadLocal<Scoped> scope = new ThreadLocal<>();
+
+    private record Scoped(CallScope scope, ChainTime clock) {}
 
     /** A transaction the runtime built: what it is for, and the transaction (signed when submitted, unsigned when prepared). */
     public record BuiltTx(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {}
@@ -54,6 +63,7 @@ public final class StateRuntime {
         this.mapStore = b.mapStore;               // null: the default store, opened when a map contract first needs it
         this.mapStorePath = b.mapStorePath;
         this.mapProver = b.mapProver;
+        this.unitProver = b.unitProver;
         this.onBuilt = b.onBuilt;
         this.referenceScripts = Map.copyOf(b.referenceScripts);
         this.relays = b.relays.isEmpty() ? java.util.List.of(Relay.of(b.backend)) : java.util.List.copyOf(b.relays);
@@ -61,9 +71,17 @@ public final class StateRuntime {
         this.topUpAllowance = b.topUpAllowance;
         this.relayTimeout = b.relayTimeout;
         this.settlementSlots = b.settlementSlots;
+        this.claimStore = b.claimStore;
         org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
     }
 
+    /**
+     * A runtime over {@code backend}. Its transaction service's answers decide a submission's outcome: only a definite
+     * one is a rejection (an HTTP 4xx with a body, other than 408, 425 and 429). Anything else, an answer without a
+     * status included, may hide an accepted transaction, so the call ends pending ({@link PendingTransactionException})
+     * and is not retried. A backend should therefore answer the node's rejection with a 4xx and its reason: CCL's
+     * Blockfrost and Yaci Store services do; its Ogmios 5 (a 500) and GraphQL (no status) services do not.
+     */
     public static Builder builder(BackendService backend) {
         return new Builder(backend);
     }
@@ -72,8 +90,82 @@ public final class StateRuntime {
     /** May be null: then QuickTx uses the backend's evaluation endpoint. */
     public TransactionEvaluator evaluator() { return evaluator; }
     public Network network() { return network; }
-    public ChainTime chainTime() { return chainTime; }
-    public long ttlMs() { return ttlMs; }
+    /**
+     * The clock: the builder's; inside a {@linkplain #inScope call scope}, the same conversions with the scope's
+     * {@code now} as both {@code currentSlot()} and {@code tipSlot()}.
+     */
+    public ChainTime chainTime() {
+        Scoped s = scope.get();
+        return s == null ? chainTime : s.clock();
+    }
+    /** The TTL of Ctx-reading and wallet calls, in milliseconds, including when converted from a scope's slot count. */
+    public long ttlMs() {
+        Scoped s = scope.get();
+        if (s == null || s.scope().ttlSlots().isEmpty()) return ttlMs;
+        return Math.multiplyExact(s.scope().ttlSlots().getAsLong(), chainTime.slotLengthMs());
+    }
+
+    /**
+     * Runs {@code body} on this thread with {@code callScope}'s clock, TTL and page limits in place of this runtime's
+     * (ADR-0022 D7). Scopes nest (the innermost applies) and end with {@code body}, however it ends; other threads, and
+     * this thread outside {@code body}, keep the builder's settings.
+     */
+    public <T> T inScope(CallScope callScope, java.util.function.Supplier<T> body) {
+        Objects.requireNonNull(callScope, "callScope");
+        Scoped before = scope.get();
+        scope.set(new Scoped(callScope, new CallScope.Clock(chainTime, callScope.now())));
+        try {
+            return body.get();
+        } finally {
+            if (before == null) scope.remove();
+            else scope.set(before);
+        }
+    }
+
+    /** As {@link #inScope(CallScope, java.util.function.Supplier)}, for a body without a result. */
+    public void inScope(CallScope callScope, Runnable body) {
+        inScope(callScope, () -> {
+            body.run();
+            return null;
+        });
+    }
+
+    /** The call scope active on this thread for this runtime, or null. */
+    public CallScope callScope() {
+        Scoped s = scope.get();
+        return s == null ? null : s.scope();
+    }
+
+    /** Whether this call uses the protocol host's validated clock, reads and signer rules. */
+    public boolean hostedCall() {
+        var call = callScope();
+        return call != null && call.hosted();
+    }
+
+    /** D6/D8: the host owns a complete, call-local address snapshot. Never reuse an older finder's cached hit. */
+    com.bloxbean.cardano.client.api.model.Utxo hostedReference(String holder, String hash) {
+        try {
+            var result = backend.getUtxoService().getUtxos(holder, Integer.MAX_VALUE, 1);
+            if (!result.isSuccessful()) throw new org.julclang.state.runtime.snapshot.ReadFailed("utxos", holder, result.getResponse());
+            for (var u : result.getValue()) {
+                if (hash.equalsIgnoreCase(u.getReferenceScriptHash())) return u;
+            }
+            return null;
+        } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+            throw new org.julclang.state.runtime.snapshot.ReadFailed("utxos", holder, e.getMessage());
+        }
+    }
+
+    void requireUnscopedSubmission() {
+        if (callScope() != null) throw new IllegalStateException("submitting inside a call scope");
+    }
+
+    /**
+     * Where this runtime keeps the claims of what it builds and its designated inputs (ADR-0022 D8): the builder's
+     * store, by default this JVM's (expiring by the machine clock, as before). Internal: the default store is shared by
+     * every runtime of the JVM, so it is not handed out (#145 Codex review); a host keeps the store it gave the builder.
+     */
+    ClaimStore claimStore() { return claimStore; }
     public int maxRetries() { return maxRetries; }
     public Duration confirmTimeout() { return confirmTimeout; }
     /**
@@ -95,14 +187,54 @@ public final class StateRuntime {
      */
     public long settlementSlots() { return settlementSlots; }
     /**
-     * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null: keyed
-     * calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
+     * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null (never
+     * in a hosted call): keyed calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
      */
-    public long[] pageLimits() { return pageLimits == null ? null : pageLimits.clone(); }
+    public long[] pageLimits() {
+        Scoped s = scope.get();
+        long[] limits = s == null ? null : s.scope().pageLimits();
+        if (limits == null && pageLimits != null) limits = pageLimits.clone();
+        // A hosted call always has limits: the scope's, the runtime's, or the defaults.
+        if (limits == null && s != null && s.scope().hosted())
+            limits = new long[]{CallScope.DEFAULT_MAX_START_SLOTS, CallScope.DEFAULT_MAX_VALIDITY_SLOTS};
+        // A hosted cooldown must leave at least one slot before the absolute end ceiling (D7).
+        if (limits != null && s != null && s.scope().hosted()) limits[0] = Math.min(limits[0], limits[1] - 1);
+        return limits;
+    }
     void log(String message) { log.accept(message); }
-    /** Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). */
+    /**
+     * Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). The observer gets a
+     * copy (#165 Codex): what it does with it, now or later, changes nothing the runtime checks, hands out or submits.
+     */
     void built(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {
-        if (onBuilt != null) onBuilt.accept(new BuiltTx(what, tx, prepared));
+        if (onBuilt == null) return;
+        com.bloxbean.cardano.client.transaction.spec.Transaction copy;
+        try {
+            copy = com.bloxbean.cardano.client.transaction.util.TransactionUtil.createCopy(tx);
+        } catch (RuntimeException e) {
+            throw new JoustException(what + ": cannot copy the built transaction for its observer", e);
+        }
+        onBuilt.accept(new BuiltTx(what, copy, prepared));
+    }
+
+    /**
+     * Reports a signed transaction the runtime refused before submitting it (#165 Codex round 8): the observer gets a
+     * copy without its signatures (vkey and bootstrap witnesses), so nothing it keeps can be submitted. The body, and
+     * so its hash, is the one refused.
+     */
+    void builtRefused(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx) {
+        if (onBuilt == null) return;
+        com.bloxbean.cardano.client.transaction.spec.Transaction copy;
+        try {
+            copy = com.bloxbean.cardano.client.transaction.util.TransactionUtil.createCopy(tx);
+        } catch (RuntimeException e) {
+            throw new JoustException(what + ": cannot copy the built transaction for its observer", e);
+        }
+        if (copy.getWitnessSet() != null) {
+            copy.getWitnessSet().setVkeyWitnesses(null);
+            copy.getWitnessSet().setBootstrapWitnesses(null);
+        }
+        onBuilt.accept(new BuiltTx(what, copy, false));
     }
     private volatile VerifierHandle mapVerifier;
     private volatile VerifierHandle outputVerifier;
@@ -150,6 +282,7 @@ public final class StateRuntime {
      * is rebuilt from that unit's chain history first (ADR-0015 §13.12 M4).
      */
     public MerkleSupport.Prover mapProver(String unit) {
+        if (unitProver != null) return unitProver.apply(unit);
         if (mapProver != null) return mapProver;
         return new MerkleSupport.TrieProver(mapStore(), () -> {
             int n = MapHistory.rebuild(this, unit);
@@ -180,6 +313,7 @@ public final class StateRuntime {
         private com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
         private String mapStorePath;
         private MerkleSupport.Prover mapProver;
+        private Function<String, MerkleSupport.Prover> unitProver;
         private Consumer<BuiltTx> onBuilt;
         private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts = new HashMap<>();
         private final java.util.List<Relay> relays = new java.util.ArrayList<>();
@@ -187,6 +321,7 @@ public final class StateRuntime {
         private long topUpAllowance = 10_000_000L;
         private Duration relayTimeout = Duration.ofSeconds(60);
         private long settlementSlots = 2;
+        private ClaimStore claimStore = JvmClaimStore.INSTANCE;
 
         private Builder(BackendService backend) {
             this.backend = backend;
@@ -222,6 +357,11 @@ public final class StateRuntime {
         public Builder mapStorePath(String path) { this.mapStorePath = path; return this; }
         /** Map proofs from elsewhere: the runtime engine's caller supplies them (ADR-0015 §13.12 M1). */
         public Builder mapProver(MerkleSupport.Prover prover) { this.mapProver = prover; return this; }
+        /** Supply the prover for a particular token, including its history source. */
+        public Builder unitProver(Function<String, MerkleSupport.Prover> prover) {
+            unitProver = prover;
+            return this;
+        }
 
         /**
          * A known reference script output (a deployment's pin, ADR-0013 D2): contracts whose script hash it carries use it
@@ -280,6 +420,16 @@ public final class StateRuntime {
                 throw new IllegalArgumentException("settlementSlots must be 0 to " + MAX_SETTLEMENT_SLOTS);
             }
             this.settlementSlots = slots;
+            return this;
+        }
+
+        /**
+         * Where the runtime keeps the claims of the transactions it builds, its designated inputs and how they expire
+         * (ADR-0022 D8). Default: this JVM's static claims, released by the machine clock
+         * (ADR-0016 D7, unchanged). Only ever set here: a runtime never discovers a store by itself.
+         */
+        public Builder claimStore(ClaimStore store) {
+            this.claimStore = Objects.requireNonNull(store, "claimStore");
             return this;
         }
 

@@ -57,7 +57,8 @@ apply from: 'gradle/plutus-scripts.gradle'
 
 // The modules published to Maven Central and the BloxBean Maven repository; examples are never published.
 def publishedModules = ['julc-state-api', 'julc-state-processor', 'julc-state-runtime', 'julc-state-testkit',
-                        'julc-state-verifier', 'julc-state-dsl', 'julc-state-server', 'julc-state-gradle-plugin']
+                        'julc-state-verifier', 'julc-state-dsl', 'julc-state-serve', 'julc-state-host', 'julc-state-server',
+                        'julc-state-gradle-plugin']
 
 subprojects {
     apply plugin: 'java-library'

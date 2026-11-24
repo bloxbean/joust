@@ -8,6 +8,7 @@ import { instanceIdOf } from './tokens.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
   paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks, reservedName, heldBy, boundPayment,
+  scriptBearingChecks,
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
@@ -33,6 +34,7 @@ export async function verifyComposed(o) {
   }
   // The body commits to the redeemers verified below (the calls', the claims, the approvals).
   integrityChecks(tx, chain.params, problems);
+  scriptBearingChecks(tx, wallet, problems);
 
   // Each call: its contract, a spending kind, verifiable by the page.
   const calls = steps.map((s) => {

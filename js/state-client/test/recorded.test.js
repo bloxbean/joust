@@ -17,8 +17,10 @@ const SPENDING = new Set(['action', 'destroy', 'ownedAction', 'ownedDestroy']);
 
 // Refused on main too, and outside this verifier's rules so far (each a follow-up):
 // - a payout to another party below its minimum ADA, topped up from the wallet (treasury pays 1 ADA to a key): the
-//   page counts the top-up as the wallet's funds going to others.
-const KNOWN = new Map([...['004', '005', '006', '007', '008', '009', '010', '011', '012'].map((n) => [`treasury/${n}-pay.json`, /others receive/])]);
+//   page counts the top-up as the wallet's funds going to others. Every recorded Treasury.pay of 1 ADA (the first pays 10).
+const KNOWN = new Map(readdirSync(new URL('treasury/', ROOT)).filter((f) => f.endsWith('-pay.json') &&
+  JSON.parse(readFileSync(new URL(`treasury/${f}`, ROOT), 'utf8')).call.args.amount === '1000000')
+  .map((f) => [`treasury/${f}`, /others receive/]));
 
 test('every recorded call the page verifies is accepted, alone and as a one-call composition', async () => {
   let verified = 0;
@@ -50,9 +52,9 @@ test('every recorded call the page verifies is accepted, alone and as a one-call
 test('fixtures/m0\'s Market.buy: the payment it forwards is credited; refused only for the wallet\'s top-up of the NFT send', async () => {
   const description = JSON.parse(readFileSync(new URL('./fixtures/market.description.json', import.meta.url), 'utf8'));
   const i = m0Inputs('market/0004-Market.buy.json', {
-    description, walletAddress: 'addr_test1qzf4l8rrxcqla29qzy7curspnpttanpyuc6fgdv0djc5ygqgr6hw09v402suvtx69tq6xugjddy9mww9kz9g5re4qclswstdts',
-    call: { method: 'buy', instance: 'ee7b4388074a7276c17f057636a8331523b65ae83e0c5662eb0a909f67cd8882',
-      object: '4f414a2479f419704d8e85f80bce6b6da8514c9d358b2ffba64c588b11', pay: { lovelace: 100_000_000n } },
+    description, walletAddress: 'addr_test1qp7wful8sjxgjvpaw8kmal9zj90etff6u4kx963jwy8z9nk079k7ucj6puhs64pmhhyqy9ynespgvakzrq7yr5qlpz3qj6yt43',
+    call: { method: 'buy', instance: '96c648b15a79c0c01c608df74e1bca7e4b40879b5224878d26ca5186c60bac95',
+      object: '4fcf8e814ebf338a288ea23b452636e1585ac576764fcf506bbf97285b', pay: { lovelace: 100_000_000n } },
   });
   // The known limitation of ADR-0013 §9.2 (refused on main too, before forwarding): the NFT send to the buyer holds
   // 1.02147 ADA of the wallet's to reach its minimum ADA, and a claimed wallet output counts whole as the script's. The

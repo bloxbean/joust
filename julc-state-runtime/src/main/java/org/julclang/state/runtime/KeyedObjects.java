@@ -53,6 +53,7 @@ final class KeyedObjects {
      * pending (F51, R-D1). A pending operation keeps its designated input reserved until those windows have passed.
      */
     static <T> T series(StateRuntime rt, Account payer, String what, boolean lazy, Function<Designated, T> attempt) {
+        rt.requireUnscopedSubmission();
         if (!lazy) refuseWallet(payer, what);
         Designated d = lazy ? null : Designation.reserve(rt, payer, what, Set.of());
         // True once the outcome is known for certain (landed, or no handed-out attempt can land): only then is the
@@ -107,7 +108,7 @@ final class KeyedObjects {
         } finally {
             if (d != null) {
                 if (definite || d.attempts().isEmpty()) d.release();
-                else d.releaseAt(lingerUntilOrForever(rt, d));
+                else d.releaseAt(new ClaimStore.Expiry(lingerUntilOrForever(rt, d), d.lastToSlot()));
             }
         }
     }
@@ -150,6 +151,9 @@ final class KeyedObjects {
     private static Next next(StateRuntime rt, Designated d, String what, Throwable thrown, int retries) {
         if (thrown instanceof PendingTransactionException p) {
             if (d == null || p.designatedInput() != null) return new Next(false, p);
+            // Nothing of the operation was handed out: what may land is another transaction (a prerequisite such as a
+            // verifier publication), whose own hash is the outcome to recover by (#145 Codex).
+            if (d.attemptHashes().isEmpty() && p.txHash() != null) return new Next(false, p);
             var e = new PendingTransactionException(p.getMessage(), d.attemptHashes(), d.ref());
             e.initCause(p);
             return new Next(false, e);
@@ -235,6 +239,7 @@ final class KeyedObjects {
      * pending.
      */
     static RuntimeException settle(StateRuntime rt, Designated d, String what, RuntimeException failure) {
+        rt.requireUnscopedSubmission();
         if (d == null || d.attempts().isEmpty()) return failure;
         try {
             return settleHandedOut(rt, d, what, failure);

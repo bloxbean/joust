@@ -839,6 +839,69 @@ direct `Tx` building, gated by S3.
     prepared Dex swap reproduced it on the JVM.
   - So the runtime collects only for key accounts (`caller instanceof WalletAccount` skips it). This is worth
     reporting to cardano-client-lib.
+  - **Corrected (#152).** The two build paths of `Tx` are the same; the double count was the runtime's own. A wallet's
+    prepare with a payout to the wallet also spends the wallet's largest UTxO, to give the change output the fee comes
+    from. When that UTxO is the one collected for the assets (a wallet's only UTxO), it was collected twice. QuickTx
+    keeps one input but counts its value twice in the change. Skipping the collection made a second bug: with a script
+    input fixed, QuickTx builds the change from the fixed inputs, and its fee selection asks only for lovelace. A wallet
+    whose tokens sit on a UTxO the selection does not pick then gets a negative token quantity in its change (the node
+    rejects it, "expected word"). Now the runtime collects asset UTxOs for wallets too, and never collects a UTxO twice.
+    The funding pick reuses an asset input, and each later call in a composition first counts what the inputs it
+    already spends hold. It never takes a UTxO with a reference script, nor one another keyed operation holds. It also
+    skips a UTxO with a datum hash: at a key address the ledger needs no datum, so this is a conservative choice, as
+    cardano-client-lib's selection makes. An inline datum at a key address is spendable as is, so tokens sent to a
+    wallet with one can be paid in (also when the provider gives the inline datum's hash beside it, as Yaci Store does). A creation's seed is never an input the composition already spends: a creation
+    after a call that paid assets from the caller's only UTxO is refused, while the other order works (the seed is
+    counted for the payment). It never takes one of the transaction's reference inputs (the call's reads are applied
+    before its assets are collected; in a composition, every call's reads from the first pass count), and every body,
+    prepared or submitted, is refused if it spends one of its reference inputs (the ledger's
+    `BabbageNonDisjointRefInputs`). Like every plain selection (`Designation`), it does not skip a UTxO an earlier, still-open prepare claims:
+    two such bodies conflict and at most one lands.
+  - **A caller that is not the payer** (a composition's co-caller, wallet or key account) gets back, at its own address,
+    what its collected inputs hold beyond the assets it pays in: one output with their lovelace and other tokens. The
+    payer funds the lovelace paid in and the fee. Before #152 a key co-caller's surplus went to the payer's change
+    (the runtime signed for it). A body, prepared or submitted, may take nothing else from a co-caller's address, and
+    an input whose provider gives no address is refused rather than assumed to be the payer's. Only the return the
+    runtime made counts as a co-caller's return (the output at the index it was appended at: its address, no datum, the
+    exact value recorded), and the check covers every co-caller the plan pays in for or returns to (the chain provider is
+    trusted for where an input is; #169 tracks a trustless mode); the return is exactly what the co-caller's inputs hold
+    less what it pays in: any other output there (a payout, a send, an intent's refund) is owed by someone else and
+    cannot cover a short return, and a larger return would give it the payer's value. The collateral is the payer's: every collateral input and the collateral return are at the payer's
+    address. A key-signed call with co-signers (`@Quorum`, `@AuthorizedBy`) is checked the same way. A return above
+    the ledger's maximum value size (inputs with many unrelated tokens) is refused, not split. A wallet's UTxOs keep
+    their reference script hash from CIP-30's CBOR, so one carrying a script is never spent for its tokens, taken as a
+    creation's seed (over every page of the listing), or designated by a keyed call (at another of the wallet's
+    addresses when the funding address has none; the engine then builds from that address). The DevKit wallet leaves out
+    a UTxO carrying a reference script (it knows only the hash, or with Ogmios perhaps only that there is one) and
+    reports datum hashes, an inline datum `00` included. QuickTx's own funding and collateral selection can still spend
+    a wallet UTxO carrying a reference script: tracked in #167. Whatever built the transaction, every page verifier
+    (single, keyed and composed calls, purposes, intents, a governor's registration) refuses one that spends, or puts
+    up as collateral, a wallet UTxO whose record carries a reference script (`referenceScriptHash`, or
+    `hasReferenceScript`) before the wallet signs: a prepare service could otherwise return its value as change while
+    the script is lost. The caller's and payer's listings (seeds, token payments, the
+    funding pick, keyed reservations and designated inputs) are read to their end (up to 10,000 pages, beyond which the read is
+    refused as incomplete). A page after the first that the provider fails to answer is an error, not the end; a
+    failed first page reads as an empty listing, and the refusal (a seed's, a token payment's, a keyed reservation's)
+    says the provider may not have answered; the funding pick then picks nothing, and the build selects as before. One check
+    reads it the other way on purpose: a keyed retry's "is the designated input still unspent" counts an unreadable
+    listing as spent, so nothing is rebuilt on a guess. A page designates a keyed input only at an address with the
+    caller's payment key, so the caller a contract records (an admin) stays the wallet's, and the page's verifier
+    requires the call's caller to be the payment key of the designated input's address (not just any key of the
+    wallet); with no such input the refusal names the funding address. Retries compare transaction
+    ids in any letter case. The engine's snapshot (fetched listings and a request's `walletUtxos`) and the DevKit helpers (`devkitMint`,
+    `devkitSweep`, the genesis top-up) never offer an output carrying a reference script for spending.
+  - **Every body handed to a wallet** (`PreparedTx`, a prepared publication, the engine's governor stake
+    registration) must balance per unit (`BodyBalance`):
+    inputs + mint + withdrawals + certificate refunds = outputs + fee + certificate deposits + proposal deposits +
+    donation. No quantity may be negative, zero (an asset) or outside the ledger's range, and no input may appear
+    twice; nor a map key twice (two withdrawals from one reward account, a policy or an asset name listed twice in a
+    value, in any spelling), which the bytes would keep once; nor an output or collateral return holding assets whose
+    value is above the protocol's maximum value size (and with no maximum known, such an output is refused). The
+    checks read a copy decoded from the body's bytes, which is what the wallet gets (and, for the runtime's own
+    key-signed submissions, what it signs and submits, value sizes included, publications too); an observer (`onBuilt`) gets a copy of its own and cannot
+    change either. A signed transaction reaches observers only after every check of its body passed; a refused one
+    reaches them without its signatures, so nothing an observer keeps can be submitted. Otherwise the body is refused. This is the runtime's self-check against bodies the ledger would reject. It
+    says nothing about where value goes: the wallet's net outflow is the page verifier's to bound (ADR-0013).
 - **The snapshot backend** returns one object per output reference, whichever query found it: cardano-client-lib tells
   UTxOs apart by equality.
 - **`devkitSweep`** moves what contracts sent to the wallet key's enterprise address to its base address, as

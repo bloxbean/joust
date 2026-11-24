@@ -12,7 +12,7 @@ const refused = (r, re, what) => assert.ok(r.problems.some((p) => re.test(p)), `
 const plus = (m, unit, q) => new Map([...m].map(([k, v]) => [k, k === unit ? v + q : v]));
 
 test('a batch whose signer is also owed an intent\'s refund: the refund is not the batcher\'s change', async () => {
-  const r = recorded('pool/017-batch.json');
+  const r = recorded('pool/018-batch.json');
   const tx = parseTx(r.cbor);
   const base = walletOf(r.x);
   const verify = (txHex, wallet) => verifyBatch({ description: r.description, deployment: deploymentOf(r.x, r.description), txHex,

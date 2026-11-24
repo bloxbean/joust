@@ -151,5 +151,5 @@ test('every recorded registry transaction passes the page with the recorded cloc
     n++;
   }
   console.log(`[window] ${n} recorded registry transactions accepted by the page with the clock pinned`);
-  assert.equal(n, 22);
+  assert.equal(n, 26);
 });

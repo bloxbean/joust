@@ -24,9 +24,9 @@ const both = async (o) => [await verifyPrepared(o), await verifyComposed({ ...o,
 // ---------------------------------------------------------------- a payment is credited only where it is bound
 
 test('a non-payable method is paid nothing alone either, and a payment no Ctx binds is not credited', async () => {
-  // upgrade/002: CounterV1.increment, not payable, no Ctx. The page states a 2 ADA payment, and the body pays 2 ADA of
+  // upgrade/004: CounterV1.increment, not payable, no Ctx. The page states a 2 ADA payment, and the body pays 2 ADA of
   // the wallet's change to a stranger's key carrying the target's payout tag.
-  const i = fixtureInputs('upgrade/002-increment.json').single;
+  const i = fixtureInputs('upgrade/004-increment.json').single;
   const tx = parseTx(i.txHex);
   const target = tx.inputs.find((r) => !i.wallet.utxos.has(r));
   const x = JSON.parse(JSON.stringify({ snapshot: { protocolParams: i.chain.params } }));
@@ -47,9 +47,9 @@ test('a non-payable method is paid nothing alone either, and a payment no Ctx bi
 
 // --------------------------------------------------------------------- an owned object's source instance
 
-/** guild/017: Guild.retire destroys an owned object (no continuation): its source instance is in its input's datum. */
+/** guild/018: Guild.retire destroys an owned object (no continuation): its source instance is in its input's datum. */
 function retire() {
-  const i = fixtureInputs('guild/017-retire.json').single;
+  const i = fixtureInputs('guild/018-retire.json').single;
   const tx = parseTx(i.txHex);
   const target = tx.inputs.find((r) => !i.wallet.utxos.has(r));
   return { i, target };
@@ -69,7 +69,7 @@ test('an owned destroy binds its source instance by its input\'s datum', async (
 });
 
 test('a move binds its source instance too', async () => {
-  const c = recordedComposition('guild/005-undefined.json');
+  const c = recordedComposition('guild/006-undefined.json');
   accepted(await verifyComposed({ steps: c.steps, wallet: c.wallet, chain: c.chain, txHex: c.cbor }), 'the recorded transfer');
   const tx = parseTx(c.cbor);
   const move = c.steps.find((s) => s.call.meta.policies?.into);

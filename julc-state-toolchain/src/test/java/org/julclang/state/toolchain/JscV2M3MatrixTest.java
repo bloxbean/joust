@@ -465,9 +465,25 @@ class JscV2M3MatrixTest {
 
     @Test
     void aScriptOverTheRuntimesLimit_isWarnedAtBuildTime() throws Exception {
-        // MixFull (security MS3): Mix with a vote handler too, over the runtime's 15,000-byte limit.
+        // MixFull (security MS3): Mix with a vote handler and seven more owned actions, over the runtime's 15,000-byte
+        // limit (JuLC 0.1.0-pre21's smaller scripts put Mix with the vote handler alone at 13,634 bytes, five more
+        // owned actions at 14,873).
         String full = SOURCES.get("Mix").replace("contract Mix(", "contract MixFull(").replace("\n  invariant Hero.heroLevel",
                 "\n  vote judge(voter: Voter, action: GovernanceActionId, choice: Vote) quorum params.council params.quorum = true\n\n"
+                        + "  owned action Hero.train(steps: Int) only owner {\n    require(steps > 0 && steps <= 10, \"steps\")\n"
+                        + "    return { ...state, level: level + steps }\n  }\n\n"
+                        + "  owned action Hero.demote(steps: Int) only owner {\n    require(steps > 0 && steps < level, \"steps\")\n"
+                        + "    return { ...state, level: level - steps }\n  }\n\n"
+                        + "  owned action Seat.clear() only holder {\n    require(length(note) > 0, \"empty\")\n"
+                        + "    return { ...state, note: utf8(\"\") }\n  }\n\n"
+                        + "  owned action Hero.promote(steps: Int, cap: Int) only owner {\n    require(steps > 0 && level + steps <= cap, \"cap\")\n"
+                        + "    return { ...state, level: level + steps }\n  }\n\n"
+                        + "  owned action Seat.stamp(text: Bytes) only holder {\n    require(length(text) > 0 && length(text) <= 32, \"text\")\n"
+                        + "    return { ...state, note: text }\n  }\n\n"
+                        + "  owned action Hero.rank(target: Int) only owner {\n    require(target > level && target <= 100, \"rank\")\n"
+                        + "    return { ...state, level: target }\n  }\n\n"
+                        + "  owned action Seat.reserve(text: Bytes, limit: Int) only holder {\n    require(length(text) <= limit && limit <= 64, \"limit\")\n"
+                        + "    return { ...state, note: text }\n  }\n\n"
                         + "  invariant Hero.heroLevel");
         var r = Toolchain.build(Map.of("org/julclang/state/examples/dsl/MixFull.jsc", full), Map.of());
         assertTrue(r.ok(), "a warning, not an error: " + r.diagnostics());

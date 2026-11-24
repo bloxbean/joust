@@ -3,7 +3,7 @@
 // rewards go. Each prepared transaction is verified before the wallet signs: nothing beyond the operation, the
 // wallet's funds bounded (it pays the fee only), the redeemers the page's own.
 
-import { DEFAULT_LIMITS, add, isWalletEnterprise, integrityChecks } from './verify.js';
+import { DEFAULT_LIMITS, add, isWalletEnterprise, integrityChecks, scriptBearingChecks } from './verify.js';
 import { codec as makeCodec } from './data.js';
 import { Data, dataEqual } from './pdata.js';
 import { rewardAddressOf } from './governors.js';
@@ -45,6 +45,7 @@ export async function verifyPurpose(o) {
   } catch (e) {
     return { problems: ['not a transaction'], report: {} };
   }
+  scriptBearingChecks(tx, wallet, problems);
   const report = { fee: tx.fee };
   const policy = deployment.policy;
   const own = rewardAddressOf(policy, deployment.networkId);

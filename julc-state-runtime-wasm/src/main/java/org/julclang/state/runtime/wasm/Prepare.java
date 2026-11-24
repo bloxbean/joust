@@ -10,7 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.julclang.clientlib.eval.JulcTransactionEvaluator;
 import org.julclang.clientlib.eval.SlotConfig;
 import org.julclang.state.runtime.Compose;
-import org.julclang.state.runtime.NotYetException;
+import org.julclang.state.runtime.CallScope;
 import org.julclang.state.runtime.PreparedTx;
 import org.julclang.state.runtime.SlotChainTime;
 import org.julclang.state.runtime.StateRuntime;
@@ -44,16 +44,36 @@ public final class Prepare {
      * A contract as the toolchain builds it: the description (JSON), the script (CBOR hex), the transition programs, and
      * their manifest (JSON, ADR-0020 D8), which must match the other three before any program runs.
      */
-    public record Contract(String description, String script, Map<String, String> transitions, String manifest) {}
+    public record Contract(String description, String script, Map<String, String> transitions, String manifest, String messages) {
+        public Contract(String description, String script, Map<String, String> transitions, String manifest) {
+            this(description, script, transitions, manifest, null);
+        }
+    }
 
     /**
      * {@code call}: the request JSON, {@code { contract, kind, method, instance, object, args, pay: {lovelace}, address }};
      * {@code snapshot}: the chain as JSON ({@link Snapshot}); the chain's slot clock; the runtime's TTL; network id
      * 0 (test networks) or 1 (mainnet).
      */
+    public record Scope(long now, long ttlSlots, List<Long> pageLimits) {
+        long ceiling() { return Math.addExact(now, ttlSlots); }
+
+        CallScope scope() {
+            ceiling();
+            var scope = CallScope.hosted(now).ttlSlots(ttlSlots);
+            if (pageLimits == null) return scope;
+            if (pageLimits.size() != 2) throw new IllegalArgumentException("expected two page limits");
+            return scope.pageLimits(pageLimits.get(0), pageLimits.get(1));
+        }
+    }
+
     public record Request(String call, String snapshot, List<Contract> contracts, long zeroSlot, long zeroTimeMs,
                           long slotLengthMs, long ttlMs, int networkId, Map<String, String> mapNodes,
-                          Map<String, String> mapProofs) {
+                          Map<String, String> mapProofs, Scope scope) {
+        public Request(String call, String snapshot, List<Contract> contracts, long zeroSlot, long zeroTimeMs,
+                       long slotLengthMs, long ttlMs, int networkId, Map<String, String> mapNodes, Map<String, String> mapProofs) {
+            this(call, snapshot, contracts, zeroSlot, zeroTimeMs, slotLengthMs, ttlMs, networkId, mapNodes, mapProofs, null);
+        }
         /** As before ADR-0015 §13.12: the caller's map nodes, no proofs. */
         public Request(String call, String snapshot, List<Contract> contracts, long zeroSlot, long zeroTimeMs,
                        long slotLengthMs, long ttlMs, int networkId, Map<String, String> mapNodes) {
@@ -77,7 +97,8 @@ public final class Prepare {
             throw new IllegalArgumentException("the call request is not JSON", e);
         }
         if (pl.isMissingNode() || pl.isNull()) {
-            b.pageLimits(60, 900);
+            b.pageLimits(org.julclang.state.runtime.CallScope.DEFAULT_MAX_START_SLOTS,
+                    org.julclang.state.runtime.CallScope.DEFAULT_MAX_VALIDITY_SLOTS);
         } else {
             // R-G4: two integers, a start limit of at least 0 and a validity limit of at least 1 slot.
             if (!pl.isArray() || pl.size() != 2 || !pl.get(0).canConvertToLong() || !pl.get(1).canConvertToLong()
@@ -105,7 +126,12 @@ public final class Prepare {
      */
     public record Result(boolean ok, String cbor, String txHash, String created, long validTo, List<String> signers,
                          String plan, String needKind, String needKey, String error, Map<String, String> mapNodes,
-                         long retryAtSlot, String refusedBy) {
+                         long retryAtSlot, String refusedBy, String outcome) {
+        public Result(boolean ok, String cbor, String txHash, String created, long validTo, List<String> signers,
+                      String plan, String needKind, String needKey, String error, Map<String, String> mapNodes,
+                      long retryAtSlot, String refusedBy) {
+            this(ok, cbor, txHash, created, validTo, signers, plan, needKind, needKey, error, mapNodes, retryAtSlot, refusedBy, null);
+        }
         /** Every result but a refusal names no refusing contract, and only a cooldown's refusal has a retry slot. */
         public Result(boolean ok, String cbor, String txHash, String created, long validTo, List<String> signers,
                       String plan, String needKind, String needKey, String error, Map<String, String> mapNodes) {
@@ -172,6 +198,7 @@ public final class Prepare {
     public static Result prepare(Request r) {
         String called = null;
         try {
+            if (r.scope() != null) r.scope().scope();
             JsonNode call = JSON.readTree(r.call());
             if (call.has("calls")) return composed(r, call);
             String contract = call.path("contract").asText();
@@ -183,118 +210,133 @@ public final class Prepare {
             for (Contract c : r.contracts()) {
                 if (JSON.readTree(c.description()).path("preamble").path("title").asText().equals(contract)) dc = load(c);
             }
-            if (dc == null) return refused("unknown contract " + contract);
+            if (dc == null) return refused("contract", "unknown contract " + contract);
             Network network = r.networkId() == 1 ? Networks.mainnet() : Networks.testnet();
             var backend = new SnapshotBackend(Snapshot.fromJson(r.snapshot()));
-            var time = new SlotChainTime(r.zeroSlot(), r.zeroTimeMs(), r.slotLengthMs(), backend);
-            // The MerkleMap mirror: the caller's nodes; a missing one is a need; the written ones go back (ADR-0015 D5).
             var nodes = new org.julclang.state.runtime.snapshot.SnapshotNodeStore(r.mapNodes());
-            var builder = maps(StateRuntime.builder(backend), r, nodes);
-            // The deployment's pinned reference scripts, from the snapshot (one lookup each, not an address scan).
-            for (JsonNode ref : call.path("referenceScripts")) {
-                String[] p = ref.asText().split("#");
-                var u = backend.getUtxoService().getTxOutput(p[0], Integer.parseInt(p[1]));
-                if (u.isSuccessful()) builder.referenceScript(u.getValue());
-            }
-            var rt = builder
-                    .network(network)
-                    .chainTime(time)
-                    .ttl(Duration.ofMillis(r.ttlMs()))
-                    .evaluator(new JulcTransactionEvaluator(
-                            new DefaultUtxoSupplier(backend.getUtxoService()),
-                            new DefaultProtocolParamsSupplier(backend.getEpochService()),
-                            new DefaultScriptSupplier(backend.getScriptService()),
-                            new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())))
-                    .build();
-            var wallet = WalletAccount.of(call.path("address").asText(), network);
-            BigInteger pay = new BigInteger(call.path("pay").path("lovelace").asText("0"));
-            if (call.path("kind").asText().equals("deployment")) {
-                // What a page pins (ADR-0013 D2): policy, address, network and the reference script, if published.
-                var h = dc.handle(rt, call.get("params"));
-                var ref = h.findReferenceScript();
-                var d = JSON.createObjectNode();
-                d.put("contract", dc.name());
-                d.put("policy", h.policyId());
-                d.put("address", h.address());
-                d.put("networkId", r.networkId());
-                if (call.has("params")) d.set("params", call.get("params"));
-                var refs = d.putArray("referenceScripts");
-                if (ref != null) refs.add(ref.getTxHash() + "#" + ref.getOutputIndex());
-                return new Result(true, null, null, null, -1, List.of(), d.toString(), null, null, null, Map.of());
-            }
-            if (call.path("kind").asText().equals("publish")) {
-                // The contract's reference script, paid by the caller (joust deploy).
-                var tx = dc.handle(rt, call.get("params")).prepareReferenceScript(wallet.baseAddress());
-                if (tx == null) return new Result(true, null, null, null, -1, List.of(), null, null, null, null, Map.of());
-                byte[] pkh = new com.bloxbean.cardano.client.address.Address(wallet.baseAddress()).getPaymentCredentialHash().orElseThrow();
-                return new Result(true, com.bloxbean.cardano.client.util.HexUtil.encodeHexString(tx.serialize()),
-                        com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(tx), null,
-                        tx.getBody().getTtl(), List.of(com.bloxbean.cardano.client.util.HexUtil.encodeHexString(pkh)),
-                        JSON.writeValueAsString(org.julclang.state.runtime.TxPlan.of(tx)), null, null, null, Map.of());
-            }
-            String kind = call.path("kind").asText();
-            if (kind.equals("registerStake")) {
-                // The contract's stake credential (ADR-0010): a plain registration, once per deployment.
-                return registration(backend, dc.rewardAddress(rt, call.get("params")), call.path("address").asText());
-            }
-            if (kind.equals("delegate") || kind.equals("collect")) {
-                // Purpose handlers (ADR-0010; ADR-0015 M3): @Certify (a delegation), @Withdraw (the rewards, sent).
-                final DescribedContract d = dc;
-                var cos = cosigners(call, network);
-                PreparedTx p = Compose.of(rt, wallet).add(() -> {
-                    if (kind.equals("delegate")) d.delegate(rt, wallet, call.get("params"), call.path("pool").asText(null), cos);
-                    else d.collect(rt, wallet, call.get("params"), new BigInteger(call.path("amount").asText("0")), call.get("args"), cos);
-                }).prepare();
-                return new Result(true, p.cbor(), p.txHash(), null, p.validTo(), p.requiredSigners(),
-                        JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
-            }
-            if (kind.equals("pendingIntents")) {
-                // An instance's pending intents (ADR-0004), read through the snapshot: no transaction.
-                var list = dc.pendingIntents(rt, call.path("instance").asText(null), call.get("params"));
-                return new Result(true, null, null, null, -1, List.of(), list.toString(), null, null, null, Map.of());
-            }
-            if (kind.equals("intent") || kind.equals("cancelIntent") || kind.equals("batch")) {
-                // Batched actions (ADR-0004; ADR-0015 M3): lock an intent, withdraw it, or apply pending ones.
-                String[] out = new String[1];
-                final DescribedContract d = dc;
-                String instance = call.path("instance").asText(null);
-                JsonNode params = call.get("params");
-                PreparedTx p = Compose.of(rt, wallet).add(() -> {
-                    switch (kind) {
-                        case "intent" -> out[0] = d.intent(rt, wallet, call.path("method").asText(), instance, call.path("args"),
-                                pay, params, call.path("deadline").asLong());
-                        case "cancelIntent" -> d.cancelIntent(rt, wallet, instance, call.path("intent").asText(null), params);
-                        default -> {
-                            var b = d.batch(rt, wallet, instance, call.path("max").asInt(8), params);
-                            if (b.applied().isEmpty()) {
-                                throw new org.julclang.state.api.RequireException("nothing to batch" + (b.skipped().isEmpty() ? ""
-                                        : ": " + b.skipped()));
-                            }
-                            var o = JSON.createObjectNode();
-                            var applied = o.putArray("applied");
-                            b.applied().forEach(applied::add);
-                            var skipped = o.putObject("skipped");
-                            b.skipped().forEach(skipped::put);
-                            out[0] = o.toString();
-                        }
-                    }
-                }).prepare();
-                return new Result(true, p.cbor(), p.txHash(), out[0], p.validTo(), p.requiredSigners(),
-                        JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
-            }
-            String[] made = new String[1];
-            DescribedContract target = dc;
-            var cosigners = cosigners(call, network);
-            // ADR-0016 D11: a keyed call spends the wallet input the page designated for its operation.
-            PreparedTx p = Compose.of(rt, wallet).designate(call.path("designated").asText(null)).add(() -> made[0] = target.call(rt, wallet, call.path("kind").asText(),
-                    call.path("method").asText(), call.path("instance").asText(null), call.path("object").asText(null),
-                    call.path("args"), pay, call.get("params"), call.path("pay").get("assets"), call.path("into").asText(null),
-                    cosigners, governorOf(call, network))).prepare();
-            return new Result(true, p.cbor(), p.txHash(), made[0], p.validTo(), p.requiredSigners(),
-                    JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
+            var rt = runtime(r, call, backend, nodes);
+            var target = dc;
+            return scoped(r, rt, () -> single(r, call, target, network, backend, nodes, rt));
         } catch (Throwable t) {
-            return failed(t, called);
+            return failed(t, called, r.contracts());
         }
+    }
+
+    @FunctionalInterface private interface Build { Result run() throws Exception; }
+
+    private static Result scoped(Request r, StateRuntime rt, Build build) throws Exception {
+        if (r.scope() == null) return build.run();
+        return rt.inScope(r.scope().scope(), () -> {
+            try { return build.run(); }
+            catch (RuntimeException e) { throw e; }
+            catch (Exception e) { throw new IllegalStateException(e.getMessage(), e); }
+        });
+    }
+
+    private static Result single(Request r, JsonNode call, DescribedContract dc, Network network, SnapshotBackend backend,
+                             org.julclang.state.runtime.snapshot.SnapshotNodeStore nodes, StateRuntime rt) throws Exception {
+        boolean deployment = call.path("kind").asText().equals("deployment");
+        var wallet = deployment && !call.hasNonNull("address") ? null : WalletAccount.of(call.path("address").asText(), network);
+        BigInteger pay = new BigInteger(call.path("pay").path("lovelace").asText("0"));
+        if (deployment) {
+            // What a page pins (ADR-0013 D2): policy, address, network and the reference script, if published.
+            var h = dc.handle(rt, call.get("params"));
+            var ref = h.findReferenceScript();
+            var d = JSON.createObjectNode();
+            d.put("contract", dc.name());
+            d.put("policy", h.policyId());
+            d.put("address", h.address());
+            d.put("networkId", r.networkId());
+            if (call.has("params")) d.set("params", call.get("params"));
+            var refs = d.putArray("referenceScripts");
+            if (ref != null) refs.add(ref.getTxHash() + "#" + ref.getOutputIndex());
+            return new Result(true, null, null, null, -1, List.of(), d.toString(), null, null, null, Map.of());
+        }
+        if (call.path("kind").asText().equals("publish")) {
+            // The contract's reference script, paid by the caller (joust deploy).
+            if (r.scope() != null) {
+                var handle = dc.handle(rt, call.get("params"));
+                var all = backend.getUtxoService().getUtxos(handle.address(), Integer.MAX_VALUE, 1).getValue();
+                return publication(handle.prepareReferenceScript(wallet.baseAddress(), r.scope().ceiling(), all));
+            }
+            var tx = dc.handle(rt, call.get("params")).prepareReferenceScript(wallet.baseAddress());
+            if (tx == null) return new Result(true, null, null, null, -1, List.of(), null, null, null, null, Map.of());
+            byte[] pkh = new com.bloxbean.cardano.client.address.Address(wallet.baseAddress()).getPaymentCredentialHash().orElseThrow();
+            return new Result(true, com.bloxbean.cardano.client.util.HexUtil.encodeHexString(tx.serialize()),
+                    com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(tx), null,
+                    tx.getBody().getTtl(), List.of(com.bloxbean.cardano.client.util.HexUtil.encodeHexString(pkh)),
+                    JSON.writeValueAsString(org.julclang.state.runtime.TxPlan.of(tx)), null, null, null, Map.of());
+        }
+        String kind = call.path("kind").asText();
+        if (kind.equals("registerStake")) {
+            // The contract's stake credential (ADR-0010): a plain registration, once per deployment.
+            return registration(r, backend, dc.rewardAddress(rt, call.get("params")), call.path("address").asText());
+        }
+        if (kind.equals("delegate") || kind.equals("collect")) {
+            // Purpose handlers (ADR-0010; ADR-0015 M3): @Certify (a delegation), @Withdraw (the rewards, sent).
+            final DescribedContract d = dc;
+            var cos = cosigners(call, network);
+            PreparedTx p = Compose.of(rt, wallet).add(() -> {
+                if (kind.equals("delegate")) d.delegate(rt, wallet, call.get("params"), call.path("pool").asText(null), cos);
+                else d.collect(rt, wallet, call.get("params"), new BigInteger(call.path("amount").asText("0")), call.get("args"), cos);
+            }).prepare();
+            return new Result(true, p.cbor(), p.txHash(), null, validTo(r, p), p.requiredSigners(),
+                    JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
+        }
+        if (kind.equals("pendingIntents")) {
+            // An instance's pending intents (ADR-0004), read through the snapshot: no transaction.
+            var list = dc.pendingIntents(rt, call.path("instance").asText(null), call.get("params"));
+            return new Result(true, null, null, null, -1, List.of(), list.toString(), null, null, null, Map.of());
+        }
+        if (kind.equals("intent") || kind.equals("cancelIntent") || kind.equals("batch")) {
+            // Batched actions (ADR-0004; ADR-0015 M3): lock an intent, withdraw it, or apply pending ones.
+            String[] out = new String[1];
+            final DescribedContract d = dc;
+            String instance = call.path("instance").asText(null);
+            JsonNode params = call.get("params");
+            PreparedTx p = Compose.of(rt, wallet).add(() -> {
+                switch (kind) {
+                    case "intent" -> out[0] = d.intent(rt, wallet, call.path("method").asText(), instance, call.path("args"),
+                            pay, params, call.path("deadline").asLong());
+                    case "cancelIntent" -> d.cancelIntent(rt, wallet, instance, call.path("intent").asText(null), params);
+                    default -> {
+                        var b = d.batch(rt, wallet, instance, call.path("max").asInt(8), params);
+                        if (b.applied().isEmpty()) {
+                            throw new org.julclang.state.api.RequireException("nothing to batch" + (b.skipped().isEmpty() ? ""
+                                    : ": " + b.skipped()));
+                        }
+                        var o = JSON.createObjectNode();
+                        var applied = o.putArray("applied");
+                        b.applied().forEach(applied::add);
+                        var skipped = o.putObject("skipped");
+                        b.skipped().forEach(skipped::put);
+                        out[0] = o.toString();
+                    }
+                }
+            }).prepare();
+            return new Result(true, p.cbor(), p.txHash(), out[0], validTo(r, p), p.requiredSigners(),
+                    JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
+        }
+        String[] made = new String[1];
+        DescribedContract target = dc;
+        var cosigners = cosigners(call, network);
+        // ADR-0016 D11: a keyed call spends the wallet input the page designated for its operation.
+        PreparedTx p = Compose.of(rt, wallet).designate(call.path("designated").asText(null)).add(() -> made[0] = target.call(rt, wallet, call.path("kind").asText(),
+                call.path("method").asText(), call.path("instance").asText(null), call.path("object").asText(null),
+                call.path("args"), pay, call.get("params"), call.path("pay").get("assets"), call.path("into").asText(null),
+                cosigners, governorOf(call, network))).prepare();
+        return new Result(true, p.cbor(), p.txHash(), made[0], validTo(r, p), p.requiredSigners(),
+                JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
+    }
+
+    private static long validTo(Request r, PreparedTx tx) {
+        return r.scope() == null ? tx.validTo() : tx.validToSlot().orElse(-1);
+    }
+
+    private static Result publication(PreparedTx tx) throws Exception {
+        if (tx == null) return new Result(true, null, null, null, -1, List.of(), null, null, null, null, Map.of());
+        return new Result(true, tx.cbor(), tx.txHash(), null, tx.validToSlot().orElseThrow(), tx.requiredSigners(),
+                JSON.writeValueAsString(tx.plan()), null, null, null, Map.of());
     }
 
     /**
@@ -336,7 +378,7 @@ public final class Prepare {
         var program = org.julclang.clientlib.JulcScriptAdapter.toProgram(call.path("script").asText());
         var params = new java.util.ArrayList<org.julclang.core.PlutusData>();
         for (JsonNode p : call.path("params")) {
-            params.add(org.julclang.core.cbor.PlutusDataCborDecoder.decode(java.util.HexFormat.of().parseHex(p.asText())));
+            params.add(org.julclang.state.runtime.PlutusBytes.decodeHex(p.asText()));
         }
         if (!params.isEmpty()) program = program.applyParams(params.toArray(new org.julclang.core.PlutusData[0]));
         var script = org.julclang.clientlib.JulcScriptAdapter.fromProgram(program);
@@ -350,20 +392,45 @@ public final class Prepare {
             d.put("rewardAddress", reward);
             return new Result(true, null, null, null, -1, List.of(), d.toString(), null, null, null, Map.of());
         }
-        if (!call.path("kind").asText().equals("register")) return refused("a governor has no " + call.path("kind").asText());
-        return registration(new SnapshotBackend(Snapshot.fromJson(r.snapshot())), reward, call.path("address").asText());
+        if (!call.path("kind").asText().equals("register")) return refused("request", "a governor has no " + call.path("kind").asText());
+        return registration(r, new SnapshotBackend(Snapshot.fromJson(r.snapshot())), reward, call.path("address").asText());
+    }
+
+    /**
+     * Handed to a wallet like the runtime's prepared bodies, a registration must balance per unit too (#152 F-W1). The
+     * snapshot answers each output alike to QuickTx and to this check (one object per reference), so this guards
+     * against the builder, not the chain reads (#165 reviewer3 R3-4).
+     */
+    static void checkRegistration(com.bloxbean.cardano.client.transaction.spec.Transaction built, SnapshotBackend backend) {
+        org.julclang.state.runtime.BodyBalance.check(built.getBody(), in -> {
+            try {
+                var o = backend.getUtxoService().getTxOutput(in.getTransactionId(), in.getIndex());
+                return o.isSuccessful() ? o.getValue() : null;
+            } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+                throw new IllegalStateException(e);
+            }
+        }, () -> {
+            try {
+                return backend.getEpochService().getProtocolParameters().getValue();
+            } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+                throw new IllegalStateException(e);
+            }
+        }, "register the stake credential");
     }
 
     /** The unsigned transaction registering the stake credential of {@code reward}, paid from {@code payer}. */
-    private static Result registration(SnapshotBackend backend, String reward, String payer) throws Exception {
+    private static Result registration(Request r, SnapshotBackend backend, String reward, String payer) throws Exception {
         var tx = new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(reward).from(payer);
-        var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend).compose(tx)
+        var context = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend).compose(tx)
                 .feePayer(payer)
-                .additionalSignersCount(1)
-                .build();
+                .additionalSignersCount(1);
+        if (r.scope() != null) context.validTo(r.scope().ceiling());
+        // Checked and handed out as its bytes hold it, as the runtime's prepared bodies are (#165 Opus P3).
+        var built = org.julclang.state.runtime.BodyBalance.readBack(context.build(), "register the stake credential");
+        checkRegistration(built, backend);
         byte[] pkh = new com.bloxbean.cardano.client.address.Address(payer).getPaymentCredentialHash().orElseThrow();
         return new Result(true, com.bloxbean.cardano.client.util.HexUtil.encodeHexString(built.serialize()),
-                com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(built), null, -1,
+                com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(built), null, r.scope() == null ? -1 : built.getBody().getTtl(),
                 List.of(com.bloxbean.cardano.client.util.HexUtil.encodeHexString(pkh)),
                 JSON.writeValueAsString(org.julclang.state.runtime.TxPlan.of(built)), null, null, null, Map.of());
     }
@@ -407,34 +474,43 @@ public final class Prepare {
             var nodes = new org.julclang.state.runtime.snapshot.SnapshotNodeStore(r.mapNodes());
             var rt = runtime(r, call, backend, nodes);
             var wallet = WalletAccount.of(call.path("address").asText(), network);
-            var compose = Compose.of(rt, wallet).allowSharedSigners().designate(call.path("designated").asText(null));
-            var made = new java.util.ArrayList<String>();
-            for (JsonNode c : call.get("calls")) {
-                DescribedContract dc = contract(r, c.path("contract").asText());
-                BigInteger pay = new BigInteger(c.path("pay").path("lovelace").asText("0"));
-                int slot = made.size();
-                made.add(null);
-                String title = c.path("contract").asText();
-                compose.add(() -> {
-                    try {
-                        made.set(slot, dc.call(rt, wallet, c.path("kind").asText(), c.path("method").asText(),
-                                c.path("instance").asText(null), c.path("object").asText(null), c.path("args"), pay, c.get("params"),
-                                c.path("pay").get("assets"), c.path("into").asText(null), cosigners(c, network), governorOf(c, network)));
-                    } catch (org.julclang.state.api.RequireException e) {
-                        throw new RefusedBy(title, e);
-                    }
-                });
-            }
-            PreparedTx p = compose.prepare();
-            return new Result(true, p.cbor(), p.txHash(), JSON.writeValueAsString(made), p.validTo(), p.requiredSigners(),
-                    JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
+            return scoped(r, rt, () -> composedBuild(r, call, rt, wallet, network, nodes));
         } catch (Throwable t) {
-            String by = null;
-            for (Throwable c = t; c != null && by == null; c = c.getCause()) {
-                if (c instanceof RefusedBy rb) by = rb.contract;
-            }
-            return failed(t, by);
+            return composedFailure(t, r.contracts());
         }
+    }
+
+    private static Result composedBuild(Request r, JsonNode call, StateRuntime rt, WalletAccount wallet, Network network,
+                                        org.julclang.state.runtime.snapshot.SnapshotNodeStore nodes) throws Exception {
+        var compose = Compose.of(rt, wallet).allowSharedSigners().designate(call.path("designated").asText(null));
+        var made = new java.util.ArrayList<String>();
+        for (JsonNode c : call.get("calls")) {
+            DescribedContract dc = contract(r, c.path("contract").asText());
+            BigInteger pay = new BigInteger(c.path("pay").path("lovelace").asText("0"));
+            int slot = made.size();
+            made.add(null);
+            String title = c.path("contract").asText();
+            compose.add(() -> {
+                try {
+                    made.set(slot, dc.call(rt, wallet, c.path("kind").asText(), c.path("method").asText(),
+                            c.path("instance").asText(null), c.path("object").asText(null), c.path("args"), pay, c.get("params"),
+                            c.path("pay").get("assets"), c.path("into").asText(null), cosigners(c, network), governorOf(c, network)));
+                } catch (org.julclang.state.api.RequireException e) {
+                    throw new RefusedBy(title, e);
+                }
+            });
+        }
+        PreparedTx p = compose.prepare();
+        return new Result(true, p.cbor(), p.txHash(), JSON.writeValueAsString(made), validTo(r, p), p.requiredSigners(),
+                JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
+    }
+
+    private static Result composedFailure(Throwable t, List<Contract> contracts) {
+        String by = null;
+        for (Throwable c = t; c != null && by == null; c = c.getCause()) {
+            if (c instanceof RefusedBy rb) by = rb.contract;
+        }
+        return failed(t, by, contracts);
     }
 
     /**
@@ -459,6 +535,11 @@ public final class Prepare {
             return new Result(true, null, null, null, -1, List.of(), d.toString(), null, null, null, Map.of());
         }
         var payer = call.path("address").asText();
+        if (r.scope() != null) {
+            var all = backend.getUtxoService().getUtxos(v.holder(), Integer.MAX_VALUE, 1).getValue();
+            if (all.stream().anyMatch(u -> v.hash().equals(u.getReferenceScriptHash()))) return publication(null);
+            return publication(v.prepare(payer, r.scope().ceiling(), all, org.julclang.state.runtime.VerifierHandle.Component.BOTH));
+        }
         var tx = v.prepare(payer);
         if (tx == null) return new Result(true, null, null, null, -1, List.of(), null, null, null, null, Map.of());
         byte[] pkh = new com.bloxbean.cardano.client.address.Address(payer).getPaymentCredentialHash().orElseThrow();
@@ -468,34 +549,41 @@ public final class Prepare {
                 JSON.writeValueAsString(org.julclang.state.runtime.TxPlan.of(tx)), null, null, null, Map.of());
     }
 
-    private static Result refused(String message) {
-        return refused(message, null);
-    }
-
-    /** A refusal, naming the contract that refused when one did (its message map explains the message: D12). */
-    private static Result refused(String message, String refusedBy) {
-        return new Result(false, null, null, null, -1, List.of(), null, null, null, message, Map.of(), -1, refusedBy);
+    private static Result refused(String code, String message) {
+        return new Result(false, null, null, null, -1, List.of(), null, null, null, message, Map.of(), -1, null,
+                org.julclang.state.host.Errors.badArgument(code, message).toString());
     }
 
     /** A call that threw: a need, a keyed call to prepare again later (its slot, structured), or a refusal. */
     static Result failed(Throwable t) {
-        return failed(t, null);
+        return failed(t, null, null);
     }
 
     /**
      * As {@link #failed(Throwable)}, naming {@code refusedBy}, the contract whose message map explains a refusal (ADR-0018
      * D12), when one is known.
      */
-    static Result failed(Throwable t, String refusedBy) {
+    private static Result failed(Throwable t, String refusedBy, List<Contract> contracts) {
         for (Throwable c = t; c != null; c = c.getCause()) {
             if (c instanceof Need n) return new Result(false, null, null, null, -1, List.of(), null, n.kind(), n.key(), null, Map.of());
         }
         String message = t.getMessage() != null ? t.getMessage() : t.toString();
-        for (Throwable c = t; c != null; c = c.getCause()) {
-            if (c instanceof NotYetException n) {
-                return new Result(false, null, null, null, -1, List.of(), null, null, null, message, Map.of(), n.prepareAt(), refusedBy);
+        var data = org.julclang.state.host.Errors.rpcError(t).required("data");
+        if (data.path("code").asText().equals("internal") && (t instanceof IllegalArgumentException || t instanceof ArithmeticException))
+            data = org.julclang.state.host.Errors.badArgument("request", message);
+        if (data.path("code").asText().equals("require") && contracts != null && refusedBy != null) {
+            for (Contract c : contracts) {
+                if (c.messages() == null) continue;
+                try {
+                    if (!JSON.readTree(c.description()).path("preamble").path("title").asText().equals(refusedBy)) continue;
+                    var trace = new org.julclang.state.api.RequireException(data.path("message").asText());
+                    var explained = org.julclang.state.runtime.JscMessages.explained(JSON.readTree(c.messages()), trace);
+                    data = org.julclang.state.host.Errors.rpcError(explained).required("data");
+                } catch (java.io.IOException malformedMap) { /* Optional diagnostics cannot replace a refusal. */ }
+                break;
             }
         }
-        return refused(message, refusedBy);
+        return new Result(false, null, null, null, -1, List.of(), null, null, null, message, Map.of(),
+                data.path("retryAtSlot").asLong(-1), refusedBy, data.toString());
     }
 }

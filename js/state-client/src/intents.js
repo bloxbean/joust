@@ -2,7 +2,7 @@
 // batcher. Each prepared transaction is verified against the description before the wallet signs, as for calls:
 // nothing beyond the operation, the wallet's funds bounded, every datum and redeemer the page's own.
 
-import { DEFAULT_LIMITS, ledgerOrder, add, isWalletEnterprise, integrityChecks } from './verify.js';
+import { DEFAULT_LIMITS, ledgerOrder, add, isWalletEnterprise, integrityChecks, scriptBearingChecks } from './verify.js';
 import { parseTx, addressParts } from './ledger.js';
 import { codec as makeCodec, dataEqual } from './data.js';
 import { bytesToHex } from './hex.js';
@@ -43,6 +43,7 @@ async function frame({ deployment, txHex, wallet, chain, limits, scriptInput, wa
   } catch (e) {
     return { problems: ['not a transaction'] };
   }
+  scriptBearingChecks(tx, wallet, problems);
   const isWallet = (addr) => wallet.addresses.includes(addr) || isWalletEnterprise(addr, wallet);
   if (!tx.isValid) problems.push('is_valid is false (the collateral would be taken)');
   if (tx.certificates.length > 0) problems.push('certificates');
