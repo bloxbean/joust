@@ -1,6 +1,7 @@
 # ADR-0024: A dev playground — one generated UI over the dev host, offline and on DevKit
 
-**Status:** Proposed (r2: the maintainer's answers to Q1–Q7 recorded in §10). Design only.
+**Status:** Proposed (r2: the maintainer's answers to Q1–Q7 recorded in §10; r3: what the M1–M3 implementation and its
+reviews changed, §13). Design only.
 **Date:** 2026-11-21
 **Requested by:** issue #155 ("Generic Joust dev playground for Java/JSC, offline simulation, DevKit and CIP-30
 wallets"). §11 maps its acceptance criteria to this ADR.
@@ -139,8 +140,13 @@ The server answers the host's `chain/read` from one of two sources, chosen per s
   `ledger.submit`; a refusal is shown with its rule (`LedgerRefusal.rule`), and a success is reported to the host as
   confirmed at its inclusion slot. The ledger gains what this needs: the inclusion slot of each applied transaction
   (F2) and each reference script's language.
-- **DevKit:** the configured network's provider (Yaci Store, or Ogmios; F6), through the server's existing chain
-  routes. Only a network with an `admin` API and network id 0 can be used in this mode (v1); mainnet is impossible
+- **DevKit:** the configured network's provider (Yaci Store; F6), through the server's existing chain routes. *(r3)*
+  Ogmios is refused in this mode: settlement needs a transaction's inclusion slot by hash, which the Ogmios provider
+  does not serve. The provider's genesis (magic, system start) must equal the admin API's identity before anything is
+  journaled, funded or submitted; the public magics are refused; the session clock comes from that identity, and a
+  changed genesis or a tip going backwards ends the session. The settlement shown is derived from the journal and the
+  chain; a host reply that disagrees fences that host. A body handed to a CIP-30 wallet is journaled first and never
+  discarded afterwards; the faucet is the admin API's only; the TTL is capped at the stability window 3k/f. Only a network with an `admin` API and network id 0 can be used in this mode (v1); mainnet is impossible
   (no flag enables it), and public testnets are out of v1 (Q3, decided). `now` comes from the network's clock. The
   server persists the journal and the high-water mark that ADR-0022 D8 requires per chain in a **per-user JOUST
   state directory** (`~/.joust/state/`), never in the project (I10) and never in DevKit's own files (F19). A chain is
@@ -214,9 +220,14 @@ stays what the build's gate checks.
 3. **Check** in the page: the D13 rules the page verifier implements (`verifyPrepared`), plus the publication shapes
    for `publish` results (stage `verification`). The page verifier does not check publications today (F14): adding
    them, tested against the protocol's publication vectors, is part of M1. A call the page cannot check is not signed.
+   *(r3)* `verifyPrepared` alone accepted 86 of the protocol's mutated vectors, so the page also runs
+   `verifyHostResult` (`@julclang/state-client`), a port of the conformance kit's reference checker; a body either
+   refuses is not signed, and the test runs every vector in `fixtures/host/verifier` through the page's check.
 4. **Review**: before/after state, objects, events and payouts (from `predicted`, labelled predicted; the page
    recomputes from the body whatever it relies on, F13), fee, the signer's net outflow, required signers, validity
-   window, scripts run.
+   window, scripts run. *(r3)* Everything the review shows for the decision comes from the checker's report: "before"
+   decoded from the resolved target input, "after" from the body's continuation, the window, signers and net outflow
+   from the body. The host's `predicted` is shown folded, as unchecked.
 5. **Sign** in the page, by the chosen identity or wallet, after an explicit approval (stage `wallet`; a CIP-30
    refusal is shown as such).
 6. **Submit** through the server (stage `ledger`: a `LedgerRefusal` rule offline, the node's error on DevKit).
@@ -230,11 +241,17 @@ A declined review is `discarded` to the host (ADR-0022 D8). First use of a contr
 ### D8. The server's surface
 
 - Listens on **`127.0.0.1` only**; v1 has no option for another address.
-- A **session token** (32 random bytes) is created per server start and given to the page in the URL fragment the
-  command opens (never in a query string or a log line); the page keeps it in `sessionStorage` and sends it as a
-  header on every request. A request without it, or with another, is refused before any work.
+- A **session token** (32 random bytes) is created per server start and exists only in the server's memory and the
+  paired page's `sessionStorage`; the page sends it as a header on every request. A request without it, or with
+  another, is refused before any work. *(r3)* The page obtains it by **one-time pairing**: every link the command
+  opens or prints carries a single-use pairing code (random, valid ten minutes) in its fragment; the page exchanges it
+  once at a `pair` route (under the same `Host`/`Origin`/`Sec-Fetch-Site` rules) for the token. The command opens the
+  browser through a private (0600) launcher file holding the pairing link, never the token, and removes it after
+  pairing; so the reusable token is in no file, log line or process argument.
 - **`Host`** must be `127.0.0.1:<port>` or `localhost:<port>`; **`Origin`**, when present, must be the server's own.
-  No CORS headers are sent (unlike `joust dev` today, F5), and `OPTIONS` is refused.
+  No CORS headers are sent (unlike `joust dev` today, F5), and `OPTIONS` is refused. A cross-site request is refused,
+  except a top-level document navigation to the page's own files (the launcher is a `file://` initiator); `api`
+  routes stay same-origin only. *(r3)*
 - Routes take JSON bodies of bounded size and never a file path, a command or a URL. The server serves only the
   page's own assets.
 - The page renders every project- or chain-supplied string as **text** (no `innerHTML`), under a strict
@@ -387,8 +404,8 @@ sections named.
   would have given: a reset DevKit starts with an empty journal, and the old one is never reconciled against it.
 - **Q7. The attack suite offline. Decided:** on by default, with a session toggle (D9).
 
-Still open: the replacement of the issue's Gradle "common bundle" by the host's verified snapshot (§5, §11) awaits the
-maintainer's confirmation.
+The replacement of the issue's Gradle "common bundle" by the host's verified snapshot (§5, §11) was taken as accepted
+when the maintainer asked for M2 to be implemented (2026-11-24, r3).
 
 ## 11. Issue #155's acceptance criteria
 
@@ -416,6 +433,17 @@ maintainer's confirmation.
 - Windows: the JVM host on Windows relies on detection rather than diversion of stray output (ADR-0022 Q6), and CI
   runs the hosts on Linux only. The playground inherits both.
 
+## 13. Implementation notes (r3)
+
+- **D2:** offline keeps up to four sessions; DevKit mode one per server, because the journal's lock is per project and
+  chain. A replaced tab is told so.
+- **D3 (Gradle):** the playground requires a settings file in the trusted build root (Gradle would otherwise search
+  parent directories), takes the wrapper only from directories the user owns or lists in `JOUST_SAFE_DIRS`, requires
+  `java` to be a JDK 25+ (`release` file), and judges a session stale by content. The native `joust`'s per-user cache
+  is used only when it and every ancestor are this user's (or root's) and not writable by others.
+- **D5 (Connect wallet):** the payer is the wallet's change address; before each signature the page re-reads the
+  wallet's network, change address and UTxOs.
+
 ## Revision history
 
 - **r1** (2026-11-21): initial proposal.
@@ -423,3 +451,8 @@ maintainer's confirmation.
   `joust playground` everywhere, D3, §11; Q3 → no public testnets in v1, Connect wallet through the Cardano Foundation
   connector with Yano first (D5, F18, M3); Q4 → (a), D9, M1; Q5 → later, separately; Q6 → (b) keyed by DevKit's
   `startTime` (D4, F19, M3); Q7 → on by default (D9). Added F18 and F19.
+- **r3** (2026-11-24, after the M1–M3 implementation reviews on #174, #178, #179): D8 → one-time pairing (no reusable
+  token in a link, file, log or argument) and the launcher's cross-site navigation; D7 → `verifyHostResult` beside
+  `verifyPrepared` (I2), the review from the body; D4 → DevKit is Yaci Store only, the chain verified against the admin
+  identity, settlement from the chain, wallet handoff journaled, admin-only faucet, TTL cap; §13 lists the remaining
+  implementation choices. Point 8 of #159 (no Gradle common bundle) is taken as accepted with the M2 go-ahead.
