@@ -29,6 +29,8 @@ import { applyOperation, operationRecord } from './operations.js';
 
 export const stateRoot = () => process.env.JOUST_STATE_DIR || join(homedir(), '.joust', 'state');
 export const JOURNAL_VERSION = 1;
+const JOURNAL_FIELDS = new Set(['version', 'project', 'entries', 'removedAt', 'fencedUntil']);
+const ENTRY_FIELDS = new Set(['reservation', 'txHash', 'cbor', 'validFrom', 'validTo', 'state', 'slot', 'submitted', 'handedOff', 'label']);
 
 const isSlot = (n) => Number.isSafeInteger(n) && n >= 0;
 /** A reservation id as the playground accepts it from a host: printable, bounded. */
@@ -222,6 +224,18 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   const high = readJson(highFile);
   let highWater = isSlot(high?.highWater) ? high.highWater : null;
   const raw = readJson(journalFile);
+  // Fail closed (#179 r6): a journal of another version, or with a field this joust does not know, is not opened (its
+  // meaning, a fence for instance, would be lost on the next write).
+  if (raw !== undefined && raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    const unknown = raw.version !== JOURNAL_VERSION ? `version ${JSON.stringify(raw.version)}`
+      : Object.keys(raw).find((k) => !JOURNAL_FIELDS.has(k))
+        ?? (Array.isArray(raw.entries) ? raw.entries.flatMap((x) => (x && typeof x === 'object' ? Object.keys(x) : [])).find((k) => !ENTRY_FIELDS.has(k)) : undefined);
+    if (unknown !== undefined) {
+      release(lockFile, token);
+      throw Object.assign(new Error(`the journal ${journalFile} has a format this joust does not know (${unknown}): open it with the joust `
+        + 'that wrote it, or move it aside once the bodies it held have expired'), { code: 'journalUnknown' });
+    }
+  }
   // Validated as a whole: one bad entry, a wrong version or a missing file with a high-water mark is lost history.
   const parsed = raw?.version === JOURNAL_VERSION && Array.isArray(raw.entries) ? raw.entries.map(entry) : null;
   // #179 r2: each reservation once (two bodies under one id would share one chain observation).
@@ -229,6 +243,9 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
     && (raw.removedAt === undefined || raw.removedAt === null || isSlot(raw.removedAt))
     && (raw.fencedUntil === undefined || raw.fencedUntil === null || isSlot(raw.fencedUntil));
   const lost = (raw !== undefined || highWater !== null) && !intact;
+  // A fence a closing session could not write (#179 r6): it left this marker (best effort) beside its lock.
+  const pendingFile = join(dir, `${pkey}.fence-pending.json`);
+  const pendingFence = readJson(pendingFile)?.fencedUntil;
   // The journal's cur. Every change is written first and taken in memory only once the write succeeded (#179 r4): a
   // failed write changes nothing, so a retry writes again.
   let cur = {
@@ -241,6 +258,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
     fencedUntil: intact && isSlot(raw.fencedUntil) ? raw.fencedUntil : null,
   };
   let closed = false;
+  let keepLock = false;
   const mine = () => {
     if (closed || !owns(lockFile, token)) {
       throw Object.assign(new Error('another playground took this project\'s journal on this DevKit'), { code: 'journalTaken' });
@@ -253,6 +271,15 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
     cur = next;
   };
   const later = (a, b) => (a === null ? b : b === null ? a : Math.max(a, b));
+  // A fence a session could not write before it closed: written now, then its marker removed.
+  if (intact && isSlot(pendingFence)) {
+    commit({ fencedUntil: later(cur.fencedUntil, pendingFence) });
+    try {
+      unlinkSync(pendingFile);
+    } catch {
+      // written already; the marker is harmless
+    }
+  }
 
   return {
     dir,
@@ -369,10 +396,23 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
         // none
       }
     },
+    /**
+     * A fence that could not be written (#179 r6): the lock is kept on close (a replacement session cannot open this
+     * journal as clean: in this process it is locked, after a restart it is a stale lock to remove by hand), and a
+     * marker with the bound is left if it can be written, which the next open applies.
+     */
+    holdFence(slot) {
+      keepLock = true;
+      try {
+        writeAtomic(pendingFile, { fencedUntil: slot });
+      } catch {
+        // the kept lock guards it
+      }
+    },
     close() {
       if (closed) return;
       closed = true;
-      release(lockFile, token);
+      if (!keepLock) release(lockFile, token);
     },
   };
 }

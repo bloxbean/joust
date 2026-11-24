@@ -336,7 +336,14 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     if (e.code === 'devkitReset' || e.code === 'journalLocked') throw new StageError('session', e.code, e.message);
     throw e;
   }
-  const read = chainReads(chain);
+  // Every answered reverse read's chain point (stable: chainReads reads it before and after) goes through the one rewind
+  // check too (#179 r6); a fence it finds blocks the handout of the body being prepared.
+  const chainRead = chainReads(chain);
+  const read = async (q) => {
+    const a = await chainRead(q);
+    if (Number.isSafeInteger(a?.tip?.slot)) seeTip(a.tip.slot);
+    return a;
+  };
   let host;
   try {
     host = fp.launch({ onExit: (reason) => { fp.dispose(); onEnd(reason); } });
@@ -439,11 +446,10 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
    */
   function seeTip(t) {
     const below = (stableTip !== null && t < stableTip) || (journal.removedAt !== null && t < journal.removedAt);
-    if (!below) {
-      stableTip = stableTip === null ? t : Math.max(stableTip, t);
-      return false;
-    }
-    rewound(`the chain is at slot ${t}, below slot ${Math.max(stableTip ?? 0, journal.removedAt ?? 0)} it was seen at`);
+    const seen = Math.max(stableTip ?? 0, journal.removedAt ?? 0);
+    stableTip = stableTip === null ? t : Math.max(stableTip, t);
+    if (!below) return false;
+    rewound(`the chain is at slot ${t}, below slot ${seen} it was seen at`);
     return true;
   }
   /** A rewind found: builds blocked at once, the fence (the high-water mark) written now or retried. */
@@ -471,6 +477,8 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       const b = await chain.tip();
       if (a.slot === b.slot && a.hash === b.hash) return void seeTip(a.slot);
     }
+    // No stable tip to compare: never admitted unchecked (#179 r6).
+    throw new StageError('session', 'chainMoving', 'the chain kept moving while the session started: start again');
   }
 
   async function restore() {
@@ -491,6 +499,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       if (!o) throw new StageError('session', 'chainMoving', 'the chain kept moving while the journal was read: start again');
       if (bound === null || o.tip.slot > bound) break;
     }
+    seeTip(o.tip.slot);   // the one rewind check (#179 r6): a fence found here holds until a stable tip passes it
     const t = o.tip.slot;
     // History this restore drops (settled while no playground ran, or lost with the journal) left at this point (#179 r3).
     let dropped = journal.lost;
@@ -559,8 +568,11 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       // Its fence is written first; this session's view of the chain is gone, so it ends, but only once the fence
       // holds: until then the session stays, builds blocked, and every pass writes it again (#179 r3, r4).
       const otherBlock = tip && o.tip.slot === tip.slot && o.tip.hash !== tip.hash;
-      if (seeTip(o.tip.slot) || otherBlock) {
-        if (otherBlock) rewound(`the chain shows another block at slot ${o.tip.slot}`);
+      const wentBack = stableTip !== null && o.tip.slot < stableTip;
+      // Below the removal point only (a session that started fenced, the chain catching up): fenced, kept polling.
+      if (seeTip(o.tip.slot) && wentBack) resetOnceFenced = true;
+      if (otherBlock) {
+        rewound(`the chain shows another block at slot ${o.tip.slot}`);
         resetOnceFenced = true;
       }
       persistFence();   // a fence whose write failed before: again
@@ -683,21 +695,28 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     // An input a journaled body spends (#179 r3): the host may have seen that body expire before this session's watcher
     // did. The chain decides: expired now, it is settled here and the new body goes out; otherwise (still live, or the
     // chain cannot tell) the new body is refused, retryably, and the host is not blamed.
-    for (const e of overlapping()) {
-      let o = null;
-      try {
-        o = e.state === 'prepared' ? await observeOne(e) : null;
-      } catch {
-        // uncertain: refused below
+    // Reconciled against the journal as it is after each await (#179 r6): an entry that changed meanwhile (another
+    // body under its id, or settled) is never removed on the old one's evidence; the overlaps are looked at again.
+    reconcile: for (let round = 0; round < 8; round++) {
+      for (const e of overlapping()) {
+        let o = null;
+        try {
+          o = e.state === 'prepared' ? await observeOne(e) : null;
+        } catch {
+          // uncertain: refused below
+        }
+        if (o && seeTip(o.tip)) guardBuild();   // a rewind: refused as such
+        const now = journal.find(e.reservation);
+        if (!now || now.txHash !== e.txHash || now.state !== 'prepared' || now.cbor !== e.cbor) continue reconcile;
+        if (o && o.slot === null && o.tip > e.validTo + settlementSlots) {
+          journal.remove(e.reservation, o.tip);
+          observed(e.txHash, { chain: 'expired', slot: null });
+          await inform(e, { status: 'expired', tip: o.tip }, ['expired']);
+          continue reconcile;
+        }
+        throw pending(e);
       }
-      if (o && seeTip(o.tip)) guardBuild();   // a rewind: refused as such
-      if (o && o.slot === null && o.tip > e.validTo + settlementSlots && journal.find(e.reservation)) {
-        journal.remove(e.reservation, o.tip);
-        observed(e.txHash, { chain: 'expired', slot: null });
-        await inform(e, { status: 'expired', tip: o.tip }, ['expired']);
-        continue;
-      }
-      throw pending(e);
+      break;
     }
     // From here to the record, no await (#179 r4): the session's eligibility, the body, its reservation and every input
     // and collateral input against the journal as it is now (another handout may have recorded meanwhile).
@@ -1021,6 +1040,8 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       clearInterval(watcher);
       for (const w of waits) w();
       persistFence();   // a found rewind's fence, one last time
+      // Still not written (#179 r6): the journal's lock is kept and a marker left, so no session opens it as clean.
+      if (rewindPending) journal.holdFence(rewindPending.bound);
       await host.close().catch(() => {});
       journal.close();
     },
