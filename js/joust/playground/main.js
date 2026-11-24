@@ -22,6 +22,7 @@ import { symbolic, concrete, outcomeOf, sameOutcome, exportScenario, importScena
 const ADA = 1_000_000n;
 const FUND_ADA = 1000n;
 const MAX_FEE = 5n * ADA;
+const SCENARIO_MAX_BYTES = 1 << 20;
 const NAMES = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin', 'Frank', 'Grace', 'Heidi'];
 const SETTLE_POLL_MS = 1000;
 /** Beyond the body's expiry and depth margin, how long the page waits for an inclusion before it shows a timeout. */
@@ -287,7 +288,10 @@ function drawBanner() {
         h('input', { type: 'file', id: 'import-scenario', accept: 'application/json,.json', onchange: (e) => {
           const f = e.target.files?.[0];
           e.target.value = '';
-          if (f) guard(async () => replay(await f.text()));
+          // A scenario is small data: anything over 1 MiB is refused before it is read.
+          if (f && f.size > SCENARIO_MAX_BYTES) {
+            guard(async () => { throw new StageFailure({ stage: 'arguments', code: 'scenario', message: `a scenario of ${f.size} bytes: at most ${SCENARIO_MAX_BYTES}` }); });
+          } else if (f) guard(async () => replay(await f.text()));
         } })),
       h('button', { id: 'reset', text: 'Reset ledger', onclick: () => guard(async () => {
         state.session = await sapi('session/reset');

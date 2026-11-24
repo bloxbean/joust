@@ -591,6 +591,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     fingerprint: fp.digest,
     entries,
     verifiers: fp.verifiers ?? null,
+    engineFiles: fp.engineFiles ?? null,
     host,
     init,
     stale,

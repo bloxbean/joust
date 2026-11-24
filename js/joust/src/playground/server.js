@@ -16,7 +16,10 @@
 // - Every page response carries a strict Content-Security-Policy.
 
 import { createServer } from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { offlineSession, StageError } from './session.js';
 import { devkitSession } from './devkit.js';
 
@@ -76,8 +79,28 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * @returns { pairingPath() (the base with a fresh single-use code in its fragment), token (in memory, for tests),
  *   sessions, handles(pathname), handle(req, res), close() }
  */
-/** The verifiers' scripts (double-wrapped cborHex) the runtime engine embeds; {} if none is at hand. */
-async function engineVerifiers(engine) {
+/** The loaded runtime engine's files, by hash (the engine loadEngine() reads: the runtime package's engine/). */
+async function loadedEngineFiles() {
+  const dir = fileURLToPath(new URL('../engine/', import.meta.resolve('@julclang/joust-runtime')));
+  const out = {};
+  for (const f of ['joust-runtime.js', 'joust-runtime.js.wasm']) out[f] = createHash('sha256').update(readFileSync(join(dir, f))).digest('hex');
+  return out;
+}
+
+/**
+ * The verifiers' scripts (double-wrapped cborHex) the loaded runtime engine embeds, when its files are the session's
+ * fingerprinted ones ({@code pinned}); {} otherwise, or if none is at hand.
+ */
+async function engineVerifiers(engine, pinned, log = () => {}) {
+  try {
+    const loaded = await loadedEngineFiles();
+    if (!pinned || Object.keys(pinned).some((f) => pinned[f] !== loaded[f])) {
+      log('playground: the loaded runtime engine is not the one this session\'s build pins: no shared verifiers (sends and maps are refused)');
+      return {};
+    }
+  } catch {
+    return {};
+  }
   let e = engine;
   if (!e) {
     try {
@@ -225,10 +248,11 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       if (!entry) throw new StageError('request', 'contract', 'no such contract in this build');
       // The page's anchors come from the build this session pinned (the bytes the fingerprint covers), never from
       // the host (ADR-0022 D13 rule 2): its description and script.
-      // The shared verifiers likewise (sends, maps): a Gradle build's from its snapshot's julc-state-verifier entry, an
-      // npm build's from its runtime engine (the engine files its fingerprint covers).
+      // The shared verifiers likewise (sends, maps): a Gradle build's from its snapshot's julc-state-verifier entry; an
+      // npm build's from the server's loaded runtime engine, only when its files are the ones the session's fingerprint
+      // covers (else none: the page refuses the calls that need them).
       return { describe: await s.describe(contract), description: JSON.parse(entry.description), script: entry.script,
-        verifiers: s.verifiers ?? await engineVerifiers(engine) };
+        verifiers: s.verifiers ?? await engineVerifiers(engine, s.engineFiles, log) };
     },
     'deployment': async (b) => use(b.session).deployment(str(b.contract, 'contract', CONTRACT)),
     'prerequisites': async (b) => use(b.session).prerequisites(str(b.contract, 'contract', CONTRACT)),
