@@ -743,11 +743,11 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     s = await session(L, chain, { startTime: 130 });
     try {
       await assert.rejects(increment(s, w, instance), (e) => e.code === 'rewound');
-      assert.ok(s.status().rewoundUntil >= removedAt);
+      assert.equal(s.status().fencedUntil, s.journal.highWater, 'the fence is the high-water mark');
       chain.tipOverride = null;
-      advanceSlots(L, s.status().rewoundUntil - L.slot + 1);
+      advanceSlots(L, Math.max(0, s.status().fencedUntil - L.slot) + 1);
       await s.tick();
-      assert.equal(s.status().rewoundUntil, null);
+      assert.equal(s.status().fencedUntil, null);
       await increment(s, w, instance);   // past the high-water mark: builds again
     } finally {
       await s.close();
@@ -930,43 +930,191 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     }
   });
 
-  test('#179 r3: a rewind bound found once is persisted and holds across restarts until a tip strictly above it', async () => {
+  /** A session whose bodies all settled final, with the removal point below the high-water mark. */
+  async function settled(startTime) {
     const L = memoryLedger({ engine: await theEngine(), attacks: false });
-    const chain = fakeChain(L, 185);
-    let s = await session(L, chain, { startTime: 185 });
+    const chain = fakeChain(L, startTime);
+    const s = await session(L, chain, { startTime });
     const w = await wallet();
     try {
       await s.fund(w.address, String(1000n * ADA));
       await create(s, w);
-      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      advanceSlots(L, SETTLEMENT_SLOTS + 2);   // final, while the high-water mark is still ahead
       await s.tick();
+      assert.deepEqual(s.journal.entries, []);
     } finally {
       await s.close();
     }
-    const at = s.journal.removedAt;
-    const high = s.journal.highWater;
-    chain.tipOverride = () => ({ slot: at - 30, hash: sha('rw2'), height: 1 });
-    s = await session(L, chain, { startTime: 185 });
-    const bound = s.status().rewoundUntil;
+    assert.ok(s.journal.removedAt < s.journal.highWater);
+    return { L, chain, w, at: s.journal.removedAt, high: s.journal.highWater };
+  }
+  const tipAt = (chain, slot) => { chain.tipOverride = () => ({ slot, hash: sha('tip ' + slot), height: 1 }); };
+  const init = (s, w) => s.prepare({ contract: COUNTER, kind: 'init', method: 'init', address: w.address, args: {} });
+
+  test('#179 r4: one persisted fence: found below the removal point, it holds across restarts; clearing it moves the removal point', async () => {
+    const { L, chain, w, at, high } = await settled(185);
+    tipAt(chain, at - 30);
+    let s = await session(L, chain, { startTime: 185 });
+    assert.equal(s.status().fencedUntil, high, 'the high-water mark');
+    assert.equal(s.journal.fencedUntil, high, 'written');
     await s.close();
-    assert.ok(bound >= Math.max(at, high));
-    // Reopened with the tip back between the removal point and the bound: still fenced (it was persisted).
-    chain.tipOverride = () => ({ slot: at + 1, hash: sha('rw3'), height: 1 });
+    // Reopened with the tip between the removal point and the fence: still fenced (persisted).
+    tipAt(chain, at + 1);
     s = await session(L, chain, { startTime: 185 });
     try {
-      assert.equal(s.status().rewoundUntil, bound);
-      await assert.rejects(s.prepare({ contract: COUNTER, kind: 'init', method: 'init', address: w.address, args: {} }),
-        (e) => e.code === 'rewound');
-      chain.tipOverride = () => ({ slot: bound, hash: sha('rw4'), height: 1 });
+      assert.equal(s.status().fencedUntil, high);
+      await assert.rejects(init(s, w), (e) => e.code === 'rewound');
+      tipAt(chain, high);
       await s.tick();
-      assert.equal(s.status().rewoundUntil, bound, 'not cleared at the bound itself');
-      chain.tipOverride = () => ({ slot: bound + 1, hash: sha('rw5'), height: 1 });
+      assert.equal(s.status().fencedUntil, high, 'not cleared at the fence itself');
+      tipAt(chain, high + 1);
       await s.tick();
-      assert.equal(s.status().rewoundUntil, null, 'cleared strictly above it');
-      assert.equal(s.journal.rewoundUntil, null, 'and the clearing persisted');
+      assert.equal(s.status().fencedUntil, null, 'cleared strictly above it');
+      assert.equal(s.journal.fencedUntil, null);
+      assert.equal(s.journal.removedAt, high + 1, 'the removal point moved to that tip, in the same write');
+    } finally {
+      await s.close();
+    }
+    // A second rewind, to between the original removal point and the cleared fence: found again.
+    tipAt(chain, Math.floor((at + high) / 2));
+    s = await session(L, chain, { startTime: 185 });
+    try {
+      await assert.rejects(init(s, w), (e) => e.code === 'rewound');
+      assert.equal(s.journal.fencedUntil, high);
     } finally {
       await s.close();
       chain.tipOverride = null;
+    }
+  });
+
+  test('#179 r4: a fence that cannot be written blocks builds at once and is written again until it holds', async () => {
+    const { L, chain, w, at, high } = await settled(186);
+    const s = await session(L, chain, { startTime: 186 });
+    const dir = join(state, 'chains', '0-42-186');
+    try {
+      // The journal's directory refuses writes when the watcher finds the rewind.
+      chmodSync(dir, 0o500);
+      try {
+        tipAt(chain, at - 10);
+        await s.tick();
+        assert.equal(s.journal.fencedUntil, null, 'not written');
+        assert.equal(s.status().fencedUntil, high, 'but builds are blocked');
+        assert.equal(s.ended, null, 'the session stays until its fence holds');
+        await assert.rejects(init(s, w), (e) => e.code === 'rewound');
+        await s.tick();
+        assert.equal(s.journal.fencedUntil, null, 'still not written');
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+      await s.tick();
+      assert.equal(s.journal.fencedUntil, high, 'written on the retry');
+      assert.match(s.ended, /tip went back/, 'then the session ends');
+    } finally {
+      await s.close();
+      chain.tipOverride = null;
+    }
+  });
+
+  test('#179 r4: lost history completes its restore only on a stable observation strictly above the high-water mark', async () => {
+    const L = memoryLedger({ engine: await theEngine(), attacks: false });
+    const chain = fakeChain(L, 187);
+    const real = realpathSync(root);
+    const j = await openJournal({ root: real, chain: identity(187), state });
+    const high = L.slot + 3;
+    j.raise(high);
+    j.close();
+    // The wait sees a tip above the mark once; the restore's own observation then reads below it, and waits again.
+    let reads = 0;
+    chain.tipOverride = () => {
+      reads++;
+      const slot = reads === 1 ? high + 1 : reads < 8 ? high - 20 : L.slot;
+      return { slot, hash: sha('lost ' + slot), height: 1 };
+    };
+    const blocks = setInterval(() => advanceSlots(L, 1), 50);
+    let s;
+    try {
+      s = await session(L, chain, { startTime: 187 });
+    } finally {
+      clearInterval(blocks);
+      chain.tipOverride = null;
+    }
+    try {
+      assert.ok(s.journal.removedAt > high, `the restore's point ${s.journal.removedAt} above ${high}`);
+      assert.ok(reads >= 8, 'it waited again');
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r4: the watcher compares each observation with the removal point too (a rewind below a handout\'s expiry)', async () => {
+    let lie = null;
+    const { L, chain, s, w } = await ready({ startTime: 188, launch: lyingLaunch({ prepare: async (r, p) => (lie ? { ...r, prepared: { ...r.prepared, ...(await lie(p)) } } : r) }) });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      L.fund(w.address, 500n * ADA);
+      const held = await increment(s, w, instance);
+      await s.tick();   // the watcher's last tip
+      const watcherTip = L.slot;
+      const ref = parseTx(held.prepared.cbor).inputs.map((x) => (typeof x === 'string' ? x : `${x.txHash}#${x.index}`))[0];
+      const second = await create(s, w);
+      // The held body expires as a handout sees it (its removal point well past the watcher's tip) …
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'past' });
+      await increment(s, w, second);
+      lie = null;
+      const removedAt = s.journal.removedAt;
+      assert.ok(removedAt > watcherTip + 5);
+      // … and the chain rewinds to between the watcher's tip and that point before the next pass.
+      tipAt(chain, removedAt - 3);
+      await s.tick();
+      assert.equal(s.journal.fencedUntil, s.journal.highWater, 'fenced');
+      assert.match(s.ended, /tip went back/);
+    } finally {
+      chain.tipOverride = null;
+      await s.close();
+    }
+  });
+
+  test('#179 r4: two concurrent handouts that share an input: one is handed out, the other refused (no await between check and record)', async () => {
+    let lie = null;
+    const { L, chain, s, w } = await ready({ startTime: 189, launch: lyingLaunch({ prepare: async (r, p) => (lie ? { ...r, prepared: { ...r.prepared, ...(await lie(p)) } } : r) }) });
+    try {
+      const a = await create(s, w);
+      const b = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      L.fund(w.address, 500n * ADA);
+      L.fund(w.address, 500n * ADA);
+      // A journaled body on input J: the first handout overlaps it and waits on the chain while reconciling.
+      const held = await increment(s, w, a);
+      const J = parseTx(held.prepared.cbor).inputs.map((x) => (typeof x === 'string' ? x : `${x.txHash}#${x.index}`))[0];
+      const I = `${sha('shared input')}#0`;
+      let open;
+      const gate = new Promise((ok) => { open = ok; });
+      const txSlot = chain.txSlot;
+      chain.txSlot = async (h) => { if (h === held.prepared.txHash) await gate; return txSlot(h); };
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);   // the held body is expired by the chain: reconciliation would pass
+      const twoInputs = async (p, refs) => {
+        const cbor = buildPlainTx({ inputs: refs.map((ref) => ({ ref, value: new Map([['lovelace', 10_000_000n]]) })),
+          change: enterpriseAddress({ type: 'key', hash: '00'.repeat(28) }, 0), params: PARAMS, ttl: p.now + 10 });
+        return { cbor, txHash: parseTx(cbor).hash };
+      };
+      let calls = 0;
+      lie = async (p) => (++calls === 1 ? { ...(await twoInputs(p, [I, J])), reservation: 'first' } : { ...(await twoInputs(p, [I])), reservation: 'second' });
+      const first = increment(s, w, b, '3').then(() => 'out', (e) => e.code);
+      await new Promise((ok) => setTimeout(ok, 100));   // the first waits on the chain for the held body
+      const second = await increment(s, w, a, '4').then(() => 'out', (e) => e.code);
+      open();
+      const results = [await first, second];
+      assert.equal(results.filter((x) => x === 'out').length, 1, results.join(','));
+      assert.ok(results.includes('pending'), results.join(','));
+      assert.ok(!(s.journal.find('first') && s.journal.find('second')), 'never both');
+      assert.equal(s.fenced, null);
+      chain.txSlot = txSlot;
+    } finally {
+      await s.close();
     }
   });
 
