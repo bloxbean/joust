@@ -447,6 +447,14 @@ when the maintainer asked for M2 to be implemented (2026-11-24, r3).
   is used only when it and every ancestor are this user's (or root's) and not writable by others.
 - **D5 (Connect wallet):** the payer is the wallet's change address; before each signature the page re-reads the
   wallet's network, change address and UTxOs.
+- **D4 (DevKit stake registrations):** Yaci Store cannot tell whether a stake credential is registered, so the
+  playground keeps the registrations it has seen settle (or seen refused as already registered) per project and chain
+  beside the journal, and tells each new host (`registered`) at start.
+- **D11 (keyed calls, M4):** keyed calls are offered from the page's own identities only; keyed calls from a connected
+  CIP-30 wallet are deferred (recovery across a wallet's rotating change addresses is a follow-up). A keyed attempt
+  counts as landed only when final (past the settlement margin); a shallow inclusion keeps the operation pending.
+- **D10 (scenarios, M4):** steps signed by a CIP-30 wallet are not exported; a session started with "keep the ledger"
+  cannot be exported; imports are limited to 16 identities and 500 steps.
 
 ## Revision history
 
@@ -459,4 +467,4 @@ when the maintainer asked for M2 to be implemented (2026-11-24, r3).
   token in a link, file, log or argument) and the launcher's cross-site navigation; D7 → `verifyHostResult` beside
   `verifyPrepared` (I2), the review from the body; D4 → DevKit is Yaci Store only, the chain verified against the admin
   identity, settlement from the chain, wallet handoff journaled, admin-only faucet, TTL cap; §13 lists the remaining
-  implementation choices; §2 states that same-user processes are trusted like the user. Point 8 of #159 (no Gradle common bundle) is taken as accepted with the M2 go-ahead.
+  implementation choices (r3 notes for M3/M4: DevKit registrations, keyed calls from page identities only, scenario rules); §2 states that same-user processes are trusted like the user. Point 8 of #159 (no Gradle common bundle) is taken as accepted with the M2 go-ahead.
