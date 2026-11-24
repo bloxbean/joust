@@ -321,24 +321,6 @@ class AssetCollectionTest {
     // ---------------------------------------------------------------- #165 Codex round 4
 
     @Test
-    void aSeedIsTheCallersWhoseListingGaveIt() {
-        // B's listing gives a seed whose address field says A: it is B's (and the chain must say B too).
-        String payer = new Account(Networks.testnet()).baseAddress();
-        var b = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
-        var seed = utxo(payer, "a4", 5_000_000, 0);
-        snapshot.utxos.put(b.baseAddress(), List.of(seed));
-        var cap = new TxRunner.Capture();
-        TxRunner.CAPTURE.set(cap);
-        try {
-            var picked = contract.pickSeedFor(b);
-            TxRunner.collect(cap.tx, picked, null);
-        } finally {
-            TxRunner.CAPTURE.remove();
-        }
-        assertEquals(b.baseAddress(), cap.regularOwners.get(Designation.ref(seed)));
-    }
-
-    @Test
     void aCoCallersPaymentCountsWithoutAnInputAttributedToIt() {
         // B pays in 40 tokens but no input is B's: the plan still holds B to its payment.
         snapshot.protocolParams = pp();

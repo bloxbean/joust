@@ -256,9 +256,7 @@ public final class Compose {
         runner.designated = designated;   // a keyed composition's attempt (ADR-0016 D7)
         runner.extraExpected = cap.expected.size() > 1 ? cap.expected.subList(1, cap.expected.size()) : List.of();
         runner.assetInputs = cap.assetInputs;
-        var owners = new java.util.HashMap<String, String>();
-        cap.regularOwners.forEach((ref, owner) -> { if (owner != null && !owner.equals(payer.baseAddress())) owners.put(ref, owner); });
-        runner.coCallers = new TxRunner.CoCallers(coCallers, java.util.Map.copyOf(cap.returns), owners);
+        runner.coCallers = new TxRunner.CoCallers(coCallers, java.util.Map.copyOf(cap.returns));
         runner.otherCallers = cap.accounts.keySet().stream().anyMatch(a -> !a.equals(payer.baseAddress()));
         if (prepare) {
             return runner.prepare(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),

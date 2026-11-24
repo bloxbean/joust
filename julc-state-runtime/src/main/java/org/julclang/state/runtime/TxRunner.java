@@ -39,12 +39,11 @@ final class TxRunner {
     record Return(int index, org.julclang.ledger.Value value) {}
 
     /**
-     * What a body may take from each caller other than the payer (T1): the native assets it pays in, the return made to
-     * it, and the address each of its collected inputs was listed at (by reference), checked against the chain.
+     * What a body may take from each caller other than the payer (T1): the native assets it pays in and the return made
+     * to it.
      */
-    record CoCallers(java.util.Map<String, org.julclang.ledger.Value> paid, java.util.Map<String, Return> returns,
-                     java.util.Map<String, String> owners) {
-        static final CoCallers NONE = new CoCallers(java.util.Map.of(), java.util.Map.of(), java.util.Map.of());
+    record CoCallers(java.util.Map<String, org.julclang.ledger.Value> paid, java.util.Map<String, Return> returns) {
+        static final CoCallers NONE = new CoCallers(java.util.Map.of(), java.util.Map.of());
     }
 
     /** A payout output the built transaction must contain: at {@code address}, at least {@code lovelace}, tagged. */
@@ -82,6 +81,7 @@ final class TxRunner {
         /**
          * The address each regular input was collected from (R7): the caller's base address for an asset input (it was
          * listed there), else the provider's {@code Utxo.address}, possibly null (then {@code returnSurplus} refuses).
+         * The chain provider is trusted (#169 tracks a trustless mode).
          */
         final java.util.Map<String, String> regularOwners = new java.util.HashMap<>();
         /** The native assets each caller's calls pay from its own inputs, by base address and unit (T1). */
@@ -91,11 +91,6 @@ final class TxRunner {
          * exact value (#165 Fable, Codex round 3).
          */
         final java.util.Map<String, Return> returns = new java.util.LinkedHashMap<>();
-        /**
-         * The address whose listing supplied a seed (by reference; #165 Codex round 4): the seed is that caller's,
-         * whatever address the provider writes in it, and the chain must agree.
-         */
-        final java.util.Map<String, String> listedAt = new java.util.HashMap<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
         /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
@@ -249,8 +244,7 @@ final class TxRunner {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
         if (c != null && redeemer == null && c.regularInputs.putIfAbsent(Designation.ref(u), u) == null) {
-            String owner = c.listedAt.getOrDefault(Designation.ref(u), u.getAddress());
-            if (owner != null) c.regularOwners.put(Designation.ref(u), owner);
+            if (u.getAddress() != null) c.regularOwners.put(Designation.ref(u), u.getAddress());
         }
         return redeemer == null ? tx.collectFrom(java.util.List.of(u)) : tx.collectFrom(u, redeemer);
     }
@@ -945,17 +939,6 @@ final class TxRunner {
         var paid = coCallers.paid();
         var returns = coCallers.returns();
         var body = t.getBody();
-        // Each collected input of another caller is that caller's on the chain too (#165 Codex round 3): one the chain
-        // puts at the payer's address would leave the caller out of the accounting below.
-        for (var in : body.getInputs()) {
-            String listed = coCallers.owners().get(Designation.ref(in));
-            if (listed == null || listed.equals(payer)) continue;
-            Utxo u = spends.get(in);
-            if (u == null || u.getAddress() == null || !u.getAddress().equals(listed)) {
-                throw new JoustException(what + ": input " + in.getTransactionId() + "#" + in.getIndex() + " was listed at "
-                        + listed + " but the chain has it at " + (u == null ? "no address" : u.getAddress()) + "; refused");
-            }
-        }
         if (body.getCollateral() != null) {
             for (var in : body.getCollateral()) {
                 Utxo u = spends.get(in);

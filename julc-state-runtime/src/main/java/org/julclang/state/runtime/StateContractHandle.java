@@ -498,15 +498,7 @@ public final class StateContractHandle<S> {
      * the transaction spending it is built (F63, R-E4).
      */
     private Utxo pickSeed(Account caller) {
-        return Designation.pick(caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
-    }
-
-    private Utxo seedOf(Account caller) {
-        Utxo seed = seedFrom(caller);
-        // The seed is the caller's because its listing gave it (#165 Codex round 4): checked against the chain later.
-        var cap = TxRunner.capture();
-        if (cap != null) cap.listedAt.put(Designation.ref(seed), caller.baseAddress());
-        return seed;
+        return Designation.pick(caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedFrom(caller));
     }
 
     /** A bound on the pages of one listing read: a provider that never ends is refused, not followed forever. */

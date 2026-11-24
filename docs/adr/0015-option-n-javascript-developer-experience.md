@@ -854,9 +854,8 @@ direct `Tx` building, gated by S3.
     (the runtime signed for it). A body, prepared or submitted, may take nothing else from a co-caller's address, and
     an input whose provider gives no address is refused rather than assumed to be the payer's. Only the return the
     runtime made counts as a co-caller's return (the output at the index it was appended at: its address, no datum, the
-    exact value recorded), each input collected for a co-caller (a seed counts as the caller's whose listing gave it) must be
-    at that co-caller's address on the chain too, and the check covers every co-caller the plan pays in for or returns
-    to; the return is exactly what the co-caller's inputs hold less what it pays in: any other output there (a payout, a send, an
+    exact value recorded), and the check covers every co-caller the plan pays in for or returns to (the chain provider is
+    trusted for where an input is; #169 tracks a trustless mode); the return is exactly what the co-caller's inputs hold less what it pays in: any other output there (a payout, a send, an
     intent's refund) is owed by someone else and cannot cover a short return, and a larger return would give it the
     payer's value. The collateral is the payer's: every collateral input and the collateral return are at the payer's
     address. A key-signed call with co-signers (`@Quorum`, `@AuthorizedBy`) is checked the same way. A return above

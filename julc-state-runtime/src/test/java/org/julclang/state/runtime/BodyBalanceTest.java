@@ -163,27 +163,27 @@ class BodyBalanceTest {
         var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
         var returns = Map.of(ADDR, ret(0, 10_000_000, 60));
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 60), outTo(a, 4_800_000, 40)));
-        TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns, Map.of()), "test");   // B gets back its lovelace and the 60 tokens it keeps
+        TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns), "test");   // B gets back its lovelace and the 60 tokens it keeps
         // Built from a 9 ADA listing (its return records 9 ADA): the 1 ADA the chain holds beyond it is taken from B.
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(9_000_000, 60), outTo(a, 5_800_000, 40)));
-        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, Map.of(ADDR, ret(0, 9_000_000, 60)), Map.of()),
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, Map.of(ADDR, ret(0, 9_000_000, 60))),
                 "test"));
         assertTrue(e.getMessage().contains("take 1000000 lovelace"), e::getMessage);
         // Not the return recorded: refused.
-        var none = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns, Map.of()), "test"));
+        var none = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns), "test"));
         assertTrue(none.getMessage().contains("output 0 is not the return to " + ADDR), none::getMessage);
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 50), outTo(a, 4_800_000, 50)));
-        assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, Map.of(ADDR, ret(0, 10_000_000, 50)), Map.of()), "test"));
+        assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, Map.of(ADDR, ret(0, 10_000_000, 50))), "test"));
         // R8: an output unit in another spelling is the same unit.
         var upper = out(10_000_000, 0);
         upper.getValue().getMultiAssets().add(MultiAsset.builder().policyId(POLICY.toUpperCase())
                 .assets(new ArrayList<>(List.of(new Asset("0x01", BigInteger.valueOf(60))))).build());
         t.setBody(body(List.of(IN_A, IN_B), 200_000, upper, outTo(a, 4_800_000, 40)));
-        TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns, Map.of()), "test");
+        TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns), "test");
         // R7: a spent input without an address is refused, whoever it may belong to.
         var anonymous = utxo(null, "aa", 10_000_000, 100);
         var unknown = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, Map.of(IN_A, anonymous, IN_B, spends.get(IN_B)),
-                a, new TxRunner.CoCallers(paid, returns, Map.of()), "test"));
+                a, new TxRunner.CoCallers(paid, returns), "test"));
         assertTrue(unknown.getMessage().contains("cannot tell whose input"), unknown::getMessage);
     }
 
@@ -350,20 +350,20 @@ class BodyBalanceTest {
         payout.setInlineDatum(com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData.of(7));
         var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(8_000_000, 0), payout, outTo(a, 4_800_000, 0)));
-        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns, Map.of()), "test"));
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns), "test"));
         assertTrue(e.getMessage().contains("take 2000000 lovelace from " + ADDR), e::getMessage);
         // A plain output beside the short return: not the return either.
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(2_000_000, 0), out(8_000_000, 0), outTo(a, 4_800_000, 0)));
-        var plain = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns, Map.of()), "test"));
+        var plain = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, returns), "test"));
         assertTrue(plain.getMessage().contains("output 0 is not the return to " + ADDR), plain::getMessage);
         // The return recorded at output 2; an equal send to B at output 1 cannot stand in for it (#165 Codex round 3).
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(2_000_000, 0), out(8_000_000, 0), outTo(a, 4_800_000, 0)));
         var send = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a,
-                new TxRunner.CoCallers(paid, Map.of(ADDR, ret(2, 8_000_000, 0)), Map.of()), "test"));
+                new TxRunner.CoCallers(paid, Map.of(ADDR, ret(2, 8_000_000, 0))), "test"));
         assertTrue(send.getMessage().contains("output 2 is not the return to " + ADDR), send::getMessage);
         // B's whole 10 ADA back (so recorded), beside the payout: fine.
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 0), payout, outTo(a, 2_800_000, 0)));
-        TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, Map.of(ADDR, ret(0, 10_000_000, 0)), Map.of()), "test");
+        TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(paid, Map.of(ADDR, ret(0, 10_000_000, 0))), "test");
     }
 
     @Test
@@ -397,11 +397,11 @@ class BodyBalanceTest {
         var spends = Map.of(IN_A, utxo(ADDR, "aa", 3_000_000, 0), IN_B, utxo(a, "bb", 12_000_000, 0));
         var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(5_000_000, 0), outTo(a, 9_800_000, 0)));
-        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(Map.of(), Map.of(ADDR, ret(0, 5_000_000, 0)), Map.of()),
+        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(Map.of(), Map.of(ADDR, ret(0, 5_000_000, 0))),
                 "test"));
         assertTrue(e.getMessage().contains("would give 2000000 lovelace to " + ADDR), e::getMessage);
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(3_000_000, 0), outTo(a, 11_800_000, 0)));
-        TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(Map.of(), Map.of(ADDR, ret(0, 3_000_000, 0)), Map.of()), "test");
+        TxRunner.checkCoCallers(t, spends, a, new TxRunner.CoCallers(Map.of(), Map.of(ADDR, ret(0, 3_000_000, 0))), "test");
     }
 
     @Test
@@ -477,23 +477,18 @@ class BodyBalanceTest {
         assertNotSame(t, kept.get());
     }
 
-    // ---------------------------------------------------------------- #165 Codex round 3
+    // ---------------------------------------------------------------- #165 Codex round 4
 
     @Test
-    void aCoCallersInputTheChainPutsAtThePayersAddressIsRefused() {
-        // B's token UTxO was listed at B's address; the chain answers it at the payer's, with the same value. Balanced,
-        // and B would drop out of the accounting: the payer would fund B's payment and B's return.
+    void aCoCallerPaidForAndReturnedToWithNoInputIsStillChecked() {
+        // B, paid for and returned to, has no input in the body at all (every input is the payer's), and is still checked.
         String a = new Account(Networks.testnet()).baseAddress();
         var spends = Map.of(IN_A, utxo(a, "aa", 10_000_000, 100), IN_B, utxo(a, "bb", 5_000_000, 0));
         var paid = Map.of(ADDR, org.julclang.state.api.Assets.of(new byte[28], new byte[]{1}, BigInteger.valueOf(40)));
         var t = new com.bloxbean.cardano.client.transaction.spec.Transaction();
         t.setBody(body(List.of(IN_A, IN_B), 200_000, out(10_000_000, 60), outTo(a, 4_800_000, 40)));
-        var co = new TxRunner.CoCallers(paid, Map.of(ADDR, ret(0, 10_000_000, 60)), Map.of(Designation.ref(IN_A), ADDR));
-        var e = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a, co, "test"));
-        assertTrue(e.getMessage().contains("was listed at " + ADDR + " but the chain has it at " + a), e::getMessage);
-        // Without the listing: B, paid for and returned to, has no input at all, and is still checked.
         var e2 = assertThrows(JoustException.class, () -> TxRunner.checkCoCallers(t, spends, a,
-                new TxRunner.CoCallers(paid, Map.of(ADDR, ret(0, 10_000_000, 60)), Map.of()), "test"));
+                new TxRunner.CoCallers(paid, Map.of(ADDR, ret(0, 10_000_000, 60))), "test"));
         assertTrue(e2.getMessage().contains("would give") && e2.getMessage().contains("to " + ADDR), e2::getMessage);
     }
 }
