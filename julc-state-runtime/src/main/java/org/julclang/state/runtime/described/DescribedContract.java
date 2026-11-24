@@ -570,50 +570,72 @@ public final class DescribedContract {
         return c.fields().size() > 2 ? t.withEvents(eventsOf(c, 2)) : t;
     }
 
-    /** An asset-aware step ({@code Constr 0 [next?, payouts, sends, mint, accepted]}) as the runtime's full transition. */
+    /**
+     * An asset-aware step ({@code Constr 0 [next?, payouts, sends, mint, accepted, deposits?, events?]}) as the runtime's
+     * full transition. The Data that reaches the transaction byte for byte (the next state, payouts, a send's address
+     * and datum, a deposit's ids and memo, events) must be in canonical CBOR order (I9, {@link DataFidelity}); the
+     * values (a send's or deposit's value, mint, accepted) are ledger values, in ledger order ({@code Assets.check}),
+     * which differs from CBOR order when token names differ in length ({@code ff} before {@code 0000} in CBOR, after
+     * it in the ledger; #154 Codex confirmation).
+     */
     static Transition<PlutusData> full(PlutusData step) {
-        var c = (PlutusData.ConstrData) DataFidelity.check(step, "the method's result");
+        var c = (PlutusData.ConstrData) step;
         var base = transition(new PlutusData.ConstrData(0, List.of(c.fields().get(0), c.fields().get(1))));
         var items = ((PlutusData.ListData) c.fields().get(2)).items();
         JulcList<org.julclang.state.api.Send> sends = JulcList.empty();
         for (int i = items.size() - 1; i >= 0; i--) {
-            sends = sends.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(items.get(i)), org.julclang.state.api.Send.class));
+            var s = (PlutusData.ConstrData) items.get(i);
+            DataFidelity.check(s.fields().get(0), "a send's address");
+            DataFidelity.check(s.fields().get(2), "a send's datum");
+            ledgerValue(s.fields().get(1), "a send's value");
+            sends = sends.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(s), org.julclang.state.api.Send.class));
         }
-        var mint = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(c.fields().get(3)), org.julclang.ledger.Value.class);
-        var accepted = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(c.fields().get(4)), org.julclang.ledger.Value.class);
+        var mint = ledgerValue(c.fields().get(3), "the mint");
+        var accepted = ledgerValue(c.fields().get(4), "the accepted value");
         JulcList<org.julclang.state.api.Deposit> deposits = JulcList.empty();
         if (c.fields().size() > 5) {
             var ds = ((PlutusData.ListData) c.fields().get(5)).items();
             for (int i = ds.size() - 1; i >= 0; i--) {
-                deposits = deposits.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(ds.get(i)), org.julclang.state.api.Deposit.class));
+                var d = (PlutusData.ConstrData) ds.get(i);
+                for (int f : new int[]{0, 1, 3}) DataFidelity.check(d.fields().get(f), "a deposit");
+                ledgerValue(d.fields().get(2), "a deposit's value");
+                deposits = deposits.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(d), org.julclang.state.api.Deposit.class));
             }
         }
+        if (c.fields().size() > 6) DataFidelity.check(c.fields().get(6), "the method's events");
         return Transition.full(base.next(), base.payouts(), sends, mint, accepted).withDeposits(deposits).withEvents(eventsOf(c, 6));
     }
 
     /**
-     * Offered native assets: {@code [[policy, [[name, quantity]]]]} (hex), as the JS client sends them, as a value in
-     * ledger order. Only the shape is checked here, so nothing fails as internal; the host's wire rules are
-     * {@code Session.checkAssets}'.
+     * A value the method returned, checked as Data (a conversion would collapse a repeated key) to be a ledger value:
+     * ledger order, no repeats, no zero quantities.
+     */
+    private static org.julclang.ledger.Value ledgerValue(PlutusData d, String what) {
+        org.julclang.state.api.Assets.check(org.julclang.ledger.Value.fromPlutusData(d), what);
+        return PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(d), org.julclang.ledger.Value.class);
+    }
+
+    /**
+     * Offered native assets: {@code [[policy, [[name, quantity]]]]} (lowercase hex text; a quantity is an integer or its
+     * decimal text), as the JS client sends them, as a value in ledger order. The shape is checked here, so nothing
+     * fails as internal; the host's further wire rules (order, bounds) are {@code Session.checkAssets}'.
      */
     static org.julclang.ledger.Value assets(JsonNode json) {
         var v = org.julclang.state.api.Assets.none();
         if (json == null || json.isNull() || json.isMissingNode()) return v;
         if (!json.isArray()) throw new BadCall("pay.assets: not an array");
-        try {
-            for (JsonNode p : json) {
-                if (!p.isArray() || p.size() != 2 || !p.get(1).isArray()) throw new BadCall("pay.assets: not a [policy, tokens] pair");
-                byte[] policy = HexFormat.of().parseHex(p.get(0).asText());
-                for (JsonNode a : p.get(1)) {
-                    if (!a.isArray() || a.size() != 2) throw new BadCall("pay.assets: not a [name, quantity] token");
-                    v = org.julclang.state.api.Assets.add(v, org.julclang.state.api.Assets.of(policy, HexFormat.of().parseHex(a.get(0).asText()),
-                            new BigInteger(a.get(1).asText())));
-                }
+        for (JsonNode p : json) {
+            if (!p.isArray() || p.size() != 2 || !p.get(0).isTextual() || !p.get(0).asText().matches("[0-9a-f]{56}")
+                    || !p.get(1).isArray())
+                throw new BadCall("pay.assets: not a [policy, tokens] pair");
+            byte[] policy = HexFormat.of().parseHex(p.get(0).asText());
+            for (JsonNode a : p.get(1)) {
+                if (!a.isArray() || a.size() != 2 || !a.get(0).isTextual() || !a.get(0).asText().matches("([0-9a-f]{2}){0,32}")
+                        || !(a.get(1).isIntegralNumber() || a.get(1).isTextual() && a.get(1).asText().matches("-?[0-9]{1,200}")))
+                    throw new BadCall("pay.assets: not a [name, quantity] token");
+                v = org.julclang.state.api.Assets.add(v, org.julclang.state.api.Assets.of(policy, HexFormat.of().parseHex(a.get(0).asText()),
+                        new BigInteger(a.get(1).asText())));
             }
-        } catch (BadCall e) {
-            throw e;
-        } catch (IllegalArgumentException e) {   // bad hex or quantity
-            throw new BadCall("pay.assets: " + e.getMessage(), e);
         }
         return v;
     }
