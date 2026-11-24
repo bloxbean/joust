@@ -8,7 +8,6 @@ import com.bloxbean.cardano.client.plutus.spec.RedeemerTag;
 import com.bloxbean.cardano.vds.core.api.NodeStore;
 import com.bloxbean.cardano.vds.mpf.MpfTrie;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.state.api.mpf.Mpf;
 
 import java.util.ArrayList;
@@ -64,7 +63,7 @@ public final class MapHistory {
             if (!HEX.formatHex(Blake2bUtil.blake2bHash256(cbor)).equals(red.getRedeemerDataHash())) {
                 throw new JoustException("the chain API served other data for redeemer " + red.getRedeemerDataHash());
             }
-            out.addAll(claims(PlutusDataCborDecoder.decode(cbor)));
+            out.addAll(claims(PlutusBytes.decode(cbor)));   // the bytes just hashed
         }
         return out;
     }

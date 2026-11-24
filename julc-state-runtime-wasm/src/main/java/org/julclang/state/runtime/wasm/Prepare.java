@@ -336,7 +336,7 @@ public final class Prepare {
         var program = org.julclang.clientlib.JulcScriptAdapter.toProgram(call.path("script").asText());
         var params = new java.util.ArrayList<org.julclang.core.PlutusData>();
         for (JsonNode p : call.path("params")) {
-            params.add(org.julclang.core.cbor.PlutusDataCborDecoder.decode(java.util.HexFormat.of().parseHex(p.asText())));
+            params.add(org.julclang.state.runtime.PlutusBytes.decodeHex(p.asText()));
         }
         if (!params.isEmpty()) program = program.applyParams(params.toArray(new org.julclang.core.PlutusData[0]));
         var script = org.julclang.clientlib.JulcScriptAdapter.fromProgram(program);
