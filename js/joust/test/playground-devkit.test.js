@@ -760,7 +760,7 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       ['outside the asked window', async (p, prev) => ({ ...(await plainBody({ to: p.now + p.ttlSlots + 1000 })), reservation: 'lie-window' })],
       ['empty validity window', async (p) => ({ ...(await plainBody({ from: p.now + 5, to: p.now + 5 })), reservation: 'lie-empty' })],
       ['already journaled', async (p, prev) => ({ ...prev, reservation: 'lie-again' })],
-      ['already spends', async (p, prev) => ({ ...(await plainBody({ ref: parseTx(prev.cbor).inputs.map((x) => (typeof x === 'string' ? x : `${x.txHash}#${x.index}`))[0],
+      ['still reserves', async (p, prev) => ({ ...(await plainBody({ ref: parseTx(prev.cbor).inputs.map((x) => (typeof x === 'string' ? x : `${x.txHash}#${x.index}`))[0],
         to: p.now + 10 })), reservation: 'lie-overlap' })],
     ];
     for (const [what, lie] of cases) {
@@ -780,8 +780,10 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
         await increment(s, w, other);   // a body journaled (held), on the other instance
         lying = true;
         await assert.rejects(s.prepare({ contract: COUNTER, kind: 'action', method: 'increment', instance, address: w.address, args: { by: '7' } }),
-          (e) => e.code === 'reservation' && e.message.includes(what), what);
-        assert.ok(s.fenced, what);
+          (e) => (what === 'still reserves' ? e.code === 'pending' : e.code === 'reservation') && e.message.includes(what), what);
+        // A body that spends a live reservation's input is refused, retryably, without blaming the host (#179 r3).
+        if (what === 'still reserves') assert.equal(s.fenced, null, what);
+        else assert.ok(s.fenced, what);
         assert.equal(s.journal.find('lie-window') ?? s.journal.find('lie-again') ?? s.journal.find('lie-overlap'), null);
       } finally {
         await s.close();
@@ -819,24 +821,23 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     try {
       await s.fund(w.address, String(1000n * ADA));
       const instance = await create(s, w);
-      // A window that opens ahead: the submit waits for it.
-      lie = async (p) => ({ ...(await plainBody({ from: p.now + 5, to: p.now + 20 })), reservation: 'ahead' });
-      const ahead = await increment(s, w, instance, '9');
-      lie = null;
-      const waiting = s.submit('ahead', ahead.prepared.cbor).then(() => 'sent', (e) => e.code);
-      // Past the window by the time it is sent: refused before sending (another instance: the host still reserves
-      // the real body behind the lie).
       L.fund(w.address, 500n * ADA);
       const second = await create(s, w);
       advanceSlots(L, SETTLEMENT_SLOTS + 2);
       await s.tick();
+      // Past the window by the time it is sent: refused before sending.
       const r = await increment(s, w, second, '2');
       const before = sends;
       skew = 10_000;
       await assert.rejects(s.submit(r.prepared.reservation, await signed(w, r.prepared)), (e) => e.code === 'window');
       skew = 0;
-      // Another genesis by the time it is sent: the session ends and nothing is sent.
       assert.equal(sends, before);
+      // A window that opens ahead (no block arrives meanwhile): the submit waits for it, and a close cancels the wait.
+      lie = async (p) => ({ ...(await plainBody({ from: p.now + 5, to: p.now + 20 })), reservation: 'ahead' });
+      const ahead = await increment(s, w, instance, '9');
+      lie = null;
+      const waiting = s.submit('ahead', ahead.prepared.cbor).then(() => 'sent', (e) => e.code);
+      await new Promise((ok) => setTimeout(ok, 300));
       await s.close();
       assert.equal(await waiting, 'closed', 'a close cancels the wait');
       assert.equal(sends, before, 'nothing was sent');
@@ -869,6 +870,204 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       assert.ok(res.slot > 0);
       chain.submit = send;
     } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r3: a restore that drops settled history (or lost history) keeps its removal point; a rewind below it is fenced', async () => {
+    const L = memoryLedger({ engine: await theEngine(), attacks: false });
+    const chain = fakeChain(L, 180);
+    let s = await session(L, chain, { startTime: 180 });
+    const w = await wallet();
+    let r;
+    try {
+      await s.fund(w.address, String(1000n * ADA));
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      chain.hold = true;
+      r = await increment(s, w, instance);
+      await s.handOff(r.prepared.reservation);
+    } finally {
+      await s.close();
+    }
+    chain.pending.length = 0;
+    chain.hold = false;
+    const before = s.journal.removedAt;
+    advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);   // it expires while no playground runs
+    s = await session(L, chain, { startTime: 180 });
+    const removedAt = s.journal.removedAt;
+    try {
+      assert.deepEqual(s.journal.entries, [], 'the restore dropped it');
+      assert.ok(removedAt > before && removedAt >= L.slot - 1, 'and kept where');
+    } finally {
+      await s.close();
+    }
+    chain.tipOverride = () => ({ slot: removedAt - 1, hash: sha('rw'), height: 1 });   // one slot below
+    s = await session(L, chain, { startTime: 180 });
+    try {
+      await assert.rejects(s.prepare({ contract: COUNTER, kind: 'init', method: 'init', address: w.address, args: {} }),
+        (e) => e.code === 'rewound');
+    } finally {
+      await s.close();
+      chain.tipOverride = null;
+    }
+    // Lost history: the restore that waited past the high-water mark keeps that point too.
+    const real = realpathSync(root);
+    const j = await openJournal({ root: real, chain: identity(181), state });
+    j.raise(L.slot + 2);
+    j.close();
+    const blocks = setInterval(() => advanceSlots(L, 1), 50);
+    try {
+      s = await session(L, fakeChain(L, 181), { startTime: 181 });
+    } finally {
+      clearInterval(blocks);
+    }
+    try {
+      assert.ok(s.journal.removedAt > j.highWater, 'the point past the lost high-water mark');
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r3: a rewind bound found once is persisted and holds across restarts until a tip strictly above it', async () => {
+    const L = memoryLedger({ engine: await theEngine(), attacks: false });
+    const chain = fakeChain(L, 185);
+    let s = await session(L, chain, { startTime: 185 });
+    const w = await wallet();
+    try {
+      await s.fund(w.address, String(1000n * ADA));
+      await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+    } finally {
+      await s.close();
+    }
+    const at = s.journal.removedAt;
+    const high = s.journal.highWater;
+    chain.tipOverride = () => ({ slot: at - 30, hash: sha('rw2'), height: 1 });
+    s = await session(L, chain, { startTime: 185 });
+    const bound = s.status().rewoundUntil;
+    await s.close();
+    assert.ok(bound >= Math.max(at, high));
+    // Reopened with the tip back between the removal point and the bound: still fenced (it was persisted).
+    chain.tipOverride = () => ({ slot: at + 1, hash: sha('rw3'), height: 1 });
+    s = await session(L, chain, { startTime: 185 });
+    try {
+      assert.equal(s.status().rewoundUntil, bound);
+      await assert.rejects(s.prepare({ contract: COUNTER, kind: 'init', method: 'init', address: w.address, args: {} }),
+        (e) => e.code === 'rewound');
+      chain.tipOverride = () => ({ slot: bound, hash: sha('rw4'), height: 1 });
+      await s.tick();
+      assert.equal(s.status().rewoundUntil, bound, 'not cleared at the bound itself');
+      chain.tipOverride = () => ({ slot: bound + 1, hash: sha('rw5'), height: 1 });
+      await s.tick();
+      assert.equal(s.status().rewoundUntil, null, 'cleared strictly above it');
+      assert.equal(s.journal.rewoundUntil, null, 'and the clearing persisted');
+    } finally {
+      await s.close();
+      chain.tipOverride = null;
+    }
+  });
+
+  test('#179 r3: one provider attempt per check; a retry waits cancellably and a close stops it before any second POST', async () => {
+    // The production adapter: a 400 BadInputsUTxO answer is one POST, no provider retry.
+    let posts = 0;
+    const { yaciChain } = await import('../src/playground/devkit.js');
+    const yaci = yaciChain({ chain: 'http://127.0.0.1:9/api/v1' }, { fetchImpl: async (u, init) => {
+      if (init?.method === 'POST') posts++;
+      return { ok: false, status: 400, headers: { get: () => null }, text: async () => 'BadInputsUTxO' };
+    } });
+    await assert.rejects(yaci.submit('84a0'), /BadInputsUTxO/);
+    assert.equal(posts, 1);
+    // The session's own retry: cancelled by close.
+    const L = memoryLedger({ engine: await theEngine(), attacks: false });
+    const chain = fakeChain(L, 186);
+    let sends = 0;
+    chain.submit = async () => { sends++; throw new Error('submit failed: 400 BadInputsUTxO'); };
+    const s = await session(L, chain, { startTime: 186, retryDelayMs: 1000 });
+    try {
+      const w = await wallet();
+      await s.fund(w.address, String(1000n * ADA));
+      const p = await s.prerequisites(COUNTER);
+      const r = p.length ? await s.publish(COUNTER, p[0].id, w.address)
+        : await s.prepare({ contract: COUNTER, kind: 'init', method: 'init', address: w.address, args: {} });
+      const pending = s.submit(r.prepared.reservation, await signed(w, r.prepared)).then(() => 'sent', (e) => e.code);
+      await new Promise((ok) => setTimeout(ok, 200));
+      assert.equal(sends, 1);
+      await s.close();
+      assert.equal(await pending, 'nodeRefused', 'the first refusal stands');
+      await new Promise((ok) => setTimeout(ok, 1500));
+      assert.equal(sends, 1, 'no POST after the close');
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r3: an input a journaled body spends: settled here if the chain shows it expired, else refused retryably, never fenced', async () => {
+    let lie = null;
+    const { L, s, w } = await ready({ startTime: 187, launch: lyingLaunch({ prepare: async (r, p) => (lie ? { ...r, prepared: { ...r.prepared, ...(await lie(p)) } } : r) }) });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      L.fund(w.address, 500n * ADA);
+      const held = await increment(s, w, instance);
+      const ref = parseTx(held.prepared.cbor).inputs.map((x) => (typeof x === 'string' ? x : `${x.txHash}#${x.index}`))[0];
+      const second = await create(s, w);
+      advanceSlots(L, 1);
+      lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'reuse' });
+      await assert.rejects(increment(s, w, second), (e) => e.code === 'pending');
+      assert.equal(s.fenced, null);
+      // Past the held body's margin, before the watcher's next pass: the chain says expired, the new body goes out.
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'reuse2' });
+      await increment(s, w, second);
+      assert.equal(s.txStatus(held.prepared.txHash).status, 'expired');
+      assert.ok(s.journal.find('reuse2'));
+      assert.equal(s.fenced, null);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r3: a failed genesis read before a POST is retryable: the session and its watcher stay', async () => {
+    const { chain, s, w } = await ready({ startTime: 188 });
+    try {
+      const instance = await create(s, w);
+      const r = await increment(s, w, instance);
+      const genesis = chain.genesis;
+      chain.genesis = async () => { throw new Error('503 Service Unavailable'); };
+      await assert.rejects(s.submit(r.prepared.reservation, await signed(w, r.prepared)), (e) => e.code === 'chainUnavailable');
+      assert.equal(s.ended, null, 'not a reset');
+      chain.genesis = genesis;
+      const res = await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+      assert.equal(res.transport, 'accepted');
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r3: a newly found inclusion past its margin is final for the page only after its indexing wait (the host at once)', async () => {
+    const { L, chain, s, w } = await ready({ startTime: 189 });
+    try {
+      const instance = await create(s, w);
+      chain.hold = true;
+      const r = await increment(s, w, instance);
+      await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+      await chain.release();
+      advanceSlots(L, SETTLEMENT_SLOTS + 5);   // found already past its depth margin
+      let open;
+      chain.indexed = () => new Promise((ok) => { open = ok; });
+      const pass = s.tick();
+      await new Promise((ok) => setTimeout(ok, 200));
+      assert.equal(s.journal.find(r.prepared.reservation), null, 'the host and the journal: settled at once');
+      assert.notEqual(s.txStatus(r.prepared.txHash).status, 'final', 'the page: not before the indexes');
+      open();
+      await pass;
+      assert.equal(s.txStatus(r.prepared.txHash).status, 'final');
+    } finally {
+      chain.indexed = async () => {};
       await s.close();
     }
   });
@@ -1043,8 +1242,9 @@ describe('ADR-0024 M3: the server in DevKit mode, mounted as joust dev mounts it
 const chromium = await chromiumOrNull();
 describe('ADR-0024 M3 in Chromium over the controlled chain: late refusals, a CIP-30 input that is gone', {
   skip: skip || (!chromium && 'Playwright\'s Chromium is not installed') }, () => {
-  let root, state, L, chain, pg, server, port, browser, page, blocks, wallet;
+  let root, state, L, chain, pg, server, port, browser, page, blocks, wallet, rotated;
   const signs = { count: 0 };
+  const rotate = { on: false, emptied: false };   // the wallet indexes late, then shows another change address
   before(async () => {
     root = await project();
     state = mkdtempSync(join(tmpdir(), 'joust-state-'));
@@ -1064,10 +1264,13 @@ describe('ADR-0024 M3 in Chromium over the controlled chain: late refusals, a CI
     const view = { utxosAt: async (a) => (await L.utxos(a)).map((u) => ({ ref: `${u.txHash}#${u.index}`, address: u.address,
       value: new Map(u.value.map((x) => [x.unit, BigInt(x.quantity)])), inlineDatum: u.inlineDatum })) };
     wallet = devWallet({ chain: view, mnemonic: generateMnemonic(wordlist, 256), networkId: 0 });
+    rotated = devWallet({ chain: view, mnemonic: generateMnemonic(wordlist, 256), networkId: 0 });
     browser = await chromium.launch();
     page = await browser.newPage();
     await page.exposeFunction('__joustTestWallet', async (method, arg) => {
       if (method === 'signTx') signs.count++;
+      if (rotate.on && method === 'getUtxos' && !rotate.emptied) { rotate.emptied = true; return []; }
+      if (rotate.on && rotate.emptied && (method === 'getChangeAddress' || method === 'getUsedAddresses')) return rotated[method](arg);
       return wallet[method](arg);
     });
     await page.addInitScript(() => {
@@ -1137,6 +1340,23 @@ describe('ADR-0024 M3 in Chromium over the controlled chain: late refusals, a CI
       assert.equal(signs.count, 0, 'never asked to sign');
     } finally {
       chain.hiddenAt = null;
+    }
+  });
+
+  test('#179 r3: a wallet read again while it indexes must still be on this network with the same change address; else no signTx', async () => {
+    await idle();
+    signs.count = 0;
+    await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1');
+    await page.click('[data-call="action:increment"] button.run');
+    await page.waitForSelector('#approve', { timeout: 120_000 });
+    rotate.on = true;
+    try {
+      await page.click('#approve');
+      await page.waitForFunction(has, 'change address changed since it was connected: connect the wallet again', { timeout: 60_000 });
+      assert.match(await page.locator('#history li').first().innerText(), /Joust fake wallet: increment\s+failed\s+at stage wallet/);
+      assert.equal(signs.count, 0, 'never asked to sign');
+    } finally {
+      rotate.on = false;
     }
   });
 });

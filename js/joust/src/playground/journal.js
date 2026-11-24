@@ -222,12 +222,15 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   const parsed = raw?.version === JOURNAL_VERSION && Array.isArray(raw.entries) ? raw.entries.map(entry) : null;
   // #179 r2: each reservation once (two bodies under one id would share one chain observation).
   const intact = parsed !== null && parsed.every(Boolean) && new Set(parsed.map((e) => e.reservation)).size === parsed.length
-    && (raw.removedAt === undefined || raw.removedAt === null || isSlot(raw.removedAt));
+    && (raw.removedAt === undefined || raw.removedAt === null || isSlot(raw.removedAt))
+    && (raw.rewoundUntil === undefined || raw.rewoundUntil === null || isSlot(raw.rewoundUntil));
   const lost = (raw !== undefined || highWater !== null) && !intact;
   let entries = intact ? parsed : [];
   // The highest tip at which a body left the journal (final or expired): a chain rewound below it may let that body
   // land again, so a later session fences builds until the tip passes the high-water mark (#179 r2).
   let removedAt = intact && isSlot(raw.removedAt) ? raw.removedAt : null;
+  // A rewind found below removedAt: nothing is built until a tip strictly above this slot (#179 r3), across restarts.
+  let rewoundUntil = intact && isSlot(raw.rewoundUntil) ? raw.rewoundUntil : null;
   let closed = false;
   const mine = () => {
     if (closed || !owns(lockFile, token)) {
@@ -236,7 +239,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   };
   const save = () => {
     mine();
-    writeAtomic(journalFile, { version: JOURNAL_VERSION, project: root, entries, removedAt });
+    writeAtomic(journalFile, { version: JOURNAL_VERSION, project: root, entries, removedAt, rewoundUntil });
   };
 
   return {
@@ -282,6 +285,16 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
     get removedAt() {
       return removedAt;
     },
+    get rewoundUntil() {
+      return rewoundUntil;
+    },
+    /** Persists the rewind bound (raised, never lowered) or, with null, clears it. */
+    setRewound(slot) {
+      if (slot !== null && !isSlot(slot)) throw new Error('journal: the rewind bound is a slot');
+      if (slot !== null && rewoundUntil !== null && slot <= rewoundUntil) return;
+      rewoundUntil = slot;
+      save();
+    },
     /**
      * Removes a body; {@code atSlot} is the chain point that settled it (final or expired), kept as the removed-history
      * point (a discarded body needs none: it was never signed).
@@ -292,13 +305,17 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
       if (atSlot !== null && isSlot(atSlot) && (removedAt === null || atSlot > removedAt)) removedAt = atSlot;
       if (entries.length !== before) save();
     },
-    /** Replaces the whole journal (after a restore: the host's new reservation ids); nothing changes if one is invalid. */
-    replace(list) {
+    /**
+     * Replaces the whole journal (after a restore: the host's new reservation ids); nothing changes if one is invalid.
+     * {@code atSlot}: the chain point at which history the restore dropped settled, saved in the same write (#179 r3).
+     */
+    replace(list, atSlot = null) {
       const next = list.map(entry);
       if (!next.every(Boolean) || new Set(next.map((e) => e.reservation)).size !== next.length) {
         throw new Error('journal: the restored entries are not valid');
       }
       entries = next;
+      if (atSlot !== null && isSlot(atSlot) && (removedAt === null || atSlot > removedAt)) removedAt = atSlot;
       save();
     },
     /** The prune notices were shown: they are cleared. */
