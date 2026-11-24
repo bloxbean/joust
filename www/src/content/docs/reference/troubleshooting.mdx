@@ -32,7 +32,8 @@ annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSour
 
 ### Gradle cannot resolve the `julc` artifacts
 
-**Cause.** JuLC and JOUST are not on Maven Central yet: their releases are in the BloxBean release repository. A
+**Cause.** JOUST is not on Maven Central yet: its releases are in the BloxBean release repository. JuLC's releases are
+on Maven Central and in the BloxBean release repository (its release candidates only in the latter). A
 development snapshot of JOUST, and an early JOUST release candidate that was built against a JuLC development snapshot,
 also need the BloxBean snapshot repository. Releases since then pin JuLC releases only.
 

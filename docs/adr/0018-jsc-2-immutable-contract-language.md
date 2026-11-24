@@ -559,8 +559,9 @@ import { concat, slice, length } from "std/bytes"
   - **The file and its class.** `library <package>` replaces `package`; the file holds imports, types, enums and fns
     (a contract is JSC0711). Its class is its file name capitalised (`fees.jsc` is `<package>.Fees`; JSC0705 when that
     is no class name), so a library's package and file name are its identity, named by every importer and by Java
-    contracts: renaming either is a code change of its importers and may move their scripts (bloxbean/julc#328), as a
-    contract's package does (D12).
+    contracts: renaming either is a code change of its importers and may move their scripts, since JuLC's shape-check
+    ids follow library class names (JuLC ADR-078, L-SC); `JscV2HashStabilityTest` does not rename libraries, so how
+    often such a rename moves a hash is not measured.
   - **Imports.** `./x.jsc` and `../dir/x.jsc`, resolved from the importing file, never outside the source folder
     (JSC0706); only a library and only names it declares (JSC0708); libraries may import libraries, without cycles
     (JSC0707). npm library packages (D14) add package specifiers in M4c.
@@ -1079,13 +1080,13 @@ validator never accepts it (r17, #76 review S5, S6).
     included; a rename onto a name the program already uses is not measured, see below). The
     ABI's names are in the manifest and the description, not in the script; a rename of one is reported by the ABI gate
     as an ABI change, and still leaves the script as it was.
-  - **The one exception: the package.** The contract's fully qualified name is its identity (the manifest's
-    `"contract"`), so a package move is an ABI change the gate reports. Until JuLC 0.1.0-pre21 it could also move the
-    script: JuLC's output depended on the order of the processor-generated validator's imports, where the contract's
-    own import sorts by its package against the fixed library imports (bloxbean/julc#328). JuLC 0.1.0-pre21 orders
-    library bindings by content (JuLC ADR-075), so a move keeps the hash (`JscV2HashStabilityTest` asserts it for
-    packages that sort before, among and after the library imports). JuLC 0.1.0-pre21 still broke ties between
-    library methods with equal bodies by qualified name, so a rename that reversed their names' order moved the hash
+  - **The package: an ABI change, no longer a script change.** The contract's fully qualified name is its identity (the
+    manifest's `"contract"`), so a package move is an ABI change the gate reports. Until JuLC 0.1.0-pre21 it could also
+    move the script: JuLC's output depended on the order of the processor-generated validator's imports, where the
+    contract's own import sorts by its package against the fixed library imports (bloxbean/julc#328). JuLC 0.1.0-pre21
+    orders library bindings by content (JuLC ADR-075), so a move keeps the hash (`JscV2HashStabilityTest` asserts it for
+    packages that sort before, among and after the library imports). JuLC 0.1.0-pre21 still broke ties between library
+    methods with equal bodies by qualified name, so a rename that reversed their names' order moved the hash
     (Crowdfund's `?? 0` helpers under `renameAll`); JuLC 0.1.0-pre22 breaks those ties by first use, and by qualified
     name only among methods the program never reaches (JuLC ADR-078, bloxbean/julc#348), and `JscV2HashStabilityTest`
     passes for every example contract and every edit. A language server treats a package move as a code change.
@@ -1458,7 +1459,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J17 | Data built from `.jsc` values (state, redeemers, `send` datums, memos) equals JuLC's encoding of the generated Java and the committed ABI manifest, and matches independent CBOR golden vectors | D5, D12 | encoder tests on the JVM, JS and on-chain; manifest comparison |
 | J18 | Off-chain evaluation of a transition is bounded (step or depth cap) in the prepare service and the batcher, and engines' stacks fit the deepest recursion the budget allows; the front end nests at most 64 levels on every path (JSC0149, JSC0150, JSC0340), reads `+`/`-`, `*`, `&&`, `\|\|` chains and else-if chains of any length without deeper recursion, and reports any stack exhaustion as JSC0005 (on the JVM) or an engine failure `joust build` reports (in the Web Image, whose `joust build` engine runs on an 8 MB worker), never a crash (r12) | D7, D12 | depth tests on the JVM and on a cold Web Image engine (Node's main thread; `joust build`'s worker) |
 | J19 | Every build reports each method's execution units and script size over measured scenarios (empty, small, saturated states; branch-covering inputs), names uncovered paths and unbounded arguments, warns above 80% of the protocol maximum, and calls a figure a bound only for an enumerated bounded domain | D12 | build-report tests |
-| J20 | Every generated check's message is a key of ABI facts and source order, unique within the script and mapped to exactly one `.jsc` construct by the message map; every string the linked script holds is in that map; no message holds a file name, line, column or name the author did not write in a `require` message, and no author's message contains a key's form; a trace is matched whole, and only against the refusing contract's map; layout, comments, the file's name and renames (in any order) leave the script hash unchanged, the package excepted until JuLC 0.1.0-pre21 (bloxbean/julc#328), and a library's file name excepted, which is its class (D9; r12, r16 amended) | D12 | uniqueness and message-map tests; hash invariance under layout, comment, file-name and rename edits for every example; a changed condition changes the hash |
+| J20 | Every generated check's message is a key of ABI facts and source order, unique within the script and mapped to exactly one `.jsc` construct by the message map; every string the linked script holds is in that map; no message holds a file name, line, column or name the author did not write in a `require` message, and no author's message contains a key's form; a trace is matched whole, and only against the refusing contract's map; layout, comments, the file's name and renames (in any order) leave the script hash unchanged, the package excepted until JuLC 0.1.0-pre21 (bloxbean/julc#328), and a library's file name excepted, which is its class and may move its importers' scripts (JuLC ADR-078 L-SC; unmeasured, D9; r12, r16 amended) | D12 | uniqueness and message-map tests; hash invariance under layout, comment, file-name and rename edits for every example; a changed condition changes the hash |
 
 ## 6. Alternatives considered
 
@@ -1994,4 +1995,6 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   bloxbean/julc#348), so `JscV2HashStabilityTest` passes for all 67 example contracts and all ten edits (pre21 failed
   Crowdfund under `renameAll`); that "never" is a measured gate on each JuLC bump, citing JuLC ADR-078's known limits
   (non-exhaustive) and what the gate's renames do not measure (a rename onto a name already used); and that "renamed"
-  means renamed to fresh names.
+  means renamed to fresh names. After #148's review: D9 and J20 give a library rename's reason as JuLC ADR-078's L-SC
+  (shape-check ids follow library class names; unmeasured), no longer a comparison with a contract's package, and
+  D12's package bullet is retitled.

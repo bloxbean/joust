@@ -575,7 +575,7 @@ contract Shop {
 | Checking | A library is checked on its own, and again in each contract that imports it. The time rule (D11) runs through library calls: a library fn called with a time value is checked with that parameter marked, so a division or a `require` on it is refused at the call. An error in a library is reported at the import that brings it into the build, naming the library's own position (`JSC0712`) |
 | Inputs | A library's types are checked inputs like the contract's: a `Line` in a redeemer has its `Key` checked to 28 bytes before the method runs |
 | Artifacts | A library has no ABI manifest of its own: each contract's manifest states the library types its datum and redeemers reach (`"kind": "library"`, with the library's class). Each contract's IR export carries the libraries it imports (format 2), so the JavaScript reference interpreter evaluates their fns, and its message map lists a library's messages with the library's file (`"file": "fees.jsc"`) |
-| Identity | A library's package and file name are its class, which importing files and Java contracts name: renaming either is a code change of every importer, and may change the scripts that use it (bloxbean/julc#328), as a contract's package does |
+| Identity | A library's package and file name are its class, which importing files and Java contracts name: renaming either is a code change of every importer, and may change the scripts that use it: JuLC's shape-check ids follow library class names (JuLC ADR-078) |
 
 ### Library packages and `joust.lock`
 
