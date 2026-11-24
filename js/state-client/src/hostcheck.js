@@ -12,7 +12,9 @@
 // Output: { problems: [code], sites: [`<code>/<check>`], report }; empty problems means the body may be reviewed and
 // signed. The report is what the client shows for review, every item read from the body and the trusted inputs, none
 // from the host's claims: { plan (the body's own summary), walletNet ({ unit: quantity } the payer's wallet loses, fee
-// and deposits included), signers (the key hashes that must sign), created (a creation's instance, object or key) }.
+// and deposits included), signers (the key hashes that must sign), created (a creation's instance, object or key),
+// before / after (the state, or an owned call's object value: the target output's datum and the body's continuation,
+// decoded with the description), removed (a destroy) }.
 //
 // One deliberate difference: map claims (ADR-0014) are not checked here (the reference verifies their MPF proofs), so a
 // call on a contract state or owned value with a MerkleMap field is refused as notVerifiable (fail closed).
@@ -204,13 +206,27 @@ function paymentKey(addr) {
   const b = addressBytes(addr);
   return [0, 2, 4, 6].includes(b[0] >> 4) ? bytesToHex(b.subarray(1, 29)) : null;
 }
+/**
+ * An output's address as bech32, only when it encodes the received bytes exactly: the ledger library reads some
+ * forms leniently (a pointer address's trailing bytes) and would re-encode another address than the body names, which
+ * the reference (encoding the received bytes) never does. Fail closed.
+ */
 const bech32 = (bytesNode) => {
+  const hex = bytesOf(bytesNode);
+  let out;
   try {
-    return bech32Of(bytesOf(bytesNode));
-  } catch (e) {
-    if (e instanceof Malformed) throw e;
+    out = bech32Of(hex);
+  } catch {
     throw new Malformed('not an address');
   }
+  let back;
+  try {
+    back = addressHex(out);
+  } catch {
+    back = null;
+  }
+  if (back === null || back.toLowerCase() !== hex) throw new Malformed('an address that does not round-trip to its received bytes');
+  return out;
 };
 
 // ------------------------------------------------------------------------------------------------- the plan (Ledger.java)
@@ -433,7 +449,10 @@ class Checker {
     const net = new Map(this.walletIn);
     for (const o of this.plan.outputs) if (this.wallet(o.address)) addValue(net, valueOfPlan(o.value), -1);
     return { plan: this.plan, walletNet: Object.fromEntries([...net].filter(([, q]) => q !== 0n).map(([k, q]) => [k, q.toString()])),
-      signers: [...(this.witnesses ?? [])], created: this.created ?? null };
+      signers: [...(this.witnesses ?? [])], created: this.created ?? null,
+      // The call's state (an owned call: the object's value) before, decoded from the trusted chain's target output, and
+      // after, from the body's checked continuation; a destroy removes it, a creation has no before.
+      before: this.rules?.before ?? null, after: this.destroy ? null : this.rules?.after ?? null, removed: this.destroy };
   }
 
   test(site, ok) {
@@ -489,7 +508,7 @@ class Checker {
     this.withdrawals();
     if (this.publish) this.publication();
     else if (this.keyed) new KeyedRules(this).check();
-    else new CallRules(this).check();
+    else (this.rules = new CallRules(this)).check();
     const balance = new Map(this.consumed);
     addValue(balance, this.minted, 1);
     for (const o of plan.outputs) {
@@ -806,13 +825,55 @@ class Checker {
 
 // ------------------------------------------------------------------------------------------------- CallRules.java
 
-/** Plutus data from hex, its nesting and full consumption checked first (CallRules.data). */
-function data(hex) {
+/**
+ * The CBOR rules of Plutus decodeData that the pinned JuLC decoder applies (julc-core MapPreservingCborDecoder,
+ * PlutusDataCborDecoder) and a generic CBOR read does not: every byte string (a bytes value or a bignum's payload)
+ * is definite of at most 64 bytes, or indefinite of such chunks; no text strings, floats or simple values; tags 2
+ * and 3 only in their one-byte headers and around a byte string; constructors as tags 121-127, 1280-1400 or 102
+ * [index, fields]. A constructor index beyond JavaScript's safe integers fails closed (the data model keeps a Number,
+ * so two such indices could compare equal).
+ */
+function plutusRules(node) {
+  switch (node.major) {
+    case 0: case 1: return;
+    case 2:
+      if (node.arg >= 0n) req(node.arg <= 64n);
+      else for (const chunk of node.items) req(chunk.major === 2 && chunk.arg >= 0n && chunk.arg <= 64n);
+      return;
+    case 4: node.items.forEach(plutusRules); return;
+    case 5: node.items.forEach(plutusRules); return;
+    case 6: {
+      const tag = node.arg;
+      const content = node.items[0];
+      const header = node.src[node.start];
+      if (tag === 2n || tag === 3n) {
+        req(header === (tag === 2n ? 0xc2 : 0xc3) && content.major === 2);
+        plutusRules(content);
+        return;
+      }
+      req((tag >= 121n && tag <= 127n) || (tag >= 1280n && tag <= 1400n) || tag === 102n);
+      req(content.major === 4);
+      if (tag === 102n) {
+        req(content.items.length === 2 && content.items[0].major === 0 && content.items[0].arg <= BigInt(Number.MAX_SAFE_INTEGER)
+          && content.items[1].major === 4);
+        content.items[1].items.forEach(plutusRules);
+        return;
+      }
+      content.items.forEach(plutusRules);
+      return;
+    }
+    default: req(false);
+  }
+}
+
+/** Plutus data from hex, as the pinned decoder reads it: nesting, full consumption and its byte-string rules first. */
+export function plutusData(hex) {
   req(typeof hex === 'string');
   const bytes = hexToBytes(hex);
-  readCbor(bytes);
+  plutusRules(readCbor(bytes));
   return decodeData(bytes);
 }
+const data = plutusData;
 const isConstr = (d) => d && 'constr' in d;
 const refText = (r) => `${asText(rq(r, 'txId'))}#${asText(rq(r, 'index'))}`;
 const within = (received, allowed) => [...received].every(([k, q]) => { const a = allowed.get(k) ?? 0n; return q <= (a > 0n ? a : 0n); });
@@ -1117,7 +1178,7 @@ function reencodeOutput(rawNode, { datum, coin } = {}) {
   let hash = null;
   if (f.has(2)) {
     const d = f.get(2);
-    if (uint(at(d, 0)) === 1) inline = canonicalHex(decodeData(bytesOf(tagged(at(d, 1), 24))));
+    if (uint(at(d, 0)) === 1) inline = canonicalHex(plutusData(bytesOf(tagged(at(d, 1), 24))));
     else hash = bytesOf(at(d, 1));
   } else if (!map && rawNode.items.length === 3) hash = bytesOf(at(rawNode, 2));
   if (datum !== undefined) { inline = datum; hash = null; }

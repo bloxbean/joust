@@ -1,12 +1,17 @@
 package org.julclang.state.cli;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -24,8 +29,10 @@ import java.util.regex.Pattern;
  * {@code package-lock.json}; no install script runs ({@code --ignore-scripts}). The installed version is checked against
  * this joust's. Node.js 22+ is a stated prerequisite.
  *
- * <p>For tests and CI only, {@code JOUST_PLAYGROUND_TARBALLS} names local {@code .tgz} files to install instead (a
- * development build has no package of its version on npm), and {@code JOUST_PLAYGROUND_HOME} moves the cache.
+ * <p>A cache directory is used only when it is this user's and private, and complete for exactly the install wanted
+ * (cacheProblem). For tests and CI only, {@code JOUST_PLAYGROUND_TARBALLS} names local {@code .tgz} files to install
+ * instead (a development build has no package of its version on npm), keyed by their bytes and only into a cache
+ * {@code JOUST_PLAYGROUND_HOME} names. Install directories an interrupted install left are swept after a day.
  */
 final class Playground {
 
@@ -35,6 +42,7 @@ final class Playground {
     static final Pattern NODE_VERSION = Pattern.compile("^v(\\d+)\\.");
     static final Pattern SAFE_VERSION = Pattern.compile("[0-9A-Za-z][0-9A-Za-z.+-]{0,100}");
     static final String COMPLETE = ".complete";
+    static final long DAY_MS = 24L * 3600 * 1000;
 
     static final class Refused extends Exception {
         Refused(String message) {
@@ -92,19 +100,33 @@ final class Playground {
         return Path.of(user, ".joust", "playground");
     }
 
-    /** The cached package's bin/joust.js, installed first if the cache has none. */
+    /**
+     * The cached package's bin/joust.js, installed first if the cache has none. A cache directory is used only when it is
+     * this user's and private (owned by this user, no access for group or others, not a link), its completion marker
+     * names exactly the install wanted, and bin/joust.js resolves inside it: before a cache hit, and before accepting a
+     * concurrent install that won the rename.
+     */
     Path installed(Path node, Path npm) throws Refused {
         String version = versions.cli();
         if (!SAFE_VERSION.matcher(version).matches()) throw new Refused("this joust's version " + version + " is not a plain version");
-        Path dir = home().resolve(version);
-        if (ready(dir)) return bin(dir);
         List<String> specs = specs(version);
+        // Tarballs (tests, CI) are keyed by their bytes too: a rebuilt tarball is installed again, never ignored.
+        String key = sys.env().get(TARBALLS_ENV) == null ? version : version + "-t" + digest(specs).substring(0, 16);
+        Path home = home();
+        Path dir = home.resolve(key);
         try {
-            Files.createDirectories(dir.getParent());
-            privateDir(dir.getParent());
-            Path tmp = Files.createTempDirectory(dir.getParent(), ".install-");
+            // A link is refused before anything else; an existing directory is checked, never changed (no chmod: one would
+            // follow a link, or take others' access away from a directory the user shares).
+            if (Files.isSymbolicLink(home)) throw new Refused(home + ": a link; the playground's cache must be this user's own");
+            homeIsSafe(home);
+            createPrivate(home);
+            homeIsSafe(home);
+            sweepInstalls(home);
+            Optional<String> problem = cacheProblem(dir, key);
+            if (problem.isEmpty()) return bin(dir);
+            if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) throw new Refused(dir + ": " + problem.get() + "; remove it and run again");
+            Path tmp = posix(home) ? Files.createTempDirectory(home, ".install-", PRIVATE) : Files.createTempDirectory(home, ".install-");
             try {
-                privateDir(tmp);
                 // tmp is npm's local prefix: a project's or an ancestor's package.json and .npmrc are never consulted.
                 Files.writeString(tmp.resolve("package.json"), "{\"name\": \"joust-playground-cache\", \"private\": true}\n");
                 sys.out().println("joust playground: installing @julclang/joust " + version + " into " + dir + " (once)");
@@ -118,31 +140,106 @@ final class Playground {
                     String got = installedVersion(tmp);
                     if (!version.equals(got)) throw new Refused("npm installed @julclang/joust " + got + ", not " + version);
                 }
-                Files.writeString(tmp.resolve(COMPLETE), version + "\n");
+                Files.writeString(tmp.resolve(COMPLETE), key + "\n");
                 try {
                     Files.move(tmp, dir, StandardCopyOption.ATOMIC_MOVE);
                 } catch (AtomicMoveNotSupportedException e) {
                     throw new Refused("cannot rename the install into place atomically: " + e.getMessage());
                 } catch (IOException e) {
                     // The target exists (rename(2) reports EEXIST or ENOTEMPTY): another joust playground installed it
-                    // first, and that one is used. Anything else is reported.
-                    if (!Files.exists(dir)) throw e;
-                    if (!ready(dir)) throw new Refused(dir + " exists but is not a complete install: remove it and try again");
+                    // first, and that one is used, once it passes the same checks. Anything else is reported.
+                    if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) throw e;
                 }
             } finally {
-                if (Files.exists(tmp)) Scaffold.deleteTree(tmp);
+                if (Files.exists(tmp, LinkOption.NOFOLLOW_LINKS)) Scaffold.deleteTree(tmp);
             }
         } catch (IOException e) {
             throw new Refused("cannot install into " + dir + ": " + e.getMessage());
         }
-        if (!ready(dir)) throw new Refused("the install at " + dir + " is incomplete");
+        // The winner of a concurrent install, checked as a hit is: its directory and every directory above it.
+        homeIsSafe(home);
+        Optional<String> problem = cacheProblem(dir, key);
+        if (problem.isPresent()) throw new Refused(dir + ": " + problem.get() + "; remove it and run again");
         return bin(dir);
     }
 
-    /** What npm installs: this version from the registry, or the test/CI tarballs ({@code JOUST_PLAYGROUND_TARBALLS}). */
+    static final java.nio.file.attribute.FileAttribute<?> PRIVATE =
+            PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"));
+
+    static boolean posix(Path p) {
+        return p.getFileSystem().supportedFileAttributeViews().contains("posix");
+    }
+
+    /** Creates the missing directories of {@code dir}, each private from its creation (never chmod afterwards). */
+    static void createPrivate(Path dir) throws IOException {
+        java.util.ArrayDeque<Path> missing = new java.util.ArrayDeque<>();
+        for (Path p = dir.toAbsolutePath(); p != null && !Files.exists(p, LinkOption.NOFOLLOW_LINKS); p = p.getParent()) missing.push(p);
+        boolean posix = posix(dir);
+        while (!missing.isEmpty()) {
+            Path p = missing.pop();
+            try {
+                if (posix) Files.createDirectory(p, PRIVATE);
+                else Files.createDirectory(p);
+            } catch (java.nio.file.FileAlreadyExistsException e) {
+                // created meanwhile: checked below like any existing directory
+            }
+        }
+    }
+
+    /**
+     * The cache's home and its path are this user's to change only: the home itself (when it exists) private and this
+     * user's, and every directory above it, as written and as resolved, owned by this user or root and not writable by
+     * others unless sticky (/tmp): no other account can replace a component of the path after these checks.
+     */
+    void homeIsSafe(Path home) throws Refused {
+        Path abs = home.toAbsolutePath().normalize();
+        if (Files.exists(abs, LinkOption.NOFOLLOW_LINKS)) {
+            Optional<String> p = privateProblem(abs);
+            if (p.isPresent()) throw new Refused(abs + ": " + p.get() + "; the playground's cache must be this user's own");
+        }
+        java.util.LinkedHashSet<Path> above = new java.util.LinkedHashSet<>();
+        for (Path a = abs.getParent(); a != null; a = a.getParent()) if (Files.exists(a, LinkOption.NOFOLLOW_LINKS)) above.add(a);
+        Path deepest = abs;
+        while (deepest != null && !Files.exists(deepest)) deepest = deepest.getParent();
+        if (deepest != null) {
+            try {
+                Path real = deepest.toRealPath();
+                for (Path a = Files.exists(abs) ? real.getParent() : real; a != null; a = a.getParent()) above.add(a);
+            } catch (IOException e) {
+                throw new Refused("cannot resolve " + deepest + ": " + e.getMessage());
+            }
+        }
+        for (Path a : above) {
+            if (Files.isSymbolicLink(a)) continue;   // a link's target is checked as resolved; its own name, by its parent
+            Optional<String> owner = sys.owner(a);
+            if (owner.isPresent() && !owner.get().equals(sys.user()) && !owner.get().equals("0")) {
+                throw new Refused(a + " (above the playground's cache " + abs + ") is owned by another user (uid " + owner.get()
+                        + "): set " + HOME_ENV + " to a directory under your own");
+            }
+            try {
+                int mode = (Integer) Files.getAttribute(a, "unix:mode", LinkOption.NOFOLLOW_LINKS);
+                if ((mode & 0022) != 0 && (mode & 01000) == 0) {
+                    // Yours: say how to fix it (keep it refused until then); another's (root's): choose another home.
+                    String fix = owner.isPresent() && owner.get().equals(sys.user())
+                            ? "run chmod go-w " + a + " (or set " + HOME_ENV + " to a directory under your own)"
+                            : "set " + HOME_ENV + " to a directory under your own";
+                    throw new Refused(a + " (above the playground's cache " + abs + ") is writable by others and not sticky: " + fix);
+                }
+            } catch (UnsupportedOperationException | IllegalArgumentException | IOException ignored) {
+                // not POSIX: the user's profile directory is private already
+            }
+        }
+    }
+
+    /**
+     * What npm installs: this version from the registry, or the test/CI tarballs ({@code JOUST_PLAYGROUND_TARBALLS}),
+     * which need their own cache ({@code JOUST_PLAYGROUND_HOME}): they never fill the real per-user cache.
+     */
     List<String> specs(String version) throws Refused {
         String tarballs = sys.env().get(TARBALLS_ENV);
-        if (tarballs != null && !tarballs.isBlank()) {
+        if (tarballs != null) {
+            String h = sys.env().get(HOME_ENV);
+            if (h == null || h.isBlank()) throw new Refused(TARBALLS_ENV + " needs " + HOME_ENV + " (a cache of its own)");
             List<String> out = new ArrayList<>();
             for (String t : tarballs.split(java.io.File.pathSeparator)) {
                 if (t.isBlank()) continue;
@@ -162,12 +259,76 @@ final class Playground {
         return List.of("@julclang/joust@" + version);
     }
 
+    static String digest(List<String> tarballs) throws Refused {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            for (String t : tarballs) {
+                md.update(t.getBytes(StandardCharsets.UTF_8));
+                md.update((byte) 0);
+                md.update(Files.readAllBytes(Path.of(t)));
+            }
+            return HexFormat.of().formatHex(md.digest());
+        } catch (IOException | NoSuchAlgorithmException e) {
+            throw new Refused("cannot read the tarballs: " + e.getMessage());
+        }
+    }
+
     static Path bin(Path dir) {
         return dir.resolve("node_modules").resolve("@julclang").resolve("joust").resolve("bin").resolve("joust.js");
     }
 
-    static boolean ready(Path dir) {
-        return Files.isRegularFile(dir.resolve(COMPLETE)) && Files.isRegularFile(bin(dir));
+    /** Why {@code dir} is not this user's private directory, or empty: a link, another owner, access for others. */
+    Optional<String> privateProblem(Path dir) {
+        if (Files.isSymbolicLink(dir)) return Optional.of("a symbolic link");
+        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return Optional.of("not a directory");
+        Optional<String> owner = sys.owner(dir);
+        if (owner.isPresent() && !owner.get().equals(sys.user())) return Optional.of("owned by another user (uid " + owner.get() + ")");
+        try {
+            var perms = Files.getPosixFilePermissions(dir, LinkOption.NOFOLLOW_LINKS);
+            for (var p : perms) {
+                if (p.name().startsWith("GROUP_") || p.name().startsWith("OTHERS_")) {
+                    return Optional.of("accessible to others (" + PosixFilePermissions.toString(perms) + ")");
+                }
+            }
+        } catch (UnsupportedOperationException ignored) {
+            // not POSIX: the user's profile directory is private already
+        } catch (IOException e) {
+            return Optional.of("unreadable (" + e.getMessage() + ")");
+        }
+        return Optional.empty();
+    }
+
+    /** Why the install at {@code dir} must not be used, or empty when it is a complete, private install of {@code key}. */
+    Optional<String> cacheProblem(Path dir, String key) {
+        if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) return Optional.of("not installed");
+        Optional<String> p = privateProblem(dir);
+        if (p.isPresent()) return p;
+        Path marker = dir.resolve(COMPLETE);
+        if (!Files.isRegularFile(marker, LinkOption.NOFOLLOW_LINKS)) return Optional.of("an incomplete install (no " + COMPLETE + ")");
+        try {
+            if (Files.size(marker) > 256 || !Files.readString(marker, StandardCharsets.UTF_8).equals(key + "\n")) {
+                return Optional.of("its " + COMPLETE + " names another install than " + key);
+            }
+            Path bin = bin(dir);
+            if (!Files.isRegularFile(bin)) return Optional.of("no bin/joust.js");
+            if (!bin.toRealPath().startsWith(dir.toRealPath())) return Optional.of("bin/joust.js resolves outside it");
+        } catch (IOException e) {
+            return Optional.of("unreadable (" + e.getMessage() + ")");
+        }
+        return Optional.empty();
+    }
+
+    /** Removes this user's install directories left by an interrupted install, a day old or more. */
+    void sweepInstalls(Path home) {
+        try (var list = Files.list(home)) {
+            for (Path p : list.toList()) {
+                if (!p.getFileName().toString().startsWith(".install-") || privateProblem(p).isPresent()) continue;
+                if (Files.getLastModifiedTime(p, LinkOption.NOFOLLOW_LINKS).toMillis() > System.currentTimeMillis() - DAY_MS) continue;
+                Scaffold.deleteTree(p);
+            }
+        } catch (IOException ignored) {
+            // best effort
+        }
     }
 
     static String installedVersion(Path dir) {
@@ -175,11 +336,4 @@ final class Playground {
         return v instanceof String s ? s : "(none)";
     }
 
-    private static void privateDir(Path dir) throws IOException {
-        try {
-            Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwx------"));
-        } catch (UnsupportedOperationException ignored) {
-            // not POSIX: the user's profile directory is private already
-        }
-    }
 }

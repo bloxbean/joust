@@ -137,7 +137,8 @@ class PlaygroundTest {
         ok.onRun = r -> fakeInstall(r, "0.1.0-pre1-snapshot");
         assertThat(new JoustMain(ok, SNAPSHOT).run(new String[]{"playground"})).isZero();
         assertThat(ok.runs.get(0).command()).endsWith(a.toString(), b.toString());
-        assertThat(home.resolve("0.1.0-pre2-abc1234-SNAPSHOT").resolve(Playground.COMPLETE)).exists();
+        Path cached = only(home, "0.1.0-pre2-abc1234-SNAPSHOT-t");
+        assertThat(Files.readString(cached.resolve(Playground.COMPLETE))).isEqualTo(cached.getFileName() + "\n");
     }
 
     @Test
@@ -171,6 +172,7 @@ class PlaygroundTest {
             // Meanwhile another joust playground completed the same install.
             try {
                 Files.createDirectories(Playground.bin(cached).getParent());
+                Files.setPosixFilePermissions(cached, PosixFilePermissions.fromString("rwx------"));
                 Files.writeString(Playground.bin(cached), "");
                 Files.writeString(cached.resolve(Playground.COMPLETE), "0.1.0-pre1-rc8\n");
             } catch (IOException e) {
@@ -197,6 +199,220 @@ class PlaygroundTest {
         FakeSys unknown = sys(project);
         new JoustMain(unknown, RELEASE).run(new String[]{"lint"});
         assertThat(unknown.errText()).contains("build, test, run and playground");
+    }
+
+    /** The one cache directory whose name starts with {@code prefix}. */
+    static Path only(Path home, String prefix) throws IOException {
+        try (var list = Files.list(home)) {
+            List<Path> found = list.filter(p -> p.getFileName().toString().startsWith(prefix)).toList();
+            assertThat(found).hasSize(1);
+            return found.get(0);
+        }
+    }
+
+    /** A complete, private install of {@code key}, as a previous run would have left it. */
+    Path cachedInstall(String key) throws IOException {
+        Path dir = home.resolve(key);
+        Files.createDirectories(Playground.bin(dir).getParent());
+        Files.writeString(Playground.bin(dir), "");
+        Files.writeString(dir.resolve(Playground.COMPLETE), key + "\n");
+        Files.setPosixFilePermissions(home, PosixFilePermissions.fromString("rwx------"));
+        Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwx------"));
+        return dir;
+    }
+
+    int runOn(FakeSys s) {
+        return new JoustMain(s, RELEASE).run(new String[]{"playground"});
+    }
+
+    @Test
+    void aCacheHitIsUsedOnlyWhenPrivateOwnedAndCompleteForThisVersion() throws IOException {
+        Path dir = cachedInstall("0.1.0-pre1-rc8");
+        FakeSys ok = sys(project);
+        assertThat(runOn(ok)).isZero();
+        assertThat(ok.runs).hasSize(1);
+        // Group-writable: refused, nothing runs (a hit never installs over it either).
+        Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxrwxr-x"));
+        FakeSys open = sys(project);
+        assertThat(runOn(open)).isEqualTo(1);
+        assertThat(open.errText()).contains("accessible to others").contains("remove it");
+        assertThat(open.runs).isEmpty();
+        Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwx------"));
+        // Another user's.
+        FakeSys foreign = sys(project);
+        foreign.owners = p -> Optional.of(p.equals(dir) ? "other" : "me");
+        assertThat(runOn(foreign)).isEqualTo(1);
+        assertThat(foreign.errText()).contains("owned by another user");
+        assertThat(foreign.runs).isEmpty();
+        // A marker for another version.
+        Files.writeString(dir.resolve(Playground.COMPLETE), "0.1.0-pre1-rc7\n");
+        FakeSys other = sys(project);
+        assertThat(runOn(other)).isEqualTo(1);
+        assertThat(other.errText()).contains("names another install than 0.1.0-pre1-rc8");
+        Files.writeString(dir.resolve(Playground.COMPLETE), "0.1.0-pre1-rc8\n");
+        // bin/joust.js through a link out of the cache.
+        Path outside = Files.writeString(tmp.resolve("evil.js"), "");
+        Files.delete(Playground.bin(dir));
+        Files.createSymbolicLink(Playground.bin(dir), outside);
+        FakeSys linked = sys(project);
+        assertThat(runOn(linked)).isEqualTo(1);
+        assertThat(linked.errText()).contains("resolves outside it");
+        assertThat(linked.runs).isEmpty();
+    }
+
+    @Test
+    void aLinkedCacheOrAForeignHomeIsRefused() throws IOException {
+        Path real = Files.createDirectories(tmp.resolve("elsewhere"));
+        Files.createDirectories(home);
+        Files.setPosixFilePermissions(home, PosixFilePermissions.fromString("rwx------"));
+        Files.createSymbolicLink(home.resolve("0.1.0-pre1-rc8"), real);
+        FakeSys s = sys(project);
+        assertThat(runOn(s)).isEqualTo(1);
+        assertThat(s.errText()).contains("a symbolic link");
+        assertThat(s.runs).isEmpty();
+        FakeSys foreignHome = sys(project);
+        foreignHome.owners = p -> Optional.of(p.equals(home) ? "other" : "me");
+        assertThat(runOn(foreignHome)).isEqualTo(1);
+        assertThat(foreignHome.errText()).contains("owned by another user").contains("must be this user's own");
+    }
+
+    @Test
+    void aLinkedHomeIsRefusedBeforeAnyChmodOfItsTarget() throws IOException {
+        Path target = Files.createDirectories(tmp.resolve("shared"));
+        Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rwxr-xr-x"));
+        Files.createDirectories(home.getParent());
+        Files.createSymbolicLink(home, target);
+        FakeSys s = sys(project);
+        assertThat(runOn(s)).isEqualTo(1);
+        assertThat(s.errText()).contains("a link").contains("must be this user's own");
+        assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(target))).isEqualTo("rwxr-xr-x");
+        assertThat(s.runs).isEmpty();
+    }
+
+    @Test
+    void aConcurrentWinnerIsCheckedToo() {
+        FakeSys s = sys(project);
+        Path cached = home.resolve("0.1.0-pre1-rc8");
+        s.onRun = r -> {
+            fakeInstall(r, "0.1.0-pre1-rc8");
+            try {
+                // The "winner" is world-writable: never used.
+                Files.createDirectories(Playground.bin(cached).getParent());
+                Files.writeString(Playground.bin(cached), "");
+                Files.writeString(cached.resolve(Playground.COMPLETE), "0.1.0-pre1-rc8\n");
+                Files.setPosixFilePermissions(cached, PosixFilePermissions.fromString("rwxrwxrwx"));
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            return 0;
+        };
+        assertThat(runOn(s)).isEqualTo(1);
+        assertThat(s.errText()).contains("accessible to others");
+        assertThat(s.runs).hasSize(1);
+    }
+
+    @Test
+    void tarballsNeedTheirOwnCacheAndARebuiltTarballIsInstalledAgain() throws IOException {
+        Path a = Files.writeString(tmp.resolve("a.tgz"), "one");
+        FakeSys noHome = sys(project);
+        noHome.env.remove(Playground.HOME_ENV);
+        noHome.env.put("HOME", tmp.resolve("user").toString());
+        noHome.env.put(Playground.TARBALLS_ENV, a.toString());
+        assertThat(new JoustMain(noHome, SNAPSHOT).run(new String[]{"playground"})).isEqualTo(1);
+        assertThat(noHome.errText()).contains("needs " + Playground.HOME_ENV);
+        assertThat(tmp.resolve("user")).doesNotExist();
+        FakeSys first = sys(project);
+        first.env.put(Playground.TARBALLS_ENV, a.toString());
+        first.onRun = r -> fakeInstall(r, "0.1.0-pre1-snapshot");
+        assertThat(new JoustMain(first, SNAPSHOT).run(new String[]{"playground"})).isZero();
+        assertThat(first.runs).hasSize(2);
+        FakeSys same = sys(project);
+        same.env.put(Playground.TARBALLS_ENV, a.toString());
+        assertThat(new JoustMain(same, SNAPSHOT).run(new String[]{"playground"})).isZero();
+        assertThat(same.runs).as("the same tarball: a cache hit").hasSize(1);
+        Files.writeString(a, "two");
+        FakeSys rebuilt = sys(project);
+        rebuilt.env.put(Playground.TARBALLS_ENV, a.toString());
+        rebuilt.onRun = r -> fakeInstall(r, "0.1.0-pre1-snapshot");
+        assertThat(new JoustMain(rebuilt, SNAPSHOT).run(new String[]{"playground"})).isZero();
+        assertThat(rebuilt.runs).as("a rebuilt tarball is installed again").hasSize(2);
+        try (var list = Files.list(home)) {
+            assertThat(list.filter(p -> p.getFileName().toString().startsWith("0.1.0-pre2-abc1234-SNAPSHOT-t")).count()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void installDirectoriesLeftADayAgoAreSwept() throws IOException {
+        Files.createDirectories(home);
+        Path old = Files.createDirectories(home.resolve(".install-old"));
+        Files.setPosixFilePermissions(old, PosixFilePermissions.fromString("rwx------"));
+        Files.writeString(old.resolve("package.json"), "{}");
+        Files.setLastModifiedTime(old, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 2 * Playground.DAY_MS));
+        Path recent = Files.createDirectories(home.resolve(".install-recent"));
+        Files.setPosixFilePermissions(recent, PosixFilePermissions.fromString("rwx------"));
+        cachedInstall("0.1.0-pre1-rc8");
+        assertThat(runOn(sys(project))).isZero();
+        assertThat(old).doesNotExist();
+        assertThat(recent).exists();
+    }
+
+    static String mode(Path p) throws IOException {
+        return PosixFilePermissions.toString(Files.getPosixFilePermissions(p));
+    }
+
+    static void chmod(String mode, Path p) throws Exception {
+        assertThat(new ProcessBuilder("chmod", mode, p.toString()).start().waitFor()).isZero();
+    }
+
+    @Test
+    void newCacheDirectoriesArePrivateFromCreationAndAnExistingHomeIsNeverChanged() throws Exception {
+        home = tmp.resolve("a/b/cache");
+        FakeSys s = sys(project);
+        s.env.put(Playground.HOME_ENV, home.toString());
+        s.onRun = r -> fakeInstall(r, "0.1.0-pre1-rc8");
+        assertThat(runOn(s)).isZero();
+        for (Path d : List.of(tmp.resolve("a"), tmp.resolve("a/b"), home, home.resolve("0.1.0-pre1-rc8"))) assertThat(mode(d)).as(d.toString()).isEqualTo("rwx------");
+        // An existing home others can read: refused, and left as it was (no chmod).
+        Path shared = Files.createDirectories(tmp.resolve("shared-home"));
+        Files.setPosixFilePermissions(shared, PosixFilePermissions.fromString("rwxr-xr-x"));
+        FakeSys t = sys(project);
+        t.env.put(Playground.HOME_ENV, shared.toString());
+        assertThat(runOn(t)).isEqualTo(1);
+        assertThat(t.errText()).contains("accessible to others");
+        assertThat(mode(shared)).isEqualTo("rwxr-xr-x");
+        assertThat(t.runs).isEmpty();
+    }
+
+    @Test
+    void everyDirectoryAboveTheCacheIsThisUsersOrRootsAndNotWritableByOthersUnlessSticky() throws Exception {
+        Path open = Files.createDirectories(tmp.resolve("group-writable"));
+        chmod("775", open);
+        FakeSys s = sys(project);
+        s.env.put(Playground.HOME_ENV, open.resolve("cache").toString());
+        assertThat(runOn(s)).isEqualTo(1);
+        assertThat(s.errText()).contains("group-writable").contains("writable by others and not sticky")
+                .containsPattern("run chmod go-w \\S*group-writable ");
+        assertThat(mode(open)).isEqualTo("rwxrwxr-x");
+        assertThat(open.resolve("cache")).doesNotExist();
+        // Sticky (as /tmp): others cannot replace what this user puts there.
+        Path sticky = Files.createDirectories(tmp.resolve("sticky"));
+        chmod("1777", sticky);
+        FakeSys ok = sys(project);
+        ok.env.put(Playground.HOME_ENV, sticky.resolve("cache").toString());
+        ok.onRun = r -> fakeInstall(r, "0.1.0-pre1-rc8");
+        assertThat(runOn(ok)).isZero();
+        // Another user's directory above (root's is fine), on a hit too.
+        Path parent = sticky;
+        FakeSys foreign = sys(project);
+        foreign.env.put(Playground.HOME_ENV, sticky.resolve("cache").toString());
+        foreign.owners = p -> Optional.of(p.equals(parent) ? "1234" : "me");
+        assertThat(runOn(foreign)).isEqualTo(1);
+        assertThat(foreign.errText()).contains("is owned by another user (uid 1234)");
+        assertThat(foreign.runs).as("a cache hit is refused too").isEmpty();
+        FakeSys root = sys(project);
+        root.env.put(Playground.HOME_ENV, sticky.resolve("cache").toString());
+        root.owners = p -> Optional.of(p.equals(parent) ? "0" : "me");
+        assertThat(runOn(root)).isZero();
     }
 
     /** With a real node and npm: a local tarball installed into the cache with its integrity recorded, then run. */
@@ -232,7 +448,7 @@ class PlaygroundTest {
         assumeTrue(s.nodeVersionOutput.matches("(?s)v(2[2-9]|[3-9]\\d).*"), "needs Node.js 22+");
         int code = new JoustMain(s, SNAPSHOT).run(new String[]{"playground", "--no-open"});
         assertThat(code).as(Files.readString(tmp.resolve("err.log"))).isZero();
-        Path cached = home.resolve(SNAPSHOT.cli());
+        Path cached = only(home, SNAPSHOT.cli() + "-t");
         assertThat(Files.readString(cached.resolve("package-lock.json"))).contains("\"integrity\": \"sha512-");
         assertThat(Files.readString(project.resolve("ran.json")))
                 .contains("[\"playground\",\"--no-open\"]").contains(project.toRealPath().toString());

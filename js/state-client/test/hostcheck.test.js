@@ -78,3 +78,68 @@ test('the report comes from the body: signers, net outflow, the created id', () 
   assert.deepEqual(r.problems, []);
   assert.equal(r.report.created, init.result.prepared.instance);
 });
+
+// ---- review round 3 (Codex r2): the checker reads Plutus data as the pinned JuLC decoder does, constructor indices
+// exactly, addresses as the received bytes.
+
+const A64 = 'ab'.repeat(64);
+// Each case's verdict under the pinned decoder (julc-core 0.1.0-pre22 PlutusDataCborDecoder.decode, run on these hex
+// strings): true decodes, false is refused.
+const JULC_PRE22 = [
+  ['5840' + A64, true, 'a 64-byte definite string'],
+  ['5841' + A64 + 'ab', false, 'a 65-byte definite string'],
+  ['5f5840' + A64 + '41abff', true, '65 bytes in chunks of at most 64'],
+  ['5f5841' + A64 + 'abff', false, 'an indefinite string with a 65-byte chunk'],
+  ['c25841' + A64 + 'ab', false, 'a bignum with a 65-byte definite payload'],
+  ['c25f5840' + A64 + '41abff', true, 'a bignum with a chunked payload'],
+  ['d8024101', false, 'tag 2 in a two-byte header'],
+  ['6161', false, 'a text string'],
+  ['f5', false, 'a simple value'],
+  ['d8799f0102ff', true, 'a constructor'],
+];
+
+test('Plutus data as the pinned JuLC decoder reads it: byte strings of at most 64 bytes per chunk', async () => {
+  const { plutusData } = await import('../src/hostcheck.js');
+  for (const [hex, ok, what] of JULC_PRE22) {
+    if (ok) assert.doesNotThrow(() => plutusData(hex), what);
+    else assert.throws(() => plutusData(hex), what);
+  }
+  assert.deepEqual(plutusData('5f5840' + A64 + '41abff').bytes.length, 65);
+});
+
+test('constructor indices beyond safe integers fail closed (the data model would equate distinct ones)', async () => {
+  const { plutusData } = await import('../src/hostcheck.js');
+  const { decodeData, dataEqual } = await import('../src/pdata.js');
+  const general = (n) => 'd86682' + '1b' + n.toString(16).padStart(16, '0') + '80';
+  const two53 = 2n ** 53n;
+  // The hazard: the lenient decoder makes 2^53 and 2^53 + 1 the same constructor.
+  assert.equal(dataEqual(decodeData(general(two53)), decodeData(general(two53 + 1n))), true);
+  // The checker refuses both (JuLC would accept them: the one place it is stricter, documented), and keeps a safe one.
+  assert.throws(() => plutusData(general(two53)));
+  assert.throws(() => plutusData(general(two53 + 1n)));
+  assert.throws(() => plutusData(general(2n ** 64n - 1n)));
+  assert.equal(plutusData(general(2n ** 53n - 1n)).constr, Number.MAX_SAFE_INTEGER);
+});
+
+test('an output address that does not round-trip to its received bytes is refused (a pointer with trailing bytes)', async () => {
+  const { addressHex } = await import('../src/ledger.js');
+  const v = JSON.parse(readFileSync(new URL('accept-pointer-at-one.json', dir)));
+  const payer = addressHex(v.request.call.address);
+  assert.ok(v.result.prepared.cbor.includes('5839' + payer));
+  const pointer = '40' + payer.slice(2, 58) + '010203' + '00';   // the payer's key, a pointer, one trailing byte
+  const cbor = v.result.prepared.cbor.replace('5839' + payer, '5821' + pointer);
+  const r = verifyHostResult({ ...v, result: { prepared: { ...v.result.prepared, cbor } } });
+  assert.deepEqual(r.problems, ['malformed']);
+  assert.match(r.sites[0], /round-trip/);
+  // The same pointer without the trailing byte encodes exactly: read (and refused only by the body's other rules).
+  const exact = v.result.prepared.cbor.replace('5839' + payer, '5820' + pointer.slice(0, -2));
+  assert.ok(!verifyHostResult({ ...v, result: { prepared: { ...v.result.prepared, cbor: exact } } }).sites.some((s) => /round-trip/.test(s)));
+});
+
+test('the report carries the state before and after, both from the trusted chain and the verified body', () => {
+  const v = JSON.parse(readFileSync(new URL('accept-pointer-at-one.json', dir)));
+  const { problems, report } = verifyHostResult(v);
+  assert.deepEqual(problems, []);
+  assert.equal(BigInt(report.after.count) - BigInt(report.before.count), BigInt(v.request.call.args.by));
+  assert.equal(report.removed, false);
+});

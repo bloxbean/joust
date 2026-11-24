@@ -27,17 +27,23 @@ const SETTLE_POLL_MS = 1000;
 const CONFIRMATION_GRACE_MS = 30_000;
 const $ = (id) => document.getElementById(id);
 
-// ---- the session token: from the URL fragment the command opened, then sessionStorage (never a query string)
-function token() {
-  const m = /(?:^#|&)token=([A-Za-z0-9_-]{20,})/.exec(location.hash);
+// ---- the session token (D8): paired once with the single-use code of the link the command opened (its fragment, never
+// a query string), then kept in this tab's sessionStorage. The token itself is never in a URL.
+let TOKEN = null;
+async function pair() {
+  const m = /(?:^#|&)pair=([A-Za-z0-9_-]{32})(?:&|$)/.exec(location.hash);
   if (m) {
-    try { sessionStorage.setItem('joust-playground-token', m[1]); } catch { /* private mode: memory only */ }
     history.replaceState(null, '', location.pathname);
-    return m[1];
+    // Relative: the page may be served under joust dev's /playground/ (its /playground/pair).
+    const r = await fetch('pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: m[1] }) });
+    const j = await r.json().catch(() => null);
+    if (r.ok && typeof j?.result?.token === 'string') {
+      try { sessionStorage.setItem('joust-playground-token', j.result.token); } catch { /* private mode: memory only */ }
+      return j.result.token;
+    }
   }
   try { return sessionStorage.getItem('joust-playground-token'); } catch { return null; }
 }
-const TOKEN = token();
 
 class StageFailure extends Error {
   constructor(e) {
@@ -701,13 +707,32 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
         try {
           res = await sapi('submit', { reservation: r.prepared.reservation, cbor: signed.cbor });
         } catch (e) {
-          // Offline: not marked submitted, so the page discards the reservation on its way out. A ledger refusal was
-          // discarded by the server already (that discard then fails harmlessly); any other failure (another body, a
-          // host that ended, a malformed transaction) must not leave the instance pending.
-          // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its
-          // inputs (the server refuses that discard as well). A failure before the node saw it is still released.
-          if (devkit() && e.code === 'nodeRefused') report.submitted = true;
-          throw labelled(e, 'ledger', label);
+          // A lost answer (the request may have reached the ledger or the node).
+          if (!(e instanceof StageFailure) || e.code === 'http') {
+            report.submitted = true;   // never released: it may be on the ledger
+            if (devkit()) {
+              // DevKit: the server journaled the submission before sending it; the chain says whether it landed.
+              res = { txHash: r.prepared.txHash, status: 'submitted', transport: 'unknown', validTo: Number(parseTx(r.prepared.cbor).ttl),
+                settlementSlots: state.session.settlementSlots };
+            } else {
+              res = await reconcile(r.prepared.txHash);
+              if (!res) {
+                record({ label, outcome: 'outcome unknown', txHash: r.prepared.txHash,
+                  message: 'the submission\'s answer was lost and the session\'s history does not show it yet: check the history before trying again' });
+                note(`${label}: outcome unknown (${r.prepared.txHash.slice(0, 16)}…): check the history before trying again`, 'warn');
+                reject(Object.assign(new StageFailure({ stage: 'ledger', code: 'unknown', message: 'outcome unknown', label }), { quiet: true }));
+                return;
+              }
+            }
+          } else {
+            // Offline: not marked submitted, so the page discards the reservation on its way out. A ledger refusal was
+            // discarded by the server already (that discard then fails harmlessly); any other failure (another body, a
+            // host that ended, a malformed transaction) must not leave the instance pending.
+            // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its
+            // inputs (the server refuses that discard as well). A failure before the node saw it is still released.
+            if (devkit() && e.code === 'nodeRefused') report.submitted = true;
+            throw labelled(e, 'ledger', label);
+          }
         }
         report.submitted = true;
         // 7. settle: on DevKit as the chain settles it (I7); offline at once
@@ -748,12 +773,19 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
       ['scripts run', String(plan.redeemers.length)],
       ['outputs', plan.outputs.map((o) => `${o.address.slice(0, 24)}… ${ada(o.value.lovelace)}${Object.keys(o.value).length > 1 ? ` + ${Object.keys(o.value).length - 1} asset(s)` : ''}${o.datum ? ' (datum)' : ''}`).join('\n')],
     ];
+    // The state change, as the checks read it: before from the chain's target output, after from the body's checked
+    // continuation (a destroy removes the state; a creation has none before).
+    const states = publication ? null : h('div', { class: 'states' },
+      h('h4', { text: 'Before (on the chain)' }), h('pre', { id: 'review-before', text: report.before === null ? '(none: a creation)' : show(report.before) }),
+      h('h4', { text: 'After (in this transaction)' }), h('pre', { id: 'review-after', text: report.removed ? '(removed: a destroy)' : show(report.after) }));
     panel.replaceChildren(
       h('h3', { text: publication ? `Review publication: ${publication.kind}` : `Review: ${request.method}` }),
-      h('p', { class: 'muted', text: 'The page checked this body itself. What follows "predicted" is the host\'s claim, shown for review.' }),
+      h('p', { class: 'muted', text: 'The page checked this body itself: everything above the line is read from the body and the chain.' }),
       h('table', {}, lines.map(([k, v]) => h('tr', {}, h('th', { text: k }), h('td', {}, h('code', { text: v }))))),
-      predicted ? h('div', {}, h('h4', { text: 'Before (current state)' }), h('pre', { text: currentState() }),
-        h('h4', { text: 'After (predicted)' }), h('pre', { class: 'predicted', text: show(predicted) })) : null,
+      states,
+      // The host's own projection: not checked and not part of the decision, kept apart and folded.
+      predicted ? h('details', { class: 'predicted' }, h('summary', { text: 'The dev host\'s prediction (unchecked, not used to decide)' }),
+        h('pre', { id: 'review-predicted', text: show(predicted) })) : null,
       h('div', { class: 'actions' },
         h('button', { id: 'approve', class: 'primary', text: `Approve and sign as ${signer.label}`, onclick: approve }),
         h('button', { id: 'decline', text: 'Decline', onclick: decline })));
@@ -838,11 +870,23 @@ function currentState() {
   return li.length ? li[0].textContent : '(none)';
 }
 
+/** The session's record of a transaction the page submitted, as the submit route answers; null if it has none. */
+async function reconcile(txHash) {
+  for (let i = 0; i < 3; i++) {
+    try {
+      const entry = (await sapi('history')).find((x) => x.txHash === txHash);
+      if (entry) return { ...entry, acceptedAttacks: entry.acceptedAttacks ?? [] };
+    } catch { /* the server too may be unreachable for a moment */ }
+    await new Promise((ok) => setTimeout(ok, 500));
+  }
+  return null;
+}
+
 function drawHistory() {
   const good = (o) => o === 'confirmed' || o === 'final' || /^included/.test(o ?? '');
   const pending = (o) => o === 'submitted' || o === 'declined' || /^rolled back/.test(o ?? '');
-  $('history').replaceChildren(h('ul', {}, state.history.map((e) => h('li', { class: good(e.outcome) ? 'ok' : pending(e.outcome) ? '' : 'error',
-    'data-tx': e.txHash ?? null, 'data-outcome': e.outcome },
+  $('history').replaceChildren(h('ul', {}, state.history.map((e) => h('li', { class: good(e.outcome) ? 'ok' : pending(e.outcome) ? ''
+    : e.outcome === 'outcome unknown' ? 'warn' : 'error', 'data-tx': e.txHash ?? null, 'data-outcome': e.outcome },
     h('strong', { text: e.label }), ' ', h('span', { text: e.outcome }), e.stage ? h('span', { class: 'stage', text: ` at stage ${e.stage}` }) : null,
     e.kind ? h('code', { text: ` ${e.kind}` }) : null, e.code ? h('code', { text: ` ${e.code}` }) : null,
     e.retryAtSlot !== undefined && e.retryAtSlot !== null ? h('span', { class: 'muted', text: ` (prepare again at slot ${e.retryAtSlot})` }) : null, e.message ? h('div', { class: 'msg', text: e.message }) : null,
@@ -881,8 +925,10 @@ async function guard(fn) {
 
 // ---- start
 (async () => {
+  TOKEN = await pair().catch(() => null);
   if (!TOKEN) {
-    $('banner').replaceChildren(h('p', { class: 'error', text: 'No session token: open the playground from the URL `joust playground` printed.' }));
+    $('banner').replaceChildren(h('p', { class: 'error', text: 'Not paired: this link was used already or expired. Run joust playground again '
+      + '(or joust playground --no-open for a single-use link).' }));
     return;
   }
   await guard(async () => {

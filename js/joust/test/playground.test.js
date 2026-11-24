@@ -382,6 +382,46 @@ describe('ADR-0024 D8: the server surface', { skip }, () => {
     assert.equal((await post(server, 'session', { session: id })).status, 200, 'the server still answers');
   });
 
+  test('I5, D8: pairing gives the token once, for a live code, under the same Host, Origin and site rules', async () => {
+    const code = () => new URL(server.pairingUrl()).hash.slice('#pair='.length);
+    const pair = (c, o = {}) => post(server, '', { code: c }, { path: '/pair', ...o, headers: { [TOKEN_HEADER]: '', ...o.headers } });
+    const cases = [
+      [{ host: `evil.example:${server.port}` }, 421], [{ host: `127.0.0.1.nip.io:${server.port}` }, 421],
+      [{ origin: 'http://evil.example' }, 403], [{ origin: 'null' }, 403], [{ 'sec-fetch-site': 'cross-site' }, 403],
+      [{ 'content-type': 'text/plain' }, 415],
+    ];
+    for (const [headers, status] of cases) {
+      const c = code();
+      const r = await pair(c, { headers });
+      assert.equal(r.status, status, JSON.stringify(headers));
+      assert.ok(!r.raw.includes(server.token));
+      // A refused attempt does not spend the code.
+      assert.equal((await pair(c)).json.result.token, server.token);
+    }
+    assert.equal((await post(server, '', undefined, { method: 'GET', path: '/pair' })).status, 405);
+    // Once: the same code again is refused, as are a made-up code and the token itself.
+    const c = code();
+    assert.equal((await pair(c)).json.result.token, server.token);
+    for (const bad of [c, 'A'.repeat(32), server.token, '', null]) {
+      const r = await pair(bad);
+      assert.equal(r.status, 401, String(bad));
+      assert.ok(!r.raw.includes(server.token));
+    }
+    // A code outlives its ten minutes nowhere: a short-lived server's code expires.
+    const quick = await startPlayground({ root, page: {}, session: async () => ({}), pairTtlMs: 50 });
+    try {
+      const late = new URL(quick.pairingUrl()).hash.slice('#pair='.length);
+      await new Promise((r) => setTimeout(r, 120));
+      const r = await post(quick, '', { code: late }, { path: '/pair' });
+      assert.equal(r.status, 401);
+      assert.ok(!r.raw.includes(quick.token));
+      // No link carries the token.
+      assert.ok(!quick.pairingUrl().includes(quick.token));
+    } finally {
+      await quick.close();
+    }
+  });
+
   test('D8: bounded JSON bodies; no path, command or URL is taken', async () => {
     assert.equal((await post(server, 'session', 'x'.repeat(1024 * 1024 + 1))).status, 413);
     assert.equal((await post(server, 'session', '{')).status, 400);
@@ -507,7 +547,7 @@ for (const kind of ['java', 'jsc']) {
       page.on('pageerror', (e) => errors.push(String(e.stack ?? e)));
       page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
       page.on('request', (r) => { if (r.method() === 'POST') bodies.push({ url: r.url(), body: r.postData() ?? '' }); });
-      await page.goto(server.url);
+      await page.goto(server.pairingUrl());
       await page.waitForSelector('body[data-ready=true]', { timeout: 120_000 });
     });
     after(async () => {
@@ -575,6 +615,47 @@ for (const kind of ['java', 'jsc']) {
       await page.click('[data-call="action:increment"] button.run');
       await approveAll((k) => document.querySelectorAll('#history li.ok').length > k, m);
       await page.waitForFunction(() => /"count": "7"/.test(document.querySelector('#instances li.selected pre')?.textContent ?? ''));
+      // P1-a: a valid body with a false host prediction. The review shows the state before (the chain's target output)
+      // and after (the body's checked continuation); the host's prediction only folded apart, never as the state.
+      await page.route('**/api/prepare', async (route) => {
+        const response = await route.fetch();
+        const j = await response.json();
+        if (j.result) j.result.predicted = { state: { value: { count: '999' }, predicted: true } };
+        await route.fulfill({ response, json: j });
+      });
+      await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1');
+      const p = await confirmedCount();
+      await page.click('[data-call="action:increment"] button.run');
+      await page.waitForSelector('#approve');
+      assert.match(await page.locator('#review-before').innerText(), /"count": "7"/);
+      assert.match(await page.locator('#review-after').innerText(), /"count": "8"/);
+      assert.doesNotMatch(await page.locator('#review table').innerText(), /999/);
+      assert.equal(await page.locator('#review details.predicted').getAttribute('open'), null, 'the prediction is folded');
+      await page.click('#approve');
+      await page.waitForFunction((k) => document.querySelectorAll('#history li.ok').length > k, p);
+      await page.unroute('**/api/prepare');
+      await page.waitForFunction(() => /"count": "8"/.test(document.querySelector('#instances li.selected pre')?.textContent ?? ''));
+      // P2-b: the submission reaches the ledger but its answer is lost: the page reconciles with the session's history
+      // and shows it confirmed (nothing to retry).
+      await page.route('**/api/submit', async (route) => { await route.fetch(); await route.abort('connectionreset'); });
+      const q = await confirmedCount();
+      await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1');
+      await page.click('[data-call="action:increment"] button.run');
+      await approveAll((k) => document.querySelectorAll('#history li.ok').length > k, q);
+      await page.waitForFunction(() => /"count": "9"/.test(document.querySelector('#instances li.selected pre')?.textContent ?? ''));
+      await page.unroute('**/api/submit');
+      // The answer and the request lost: the outcome is unknown (not a retryable failure), and the body is not released.
+      await page.route('**/api/submit', (route) => route.abort('connectionreset'));
+      await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1');
+      await page.click('[data-call="action:increment"] button.run');
+      await approveAll(() => /outcome unknown/.test(document.querySelector('#history').innerText));
+      await page.unroute('**/api/submit');
+      // The two resets this test injected are the browser's only console errors from it.
+      const resets = errors.filter((e) => /ERR_CONNECTION_RESET/.test(e));
+      assert.equal(resets.length, 2);
+      errors.splice(0, errors.length, ...errors.filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
+      assert.doesNotMatch(await history(), /Alice: increment\s+failed\s+at stage ledger/);
+      assert.match(await page.locator('#instances li.selected pre').innerText(), /"count": "9"/);
       // Advance time, then reset the ledger: no instance any more.
       await page.fill('#advance-seconds', '120');
       await page.click('#advance');
@@ -584,18 +665,28 @@ for (const kind of ['java', 'jsc']) {
       assert.deepEqual(errors, []);
     });
 
-    test('D8: the command\'s launcher file opens the page (a file:// navigation is cross-site), the token arrives', async () => {
+    test('D8: the command\'s launcher file opens the page (a file:// navigation is cross-site); its code pairs once', async () => {
       const { writeLauncher } = await import('../src/playground/index.js');
-      const launcher = writeLauncher(server.url);
-      const other = await browser.newPage();
+      const link = server.pairingUrl();
+      const launcher = writeLauncher(link);
+      const context = await browser.newContext();
+      const other = await context.newPage();
       try {
         assert.equal(statSync(launcher.file).mode & 0o777, 0o600);
+        assert.ok(!readFileSync(launcher.file, 'utf8').includes(server.token), 'the launcher file holds no token');
         await other.goto(launcher.link);
         await other.waitForSelector('body[data-ready=true]', { timeout: 120_000 });
-        assert.equal(new URL(other.url()).hash, '', 'the page took the token out of the URL');
+        assert.equal(new URL(other.url()).hash, '', 'the page took the code out of the URL');
         assert.match(await other.locator('#banner').innerText(), /offline/i);
+        // A reload keeps the paired tab (its sessionStorage); the same link elsewhere pairs nothing (a spent code).
+        await other.reload();
+        await other.waitForSelector('body[data-ready=true]', { timeout: 120_000 });
+        const third = await (await browser.newContext()).newPage();
+        await third.goto(link);
+        await third.waitForFunction(() => /Not paired/.test(document.querySelector('#banner').innerText));
+        await third.context().close();
       } finally {
-        await other.close();
+        await context.close();
         launcher.remove();
       }
     });
@@ -603,7 +694,7 @@ for (const kind of ['java', 'jsc']) {
       const { wordlist } = await import('@scure/bip39/wordlists/english');
       const words = new Set(wordlist);
       const allowed = new Set(['session', 'contract', 'call', 'address', 'lovelace', 'ms', 'refs', 'reservation', 'cbor', 'prerequisite',
-        'instance', 'limit', 'enabled', 'keepLedgerOf', 'attacks', 'view', 'args', 'listing', 'after', 'method', 'datum', 'scriptHash']);
+        'instance', 'limit', 'enabled', 'keepLedgerOf', 'attacks', 'view', 'args', 'listing', 'after', 'method', 'datum', 'scriptHash', 'code']);
       assert.ok(bodies.length > 10);
       for (const { url, body } of bodies) {
         const json = JSON.parse(body || '{}');
@@ -672,10 +763,13 @@ describe('ADR-0024 D3: joust playground', { skip }, () => {
       const quiet = () => {};
       await assert.rejects(playground({ config, root, open: false, log: quiet }), /build failed/);
       assert.deepEqual(readFileSync(abi), committed, 'the ABI manifest is untouched without the flag');
-      const p = await playground({ config, root, open: false, acceptAbi: true, log: quiet });
+      const printed = [];
+      const p = await playground({ config, root, open: false, acceptAbi: true, log: (l) => printed.push(String(l)) });
       try {
         assert.notDeepEqual(readFileSync(abi), committed, 'accepted with the flag');
-        assert.match(p.url, /^http:\/\/127\.0\.0\.1:\d+\/#token=[A-Za-z0-9_-]{43}$/);
+        assert.match(p.pairingUrl(), /^http:\/\/127\.0\.0\.1:\d+\/#pair=[A-Za-z0-9_-]{32}$/);
+        assert.ok(!printed.some((l) => l.includes(p.token)), 'no log line carries the session token');
+        assert.ok(printed.some((l) => /#pair=[A-Za-z0-9_-]{32}/.test(l)), '--no-open prints a single-use pairing link');
       } finally {
         await p.close();
       }

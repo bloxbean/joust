@@ -100,7 +100,7 @@ describe('ADR-0024 M3 on Yaci DevKit: joust playground --mode devkit in Chromium
     page.on('pageerror', (e) => errors.push(String(e.stack ?? e)));
     page.on('request', (r) => { if (r.method() === 'POST') bodies.push({ url: r.url(), body: r.postData() ?? '' }); });
     wallets = await injectWallets(page);
-    await page.goto(p.url);
+    await page.goto(p.pairingUrl());
     await page.waitForSelector('body[data-ready=true]', { timeout: 300_000 });
   });
   after(async () => {
@@ -238,13 +238,23 @@ describe('ADR-0024 M3 on Yaci DevKit: joust dev serves the playground at /playgr
     const { dev } = await import('../src/dev.js');
     const d = await dev({ root, config: loadConfig(root), port: 0, log: (l) => lines.push(String(l)) });
     try {
-      // D8: no log line carries the token; the private launcher file the log names does (0600).
+      // D8, S8: no token in any log line or file; the private launcher file (0600) the log names holds a single-use
+      // pairing link under /playground/, spent at /playground/pair.
       assert.ok(!lines.join('\n').includes('#token='), lines.join('\n'));
       assert.ok(lines.some((l) => l.includes(d.playground)), lines.join('\n'));
       const launcher = fileURLToPath(d.playground);
       assert.equal(statSync(launcher).mode & 0o777, 0o600);
-      const m = /\/playground\/#token=([A-Za-z0-9_-]{43})/.exec(readFileSync(launcher, 'utf8'));
-      assert.ok(m);
+      const text = readFileSync(launcher, 'utf8');
+      assert.ok(!text.includes('token'), 'no token in the launcher');
+      const code = /\/playground\/#pair=([A-Za-z0-9_-]{32})/.exec(text)?.[1];
+      assert.ok(code, text);
+      const pair = (c) => fetch(d.url + '/playground/pair', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: c }) });
+      const paired = await pair(code);
+      assert.equal(paired.status, 200);
+      const token = (await paired.json()).result.token;
+      assert.equal((await pair(code)).status, 401, 'single use');
+      assert.ok(!existsSync(launcher), 'the spent launcher is removed');
       const page = await fetch(d.url + '/playground/');
       assert.equal(page.status, 200);
       assert.equal(page.headers.get('access-control-allow-origin'), null);
@@ -255,7 +265,7 @@ describe('ADR-0024 M3 on Yaci DevKit: joust dev serves the playground at /playgr
       const refused = await fetch(d.url + '/playground/api/sessions/new', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
       assert.equal(refused.status, 401);
       const r = await (await fetch(d.url + '/playground/api/sessions/new', { method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-joust-playground': m[1] }, body: '{}' })).json();
+        headers: { 'content-type': 'application/json', 'x-joust-playground': token }, body: '{}' })).json();
       assert.equal(r.result?.mode, 'devkit', JSON.stringify(r));
     } finally {
       await d.close();
