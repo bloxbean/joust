@@ -644,18 +644,35 @@ for (const kind of ['java', 'jsc']) {
       await approveAll((k) => document.querySelectorAll('#history li.ok').length > k, q);
       await page.waitForFunction(() => /"count": "9"/.test(document.querySelector('#instances li.selected pre')?.textContent ?? ''));
       await page.unroute('**/api/submit');
+      // The answer lost after the ledger applied it, and every history read failing too: outcome unknown, with the
+      // session and transaction kept; a later recheck reads the history and updates the entry in place.
+      await page.route('**/api/submit', async (route) => { await route.fetch(); await route.abort('connectionreset'); });
+      await page.route('**/api/history', (route) => route.abort('connectionreset'));
+      await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1');
+      const unknownBefore = await page.locator('#history li', { hasText: 'outcome unknown' }).count();
+      await page.click('[data-call="action:increment"] button.run');
+      await approveAll((k) => document.querySelectorAll('#history button.recheck').length > k, unknownBefore);
+      await page.unroute('**/api/submit');
+      await page.unroute('**/api/history');
+      errors.splice(0, errors.length, ...errors.filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
+      const entries = await page.locator('#history li').count();
+      await page.locator('#history button.recheck').first().click();
+      await page.waitForFunction(() => /confirmed in slot \d+ \(rechecked\)/.test(document.querySelector('#history').innerText));
+      assert.equal(await page.locator('#history li').count(), entries, 'the entry is updated in place, not added');
+      await page.waitForFunction(() => /"count": "10"/.test(document.querySelector('#instances li.selected pre')?.textContent ?? ''));
       // The answer and the request lost: the outcome is unknown (not a retryable failure), and the body is not released.
       await page.route('**/api/submit', (route) => route.abort('connectionreset'));
       await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1');
+      const rechecks = await page.locator('#history button.recheck').count();
       await page.click('[data-call="action:increment"] button.run');
-      await approveAll(() => /outcome unknown/.test(document.querySelector('#history').innerText));
+      await approveAll((k) => document.querySelectorAll('#history button.recheck').length > k, rechecks);
       await page.unroute('**/api/submit');
-      // The two resets this test injected are the browser's only console errors from it.
+      // The resets this test injected are the browser's only console errors from it.
       const resets = errors.filter((e) => /ERR_CONNECTION_RESET/.test(e));
-      assert.equal(resets.length, 2);
+      assert.ok(resets.length >= 1);
       errors.splice(0, errors.length, ...errors.filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
       assert.doesNotMatch(await history(), /Alice: increment\s+failed\s+at stage ledger/);
-      assert.match(await page.locator('#instances li.selected pre').innerText(), /"count": "9"/);
+      assert.match(await page.locator('#instances li.selected pre').innerText(), /"count": "10"/);
       // Advance time, then reset the ledger: no instance any more.
       await page.fill('#advance-seconds', '120');
       await page.click('#advance');

@@ -25,7 +25,8 @@ async function pair() {
   const m = /(?:^#|&)pair=([A-Za-z0-9_-]{32})(?:&|$)/.exec(location.hash);
   if (m) {
     history.replaceState(null, '', location.pathname);
-    const r = await fetch('/pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: m[1] }) });
+    // Relative, as the API: a page mounted under a base (joust dev's /playground/) pairs there.
+    const r = await fetch('pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: m[1] }) });
     const j = await r.json().catch(() => null);
     if (r.ok && typeof j?.result?.token === 'string') {
       try { sessionStorage.setItem('joust-playground-token', j.result.token); } catch { /* private mode: memory only */ }
@@ -45,7 +46,7 @@ class StageFailure extends Error {
 /** The same failure, labelled with the call it belongs to (and its stage when the server named none). */
 const labelled = (e, stage, label) => new StageFailure({ ...e, message: e.message, stage: e.stage ?? stage, label });
 async function api(route, body = {}) {
-  const r = await fetch('/api/' + route, { method: 'POST', headers: { 'content-type': 'application/json', 'x-joust-playground': TOKEN ?? '' },
+  const r = await fetch('api/' + route, { method: 'POST', headers: { 'content-type': 'application/json', 'x-joust-playground': TOKEN ?? '' },
     body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({ error: { stage: 'request', code: 'http', message: `HTTP ${r.status}` } }));
   if (j.error) throw new StageFailure(j.error);
@@ -526,8 +527,8 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
             report.submitted = true;   // never released: it may be on the ledger
             res = await reconcile(r.prepared.txHash);
             if (!res) {
-              record({ label, outcome: 'outcome unknown', txHash: r.prepared.txHash,
-                message: 'the submission\'s answer was lost and the session\'s history does not show it yet: check the history before trying again' });
+              record({ label, outcome: 'outcome unknown', txHash: r.prepared.txHash, session: state.session.session,
+                message: 'the submission\'s answer was lost and the session\'s history does not show it yet: recheck before trying again' });
               note(`${label}: outcome unknown (${r.prepared.txHash.slice(0, 16)}…): check the history before trying again`, 'warn');
               reject(Object.assign(new StageFailure({ stage: 'ledger', code: 'unknown', message: 'outcome unknown', label }), { quiet: true }));
               return;
@@ -594,15 +595,29 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
   });
 }
 /** The session's record of a transaction the page submitted, as the submit route answers; null if it has none. */
-async function reconcile(txHash) {
-  for (let i = 0; i < 3; i++) {
+async function reconcile(txHash, session = state.session.session, tries = 3) {
+  for (let i = 0; i < tries; i++) {
     try {
-      const entry = (await sapi('history')).find((x) => x.txHash === txHash);
+      const entry = (await api('history', { session })).find((x) => x.txHash === txHash);
       if (entry) return { ...entry, acceptedAttacks: entry.acceptedAttacks ?? [] };
     } catch { /* the server too may be unreachable for a moment */ }
-    await new Promise((ok) => setTimeout(ok, 500));
+    if (i + 1 < tries) await new Promise((ok) => setTimeout(ok, 500));
   }
   return null;
+}
+
+/** An "outcome unknown" entry, checked again against its session's history and updated in place. */
+async function recheck(entry) {
+  const res = await reconcile(entry.txHash, entry.session, 1);
+  if (!res) {
+    note(`${entry.label}: still unknown (${entry.txHash.slice(0, 16)}…): the session's history does not show it`, 'warn');
+    return;
+  }
+  Object.assign(entry, { outcome: 'confirmed', slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks,
+    message: `confirmed in slot ${res.slot} (rechecked)` });
+  drawHistory();
+  note(`${entry.label}: confirmed in slot ${res.slot} (${entry.txHash.slice(0, 16)}…), rechecked`, 'ok');
+  await refresh();
 }
 
 function drawHistory() {
@@ -612,6 +627,7 @@ function drawHistory() {
     e.retryAtSlot !== undefined && e.retryAtSlot !== null ? h('span', { class: 'muted', text: ` (prepare again at slot ${e.retryAtSlot})` }) : null, e.message ? h('div', { class: 'msg', text: e.message }) : null,
     e.sites?.length ? h('div', { class: 'msg', text: e.sites.map((s) => `${s.file}:${s.line}:${s.col} ${s.what ?? ''}`).join('; ') }) : null,
     e.txHash ? h('div', {}, h('code', { text: e.txHash })) : null,
+    e.outcome === 'outcome unknown' ? h('button', { class: 'recheck', text: 'recheck', onclick: () => guard(() => recheck(e)) }) : null,
     e.attacks !== undefined ? h('div', { class: e.accepted?.length ? 'warn' : 'muted',
       text: `attacks run: ${e.attacks}; accepted by the scripts: ${e.accepted?.length ?? 0}` }) : null))));
 }
