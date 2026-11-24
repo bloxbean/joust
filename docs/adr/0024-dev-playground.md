@@ -66,7 +66,9 @@ the installed `@julclang/joust` packages, the playground server they contain, an
   approval) and can rebind a DNS name to `127.0.0.1`. → Every route needs a session token that only the playground's
   own page holds, and checks `Host` and `Origin` (D8). No route can sign, because the server holds no key (D5).
 - **Another local user or process.** It can reach the loopback port. → The token again; the server never serves
-  project files beyond the UI's own assets and never runs a command a request names (D8).
+  project files beyond the UI's own assets and never runs a command a request names (D8). *(r3)* A process running as
+  the **same** user is trusted like the user: it can already read the user's files and browser profile. The 0600
+  launcher file and the one-time pairing code protect against other users, not against the user's own processes.
 - **Contract metadata, exception messages and `.jsc` sites.** Names, titles, messages and refusal texts come from the
   project and the chain and are rendered in the page. → Text only, never HTML (D8).
 - **The dev host's claims.** `plan`, `signers`, bounds and `predicted` are host claims (ADR-0022 D5a, D13). → The page
@@ -455,4 +457,4 @@ when the maintainer asked for M2 to be implemented (2026-11-24, r3).
   token in a link, file, log or argument) and the launcher's cross-site navigation; D7 → `verifyHostResult` beside
   `verifyPrepared` (I2), the review from the body; D4 → DevKit is Yaci Store only, the chain verified against the admin
   identity, settlement from the chain, wallet handoff journaled, admin-only faucet, TTL cap; §13 lists the remaining
-  implementation choices. Point 8 of #159 (no Gradle common bundle) is taken as accepted with the M2 go-ahead.
+  implementation choices; §2 states that same-user processes are trusted like the user. Point 8 of #159 (no Gradle common bundle) is taken as accepted with the M2 go-ahead.
