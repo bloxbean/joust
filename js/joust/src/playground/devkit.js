@@ -1095,7 +1095,10 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     async landed(txHash) {
       const slot = await chain.txSlot(txHash);
       const t = await chain.tip().catch(() => null);
-      return { landed: slot !== null && slot !== undefined, tip: t?.slot ?? null };
+      const included = slot !== null && slot !== undefined;
+      const tipSlot = t?.slot ?? null;
+      // Final only past the settlement margin: a shallow inclusion may still roll back (recovery waits, Codex M4).
+      return { landed: included, final: included && tipSlot !== null && tipSlot - slot >= settlementSlots, slot: included ? slot : null, tip: tipSlot };
     },
     /** The page's keyed operation records, kept in this chain's journal (operations.js). */
     operations: () => journal.operations,

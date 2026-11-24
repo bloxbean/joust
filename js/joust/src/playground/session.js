@@ -300,7 +300,9 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     protocolParams: () => chain.protocolParams(),
     /** Whether a transaction is on the ledger, and the ledger's slot then (keyed operations reconcile with it). */
     async landed(txHash) {
-      return { landed: typeof chain.inclusion === 'function' && chain.inclusion(txHash) !== null, tip: chain.slot };
+      // The offline ledger has no rollbacks: an included transaction is final at once.
+      const slot = typeof chain.inclusion === 'function' ? chain.inclusion(txHash) : null;
+      return { landed: slot !== null, final: slot !== null, slot, tip: chain.slot };
     },
     /** The page's keyed operation records: in this session's memory (an offline ledger ends with its session). */
     operations: () => ops.all(),

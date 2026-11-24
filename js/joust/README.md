@@ -137,8 +137,10 @@ calls wait for ADR-0023) are shown disabled with the host's code.
   does not hide a pending operation). Every attempt's checked hash and expiry are journaled before the body leaves the
   page (before a CIP-30 wallet sees it), and kept across signing errors and reloads. On DevKit the records live in
   IndexedDB and a write that does not commit stops the call; offline they live in page memory (they end with the
-  session). On "may have landed" the page asks the chain about the recorded attempts: one on the chain closes the
-  operation; one that can still land waits; when none is on the chain and none can land any more, the pending keyed
+  session). Keyed calls are made by the page's identities; from a connected CIP-30 wallet they are not supported yet
+  (shown disabled: a wallet may change its address between tries, which recovery cannot follow yet). On "may have
+  landed" the page asks the chain about the recorded attempts: one final on the chain closes the operation (it is
+  shown until you start another), one included but not final yet waits; one that can still land waits; when none is on the chain and none can land any more, the pending keyed
   operations panel asks you to acknowledge it before a new designation is chosen. A cooldown is shown as "prepare again
   at slot N" (offline, advance time); on DevKit a keyed window may start ahead (up to 60 slots) within the stability
   window.

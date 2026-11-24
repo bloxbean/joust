@@ -18,7 +18,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { classify, encode, render, unsupportedPaths, FormError } from './form.js';
 import { anchorsOf, checkPublication, pageCheck, snapToUtxo, isKeyedRequest, foreignPayerInput } from './check.js';
 import { symbolic, concrete, outcomeOf, sameOutcome, exportScenario, importScenario, quorumKeyNames, recanonical } from './scenario.js';
-import { operationId, operationRequest, reconcile as reconcileAttempts, decide, safeSlot } from './operations.js';
+import { operationId, operationRequest, reconcile as reconcileAttempts, decide, safeSlot, releasable, keyedRefusal } from './operations.js';
 
 const ADA = 1_000_000n;
 const FUND_ADA = 1000n;
@@ -126,33 +126,20 @@ async function reconcileOp(r) {
   return reconcileAttempts(r, { lookup: (txHash) => sapi('landed', { txHash }), settlementSlots: state.session.settlementSlots ?? 0 });
 }
 
-/** The addresses a signer pays from now and paid from before: a CIP-30 wallet's change and used addresses. */
-async function payerAddresses(signer) {
-  if (!signer.cip30) return [signer.address];
-  try {
-    const view = await walletView(signer.wallet);
-    return [...new Set([signer.address, view.change, ...view.addresses])];
-  } catch {
-    return [signer.address];
-  }
-}
-
 /**
  * The operation record for a keyed request, recorded before the first request; or { recovered, id } when this
- * operation's attempt is on the chain (found now, or recorded earlier): that is the outcome, reported on every try
- * until the user starts another (the history's button), and nothing else starts. A record of the same operation paid
- * from another address of the same wallet (a CIP-30 wallet that rotated its change address) is reconciled too, and
- * while it can still land this call is refused rather than spending a second designation. An outcome nobody can tell
- * any more waits for the user's acknowledgement (the pending keyed operations panel).
+ * operation's attempt is final on the chain (found now, or recorded earlier): that is the outcome, reported on every
+ * try until the user starts another (the pending keyed operations panel), and nothing else starts. An attempt included
+ * but not final yet waits (it may roll back); an outcome nobody can tell any more waits for the user's acknowledgement.
+ * Keyed calls are for the page's identities only (keyedRefusal): their address never changes.
  */
 async function operationFor(request, signer) {
   const ident = { contract: request.contract, method: request.method, instance: request.instance ?? null, key: request.object ?? null,
     payer: signer.address };
+  const refusal = keyedRefusal(signer, true);
+  if (refusal) throw new StageFailure({ stage: 'arguments', code: 'keyed', message: refusal });
   const id = operationId(ident);
-  const addresses = await payerAddresses(signer);
-  const same = (await ops.all()).filter((r) => r.contract === ident.contract && r.method === ident.method && r.instance === ident.instance
-    && r.key === ident.key && addresses.includes(r.payer));
-  const existing = same.find((r) => r.id === id) ?? same[0] ?? null;
+  const existing = await ops.get(id);
   const rec = existing && !existing.ambiguous && !existing.landed ? await reconcileOp(existing) : null;
   switch (decide(existing, rec)) {
     case 'ambiguous':
@@ -167,9 +154,9 @@ async function operationFor(request, signer) {
       return { recovered: txHash, id: existing.id };
     }
     case 'reuse':
-      if (existing.id !== id) {
-        throw new StageFailure({ stage: 'journal', code: 'pending', message: `this keyed operation was started from another address of `
-          + `${signer.label} (${existing.payer.slice(0, 24)}…) and can still land: wait, then try again (or connect that address)` });
+      if (rec?.shallow) {
+        throw new StageFailure({ stage: 'journal', code: 'pending', retryAtSlot: rec.until, message: `an earlier attempt is included `
+          + `(${rec.shallow.slice(0, 16)}…) but not final yet${rec.until === null ? '' : `: try again after slot ${rec.until}`}` });
       }
       return existing;
     default:
@@ -199,6 +186,7 @@ async function afterMayHaveLanded(op) {
     await ops.step({ action: 'landed', id: op.id, txHash: rec.txHash });
     return `an earlier attempt landed (${rec.txHash.slice(0, 16)}…): the operation is done`;
   }
+  if (rec.state === 'pending' && rec.shallow) return `an earlier attempt is included but not final yet${rec.until === null ? '' : ` (final after slot ${rec.until})`}: try again then`;
   if (rec.state === 'pending') return `an earlier attempt can still land${rec.until === null ? '' : ` (until slot ${rec.until})`}: wait, then try again`;
   await ops.step({ action: 'ambiguous', id: op.id });
   return 'no attempt is on the chain and none can land any more: check the chain, then acknowledge it in the pending keyed operations panel';
@@ -217,6 +205,11 @@ async function drawPendingOps() {
     r.landed ? h('button', { class: 'another', 'data-another': r.id, text: 'Done: start another such operation', onclick: () => guard(async () => {
       await ops.step({ action: 'remove', id: r.id });
       note(`the landed keyed operation ${r.method} is closed; another may start`);
+      await drawPendingOps();
+    }) }) : null,
+    releasable(r) ? h('button', { class: 'release', 'data-release': r.id, text: 'Release (nothing of it left the page)', onclick: () => guard(async () => {
+      await ops.step({ action: 'release', id: r.id });
+      note(`the keyed operation ${r.method} was released: its designated input is free`);
       await drawPendingOps();
     }) }) : null,
     r.ambiguous ? h('button', { class: 'ack', text: 'Acknowledge (I checked the chain): forget it', onclick: () => guard(async () => {
@@ -596,6 +589,7 @@ function drawOperations() {
     if (!reason && !meta) reason = 'unsupported: not in the description';
     if (!reason && c.missing && (meta.returns?.sends || c.description.definitions?.['org.julclang.state.api.MerkleMap'])) reason = c.missing;
     if (!reason && meta.policies?.quorum && signer.cip30) reason = 'unsupported: a @Quorum call is co-signed by this page\'s identities; sign it as one of them';
+    if (!reason) reason = keyedRefusal(signer, isKeyedRequest(c.description, call));
     const card = h('div', { class: 'operation' + (reason ? ' disabled' : ''), 'data-call': `${call.kind}:${call.method}` },
       h('h4', {}, h('span', { text: call.method }), ' ', h('span', { class: 'kind', text: call.kind })));
     box.append(card);

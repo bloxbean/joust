@@ -18,7 +18,7 @@ import { startPlayground } from '../src/playground/server.js';
 import { anchorsFor, publishAll, run } from './playground/flow.js';
 import { chromiumOrNull } from './playground/walkthrough.js';
 import { symbolic, concrete, exportScenario, importScenario, sameOutcome, outcomeOf, quorumKeyNames, recanonical } from '../playground/scenario.js';
-import { operationRequest, reconcile, safeSlot, decide } from '../playground/operations.js';
+import { operationRequest, reconcile, safeSlot, decide, releasable, keyedRefusal } from '../playground/operations.js';
 import { applyOperation } from '../src/playground/operations.js';
 import { openJournal } from '../src/playground/journal.js';
 import { readdirSync as readdirOf } from 'node:fs';
@@ -273,6 +273,27 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     assert.equal((await reconcile(r([{ txHash: 'a', validTo: 110 }]), { lookup: at(false, 99), settlementSlots: 10 })).state, 'pending');
     assert.equal((await reconcile(r([{ txHash: 'a', validTo: 110n }]), { lookup: at(false, 121), settlementSlots: 10 })).state, 'ambiguous');
     assert.equal((await reconcile(r([{ txHash: 'a', validTo: 1 }]), { lookup: at(false, null) })).state, 'pending', 'no tip: never ambiguous');
+  });
+  test('recovery closes an operation only when its attempt is final; a shallow inclusion waits, and one that disappears resumes (Codex M4 last)', async () => {
+    const att = { attempts: [{ txHash: 'a', validTo: 100 }] };
+    const shallow = await reconcile(att, { lookup: async () => ({ landed: true, final: false, slot: 90, tip: 92 }), settlementSlots: 10 });
+    assert.deepEqual(shallow, { state: 'pending', until: 100, shallow: 'a' });
+    assert.equal(decide(att, shallow), 'reuse', 'not recorded as landed');
+    assert.deepEqual(await reconcile(att, { lookup: async () => ({ landed: true, final: true, slot: 90, tip: 101 }), settlementSlots: 10 }),
+      { state: 'closed', txHash: 'a' });
+    // Rolled back: the inclusion is gone; the attempt can still land until 100 + 10, then nobody can tell.
+    assert.equal((await reconcile(att, { lookup: async () => ({ landed: false, tip: 105 }), settlementSlots: 10 })).state, 'pending');
+    assert.equal((await reconcile(att, { lookup: async () => ({ landed: false, tip: 111 }), settlementSlots: 10 })).state, 'ambiguous');
+  });
+  test('keyed calls are for the page\'s identities: a connected CIP-30 wallet gets them disabled, with the reason (Codex M4 last)', () => {
+    assert.match(keyedRefusal({ cip30: true }, true), /connected wallet come later; use a test identity/);
+    assert.equal(keyedRefusal({ cip30: true }, false), null, 'its other calls stay');
+    assert.equal(keyedRefusal({ label: 'Alice' }, true), null, 'test identities keep keyed calls');
+  });
+  test('a record nothing of which left the page can be released from the panel; one with an attempt or landed cannot', () => {
+    assert.equal(releasable({ attempts: [] }), true, 'closed at review');
+    assert.equal(releasable({ attempts: [{ txHash: 'a', validTo: 1 }] }), false);
+    assert.equal(releasable({ attempts: [], landed: 'aa'.repeat(32) }), false);
   });
   test('a recovered creation ends the run: nothing new is designated or prepared (Codex M4 r2)', () => {
     assert.equal(decide({ attempts: [{}] }, { state: 'closed', txHash: 'h' }), 'recovered');

@@ -39,8 +39,9 @@ export function operationRequest(r) {
 
 /**
  * What the chain says of a record's attempts (after `mayHaveLanded`, or before an existing record is used again):
- *   closed     an attempt is on the chain: the operation is done (the page reports it and starts nothing)
- *   pending    none is, but one can still land, or the observed tip is not known: wait
+ *   closed     an attempt is final on the chain: the operation is done (the page reports it and starts nothing)
+ *   pending    an attempt is included but not final yet, or none is but one can still land, or the observed tip is not
+ *              known: wait
  *   ambiguous  none is and none can land by the observed tip: the user must acknowledge before anything new
  *   fresh      no attempt was handed out
  * {@code lookup(txHash)}: { landed, tip } from the trusted chain, the tip observed with that lookup; the decision uses the
@@ -52,7 +53,10 @@ export async function reconcile(record, { lookup, settlementSlots = 0 }) {
   for (const a of record.attempts) {
     const r = await lookup(a.txHash);
     tip = r?.tip ?? null;
-    if (r?.landed) return { state: 'closed', txHash: a.txHash };
+    // Closed only when final (past the settlement margin): a shallow inclusion may roll back, so it waits, and is
+    // looked up again on the next try (if it disappears, recovery goes on as before it was seen).
+    if (r?.landed && r.final !== false) return { state: 'closed', txHash: a.txHash };
+    if (r?.landed) return { state: 'pending', until: Number.isSafeInteger(r.slot) ? r.slot + settlementSlots : null, shallow: a.txHash };
   }
   if (tip === null || tip === undefined) return { state: 'pending', until: null };
   const live = record.attempts.filter((a) => safeSlot(a.validTo) + settlementSlots >= tip);
@@ -71,4 +75,15 @@ export function decide(existing, rec) {
   if (existing.ambiguous || rec?.state === 'ambiguous') return 'ambiguous';
   if (rec?.state === 'closed') return 'recovered';
   return 'reuse';
+}
+
+/** A record nothing of which left the page (closed at review, a refused prepare): its designation may be released. */
+export const releasable = (r) => !r.landed && Array.isArray(r.attempts) && r.attempts.length === 0;
+
+/**
+ * Why a signer may not make a keyed call, or null. A connected CIP-30 wallet may rotate its change address between
+ * tries, which keyed recovery (by operation and payer) cannot follow safely yet: keyed calls are for test identities.
+ */
+export function keyedRefusal(signer, keyed) {
+  return keyed && signer?.cip30 ? 'unsupported: keyed calls from a connected wallet come later; use a test identity' : null;
 }
