@@ -279,6 +279,14 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     assert.equal(decide({ attempts: [{}] }, { state: 'pending' }), 'reuse');
     assert.equal(decide({ attempts: [], ambiguous: true }, null), 'ambiguous');
     assert.equal(decide(null, null), 'new');
+    // Codex M4 final: a landed attempt is kept on its record and reported on every try (a lost answer cannot hide it).
+    assert.equal(decide({ attempts: [{}], landed: 'aa'.repeat(32) }, null), 'recovered');
+    const row = { id: 'i', contract: 'c', method: 'init', instance: null, key: null, payer: 'addr_test1x', designated: 'bb'.repeat(32) + '#0',
+      attempts: [{ txHash: 'aa'.repeat(32), validTo: 7 }] };
+    const marked = applyOperation([row], { action: 'landed', id: 'i', txHash: 'aa'.repeat(32) });
+    assert.equal(marked.record.landed, 'aa'.repeat(32));
+    assert.deepEqual(applyOperation(marked.rows, { action: 'release', id: 'i' }).rows, marked.rows, 'not released: it landed');
+    assert.deepEqual(applyOperation(marked.rows, { action: 'remove', id: 'i' }).rows, [], 'the user starts another');
   });
   test('records are kept by the server in the chain\'s journal: they survive a restart (any page origin); a stale tab takes back only its own attempt', async () => {
     const { mkdtempSync, chmodSync } = await import('node:fs');
@@ -290,10 +298,12 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     let j = await openJournal({ root: '/p', chain, state });
     j.operate({ action: 'create', record: rec });
     j.operate({ action: 'addAttempt', id: rec.id, attempt: { txHash: 'cc'.repeat(32), validTo: 500 } });
+    j.operate({ action: 'landed', id: rec.id, txHash: 'cc'.repeat(32) });
     j.close();
     // The command restarted (another port, another page origin): the same chain's journal has the record.
     j = await openJournal({ root: '/p', chain, state });
     assert.deepEqual(j.operations.map((r) => r.attempts), [[{ txHash: 'cc'.repeat(32), validTo: 500 }]]);
+    assert.equal(j.operations[0].landed, 'cc'.repeat(32), 'the landed outcome survives the restart');
     // An old tab cleaning up an attempt it never added changes nothing of the newer tab's.
     j.operate({ action: 'removeAttempt', id: rec.id, txHash: 'dd'.repeat(32) });
     assert.equal(j.operations[0].attempts.length, 1);
@@ -401,6 +411,14 @@ describe('ADR-0024 D10: scenario data', () => {
     assert.throws(() => importScenario('{"scenario":2,"steps":[],"identities":[]}', { fingerprint: '', contracts: {} }), /version 1/);
     assert.throws(() => importScenario(JSON.stringify({ scenario: 1, identities: ['A'], steps: [{ as: 'B', call: { contract: 'c', kind: 'init', method: 'm' } }] }),
       { fingerprint: '', contracts: {} }), /not one of/);
+  });
+  test('an import is bounded before any key is derived: 16 identities, 500 steps (Codex M4 final)', () => {
+    const cur = { fingerprint: '', contracts: {} };
+    const many = (n) => Array.from({ length: n }, (_, i) => `I${i}`);
+    assert.throws(() => importScenario(JSON.stringify({ scenario: 1, identities: many(17), steps: [] }), cur), /at most 16 identities/);
+    assert.throws(() => importScenario(JSON.stringify({ scenario: 1, identities: ['A'], steps: Array.from({ length: 501 }, () => ({ advanceMs: 1 })) }), cur),
+      /500 steps/);
+    assert.equal(importScenario(JSON.stringify({ scenario: 1, identities: many(16), steps: [{ advanceMs: 1 }] }), cur).scenario.identities.length, 16);
   });
   test('outcomes compare by kind, stage and code', () => {
     assert.ok(sameOutcome('confirmed', 'confirmed'));

@@ -18,16 +18,19 @@ export function operationRecord(r) {
     && (r.key === null || (typeof r.key === 'string' && HEX.test(r.key)))
     && Array.isArray(r.attempts) && r.attempts.length <= 64
     && r.attempts.every((a) => a && HEX64.test(a.txHash ?? '') && isSlot(a.validTo))
-    && (r.ambiguous === undefined || typeof r.ambiguous === 'boolean');
+    && (r.ambiguous === undefined || typeof r.ambiguous === 'boolean')
+    && (r.landed === undefined || r.landed === null || HEX64.test(r.landed));
   if (!ok) return null;
   return { id: r.id, contract: r.contract, method: r.method, instance: r.instance, key: r.key, payer: r.payer, designated: r.designated,
-    attempts: r.attempts.map((a) => ({ txHash: a.txHash, validTo: a.validTo })), ambiguous: r.ambiguous === true };
+    attempts: r.attempts.map((a) => ({ txHash: a.txHash, validTo: a.validTo })), ambiguous: r.ambiguous === true, landed: r.landed ?? null };
 }
 
 /**
  * One step on the records (a list): { action: 'create', record } (kept as it is when one exists: the existing one is
  * returned), 'addAttempt' { id, attempt }, 'removeAttempt' { id, txHash } (only that attempt), 'ambiguous' { id },
- * 'remove' { id }, 'release' { id } (removes it only while it has no attempt). Returns { rows, record } (the record after the step, or null), or throws on a malformed step.
+ * 'landed' { id, txHash } (kept with its landed attempt until removed), 'remove' { id }, 'release' { id } (removes it
+ * only while it has no attempt). Returns { rows, record } (the record after the step, or null), or throws on a
+ * malformed step.
  */
 export function applyOperation(rows, step) {
   const at = rows.findIndex((r) => r.id === step?.id);
@@ -59,6 +62,13 @@ export function applyOperation(rows, step) {
     case 'ambiguous': {
       if (at < 0) return { rows, record: null };
       const next = { ...rows[at], ambiguous: true };
+      return { rows: rows.with(at, next), record: next };
+    }
+    case 'landed': {
+      // An attempt is on the chain: the record is kept with it until the user, having seen it, starts another (remove).
+      if (at < 0) return { rows, record: null };
+      if (!HEX64.test(step.txHash ?? '')) throw bad('not a transaction hash');
+      const next = { ...rows[at], landed: step.txHash };
       return { rows: rows.with(at, next), record: next };
     }
     case 'remove':

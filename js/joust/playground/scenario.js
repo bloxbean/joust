@@ -16,6 +16,8 @@
 import { canonicalPairs } from './form.js';
 
 export const SCENARIO_VERSION = 1;
+export const MAX_IDENTITIES = 16;
+export const MAX_STEPS = 500;
 
 /**
  * A step's call with identities and created ids made symbolic. {@code identities}: [{ label, keyHash, address }];
@@ -122,6 +124,11 @@ export function importScenario(text, current) {
     s = JSON.parse(text);
   } catch {
     throw new Error('not a scenario: not JSON');
+  }
+  // Bounded before anything is derived (each identity is a key derivation and a funding): at most 16 identities and
+  // 500 steps.
+  if (s && (Array.isArray(s.identities) && s.identities.length > MAX_IDENTITIES || Array.isArray(s.steps) && s.steps.length > MAX_STEPS)) {
+    throw new Error(`a scenario has at most ${MAX_IDENTITIES} identities and ${MAX_STEPS} steps`);
   }
   if (!s || s.scenario !== SCENARIO_VERSION || !Array.isArray(s.steps) || !Array.isArray(s.identities)
     || !s.identities.every((l) => typeof l === 'string' && l.length > 0 && l.length <= 64)) {

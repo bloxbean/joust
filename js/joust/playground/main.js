@@ -120,29 +120,51 @@ async function reconcileOp(r) {
   return reconcileAttempts(r, { lookup: (txHash) => sapi('landed', { txHash }), settlementSlots: state.session.settlementSlots ?? 0 });
 }
 
+/** The addresses a signer pays from now and paid from before: a CIP-30 wallet's change and used addresses. */
+async function payerAddresses(signer) {
+  if (!signer.cip30) return [signer.address];
+  try {
+    const view = await walletView(signer.wallet);
+    return [...new Set([signer.address, view.change, ...view.addresses])];
+  } catch {
+    return [signer.address];
+  }
+}
+
 /**
- * The operation record for a keyed request, recorded before the first request; or { recovered } when an existing
- * record's attempt is on the chain: that operation is done, and nothing else starts in this run. An existing record
- * that can still land is used again (the host refuses as pending); an outcome nobody can tell any more waits for the
- * user's acknowledgement (the pending keyed operations panel).
+ * The operation record for a keyed request, recorded before the first request; or { recovered, id } when this
+ * operation's attempt is on the chain (found now, or recorded earlier): that is the outcome, reported on every try
+ * until the user starts another (the history's button), and nothing else starts. A record of the same operation paid
+ * from another address of the same wallet (a CIP-30 wallet that rotated its change address) is reconciled too, and
+ * while it can still land this call is refused rather than spending a second designation. An outcome nobody can tell
+ * any more waits for the user's acknowledgement (the pending keyed operations panel).
  */
 async function operationFor(request, signer) {
   const ident = { contract: request.contract, method: request.method, instance: request.instance ?? null, key: request.object ?? null,
     payer: signer.address };
   const id = operationId(ident);
-  const existing = await ops.get(id);
-  const rec = existing && !existing.ambiguous ? await reconcileOp(existing) : null;
+  const addresses = await payerAddresses(signer);
+  const same = (await ops.all()).filter((r) => r.contract === ident.contract && r.method === ident.method && r.instance === ident.instance
+    && r.key === ident.key && addresses.includes(r.payer));
+  const existing = same.find((r) => r.id === id) ?? same[0] ?? null;
+  const rec = existing && !existing.ambiguous && !existing.landed ? await reconcileOp(existing) : null;
   switch (decide(existing, rec)) {
     case 'ambiguous':
-      if (!existing.ambiguous) await ops.step({ action: 'ambiguous', id });
+      if (!existing.ambiguous) await ops.step({ action: 'ambiguous', id: existing.id });
       await drawPendingOps();
       throw new StageFailure({ stage: 'journal', code: 'ambiguous', message: 'an earlier attempt of this keyed operation may have landed: '
         + 'check the chain, then acknowledge it in the pending keyed operations panel' });
-    case 'recovered':
-      await ops.step({ action: 'remove', id });
+    case 'recovered': {
+      const txHash = existing.landed ?? rec.txHash;
+      if (!existing.landed) await ops.step({ action: 'landed', id: existing.id, txHash });
       await drawPendingOps();
-      return { recovered: rec.txHash };
+      return { recovered: txHash, id: existing.id };
+    }
     case 'reuse':
+      if (existing.id !== id) {
+        throw new StageFailure({ stage: 'journal', code: 'pending', message: `this keyed operation was started from another address of `
+          + `${signer.label} (${existing.payer.slice(0, 24)}…) and can still land: wait, then try again (or connect that address)` });
+      }
       return existing;
     default:
       break;
@@ -167,7 +189,8 @@ async function afterMayHaveLanded(op) {
     return 'its designated input was spent by something else: the next try chooses another one';
   }
   if (rec.state === 'closed') {
-    await ops.step({ action: 'remove', id: op.id });
+    // Kept with its landed attempt (shown on every try) until the user starts another operation.
+    await ops.step({ action: 'landed', id: op.id, txHash: rec.txHash });
     return `an earlier attempt landed (${rec.txHash.slice(0, 16)}…): the operation is done`;
   }
   if (rec.state === 'pending') return `an earlier attempt can still land${rec.until === null ? '' : ` (until slot ${rec.until})`}: wait, then try again`;
@@ -184,6 +207,12 @@ async function drawPendingOps() {
   box.replaceChildren(h('h4', { text: 'Pending keyed operations' }), h('ul', {}, all.map((r) => h('li', { 'data-operation': r.id },
     h('code', { text: `${r.method}${r.key ? ' ' + r.key : ''}` }), ' ', h('span', { class: 'muted', text: `designated ${r.designated.slice(0, 12)}…, `
       + `${r.attempts.length} attempt(s)` }),
+    r.landed ? h('span', { class: 'ok', text: ` landed: ${r.landed.slice(0, 16)}… ` }) : null,
+    r.landed ? h('button', { class: 'another', 'data-another': r.id, text: 'Done: start another such operation', onclick: () => guard(async () => {
+      await ops.step({ action: 'remove', id: r.id });
+      note(`the landed keyed operation ${r.method} is closed; another may start`);
+      await drawPendingOps();
+    }) }) : null,
     r.ambiguous ? h('button', { class: 'ack', text: 'Acknowledge (I checked the chain): forget it', onclick: () => guard(async () => {
       await ops.step({ action: 'remove', id: r.id });
       note(`the keyed operation ${r.method} was forgotten after acknowledgement`);
@@ -721,7 +750,8 @@ async function call2(request, meta, signer, cosigners, label) {
   if (op?.recovered) {
     // An earlier attempt of this operation landed (a lost confirmation): that is the outcome; nothing is prepared now.
     record({ label, outcome: 'confirmed earlier (recovered)', txHash: op.recovered });
-    note(`${label}: an earlier attempt landed (${op.recovered.slice(0, 16)}…): that operation is done; run the call again for another`, 'ok');
+    note(`${label}: an earlier attempt landed (${op.recovered.slice(0, 16)}…): that operation is done. To start another, close it in the `
+      + 'pending keyed operations panel first', 'ok');
     await refresh();
     return null;
   }

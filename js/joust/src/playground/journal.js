@@ -37,7 +37,7 @@ const KEEP_OPS = 'restore its readability (its permissions and owner) or restore
 // version, or a field this joust does not know, is refused (its meaning would be lost on the next write).
 export const OPERATIONS_VERSION = 1;
 const OPS_FIELDS = new Set(['version', 'operations']);
-const RECORD_FIELDS = new Set(['id', 'contract', 'method', 'instance', 'key', 'payer', 'designated', 'attempts', 'ambiguous']);
+const RECORD_FIELDS = new Set(['id', 'contract', 'method', 'instance', 'key', 'payer', 'designated', 'attempts', 'ambiguous', 'landed']);
 const ATTEMPT_FIELDS = new Set(['txHash', 'validTo']);
 /** The records of an operations file's text, or null when it is not one this joust writes. */
 function operationsOf(text) {

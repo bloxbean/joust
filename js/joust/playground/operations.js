@@ -60,12 +60,14 @@ export async function reconcile(record, { lookup, settlementSlots = 0 }) {
 }
 
 /**
- * What a keyed request does with an existing record, from its reconciliation: 'recovered' (an attempt landed: report it,
+ * What a keyed request does with an existing record, from its reconciliation: 'recovered' (an attempt landed, now or
+ * recorded earlier: report it, every time, until the user starts another;
  * prepare nothing; another operation needs a separate run), 'reuse' (the same operation, the same designation), or
  * 'ambiguous' (wait for the user's acknowledgement). No existing record: 'new'.
  */
 export function decide(existing, rec) {
   if (!existing) return 'new';
+  if (existing.landed) return 'recovered';
   if (existing.ambiguous || rec?.state === 'ambiguous') return 'ambiguous';
   if (rec?.state === 'closed') return 'recovered';
   return 'reuse';
