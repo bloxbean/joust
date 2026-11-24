@@ -182,8 +182,17 @@ writes the files of the sections below, with the Gradle wrapper, and a <code dir
 <td><code dir="auto">generateJsc</code>, when <code dir="auto">src/main/jsc</code> exists: <code dir="auto">.jsc</code> contracts lowered to Java before compiling; with it <code dir="auto">acceptJscAbi</code>, <code dir="auto">checkJscAbi</code> (the <a href="/languages/jsc-reference/#the-abi-manifest">ABI manifest</a>) and <code dir="auto">remapJscDiagnostics</code> (javac’s errors on the generated Java, at their <code dir="auto">.jsc</code> positions)</td>
 <td>the build</td>
 </tr>
+<tr>
+<td><code dir="auto">joustHostSpec</code>, the protocol 1 launch manifest for an editor’s dev host</td>
+<td><code dir="auto">build/joust/host-spec.json</code></td>
+</tr>
 </tbody>
 </table>
+<p>For an editor launch from a trusted project, run <code dir="auto">./gradlew joustHostSpec</code>. It builds the main runtime class path
+and records its entries in lookup order, with the toolchain’s Java executable and SHA-256 digests. The isolated
+<code dir="auto">joustHost</code> configuration supplies the plugin’s serving adapter and stdio host. An HTTP application reuses its
+matching adapter. A version mismatch or a jar with a manifest <code dir="auto">Class-Path</code> fails the task. The editor verifies a
+private, read-only copy of those entries and starts <code dir="auto">DevHost --stdio</code> from that snapshot.</p>
 <p><code dir="auto">joust new</code> fills in the version of the <code dir="auto">joust</code> that runs it; the newest is the newest release whose tag starts with
 <code dir="auto">v</code> on the <a href="https://github.com/bloxbean/joust/releases">releases page</a> (<code dir="auto">npm view @julclang/joust version</code>). Every other version comes from the JOUST release the
 plugin belongs to, so the JuLC and cardano-client-lib versions always match. It needs a Java 25 toolchain (the default; a lower one is refused with a message).</p>
