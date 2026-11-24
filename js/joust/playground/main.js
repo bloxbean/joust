@@ -4,7 +4,7 @@
 //
 // Every string from the project or the chain is rendered as text (textContent), never as HTML (D8).
 
-import { verifyPrepared, verifyPublication, publicationExpectation, parseTx } from '@julclang/state-client';
+import { verifyPrepared, verifyPublication, publicationExpectation, parseTx, enterpriseAddress } from '@julclang/state-client';
 import { devWallet } from '@julclang/state-client/devwallet';
 import { assemble } from '@julclang/state-client/ledger';
 import { generateMnemonic } from '@scure/bip39';
@@ -105,7 +105,10 @@ function snapToUtxo(u) {
 function newIdentity(i) {
   const mnemonic = generateMnemonic(wordlist, 256);
   const wallet = devWallet({ chain: chainView, mnemonic, networkId: 0 });
-  return { label: NAMES[i] ?? `Identity ${i + 1}`, wallet, address: wallet.address, keyHash: wallet.keyHash };
+  // The identity's address is the enterprise address of its payment key: what the dev host pays an identity's key hash
+  // to and spends from (protocol 1: enterprise wallet addresses on the session network), so a payout to it is its own
+  // balance. The wallet signs with that payment key.
+  return { label: NAMES[i] ?? `Identity ${i + 1}`, wallet, address: enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0), keyHash: wallet.keyHash };
 }
 
 // ---- log and history
@@ -210,7 +213,7 @@ async function drawIdentities() {
   for (const [i, id] of state.identities.entries()) {
     const utxos = await chainView.utxosAt(id.address).catch(() => []);
     const lovelace = utxos.reduce((n, u) => n + (u.value.get('lovelace') ?? 0n), 0n);
-    rows.push(h('li', { class: i === state.signer ? 'signer' : '' },
+    rows.push(h('li', { class: i === state.signer ? 'signer' : '', 'data-identity': id.label, 'data-key-hash': id.keyHash, 'data-lovelace': String(lovelace) },
       h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'signer', checked: i === state.signer, 'data-identity': id.label,
         onchange: () => { state.signer = i; drawIdentities(); drawOperations(); } }), ' ', h('strong', { text: id.label })),
       ' ', h('code', { text: id.address.slice(0, 24) + '…' }), ' ', h('span', { text: ada(lovelace) }),

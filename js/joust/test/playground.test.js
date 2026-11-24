@@ -738,6 +738,7 @@ for (const kind of ['java', 'jsc']) {
       const { entropyToMnemonic } = await import('@scure/bip39');
       const { wordlist } = await import('@scure/bip39/wordlists/english');
       const { deriveAccount } = await import('@julclang/state-client/devwallet');
+      const { enterpriseAddress } = await import('@julclang/state-client');
       const funded = new Set(bodies.filter((b) => b.url.endsWith('/api/fund')).map((b) => JSON.parse(b.body).address));
       // The snapshot first: once this test spells the secrets out, they are in this process's memory too. Written to a
       // file and searched by grep (the snapshot is far larger than a string can be).
@@ -751,7 +752,8 @@ for (const kind of ['java', 'jsc']) {
       for (const bytes of draws) {
         const mnemonic = entropyToMnemonic(Uint8Array.from(bytes), wordlist);
         const acct = deriveAccount(mnemonic, 0, 0);
-        if (!funded.has(acct.address)) continue;
+        // An identity is funded at its payment key's enterprise address.
+        if (!funded.has(enterpriseAddress({ type: 'key', hash: acct.keyHash }, 0))) continue;
         secrets.push(mnemonic, Buffer.from(bytes).toString('hex'), acct.privateKey.hex());
       }
       assert.ok(secrets.length >= 9, `the three identities' secrets were found (${secrets.length / 3})`);
@@ -789,6 +791,99 @@ for (const kind of ['java', 'jsc']) {
     });
   });
 }
+
+// ---- payouts to an identity's key hash (protocol 1: enterprise wallet addresses): its balance, spendable by it
+
+describe('ADR-0024 M1: a payout to Bob\'s key hash is Bob\'s to spend (Chromium, an escrow)', { skip: skip || (!chromium && 'Playwright\'s Chromium is not installed') }, () => {
+  let root, server, browser, page;
+  const errors = [];
+  const ESCROW = 'app.Escrow';
+  before(async () => {
+    root = install();
+    mkdirSync(join(root, 'contracts/app'), { recursive: true });
+    const src = readFileSync(join(repo, 'examples/escrow/src/main/java/org/julclang/state/examples/escrow/Escrow.java'), 'utf8')
+      .replace(/^package [^;]+;/m, 'package app;');
+    writeFileSync(join(root, 'contracts/app/Escrow.java'), src);
+    writeFileSync(join(root, 'joust.config.json'), '{ "contracts": "contracts" }');
+    const { build } = await import('../src/build.js');
+    const r = await build({ root, log: () => {} });
+    assert.ok(r.ok, JSON.stringify(r.diagnostics));
+    const { pageFiles } = await import('../src/playground/page.js');
+    server = await startPlayground({ root, engine: await theEngine(), page: await pageFiles() });
+    browser = await chromium.launch();
+    page = await browser.newPage();
+    page.on('pageerror', (e) => errors.push(String(e.stack ?? e)));
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    await page.goto(server.pairingUrl());
+    await page.waitForSelector('body[data-ready=true]', { timeout: 120_000 });
+  });
+  after(async () => {
+    await browser?.close();
+    await server?.close();
+    if (root) rmSync(root, { recursive: true, force: true });
+  });
+
+  const lovelace = async (who) => BigInt(await page.locator(`#identities li[data-identity=${who}]`).getAttribute('data-lovelace'));
+  async function approveUntil(until, arg) {
+    for (let i = 0; i < 6; i++) {
+      const done = await Promise.race([
+        page.waitForSelector('#approve', { timeout: 120_000 }).then(() => false, () => null),
+        page.waitForFunction(until, arg, { timeout: 120_000 }).then(() => true, () => null),
+      ]);
+      if (done === null) assert.fail(`timed out\n${await page.locator('#log').innerText()}`);
+      if (done) return;
+      await page.click('#approve');
+    }
+  }
+  const confirmed = () => page.locator('#history li.ok').count();
+  async function open(by, ada) {
+    const bob = await page.locator('#identities li[data-identity=Bob]').getAttribute('data-key-hash');
+    const carol = await page.locator('#identities li[data-identity=Carol]').getAttribute('data-key-hash');
+    await page.check(`input[data-identity=${by}]`);
+    const form = page.locator('[data-call="init:open"]');
+    const bytes = form.locator('input[data-kind=bytes]');
+    await bytes.nth(0).fill(by === 'Alice' ? bob : carol);   // seller
+    await bytes.nth(1).fill(carol);                            // arbiter
+    await form.locator('input[data-kind=integer]').fill('9999999999999');
+    await form.locator('input[data-kind=pay]').fill(String(ada * 1_000_000n));
+    const opened = () => [...document.querySelectorAll('#history li.ok')].filter((li) => /: open\s+confirmed/.test(li.innerText)).length;
+    const n = await page.evaluate(opened);
+    await form.locator('button.run').click();
+    // The open's own confirmation (a first call publishes the reference script before it).
+    await approveUntil((k) => [...document.querySelectorAll('#history li.ok')].filter((li) => /: open\s+confirmed/.test(li.innerText)).length > k, n);
+  }
+
+  test('Alice releases an escrow to Bob: Bob\'s balance rises, and Bob spends the payout in his next call', async () => {
+    // The identities' addresses are their payment keys' enterprise addresses (what the host pays a key hash to).
+    for (const who of ['Alice', 'Bob']) {
+      const keyHash = await page.locator(`#identities li[data-identity=${who}]`).getAttribute('data-key-hash');
+      const { enterpriseAddress } = await import('@julclang/state-client');
+      const shown = await page.locator(`#identities li[data-identity=${who}] code`).innerText();
+      assert.ok(enterpriseAddress({ type: 'key', hash: keyHash }, 0).startsWith(shown.replace('…', '')), who);
+    }
+    await page.click(`[data-contract="${ESCROW}"]`);
+    await page.waitForSelector('[data-call="init:open"] button.run');
+    const bob0 = await lovelace('Bob');
+    await open('Alice', 600n);
+    await page.waitForSelector('#instances li.selected', { timeout: 30_000 }).catch(async () =>
+      assert.fail(`no instance\n${await page.locator('#history').innerText()}\n${await page.locator('#log').innerText()}`));
+    // Alice (the buyer) releases: the escrow's 600 ADA go to Bob's key hash.
+    const n = await confirmed();
+    await page.locator('[data-call="destroy:release"] button.run').click();
+    await approveUntil((k) => document.querySelectorAll('#history li.ok').length > k, n);
+    assert.match(await page.locator('#history').innerText(), /Alice: release\s+confirmed/);
+    await page.waitForFunction((b) => BigInt(document.querySelector('#identities li[data-identity=Bob]').dataset.lovelace) > BigInt(b), String(bob0));
+    const bob1 = await lovelace('Bob');
+    assert.ok(bob1 - bob0 >= 600_000_000n, `Bob gained ${bob1 - bob0}`);
+    // Bob opens an escrow of 1,200 ADA: more than his own 1,000, so only with the payout.
+    await open('Bob', 1200n);
+    assert.match(await page.locator('#history').innerText(), /Bob: open\s+confirmed/);
+    // Bob's balance falls by the 1,200 ADA and the fee: the payout went into it.
+    await page.waitForFunction((b) => BigInt(document.querySelector('#identities li[data-identity=Bob]').dataset.lovelace) <= BigInt(b),
+      String(bob1 - 1_200_000_000n));
+    assert.deepEqual(errors, []);
+  });
+});
 
 // ---- joust playground (D3, I10): the ABI gate, offline only
 
