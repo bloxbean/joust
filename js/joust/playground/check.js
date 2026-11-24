@@ -3,7 +3,26 @@
 // protocol 1's D13 check of a `prepare` or `publish` result (verifyHostResult, the conformance kit's reference
 // checker) over the request the page sent, the trusted chain's outputs and parameters, and the host's result.
 
-import { verifyHostResult, verifyPrepared, plutusScriptHash, enterpriseAddress, baseAddress, rewardAddress } from '@julclang/state-client';
+import { verifyHostResult, verifyPrepared, plutusScriptHash, enterpriseAddress, baseAddress, rewardAddress, paymentKeyHash } from '@julclang/state-client';
+
+/**
+ * A CIP-30 wallet's body spends from the connected change address only (final pass): the first input (by ref) that is
+ * at another address of the wallet's payment key, or, in a publication (all of whose inputs are the wallet's), at any
+ * other address; null when there is none. {@code addressOf}: ref -> the address the chain shows it at.
+ */
+export function foreignPayerInput(refs, addressOf, { payer, keyHash, publication = false }) {
+  for (const ref of refs) {
+    const at = addressOf(ref);
+    let key = null;
+    try {
+      key = paymentKeyHash(at);
+    } catch {
+      // a script address
+    }
+    if (at !== payer && (key === keyHash || publication)) return { ref, at };
+  }
+  return null;
+}
 
 /** contracts.json's script is the CBOR byte string of the program's CBOR (double-wrapped): the hash is over the inner. */
 export function unwrapScript(hex) {

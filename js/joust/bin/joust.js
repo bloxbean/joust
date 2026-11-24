@@ -207,6 +207,7 @@ async function project() {
       const stop = async () => { await d.close(); process.exit(0); };
       process.on('SIGINT', stop);
       process.on('SIGTERM', stop);
+      process.on('SIGHUP', stop);   // a closed terminal stops it as Ctrl-C does (the journal's lock released)
       return undefined;   // keeps running
     }
     case 'playground': {
@@ -224,6 +225,7 @@ async function project() {
       const stop = async () => { await p.close(); process.exit(0); };
       process.on('SIGINT', stop);
       process.on('SIGTERM', stop);
+      process.on('SIGHUP', stop);   // a closed terminal stops it as Ctrl-C does (the journal's lock released)
       return undefined;   // keeps running
     }
     case 'test': {

@@ -9,6 +9,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { connect } from 'node:net';
 import { install, repo } from './host/client.js';
 
 const ADMIN = 'http://localhost:10000';
@@ -236,7 +237,7 @@ describe('ADR-0024 M3 on Yaci DevKit: joust dev serves the playground at /playgr
     const lines = [];
     const { loadConfig } = await import('../src/config.js');
     const { dev } = await import('../src/dev.js');
-    const d = await dev({ root, config: loadConfig(root), port: 0, log: (l) => lines.push(String(l)) });
+    const d = await dev({ root, config: loadConfig(root), port: 0, log: (l) => lines.push(String(l)), playgroundPairTtlMs: 3000 });
     try {
       // D8, S8: no token in any log line or file; the private launcher file (0600) the log names holds a single-use
       // pairing link under /playground/, spent at /playground/pair.
@@ -254,7 +255,24 @@ describe('ADR-0024 M3 on Yaci DevKit: joust dev serves the playground at /playgr
       assert.equal(paired.status, 200);
       const token = (await paired.json()).result.token;
       assert.equal((await pair(code)).status, 401, 'single use');
-      assert.ok(!existsSync(launcher), 'the spent launcher is removed');
+      // FD2: the launcher now holds a fresh code (the spent one rewritten), and is renewed before a code expires.
+      const codeIn = () => /\/playground\/#pair=([A-Za-z0-9_-]{32})/.exec(readFileSync(launcher, 'utf8'))?.[1];
+      const next = codeIn();
+      assert.ok(next && next !== code, 'a fresh code after the pairing');
+      assert.equal(statSync(launcher).mode & 0o777, 0o600);
+      await new Promise((ok) => setTimeout(ok, 2000));
+      assert.notEqual(codeIn(), next, 'renewed before it expires');
+      assert.equal((await pair(codeIn())).status, 200, 'and it pairs');
+      // FD1: a request line no URL parses (a cross-site no-cors fetch of `//`) is answered 400; the server lives on.
+      const raw = await new Promise((ok, no) => {
+        const sock = connect(Number(new URL(d.url).port), '127.0.0.1', () => sock.end(`GET // HTTP/1.1\r\nHost: ${new URL(d.url).host}\r\n\r\n`));
+        let text = '';
+        sock.on('data', (b) => { text += b; if (text.includes('\r\n\r\n')) { sock.destroy(); ok(text); } });
+        sock.on('end', () => ok(text));
+        sock.on('error', no);
+      });
+      assert.match(raw, /^HTTP\/1\.1 400/);
+      assert.equal((await fetch(d.url + '/playground/')).status, 200, 'still serving');
       const page = await fetch(d.url + '/playground/');
       assert.equal(page.status, 200);
       assert.equal(page.headers.get('access-control-allow-origin'), null);

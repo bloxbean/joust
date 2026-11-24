@@ -198,8 +198,17 @@ export function yaciChain(net, { fetchImpl } = {}) {
  * The host's reverse reads answered from a DevKit chain at one chain point (docs/protocol/dev-host-1.md, "Reverse
  * reads"): the tip is read before and after each answer, and the answer is read again when the chain moved meanwhile.
  */
+/** The reverse reads' parameters, checked as the HTTP routes check theirs before any reaches a provider URL (FD5). */
+const READ_PARAMS = { address: /^addr_test1[0-9a-z]{20,200}$/, ref: /^[0-9a-f]{64}#\d{1,5}$/, hash: /^(?:[0-9a-f]{56}|[0-9a-f]{64})$/,
+  unit: /^[0-9a-f]{56}(?:[0-9a-f]{2}){0,32}$/, txHash: /^[0-9a-f]{64}$/, credential: /^[0-9a-f]{56}$/ };
+const NEEDS = { utxos: ['address'], output: ['ref'], script: ['hash'], stakeRegistration: ['credential'], assetHistory: ['unit'],
+  redeemers: ['txHash'], datum: ['hash'] };
+
 export function chainReads(chain, { networkId = 0 } = {}) {
   async function answer(q, tip) {
+    for (const k of NEEDS[q.kind] ?? []) {
+      if (typeof q[k] !== 'string' || !READ_PARAMS[k].test(q[k])) throw new Error(`a ${q.kind} read with an invalid ${k}`);
+    }
     switch (q.kind) {
       case 'tip':
         return { tip, value: tip };
@@ -333,7 +342,10 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     } });
   } catch (e) {
     fp.dispose();
-    if (e.code === 'devkitReset' || e.code === 'journalLocked') throw new StageError('session', e.code, e.message);
+    // Shown in full by the page (a stale lock's message names the file to remove) (FD4).
+    if (['devkitReset', 'journalLocked', 'journalStaleLock', 'journalUnknown', 'journalUnreadable'].includes(e.code)) {
+      throw new StageError('session', e.code, e.message);
+    }
     throw e;
   }
   // Every answered reverse read's chain point (stable: chainReads reads it before and after) goes through the one rewind
@@ -341,7 +353,22 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   const chainRead = chainReads(chain);
   const read = async (q) => {
     const a = await chainRead(q);
-    if (Number.isSafeInteger(a?.tip?.slot)) seeTip(a.tip.slot);
+    const t = a?.tip?.slot;
+    if (!Number.isSafeInteger(t)) return a;
+    seeTip(t);
+    // A tip past a journaled body's expiry margin would let the host expire it; if that body in fact landed and the
+    // watcher has not told the host yet, the read fails (retryable) and the watcher runs first (final pass FE2).
+    for (const e of journal.entries) {
+      if (t <= e.validTo + settlementSlots) continue;
+      // Recorded as included but not yet told the host (its settled call queued behind this one), or not yet seen.
+      const untoldInclusion = e.state === 'shallow' && untold.has(e.reservation);
+      if (e.state !== 'prepared' && !untoldInclusion) continue;
+      if (untoldInclusion || within(await chain.txSlot(e.txHash), e, t)) {
+        setTimeout(() => tick().catch(() => {}), 0).unref?.();
+        throw Object.assign(new Error(`the transaction ${e.txHash.slice(0, 16)}… landed and its settlement is not told yet: try again in a `
+          + 'moment'), { tip: a.tip });
+      }
+    }
     return a;
   };
   let host;
@@ -366,6 +393,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   let fenced = null;              // why the host builds nothing more
   // The rewind fence (#179 r4): one persisted bound (journal.fencedUntil). A rewind found now blocks builds at once
   // (rewindPending) while its fence is written, and the write is retried until it holds.
+  const untold = new Set();       // reservations recorded as included whose inclusion the host has not acknowledged yet
   let rewindPending = null;       // { bound, why } of a found rewind whose fence is not written yet
   let stableTip = null;           // the highest tip of any stable observation (the watcher's and a handout's)
   let resetOnceFenced = false;    // a rewind the watcher found: the session ends once its fence is written
@@ -397,6 +425,25 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     journal.close();
     throw e;
   };
+  /**
+   * A registration's publication (its label names the prerequisite): the host is told the credential is registered,
+   * with the evidence (final pass FE1; Yaci Store cannot tell registration, so a new session's host would not know).
+   */
+  async function learnRegistration(e, evidence) {
+    const m = /^publish (?:stakeRegistration|verifier):([0-9a-f]{56})$/.exec(e.label ?? '');
+    if (!m) return;
+    // Kept beside the journal (FE6): every later session's host is taught it before anything is listed or published.
+    try {
+      journal.learnRegistration({ credential: m[1], txHash: e.txHash, ...evidence });
+    } catch (err) {
+      log(`playground (devkit): the registration of ${m[1].slice(0, 16)}… could not be recorded: ${err.message ?? err}`);
+    }
+    try {
+      await forward('registered', { credential: m[1], evidence: { txHash: e.txHash, ...evidence } });
+    } catch (err) {
+      log(`playground (devkit): the host did not take the registration of ${m[1].slice(0, 16)}…: ${err.message ?? err}`);
+    }
+  }
   /** Tells the host a settlement event; a reply other than {@code expected} (or a refusal) fences it. Never throws. */
   async function inform(e, params, expected) {
     try {
@@ -435,6 +482,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     }
     if (restoring) restored = await restore();
     await rewindFence();
+    await teachRegistrations();
   } catch (e) {
     return fail(e);
   }
@@ -481,6 +529,23 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     throw new StageError('session', 'chainMoving', 'the chain kept moving while the session started: start again');
   }
 
+  /**
+   * The registrations this playground saw (FE6), taught to the new host before the page lists prerequisites: nothing is
+   * published again (Yaci Store cannot tell a registration). Not while a rewind fence stands (one may have been undone);
+   * a credential registered elsewhere is still found by the refusal of its publication.
+   */
+  async function teachRegistrations() {
+    if (rewindPending || journal.fencedUntil !== null) return;
+    for (const r of journal.registrations) {
+      try {
+        await forward('registered', { credential: r.credential,
+          evidence: r.slot !== undefined ? { txHash: r.txHash, slot: r.slot } : { txHash: r.txHash, message: r.message } });
+      } catch (err) {
+        log(`playground (devkit): the host did not take the known registration of ${r.credential.slice(0, 16)}…: ${err.message ?? err}`);
+      }
+    }
+  }
+
   async function restore() {
     // History lost (missing or invalid): the restore completes only on the stable observation it uses being strictly
     // above the high-water mark (#179 r4); below it (again), it waits.
@@ -505,6 +570,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     let dropped = journal.lost;
     // What may still land or still needs its depth margin, as the chain shows it now (one entry per body).
     const keep = [];
+    const finalSinceRestore = [];   // bodies that became final while no playground ran (registrations told below)
     const bodies = new Map();   // txHash -> its flags, across duplicates (a handoff or a submission is never forgotten)
     for (const e of journal.entries) {
       const f = bodies.get(e.txHash) ?? { submitted: false, handedOff: false };
@@ -515,15 +581,23 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       if (done.has(raw.txHash)) continue;
       done.add(raw.txHash);
       const e = { ...raw, ...bodies.get(raw.txHash) };
+      // Never left the page (not submitted, no wallet had it; FD3): the page that could sign it is gone, so it is not
+      // restored and its inputs are free at once (a reload does not block the instance until its expiry).
+      if (!e.submitted && !e.handedOff) {
+        observed(e.txHash, { label: e.label, chain: 'discarded' });
+        continue;
+      }
       const slot = o.seen.get(e.txHash);
       if (within(slot, e, t)) {
         if (t - slot <= settlementSlots) keep.push({ ...e, state: 'shallow', slot });
         else {
           dropped = true;
+          finalSinceRestore.push({ e, slot });
           // Final for the page once Yaci Store's indexes show it (bounded).
           chain.indexed(e.txHash).catch(() => {}).then(() => observed(e.txHash, { label: e.label, chain: 'final', slot }));
         }
-      } else if (e.validTo > t) {
+      } else if (t <= e.validTo + settlementSlots) {
+        // Not seen, and still within its expiry margin (final pass FE5): kept, the watcher expires it after the margin.
         keep.push({ ...e, state: 'prepared', slot: null });
       } else {
         dropped = true;
@@ -539,6 +613,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       throw new StageError('host', 'restore', 'the dev host\'s restore did not give one distinct reservation per body: the journal is kept');
     }
     journal.replace(keep.map((e, i) => ({ ...e, reservation: ids[i] })), dropped ? t : null);
+    for (const { e, slot } of finalSinceRestore) await learnRegistration(e, { slot });
     for (const e of keep) {
       observed(e.txHash, { label: e.label, chain: e.state === 'shallow' ? 'included' : null, slot: e.slot,
         transport: e.submitted ? 'unknown' : null });
@@ -555,6 +630,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     host.close().catch(() => {});
   }
   let ticking = false;
+  let lastIndexing = new Map();   // the last pass's indexing waits (tests wait for them)
   async function tick() {
     if (ticking || closed || ended || !host.alive) return;
     ticking = true;
@@ -593,17 +669,27 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       // 1. Inclusions first, each told at its own slot (no other body crosses a threshold before its own inclusion
       //    is known: #179 P1-5), oldest first.
       const indexing = new Map();   // txHash -> the bounded wait for Yaci Store's indexes, then the page's 'included'
+      lastIndexing = indexing;
       const landed = journal.entries.filter((e) => e.state === 'prepared' && within(o.seen.get(e.txHash), e, t))
         .sort((a, b) => o.seen.get(a.txHash) - o.seen.get(b.txHash));
       for (const e of landed) {
         const slot = o.seen.get(e.txHash);
+        untold.add(e.reservation);
         journal.update(e.reservation, { state: 'shallow', slot });
-        await inform(e, { status: 'confirmed', slot, tip: slot }, settlementSlots === 0 ? ['shallow', 'confirmed'] : ['shallow']);
+        try {
+          await inform(e, { status: 'confirmed', slot, tip: slot }, settlementSlots === 0 ? ['shallow', 'confirmed'] : ['shallow']);
+        } finally {
+          untold.delete(e.reservation);
+        }
         // D-5: the host knows at once; the page is told once Yaci Store's indexes show the outputs (bounded, after the
         // rest of this pass).
         indexing.set(e.txHash, chain.indexed(e.txHash).catch(() => {}).then(() => {
-          const now = status.get(e.txHash)?.chain;
-          if (now === null || now === undefined || now === 'rolledBack') observed(e.txHash, { label: e.label, chain: 'included', slot });
+          // Shown only if this very inclusion is still the journal's (final pass): a later pass may have seen it rolled
+          // back meanwhile (a final one is shown by its own step, chained after this one).
+          const cur = journal.find(e.reservation);
+          if (cur?.txHash === e.txHash && cur.state === 'shallow' && cur.slot === slot) {
+            observed(e.txHash, { label: e.label, chain: 'included', slot });
+          }
         }));
       }
       // 2. An inclusion the chain no longer shows: back to prepared.
@@ -622,13 +708,14 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
           if (indexing.has(e.txHash)) indexing.set(e.txHash, indexing.get(e.txHash).then(shown));
           else shown();
           await inform(e, { status: 'confirmed', slot: e.slot, tip: t }, ['confirmed']);
+          await learnRegistration(e, { slot: e.slot });
         } else if (e.state === 'prepared' && o.seen.get(e.txHash) === null && t > e.validTo + settlementSlots) {
           journal.remove(e.reservation, t);
           observed(e.txHash, { chain: 'expired', slot: null });
           await inform(e, { status: 'expired', tip: t }, ['expired']);
         }
       }
-      await Promise.all(indexing.values());
+      // The indexing waits are not awaited (final pass FE2): the page's states follow them; the next pass is not held.
     } catch (err) {
       log(`playground (devkit): settlement: ${err.message ?? err}`);
     } finally {
@@ -646,10 +733,13 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
    */
   /** One body's inclusion slot read between two equal chain points; null if the chain moved. */
   async function observeOne(e) {
-    const t1 = await chain.tip();
-    const slot = await chain.txSlot(e.txHash);
-    const t2 = await chain.tip();
-    return t1.slot === t2.slot && t1.hash === t2.hash ? { tip: t1.slot, slot } : null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const t1 = await chain.tip();
+      const slot = await chain.txSlot(e.txHash);
+      const t2 = await chain.tip();
+      if (t1.slot === t2.slot && t1.hash === t2.hash) return { tip: t1.slot, slot };
+    }
+    return null;
   }
   /** A pause a reset or close cancels. */
   const pause = (ms) => new Promise((ok, no) => {
@@ -688,8 +778,20 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       const b = parseTx(e.cbor);
       return [...b.inputs, ...b.collateral].some((x) => refs.has(refOf(x)));
     });
-    const pending = (e) => new StageError('host', 'pending', `the body spends an input or collateral the journaled body `
-      + `${e.txHash.slice(0, 16)}… still reserves: prepare again once it settles`);
+    // Refused retryably: the new body was never handed out, so its reservation is released at once (final pass FE4;
+    // the host's answer checked: anything but discarded fences it).
+    const pending = async (e) => {
+      if (tx && typeof reservation === 'string' && RESERVATION.test(reservation)) {
+        try {
+          const t = (await chain.tip()).slot;
+          await inform({ reservation, txHash: tx.hash }, { status: 'discarded', tip: t }, ['discarded']);
+        } catch {
+          // no tip: the reservation expires with its window
+        }
+      }
+      return new StageError('host', 'pending', `the body spends an input or collateral the journaled body `
+        + `${e.txHash.slice(0, 16)}… still reserves: prepare again once it settles`);
+    };
     const first = problemOf();
     if (first) throw refuse(first);
     // An input a journaled body spends (#179 r3): the host may have seen that body expire before this session's watcher
@@ -701,20 +803,29 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       for (const e of overlapping()) {
         let o = null;
         try {
-          o = e.state === 'prepared' ? await observeOne(e) : null;
+          o = await observeOne(e);
         } catch {
           // uncertain: refused below
         }
         if (o && seeTip(o.tip)) guardBuild();   // a rewind: refused as such
         const now = journal.find(e.reservation);
-        if (!now || now.txHash !== e.txHash || now.state !== 'prepared' || now.cbor !== e.cbor) continue reconcile;
-        if (o && o.slot === null && o.tip > e.validTo + settlementSlots) {
+        if (!now || now.txHash !== e.txHash || now.state !== e.state || now.cbor !== e.cbor) continue reconcile;
+        // Included and past its depth margin (the host, reading that tip, released it: its collateral, unspent, may be
+        // used again): final, settled here (final pass, probe A).
+        if (o && e.state === 'shallow' && o.slot === e.slot && o.tip > e.slot + settlementSlots) {
+          journal.remove(e.reservation, o.tip);
+          observed(e.txHash, { chain: 'final', slot: e.slot });
+          await inform(e, { status: 'confirmed', slot: e.slot, tip: o.tip }, ['confirmed']);
+          await learnRegistration(e, { slot: e.slot });
+          continue reconcile;
+        }
+        if (o && e.state === 'prepared' && o.slot === null && o.tip > e.validTo + settlementSlots) {
           journal.remove(e.reservation, o.tip);
           observed(e.txHash, { chain: 'expired', slot: null });
           await inform(e, { status: 'expired', tip: o.tip }, ['expired']);
           continue reconcile;
         }
-        throw pending(e);
+        throw await pending(e);
       }
       break;
     }
@@ -724,7 +835,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     const again = problemOf();
     if (again) throw refuse(again);
     const clash = overlapping()[0];
-    if (clash) throw pending(clash);
+    if (clash) throw await pending(clash);
     journal.raise(validTo + settlementSlots);
     journal.record({ reservation, txHash: tx.hash, cbor: prepared.cbor, validTo, validFrom, state: 'prepared', label });
     observed(tx.hash, { label, chain: null, slot: null, transport: null });
@@ -842,9 +953,19 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       } catch (err) {
         throw new StageError('session', 'chainUnavailable', `the chain gave no tip (${err.message ?? err}): the body is kept; discard again`);
       }
+      // Looked at again after the await (final pass FE3): settled meanwhile, nothing to do; past its expiry margin, it
+      // is told expired (the host would refuse a discard of an expired body).
+      const now = journal.find(reservation);
+      if (!now || now.txHash !== e.txHash) return {};
+      if (t > now.validTo + settlementSlots) {
+        journal.remove(reservation, t);
+        observed(e.txHash, { chain: 'expired' });
+        await inform(now, { status: 'expired', tip: t }, ['expired']);
+        return {};
+      }
       journal.remove(reservation);
       observed(e.txHash, { chain: 'discarded' });
-      await inform(e, { status: 'discarded', tip: t }, ['discarded']);
+      await inform(now, { status: 'discarded', tip: t }, ['discarded']);
       return {};
     }),
     /** Before a CIP-30 wallet sees the body (#179 P1-3): from now on it is never discarded. */
@@ -950,6 +1071,12 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         if (slot !== null || seen === 'included' || seen === 'final') {
           return { ...out, status: seen === 'final' ? 'final' : 'included', slot: status.get(hash)?.slot ?? slot, transport: 'refused', message };
         }
+        // A registration the ledger already holds (Yaci Store cannot tell it; a new session's host lists it again): the
+        // host is told, with the refusal as evidence, and the page lists the prerequisites again (final pass FE1).
+        if (/StakeKeyRegistered|already registered|StakeKeyAlreadyRegistered/i.test(message) && /^publish (?:stakeRegistration|verifier):/.test(e.label ?? '')) {
+          await learnRegistration(e, { message: message.slice(0, 500) });
+          throw new StageError('ledger', 'alreadyRegistered', `already registered: ${message}`, { note: 'the prerequisites are listed again' });
+        }
         throw new StageError('ledger', 'nodeRefused', message, { note: 'its inputs stay reserved until the body expires' });
       }
       observed(hash, { transport: 'accepted' });
@@ -1032,8 +1159,13 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       throw new StageError('session', 'devkit', 'time on DevKit is the network\'s own: it cannot be advanced');
     },
     history: () => [...submitted],
-    /** One settlement pass now (tests). */
-    tick,
+    /** One settlement pass now, then its indexing waits (tests). */
+    async tick() {
+      await tick();
+      await Promise.all(lastIndexing.values());
+    },
+    /** One settlement pass now, as the watcher runs it (its indexing waits not awaited). */
+    pass: tick,
     async close() {
       if (closed) return;
       closed = true;

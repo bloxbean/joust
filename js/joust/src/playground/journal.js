@@ -9,7 +9,7 @@
 // are reported once and removed, unless one has a lock on it.
 //
 //   <state>/chains/<networkId>-<protocolMagic>-<startTime>/chain.json      { networkId, protocolMagic, startTime, admin }
-//   <state>/chains/<…>/<project key>.journal.json                          { version: 1, project, entries }
+//   <state>/chains/<…>/<project key>.journal.json                          { version: 2, project, entries, removedAt, fencedUntil }
 //   <state>/chains/<…>/<project key>.high-water.json                       { highWater }
 //   <state>/chains/<…>/<project key>.lock                                  the owner's token: "<pid> <random>"
 //   <state>/chains/<devkit key>.prune.lock, <devkit key>.notices.json      pruning, one at a time per DevKit
@@ -22,7 +22,7 @@ import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdir
   rmSync, unlinkSync, writeSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parseTx } from '@julclang/state-client';
 
 import { applyOperation, operationRecord } from './operations.js';
@@ -33,12 +33,40 @@ const KEEP_OPS = 'restore its readability (its permissions and owner) or restore
   + 'Do not remove or move it: that forgets the pending keyed operations, and retrying one could create a second instance after the first '
   + 'landed';
 
+// The keyed operations file's own format (operations.js records), versioned and read strictly like the journal: another
+// version, or a field this joust does not know, is refused (its meaning would be lost on the next write).
+export const OPERATIONS_VERSION = 1;
+const OPS_FIELDS = new Set(['version', 'operations']);
+const RECORD_FIELDS = new Set(['id', 'contract', 'method', 'instance', 'key', 'payer', 'designated', 'attempts', 'ambiguous']);
+const ATTEMPT_FIELDS = new Set(['txHash', 'validTo']);
+/** The records of an operations file's text, or null when it is not one this joust writes. */
+function operationsOf(text) {
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object' || raw.version !== OPERATIONS_VERSION || !Array.isArray(raw.operations)
+    || !Object.keys(raw).every((k) => OPS_FIELDS.has(k))) return null;
+  const known = (r) => r && typeof r === 'object' && Object.keys(r).every((k) => RECORD_FIELDS.has(k))
+    && Array.isArray(r.attempts) && r.attempts.every((a) => a && typeof a === 'object' && Object.keys(a).every((k) => ATTEMPT_FIELDS.has(k)));
+  const rows = raw.operations.map((r) => (known(r) ? operationRecord(r) : null));
+  return rows.some((r) => r === null) ? null : rows;
+}
+
 export const stateRoot = () => process.env.JOUST_STATE_DIR || join(homedir(), '.joust', 'state');
-export const JOURNAL_VERSION = 1;
+// Version 2: entries carry handedOff (a CIP-30 wallet had the body) beside submitted; a version 1 journal lacks it, so
+// none of its bodies can be told never to have left the page: it is refused (fail closed), never read as version 2.
+export const JOURNAL_VERSION = 2;
 const JOURNAL_FIELDS = new Set(['version', 'project', 'entries', 'removedAt', 'fencedUntil']);
 const ENTRY_FIELDS = new Set(['reservation', 'txHash', 'cbor', 'validFrom', 'validTo', 'state', 'slot', 'submitted', 'handedOff', 'label']);
 
 const isSlot = (n) => Number.isSafeInteger(n) && n >= 0;
+/** A registration's evidence, as protocol 1's `registered` takes it: a credential, a tx hash and one of slot or message. */
+const validRegistration = (r) => !!r && typeof r === 'object' && /^[0-9a-f]{56}$/.test(r.credential ?? '') && /^[0-9a-f]{64}$/.test(r.txHash ?? '')
+  && ((isSlot(r.slot) && r.message === undefined) || (r.slot === undefined && typeof r.message === 'string' && r.message.length > 0
+    && r.message.length <= 500)) && Object.keys(r).every((k) => ['credential', 'txHash', 'slot', 'message'].includes(k));
 /** A reservation id as the playground accepts it from a host: printable, bounded. */
 export const RESERVATION = /^[\x21-\x7e]{1,128}$/;
 
@@ -53,7 +81,60 @@ function writeFile(file, text) {
   }
   return tmp;
 }
-const writeAtomic = (file, value) => renameSync(writeFile(file, JSON.stringify(value, null, 1) + '\n'), file);
+/** fsyncs a directory (its entries: a rename, a new file or directory in it); Windows cannot open one and is skipped. */
+function syncDir(dir) {
+  if (process.platform === 'win32') return;
+  const fd = openSync(dir, 'r');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+/** The file replaced durably (final pass): the temporary file synced, renamed over it, then its directory synced. */
+const writeAtomic = (file, value) => {
+  renameSync(writeFile(file, JSON.stringify(value, null, 1) + '\n'), file);
+  syncDir(dirname(file));
+};
+const UNREADABLE = Symbol('not JSON');
+/**
+ * A recovery file: undefined when it does not exist, UNREADABLE when its bytes are not JSON; a file that exists but
+ * cannot be read throws (fail closed: final pass), naming it and how to fix it.
+ */
+function readState(file) {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return undefined;
+    throw unreadable(file, e.code ?? e.message);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return UNREADABLE;
+  }
+}
+/**
+ * The keyed operation records of {@code file}: none when there is no file; an unreadable file, another version or an
+ * unknown field fails closed (code storage, naming the file), never read as empty and never overwritten.
+ */
+function readOperations(file) {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return [];
+    throw Object.assign(new Error(`the keyed operations file ${file} cannot be read (${e.code ?? e.message}): ${KEEP_OPS}`), { code: 'storage', file });
+  }
+  const rows = operationsOf(text);
+  if (rows === null) {
+    throw Object.assign(new Error(`the keyed operations file ${file} is not one this playground wrote: ${KEEP_OPS}`), { code: 'storage', file });
+  }
+  return rows;
+}
+const unreadable = (file, why) => Object.assign(new Error(`the playground's recovery file ${file} cannot be used (${why}): fix its `
+  + 'permissions or contents, or move it aside once the transactions it guards have expired'), { code: 'journalUnreadable', file });
 const readJson = (file) => {
   try {
     return JSON.parse(readFileSync(file, 'utf8'));
@@ -73,7 +154,12 @@ function alive(pid) {
 
 /** M3-S2: a directory of this user's, not writable by others (made 0700 when it is this user's); else refused. */
 function privateDir(dir) {
+  // Every directory this creates (a first run makes ~/.joust, its state, chains, …) is made durable in its parent,
+  // before any journal write can be acknowledged (final pass): else a crash could lose the whole state directory.
+  const missing = [];
+  for (let p = dir; !existsSync(p) && dirname(p) !== p; p = dirname(p)) missing.push(p);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const p of missing.reverse()) syncDir(dirname(p));
   const st = lstatSync(dir);
   if (!st.isDirectory()) throw new Error(`journal: ${dir} is not a directory`);
   const uid = process.getuid?.();
@@ -123,7 +209,8 @@ export function acquire(lock, what = 'this journal') {
   const held = read(lock);
   if (held === null && tryLink(lock, token)) return token;   // released meanwhile
   if (live(held)) {
-    throw Object.assign(new Error(`another playground (pid ${pidOf(held)}) is using ${what}: stop it first`), { code: 'journalLocked' });
+    throw Object.assign(new Error(`another playground (pid ${pidOf(held)}) is using ${what} (its lock: ${lock}): stop it first`),
+      { code: 'journalLocked', lock });
   }
   throw Object.assign(new Error(`the lock of ${what} (${lock}) belongs to pid ${pidOf(held)}, which is no longer running. If no `
     + `playground is using it, remove the lock and start again: rm '${lock}'`), { code: 'journalStaleLock', lock });
@@ -227,9 +314,32 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   // One playground per project and chain: a second would settle the other's reservations.
   const token = acquire(lockFile, 'this project\'s journal on this DevKit');
 
-  const high = readJson(highFile);
+  // Read fail-closed (final pass): a file that exists but cannot be read, or a high-water mark or pending fence that is
+  // not one, refuses the open (the lock released); a journal whose bytes are not JSON is lost history behind the mark.
+  let high;
+  let raw;
+  let pendingRaw;
+  let regsRaw;
+  const pendingFile = join(dir, `${pkey}.fence-pending.json`);
+  // The registrations this playground saw settle, or refused as already there (FE6): taught to every new host.
+  const regsFile = join(dir, `${pkey}.registrations.json`);
+  try {
+    high = readState(highFile);
+    if (high !== undefined && !isSlot(high?.highWater)) throw unreadable(highFile, 'not a high-water mark');
+    raw = readState(journalFile);
+    pendingRaw = readState(pendingFile);
+    if (pendingRaw !== undefined && !isSlot(pendingRaw?.fencedUntil)) throw unreadable(pendingFile, 'not a fence');
+    regsRaw = readState(regsFile);
+    if (regsRaw !== undefined && !(Array.isArray(regsRaw?.registrations) && regsRaw.registrations.every(validRegistration)
+      && Object.keys(regsRaw).every((k) => k === 'registrations'))) throw unreadable(regsFile, 'not a registration list');
+    // The keyed operations file too, at open (fail closed) — never advised away: its pending operations would look new.
+    readOperations(opsFile);
+  } catch (e) {
+    release(lockFile, token);
+    throw e;
+  }
+  if (raw === UNREADABLE) raw = null;
   let highWater = isSlot(high?.highWater) ? high.highWater : null;
-  const raw = readJson(journalFile);
   // Fail closed (#179 r6): a journal of another version, or with a field this joust does not know, is not opened (its
   // meaning, a fence for instance, would be lost on the next write).
   if (raw !== undefined && raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -250,8 +360,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
     && (raw.fencedUntil === undefined || raw.fencedUntil === null || isSlot(raw.fencedUntil));
   const lost = (raw !== undefined || highWater !== null) && !intact;
   // A fence a closing session could not write (#179 r6): it left this marker (best effort) beside its lock.
-  const pendingFile = join(dir, `${pkey}.fence-pending.json`);
-  const pendingFence = readJson(pendingFile)?.fencedUntil;
+  const pendingFence = pendingRaw?.fencedUntil;
   // The journal's cur. Every change is written first and taken in memory only once the write succeeded (#179 r4): a
   // failed write changes nothing, so a retry writes again.
   let cur = {
@@ -263,6 +372,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
     // the tip that cleared it, in the same write.
     fencedUntil: intact && isSlot(raw.fencedUntil) ? raw.fencedUntil : null,
   };
+  let registrations = regsRaw?.registrations ?? [];
   let closed = false;
   let keepLock = false;
   const mine = () => {
@@ -368,31 +478,28 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
      * invalid record fails closed (code storage, naming the file): it is never read as empty, and never overwritten.
      */
     get operations() {
-      let text;
-      try {
-        text = readFileSync(opsFile, 'utf8');
-      } catch (e) {
-        if (e.code === 'ENOENT') return [];
-        throw Object.assign(new Error(`the keyed operations file ${opsFile} cannot be read (${e.code ?? e.message}): ${KEEP_OPS}`), { code: 'storage' });
-      }
-      let raw;
-      try {
-        raw = JSON.parse(text);
-      } catch {
-        raw = null;
-      }
-      const rows = raw?.version === JOURNAL_VERSION && Array.isArray(raw.operations) ? raw.operations.map(operationRecord) : null;
-      if (rows === null || rows.some((r) => r === null)) {
-        throw Object.assign(new Error(`the keyed operations file ${opsFile} is not one this playground wrote: ${KEEP_OPS}`), { code: 'storage' });
-      }
-      return rows;
+      return readOperations(opsFile);
     },
     /** One step on them (operations.js applyOperation), written atomically before it returns. */
     operate(step) {
       mine();
       const r = applyOperation(this.operations, step);
-      writeAtomic(opsFile, { version: JOURNAL_VERSION, operations: r.rows });
+      writeAtomic(opsFile, { version: OPERATIONS_VERSION, operations: r.rows });
       return r.record;
+    },
+    /** Registrations known on this chain: [{ credential, txHash, slot } or { credential, txHash, message }]. */
+    get registrations() {
+      return registrations.map((r) => ({ ...r }));
+    },
+    /** Records a registration (written durably before it is taken); a credential already known is kept as it is. */
+    learnRegistration(r) {
+      if (!validRegistration(r)) throw new Error('journal: not a registration');
+      if (registrations.some((x) => x.credential === r.credential)) return;
+      mine();
+      const next = [...registrations, r.slot !== undefined ? { credential: r.credential, txHash: r.txHash, slot: r.slot }
+        : { credential: r.credential, txHash: r.txHash, message: r.message }];
+      writeAtomic(regsFile, { registrations: next });
+      registrations = next;
     },
     /** The prune notices were shown: they are cleared. */
     clearNotices() {

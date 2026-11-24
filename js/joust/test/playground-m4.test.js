@@ -315,7 +315,11 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     assert.deepEqual(third.operations, [], 'no file yet: none');
     third.operate({ action: 'create', record: { ...rec, id: 'q' } });
     const file = join(third.dir, readdirOf(third.dir).find((f) => f.endsWith('.operations.json') && read(join(third.dir, f), 'utf8').includes('"q"')));
-    for (const bad of ['{ not json', JSON.stringify({ version: 99, operations: [] }), JSON.stringify({ version: 1, operations: [{ id: 'x' }] })]) {
+    const good = JSON.parse(read(file, 'utf8'));
+    assert.equal(good.version, 1, 'the operations file\'s own format, version 1');
+    const unknownField = JSON.stringify({ ...good, operations: good.operations.map((r) => ({ ...r, note: 'a field this joust does not know' })) });
+    for (const bad of ['{ not json', JSON.stringify({ version: 99, operations: [] }), JSON.stringify({ version: 1, operations: [{ id: 'x' }] }),
+      unknownField, JSON.stringify({ ...good, extra: true })]) {
       write(file, bad);
       assert.throws(() => third.operations, (e) => e.code === 'storage' && e.message.includes(file)
         // Codex M4 r4: never advise moving or deleting it (a pending operation would look new: a second creation).
@@ -332,6 +336,11 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
       chmodSync(file, 0o600);
       third.close();
     }
+    // A bad operations file is refused when the journal opens too (as M3's recovery files are), and kept as it is.
+    write(file, unknownField);
+    await assert.rejects(openJournal({ root: '/q', chain, state }), (e) => e.code === 'storage' && e.message.includes(file));
+    assert.equal(read(file, 'utf8'), unknownField);
+    write(file, JSON.stringify(good));
     assert.ok(exists(file));
     // A refused first prepare or a declined review releases the designation only while the record has no attempt.
     assert.deepEqual(applyOperation([{ ...rec, attempts: [] }], { action: 'release', id: rec.id }).rows, []);

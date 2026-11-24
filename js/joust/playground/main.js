@@ -16,7 +16,7 @@ import { assemble } from '@julclang/state-client/ledger';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { classify, encode, render, unsupportedPaths, FormError } from './form.js';
-import { anchorsOf, checkPublication, pageCheck, snapToUtxo, isKeyedRequest } from './check.js';
+import { anchorsOf, checkPublication, pageCheck, snapToUtxo, isKeyedRequest, foreignPayerInput } from './check.js';
 import { symbolic, concrete, outcomeOf, sameOutcome, exportScenario, importScenario, quorumKeyNames, recanonical } from './scenario.js';
 import { operationId, operationRequest, reconcile as reconcileAttempts, decide, safeSlot } from './operations.js';
 
@@ -859,7 +859,13 @@ async function prerequisites(signer) {
         throw new StageFailure({ stage: 'verification', code: 'refused', message: 'the page refused to sign the publication: ' + v.problems.join('; '), label });
       }
       Object.assign(report, host.report);
-      await reviewSignSubmit(r, label, signer, { publication: p, report });
+      try {
+        await reviewSignSubmit(r, label, signer, { publication: p, report });
+      } catch (e) {
+        // DevKit: the registration was there already (Yaci Store cannot tell); the host knows now: list them again.
+        if (e.code !== 'alreadyRegistered') throw e;
+        note(`${label}: already registered on the chain; the prerequisites are listed again`);
+      }
     } finally {
       if (!report.submitted) await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
     }
@@ -897,13 +903,13 @@ function approval({ title, lines, states, predicted, who }) {
  * (#179 P2) and the handoff recorded before it sees the body: from then on the body is never discarded (only its expiry
  * releases its inputs, ADR-0022 D8).
  */
-async function signAs(r, id, label, report, approve, journal = null) {
+async function signAs(r, id, label, report, approve, journal = null, { publication = false } = {}) {
   if (!await approve()) {
     record({ label, outcome: 'declined' });
     note(`${label}: declined by ${id.label}; the body was discarded`);
     throw Object.assign(new StageFailure({ stage: 'wallet', code: 'declined', message: `declined at review by ${id.label}`, label }), { quiet: true });
   }
-  if (id.cip30) await walletStillMatches(id, r.prepared.cbor, label);
+  if (id.cip30) await walletStillMatches(id, r.prepared.cbor, label, { publication });
   // A keyed attempt is journaled (committed) before the body leaves the page: before a CIP-30 handoff, before signing.
   if (journal) await journal();
   if (id.cip30) {
@@ -967,7 +973,7 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
     for (const id of [signer, ...cosigners]) {
       const who = id === signer ? id.label : `${id.label} (co-signer)`;
       const w = await signAs(r, id, label, report, () => approval({ title: id === signer ? title : `${title}: co-sign`, lines, states: states(),
-        predicted, who }), id === signer ? journal : null);
+        predicted, who }), id === signer ? journal : null, { publication: !!publication });
       cbor = assemble(cbor, w).cbor;
     }
   } catch (e) {
@@ -1005,7 +1011,7 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
       // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its inputs
       // (the server refuses that discard as well); its keyed attempt stays journaled. A failure before the node saw it
       // is still released.
-      if (devkit() && e.code === 'nodeRefused') report.submitted = true;
+      if (devkit() && (e.code === 'nodeRefused' || e.code === 'alreadyRegistered')) report.submitted = true;
       else if (!report.submitted) await unjournal();
       throw labelled(e, 'ledger', label);
     }
@@ -1023,7 +1029,7 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
  * checked for) and its UTxOs, read again; every input and collateral input the body takes from the payer's address
  * must be one the wallet holds and DevKit shows unspent.
  */
-async function walletStillMatches(signer, cbor, label) {
+async function walletStillMatches(signer, cbor, label, { publication = false } = {}) {
   const refuse = (message) => new StageFailure({ stage: 'wallet', code: 'walletChanged', message, label });
   // Every read, the retries' too (#179 r3): the same network and the same change address (the payer) as connected.
   const read = async () => {
@@ -1044,6 +1050,12 @@ async function walletStillMatches(signer, cbor, label) {
   // #179 r2: every input and collateral input must resolve on the chain before it is classified by address.
   const missing = refs.find((ref) => !outputs.has(ref));
   if (missing) throw refuse(`DevKit does not show the input ${missing} the body spends: prepare the call again`);
+  // The change address is the payer, and only it (final pass): an input at another address of the wallet's key, or, in
+  // a publication (all of its inputs are the wallet's), any input elsewhere, is refused before the wallet sees it.
+  const foreign = foreignPayerInput(refs, (ref) => outputs.get(ref).address, { payer: signer.address, keyHash: signer.keyHash, publication });
+  if (foreign) {
+    throw refuse(`the body spends ${foreign.ref} at ${foreign.at.slice(0, 24)}…, not the wallet's connected address: prepare the call again`);
+  }
   const payer = refs.filter((ref) => outputs.get(ref).address === signer.address);
   const chainUnspent = new Set((await chainView.utxosAt(signer.address)).map((u) => u.ref));
   for (const ref of payer) if (!chainUnspent.has(ref)) throw refuse(`DevKit does not show the input ${ref} unspent: prepare the call again`);

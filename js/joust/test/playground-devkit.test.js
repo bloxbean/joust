@@ -6,8 +6,8 @@
 //   journal (Q6, ADR-0022 D8): validated whole, locked atomically, keyed by chain, pruned safely, restored after a restart
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync,
-  writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync,
+  unlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createServer, request } from 'node:http';
 import { spawn } from 'node:child_process';
@@ -214,6 +214,36 @@ describe('ADR-0024 M3 I4: DevKit only', () => {
     }
   });
 
+  test('FD5: a reverse read with a malformed parameter never reaches the provider', async () => {
+    const asked = [];
+    const chain = new Proxy({ tip: async () => ({ slot: 1, hash: sha('fd5'), height: 1 }) }, {
+      get: (t, k) => t[k] ?? (async (...a) => { asked.push([k, ...a]); return []; }) });
+    const read = chainReads(chain);
+    for (const q of [{ kind: 'utxos', address: '../../admin' }, { kind: 'output', ref: 'x#0' }, { kind: 'script', hash: 'zz' },
+      { kind: 'assetHistory', unit: 'ab' }, { kind: 'redeemers', txHash: '00' }, { kind: 'datum', hash: '..' },
+      { kind: 'stakeRegistration', credential: 'q' }, { kind: 'utxos' }]) {
+      await assert.rejects(read(q), /invalid/, JSON.stringify(q));
+    }
+    assert.deepEqual(asked, []);
+    await read({ kind: 'utxos', address: 'addr_test1' + 'q'.repeat(50) });
+    assert.equal(asked.length, 1);
+  });
+
+  test('final pass (Codex): a CIP-30 body spends only from the connected change address', async () => {
+    const { foreignPayerInput } = await import('../playground/check.js');
+    const { baseAddress } = await import('@julclang/state-client');
+    const key = 'ab'.repeat(28);
+    const base = baseAddress({ type: 'key', hash: key }, { type: 'key', hash: 'cd'.repeat(28) }, 0);
+    const ent = enterpriseAddress({ type: 'key', hash: key }, 0);
+    const script = enterpriseAddress({ type: 'script', hash: 'ef'.repeat(28) }, 0);
+    const at = { a: base, b: ent, c: script };
+    const o = { payer: base, keyHash: key };
+    assert.equal(foreignPayerInput(['a', 'c'], (r) => at[r], o), null, 'a call: the change address and a script input');
+    assert.deepEqual(foreignPayerInput(['a', 'b'], (r) => at[r], o), { ref: 'b', at: ent }, 'another address of the same key');
+    assert.deepEqual(foreignPayerInput(['c'], (r) => at[r], { ...o, publication: true }), { ref: 'c', at: script }, 'a publication: anything else');
+    assert.equal(foreignPayerInput(['a'], (r) => at[r], { ...o, publication: true }), null);
+  });
+
   test('reads answer at one chain point: a read that straddles a new block is read again', async () => {
     let slot = 10;
     let reads = 0;
@@ -225,7 +255,7 @@ describe('ADR-0024 M3 I4: DevKit only', () => {
         return [];
       },
     };
-    const a = await chainReads(chain)({ kind: 'utxos', address: 'addr_test1x' });
+    const a = await chainReads(chain)({ kind: 'utxos', address: 'addr_test1' + 'q'.repeat(50) });
     assert.equal(reads, 2);
     assert.deepEqual(a, { tip: { slot: 11, hash: sha('b11'), height: 11 }, absent: true });
     const stuck = { tip: async () => ({ slot: slot++, hash: sha('b' + slot), height: slot }), protocolParams: async () => ({}) };
@@ -332,7 +362,8 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
 
   test('#179 r6: a journal of another version, or with a field this joust does not know, is refused (fail closed)', async () => {
     for (const [i, spoil] of [
-      (raw) => { raw.version = 2; },
+      (raw) => { raw.version = 3; },
+      (raw) => { raw.version = 1; },                       // before handedOff: its bodies' handoff is unknown
       (raw) => { raw.rewoundUntil = 200; },                 // round 3's field: its fence would be dropped
       (raw) => { raw.entries[0].somethingNew = true; },
     ].entries()) {
@@ -360,6 +391,94 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
     assert.equal(k.fencedUntil, 250);
     assert.ok(!existsSync(j.file.replace(/\.journal\.json$/, '.fence-pending.json')), 'the marker is gone once written');
     k.close();
+  });
+
+  test('final pass (Codex): an unreadable recovery file refuses the open, naming it; never a fresh journal', async () => {
+    const make = async (root) => {
+      const j = await open(root, 15);
+      j.raise(300);
+      j.record(body(1));
+      j.close();
+      return j;
+    };
+    // A high-water mark that is not one.
+    let j = await make('/p/unread1');
+    writeFileSync(j.file.replace(/\.journal\.json$/, '.high-water.json'), '{"highWater":"soon"}');
+    await assert.rejects(open('/p/unread1', 15), (e) => e.code === 'journalUnreadable' && e.message.includes('.high-water.json'));
+    assert.ok(!existsSync(j.file.replace(/\.journal\.json$/, '.lock')), 'not left locked');
+    // A journal this user cannot read.
+    j = await make('/p/unread2');
+    chmodSync(j.file, 0o000);
+    try {
+      await assert.rejects(open('/p/unread2', 15), (e) => e.code === 'journalUnreadable' && e.message.includes(j.file));
+    } finally {
+      chmodSync(j.file, 0o600);
+    }
+    // A pending fence that is not one.
+    j = await make('/p/unread3');
+    writeFileSync(j.file.replace(/\.journal\.json$/, '.fence-pending.json'), '[]');
+    await assert.rejects(open('/p/unread3', 15), (e) => e.code === 'journalUnreadable');
+    // A journal whose bytes are not JSON: lost history behind the high-water mark (not a fresh journal).
+    j = await make('/p/unread4');
+    writeFileSync(j.file, '{ not json');
+    const k = await open('/p/unread4', 15);
+    assert.equal(k.lost, true);
+    assert.equal(k.highWater, 300);
+    k.close();
+  });
+
+  test('final pass (Codex): a journal write is durable before it returns: the file, then its directory, synced', async () => {
+    const fs = (await import('node:fs')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const j = await open('/p/durable', 16);
+    const original = fs.fsyncSync;
+    const synced = [];
+    fs.fsyncSync = (fd) => { synced.push(fd); return original(fd); };
+    syncBuiltinESMExports();
+    try {
+      j.raise(400);
+      j.record(body(1));
+    } finally {
+      fs.fsyncSync = original;
+      syncBuiltinESMExports();
+      j.close();
+    }
+    assert.ok(synced.length >= 4, `two writes, each the file and its directory: ${synced.length} fsyncs`);
+  });
+
+  test('final pass (Codex): a first run makes every directory it creates durable in its parent', async () => {
+    const fs = (await import('node:fs')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'joust-first-run-')));
+    const deep = join(base, 'home', '.joust', 'state');   // three missing ancestors, then chains/ and the chain's own
+    const opened = [];
+    const original = fs.openSync;
+    fs.openSync = (path, flags, ...rest) => { if (flags === 'r') opened.push(String(path)); return original(path, flags, ...rest); };
+    syncBuiltinESMExports();
+    let j;
+    try {
+      j = await openJournal({ root: '/p/first', chain: identity(18), state: deep });
+    } finally {
+      fs.openSync = original;
+      syncBuiltinESMExports();
+    }
+    try {
+      for (const parent of [base, join(base, 'home'), join(base, 'home', '.joust'), deep, join(deep, 'chains')]) {
+        assert.ok(opened.includes(parent), `${parent} synced (${opened.join(', ')})`);
+      }
+    } finally {
+      j.close();
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('FD4: a lock held by a running playground is refused naming its file', async () => {
+    const j = await open('/p/held', 17);
+    try {
+      await assert.rejects(open('/p/held', 17), (e) => e.code === 'journalLocked' && e.message.includes('.lock'));
+    } finally {
+      j.close();
+    }
   });
 
   test('a write after another playground took the lock fails: one writer, always', async () => {
@@ -813,7 +932,9 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
         await assert.rejects(s.prepare({ contract: COUNTER, kind: 'action', method: 'increment', instance, address: w.address, args: { by: '7' } }),
           (e) => (what === 'still reserves' ? e.code === 'pending' : e.code === 'reservation') && e.message.includes(what), what);
         // A body that spends a live reservation's input is refused, retryably, without blaming the host (#179 r3).
-        if (what === 'still reserves') assert.equal(s.fenced, null, what);
+        // A pending body is told discarded to the host (final pass FE4): this lying host does not know its id, so its
+        // answer fences it; an honest host answers discarded (see the FE4 test).
+        if (what === 'still reserves') assert.match(s.fenced ?? '', /discarded/, what);
         else assert.ok(s.fenced, what);
         assert.equal(s.journal.find('lie-window') ?? s.journal.find('lie-again') ?? s.journal.find('lie-overlap'), null);
       } finally {
@@ -1125,7 +1246,9 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       let open;
       const gate = new Promise((ok) => { open = ok; });
       const txSlot = chain.txSlot;
-      chain.txSlot = async (h) => { if (h === held.prepared.txHash) await gate; return txSlot(h); };
+      // Only the first handout's reconciliation lookup waits (armed once its prepare returned); the second's reads do not.
+      let gated = false;
+      chain.txSlot = async (h) => { if (h === held.prepared.txHash && gated) { gated = false; await gate; } return txSlot(h); };
       advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);   // the held body is expired by the chain: reconciliation would pass
       const twoInputs = async (p, refs) => {
         const cbor = buildPlainTx({ inputs: refs.map((ref) => ({ ref, value: new Map([['lovelace', 10_000_000n]]) })),
@@ -1133,7 +1256,13 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
         return { cbor, txHash: parseTx(cbor).hash };
       };
       let calls = 0;
-      lie = async (p) => (++calls === 1 ? { ...(await twoInputs(p, [I, J])), reservation: 'first' } : { ...(await twoInputs(p, [I])), reservation: 'second' });
+      lie = async (p) => {
+        if (++calls === 1) {
+          gated = true;
+          return { ...(await twoInputs(p, [I, J])), reservation: 'first' };
+        }
+        return { ...(await twoInputs(p, [I])), reservation: 'second' };
+      };
       const first = increment(s, w, b, '3').then(() => 'out', (e) => e.code);
       await new Promise((ok) => setTimeout(ok, 100));   // the first waits on the chain for the held body
       const second = await increment(s, w, a, '4').then(() => 'out', (e) => e.code);
@@ -1142,7 +1271,8 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       assert.equal(results.filter((x) => x === 'out').length, 1, results.join(','));
       assert.ok(results.includes('pending'), results.join(','));
       assert.ok(!(s.journal.find('first') && s.journal.find('second')), 'never both');
-      assert.equal(s.fenced, null);
+      // The refused one is told discarded (FE4); this lying host does not know its id, which fences it.
+      assert.ok(s.fenced === null || /discarded/.test(s.fenced), s.fenced);
       chain.txSlot = txSlot;
     } finally {
       await s.close();
@@ -1225,7 +1355,9 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     // … and after a restart (the owner gone) it is a stale lock to remove by hand, never opened unfenced.
     const lock = readdirSync(dir).find((f) => f.endsWith('.lock'));
     writeFileSync(join(dir, lock), '999999999 gone');
-    await assert.rejects(session(L, chain, { startTime: 193 }), (e) => e.code === 'journalStaleLock');
+    // Reaches the page whole, naming the lock and how to remove it (FD4).
+    await assert.rejects(session(L, chain, { startTime: 193 }), (e) => e.code === 'journalStaleLock' && e.stage === 'session'
+      && e.message.includes(`rm '${join(dir, lock)}'`));
     chain.tipOverride = null;
     assert.ok(w.address);
   });
@@ -1257,6 +1389,143 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       assert.equal(await handout, 'out');
       assert.equal(s.journal.find(held.prepared.reservation)?.txHash, replacement.txHash, 'the replacement is kept');
       chain.txSlot = txSlot;
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('final pass FE2 (probe B): a host read past the margin of a body that landed fails, the watcher tells it first: no fence', async () => {
+    const { L, chain, s, w } = await ready({ startTime: 960 });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      chain.hold = true;
+      const a = await increment(s, w, instance);
+      const validTo = Number(parseTx(a.prepared.cbor).ttl);
+      await s.submit(a.prepared.reservation, await signed(w, a.prepared));
+      advanceSlots(L, validTo - 2 - L.slot);
+      await chain.release();   // lands at validTo - 2
+      chain.hold = false;
+      advanceSlots(L, SETTLEMENT_SLOTS + 3);   // the watcher lagged
+      await assert.rejects(s.view(COUNTER, instance));   // the read failed: retryable
+      await s.tick();
+      assert.equal(s.fenced, null, s.fenced);
+      assert.equal((await s.view(COUNTER, instance)).value.count, '1');
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('final pass (probe A): a journaled body the chain shows final is settled during a handout, never a false pending', async () => {
+    const { L, s, w } = await ready({ startTime: 961 });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      const a = await increment(s, w, instance);
+      await s.submit(a.prepared.reservation, await signed(w, a.prepared));
+      await s.tick();
+      assert.equal(s.journal.find(a.prepared.reservation).state, 'shallow');
+      advanceSlots(L, SETTLEMENT_SLOTS + 1);   // past A's margin; the watcher has not ticked
+      await increment(s, w, instance);   // no false pending
+      assert.equal(s.fenced, null);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('final pass (Codex): a host read past the margin of an inclusion recorded but not yet told fails, so the host is told first', async () => {
+    const { L, chain, s, w } = await ready({ startTime: 965 });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      chain.hold = true;
+      const a = await increment(s, w, instance);
+      const validTo = Number(parseTx(a.prepared.cbor).ttl);
+      await s.submit(a.prepared.reservation, await signed(w, a.prepared));
+      advanceSlots(L, validTo - 2 - L.slot);
+      await chain.release();   // lands at validTo - 2
+      chain.hold = false;
+      // A host call whose chain read is held; meanwhile the watcher records the inclusion and queues its confirmation
+      // behind that call; the read then answers past the body's margin.
+      let open;
+      const gate = new Promise((ok) => { open = ok; });
+      const utxos = chain.utxos;
+      let held = true;
+      chain.utxos = async (addr) => { if (held) { held = false; await gate; } return utxos(addr); };
+      const view = s.view(COUNTER, instance).then(() => 'answered', () => 'refused');
+      await new Promise((ok) => setTimeout(ok, 100));
+      const pass = s.pass();
+      await new Promise((ok) => setTimeout(ok, 100));
+      assert.equal(s.journal.find(a.prepared.reservation).state, 'shallow', 'recorded, its confirmation queued');
+      advanceSlots(L, SETTLEMENT_SLOTS + 3);
+      open();
+      assert.equal(await view, 'refused', 'the read past the margin failed (retryable)');
+      await pass;
+      assert.equal(s.fenced, null, s.fenced);
+      chain.utxos = utxos;
+      await s.tick();
+      assert.equal(s.txStatus(a.prepared.txHash).status, 'final');
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('final pass (Codex): an indexing wait released after the inclusion was rolled back never shows it included', async () => {
+    const { L, chain, s, w } = await ready({ startTime: 964 });
+    try {
+      const instance = await create(s, w);
+      const r = await increment(s, w, instance);
+      await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+      let open;
+      chain.indexed = () => new Promise((ok) => { open = ok; });
+      await s.pass();   // the inclusion found; its indexing wait held
+      assert.equal(s.journal.find(r.prepared.reservation).state, 'shallow');
+      const txSlot = chain.txSlot;
+      chain.txSlot = async (h) => (h === r.prepared.txHash ? null : txSlot(h));   // gone from the chain
+      chain.indexed = async () => {};
+      await s.pass();
+      assert.equal(s.txStatus(r.prepared.txHash).status, 'rolledBack');
+      open();
+      await new Promise((ok) => setTimeout(ok, 50));
+      assert.equal(s.txStatus(r.prepared.txHash).status, 'rolledBack', 'the late indexing wait shows nothing');
+      chain.txSlot = txSlot;
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('final pass FE3: a discard after the body passed its expiry margin is told expired, not discarded', async () => {
+    const { L, s, w } = await ready({ startTime: 962 });
+    try {
+      const instance = await create(s, w);
+      const r = await increment(s, w, instance);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.discard(r.prepared.reservation);
+      assert.equal(s.txStatus(r.prepared.txHash).status, 'expired');
+      assert.equal(s.fenced, null, s.fenced);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('final pass FE4: a handout refused as pending is told discarded to the host (its answer checked), so the next one goes out', async () => {
+    const { L, s, w } = await ready({ startTime: 963 });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      // A live journaled body over every wallet output: whatever the honest host picks overlaps it.
+      const refs = (await s.utxos(w.address)).map((u) => `${u.tx_hash}#${u.output_index}`);
+      const cbor = buildPlainTx({ inputs: refs.map((ref) => ({ ref, value: new Map([['lovelace', 10_000_000n]]) })),
+        change: enterpriseAddress({ type: 'key', hash: '00'.repeat(28) }, 0), params: PARAMS, ttl: L.slot + 20 });
+      s.journal.record({ reservation: 'blocker', txHash: parseTx(cbor).hash, cbor, validTo: L.slot + 20, validFrom: null });
+      await assert.rejects(increment(s, w, instance), (e) => e.code === 'pending');
+      assert.equal(s.fenced, null, 'the honest host answered discarded');
+      s.journal.remove('blocker');
+      await increment(s, w, instance);   // the host released the refused body's inputs
     } finally {
       await s.close();
     }
@@ -1310,16 +1579,30 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       advanceSlots(L, 1);
       lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'reuse' });
       await assert.rejects(increment(s, w, second), (e) => e.code === 'pending');
-      assert.equal(s.fenced, null);
-      // Past the held body's margin, before the watcher's next pass: the chain says expired, the new body goes out.
-      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
-      lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'reuse2' });
-      await increment(s, w, second);
-      assert.equal(s.txStatus(held.prepared.txHash).status, 'expired');
-      assert.ok(s.journal.find('reuse2'));
-      assert.equal(s.fenced, null);
+      // Not blamed for the overlap; this lying host is fenced only by its answer to the discard (FE4).
+      assert.match(s.fenced ?? '', /discarded/);
     } finally {
       await s.close();
+    }
+    // Past the held body's margin, before the watcher's next pass: the chain says expired, the new body goes out.
+    lie = null;
+    const t = await ready({ startTime: 186.5 * 2, launch: lyingLaunch({ prepare: async (r, p) => (lie ? { ...r, prepared: { ...r.prepared, ...(await lie(p)) } } : r) }) });
+    try {
+      const instance = await create(t.s, t.w);
+      advanceSlots(t.L, TTL + SETTLEMENT_SLOTS + 2);
+      await t.s.tick();
+      t.L.fund(t.w.address, 500n * ADA);
+      const held = await increment(t.s, t.w, instance);
+      const ref = parseTx(held.prepared.cbor).inputs.map((x) => (typeof x === 'string' ? x : `${x.txHash}#${x.index}`))[0];
+      const second = await create(t.s, t.w);
+      advanceSlots(t.L, TTL + SETTLEMENT_SLOTS + 2);
+      lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'reuse2' });
+      await increment(t.s, t.w, second);
+      assert.equal(t.s.txStatus(held.prepared.txHash).status, 'expired');
+      assert.ok(t.s.journal.find('reuse2'));
+      assert.equal(t.s.fenced, null);
+    } finally {
+      await t.s.close();
     }
   });
 
@@ -1351,12 +1634,14 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       advanceSlots(L, SETTLEMENT_SLOTS + 5);   // found already past its depth margin
       let open;
       chain.indexed = () => new Promise((ok) => { open = ok; });
-      const pass = s.tick();
+      const pass = s.pass();
       await new Promise((ok) => setTimeout(ok, 200));
       assert.equal(s.journal.find(r.prepared.reservation), null, 'the host and the journal: settled at once');
       assert.notEqual(s.txStatus(r.prepared.txHash).status, 'final', 'the page: not before the indexes');
+      await pass;   // the pass does not wait for the indexes (final pass FE2)
+      assert.notEqual(s.txStatus(r.prepared.txHash).status, 'final');
       open();
-      await pass;
+      await new Promise((ok) => setTimeout(ok, 50));
       assert.equal(s.txStatus(r.prepared.txHash).status, 'final');
     } finally {
       chain.indexed = async () => {};
@@ -1391,7 +1676,7 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       advanceSlots(L, SETTLEMENT_SLOTS + 1);
       await s.tick();
       assert.equal(s.txStatus(landed.prepared.txHash).status, 'final');
-      // A handed-out body the page never signed survives a restart too, and expires.
+      // A body the page never signed (no wallet had it, never submitted): not restored after a restart (FD3) …
       const instance = (await s.instances(COUNTER)).items.find((x) => x.instance).instance;
       waiting = await increment(s, w, instance);
     } finally {
@@ -1399,12 +1684,12 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     }
     s = await session(L, chain, { startTime: 104 });
     try {
-      assert.equal(s.status().restored, 1);
-      assert.equal(s.txStatus(waiting.prepared.txHash).status, 'handedOut');
-      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 1);
-      await s.tick();
-      assert.equal(s.txStatus(waiting.prepared.txHash).status, 'expired');
+      assert.equal(s.status().restored, 0);
+      assert.equal(s.txStatus(waiting.prepared.txHash).status, 'discarded');
       assert.deepEqual(s.journal.entries, []);
+      // … so the instance is not blocked until its expiry.
+      const instance = (await s.instances(COUNTER)).items.find((x) => x.instance).instance;
+      await increment(s, w, instance);
     } finally {
       await s.close();
     }
@@ -1432,8 +1717,28 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     // An invalid journal with no high-water mark cannot be fenced: refused.
     const c = await openJournal({ root: real, chain: identity(107), state });
     c.close();
-    writeFileSync(c.file, '{"version":1,"entries":[{"reservation":"x"}]}');
+    writeFileSync(c.file, '{"version":2,"entries":[{"reservation":"x"}]}');
     await assert.rejects(session(L, fakeChain(L, 107), { startTime: 107 }), (e) => e.code === 'journalCorrupt');
+  });
+
+  test('FD4: SIGHUP stops joust playground as Ctrl-C does', async () => {
+    // Its own project, with this checkout's whole @julclang/joust installed (joust hands over to the project's copy;
+    // the shared test project's copy holds the dev host's files only). No session starts: no page opens it.
+    const own = await project();
+    rmSync(join(own, 'node_modules/@julclang/joust'), { recursive: true, force: true });
+    symlinkSync(join(repo, 'js/joust'), join(own, 'node_modules/@julclang/joust'), 'dir');
+    const p = spawn(process.execPath, [join(repo, 'js/joust/bin/joust.js'), 'playground', '--no-open'],
+      { cwd: own, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { out += d; });
+    const exited = new Promise((ok) => p.on('exit', (code, signal) => ok({ code, signal })));
+    for (const until = Date.now() + 240_000; !/Ctrl-C stops the playground/.test(out) && Date.now() < until;) await new Promise((ok) => setTimeout(ok, 200));
+    assert.match(out, /Ctrl-C stops the playground/);
+    p.kill('SIGHUP');
+    const r = await exited;
+    rmSync(own, { recursive: true, force: true });
+    assert.deepEqual(r, { code: 0, signal: null }, out);
   });
 
   test('plutusScriptOf: a provider\'s script CBOR, single- or double-wrapped, as the protocol\'s script read', async () => {
@@ -1530,6 +1835,147 @@ describe('ADR-0024 M3: the server in DevKit mode, mounted as joust dev mounts it
 });
 
 // ---- the browser path over the controlled chain (#179 r2 P2s): the page itself, in Chromium
+
+describe('final pass FE1 (probe C): a registration Yaci Store cannot tell is learned again in a new session, never a loop', { skip }, () => {
+  let root, state;
+  before(async () => {
+    root = install();
+    mkdirSync(join(root, 'contracts/app'), { recursive: true });
+    writeFileSync(join(root, 'contracts/app/Box.java'), `package app;
+import java.math.BigInteger;
+import org.julclang.state.api.Action;
+import org.julclang.state.api.Init;
+import org.julclang.state.api.MerkleMap;
+import org.julclang.state.api.MerkleMaps;
+import org.julclang.state.api.StateContract;
+@StateContract
+public class Box {
+    public record State(BigInteger n, MerkleMap m) {}
+    @Init
+    public static State init() { return new State(BigInteger.ZERO, MerkleMaps.empty()); }
+    @Action
+    public static State bump(State s, BigInteger by) { return new State(s.n().add(by), s.m()); }
+}
+`);
+    writeFileSync(join(root, 'joust.config.json'), '{ "contracts": "contracts" }');
+    const { build } = await import('../src/build.js');
+    const r = await build({ root, log: () => {} });
+    assert.ok(r.ok, JSON.stringify(r.diagnostics));
+    state = mkdtempSync(join(tmpdir(), 'joust-state-'));
+  });
+  after(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(state, { recursive: true, force: true });
+  });
+  const open = (L, chain, startTime) => devkitSession({ id: 's1', root, net: net(L), identity: identity(startTime), chain, state, ttlSlots: TTL,
+    clock: L.clock, nowSlot: () => L.slot, topUp: async (a, ada) => L.fund(a, BigInt(ada) * ADA), pollMs: 3_600_000 });
+  const yaciLike = async (startTime) => {
+    const L = memoryLedger({ engine: await theEngine(), attacks: false });
+    const chain = fakeChain(L, startTime);
+    chain.stakeRegistered = async () => undefined;   // Yaci Store: registered and unknown answer alike
+    return { L, chain };
+  };
+  /** Publishes the outstanding prerequisites one by one, each final before the next. */
+  async function publishAll(s, L, w) {
+    for (let round = 0; round < 6; round++) {
+      const [p] = await s.prerequisites('app.Box');
+      if (!p) return;
+      const r = await s.publish('app.Box', p.id, w.address);
+      if (!r?.prepared) continue;
+      await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+      await s.tick();
+      advanceSlots(L, SETTLEMENT_SLOTS + 2);
+      await s.tick();
+    }
+    assert.fail('the prerequisites did not settle');
+  }
+
+  test('FE6: session 1 publishes and finalises; session 2 is taught the registration, lists nothing, and its first call prepares at once', async () => {
+    const { L, chain } = await yaciLike(970);
+    const w = await wallet();
+    L.fund(w.address, 1000n * ADA);
+    let s = await open(L, chain, 970);
+    try {
+      await publishAll(s, L, w);
+      assert.deepEqual(await s.prerequisites('app.Box'), []);
+      assert.equal(s.journal.registrations.length, 1, 'kept beside the journal');
+    } finally {
+      await s.close();
+    }
+    s = await open(L, chain, 970);
+    try {
+      assert.deepEqual(await s.prerequisites('app.Box'), [], 'taught before anything is listed: nothing published again');
+      const r = await s.prepare({ contract: 'app.Box', kind: 'init', method: 'init', address: w.address, args: {} });
+      assert.ok(r.prepared, 'the first call prepares at once (no reservation of a refused republication to wait out)');
+      assert.equal(s.fenced, null);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('FE1 fallback: a registration this playground never saw (made elsewhere) is learned from the refusal of its publication', async () => {
+    const { L, chain } = await yaciLike(972);
+    const w = await wallet();
+    L.fund(w.address, 1000n * ADA);
+    let s = await open(L, chain, 972);
+    const regs = () => join(s.journal.dir, s.journal.file.split('/').at(-1).replace('.journal.json', '.registrations.json'));
+    try {
+      await publishAll(s, L, w);
+    } finally {
+      await s.close();
+    }
+    unlinkSync(regs());   // as if registered by someone else
+    s = await open(L, chain, 972);
+    try {
+      const reg = (await s.prerequisites('app.Box')).find((p) => p.id.startsWith('stakeRegistration'));
+      assert.ok(reg, 'a host that was not taught lists it');
+      const r = await s.publish('app.Box', reg.id, w.address);
+      await assert.rejects(s.submit(r.prepared.reservation, await signed(w, r.prepared)), (e) => e.code === 'alreadyRegistered');
+      assert.ok(!(await s.prerequisites('app.Box')).some((p) => p.id.startsWith('stakeRegistration')), 'learned: no loop');
+      assert.equal(s.journal.registrations.length, 1, 'and kept for the next session');
+      assert.equal(s.fenced, null);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('FE6: an unreadable registration list refuses the open', async () => {
+    const { L, chain } = await yaciLike(973);
+    let s = await open(L, chain, 973);
+    const file = join(s.journal.dir, s.journal.file.split('/').at(-1).replace('.journal.json', '.registrations.json'));
+    await s.close();
+    writeFileSync(file, '{"registrations":[{"credential":"zz"}]}');
+    await assert.rejects(open(L, chain, 973), (e) => e.code === 'journalUnreadable');
+  });
+
+  test('a registration that became final while no playground ran is told to the restored host', async () => {
+    const { L, chain } = await yaciLike(971);
+    const w = await wallet();
+    L.fund(w.address, 1000n * ADA);
+    let s = await open(L, chain, 971);
+    try {
+      for (let round = 0; round < 6; round++) {
+        const [p] = await s.prerequisites('app.Box');
+        assert.ok(p);
+        const r = await s.publish('app.Box', p.id, w.address);
+        await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+        await s.tick();
+        if (p.id.startsWith('stakeRegistration')) break;   // shallow: the session closes before it is final
+        advanceSlots(L, SETTLEMENT_SLOTS + 2);
+        await s.tick();
+      }
+    } finally {
+      await s.close();
+    }
+    advanceSlots(L, SETTLEMENT_SLOTS + 2);   // final while no playground runs
+    s = await open(L, chain, 971);
+    try {
+      assert.ok(!(await s.prerequisites('app.Box')).some((p) => p.id.startsWith('stakeRegistration')));
+    } finally {
+      await s.close();
+    }
+  });
+});
 
 const chromium = await chromiumOrNull();
 describe('ADR-0024 M3 in Chromium over the controlled chain: late refusals, a CIP-30 input that is gone', {
