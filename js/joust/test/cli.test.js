@@ -105,6 +105,10 @@ test('without the project\'s package, or in a Gradle build, the npm joust refuse
   r = run(gradle, ['build']);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /is a Gradle build; this is the npm joust/);
+  // ADR-0024 D3: the playground runs in a Gradle build, through the build's own wrapper only (here: none).
+  r = run(gradle, ['playground', '--no-open']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /no executable Gradle wrapper at .*never a gradle from PATH/);
 });
 
 test('no trusted project: project commands are refused, never run on the working directory', () => {

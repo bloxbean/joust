@@ -65,6 +65,17 @@ A generated page for every contract the project builds, Java or `.jsc`, with no 
 models and evaluates the scripts with JuLC's VM, with the attack suite on every script transaction (a toggle in the
 banner). It never attaches to or starts a network. DevKit mode and Connect wallet come in a later milestone.
 
+The same command works in a **Gradle project** (ADR-0024 M2): with the native `joust`, `joust playground` in a Gradle
+build runs `./gradlew build joustHostSpec` (the build's own gates: `checkJscAbi`, the lock check; the playground never
+accepts a change, so `--accept-abi` and `--accept-lock` are refused there: use `./gradlew acceptJscAbi` or
+`./gradlew acceptJoustLock`), then the JVM dev host on a private, verified copy of the build (the snapshot whose digest
+`joustHostSpec` recorded). Prerequisites: Node.js 22+ besides the project's JDK 25. The native `joust` runs a
+`@julclang/joust` of its own version, never the project's: the first `joust playground` installs it with npm into
+`~/.joust/playground/<version>` (npm checks the package's published integrity; no install script runs), later runs use
+that copy. The page is the same in every combination of Java or `.jsc` and npm or Gradle; the JVM host also runs named
+views (on npm the page says views are not available). A rebuild during a session (`./gradlew build joustHostSpec`) marks
+it stale; a new session runs the build again and uses the new snapshot.
+
 A two-identity Counter walkthrough:
 
 1. `npx joust playground` builds through the usual gates (a changed `.jsc` ABI or `joust.lock` fails unless

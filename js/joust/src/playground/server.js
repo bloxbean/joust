@@ -56,7 +56,8 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
 /**
  * Starts the playground server.
  *
- * @param o.root     the npm project (built: build/joust/contracts.json)
+ * @param o.root     the project: npm (built: build/joust/contracts.json) or Gradle (with o.source)
+ * @param o.source   the build sessions pin (default the npm project's; gradle.js's gradleSource for Gradle)
  * @param o.engine   the runtime engine (loadEngine()) for the offline ledgers
  * @param o.page     the page: { 'index.html': Buffer, 'assets/x.js': Buffer, … } (see page.js)
  * @param o.port     default 0 (any free port)
@@ -64,7 +65,7 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * @returns { url (with the token in its fragment), port, token, close() }
  */
 export async function startPlayground({ root, engine, page, port = 0, attacks = true, log = () => {},
-  session: makeSession = offlineSession } = {}) {
+  session: makeSession = offlineSession, source } = {}) {
   const token = randomBytes(32).toString('base64url');
   const tokenBytes = Buffer.from(token);
   const sessions = new Map();     // id -> session (Map order = least recently used first)
@@ -86,7 +87,7 @@ export async function startPlayground({ root, engine, page, port = 0, attacks = 
       s.close().catch(() => {});
     }
     const id = 's' + ++counter;
-    const s = await makeSession({ id, root, engine, ledger: prior?.ledger, attacks: !!a,
+    const s = await makeSession({ id, root, engine, ledger: prior?.ledger, attacks: !!a, ...(source ? { source } : {}),
       onEnd: (reason) => log(`session ${id}: the dev host ended (${reason})`) });
     if (prior) {
       // The old session's host is done with; its ledger lives on in the new one (D2).
@@ -136,7 +137,7 @@ export async function startPlayground({ root, engine, page, port = 0, attacks = 
       return use(b.session).prepare(b.call);
     },
     'view': async (b) => use(b.session).view(str(b.contract, 'contract', CONTRACT), str(b.instance, 'instance', /^[0-9a-f]{64}$/),
-      b.view ?? null, b.args ?? {}),
+      b.view == null ? null : str(b.view, 'view', /^[A-Za-z_$][\w$]{0,200}$/), b.args ?? {}),
     'instances': async (b) => use(b.session).instances(str(b.contract, 'contract', CONTRACT), b.limit ?? 50),
     'objects': async (b) => use(b.session).objects(str(b.contract, 'contract', CONTRACT), str(b.instance, 'instance', /^[0-9a-f]{64}$/), b.limit ?? 50),
     'page': async (b) => use(b.session).page(b.method === 'objects' ? 'objects' : 'instances', str(b.listing, 'listing'), b.after, b.limit ?? 50),
