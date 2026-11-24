@@ -71,6 +71,21 @@ function* upwards(start, env) {
   }
 }
 
+/**
+ * The Gradle build root of the project at `dir` (as the native joust's Locator.gradleBuildRoot): the nearest directory
+ * at or above it with a settings file, walking only through trusted directories (owned by this user, or listed in
+ * JOUST_SAFE_DIRS) and never to the filesystem root; else `dir` itself. A settings file or wrapper in a shared or foreign
+ * ancestor is never used. `isTrusted` is for tests.
+ */
+export function gradleBuildRoot(dir, env = process.env, isTrusted = trusted) {
+  const stop = typeof process.getuid === 'function' ? undefined : resolve(homedir());
+  for (let d = resolve(dir); dirname(d) !== d && isTrusted(d, env); d = dirname(d)) {
+    if (isFile(join(d, 'settings.gradle')) || isFile(join(d, 'settings.gradle.kts'))) return d;
+    if (d === stop) break;
+  }
+  return resolve(dir);
+}
+
 /** `{ kind: 'npm'|'gradle', root }`, or undefined when no project is found. */
 export function locate(cwd = process.cwd(), env = process.env) {
   for (const d of upwards(cwd, env)) {

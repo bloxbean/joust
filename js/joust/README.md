@@ -69,10 +69,12 @@ The same command works in a **Gradle project** (ADR-0024 M2): with the native `j
 build runs `./gradlew build joustHostSpec` (the build's own gates: `checkJscAbi`, the lock check; the playground never
 accepts a change, so `--accept-abi` and `--accept-lock` are refused there: use `./gradlew acceptJscAbi` or
 `./gradlew acceptJoustLock`), then the JVM dev host on a private, verified copy of the build (the snapshot whose digest
-`joustHostSpec` recorded). Prerequisites: Node.js 22+ besides the project's JDK 25. The native `joust` runs a
+`joustHostSpec` recorded). The wrapper is the build's own (the nearest settings file's directory, looking only through
+directories you own or list in `JOUST_SAFE_DIRS`, else the project's), and the JDK the spec names must be a JDK 25+
+(its `release` file). Prerequisites: Node.js 22+ besides the project's JDK 25. The native `joust` runs a
 `@julclang/joust` of its own version, never the project's: the first `joust playground` installs it with npm into
 `~/.joust/playground/<version>` (npm checks the package's published integrity; no install script runs), later runs use
-that copy. The page is the same in every combination of Java or `.jsc` and npm or Gradle; the JVM host also runs named
+that copy, only while it is yours and private (mode 0700, no links) and complete for that version. The page is the same in every combination of Java or `.jsc` and npm or Gradle; the JVM host also runs named
 views (on npm the page says views are not available). A rebuild during a session (`./gradlew build joustHostSpec`) marks
 it stale; a new session runs the build again and uses the new snapshot.
 
