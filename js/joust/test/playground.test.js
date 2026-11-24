@@ -584,6 +584,21 @@ for (const kind of ['java', 'jsc']) {
       assert.deepEqual(errors, []);
     });
 
+    test('D8: the command\'s launcher file opens the page (a file:// navigation is cross-site), the token arrives', async () => {
+      const { writeLauncher } = await import('../src/playground/index.js');
+      const launcher = writeLauncher(server.url);
+      const other = await browser.newPage();
+      try {
+        assert.equal(statSync(launcher.file).mode & 0o777, 0o600);
+        await other.goto(launcher.link);
+        await other.waitForSelector('body[data-ready=true]', { timeout: 120_000 });
+        assert.equal(new URL(other.url()).hash, '', 'the page took the token out of the URL');
+        assert.match(await other.locator('#banner').innerText(), /offline/i);
+      } finally {
+        await other.close();
+        launcher.remove();
+      }
+    });
     test('I1: no request carries a mnemonic or a key; I10: the project is untouched', async () => {
       const { wordlist } = await import('@scure/bip39/wordlists/english');
       const words = new Set(wordlist);
