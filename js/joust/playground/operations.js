@@ -87,3 +87,13 @@ export const releasable = (r) => !r.landed && Array.isArray(r.attempts) && r.att
 export function keyedRefusal(signer, keyed) {
   return keyed && signer?.cip30 ? 'unsupported: keyed calls from a connected wallet come later; use a test identity' : null;
 }
+
+/**
+ * When a keyed operation's record is cleared after its call succeeded: offline at once (the ledger has no rollbacks);
+ * on DevKit only at final ('final'), never at a shallow inclusion: until then a reload and a retry find the record and
+ * reuse its designation and attempt.
+ */
+export function opDone(onDevkit, succeeded) {
+  if (!succeeded) return 'keep';
+  return onDevkit ? 'final' : 'clear';
+}

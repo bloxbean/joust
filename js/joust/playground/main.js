@@ -18,7 +18,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { classify, encode, render, unsupportedPaths, FormError } from './form.js';
 import { anchorsOf, checkPublication, pageCheck, snapToUtxo, isKeyedRequest, foreignPayerInput } from './check.js';
 import { symbolic, concrete, outcomeOf, sameOutcome, exportScenario, importScenario, quorumKeyNames, recanonical } from './scenario.js';
-import { operationId, operationRequest, reconcile as reconcileAttempts, decide, safeSlot, releasable, keyedRefusal } from './operations.js';
+import { operationId, operationRequest, reconcile as reconcileAttempts, decide, safeSlot, releasable, keyedRefusal, opDone } from './operations.js';
 
 const ADA = 1_000_000n;
 const FUND_ADA = 1000n;
@@ -806,8 +806,10 @@ async function call2(request, meta, signer, cosigners, label) {
     // Nothing left the page (a check refused, a decline, a signature that failed): the designation is released too.
     if (!report?.submitted && op) await ops.step({ action: 'release', id: op.id }).catch(() => {});
   }
-  // A keyed operation is done once its transaction is in (offline at once; on DevKit at inclusion).
-  if (op) {
+  // A keyed operation is done once its transaction is final: offline at once; on DevKit the settlement's background
+  // poll clears it at final (a shallow inclusion may roll back: the record, its designation and attempt, stay until
+  // then, so a reload and a retry reuse them).
+  if (op && opDone(devkit(), true) === 'clear') {
     await ops.step({ action: 'remove', id: op.id });
     await drawPendingOps();
   }
@@ -1057,7 +1059,10 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
   }
   report.submitted = true;
   // 7. settle: on DevKit as the chain settles it (I7); offline at once
-  if (devkit()) return settlement(res, label);
+  if (devkit()) return settlement(res, label, op ? async () => {
+    await ops.step({ action: 'remove', id: op.id });
+    await drawPendingOps();
+  } : null);
   record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
   confirmedNotes(label, res);
   await refresh();
@@ -1113,7 +1118,7 @@ async function walletStillMatches(signer, cbor, label, { publication = false } =
  * again), then on to final in the background. Never shown as confirmed before the chain reported it included (I7);
  * expiry, or no inclusion within the window, fails at stage confirmation.
  */
-async function settlement(res, label) {
+async function settlement(res, label, onFinal = null) {
   const entry = { label, outcome: 'submitted', txHash: res.txHash };
   state.history.unshift({ at: state.session?.slot ?? null, ...entry });
   const update = (patch) => {
@@ -1147,9 +1152,11 @@ async function settlement(res, label) {
   note(`${label}: included in slot ${included.slot} (not final yet)`, 'ok');
   await refresh();
   // On to final, without holding the page.
-  poll((st) => st.status === 'final').then((st) => {
+  poll((st) => st.status === 'final').then(async (st) => {
     update({ outcome: 'final', slot: st.slot });
     note(`${label}: final (slot ${st.slot})`, 'ok');
+    // A keyed operation's record is cleared only now (an expired or rolled-back body keeps it: recovery takes over).
+    if (onFinal) await onFinal().catch((e) => note(`${label}: the keyed operation record was not cleared (${e.message})`, 'warn'));
   }, (e) => note(`${label}: ${e.message}`, 'error'));
   return { ...res, slot: included.slot };
 }

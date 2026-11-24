@@ -18,7 +18,7 @@ import { startPlayground } from '../src/playground/server.js';
 import { anchorsFor, publishAll, run } from './playground/flow.js';
 import { chromiumOrNull } from './playground/walkthrough.js';
 import { symbolic, concrete, exportScenario, importScenario, sameOutcome, outcomeOf, quorumKeyNames, recanonical } from '../playground/scenario.js';
-import { operationRequest, reconcile, safeSlot, decide, releasable, keyedRefusal } from '../playground/operations.js';
+import { operationRequest, reconcile, safeSlot, decide, releasable, keyedRefusal, opDone } from '../playground/operations.js';
 import { applyOperation } from '../src/playground/operations.js';
 import { openJournal } from '../src/playground/journal.js';
 import { readdirSync as readdirOf } from 'node:fs';
@@ -284,6 +284,25 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     // Rolled back: the inclusion is gone; the attempt can still land until 100 + 10, then nobody can tell.
     assert.equal((await reconcile(att, { lookup: async () => ({ landed: false, tip: 105 }), settlementSlots: 10 })).state, 'pending');
     assert.equal((await reconcile(att, { lookup: async () => ({ landed: false, tip: 111 }), settlementSlots: 10 })).state, 'ambiguous');
+  });
+  test('DevKit: submit, included, reload, rollback, retry reuses the original designation (Codex M4 last2)', async () => {
+    // The call succeeded at inclusion: on DevKit the record is kept (cleared only by the final poll); offline at once.
+    assert.equal(opDone(true, true), 'final');
+    assert.equal(opDone(false, true), 'clear');
+    // The server-kept record survives the reload.
+    let rows = applyOperation([], { action: 'create', record: { id: 'op', contract: 'c', method: 'init', instance: null, key: null,
+      payer: 'addr_test1x', designated: 'de'.repeat(32) + '#0', attempts: [] } }).rows;
+    rows = applyOperation(rows, { action: 'addAttempt', id: 'op', attempt: { txHash: 'ab'.repeat(32), validTo: 200 } }).rows;
+    const record = rows[0];
+    // Shallow on the retry: it waits (not landed, not a new designation).
+    const shallow = await reconcile(record, { lookup: async () => ({ landed: true, final: false, slot: 150, tip: 152 }), settlementSlots: 10 });
+    assert.equal(decide(record, shallow), 'reuse');
+    assert.equal(shallow.shallow, 'ab'.repeat(32));
+    // Rolled back before the window ends: pending again, and the retry reuses the same record and designation.
+    const back = await reconcile(record, { lookup: async () => ({ landed: false, final: false, slot: null, tip: 160 }), settlementSlots: 10 });
+    assert.equal(back.state, 'pending');
+    assert.equal(decide(record, back), 'reuse');
+    assert.equal(operationRequest(record).designated, 'de'.repeat(32) + '#0', 'the original designation');
   });
   test('keyed calls are for the page\'s identities: a connected CIP-30 wallet gets them disabled, with the reason (Codex M4 last)', () => {
     assert.match(keyedRefusal({ cip30: true }, true), /connected wallet come later; use a test identity/);
