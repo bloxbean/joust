@@ -93,9 +93,9 @@ const listed = (dir, env) => (env.JOUST_SAFE_DIRS ?? '').split(delimiter).filter
  *   searches upwards itself, so a build without its own settings file is refused, and one whose settings file sits in
  *   a directory the walk may not enter is named.
  * - Exactly one settings candidate, a regular file (not a link); the wrapper a regular, executable file (not a link).
- * - Unless the root is listed in JOUST_SAFE_DIRS: the settings file and the wrapper are this user's (or root's), and
- *   none of the directories walked (the project up to the root), the settings file or the wrapper is writable by
- *   others. Every such path is named in one refusal, with one chmod line to fix them all (umask 002 systems).
+ * - Unless the root is listed in JOUST_SAFE_DIRS: the settings file and the wrapper are this user's (or root's) and not
+ *   writable by others. Each directory walked (the project up to the root) that is not itself listed is not writable
+ *   by others either. Every such path is named in one refusal, with one chmod line to fix them all (umask 002).
  */
 export function gradleBuild(root, { env = process.env, isTrusted = trusted, platform = process.platform } = {}) {
   const project = realpathSync(root);
@@ -158,19 +158,24 @@ export function gradleBuild(root, { env = process.env, isTrusted = trusted, plat
   if (platform === 'win32') {
     const problem = windowsCommandProblem(gradlew);
     if (problem) fail(problem);
-  } else if (!listed(buildRoot, env)) {
-    for (const [file, st] of [[settings, candidates[0].st], [gradlew, wrapper]]) {
-      const ownerOk = typeof process.getuid !== 'function' || st.uid === process.getuid() || st.uid === 0;
-      if (!ownerOk) fail(`${file} belongs to another user (uid ${st.uid}): the build's settings and wrapper must be yours, or list ${buildRoot} in JOUST_SAFE_DIRS`);
+  } else {
+    // Listing the root exempts the settings file and the wrapper; each directory walked is checked unless it is listed
+    // itself (listing the root does not vouch for the directories below it).
+    const rootListed = listed(buildRoot, env);
+    if (!rootListed) {
+      for (const [file, st] of [[settings, candidates[0].st], [gradlew, wrapper]]) {
+        const ownerOk = typeof process.getuid !== 'function' || st.uid === process.getuid() || st.uid === 0;
+        if (!ownerOk) fail(`${file} belongs to another user (uid ${st.uid}): the build's settings and wrapper must be yours, or list ${buildRoot} in JOUST_SAFE_DIRS`);
+      }
     }
-    const writable = [];
-    for (const d of walked) if (othersWrite(statSync(d))) writable.push(d);
-    if (othersWrite(candidates[0].st)) writable.push(settings);
-    if (othersWrite(wrapper)) writable.push(gradlew);
+    const dirs = walked.filter((d) => !listed(d, env) && othersWrite(statSync(d)));
+    const files = rootListed ? [] : [[settings, candidates[0].st], [gradlew, wrapper]].filter(([, st]) => othersWrite(st)).map(([f]) => f);
+    const writable = [...dirs, ...files];
     if (writable.length) {
+      const toList = [...new Set([...dirs, ...(files.length ? [buildRoot] : [])])];
       fail(`${writable.join(', ')} ${writable.length > 1 ? 'are' : 'is'} writable by others, so another account could change`
         + ` what Gradle runs. Fix (on a umask 002 system, say): chmod go-w ${writable.join(' ')}`
-        + ` (or list ${buildRoot} in JOUST_SAFE_DIRS)`);
+        + ` (or list ${toList.join(' and ')} in JOUST_SAFE_DIRS)`);
     }
   }
   return { project, buildRoot, gradlew };

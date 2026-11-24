@@ -18,7 +18,7 @@ import {
   symlinkSync, unlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, sep } from 'node:path';
+import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { crc32 } from 'node:zlib';
 import {
   GradleLaunchError, JVM_ARGS, MAIN_CLASS, SNAPSHOT_PREFIX, SPEC_PATH, checkJdk, gradleBuild, gradleSource, isGradleProject,
@@ -446,6 +446,21 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     assert.equal(gradleBuild(p.root).gradlew, gradlew);
   });
 
+  test('a listed root does not vouch for a writable directory below it (the walk from the project)', () => {
+    const p = project();
+    const sub = join(p.root, 'sub');
+    mkdirSync(sub);
+    writeFileSync(join(sub, 'build.gradle'), '');
+    chmodSync(sub, 0o777);
+    try {
+      assert.throws(() => gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }),
+        new RegExp(`: ${esc(sub)} is writable by others.*chmod go-w ${esc(sub)} \\(or list ${esc(sub)} in JOUST_SAFE_DIRS\\)`));
+      assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: [p.root, sub].join(delimiter) } }).buildRoot, p.root);
+    } finally {
+      chmodSync(sub, 0o755);
+    }
+  });
+
   test('a linked wrapper is refused like a linked settings file', () => {
     const p = project();
     const real = join(p.root, 'real-gradlew');
@@ -483,8 +498,11 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     assert.match(message, new RegExp(`^${esc(paths.join(', '))} are writable by others`));
     const line = /chmod go-w [^(]+/.exec(message)[0].trim();
     assert.equal(line, `chmod go-w ${paths.join(' ')}`);
-    assert.match(message, new RegExp(`or list ${esc(p)} in JOUST_SAFE_DIRS`));
-    assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p } }).buildRoot, p, 'or listed');
+    assert.match(message, new RegExp(`or list ${esc([sub, dirname(sub), p].join(' and '))} in JOUST_SAFE_DIRS`));
+    // Listing the root vouches for its settings file and wrapper, not for the directories below it (FG6).
+    assert.throws(() => gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p } }),
+      new RegExp(`: ${esc([sub, dirname(sub)].join(', '))} are writable by others.*chmod go-w ${esc([sub, dirname(sub)].join(' '))} \\(or list`));
+    assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: [sub, dirname(sub), p].join(delimiter) } }).buildRoot, p, 'or each listed');
     assert.equal(spawnSync('sh', ['-c', line]).status, 0);
     assert.deepEqual(gradleBuild(sub), { project: sub, buildRoot: p, gradlew: join(p, 'gradlew') }, 'the printed line fixes it');
   });
