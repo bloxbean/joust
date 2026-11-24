@@ -30,28 +30,33 @@ export async function playground({ config, root = process.cwd(), mode = 'offline
   if (!r.ok) throw new Error('joust playground: the build failed (see above)');
   const { loadEngine } = await import('@julclang/joust-runtime');
   const [engine, page] = await Promise.all([loadEngine(), pageFiles()]);
-  const server = await startPlayground({ root, engine, page, port: port ?? 0, log });
-  // D8: the token is in no log line and no process's arguments (another local user can read both). The browser is
-  // opened on a private launcher file that forwards to the tokenised URL; only --no-open prints the token, as the one
-  // way to reach the page then.
-  const unopened = () => log(`  no browser could be opened: ${server.url} (it carries this run's session token: do not share it)`);
-  const opened = open && openBrowser(server.url, unopened);
-  if (opened) {
+  let launcher = null;
+  const server = await startPlayground({ root, engine, page, port: port ?? 0, log, onPaired: () => launcher?.remove() });
+  // D8: the session token is in no file, log line or process argument. The browser opens a private launcher file (no
+  // link in any process's arguments) that forwards to a pairing link: a single-use code, valid ten minutes, which the
+  // page exchanges for the token once; the file is removed when the page pairs. Only a printed link (--no-open, or no
+  // browser could be asked) shows a code, and it pairs one page.
+  const printed = (why) => {
+    log(`  ${why}: ${server.pairingUrl()}`);
+    log('  (a single-use link, valid ten minutes: it pairs one page; run joust playground again for another)');
+  };
+  launcher = open ? openBrowser(server.pairingUrl(), () => { launcher?.remove(); printed('no browser could be opened; open this link'); }) : null;
+  if (launcher) {
     log(`joust playground (offline): http://127.0.0.1:${server.port}/ (opened in your browser)`);
-    log('  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for the link');
+    log('  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for a link');
     const close = server.close;
-    server.close = async () => { opened.remove(); return close(); };
+    server.close = async () => { launcher.remove(); return close(); };
   } else {
-    log(`joust playground (offline): ${server.url}`);
-    log('  the link carries this run\'s session token: do not share it.');
+    log(`joust playground (offline): http://127.0.0.1:${server.port}/`);
+    printed(open ? 'no browser could be opened; open this link' : 'open this link');
   }
   log('  Ctrl-C stops the playground.');
   return server;
 }
 
 /**
- * A private launcher file (mode 0600 in a fresh 0700 directory) that forwards to the tokenised URL: the browser gets a
- * file:// link, so the token is in no process's arguments.
+ * A private launcher file (mode 0600 in a fresh 0700 directory) that forwards to a pairing link: the browser gets a
+ * file:// link, so the code is in no process's arguments, and the code is spent when the page pairs.
  */
 export function writeLauncher(url) {
   const dir = mkdtempSync(join(tmpdir(), 'joust-playground-'));
@@ -75,7 +80,7 @@ function openBrowser(url, failed) {
     const [cmd, args] = process.platform === 'darwin' ? ['open', [launcher.link]]
       : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', launcher.link]] : ['xdg-open', [launcher.link]];
     spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', failed).unref();
-    // Removed after ten minutes (a browser's cold start may take a while), or when the playground stops.
+    // Removed when the page pairs, after ten minutes (the code's life), or when the playground stops.
     setTimeout(launcher.remove, 600_000).unref();
     return launcher;
   } catch {
