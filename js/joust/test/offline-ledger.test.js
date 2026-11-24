@@ -480,6 +480,14 @@ test('a witness script no purpose needs is extraneous; a reference script never 
   // Control: a reference input carrying a script nothing runs is not a witness.
   const h = await publishRef(ledger, a, SCRIPT);
   await ledger.submit(await signed(a, plain({ referenceInputs: [`${h}#0`] })));
+  // A needed script a reference input already provides is extraneous as a witness too (Conway: needed minus the
+  // reference-provided scripts); the reference alone serves the mint.
+  const second = tokens(a, 2);
+  const r = await publishRef(ledger, a, second.policy.toCore());
+  const refMint = (nativeScripts) => rawTx({ inputs: [ledger.fund(a.address, 10n * ADA)], referenceInputs: [`${r}#0`],
+    outputs: [{ address: a.address, lovelace: 9_700_000n, assets: second.units }], fee: 300_000n, mint: second.units, nativeScripts });
+  await refused(ledger, await signed(a, refMint([second.policy])), 'ExtraneousScriptWitnessesUTXOW');
+  await ledger.submit(await signed(a, refMint([])));
 });
 
 test('the inclusion slot: awaitTx resolves to it, inclusion() answers it (ADR-0024 D4)', async () => {

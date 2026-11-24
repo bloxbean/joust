@@ -111,6 +111,32 @@ describe('ADR-0024 M1 sessions', { skip }, () => {
     for (const kind of ['redeemers', 'datum', 'somethingElse']) assert.equal((await read({ kind })).unsupported, true);
   });
 
+  test('D2, I9: concurrent session requests keep the bound of four and never share a ledger', async () => {
+    let ledgers = 0;
+    const closedIds = [];
+    const stub = async ({ id, ledger }) => {
+      await new Promise((r) => setTimeout(r, 30));
+      const chain = ledger ?? { name: 'ledger' + ++ledgers };
+      return { id, ledger: chain, entries: [], status: () => ({ session: id, ledger: chain.name }),
+        close: async () => { closedIds.push(id); } };
+    };
+    const server = await startPlayground({ root, page: {}, session: stub });
+    try {
+      const call = (route, body) => post(server, route, body).then((r) => r.json);
+      await Promise.all(Array.from({ length: 12 }, () => call('sessions/new', {})));
+      assert.equal(server.sessions.size, 4, 'at most four sessions live');
+      const s1 = (await call('sessions/new', {})).result.session;
+      const [a, b] = await Promise.all([call('sessions/new', { keepLedgerOf: s1 }), call('sessions/new', { keepLedgerOf: s1 })]);
+      assert.equal([a, b].filter((r) => r.result).length, 1, 'one session takes the ledger over');
+      assert.equal([a, b].find((r) => r.error).error.code, 'unknownSession');
+      const owners = [...server.sessions.values()].filter((x) => x.ledger.name === 'ledger13');
+      assert.equal(owners.length, 1, 'one live session per ledger');
+      assert.ok(closedIds.includes(s1), 'the old session is closed');
+    } finally {
+      await server.close();
+    }
+  });
+
   test('I9: resetting one session leaves another unchanged', async () => {
     const page = { 'index.html': Buffer.from('<!doctype html>') };
     const server = await startPlayground({ root, engine: await theEngine(), page });
@@ -272,6 +298,14 @@ describe('ADR-0024 D8: the server surface', { skip }, () => {
       assert.equal((await post(server, '', undefined, { method: 'GET', path })).status, 404, path);
     }
     assert.equal((await post(server, '', undefined, { method: 'POST', path: '/' })).status, 405);
+    // Inherited names are no assets and no routes (an inherited function reaching res.end once crashed the server).
+    for (const path of ['/__defineGetter__', '/constructor', '/__proto__', '/toString', '/hasOwnProperty']) {
+      assert.equal((await post(server, '', undefined, { method: 'GET', path })).status, 404, path);
+    }
+    for (const route of ['__defineGetter__', 'constructor', 'toString']) {
+      assert.equal((await post(server, route, {})).status, 404, route);
+    }
+    assert.equal((await post(server, 'session', { session: id })).status, 200, 'the server still answers');
   });
 
   test('D8: bounded JSON bodies; no path, command or URL is taken', async () => {

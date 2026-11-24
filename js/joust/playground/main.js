@@ -4,7 +4,7 @@
 //
 // Every string from the project or the chain is rendered as text (textContent), never as HTML (D8).
 
-import { verifyPrepared, verifyPublication, plutusScriptHash, enterpriseAddress, parseTx }
+import { verifyPrepared, verifyPublication, plutusScriptHash, enterpriseAddress, baseAddress, parseTx }
   from '@julclang/state-client';
 import { devWallet } from '@julclang/state-client/devwallet';
 import { assemble } from '@julclang/state-client/ledger';
@@ -111,10 +111,9 @@ function record(entry) {
 
 // ---- session
 async function startSession(opts = {}) {
-  let previous = null;
-  try { previous = sessionStorage.getItem('joust-playground-session'); } catch { /* none */ }
-  // D5: a reload loses the identities' keys, so the old offline session's funds are unreachable: end it.
-  if (previous && !opts.keepLedgerOf) await api('session/end', { session: previous }).catch(() => {});
+  // D5: a reload loses the identities' keys, so it starts a new session. The old one is not ended here: a duplicated
+  // tab inherits sessionStorage and would end the original tab's live session. The server's bound (four sessions,
+  // least recently used ends first) retires abandoned ones.
   state.session = await api('sessions/new', opts);
   try { sessionStorage.setItem('joust-playground-session', state.session.session); } catch { /* memory only */ }
   if (!state.identities.length) for (let i = 0; i < 3; i++) state.identities.push(newIdentity(i));
@@ -221,9 +220,11 @@ async function selectContract(name) {
   // from the host's claims (ADR-0022 D13 rule 2).
   const unwrapped = unwrapScript(r.script);
   const hash = plutusScriptHash(unwrapped, 3);
-  const address = enterpriseAddress({ type: 'script', hash }, 0);
-  const deployment = await sapi('deployment', { contract: name });
   const x = r.description['x-joust'] ?? {};
+  // A stakeSelf contract's address is a base address whose stake credential is its own script (ADR-0010).
+  const script = { type: 'script', hash };
+  const address = x.stakeSelf === true ? baseAddress(script, script, 0) : enterpriseAddress(script, 0);
+  const deployment = await sapi('deployment', { contract: name });
   const needsVerifier = [...(x.actions ?? []), ...(x.creations ?? [])].some((m) => m.returns?.sends) || !!x.maps?.length;
   if (deployment.scriptHashes?.spend !== hash || deployment.addresses?.contract !== address) {
     throw new StageFailure({ stage: 'verification', code: 'deployment',
@@ -430,7 +431,7 @@ async function prerequisites(signer) {
       networkId: 0, now: r.now, ttlSlots: r.ttlSlots,
       chain: { params, utxo: async (ref) => outputs.get(ref) ?? null,
         scriptsAt: async (addr) => (await sapi('utxos', { address: addr })).map((u) => u.reference_script_hash).filter(Boolean),
-        registration: async () => 'unknown' },
+        registration: async (scriptHash) => sapi('registered', { scriptHash }) },
       limits: { maxFee: MAX_FEE } });
     if (v.problems.length) {
       await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
@@ -465,6 +466,7 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication })
         }
         record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
         note(`${label}: confirmed in slot ${res.slot} (${res.txHash.slice(0, 16)}…)`, 'ok');
+        if (res.settlement) note(`${label}: the ledger applied it, but the dev host did not take the settlement (${res.settlement}): start a new session`, 'warn');
         for (const a of res.acceptedAttacks) note(`${label}: the scripts ACCEPTED the attack "${a.name}" (${a.invariant}): ${a.detail}`, 'warn');
         await refresh();
         resolve(res);

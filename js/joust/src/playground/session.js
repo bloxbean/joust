@@ -220,13 +220,20 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
         await forward('settled', { reservation, txHash: hash, status: 'discarded', tip: chain.slot }).catch(() => {});
         throw new StageError('ledger', e.rule, e.message, { rule: e.rule, notModelled: e.rule === 'NotModelled' });
       }
+      // The ledger applied it: record that first, so a host that fails to take the settlement cannot hide an applied
+      // transaction (a retried increment would apply twice).
       const slot = typeof chain.inclusion === 'function' ? chain.inclusion(hash) : chain.slot - 1;
       reservations.delete(reservation);
-      const settled = await forward('settled', { reservation, txHash: hash, status: 'confirmed', slot, tip: chain.slot });
       const ran = chain.attacks().slice(before).filter((a) => a.tx === hash);
-      const entry = { txHash: hash, slot, state: settled?.state ?? null, attacks: ran.length,
+      const entry = { txHash: hash, slot, state: null, attacks: ran.length,
         acceptedAttacks: ran.filter((a) => !a.refused).map(({ name, invariant, detail }) => ({ name, invariant, detail })) };
       submitted.push(entry);
+      try {
+        const settled = await forward('settled', { reservation, txHash: hash, status: 'confirmed', slot, tip: chain.slot });
+        entry.state = settled?.state ?? null;
+      } catch (e) {
+        entry.settlement = String(e.message ?? e).slice(0, 500);
+      }
       return entry;
     },
     /** Outputs at an address, in the protocol's snapshot encoding (the page's wallets and checks read these). */
@@ -242,6 +249,10 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       return out;
     },
     protocolParams: () => chain.protocolParams(),
+    /** Whether a script credential's stake is registered (the trusted chain's answer, for the publication checks). */
+    async registered(scriptHash) {
+      return (await chain.account(rewardAddress({ type: 'script', hash: scriptHash }, 0))).registered === true;
+    },
     /** Funds an identity's address from nowhere (offline only, D5). */
     fund(address, lovelace) {
       const parts = (() => {

@@ -85,8 +85,10 @@ chain reads from the ledger. The page renders what the host describes, checks ev
 (publications included) before an identity signs it, and asks the server to submit. Keys never leave the page: the
 server learns addresses only. A reload starts a new session with new identities.
 
-The server listens on `127.0.0.1` only. The URL it prints carries a per-run session token in its fragment: every request
-needs it, and requests with another `Host` or `Origin` are refused. Do not share the link.
+The server listens on `127.0.0.1` only. Every request needs a per-run session token, and requests with another `Host`
+or `Origin` are refused. The command opens the page through a private launcher file, so the token appears in no log
+line or process argument; with `--no-open` (or when no browser can be opened) it prints the link with the token in its
+fragment instead. Do not share that link.
 
 What offline success means: the dev host built the transaction with this project's JOUST, the page's checks passed, the
 ledger's modelled rules passed and the scripts accepted it. It is not a node's acceptance. The ledger refuses votes,
