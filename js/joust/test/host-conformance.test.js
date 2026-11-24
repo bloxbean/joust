@@ -168,8 +168,8 @@ describe('Node protocol 1 against the JVM recordings', { skip: !images && 'requi
   });
   it('refuses Plutus data nested past 256 CBOR levels before decoding it, and keeps serving (#154 review G3-4, F1)', async () => {
     // 16,383 nested lists trapped the image (tooDeep, then the host exited): datums and Data arguments nest at most 256
-    // CBOR levels (SchemaCodec.checkNesting). No served contract takes a Data argument; decode reads its datum with the
-    // same recursive decoder, so it shows the image survives the bound.
+    // CBOR levels (SchemaCodec.checkNesting). No served contract takes a Data argument; decode reads its datum under the
+    // same bound, so it shows the image survives it.
     const v = fixture('owned-action');
     const { call } = v.params;
     start(contracts.filter(c => JSON.parse(c.description).preamble.title === call.contract));

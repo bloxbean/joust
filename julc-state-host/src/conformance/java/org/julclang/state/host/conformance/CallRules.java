@@ -2,7 +2,6 @@ package org.julclang.state.host.conformance;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 import org.julclang.state.runtime.described.SchemaCodec;
 import java.math.BigInteger;
@@ -137,7 +136,7 @@ final class CallRules {
     static PlutusData data(String hex) {
         byte[] bytes = HEX.parseHex(hex);
         Cbor.read(bytes); // Validate nesting and full consumption before the schema decoder.
-        return PlutusDataCborDecoder.decode(bytes);
+        return org.julclang.state.runtime.PlutusBytes.decode(bytes);
     }
     private JsonNode decodeDatum(String hex) { return codec.decode(datumSchema,data(hex)); }
     static String ref(JsonNode ref) { return ref.required("txId").asText()+"#"+ref.required("index").asText(); }

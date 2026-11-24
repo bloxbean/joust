@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 import org.julclang.core.types.JulcList;
 import org.julclang.core.types.JulcMap;
@@ -47,8 +46,8 @@ public final class JsonValues {
     public static final JsonValues TYPED = new JsonValues(true, true);
     /**
      * The HTTP service's codec, as it has always behaved: record reflection failures are bad values, a JSON number up
-     * to 2^53 in magnitude is accepted, malformed UTF-8 is decoded with replacement characters, and Plutus data too
-     * deep to decode is a bad value.
+     * to 2^53 in magnitude is accepted, malformed UTF-8 is decoded with replacement characters, and Plutus data of any
+     * depth decodes (iteratively; a later overflow is answered 400 by the server).
      */
     public static final JsonValues BAD_VALUES = new JsonValues(false, false);
 
@@ -102,8 +101,8 @@ public final class JsonValues {
                 catch (org.julclang.state.runtime.described.SchemaCodec.DataError e) { throw new BadValue(e.getMessage()); }
             }
             try {
-                return PlutusDataCborDecoder.decode(cbor);
-            } catch (RuntimeException | StackOverflowError e) {   // the HTTP codec's decoder may overflow on deep nesting
+                return org.julclang.state.runtime.PlutusBytes.decode(cbor);   // iterative: any depth decodes
+            } catch (RuntimeException e) {
                 throw new BadValue(path + ": not Plutus data CBOR");
             }
         }

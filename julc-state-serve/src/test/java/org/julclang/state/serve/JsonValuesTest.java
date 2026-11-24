@@ -90,19 +90,23 @@ class JsonValuesTest {
     }
 
     /**
-     * Plutus data nested past the strict wire's bound (256 levels, #154 review G3-4) is a bad value before the
-     * decoder recurses; the HTTP codec keeps calling a decoder overflow a bad value too.
+     * Plutus data nested past the strict wire's bound (256 levels, #154 review G3-4) is a bad value on the dev host's
+     * wire. The decoder itself ({@code PlutusBytes}) is iterative, so the HTTP codec, which has no such bound, decodes
+     * the same 16,000 levels on a small stack; broken CBOR is still a bad value.
      */
     @Test void tooDeepPlutusDataIsABadValue() throws Exception {
         String deep = "{\"d\": \"" + "81".repeat(16000) + "80\"}";
         var typed = onASmallStack(() -> view(JsonValues.TYPED, "data", deep));
         assertInstanceOf(JsonValues.BadValue.class, typed);
         assertTrue(typed.getMessage().contains("nested too deeply"), typed.getMessage());
-        assertInstanceOf(JsonValues.BadValue.class, onASmallStack(() -> view(JsonValues.BAD_VALUES, "data", deep)));
+        assertNull(onASmallStack(() -> view(JsonValues.BAD_VALUES, "data", deep)));
         assertEquals("0", view(JsonValues.TYPED, "data", "{\"d\": \"8180\"}").textValue());
+        String truncated = "{\"d\": \"" + "81".repeat(16000) + "\"}";
+        assertInstanceOf(JsonValues.BadValue.class, onASmallStack(() -> view(JsonValues.BAD_VALUES, "data", truncated)));
+        assertInstanceOf(JsonValues.BadValue.class, onASmallStack(() -> view(JsonValues.TYPED, "data", "{\"d\": \"8181\"}")));
     }
 
-    /** What {@code call} throws on a thread with a small stack (so the decoder's recursion overflows for certain). */
+    /** What {@code call} throws (null: nothing) on a thread with a small stack, where any recursion per level overflows. */
     static Throwable onASmallStack(java.util.concurrent.Callable<?> call) throws Exception {
         var thrown = new AtomicReference<Throwable>();
         Thread t = new Thread(null, () -> {
