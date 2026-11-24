@@ -1,6 +1,7 @@
 package org.julclang.state.toolchain;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -343,7 +345,11 @@ class JscV2HashStabilityTest {
         return e;
     }
 
+    // 11 builds of each of the 67 example contracts (the base, 9 edits and the file rename). JuLC 0.1.0-pre22 compiles
+    // about 1.8x slower than pre21, so this test takes about 7.5 minutes locally and more than 10 on CI: it gets its own
+    // limit instead of the 10-minute default.
     @Test
+    @Timeout(value = 20, unit = TimeUnit.MINUTES)
     void behaviourNeutralEdits_leaveEveryScriptHash() throws Exception {
         var table = new StringBuilder();
         int checked = 0;
@@ -390,13 +396,12 @@ class JscV2HashStabilityTest {
 
     /**
      * Design F1: the package is part of the contract's identity, recorded in the ABI manifest ({@code "contract"}), so a
-     * package move is an ABI change the gate reports, and it may move the script hash: JuLC's output depends on the order
-     * of the processor-generated validator's imports, and the contract's own import sorts by its package against the
-     * fixed library imports (bloxbean/julc#328). Asserted as it is today: a package that keeps the
-     * import's place keeps the hash, one that moves it may not; the ABI manifest changes either way.
+     * package move is an ABI change the gate reports. Since JuLC 0.1.0-pre21 (bloxbean/julc#328, JuLC ADR-075) the
+     * script no longer depends on the order of the processor-generated validator's imports, so a move keeps the script
+     * hash, wherever the contract's import sorts among the library imports; the ABI manifest changes either way.
      */
     @Test
-    void aPackageMove_isAnAbiChange_andMayMoveTheHash() throws Exception {
+    void aPackageMove_isAnAbiChange_andKeepsTheHash() throws Exception {
         String src = Files.readString(DSL.resolve("Counter2.jsc"));
         Built base = build("Counter2.jsc", src);
         String home = "org.julclang.state.examples.dsl";
@@ -410,16 +415,14 @@ class JscV2HashStabilityTest {
             hashes.put(pkg, r.contracts().get(0).scriptHash());
             System.out.println("[hash] Counter2 in " + pkg + ": " + r.contracts().get(0).scriptHash());
         }
-        assertEquals(base.hash(), hashes.get(home));
-        // The contract's import keeps its place among the validator's imports: the hash stays.
-        assertEquals(base.hash(), hashes.get("org.julclang.state.examples.moved"));
+        // Whether the contract's import keeps its place among the validator's imports (moved) or not (org.other.pkg
+        // sorts after org.julclang.stdlib.*, com.acme.app before every library import): the hash stays.
+        for (String pkg : hashes.keySet()) assertEquals(base.hash(), hashes.get(pkg), pkg);
         // Every move is an ABI change: the manifest names the contract by its package.
         for (String pkg : List.of("org.julclang.state.examples.moved", "org.other.pkg", "com.acme.app")) {
             assertNotEquals(abi.get(home), abi.get(pkg), pkg);
             assertTrue(abi.get(pkg).contains("\"contract\": \"" + pkg + ".Counter2\""), pkg);
         }
-        // Today org.other.pkg sorts after org.julclang.stdlib.*, so the import moves and the hash with it (F1's table).
-        assertNotEquals(base.hash(), hashes.get("org.other.pkg"), "if JuLC no longer depends on import order, update D12 and J20");
     }
 
     @Test

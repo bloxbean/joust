@@ -221,27 +221,39 @@ public final class StateContractHandle<S> {
      * thread token: the validator never lets it be spent (I10), so it stays available. Found on chain, or null.
      */
     public Utxo findReferenceScript() {
-        if (referenceScript != null) return referenceScript;
+        if (runtime.hostedCall()) return runtime.hostedReference(address, policyId);
+        // As VerifierHandle.find: a scoped call neither reads nor fills the cross-call cache (ADR-0022 D8).
+        boolean scoped = runtime.callScope() != null;
+        if (!scoped && referenceScript != null) return referenceScript;
         var pinned = runtime.referenceScript(policyId);
-        if (pinned != null && pinned.getAddress() != null && pinned.getAddress().equals(address)) {
+        if (pinned != null && (pinned.getAddress() == null || !pinned.getAddress().equals(address))) pinned = null;
+        if (pinned != null && !scoped) {
             referenceScript = pinned;
             return pinned;
         }
+        // A scoped call trusts only this call's answers: a pin is used once the answer shows it (a rollback may have
+        // removed it since the runtime was built; #145 Codex review), else the answer's own reference script.
+        Utxo first = null;
         try {
-            for (int page = 1; page < 20; page++) {
-                var r = runtime.backend().getUtxoService().getUtxos(address, 100, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                for (Utxo u : r.getValue()) {
-                    if (policyId.equalsIgnoreCase(u.getReferenceScriptHash())) {
-                        referenceScript = u;
+            // Unscoped, 19 pages, as always; a scoped call, or one looking for a pin, every page until the answer runs out:
+            // absence must be the answer's, not a page cut (#145 Codex).
+            // Scoped, a failed page is a failed read, not the end of the answer: absence would publish a copy (Pages).
+            var walk = new Pages(runtime, address, 100, scoped || pinned != null ? VerifierHandle.PIN_PAGES : 19);
+            for (var list = walk.next(); list != null; list = walk.next()) {
+                for (Utxo u : list) {
+                    if (!policyId.equalsIgnoreCase(u.getReferenceScriptHash())) continue;
+                    if (pinned == null) {
+                        if (!scoped) referenceScript = u;
                         return u;
                     }
+                    if (Designation.ref(u).equals(Designation.ref(pinned))) return u;
+                    if (first == null) first = u;
                 }
             }
         } catch (Exception e) {
             throw new JoustException("cannot look up the " + spec.name() + " reference script", e);
         }
-        return null;
+        return first;
     }
 
     /**
@@ -251,6 +263,7 @@ public final class StateContractHandle<S> {
     public Utxo ensureReferenceScript(Account payer) {
         Utxo existing = findReferenceScript();
         if (existing != null) return existing;
+        if (runtime.hostedCall()) throw new CallScope.Refusal("prerequisite", "missing reference script at " + address);
         var tx = new com.bloxbean.cardano.client.quicktx.Tx()
                 .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
                 .from(payer.baseAddress());
@@ -272,16 +285,32 @@ public final class StateContractHandle<S> {
                 .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
                 .from(payerAddress);
         try {
-            var ctx = Designation.builder(runtime.backend(), null).compose(tx)
+            var ctx = Designation.builder(runtime, null).compose(tx)
                     .feePayer(payerAddress)
                     .additionalSignersCount(1);
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
-            var claimed = Designation.build(payerAddress, null, ctx::build);
+            var claimed = Designation.build(runtime.claimStore(), payerAddress, null, ctx::build);
             return TxRunner.exportPrepared(runtime, "publish the " + spec.name() + " reference script", claimed);
+        } catch (ReservedInputException e) {
+            throw e;
         } catch (Exception e) {
             throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
                     + e.getMessage(), e);
         }
+    }
+
+    /** Bounded wallet publication using the complete holder answer for this call (ADR-0022 D14). */
+    public PreparedTx prepareReferenceScript(String payerAddress, long validTo, List<Utxo> holderOutputs) {
+        if (Publication.present(holderOutputs, address, policyId)) return null;
+        var tx = new com.bloxbean.cardano.client.quicktx.Tx()
+                .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script);
+        return Publication.build(runtime, payerAddress, validTo, tx);
+    }
+
+    /** Pure registration of this contract's withdrawal credential. */
+    public PreparedTx prepareStakeRegistration(String payerAddress, long validTo) {
+        return Publication.build(runtime, payerAddress, validTo,
+                new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(rewardAddress));
     }
 
     private BigInteger referenceScriptDeposit() {
@@ -496,7 +525,7 @@ public final class StateContractHandle<S> {
      * the transaction spending it is built (F63, R-E4).
      */
     private Utxo pickSeed(Account caller) {
-        return Designation.pick(caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
+        return Designation.pick(runtime.claimStore(), caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
     }
 
     private Utxo seedOf(Account caller) {
@@ -509,12 +538,41 @@ public final class StateContractHandle<S> {
             var own = TxRunner.currentOperation();
             // A wallet's prepared creation in a keyed contract: the page's designated input is the seed (ADR-0016 D11).
             if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
-            var free = r.getValue().stream().filter(u -> Designation.pickable(u, own)).toList();
-            if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
-            return free.stream()
-                    .filter(u -> u.getAmount().size() == 1)
-                    .findFirst()
-                    .orElse(free.get(0));
+            var store = runtime.claimStore();
+            if (store instanceof JvmClaimStore) {
+                // The default store: the first page, as always.
+                var free = r.getValue().stream().filter(u -> Designation.pickable(store, u, own)).toList();
+                if (!free.isEmpty()) {
+                    return free.stream().filter(u -> u.getAmount().size() == 1).findFirst().orElse(free.getFirst());
+                }
+            } else {
+                // A session store (the dev host) may reserve inputs: apply the same rule to the first 50 eligible
+                // inputs in provider order, across pages, so the seed (and the instance id and bytes) does not depend
+                // on where reserved inputs fall (#145 Codex review 5).
+                Utxo mixed = null;
+                int eligible = 0;
+                String lastFirst = null;
+                for (int page = 1; ; page++) {
+                    // A repeated page (a provider that ignores the page) is the end, checked before filtering (#145 Codex).
+                    String first = Designation.ref(r.getValue().get(0));
+                    if (first.equals(lastFirst)) break;
+                    lastFirst = first;
+                    for (Utxo u : r.getValue()) {
+                        if (!Designation.pickable(store, u, own)) continue;
+                        if (u.getAmount().size() == 1) return u;
+                        if (mixed == null) mixed = u;
+                        if (++eligible == 50) return mixed;
+                    }
+                    if (r.getValue().size() < 50) break;
+                    r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, page + 1);
+                    if (!r.isSuccessful()) throw new JoustException("deploy: cannot read the caller's UTxOs: " + r.getResponse());
+                    if (r.getValue() == null || r.getValue().isEmpty()) break;
+                }
+                if (mixed != null) return mixed;
+            }
+            throw new JoustException(store instanceof JvmClaimStore
+                    ? "deploy: every UTxO of the caller is designated by a keyed operation"
+                    : "deploy: every UTxO of the caller is designated or reserved by a pending transaction");
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {

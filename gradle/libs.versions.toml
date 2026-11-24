@@ -1,15 +1,18 @@
 [versions]
-# JuLC 0.1.0-pre21-rc1 (tag v0.1.0-pre21-rc1, main at 5483ecbc; includes bloxbean/julc#311 and #313), published to
-# the BloxBean release repository (https://repo.bloxbean.org/maven/releases; bloxbean/julc Actions run 42731736289).
-julc = "0.1.0-pre21-rc1"
-cardano-client-lib = "0.8.0-pre7"
+# JuLC 0.1.0-pre22 (tag v0.1.0-pre22 at b782bf4c, released 2026-11-19; includes bloxbean/julc#311, #313, #348),
+# on Maven Central and in the BloxBean release repository (https://repo.bloxbean.org/maven/releases). It depends on
+# cardano-client-lib 0.8.0-pre8: keep the two in step.
+julc = "0.1.0-pre22"
+cardano-client-lib = "0.8.0-pre8"
 junit = "5.11.4"
-bouncycastle = "1.83"
+# JuLC 0.1.0-pre22 uses bcprov 1.86 in every published module (julc-vm, julc-vm-java, julc-testkit).
+bouncycastle = "1.86"
 assertj = "3.25.1"
 # Coverage-guided fuzzing (as JuLC, ADR-063 D13): gradle/jazzer-fuzz.gradle.
 jazzer = "0.30.0"
 
 [libraries]
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version = "2.21.0" }
 julc-stdlib = { module = "org.julclang:julc-stdlib", version.ref = "julc" }
 julc-ledger-api = { module = "org.julclang:julc-ledger-api", version.ref = "julc" }
 julc-core = { module = "org.julclang:julc-core", version.ref = "julc" }
@@ -17,9 +20,11 @@ julc-compiler = { module = "org.julclang:julc-compiler", version.ref = "julc" }
 julc-annotation-processor = { module = "org.julclang:julc-annotation-processor", version.ref = "julc" }
 julc-cardano-client-lib = { module = "org.julclang:julc-cardano-client-lib", version.ref = "julc" }
 julc-testkit = { module = "org.julclang:julc-testkit", version.ref = "julc" }
+julc-vm-api = { module = "org.julclang:julc-vm", version.ref = "julc" }
 julc-vm-java = { module = "org.julclang:julc-vm-java", version.ref = "julc" }
 
 cardano-client-lib = { module = "com.bloxbean.cardano:cardano-client-lib", version.ref = "cardano-client-lib" }
+cardano-client-common = { module = "com.bloxbean.cardano:cardano-client-common", version.ref = "cardano-client-lib" }
 cardano-client-backend = { module = "com.bloxbean.cardano:cardano-client-backend", version.ref = "cardano-client-lib" }
 cardano-client-mpf = { module = "com.bloxbean.cardano:cardano-client-merkle-patricia-forestry", version.ref = "cardano-client-lib" }
 cardano-client-mpf-rocksdb = { module = "com.bloxbean.cardano:cardano-client-merkle-patricia-forestry-rocksdb", version.ref = "cardano-client-lib" }

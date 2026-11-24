@@ -8,7 +8,7 @@ package org.julclang.state.runtime.snapshot;
  *             {@code assetUtxos} (at an address, holding a unit), {@code output} (by reference), {@code script} (by hash)
  * @param key  the address, {@code address|unit}, {@code txHash#index} or script hash; empty for tip and parameters
  */
-public final class Need extends Error {
+public final class Need extends Error implements org.julclang.state.runtime.CallAbort {
     private final String kind;
     private final String key;
 

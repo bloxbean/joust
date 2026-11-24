@@ -1,0 +1,448 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "results.schema.json",
+  "title": "Successful forward response by outstanding method",
+  "$defs": {
+    "status": {
+      "oneOf": [
+        {"required": ["served"], "properties": {"served": {"const": true}}},
+        {
+          "required": ["unsupported"],
+          "properties": {
+            "unsupported": {
+              "enum": [
+                "protocol",
+                "runtimeVersion",
+                "views",
+                "params",
+                "maps",
+                "keyed",
+                "unverifiable",
+                "authorizedBy"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "initialize": {
+      "type": "object",
+      "properties": {
+        "protocol": {"const": 1},
+        "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "network": {"$ref": "methods.schema.json#/$defs/network"},
+        "capabilities": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "reads": {
+          "type": "array",
+          "items": {"enum": ["utxos", "output", "tip", "protocolParams", "script", "stakeRegistration", "assetHistory", "redeemers", "datum"]}
+        },
+        "versions": {
+          "type": "object",
+          "properties": {
+            "build": {
+              "type": ["object", "null"],
+              "properties": {
+                "joust": {"type": "string"},
+                "engine": {"type": ["string", "null"]},
+                "julc": {"type": ["string", "null"]}
+              },
+              "required": ["joust"],
+              "additionalProperties": false
+            },
+            "engine": {
+              "type": "object",
+              "properties": {
+                "joust": {"type": "string", "minLength": 1},
+                "image": {"type": ["string", "null"]},
+                "ccl": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+                "julc": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+                "vmProvider": {"type": "string", "minLength": 1},
+                "vmVersion": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]}
+              },
+              "required": ["joust", "ccl", "julc", "vmProvider", "vmVersion"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["build", "engine"],
+          "additionalProperties": false
+        },
+        "contracts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "scriptHashes": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {"unapplied": {"type": "string", "pattern": "^[0-9a-f]{56}$"}},
+                    "required": ["unapplied"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "spend": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+                      "mint": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+                      "stake": {"type": "string", "pattern": "^[0-9a-f]{56}$"}
+                    },
+                    "required": ["spend", "mint"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "served": {"const": true},
+              "unsupported": {"type": "string", "minLength": 1}
+            },
+            "required": ["name", "scriptHashes"],
+            "additionalProperties": false,
+            "allOf": [{"$ref": "#/$defs/status"}]
+          }
+        }
+      },
+      "required": ["protocol", "fingerprint", "network", "capabilities", "reads", "versions", "contracts"],
+      "additionalProperties": false
+    },
+    "describe": {
+      "type": "object",
+      "properties": {
+        "description": {"type": "object"},
+        "messages": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+        "calls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {"type": "string", "minLength": 1},
+              "method": {"type": "string", "minLength": 1},
+              "served": {"const": true},
+              "unsupported": {"type": "string", "minLength": 1}
+            },
+            "required": ["kind", "method"],
+            "additionalProperties": false,
+            "allOf": [{"$ref": "#/$defs/status"}]
+          }
+        }
+      },
+      "required": ["description", "messages", "calls"],
+      "additionalProperties": false
+    },
+    "prepare": {
+      "type": "object",
+      "properties": {"prepared": {"$ref": "#/$defs/prepared"}, "predicted": {"$ref": "#/$defs/predicted"}},
+      "required": ["prepared", "predicted"],
+      "additionalProperties": false
+    },
+    "settled": {
+      "type": "object",
+      "properties": {"state": {"enum": ["prepared", "shallow", "confirmed", "expired", "discarded"]}},
+      "required": ["state"],
+      "additionalProperties": false
+    },
+    "restore": {
+      "type": "object",
+      "properties": {"reservations": {"type": "array", "items": {"type": "string", "minLength": 1}}},
+      "required": ["reservations"],
+      "additionalProperties": false
+    },
+    "reset": {"type": "object", "properties": {}, "required": [], "additionalProperties": false},
+    "shutdown": {"type": "object", "properties": {}, "required": [], "additionalProperties": false},
+    "prepared": {
+      "type": "object",
+      "properties": {
+        "reservation": {"type": "string", "minLength": 1},
+        "cbor": {"type": "string", "pattern": "^(?:[a-fA-F0-9]{2})+$"},
+        "txHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "validFrom": {"anyOf": [{"type": "integer", "minimum": 0, "maximum": 9223372036854775807}, {"type": "null"}]},
+        "validTo": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "signers": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{56}$"}},
+        "plan": {"type": "object"},
+        "instance": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "object": {"type": "string", "pattern": "^(?:[0-9a-f]{2})+$"}
+      },
+      "required": ["reservation", "cbor", "txHash", "validFrom", "validTo", "signers", "plan"],
+      "additionalProperties": false
+    },
+    "predicted": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "predicted": {"const": true},
+                "type": {"type": "string", "minLength": 1},
+                "value": {},
+                "index": {"type": "integer", "minimum": 0},
+                "instance": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              },
+              "required": ["predicted", "type", "value", "index", "instance"],
+              "additionalProperties": false
+            },
+            {"type": "null"}
+          ]
+        },
+        "objects": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "predicted": {"const": true},
+                  "type": {"type": "string", "minLength": 1},
+                  "value": {},
+                  "effect": {"enum": ["created", "updated", "retired"]},
+                  "index": {"type": "integer", "minimum": 0},
+                  "object": {"type": "string", "pattern": "^(?:4b|4f)[0-9a-f]{56}$"}
+                },
+                "required": ["predicted", "type", "value", "effect", "index", "object"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "predicted": {"const": true},
+                  "effect": {"const": "removed"},
+                  "object": {"type": "string", "pattern": "^(?:4b|4f)[0-9a-f]{56}$"}
+                },
+                "required": ["predicted", "effect", "object"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {"predicted": {"const": true}, "value": {}},
+            "required": ["predicted", "value"],
+            "additionalProperties": false
+          }
+        },
+        "payouts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "predicted": {"const": true},
+              "index": {"type": "integer", "minimum": 0},
+              "address": {"type": "string", "minLength": 1},
+              "value": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9]+$"}},
+              "owed": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9]+$"}}
+            },
+            "required": ["predicted", "index", "address", "value", "owed"],
+            "additionalProperties": false
+          }
+        },
+        "sends": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "predicted": {"const": true},
+              "index": {"type": "integer", "minimum": 0},
+              "address": {"type": "string", "minLength": 1},
+              "value": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9]+$"}},
+              "owed": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9]+$"}}
+            },
+            "required": ["predicted", "index", "address", "value", "owed"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["state", "objects", "events", "payouts", "sends"],
+      "additionalProperties": false
+    },
+    "publish": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {"prepared": {"$ref": "#/$defs/prepared"}},
+          "required": ["prepared"],
+          "additionalProperties": false
+        },
+        {"type": "null"}
+      ]
+    },
+    "deployment": {
+      "type": "object",
+      "properties": {
+        "addresses": {
+          "type": "object",
+          "properties": {
+            "contract": {"type": "string", "minLength": 1},
+            "reward": {"type": "string", "minLength": 1},
+            "mapVerifier": {"type": "string", "minLength": 1},
+            "outputVerifier": {"type": "string", "minLength": 1},
+            "mapVerifierReward": {"type": "string", "minLength": 1},
+            "outputVerifierReward": {"type": "string", "minLength": 1}
+          },
+          "required": ["contract"],
+          "additionalProperties": false
+        },
+        "policies": {
+          "type": "object",
+          "properties": {"contract": {"type": "string", "pattern": "^[0-9a-f]{56}$"}},
+          "required": ["contract"],
+          "additionalProperties": false
+        },
+        "scriptHashes": {
+          "type": "object",
+          "properties": {
+            "spend": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+            "mint": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+            "stake": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+            "mapVerifier": {"type": "string", "pattern": "^[0-9a-f]{56}$"},
+            "outputVerifier": {"type": "string", "pattern": "^[0-9a-f]{56}$"}
+          },
+          "required": ["spend", "mint"],
+          "additionalProperties": false
+        },
+        "referenceScripts": {
+          "type": "object",
+          "properties": {
+            "contract": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"},
+            "mapVerifier": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"},
+            "outputVerifier": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"}
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "governors": {"type": "array", "maxItems": 0}
+      },
+      "required": ["addresses", "policies", "scriptHashes", "referenceScripts", "governors"],
+      "additionalProperties": false
+    },
+    "prerequisites": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "kind": {"enum": ["referenceScript", "stakeRegistration", "verifier"]},
+          "target": {"type": "string", "minLength": 1},
+          "present": {"enum": [false, "unknown"]}
+        },
+        "required": ["id", "kind", "target", "present"],
+        "additionalProperties": false
+      }
+    },
+    "registered": {"$ref": "#/$defs/reset"},
+    "view": {"type": "object", "properties": {"value": {}}, "required": ["value"], "additionalProperties": false},
+    "instances": {
+      "type": "object",
+      "properties": {
+        "listing": {"type": "string", "minLength": 1},
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ref": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"},
+                  "type": {"type": "string", "minLength": 1},
+                  "value": {},
+                  "instance": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                },
+                "required": ["ref", "type", "value", "instance"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {"unrecognized": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"}},
+                "required": ["unrecognized"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "maxItems": 500
+        },
+        "next": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 9223372036854775807}, {"type": "null"}]}
+      },
+      "required": ["listing", "items", "next"],
+      "additionalProperties": false
+    },
+    "objects": {
+      "type": "object",
+      "properties": {
+        "listing": {"type": "string", "minLength": 1},
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ref": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"},
+                  "type": {"type": "string", "minLength": 1},
+                  "value": {},
+                  "instance": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "object": {"type": "string", "pattern": "^(?:4b|4f)[0-9a-f]{56}$"}
+                },
+                "required": ["ref", "type", "value", "instance", "object"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {"unrecognized": {"type": "string", "pattern": "^[0-9a-f]{64}#[0-9]+$"}},
+                "required": ["unrecognized"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "maxItems": 500
+        },
+        "next": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 9223372036854775807}, {"type": "null"}]}
+      },
+      "required": ["listing", "items", "next"],
+      "additionalProperties": false
+    },
+    "decode": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {"type": {"type": "string", "minLength": 1}, "value": {}},
+          "required": ["type", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"ambiguous": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 2}},
+          "required": ["ambiguous"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "type": "object",
+  "properties": {
+    "jsonrpc": {"const": "2.0"},
+    "id": {"type": ["string", "integer"]},
+    "result": {
+      "anyOf": [
+        {"$ref": "#/$defs/initialize"},
+        {"$ref": "#/$defs/describe"},
+        {"$ref": "#/$defs/prepare"},
+        {"$ref": "#/$defs/settled"},
+        {"$ref": "#/$defs/restore"},
+        {"$ref": "#/$defs/reset"},
+        {"$ref": "#/$defs/shutdown"},
+        {"$ref": "#/$defs/deployment"},
+        {"$ref": "#/$defs/prerequisites"},
+        {"$ref": "#/$defs/publish"},
+        {"$ref": "#/$defs/view"},
+        {"$ref": "#/$defs/instances"},
+        {"$ref": "#/$defs/objects"},
+        {"$ref": "#/$defs/decode"},
+        {"$ref": "#/$defs/registered"}
+      ]
+    }
+  },
+  "required": ["jsonrpc", "id", "result"],
+  "additionalProperties": false
+}

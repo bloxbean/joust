@@ -104,10 +104,20 @@ public final class DevKit {
     /**
      * A runtime over a snapshot (ADR-0015 D5): configured as {@link #runtime()}, with the slot clock of
      * {@code fixtures/m0/devkit.json} (recorded from the DevKit's genesis). No I/O: a read outside the snapshot throws
-     * {@link org.julclang.state.runtime.snapshot.Need}.
+     * {@link org.julclang.state.runtime.snapshot.Need}. That clock is the genesis of the chain the {@code dapp} group
+     * was recorded on; groups recorded alone on a fresh chain (dex, fees, locker, upgrade) come from other chains, so
+     * their time-bounded steps do not replay under it.
      */
     public static StateRuntime snapshotRuntime(org.julclang.state.runtime.snapshot.Snapshot snapshot, java.nio.file.Path devkitJson) {
-        BackendService backend = new org.julclang.state.runtime.snapshot.SnapshotBackend(snapshot);
+        return snapshotRuntime(new org.julclang.state.runtime.snapshot.SnapshotBackend(snapshot), devkitJson, b -> b);
+    }
+
+    /**
+     * As {@link #snapshotRuntime(org.julclang.state.runtime.snapshot.Snapshot, java.nio.file.Path)}, over {@code backend}
+     * (a snapshot's, possibly wrapped by a test), with {@code more} applied to the builder last (a claim store, ...).
+     */
+    public static StateRuntime snapshotRuntime(BackendService backend, java.nio.file.Path devkitJson,
+                                               java.util.function.UnaryOperator<StateRuntime.Builder> more) {
         com.fasterxml.jackson.databind.JsonNode d;
         try {
             d = new com.fasterxml.jackson.databind.ObjectMapper().readTree(devkitJson.toFile());
@@ -115,7 +125,7 @@ public final class DevKit {
             throw new IllegalStateException("cannot read " + devkitJson, e);
         }
         SlotChainTime time = new SlotChainTime(d.get("zeroSlot").asLong(), d.get("startTimeMs").asLong(), d.get("slotLengthMs").asLong(), backend);
-        return StateRuntime.builder(backend)
+        return more.apply(StateRuntime.builder(backend)
                 .network(Networks.testnet())
                 .chainTime(time)
                 .ttl(Duration.ofSeconds(20))
@@ -123,7 +133,7 @@ public final class DevKit {
                         new DefaultUtxoSupplier(backend.getUtxoService()),
                         new DefaultProtocolParamsSupplier(backend.getEpochService()),
                         new DefaultScriptSupplier(backend.getScriptService()),
-                        new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())))
+                        new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs()))))
                 .build();
     }
 

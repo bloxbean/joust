@@ -2,6 +2,7 @@ package org.julclang.state.runtime;
 
 import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.api.UtxoSupplier;
+import com.bloxbean.cardano.client.api.common.OrderEnum;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.backend.api.BackendService;
 import com.bloxbean.cardano.client.quicktx.QuickTxBuilder;
@@ -29,46 +30,23 @@ import java.util.function.Supplier;
  *       (a lock per address), so none can slip between another's read and claim. Plain transactions do not skip
  *       claimed inputs (they select as before M2 while nothing is designated); keyed attempts skip other claims.</li>
  *   <li>The scope is one JVM: separate processes sharing a wallet must use separate UTxOs (or wallets).</li>
+ *   <li>Where designations and claims are kept, and when they end, is the runtime's {@link ClaimStore} (ADR-0022 D8):
+ *       by default the static store of this JVM described above, released by the machine
+ *       clock. The overloads without a store use that default.</li>
  * </ul>
  */
 final class Designation {
 
     private Designation() {}
 
-    /** Designated inputs ({@code txHash#index}) of this JVM's keyed operations. */
-    private static final Set<String> DESIGNATED = ConcurrentHashMap.newKeySet();
-    /** Designated inputs kept after their operation ended pending, until this wall-clock time (ms). */
-    private static final Map<String, Long> LINGERING = new ConcurrentHashMap<>();
-    /** Claims of transactions built (or inputs picked) and not yet resolved; each claim is its own identity. */
-    private static final Set<Claim> CLAIMS = ConcurrentHashMap.newKeySet();
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
 
-    /**
-     * Inputs held by one transaction, or by every handed-out attempt of one keyed operation, until resolved. Claims are
-     * compared by identity, so two claims of the same inputs are released separately (F66, R-E3). {@code owner} is the
-     * keyed operation ({@link Designated}) whose attempts may reuse these inputs, or the claim itself.
-     */
-    static final class Claim {
-        final Object owner;
-        final Set<String> refs = ConcurrentHashMap.newKeySet();
-        /** Released at this wall-clock time (ms); {@code Long.MAX_VALUE}: until released explicitly. */
-        volatile long until = Long.MAX_VALUE;
+    /** The default store (ADR-0022 D8): this JVM's static designations and claims, as before. */
+    static final JvmClaimStore JVM = JvmClaimStore.INSTANCE;
 
-        Claim(Object owner) {
-            this.owner = owner == null ? this : owner;
-        }
-
-        /** Ends the claim now. */
-        void release() {
-            CLAIMS.remove(this);
-        }
-
-        /** Ends the claim at {@code untilMs} (wall clock). */
-        void releaseAt(long untilMs) {
-            if (untilMs <= System.currentTimeMillis()) CLAIMS.remove(this);
-            else until = untilMs;
-        }
-    }
+    // Claims are ClaimStore.Claim (ADR-0022 D8 made the store a seam; a claim is what it was): the inputs held by one
+    // transaction, or by every handed-out attempt of one keyed operation, until resolved; compared by identity (F66,
+    // R-E3); owned by the keyed operation (Designated) whose attempts may reuse them, or by the claim itself.
 
     /** One attempt handed to the relays: its hash and its window's end (exclusive). */
     record Attempt(String txHash, long toSlot) {}
@@ -82,8 +60,6 @@ final class Designation {
         private final Utxo utxo;
         private final String address;
         private final List<Attempt> attempts = new ArrayList<>();
-        /** The inputs of every handed-out attempt (F64): held until the series ends, then released or kept pending. */
-        private final Claim held = new Claim(this);
         /**
          * What the latest attempt depends on: the script inputs it spends and the reference inputs it reads (to tell a
          * deterministic failure from contention; F68).
@@ -92,15 +68,24 @@ final class Designation {
         private boolean released;
         /** Given by a wallet's page for a prepared transaction (ADR-0016 D11), not reserved in this JVM. */
         private final boolean given;
+        private final ClaimStore store;
+        /** The inputs of every handed-out attempt (F64): held until the series ends, then released or kept pending. */
+        private final ClaimStore.Claim held;
 
         Designated(Utxo utxo, String address) {
             this(utxo, address, false);
         }
 
         Designated(Utxo utxo, String address, boolean given) {
+            this(utxo, address, given, JVM);
+        }
+
+        Designated(Utxo utxo, String address, boolean given, ClaimStore store) {
             this.utxo = utxo;
             this.address = address;
             this.given = given;
+            this.store = store;
+            this.held = new ClaimStore.Claim(this, store);
         }
 
         boolean given() { return given; }
@@ -127,7 +112,7 @@ final class Designation {
         /** Keeps a handed-out attempt's inputs claimed for this operation until the series ends (F64). */
         void hold(java.util.Collection<String> refs) {
             held.refs.addAll(refs);
-            CLAIMS.add(held);
+            store.add(held, null);
         }
 
         synchronized List<Attempt> attempts() {
@@ -175,54 +160,71 @@ final class Designation {
         void release() {
             if (released) return;
             released = true;
-            DESIGNATED.remove(ref());
+            store.undesignate(ref(), null);
             held.release();
         }
 
         /** Ends the reservation and its attempts' claims at {@code untilMs} (wall clock): an attempt may land until then. */
         void releaseAt(long untilMs) {
+            releaseAt(ClaimStore.Expiry.atMs(untilMs));
+        }
+
+        /** Ends the reservation and its attempts' claims at {@code when}: an attempt may land until then. */
+        void releaseAt(ClaimStore.Expiry when) {
             if (released) return;
             released = true;
-            if (untilMs <= System.currentTimeMillis()) DESIGNATED.remove(ref());
-            else LINGERING.put(ref(), untilMs);
-            held.releaseAt(untilMs);
+            store.undesignate(ref(), when);
+            held.releaseAt(when);
         }
     }
 
+    // Claim-store keys name a ledger input by one spelling: the lowercase hex of the bytes CCL serialises. CCL reads an
+    // id through HexUtil.decodeHexString (either case, a leading 0x dropped, any Unicode hex digit), so every spelling it
+    // writes as the same input must have the same key, or one escapes the other's reservation (I13; #145 Codex reviews).
     static String ref(Utxo u) {
-        return u.getTxHash() + "#" + u.getOutputIndex();
+        return txKey(u.getTxHash()) + "#" + u.getOutputIndex();
     }
 
     static String ref(TransactionInput in) {
-        return in.getTransactionId() + "#" + in.getIndex();
+        return txKey(in.getTransactionId()) + "#" + in.getIndex();
+    }
+
+    /** {@code id} as the ledger sees it: re-encoded from the bytes CCL decodes it to. */
+    static String txKey(String id) {
+        if (id == null) return "null";
+        try {
+            return com.bloxbean.cardano.client.util.HexUtil.encodeHexString(com.bloxbean.cardano.client.util.HexUtil.decodeHexString(id));
+        } catch (RuntimeException e) {
+            // Not hex to CCL either: no transaction it builds can spend it (serialising refuses), so any stable key does.
+            return id.toLowerCase(java.util.Locale.ROOT);
+        }
     }
 
     /** Some keyed operation of this JVM designated {@code ref} (still reserved). */
     static boolean isDesignated(String ref) {
-        purge();
-        return DESIGNATED.contains(ref);
+        return isDesignated(JVM, ref);
     }
 
-    private static void purge() {
-        long now = System.currentTimeMillis();
-        if (!LINGERING.isEmpty()) {
-            LINGERING.forEach((ref, until) -> {
-                if (until <= now && LINGERING.remove(ref, until)) DESIGNATED.remove(ref);
-            });
-        }
-        CLAIMS.removeIf(c -> c.until <= now);
+    /** Some keyed operation designated {@code ref} in {@code store} (still reserved). */
+    static boolean isDesignated(ClaimStore store, String ref) {
+        return store.isDesignated(ref);
     }
 
     /** Some unresolved transaction of this JVM claims {@code ref}. */
     static boolean isClaimed(String ref) {
-        purge();
-        for (Claim c : CLAIMS) if (c.refs.contains(ref)) return true;
+        return isClaimed(JVM, ref);
+    }
+
+    /** Some unresolved transaction claims {@code ref} in {@code store}. */
+    static boolean isClaimed(ClaimStore store, String ref) {
+        for (ClaimStore.Claim c : store.claims()) if (c.refs.contains(ref)) return true;
         return false;
     }
 
     /** A claim on {@code ref} by anyone but {@code owner}. */
-    private static boolean claimedByOther(String ref, Object owner) {
-        for (Claim c : CLAIMS) if (c.owner != owner && c.refs.contains(ref)) return true;
+    private static boolean claimedByOther(ClaimStore store, String ref, Object owner) {
+        Iterable<ClaimStore.Claim> claims = store instanceof JvmClaimStore j ? j.raw() : store.claims();
+        for (ClaimStore.Claim c : claims) if (c.owner != owner && c.refs.contains(ref)) return true;
         return false;
     }
 
@@ -257,8 +259,12 @@ final class Designation {
 
     /** {@code ref} is held by a keyed operation other than {@code own} (its handed-out attempts' inputs; F72). */
     static boolean heldByAnotherOperation(String ref, Designated own) {
-        purge();
-        for (Claim c : CLAIMS) {
+        return heldByAnotherOperation(JVM, ref, own);
+    }
+
+    /** As {@link #heldByAnotherOperation(String, Designated)}, in {@code store}. */
+    static boolean heldByAnotherOperation(ClaimStore store, String ref, Designated own) {
+        for (ClaimStore.Claim c : store.claims()) {
             if (c.owner instanceof Designated d && d != own && c.refs.contains(ref)) return true;
         }
         return false;
@@ -267,7 +273,7 @@ final class Designation {
     // ------------------------------------------------------------------ explicit picks (F63, F71, F72)
 
     /** The picks made on this thread inside the outermost open scope. */
-    private static final ThreadLocal<List<Claim>> SCOPE = new ThreadLocal<>();
+    private static final ThreadLocal<List<ClaimStore.Claim>> SCOPE = new ThreadLocal<>();
 
     /**
      * A scope for explicit picks: the outermost scope on a thread (an entry point such as a deployment, or a whole
@@ -284,9 +290,9 @@ final class Designation {
         @Override
         public void close() {
             if (!outer) return;
-            List<Claim> picks = SCOPE.get();
+            List<ClaimStore.Claim> picks = SCOPE.get();
             SCOPE.remove();
-            if (picks != null) picks.forEach(Claim::release);
+            if (picks != null) picks.forEach(ClaimStore.Claim::release);
         }
     }
 
@@ -303,9 +309,15 @@ final class Designation {
      */
     static Designated given(StateRuntime rt, Account payer, String ref) {
         String address = payer.baseAddress();
+        // ADR-0022 D8, D11: a reserved input is taken only by the operation its reservation belongs to.
+        ClaimStore store = rt.claimStore();
+        if (store.avoids(ref) && !store.reusable(ref)) throw new ReservedInputException("the designated input", ref);
         boolean complete = false;
+        // A host answers from the complete wallet listing it acquired: read all of it, so a designation past the first
+        // 2,000 outputs is found (#156 Codex review). A provider keeps the earlier bound.
+        int lastPage = rt.hostedCall() ? 100_000 : 20;
         try {
-            for (int page = 1; page <= 20; page++) {
+            for (int page = 1; page <= lastPage; page++) {
                 var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                 if (!r.isSuccessful()) {
                     throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref + ": " + r.getResponse());
@@ -325,7 +337,7 @@ final class Designation {
                     if (u.getAmount().get(0).getQuantity().compareTo(BigInteger.valueOf(5_000_000)) < 0) {
                         throw new JoustException("the designated input " + ref + " holds less than 5 ADA (ADR-0016 D11, R-G3)");
                     }
-                    return new Designated(u, address, true);
+                    return new Designated(u, address, true, rt.claimStore());
                 }
                 if (r.getValue().size() < 100) {
                     complete = true;
@@ -352,16 +364,16 @@ final class Designation {
      */
     static Designated reserve(StateRuntime rt, Account payer, String what, Set<String> avoid) {
         String address = payer.baseAddress();
-        purge();
+        ClaimStore store = rt.claimStore();
+        if (store instanceof JvmClaimStore j) j.purge();
         // Read and chosen under the address's lock (F63): no build of that address can spend and release a candidate
         // between the read and the designation.
         Designated chosen = locked(address, () -> {
             var candidates = new ArrayList<Utxo>();
             try {
-                for (int page = 1; page <= 20; page++) {
-                    var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                    if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                    for (Utxo u : r.getValue()) {
+                var walk = new Pages(rt, address, 100, 20);
+                for (var list = walk.next(); list != null; list = walk.next()) {
+                    for (Utxo u : list) {
                         if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
                                 || u.getInlineDatum() != null || u.getDataHash() != null || u.getReferenceScriptHash() != null) {
                             continue;
@@ -369,7 +381,6 @@ final class Designation {
                         if (u.getAmount().get(0).getQuantity().compareTo(BigInteger.valueOf(5_000_000)) < 0) continue;
                         candidates.add(u);
                     }
-                    if (r.getValue().size() < 100) break;
                 }
             } catch (Exception e) {
                 throw new JoustException(what + ": cannot read the payer's UTxOs", e);
@@ -377,8 +388,8 @@ final class Designation {
             candidates.sort(Comparator.comparing((Utxo u) -> u.getAmount().get(0).getQuantity()).reversed());
             for (Utxo u : candidates) {
                 String ref = ref(u);
-                if (avoid.contains(ref) || isClaimed(ref)) continue;
-                if (DESIGNATED.add(ref)) return new Designated(u, address);
+                if (avoid.contains(ref) || store.avoids(ref) || isClaimed(store, ref)) continue;
+                if (store.designate(ref)) return new Designated(u, address, false, store);
             }
             return null;
         });
@@ -397,15 +408,56 @@ final class Designation {
      * own lists, so the transaction is the same.
      */
     static QuickTxBuilder builder(BackendService backend, Designated own) {
+        return builder(backend, JVM, own);
+    }
+
+    /** As {@link #builder(BackendService, Designated)}, selecting around {@code store}'s designations, claims and avoids. */
+    static QuickTxBuilder builder(StateRuntime rt, Designated own) {
+        return builder(rt.backend(), rt.claimStore(), own);
+    }
+
+    static QuickTxBuilder builder(BackendService backend, ClaimStore store, Designated own) {
         var all = new com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier(backend.getUtxoService());
-        String ownRef = own == null ? null : own.ref();
-        boolean skipClaimed = own != null;
-        Object owner = own;
+        // A wallet designation is an explicit spend. It gives no exemption from local keyed claims.
+        Object owner = own == null || own.given() ? null : own;
+        String ownRef = selectableDesignation(store, own);
         UtxoSupplier free = new UtxoSupplier() {
+            record Query(String address, int size, OrderEnum order) {}
+            class Cursor {
+                final List<Utxo> eligible = new ArrayList<>();
+                int next;
+                boolean finished;
+                String lastFirst;   // the previous raw page's first input: a provider that ignores the page repeats it
+            }
+            private final Map<Query, Cursor> pages = new java.util.HashMap<>();
+
             @Override
-            public List<Utxo> getPage(String address, Integer nrOfItems, Integer page,
-                                      com.bloxbean.cardano.client.api.common.OrderEnum order) {
-                return free(all.getPage(address, nrOfItems, page, order), ownRef, skipClaimed ? owner : null);
+            public List<Utxo> getPage(String address, Integer nrOfItems, Integer page, OrderEnum order) {
+                if (store instanceof JvmClaimStore) {
+                    return free(store, all.getPage(address, nrOfItems, page, order), ownRef, owner);
+                }
+                // CCL indexes pages from zero. Read just far enough to fill the requested eligible page,
+                // retaining the provider's order and any surplus for the next request.
+                int size = nrOfItems == null ? UtxoSupplier.DEFAULT_NR_OF_ITEMS_TO_FETCH : nrOfItems;
+                int start = Math.multiplyExact(page == null ? 0 : page, size);
+                int end = Math.addExact(start, size);
+                Cursor cursor = pages.computeIfAbsent(new Query(address, size, order), key -> new Cursor());
+                while (!cursor.finished && cursor.eligible.size() < end) {
+                    var raw = all.getPage(address, size, cursor.next, order);
+                    // A repeated page is the end of the answer, checked before filtering: a page every input of which
+                    // is reserved would otherwise be read again and again under the payer's lock (#145 Codex).
+                    String first = raw.isEmpty() ? null : ref(raw.get(0));
+                    if (first != null && first.equals(cursor.lastFirst)) {
+                        cursor.finished = true;
+                        break;
+                    }
+                    cursor.lastFirst = first;
+                    cursor.eligible.addAll(free(store, raw, ownRef, owner));
+                    cursor.next++;
+                    cursor.finished = raw.size() < size;
+                }
+                int count = cursor.eligible.size();
+                return new ArrayList<>(cursor.eligible.subList(Math.min(start, count), Math.min(end, count)));
             }
 
             @Override
@@ -415,7 +467,7 @@ final class Designation {
 
             @Override
             public List<Utxo> getAll(String address) {
-                return free(all.getAll(address), ownRef, skipClaimed ? owner : null);
+                return free(store, all.getAll(address), ownRef, owner);
             }
 
             @Override
@@ -425,6 +477,7 @@ final class Designation {
 
             @Override
             public void setSearchByAddressVkh(boolean flag) {
+                pages.clear();
                 all.setSearchByAddressVkh(flag);
             }
         };
@@ -448,12 +501,19 @@ final class Designation {
      * transactions claim; the operation's own claims (its earlier attempts' inputs) stay selectable.
      */
     static List<Utxo> free(List<Utxo> utxos, String ownRef, Object owner) {
+        return free(JVM, utxos, ownRef, owner);
+    }
+
+    /** As {@link #free(List, String, Object)}, in {@code store}: also without the inputs it {@linkplain ClaimStore#avoids avoids}. */
+    static List<Utxo> free(ClaimStore store, List<Utxo> utxos, String ownRef, Object owner) {
         if (utxos == null) return null;
-        purge();
-        if (DESIGNATED.isEmpty() && (owner == null || CLAIMS.isEmpty())) return utxos;
+        if (store instanceof JvmClaimStore j) {
+            j.purge();
+            if (j.quiet(owner != null)) return utxos;
+        }
         boolean any = false;
         for (Utxo u : utxos) {
-            if (!selectable(ref(u), ownRef, owner)) {
+            if (!selectable(store, ref(u), ownRef, owner)) {
                 any = true;
                 break;
             }
@@ -461,18 +521,19 @@ final class Designation {
         if (!any) return utxos;
         var out = new ArrayList<Utxo>(utxos.size());
         for (Utxo u : utxos) {
-            if (selectable(ref(u), ownRef, owner)) out.add(u);
+            if (selectable(store, ref(u), ownRef, owner)) out.add(u);
         }
         return out;
     }
 
-    private static boolean selectable(String ref, String ownRef, Object owner) {
-        if (ref.equals(ownRef)) return true;
-        return !DESIGNATED.contains(ref) && !(owner != null && claimedByOther(ref, owner));
+    private static boolean selectable(ClaimStore store, String ref, String ownRef, Object owner) {
+        if (ref.equals(ownRef)) return !store.avoids(ref) || store.reusable(ref);
+        boolean designated = store instanceof JvmClaimStore j ? j.designatedRaw(ref) : store.isDesignated(ref);
+        return !designated && !store.avoids(ref) && !(owner != null && claimedByOther(store, ref, owner));
     }
 
     /** A built transaction and its claim. */
-    record Claimed(Transaction tx, Claim claim) {
+    record Claimed(Transaction tx, ClaimStore.Claim claim) {
         List<String> refs() {
             return List.copyOf(claim.refs);
         }
@@ -493,27 +554,62 @@ final class Designation {
      * another from spending a shared anchor, only from taking its wallet inputs (fees, collateral, its designated input).
      */
     static Claimed build(String address, Designated own, Set<String> scriptInputs, Supplier<Transaction> build) {
+        return build(JVM, address, own, scriptInputs, build);
+    }
+
+    /** As {@link #build(String, Designated, Set, Supplier)}, claiming in {@code store}. */
+    static Claimed build(ClaimStore store, String address, Designated own, Supplier<Transaction> build) {
+        return build(store, address, own, Set.of(), build);
+    }
+
+    static Claimed build(ClaimStore store, String address, Designated own, Set<String> scriptInputs, Supplier<Transaction> build) {
         return locked(address, () -> {
             Transaction t = build.get();
-            var claim = new Claim(own);
-            for (var in : t.getBody().getInputs()) if (!scriptInputs.contains(ref(in))) claim.refs.add(ref(in));
-            if (t.getBody().getCollateral() != null) for (var in : t.getBody().getCollateral()) claim.refs.add(ref(in));
-            String ownRef = own == null ? null : own.ref();
+            // Wallet prepares retain ordinary claim ownership, including when the page supplied a designation.
+            Designated owner = own != null && !own.given() ? own : null;
+            var claim = new ClaimStore.Claim(owner, store);
+            String ownRef = selectableDesignation(store, own);
+            for (var in : t.getBody().getInputs()) {
+                String ref = ref(in);
+                checkReservation(store, ref, ownRef);
+                if (!scriptInputs.contains(ref)) claim.refs.add(ref);
+            }
+            if (t.getBody().getCollateral() != null) {
+                for (var in : t.getBody().getCollateral()) {
+                    String ref = ref(in);
+                    checkReservation(store, ref, ownRef);
+                    claim.refs.add(ref);
+                }
+            }
             for (String r : claim.refs) {
-                if (!r.equals(ownRef) && isDesignated(r)) {
+                if (!r.equals(ownRef) && isDesignated(store, r)) {
                     throw new SubmitException(SubmitException.Kind.TRANSIENT, "input " + r + " was designated by a keyed"
                             + " operation after it was picked; rebuild");
                 }
                 // A keyed attempt never spends what another keyed operation's handed-out attempts hold, even as an
                 // explicit input (F72); plain transactions keep their pre-M2 selection.
-                if (own != null && heldByAnotherOperation(r, own)) {
+                if (owner != null && heldByAnotherOperation(store, r, owner)) {
                     throw new SubmitException(SubmitException.Kind.TRANSIENT, "input " + r + " is held by another keyed"
                             + " operation's attempt; rebuild");
                 }
             }
-            CLAIMS.add(claim);
+            store.add(claim, null);
             return new Claimed(t, claim);
         });
+    }
+
+    /** A supplied ref alone gives no exemption from another operation's designation. */
+    private static String selectableDesignation(ClaimStore store, Designated own) {
+        if (own == null) return null;
+        String ref = own.ref();
+        if (own.given() && !(store.avoids(ref) && store.reusable(ref))) return null;
+        return ref;
+    }
+
+    private static void checkReservation(ClaimStore store, String ref, String ownRef) {
+        if (store.avoids(ref) && !(ref.equals(ownRef) && store.reusable(ref))) {
+            throw new ReservedInputException("build", ref);
+        }
     }
 
     /**
@@ -524,15 +620,21 @@ final class Designation {
      * and those another keyed operation holds ({@link #pickable}).
      */
     static Utxo pick(String address, long fallbackMs, Supplier<Utxo> pick) {
+        return pick(JVM, address, fallbackMs, pick);
+    }
+
+    /** As {@link #pick(String, long, Supplier)}, claiming in {@code store}. */
+    static Utxo pick(ClaimStore store, String address, long fallbackMs, Supplier<Utxo> pick) {
         return locked(address, () -> {
             Utxo u = pick.get();
             if (u != null) {
-                var claim = new Claim(null);
+                var claim = new ClaimStore.Claim(null, store);
                 claim.refs.add(ref(u));
-                List<Claim> scope = SCOPE.get();
+                List<ClaimStore.Claim> scope = SCOPE.get();
+                ClaimStore.Expiry until = null;
                 if (scope != null) scope.add(claim);
-                else claim.until = System.currentTimeMillis() + fallbackMs;
-                CLAIMS.add(claim);
+                else until = ClaimStore.Expiry.atMs(System.currentTimeMillis() + fallbackMs);
+                store.add(claim, until);
             }
             return u;
         });
@@ -545,13 +647,17 @@ final class Designation {
      * from the operation's.)
      */
     static boolean pickable(Utxo u, Designated own) {
+        return pickable(JVM, u, own);
+    }
+
+    /** As {@link #pickable(Utxo, Designated)}, in {@code store}: also not an input it {@linkplain ClaimStore#avoids avoids}. */
+    static boolean pickable(ClaimStore store, Utxo u, Designated own) {
         String ref = ref(u);
-        return !isDesignated(ref) && !heldByAnotherOperation(ref, own);
+        return !isDesignated(store, ref) && !heldByAnotherOperation(store, ref, own) && !store.avoids(ref);
     }
 
     /** For tests: nothing designated or claimed. */
     static boolean idle() {
-        purge();
-        return DESIGNATED.isEmpty() && CLAIMS.isEmpty();
+        return JVM.idle();
     }
 }
