@@ -362,7 +362,8 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
 
   test('#179 r6: a journal of another version, or with a field this joust does not know, is refused (fail closed)', async () => {
     for (const [i, spoil] of [
-      (raw) => { raw.version = 2; },
+      (raw) => { raw.version = 3; },
+      (raw) => { raw.version = 1; },                       // before handedOff: its bodies' handoff is unknown
       (raw) => { raw.rewoundUntil = 200; },                 // round 3's field: its fence would be dropped
       (raw) => { raw.entries[0].somethingNew = true; },
     ].entries()) {
@@ -1654,7 +1655,7 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     // An invalid journal with no high-water mark cannot be fenced: refused.
     const c = await openJournal({ root: real, chain: identity(107), state });
     c.close();
-    writeFileSync(c.file, '{"version":1,"entries":[{"reservation":"x"}]}');
+    writeFileSync(c.file, '{"version":2,"entries":[{"reservation":"x"}]}');
     await assert.rejects(session(L, fakeChain(L, 107), { startTime: 107 }), (e) => e.code === 'journalCorrupt');
   });
 

@@ -9,7 +9,7 @@
 // are reported once and removed, unless one has a lock on it.
 //
 //   <state>/chains/<networkId>-<protocolMagic>-<startTime>/chain.json      { networkId, protocolMagic, startTime, admin }
-//   <state>/chains/<…>/<project key>.journal.json                          { version: 1, project, entries }
+//   <state>/chains/<…>/<project key>.journal.json                          { version: 2, project, entries, removedAt, fencedUntil }
 //   <state>/chains/<…>/<project key>.high-water.json                       { highWater }
 //   <state>/chains/<…>/<project key>.lock                                  the owner's token: "<pid> <random>"
 //   <state>/chains/<devkit key>.prune.lock, <devkit key>.notices.json      pruning, one at a time per DevKit
@@ -26,7 +26,9 @@ import { dirname, join } from 'node:path';
 import { parseTx } from '@julclang/state-client';
 
 export const stateRoot = () => process.env.JOUST_STATE_DIR || join(homedir(), '.joust', 'state');
-export const JOURNAL_VERSION = 1;
+// Version 2: entries carry handedOff (a CIP-30 wallet had the body) beside submitted; a version 1 journal lacks it, so
+// none of its bodies can be told never to have left the page: it is refused (fail closed), never read as version 2.
+export const JOURNAL_VERSION = 2;
 const JOURNAL_FIELDS = new Set(['version', 'project', 'entries', 'removedAt', 'fencedUntil']);
 const ENTRY_FIELDS = new Set(['reservation', 'txHash', 'cbor', 'validFrom', 'validTo', 'state', 'slot', 'submitted', 'handedOff', 'label']);
 
