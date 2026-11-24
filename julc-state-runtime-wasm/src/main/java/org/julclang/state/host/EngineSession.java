@@ -8,9 +8,11 @@ import org.julclang.state.api.RequireException;
 import org.julclang.state.runtime.*;
 import org.julclang.state.runtime.described.DescribedContract;
 import org.julclang.state.runtime.described.UplcTransitions;
+import org.julclang.state.runtime.described.TransitionFn;
 import org.julclang.state.runtime.wasm.Prepare;
 import org.julclang.state.serve.ContractCalls;
 
+import org.julclang.core.PlutusData;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -30,6 +32,7 @@ public final class EngineSession {
     public String execute(String frame, String setup, Function<String, String> reverse, BooleanSupplier live,
                           BooleanSupplier claim, Runnable release) {
         pending = null;
+        LIVE.set(live);
         try {
             var request = JSON.readTree(frame);
             String method = str(request, "method");
@@ -52,7 +55,21 @@ public final class EngineSession {
             return obj().set("result", pending.value()).toString();
         } catch (Throwable failure) {
             return obj().set("error", Errors.rpcError(failure)).toString();
+        } finally {
+            LIVE.remove();
         }
+    }
+
+    /**
+     * The current call's liveness, checked before each transition evaluation as well as at each chain read: read
+     * discovery evaluates a transition several times without a read in between, and a cancelled call must stop before
+     * the transport's drain timer ends the worker and the session with it (#160 Codex re-review).
+     */
+    private static final ThreadLocal<BooleanSupplier> LIVE = new ThreadLocal<>();
+
+    static void checkLive() {
+        var live = LIVE.get();
+        if (live != null && !live.getAsBoolean()) throw HostError.internal("cancelled", "call cancelled");
     }
 
     public void commit() {
@@ -69,7 +86,7 @@ public final class EngineSession {
             var x = desc.required("x-joust");
             String name = str(desc.required("preamble"), "title");
             String hash = HexFormat.of().formatHex(PlutusV3Script.builder().cborHex(source.script()).build().getScriptHash());
-            String code = x.has("params") ? "params" : desc.path("definitions").has("org.julclang.state.api.MerkleMap") ? "maps" : null;
+            String code = x.has("params") ? "params" : null;
             var messages = source.messages() == null ? null : JSON.readTree(source.messages());
             if (messages instanceof ObjectNode map) map.put("scriptHash", x.has("params") ? "" : hash);
             // The programs are checked before the VM loads them: a lost program is the build's stage mismatch, whatever
@@ -103,19 +120,32 @@ public final class EngineSession {
         }
     }
 
-    // Hosted calls exclude maps. Their transition needs only the step and the VM's typed verdict.
     private static DescribedContract load(Prepare.Contract source, JsonNode desc) {
         var vm = UplcTransitions.verified(source.manifest(), source.description(), source.script(), source.transitions());
-        return new DescribedContract(desc, source.script(), (method, target, shared, args, ctx) -> {
-            var result = vm.evaluate(method, target, shared, args, ctx);
-            return switch (result.kind()) {
-                case STEP -> result.run().step();
-                case REFUSAL -> throw new RequireException(result.run().refusal());
-                // A failing transition is the contract's own failure, as a Java exception is on the JVM host. The JVM
-                // runs the method without a budget: an exhausted one has no JVM counterpart (#154 review M2-5).
-                case ERROR -> throw HostError.internal("internal", "transition failed: " + result.run().refusal());
-                case BUDGET -> throw HostError.internal("evaluator", result.run().refusal());
-            };
+        return new DescribedContract(desc, source.script(), new TransitionFn() {
+            public PlutusData apply(String method, PlutusData target,
+                    PlutusData shared, PlutusData args, PlutusData ctx) {
+                var run = run(method, target, shared, args, ctx);
+                run.raise();
+                if (run.step() == null) throw new RequireException(run.refusal());
+                return run.step();
+            }
+            public Run run(String method, PlutusData target, PlutusData shared,
+                           PlutusData args, PlutusData ctx) {
+                checkLive();
+                var result = vm.evaluate(method, target, shared, args, ctx);
+                return switch (result.kind()) {
+                    case STEP, REFUSAL -> result.run(); // Includes map-read discovery traces, also on a tentative refusal.
+                    // A failing transition is the contract's own failure, as a Java exception is on the JVM host. The
+                    // JVM runs the method without a budget: an exhausted one has no JVM counterpart (#154 review M2-5).
+                    // Raised by discovery once the run's traces report no unknown read: a key it answered as absent
+                    // may change its path, as the JVM's would (#160 Codex review).
+                    case ERROR -> new Run(null, result.run().refusal(), result.run().traces(),
+                            HostError.internal("internal", "transition failed: " + result.run().refusal()));
+                    case BUDGET -> new Run(null, result.run().refusal(), result.run().traces(),
+                            HostError.internal("evaluator", result.run().refusal()));
+                };
+            }
         }, true);
     }
 

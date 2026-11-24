@@ -63,4 +63,55 @@ class DataFidelityTest {
         var e = assertThrows(IllegalArgumentException.class, () -> DataFidelity.check(unsorted, "the datum"));
         assertTrue(e.getMessage().contains("canonical order"), e.getMessage());
     }
+
+    /**
+     * #173 review: a deep raw Data parameter goes through schema decoding and the fidelity check without recursion, on a
+     * small stack; the per-map key-order check still holds at the bottom.
+     */
+    @Test
+    void deepRawDataPassesSchemaDecodingAndTheCheckOnASmallStack() throws Exception {
+        int n = 50_000;
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        var codec = new SchemaCodec(json.readTree("{}"));
+        var anyData = json.readTree("{}");
+        java.util.function.Function<String, Throwable> run = hex -> {
+            var thrown = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            Thread t = new Thread(null, () -> {
+                try {
+                    DataFidelity.check(codec.encode(anyData, com.fasterxml.jackson.databind.node.TextNode.valueOf(hex), "params"),
+                            "the params");
+                } catch (Throwable e) {
+                    thrown.set(e);
+                }
+            }, "small-stack", 256 * 1024);
+            t.start();
+            try {
+                t.join();
+            } catch (InterruptedException e) {
+                throw new AssertionError(e);
+            }
+            return thrown.get();
+        };
+        assertNull(run.apply("81".repeat(n) + "a2" + "0100" + "0200"), "a deep list over an ordered map");
+        assertNull(run.apply("d87981".repeat(n) + "00"), "deep constructors");
+        // Keys are encoded at every level they are checked, so data nested in key position costs depth squared (as it
+        // did before the walk was iterative): fewer levels, still far past what a recursive walk takes on this stack.
+        assertNull(run.apply("a1".repeat(5_000) + "00" + "00".repeat(5_000)), "maps nested in key position");
+        Throwable unordered = run.apply("81".repeat(n) + "a2" + "0200" + "0100");
+        assertInstanceOf(IllegalArgumentException.class, unordered);
+        assertTrue(unordered.getMessage().contains("not in canonical order"), unordered.getMessage());
+        Throwable repeated = run.apply("81".repeat(n) + "a2" + "0100" + "0100");
+        assertTrue(repeated.getMessage().contains("duplicate key"), repeated.getMessage());
+    }
+
+    /** The walk reports the first offending map in depth-first order, as the recursive walk did. */
+    @Test
+    void theFirstOffendingMapInDepthFirstOrderIsReported() {
+        var dupIn = PlutusData.map(new PlutusData.Pair(PlutusData.integer(5), PlutusData.integer(0)),
+                new PlutusData.Pair(PlutusData.integer(5), PlutusData.integer(0)));            // inner: a duplicate (05)
+        var outer = PlutusData.map(new PlutusData.Pair(PlutusData.integer(1), dupIn),
+                new PlutusData.Pair(PlutusData.integer(0), PlutusData.integer(0)));            // outer: out of order (00)
+        var e = assertThrows(IllegalArgumentException.class, () -> DataFidelity.check(outer, "d"));
+        assertTrue(e.getMessage().contains("(a duplicate key)") && e.getMessage().contains("(05;"), e.getMessage());
+    }
 }

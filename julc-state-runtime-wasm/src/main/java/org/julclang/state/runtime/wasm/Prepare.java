@@ -97,7 +97,8 @@ public final class Prepare {
             throw new IllegalArgumentException("the call request is not JSON", e);
         }
         if (pl.isMissingNode() || pl.isNull()) {
-            b.pageLimits(60, 900);
+            b.pageLimits(org.julclang.state.runtime.CallScope.DEFAULT_MAX_START_SLOTS,
+                    org.julclang.state.runtime.CallScope.DEFAULT_MAX_VALIDITY_SLOTS);
         } else {
             // R-G4: two integers, a start limit of at least 0 and a validity limit of at least 1 slot.
             if (!pl.isArray() || pl.size() != 2 || !pl.get(0).canConvertToLong() || !pl.get(1).canConvertToLong()
@@ -377,7 +378,7 @@ public final class Prepare {
         var program = org.julclang.clientlib.JulcScriptAdapter.toProgram(call.path("script").asText());
         var params = new java.util.ArrayList<org.julclang.core.PlutusData>();
         for (JsonNode p : call.path("params")) {
-            params.add(org.julclang.core.cbor.PlutusDataCborDecoder.decode(java.util.HexFormat.of().parseHex(p.asText())));
+            params.add(org.julclang.state.runtime.PlutusBytes.decodeHex(p.asText()));
         }
         if (!params.isEmpty()) program = program.applyParams(params.toArray(new org.julclang.core.PlutusData[0]));
         var script = org.julclang.clientlib.JulcScriptAdapter.fromProgram(program);

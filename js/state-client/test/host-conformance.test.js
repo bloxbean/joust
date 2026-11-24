@@ -7,7 +7,7 @@ import { rewardAddressOf } from '../src/governors.js';
 
 const dir = new URL('../../../fixtures/host/verifier/', import.meta.url);
 const common = new Set(['mint', 'fee', 'balance', 'signer', 'pointer', 'redeemer', 'collateral', 'deposit',
-  'continuingOutput', 'netOutflow', 'walletOutput', 'scriptInput', 'auxiliaryData', 'withdrawal', 'upperBound', 'lowerBound', 'isValid', 'governance', 'referenceInput', 'budget']);
+  'mapWithdrawal', 'continuingOutput', 'netOutflow', 'walletOutput', 'scriptInput', 'auxiliaryData', 'withdrawal', 'upperBound', 'lowerBound', 'isValid', 'governance', 'referenceInput', 'budget', 'designatedInput', 'keyedToken', 'keyedRedeemer', 'keyedLink', 'keyedInputValue']);
 
 // Negative vectors (by `mutation`) whose protocol-1 check the page verifier does not make yet: the page accepts them
 // where the reference refuses. Each still runs and must still be accepted, so an entry fails once verify.js gains the
@@ -32,8 +32,14 @@ const pageGaps = {
   'expired-window': 'an upper bound after now', 'missing-reward-redeemer': 'the verifier withdrawal\'s redeemer',
   'missing-verifier-reference': 'the verifier script supplied', 'negative-collateral-total': 'a nonnegative total collateral',
   'short-signer': 'required signers are key hashes',
+  'keyed-designated-record': 'the designated input equals the persisted operation record\'s',
+  'keyed-signed-by': 'signedBy against the keyed target\'s state',
+  'map-verifier-reference': 'the map verifier script supplied',
   // #153 Codex review: the kit refuses these two; the page does not yet (bloxbean/joust#162).
   'claimed-third-party-tagged': claims, 'owned-destroy-wrong-parent': 'the owned target names the call\'s instance',
+  // #156 Codex review: keyed change at the caller's enterprise address (protocol rule 6); keyed.js counts that address
+  // as the wallet's (bloxbean/joust#162).
+  'keyed-change-at-enterprise': 'keyed change at the payer\'s address',
 };
 
 // Positive vectors (by `mutation`) the page verifier still refuses: protocol 1 accepts them. Each must still be refused
@@ -47,26 +53,30 @@ for (const file of readdirSync(dir).filter(f => f.endsWith('.json'))) {
   const gap = pageGaps[v.mutation];
   const falseRefusal = v.violations.length === 0 ? pageFalseRefusals[v.mutation] : undefined;
   test(gap ? `page verifier gap on ${file}: ${gap}` : falseRefusal ? `page verifier false refusal on ${file} (#164)` :
-    'wallet agreement on ' + file, async () => {
+    'wallet agreement on ' + file, async t => {
     const { description, policy, address, outputVerifier } = v.anchors;
     const { call } = v.request;
     const x = description['x-joust'];
     const meta = [...x.actions, ...x.creations].find(m => m.kind === call.kind && m.name === call.method);
     const utxos = new Map(Object.entries(v.resolved).map(([r, u]) => [r, {
-      address: u.address, referenceScriptHash: u.reference_script_hash,
+      address: u.address, inlineDatum: u.inline_datum, referenceScriptHash: u.reference_script_hash,
       value: new Map(u.amount.map(a => [a.unit.replace('.', ''), BigInt(a.quantity)])),
     }]));
     const payer = call.address;
     const wallet = { addresses: [payer], keyHashes: [paymentKeyHashOf(payer)],
       utxos: new Map([...utxos].filter(([, u]) => u.address === payer)) };
-    const verifierRefs = [...utxos].filter(([, u]) => u.address === outputVerifier.address &&
-      u.referenceScriptHash === outputVerifier.hash).map(([r]) => r);
+    const pinned = anchor => ({ rewardAddress: rewardAddressOf(anchor.hash, v.networkId),
+      referenceScripts: [...utxos].filter(([, u]) => u.address === anchor.address &&
+        u.referenceScriptHash === anchor.hash).map(([r]) => r) });
+    if (v.clock) t.mock.method(Date, 'now', () =>
+      v.clock.zeroTimeMs + (v.request.now - v.clock.zeroSlot) * v.clock.slotLengthMs);
     const { problems, report } = await verifyPrepared({ description, txHex: v.result.prepared.cbor,
-      deployment: { policy, address, networkId: v.networkId, outputVerifier: {
-        rewardAddress: rewardAddressOf(outputVerifier.hash, v.networkId), referenceScripts: verifierRefs } },
-      wallet, call: { ...call, meta, cosignerKeys: call.cosigners },
+      deployment: { policy, address, slotConfig: v.clock, networkId: v.networkId, outputVerifier: pinned(outputVerifier),
+        mapVerifier: v.anchors.mapVerifier && pinned(v.anchors.mapVerifier) },
+      wallet, call: { ...call, key: call.object, meta, cosignerKeys: call.cosigners },
       chain: { tip: v.request.now, params: v.protocolParams, utxo: async r => utxos.get(r) },
-      limits: { maxFee: BigInt(v.maxFee), maxValiditySlots: v.request.ttlSlots, maxBackdateSlots: 0 },
+      limits: { maxFee: BigInt(v.maxFee), maxValiditySlots: call.pageLimits?.[1] ?? (v.clock ? 900 : v.request.ttlSlots),
+        maxStartSlots: call.pageLimits?.[0] ?? 60, maxBackdateSlots: 0 },
     });
     if (gap) assert.deepEqual(problems, [], `the page now refuses ${v.mutation}: remove it from pageGaps`);
     else if (falseRefusal) assert.deepEqual([...new Set(problems)], [falseRefusal],

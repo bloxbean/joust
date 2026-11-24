@@ -40,6 +40,11 @@ public final class ReferenceChecker {
     final Ledger ledger;
     final String payer, caller, policy, address, kind;
     final boolean publish, creation, destroy, owned;
+    boolean keyed;
+    List<String> mapFields = List.of();
+    List<String> rewards = List.of();
+    boolean mapContract() { return description.required("definitions").has("org.julclang.state.api.MerkleMap"); }
+    String reward(String verifier) { return "f" + Integer.toHexString(network) + anchors.at("/"+verifier+"/hash").asText(); }
     final int network;
     final Set<String> disabled, problems = new LinkedHashSet<>();
     final Map<String,BigInteger> consumed = new HashMap<>(), walletIn = new HashMap<>(), targetValue = new HashMap<>();
@@ -72,7 +77,7 @@ public final class ReferenceChecker {
         inputs = strings(plan.required("inputs"));
         kind = publish ? "publish" : call.required("kind").textValue();
         owned = kind.startsWith("owned");
-        creation = Set.of("init","ownedInit").contains(kind);
+        creation = Set.of("init","ownedInit","keyedInit").contains(kind);
         destroy = Set.of("destroy","ownedDestroy").contains(kind);
 
         minted = value(plan.required("mint"));
@@ -110,7 +115,7 @@ public final class ReferenceChecker {
             test("notVerifiable/classify", false);
             if (enabled("notVerifiable/classify") || meta==null) return;
         }
-        if (!creation && !publish) token = policy + call.required(owned ? "object" : "instance").textValue();
+        if (!creation && !publish && !keyed) token = policy + call.required(owned ? "object" : "instance").textValue();
         var resolved = v.required("resolved");
         for (var pair : List.of(List.of("inputs","unresolvedInput/spending"),List.of("referenceInputs","unresolvedInput/reference"),
                 List.of("collateral","unresolvedInput/collateral"))) {
@@ -128,6 +133,7 @@ public final class ReferenceChecker {
         certificates();
         withdrawals();
         if (publish) publication();
+        else if (keyed) new KeyedRules(this).check();
         else new CallRules(this).check();
         var balance = new HashMap<>(consumed);
         if (enabled("balance/conserved#mint")) add(balance,minted,1);
@@ -144,18 +150,36 @@ public final class ReferenceChecker {
     private boolean classify() {
         boolean knownContract = holds("notVerifiable/classify#contract",description.at("/preamble/title").asText().equals(call.required("contract").asText())) &&
                 holds("notVerifiable/classify#params",!x.hasNonNull("params")) &&
-                holds("notVerifiable/classify#maps",!description.required("definitions").has("org.julclang.state.api.MerkleMap"));
+                holds("notVerifiable/classify#maps",!mapContract() || anchors.at("/mapVerifier/hash").asText().matches("[0-9a-f]{56}"));
         if (publish) return knownContract;
         if (!"prepare".equals(v.required("method").textValue()) ||
-                !Set.of("init","action","destroy","ownedInit","ownedAction","ownedDestroy").contains(kind)) return false;
+                !Set.of("init","action","destroy","ownedInit","ownedAction","ownedDestroy","keyedInit","keyedAction","keyedRemove","keyedRetire").contains(kind)) return false;
         for (var m : x.required(creation ? "creations" : "actions")) {
             if (kind.equals(m.required("kind").textValue()) && call.required("method").equals(m.required("name"))) meta = m;
         }
         if (meta == null) return false;
+        if (mapContract()) {
+            var codec = new org.julclang.state.runtime.described.SchemaCodec(description);
+            var schema = owned ? codec.definition(meta.required("owned").asText()) : codec.resolve(x.required("state"));
+            var names = new ArrayList<String>();
+            for (var field : schema.at("/anyOf/0/fields"))
+                if (field.path("$ref").asText().equals("#/definitions/org.julclang.state.api.MerkleMap"))
+                    names.add(field.required("title").asText());
+            mapFields = List.copyOf(names);
+        }
         var p = meta.path("policies");
         var recipe = meta.path("recipe");
         boolean keyedInit = kind.equals("init") && !x.path("keyed").isEmpty();
-        return knownContract && holds("notVerifiable/classify#keyed",!keyedInit) &&
+        if (keyedInit || kind.startsWith("keyed")) {
+            // A legacy description without the D11 tags and schemas cannot anchor a keyed transaction.
+            boolean tagged = !x.path("keyed").isEmpty();
+            for (var t : x.path("keyed")) tagged &= t.hasNonNull("typeId") && t.hasNonNull("link");
+            keyed = tagged || kind.startsWith("keyed");
+            if (!holds("notVerifiable/classify#keyedSchemas",tagged)) return false;
+            if (!holds("notVerifiable/classify#keyedService",!meta.path("needsService").asBoolean()) ||
+                    !holds("notVerifiable/classify#keyedRemoveCtx",!kind.equals("keyedRemove") || meta.path("ctx").asBoolean())) return false;
+        }
+        return knownContract &&
                 holds("notVerifiable/classify#batched",!p.path("batched").asBoolean()) &&
                 holds("notVerifiable/classify#into",!p.path("into").asBoolean()) &&
                 holds("notVerifiable/classify#admits",!p.hasNonNull("admits")) &&
@@ -178,20 +202,23 @@ public final class ReferenceChecker {
             if (wallet(addr)) {
                 walletRefs.add(ref);
                 add(walletIn,amount,1);
-            } else if (!publish && !creation && spent == null && addr.equals(address) && ONE.equals(amount.get(token))) {
+            } else if (keyed && address.equals(addr)) {
+                // KeyedRules assigns target and predecessor by token, datum and ledger pointer.
+            } else if (!keyed && !publish && !creation && spent == null && addr.equals(address) && ONE.equals(amount.get(token))) {
                 spent = ref;
                 target = u;
                 targetValue.putAll(amount);
             } else test("scriptInput/foreign",false);
         }
-        if (!publish && !creation) test("scriptInput/target",spent != null);
+        if (!publish && !creation && !keyed) test("scriptInput/target",spent != null);
         var scripts = new HashSet<String>();
         var inline = ledger.tx.at(1).fields().get(7);
         if (inline != null) for (var script : inline.set()) {
             byte[] bytes = HEX.parseHex("03"+script.bytes());
             scripts.add(digest(224,bytes,0,bytes.length));
         }
-        test("referenceInput/witnessScript",scripts.stream().allMatch(h -> h.equals(policy) || h.equals(anchors.at("/outputVerifier/hash").textValue())));
+        test("referenceInput/witnessScript",scripts.stream().allMatch(h -> h.equals(policy) || h.equals(anchors.at("/outputVerifier/hash").textValue()) ||
+                mapContract() && h.equals(anchors.at("/mapVerifier/hash").textValue())));
         boolean resolvedAll = true;
         for (String ref : strings(plan.required("referenceInputs"))) {
             var u = resolved.path(ref);
@@ -201,24 +228,47 @@ public final class ReferenceChecker {
             var verifier = anchors.path("outputVerifier");
             boolean holder = address.equals(addr) && policy.equals(hash);
             boolean shared = addr.equals(verifier.path("address").textValue()) && Objects.equals(hash,verifier.path("hash").textValue()) && hash != null;
-            boolean instance = address.equals(addr) && call.hasNonNull("instance") &&
+            var map = anchors.path("mapVerifier");
+            shared |= mapContract() && addr.equals(map.path("address").textValue()) && hash != null && hash.equals(map.path("hash").textValue());
+            boolean instance = address.equals(addr) && call.hasNonNull("instance") && (!keyed || meta.at("/recipe/shared").asBoolean()) &&
                     ONE.equals(utxoValue(u).get(policy + call.get("instance").asText()));
             test("referenceInput/allowed", holds("referenceInput/allowed#call",!publish) && holds("referenceInput/allowed#pinned",holder || shared || instance));
             if (holder || shared) scripts.add(hash);
         }
         if (!publish && resolvedAll) test("referenceInput/scripts",holds("referenceInput/scripts#policy",scripts.contains(policy)) &&
-                holds("referenceInput/scripts#verifier",!ledger.b.containsKey(5) || scripts.contains(anchors.at("/outputVerifier/hash").asText())));
+                holds("referenceInput/scripts#verifier",!usesOutputVerifier() || scripts.contains(anchors.at("/outputVerifier/hash").asText())) &&
+                holds("referenceInput/scripts#mapVerifier",mapFields.isEmpty() || scripts.contains(anchors.at("/mapVerifier/hash").asText())));
+    }
+
+    private boolean usesOutputVerifier() {
+        var ws = ledger.b.get(5);
+        if (ws == null) return false;
+        for (int i = 0; i < ws.items.size(); i += 2) if (ws.items.get(i).bytes().equals(reward("outputVerifier"))) return true;
+        return false;
     }
 
     private void envelope() {
         var upper = plan.required("validTo");
         var lower = plan.required("validFrom");
         BigInteger now = n(req,"now"), ttl = n(req,"ttlSlots");
-        test("upperBound/window",holds("upperBound/window#present",upper.isIntegralNumber()) &&
+        if (keyed) {
+            var page = call.path("pageLimits");
+            require(page.isMissingNode() || page.isArray() && page.size() == 2 &&
+                    page.get(0).isIntegralNumber() && page.get(1).isIntegralNumber());
+            BigInteger start = page.isMissingNode() ? valueOf(60) : page.get(0).bigIntegerValue();
+            BigInteger validity = page.isMissingNode() ? valueOf(900) : page.get(1).bigIntegerValue();
+            BigInteger from = lower.bigIntegerValue(), end = upper.bigIntegerValue();
+            test("keyedWindow/bounds", holds("keyedWindow/bounds#present",lower.isIntegralNumber() && upper.isIntegralNumber()) &&
+                    holds("keyedWindow/bounds#startAfterNow",from.compareTo(now)>=0) &&
+                    holds("keyedWindow/bounds#startWithinLimit",from.compareTo(now.add(start))<=0) &&
+                    holds("keyedWindow/bounds#nonempty",end.compareTo(from)>0) &&
+                    holds("keyedWindow/bounds#withinTtl",end.compareTo(from.add(ttl))<=0) &&
+                    holds("keyedWindow/bounds#withinValidity",end.compareTo(now.add(validity))<=0));
+        } else test("upperBound/window",holds("upperBound/window#present",upper.isIntegralNumber()) &&
                 holds("upperBound/window#afterNow",upper.bigIntegerValue().compareTo(now)>0) &&
                 holds("upperBound/window#withinTtl",upper.bigIntegerValue().compareTo(now.add(ttl))<=0) &&
                 holds("upperBound/window#nonempty",lower.isNull() || upper.bigIntegerValue().compareTo(lower.bigIntegerValue())>0));
-        if (!publish && (meta.path("ctx").asBoolean() || !meta.at("/policies/validBefore").isEmpty() ||
+        if (!keyed && !publish && (meta.path("ctx").asBoolean() || !meta.at("/policies/validBefore").isEmpty() ||
                 !meta.at("/policies/validAfter").isEmpty()))
             test("lowerBound/context",holds("lowerBound/context#present",lower.isIntegralNumber()) &&
                     holds("lowerBound/context#notBefore",lower.bigIntegerValue().compareTo(now)>=0));
@@ -319,22 +369,40 @@ public final class ReferenceChecker {
     }
     private void withdrawals() {
         var ws = ledger.b.get(5);
-        if (ws == null) return;
+        boolean mapCall = !mapFields.isEmpty();
+        if (ws == null) {
+            test("mapWithdrawal/withdrawal", holds("mapWithdrawal/withdrawal#present", !mapCall));
+            return;
+        }
         require(ws.major==5);
-        String reward = "f" + Integer.toHexString(network) + anchors.at("/outputVerifier/hash").asText();
-        test("withdrawal/allowed",holds("withdrawal/allowed#call",!publish) && holds("withdrawal/allowed#sends",meta.at("/returns/sends").asBoolean()) &&
-                holds("withdrawal/allowed#single",ws.items.size()==2));
+        String reward = reward("outputVerifier"), mapReward = mapCall ? reward("mapVerifier") : null;
+        // Ledger refuses a reward account named twice, so each verifier withdraws at most once.
+        test("withdrawal/allowed",holds("withdrawal/allowed#call",!publish) && holds("withdrawal/allowed#single",ws.items.size()<=(mapCall ? 4 : 2)));
+        var accounts = new ArrayList<String>();
         for (int i=0;i<ws.items.size();i+=2) {
+            String account = ws.items.get(i).bytes();
+            accounts.add(account);
             var coin = ws.items.get(i+1).integer();
-            test("withdrawal/account",ws.items.get(i).bytes().equals(reward));
-            test("withdrawal/amount",coin.signum()==0);
+            if (!mapCall || account.equals(reward)) {
+                test("withdrawal/allowed",holds("withdrawal/allowed#sends",!publish && meta.at("/returns/sends").asBoolean()));
+                test("withdrawal/account",account.equals(reward));
+                test("withdrawal/amount",coin.signum()==0);
+            } else {
+                test("mapWithdrawal/withdrawal",holds("mapWithdrawal/withdrawal#account",account.equals(mapReward)));
+                test("mapWithdrawal/amount",coin.signum()==0);
+            }
             if (enabled("balance/conserved#withdrawals")) consumed.merge("lovelace",coin,BigInteger::add);
         }
+        accounts.sort(String::compareTo);
+        rewards = List.copyOf(accounts);
+        if (mapCall) test("mapWithdrawal/withdrawal",holds("mapWithdrawal/withdrawal#present",accounts.contains(mapReward)));
     }
 
     private void publication() {
         String kind = prerequisiteKind(), hash = prerequisiteHash();
         var verifier = anchors.path("outputVerifier");
+        boolean map = mapContract() && hash.equals(anchors.at("/mapVerifier/hash").textValue());
+        if (map) verifier = anchors.required("mapVerifier");
         boolean shared = hash.equals(verifier.path("hash").textValue());
         boolean sends = false, withdraw = false;
         for (String group : List.of("creations","actions","purposes")) for (var m : x.path(group)) {
@@ -345,7 +413,7 @@ public final class ReferenceChecker {
         boolean holder = !kind.equals("stakeRegistration");
         boolean registration = !kind.equals("referenceScript");
         test("publicationShape/kind",holds("publicationShape/kind#known",Set.of("stakeRegistration","referenceScript","verifier").contains(kind)) &&
-                (shared ? holds("publicationShape/kind#sends",sends) : holds("publicationShape/kind#policy",hash.equals(policy)) &&
+                (shared ? holds("publicationShape/kind#sends",map || sends) : holds("publicationShape/kind#policy",hash.equals(policy)) &&
                         holds("publicationShape/kind#verifierShared",!kind.equals("verifier")) && holds("publicationShape/kind#withdraw",!registration || withdraw)));
         String target = shared ? verifier.required("address").textValue() : address;
         var node = v.required("node");

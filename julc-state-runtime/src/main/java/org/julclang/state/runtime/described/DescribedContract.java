@@ -212,7 +212,10 @@ public final class DescribedContract {
         }
         boolean hostedOwnedQuorum = runtime.hostedCall() && meta.path("policies").path("quorum").isObject()
                 && (kind.equals("ownedAction") || kind.equals("ownedDestroy"));
-        if (signedByOthers && !hostedOwnedQuorum && !kind.equals("action") && !kind.equals("destroy") && !kind.equals("keyedAction")) {
+        // A keyed removal takes its co-signers like a keyed action (the dispatch below adds them): the dev hosts serve
+        // both, so the npm host must not refuse what the JVM host prepares (#156 Codex review).
+        if (signedByOthers && !hostedOwnedQuorum && !kind.equals("action") && !kind.equals("destroy") && !kind.equals("keyedAction")
+                && !kind.equals("keyedRemove")) {
             throw new BadCall(method + ": @Quorum and @AuthorizedBy on " + kind + " calls: not supported yet (ADR-0015 M3)");
         }
         if (!signedByOthers && !cosigners.isEmpty()) throw new BadCall(method + " takes no co-signers");
@@ -782,6 +785,7 @@ public final class DescribedContract {
                                 PlutusData shared, PlutusData args, PlutusData ctx) {
         if (!layout.hasMaps() || target == NONE) {
             var r = fn.run(transition, target, shared, args, ctx);
+            r.raise();
             if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
             return r.step();
         }
@@ -791,36 +795,51 @@ public final class DescribedContract {
             var list = known.computeIfAbsent(HexFormat.of().formatHex(m.root()), k -> new ArrayList<>());
             for (var e : m.reads()) list.add(e);
         }
-        for (int round = 1; round <= MAX_READ_ROUNDS; round++) {
+        var r = walk(known, k -> {
             var reads = new ArrayList<JulcList<org.julclang.state.api.MapEntry>>();
             for (int idx : layout.maps()) {
-                var list = known.get(HexFormat.of().formatHex(layout.map(target, idx).root()));
+                var list = k.get(HexFormat.of().formatHex(layout.map(target, idx).root()));
                 JulcList<org.julclang.state.api.MapEntry> l = JulcList.empty();
                 for (int i = list.size() - 1; i >= 0; i--) l = l.prepend(list.get(i));
                 reads.add(l);
             }
-            var r = fn.run(transition, layout.opened(target, reads), shared, args, ctx);
-            boolean fresh = false;
+            return fn.run(transition, layout.opened(target, reads), shared, args, ctx);
+        }, (root, key) -> org.julclang.state.api.MerkleMaps.read(HexFormat.of().parseHex(root), HexFormat.of().parseHex(key)),
+                transition);
+        r.raise();   // a failure counts only on the final path: a key answered as absent may change it
+        if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
+        return r.step();
+    }
+
+    /**
+     * The path walk of read discovery: a run answers a key {@code known} lacks as absent and reports it
+     * ({@code joust:read}); its first report is the path's next lookup (every earlier one was answered as on chain), so
+     * it is {@code read} (the call's ReadSource records and proves it, as the JVM host's run would) and added for the
+     * next run. Both hosts write the same claims in the same order. A guarded lookup aborts its run, so a call takes
+     * one run per read plus the final one, which is returned.
+     */
+    static TransitionFn.Run walk(java.util.Map<String, List<org.julclang.state.api.MapEntry>> known,
+                                 java.util.function.Function<java.util.Map<String, List<org.julclang.state.api.MapEntry>>, TransitionFn.Run> runWith,
+                                 java.util.function.BiFunction<String, String, org.julclang.state.api.MapEntry> read, String what) {
+        for (int n = 0; n <= MAX_MAP_READS; n++) {
+            var r = runWith.apply(known);
+            String[] next = null;
             for (String t : r.traces()) {
                 if (!t.startsWith("joust:read ")) continue;
                 String[] p = t.split(" ");
-                String root = p[1];
                 String key = p.length > 2 ? p[2] : "";
-                var list = known.computeIfAbsent(root, k -> new ArrayList<>());
-                if (list.stream().anyMatch(e -> HexFormat.of().formatHex(e.key()).equals(key))) continue;
-                list.add(org.julclang.state.api.MerkleMaps.read(HexFormat.of().parseHex(root), HexFormat.of().parseHex(key)));
-                fresh = true;
+                if (known.getOrDefault(p[1], List.of()).stream().noneMatch(e -> HexFormat.of().formatHex(e.key()).equals(key))) {
+                    next = new String[] {p[1], key};
+                    break;
+                }
             }
-            if (!fresh) {
-                if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
-                return r.step();
-            }
+            if (next == null) return r;
+            known.computeIfAbsent(next[0], k -> new ArrayList<>()).add(read.apply(next[0], next[1]));
         }
-        throw new org.julclang.state.api.RequireException(transition + ": more than " + MAX_READ_ROUNDS
-                + " rounds of MerkleMap reads (ADR-0015 D3)");
+        throw new org.julclang.state.api.RequireException(what + ": more than " + MAX_MAP_READS
+                + " MerkleMap reads in one call (ADR-0015 D3)");
     }
 
-    /** The round limit of read discovery (ADR-0015 D3). */
     // ------------------------------------------------------------------ other purposes (ADR-0010; ADR-0015 M3)
 
     /** The purpose handler of {@code purpose} (withdraw, certify, vote, propose). */
@@ -1022,7 +1041,8 @@ public final class DescribedContract {
         return out;
     }
 
-    static final int MAX_READ_ROUNDS = 4;
+    /** The read limit of one call's MerkleMap read discovery (ADR-0015 D3), far above what one transaction can prove. */
+    static final int MAX_MAP_READS = 128;
 
     /** The current state of {@code instance}, as JSON by the description's state schema. */
     public JsonNode state(StateRuntime runtime, String instance) {

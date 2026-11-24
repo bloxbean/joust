@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 
 import java.math.BigInteger;
@@ -58,13 +57,14 @@ public final class SchemaCodec {
 
     static final long MAX_SAFE_INTEGER = (1L << 53) - 1;
     static final int MAX_DEPTH = 32, MAX_ITEMS = 1024, MAX_DIGITS = 200, MAX_HEX_BYTES = 16384;
-    /** Plutus data nested deeper than this is refused on the strict wire: the decoder recurses, and on the Web Image a
-     *  stack overflow is a trap that ends the session (#154 review G3-4: 16,383 levels trap there). */
+    /** Plutus data nested deeper than this is refused on the strict wire: the protocol's bound (dev-host-1). Decoding is
+     *  iterative ({@code PlutusBytes}), but code after it still recurses per level, and on the Web Image a stack
+     *  overflow is a trap that ends the session (#154 review G3-4: 16,383 levels trapped there). */
     public static final int MAX_DATA_DEPTH = 256;
 
     /**
-     * Refuses CBOR whose arrays, maps and tags nest deeper than {@link #MAX_DATA_DEPTH}, by a linear scan before the
-     * recursive decoder. Malformed input passes: the decoder refuses it.
+     * Refuses CBOR whose arrays, maps and tags nest deeper than {@link #MAX_DATA_DEPTH}, by a linear scan before
+     * decoding. Malformed input passes: the decoder refuses it.
      */
     public static void checkNesting(byte[] b, String path) {
         var open = new java.util.ArrayDeque<long[]>();   // items left in each open container; -1: indefinite
@@ -212,9 +212,9 @@ public final class SchemaCodec {
                 if (strict && !v.asText().matches("([0-9a-f]{2})*")) throw new DataError(path + ": not lowercase hex");
                 byte[] cbor;
                 try { cbor = HEX.parseHex(v.asText()); } catch (IllegalArgumentException e) { throw new DataError(path + ": Data is hex CBOR"); }
-                if (strict) checkNesting(cbor, path);   // before the recursive decoder, on every strict value
+                if (strict) checkNesting(cbor, path);   // the protocol's nesting bound, on every strict value
                 try {
-                    return PlutusDataCborDecoder.decode(cbor);
+                    return org.julclang.state.runtime.PlutusBytes.decode(cbor);
                 } catch (Exception e) {
                     throw new DataError(path + ": not CBOR Plutus data");
                 }
