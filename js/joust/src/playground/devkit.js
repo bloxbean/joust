@@ -393,6 +393,12 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   async function learnRegistration(e, evidence) {
     const m = /^publish (?:stakeRegistration|verifier):([0-9a-f]{56})$/.exec(e.label ?? '');
     if (!m) return;
+    // Kept beside the journal (FE6): every later session's host is taught it before anything is listed or published.
+    try {
+      journal.learnRegistration({ credential: m[1], txHash: e.txHash, ...evidence });
+    } catch (err) {
+      log(`playground (devkit): the registration of ${m[1].slice(0, 16)}… could not be recorded: ${err.message ?? err}`);
+    }
     try {
       await forward('registered', { credential: m[1], evidence: { txHash: e.txHash, ...evidence } });
     } catch (err) {
@@ -437,6 +443,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     }
     if (restoring) restored = await restore();
     await rewindFence();
+    await teachRegistrations();
   } catch (e) {
     return fail(e);
   }
@@ -481,6 +488,23 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     }
     // No stable tip to compare: never admitted unchecked (#179 r6).
     throw new StageError('session', 'chainMoving', 'the chain kept moving while the session started: start again');
+  }
+
+  /**
+   * The registrations this playground saw (FE6), taught to the new host before the page lists prerequisites: nothing is
+   * published again (Yaci Store cannot tell a registration). Not while a rewind fence stands (one may have been undone);
+   * a credential registered elsewhere is still found by the refusal of its publication.
+   */
+  async function teachRegistrations() {
+    if (rewindPending || journal.fencedUntil !== null) return;
+    for (const r of journal.registrations) {
+      try {
+        await forward('registered', { credential: r.credential,
+          evidence: r.slot !== undefined ? { txHash: r.txHash, slot: r.slot } : { txHash: r.txHash, message: r.message } });
+      } catch (err) {
+        log(`playground (devkit): the host did not take the known registration of ${r.credential.slice(0, 16)}…: ${err.message ?? err}`);
+      }
+    }
   }
 
   async function restore() {

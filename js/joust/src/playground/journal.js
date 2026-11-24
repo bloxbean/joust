@@ -31,6 +31,10 @@ const JOURNAL_FIELDS = new Set(['version', 'project', 'entries', 'removedAt', 'f
 const ENTRY_FIELDS = new Set(['reservation', 'txHash', 'cbor', 'validFrom', 'validTo', 'state', 'slot', 'submitted', 'handedOff', 'label']);
 
 const isSlot = (n) => Number.isSafeInteger(n) && n >= 0;
+/** A registration's evidence, as protocol 1's `registered` takes it: a credential, a tx hash and one of slot or message. */
+const validRegistration = (r) => !!r && typeof r === 'object' && /^[0-9a-f]{56}$/.test(r.credential ?? '') && /^[0-9a-f]{64}$/.test(r.txHash ?? '')
+  && ((isSlot(r.slot) && r.message === undefined) || (r.slot === undefined && typeof r.message === 'string' && r.message.length > 0
+    && r.message.length <= 500)) && Object.keys(r).every((k) => ['credential', 'txHash', 'slot', 'message'].includes(k));
 /** A reservation id as the playground accepts it from a host: printable, bounded. */
 export const RESERVATION = /^[\x21-\x7e]{1,128}$/;
 
@@ -259,13 +263,19 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   let high;
   let raw;
   let pendingRaw;
+  let regsRaw;
   const pendingFile = join(dir, `${pkey}.fence-pending.json`);
+  // The registrations this playground saw settle, or refused as already there (FE6): taught to every new host.
+  const regsFile = join(dir, `${pkey}.registrations.json`);
   try {
     high = readState(highFile);
     if (high !== undefined && !isSlot(high?.highWater)) throw unreadable(highFile, 'not a high-water mark');
     raw = readState(journalFile);
     pendingRaw = readState(pendingFile);
     if (pendingRaw !== undefined && !isSlot(pendingRaw?.fencedUntil)) throw unreadable(pendingFile, 'not a fence');
+    regsRaw = readState(regsFile);
+    if (regsRaw !== undefined && !(Array.isArray(regsRaw?.registrations) && regsRaw.registrations.every(validRegistration)
+      && Object.keys(regsRaw).every((k) => k === 'registrations'))) throw unreadable(regsFile, 'not a registration list');
   } catch (e) {
     release(lockFile, token);
     throw e;
@@ -304,6 +314,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
     // the tip that cleared it, in the same write.
     fencedUntil: intact && isSlot(raw.fencedUntil) ? raw.fencedUntil : null,
   };
+  let registrations = regsRaw?.registrations ?? [];
   let closed = false;
   let keepLock = false;
   const mine = () => {
@@ -403,6 +414,20 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
         throw new Error('journal: the restored entries are not valid');
       }
       commit({ entries: next, removedAt: isSlot(atSlot) ? later(cur.removedAt, atSlot) : cur.removedAt });
+    },
+    /** Registrations known on this chain: [{ credential, txHash, slot } or { credential, txHash, message }]. */
+    get registrations() {
+      return registrations.map((r) => ({ ...r }));
+    },
+    /** Records a registration (written durably before it is taken); a credential already known is kept as it is. */
+    learnRegistration(r) {
+      if (!validRegistration(r)) throw new Error('journal: not a registration');
+      if (registrations.some((x) => x.credential === r.credential)) return;
+      mine();
+      const next = [...registrations, r.slot !== undefined ? { credential: r.credential, txHash: r.txHash, slot: r.slot }
+        : { credential: r.credential, txHash: r.txHash, message: r.message }];
+      writeAtomic(regsFile, { registrations: next });
+      registrations = next;
     },
     /** The prune notices were shown: they are cleared. */
     clearNotices() {

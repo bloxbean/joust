@@ -1801,7 +1801,7 @@ public class Box {
     assert.fail('the prerequisites did not settle');
   }
 
-  test('session 1 publishes and finalises; session 2 is refused "already registered", learns it, and lists nothing more', async () => {
+  test('FE6: session 1 publishes and finalises; session 2 is taught the registration, lists nothing, and its first call prepares at once', async () => {
     const { L, chain } = await yaciLike(970);
     const w = await wallet();
     L.fund(w.address, 1000n * ADA);
@@ -1809,21 +1809,54 @@ public class Box {
     try {
       await publishAll(s, L, w);
       assert.deepEqual(await s.prerequisites('app.Box'), []);
+      assert.equal(s.journal.registrations.length, 1, 'kept beside the journal');
     } finally {
       await s.close();
     }
     s = await open(L, chain, 970);
     try {
-      const pre = await s.prerequisites('app.Box');
-      const reg = pre.find((p) => p.id.startsWith('stakeRegistration'));
-      assert.ok(reg, 'a new host cannot tell the registration: listed again');
-      const r = await s.publish('app.Box', reg.id, w.address);
-      await assert.rejects(s.submit(r.prepared.reservation, await signed(w, r.prepared)), (e) => e.code === 'alreadyRegistered');
-      assert.ok(!(await s.prerequisites('app.Box')).some((p) => p.id.startsWith('stakeRegistration')), 'learned: no loop');
+      assert.deepEqual(await s.prerequisites('app.Box'), [], 'taught before anything is listed: nothing published again');
+      const r = await s.prepare({ contract: 'app.Box', kind: 'init', method: 'init', address: w.address, args: {} });
+      assert.ok(r.prepared, 'the first call prepares at once (no reservation of a refused republication to wait out)');
       assert.equal(s.fenced, null);
     } finally {
       await s.close();
     }
+  });
+
+  test('FE1 fallback: a registration this playground never saw (made elsewhere) is learned from the refusal of its publication', async () => {
+    const { L, chain } = await yaciLike(972);
+    const w = await wallet();
+    L.fund(w.address, 1000n * ADA);
+    let s = await open(L, chain, 972);
+    const regs = () => join(s.journal.dir, s.journal.file.split('/').at(-1).replace('.journal.json', '.registrations.json'));
+    try {
+      await publishAll(s, L, w);
+    } finally {
+      await s.close();
+    }
+    unlinkSync(regs());   // as if registered by someone else
+    s = await open(L, chain, 972);
+    try {
+      const reg = (await s.prerequisites('app.Box')).find((p) => p.id.startsWith('stakeRegistration'));
+      assert.ok(reg, 'a host that was not taught lists it');
+      const r = await s.publish('app.Box', reg.id, w.address);
+      await assert.rejects(s.submit(r.prepared.reservation, await signed(w, r.prepared)), (e) => e.code === 'alreadyRegistered');
+      assert.ok(!(await s.prerequisites('app.Box')).some((p) => p.id.startsWith('stakeRegistration')), 'learned: no loop');
+      assert.equal(s.journal.registrations.length, 1, 'and kept for the next session');
+      assert.equal(s.fenced, null);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('FE6: an unreadable registration list refuses the open', async () => {
+    const { L, chain } = await yaciLike(973);
+    let s = await open(L, chain, 973);
+    const file = join(s.journal.dir, s.journal.file.split('/').at(-1).replace('.journal.json', '.registrations.json'));
+    await s.close();
+    writeFileSync(file, '{"registrations":[{"credential":"zz"}]}');
+    await assert.rejects(open(L, chain, 973), (e) => e.code === 'journalUnreadable');
   });
 
   test('a registration that became final while no playground ran is told to the restored host', async () => {
