@@ -1435,6 +1435,30 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     }
   });
 
+  test('final pass (Codex): an indexing wait released after the inclusion was rolled back never shows it included', async () => {
+    const { L, chain, s, w } = await ready({ startTime: 964 });
+    try {
+      const instance = await create(s, w);
+      const r = await increment(s, w, instance);
+      await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+      let open;
+      chain.indexed = () => new Promise((ok) => { open = ok; });
+      await s.pass();   // the inclusion found; its indexing wait held
+      assert.equal(s.journal.find(r.prepared.reservation).state, 'shallow');
+      const txSlot = chain.txSlot;
+      chain.txSlot = async (h) => (h === r.prepared.txHash ? null : txSlot(h));   // gone from the chain
+      chain.indexed = async () => {};
+      await s.pass();
+      assert.equal(s.txStatus(r.prepared.txHash).status, 'rolledBack');
+      open();
+      await new Promise((ok) => setTimeout(ok, 50));
+      assert.equal(s.txStatus(r.prepared.txHash).status, 'rolledBack', 'the late indexing wait shows nothing');
+      chain.txSlot = txSlot;
+    } finally {
+      await s.close();
+    }
+  });
+
   test('final pass FE3: a discard after the body passed its expiry margin is told expired, not discarded', async () => {
     const { L, s, w } = await ready({ startTime: 962 });
     try {

@@ -640,8 +640,12 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         // D-5: the host knows at once; the page is told once Yaci Store's indexes show the outputs (bounded, after the
         // rest of this pass).
         indexing.set(e.txHash, chain.indexed(e.txHash).catch(() => {}).then(() => {
-          const now = status.get(e.txHash)?.chain;
-          if (now === null || now === undefined || now === 'rolledBack') observed(e.txHash, { label: e.label, chain: 'included', slot });
+          // Shown only if this very inclusion is still the journal's (final pass): a later pass may have seen it rolled
+          // back meanwhile (a final one is shown by its own step, chained after this one).
+          const cur = journal.find(e.reservation);
+          if (cur?.txHash === e.txHash && cur.state === 'shallow' && cur.slot === slot) {
+            observed(e.txHash, { label: e.label, chain: 'included', slot });
+          }
         }));
       }
       // 2. An inclusion the chain no longer shows: back to prepared.
