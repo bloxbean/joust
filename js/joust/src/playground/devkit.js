@@ -400,6 +400,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     root: fp.root,
     fingerprint: fp.digest,
     entries,
+    verifiers: fp.verifiers ?? null,
     host,
     init,
     stale,

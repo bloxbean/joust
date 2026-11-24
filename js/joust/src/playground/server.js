@@ -70,6 +70,28 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * @param o.base     the path the handler serves ('/' or '/playground/')
  * @returns { token, sessions, handles(pathname), handle(req, res), close() }
  */
+/** The verifiers' scripts (double-wrapped cborHex) the runtime engine embeds; {} if none is at hand. */
+async function engineVerifiers(engine) {
+  let e = engine;
+  if (!e) {
+    try {
+      e = await (await import('@julclang/joust-runtime')).loadEngine();
+    } catch {
+      return {};
+    }
+  }
+  const out = {};
+  for (const [key, validator] of [['outputVerifier', 'OutputVerifier'], ['mapVerifier', 'MapVerifier']]) {
+    try {
+      const r = await e.joust.validatorScript({ validator });
+      if (r?.ok && typeof r.cborHex === 'string' && /^(?:[0-9a-f]{2})+$/.test(r.cborHex)) out[key] = r.cborHex;
+    } catch {
+      // absent: calls that need it are refused by the page's checks
+    }
+  }
+  return out;
+}
+
 export function playgroundHandler({ root, engine, page, attacks = true, log = () => {}, mode = 'offline', devkit = {}, base = '/',
   session: makeSession = mode === 'devkit' ? devkitSession : offlineSession, source } = {}) {
   if (!['offline', 'devkit'].includes(mode)) throw new Error(`playground: no mode ${mode}`);
@@ -169,7 +191,10 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       if (!entry) throw new StageError('request', 'contract', 'no such contract in this build');
       // The page's anchors come from the build this session pinned (the bytes the fingerprint covers), never from
       // the host (ADR-0022 D13 rule 2): its description and script.
-      return { describe: await s.describe(contract), description: JSON.parse(entry.description), script: entry.script };
+      // The shared verifiers likewise (sends, maps): a Gradle build's from its snapshot's julc-state-verifier entry, an
+      // npm build's from its runtime engine (the engine files its fingerprint covers).
+      return { describe: await s.describe(contract), description: JSON.parse(entry.description), script: entry.script,
+        verifiers: s.verifiers ?? await engineVerifiers(engine) };
     },
     'deployment': async (b) => use(b.session).deployment(str(b.contract, 'contract', CONTRACT)),
     'prerequisites': async (b) => use(b.session).prerequisites(str(b.contract, 'contract', CONTRACT)),

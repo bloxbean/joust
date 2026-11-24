@@ -463,10 +463,15 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
       slot += Math.ceil(ms / slotLengthMs);
     },
     /** A new output of {@code lovelace} at {@code address}, from nowhere (a faucet). */
-    fund(address, lovelace) {
+    fund(address, lovelace, assets = []) {
       const hash = h32('genesis' + genesis++ + randomBytes(8).toString('hex'));
-      utxos.set(`${hash}#0`, { txHash: hash, index: 0, address, value: [{ unit: 'lovelace', quantity: String(lovelace) }],
-        datumHash: null, inlineDatum: null, referenceScriptHash: null });
+      // Native assets from nowhere too ({ unit: policy hex + name hex, quantity }), for simulations that need tokens.
+      const value = [{ unit: 'lovelace', quantity: String(lovelace) }];
+      for (const a of assets) {
+        if (!/^[0-9a-f]{56}(?:[0-9a-f]{2}){0,32}$/.test(a.unit) || !(BigInt(a.quantity) > 0n)) throw new Error('fund: an asset is { unit, positive quantity }');
+        value.push({ unit: a.unit, quantity: String(a.quantity) });
+      }
+      utxos.set(`${hash}#0`, { txHash: hash, index: 0, address, value, datumHash: null, inlineDatum: null, referenceScriptHash: null });
       return `${hash}#0`;
     },
     /** Every attack the suite ran on this ledger's script transactions, and those the scripts did not refuse. */

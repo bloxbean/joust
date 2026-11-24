@@ -109,12 +109,31 @@ ledger's modelled rules passed and the scripts accepted it. It is not a node's a
 proposals, treasury donations and every certificate but stake (de)registration as `NotModelled` ("not modelled offline:
 try DevKit"), and does not model rewards or collateral loss.
 
-Supported in this version: init, actions, destroy and owned calls; argument forms for integers, bytes (with a UTF-8
-helper and identities' key hashes), Bool, Optional, records and sum types, lists, maps with integer or byte-string keys,
-and Values, and an asset offer for calls that take assets (`<policy>.<asset name> <quantity>` per line). Anything else
-(untyped Plutus data, other map keys) is shown as UNSUPPORTED with the argument's path. Calls the dev host refuses
-(`keyed`, `params`, `authorizedBy`, `unverifiable`), keyed contracts, `@Quorum` co-signing and calls that need a shared
-verifier (sends, MerkleMaps) are shown disabled.
+Supported: init, actions, destroy and owned calls; keyed calls; `@Quorum` calls; sends; MerkleMap contracts. Argument
+forms cover integers, bytes (with a UTF-8 helper and identities' key hashes), Bool, Optional, records and sum types, lists,
+maps with integer or byte-string keys, and Values, plus an asset offer for calls that take assets (`<policy>.<asset name>
+<quantity>` per line). Anything else (untyped Plutus data, other map keys) is shown as UNSUPPORTED with the argument's
+path. Calls the dev host refuses (`params`, `authorizedBy`, `unverifiable`: `@Params` contracts and governor-authorized
+calls wait for ADR-0023) are shown disabled with the host's code.
+
+- **Sends and MerkleMaps.** JOUST's shared output and map verifiers are anchored in the pinned build, like the contract's
+  own script: a Gradle build's from its snapshot's julc-state-verifier entry, an npm build's from its runtime engine. A
+  MerkleMap call's claims and their Merkle Patricia Forestry proofs are checked before signing, as the protocol's
+  reference checker checks them. A send to an identity's key (`ctx.caller()`) lands at its enterprise address, which the
+  identities panel shows beside the identity.
+- **`@Quorum`.** The call's card lists the other identities as co-signers. The caller approves and signs, then each
+  co-signer approves the same checked body and adds its signature. Co-signers are this page's identities (a connected
+  CIP-30 wallet cannot be one; sign a quorum call as an identity).
+- **Keyed calls (ADR-0016).** Before its first request, each keyed operation (including a keyed contract's creation) gets
+  a designated input: a lovelace-only output of at least 5 ADA at the payer that no other pending operation holds. It is
+  persisted with the operation record, and every attempt handed to the chain is journaled in it. Records are kept in page
+  memory offline (they end with the session) and in IndexedDB on DevKit. A cooldown is shown as "prepare again at slot
+  N" (offline, advance time). "May have landed" with nothing handed out picks a new designation on the next try.
+- **Scenarios (D10).** "Export scenario" saves an offline session's calls as JSON: identities as labels,
+  key hashes and created ids as symbols, no keys, mnemonics or transaction bytes. "Import scenario" replays one in a
+  fresh offline session with new identities, running every step through the same checks (without the review panel), and
+  reports which steps had the same outcome. A scenario from another build is replayed with a warning naming the
+  contracts whose scripts differ.
 
 ### DevKit mode
 
