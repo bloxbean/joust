@@ -243,3 +243,29 @@ export declare function txHash(cbor: Hex): Hex;
 export declare function toJson(v: unknown): unknown;
 export declare function instanceIdOf(txHash: Hex, index: number): Hex;
 export declare function objectIdOf(txHash: Hex, index: number): Hex;
+
+/** A snapshot UTxO (ADR-0015's encoding, as protocol 1's reads carry it). */
+export interface SnapshotUtxo {
+  tx_hash: Hex; output_index: number; address: string; amount: Array<{ unit: string; quantity: string | number }>;
+  data_hash?: Hex | null; inline_datum?: Hex | null; reference_script_hash?: Hex | null;
+}
+/**
+ * Protocol 1's D13 check of a dev host's `prepare` or `publish` result before signing (ADR-0024 I2): the conformance
+ * kit's ReferenceChecker in JavaScript. The input has the verifier vectors' shape; only `result` is the host's, every
+ * other field is the client's own (its request, its pinned anchors, the trusted chain's UTxOs and parameters). Never
+ * throws; empty problems: the body may be reviewed and signed. A call touching a MerkleMap field is refused
+ * (notVerifiable): map claims are not checked here.
+ */
+export declare function verifyHostResult(input: {
+  method: 'prepare' | 'publish';
+  request: { now: Int; ttlSlots: Int; call?: Record<string, any>; contract?: string; prerequisite?: string; address?: string };
+  networkId: number;
+  maxFee: Int;
+  anchors: PublicationAnchors;
+  resolved: Record<string, SnapshotUtxo>;
+  node?: { scriptsAt: Record<string, Hex[]>; registrations: Record<Hex, boolean | 'unknown'> };
+  clock?: { zeroSlot: Int; zeroTimeMs: Int; slotLengthMs: Int };
+  protocolParams: Record<string, any>;
+  result: { prepared: Record<string, any> };
+}): { problems: string[]; sites: string[];
+  report?: { plan: Record<string, any>; walletNet: Record<string, string>; signers: Hex[]; created: Hex | null } };

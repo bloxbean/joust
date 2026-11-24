@@ -5,7 +5,7 @@
 
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, sep } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const PAGE_SOURCE = fileURLToPath(new URL('../../playground/', import.meta.url));
@@ -25,7 +25,9 @@ function readTree(dir) {
 }
 
 /** Builds the page with Vite into memory: { 'index.html': Buffer, 'assets/…': Buffer }. */
-export async function buildPage({ outDir } = {}) {
+export async function buildPage({ outDir: dir } = {}) {
+  // Relative to the caller's directory (Vite would resolve it against the page's own root).
+  const outDir = dir && resolve(dir);
   let vite;
   try {
     vite = await import('vite');

@@ -310,19 +310,23 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     const available = new Map();
     for (const w of v.witnessScripts) available.set(w.hash, w);
     let refBytes = 0;
+    const referenced = new Set();
     for (const r of [...v.inputs, ...v.referenceInputs]) {
       const h = out(r).referenceScriptHash;
       if (!h) continue;
+      referenced.add(h);
       const view = scriptViews.get(h);
       if (view) {
         available.set(h, view);
         refBytes += view.size;
       }
     }
-    // A witness script no purpose needs is extraneous (reference scripts are not witnesses).
+    // A witness script is extraneous unless a purpose needs it and no spending or reference input already provides it
+    // (Babbage/Conway: the received witnesses must lie within the needed scripts minus the reference-provided ones).
     const neededScripts = new Set(purposes.map((x) => x.script));
     for (const w of v.witnessScripts) {
       if (!neededScripts.has(w.hash)) throw new LedgerRefusal('ExtraneousScriptWitnessesUTXOW', `the witness script ${w.hash} (${w.kind}) is needed by no purpose`);
+      if (referenced.has(w.hash)) throw new LedgerRefusal('ExtraneousScriptWitnessesUTXOW', `the witness script ${w.hash} (${w.kind}) is also provided by a reference script`);
     }
     const languages = [];
     const plutus = [];
