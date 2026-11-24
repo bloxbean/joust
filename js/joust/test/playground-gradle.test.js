@@ -422,6 +422,21 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     }
   });
 
+  test('the settings file and the wrapper themselves must be yours and writable by nobody else, unless the root is listed', () => {
+    const p = project();
+    chmodSync(p.root, 0o755);
+    const settings = join(p.root, 'settings.gradle');
+    const gradlew = join(p.root, 'gradlew');
+    chmodSync(settings, 0o664);
+    assert.throws(() => gradleBuild(p.root), new RegExp(`${settings.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is writable by others: run chmod go-w`));
+    assert.equal(gradleBuild(p.root, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root, 'listed: accepted');
+    chmodSync(settings, 0o644);
+    chmodSync(gradlew, 0o775);
+    assert.throws(() => gradleBuild(p.root), /gradlew is writable by others: run chmod go-w/);
+    chmodSync(gradlew, 0o755);
+    assert.equal(gradleBuild(p.root).gradlew, gradlew);
+  });
+
   test('settings.gradle.dcl counts: the nearer directory holding one is the root, one candidate only, no link', () => {
     const p = project();
     const sub = join(p.root, 'app');

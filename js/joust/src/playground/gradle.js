@@ -113,6 +113,14 @@ export function gradleBuild(root, { env = process.env, isTrusted = settingsTrust
   if (platform === 'win32') {
     const problem = windowsCommandProblem(gradlew);
     if (problem) fail(problem);
+  } else if (!listed(buildRoot, env)) {
+    // The files Gradle runs first, themselves: this user's (or root's), and nobody else can write them.
+    for (const file of [join(buildRoot, candidates[0].f), gradlew]) {
+      const st = lstatSync(file);
+      const ownerOk = typeof process.getuid !== 'function' || st.uid === process.getuid() || st.uid === 0;
+      if (!ownerOk) fail(`${file} belongs to another user (uid ${st.uid}): the build's settings and wrapper must be yours, or list ${buildRoot} in JOUST_SAFE_DIRS`);
+      if (st.mode & 0o022) fail(`${file} is writable by others: run chmod go-w ${file}, or list ${buildRoot} in JOUST_SAFE_DIRS`);
+    }
   }
   return { project, buildRoot, gradlew };
 }
@@ -122,10 +130,12 @@ export function gradleBuild(root, { env = process.env, isTrusted = settingsTrust
  * not writable by others: another account could otherwise put a settings file there (a sticky bit does not stop a new
  * file being created).
  */
+const listed = (dir, env) => (env.JOUST_SAFE_DIRS ?? '').split(delimiter).filter((d) => d && isAbsolute(d)).map((d) => resolve(d))
+  .includes(resolve(dir));
+
 export function settingsTrusted(dir, env = process.env) {
   if (!trusted(dir, env)) return false;
-  const safe = (env.JOUST_SAFE_DIRS ?? '').split(delimiter).filter((d) => d && isAbsolute(d)).map((d) => resolve(d));
-  if (safe.includes(resolve(dir))) return true;
+  if (listed(dir, env)) return true;
   try {
     const mode = statSync(dir).mode;
     return process.platform === 'win32' || (mode & 0o022) === 0;
