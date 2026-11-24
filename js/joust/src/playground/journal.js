@@ -152,14 +152,27 @@ function alive(pid) {
   }
 }
 
+/**
+ * Every component from {@code dir} up to the filesystem's root made durable in its parent, on every open (final pass):
+ * a first run creates ~/.joust, its state, chains and the chain's directory, and a retry after a failed sync cannot tell
+ * which of them still need it. A directory of this user's must sync; another's (above the state directory, not ours)
+ * that cannot be opened is skipped.
+ */
+function syncAncestors(dir) {
+  const uid = process.getuid?.();
+  for (let p = dir; dirname(p) !== p; p = dirname(p)) {
+    const parent = dirname(p);
+    try {
+      syncDir(parent);
+    } catch (e) {
+      if (uid === undefined || lstatSync(parent).uid === uid) throw e;
+    }
+  }
+}
+
 /** M3-S2: a directory of this user's, not writable by others (made 0700 when it is this user's); else refused. */
 function privateDir(dir) {
-  // Every directory this creates (a first run makes ~/.joust, its state, chains, …) is made durable in its parent,
-  // before any journal write can be acknowledged (final pass): else a crash could lose the whole state directory.
-  const missing = [];
-  for (let p = dir; !existsSync(p) && dirname(p) !== p; p = dirname(p)) missing.push(p);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  for (const p of missing.reverse()) syncDir(dirname(p));
   const st = lstatSync(dir);
   if (!st.isDirectory()) throw new Error(`journal: ${dir} is not a directory`);
   const uid = process.getuid?.();
@@ -299,6 +312,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
       rmSync(d, { recursive: true, force: true });
     }
     privateDir(dir);
+    syncAncestors(dir);   // before anything is written in it: the chain's directory and every one above it durable
     if (!existsSync(join(dir, 'chain.json'))) writeAtomic(join(dir, 'chain.json'), { networkId, protocolMagic, startTime, admin });
   } finally {
     release(pruneLock, pruneToken);
