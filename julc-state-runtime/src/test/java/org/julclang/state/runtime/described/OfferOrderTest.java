@@ -39,4 +39,43 @@ class OfferOrderTest {
         for (String bad : new String[]{"1", "[1]", "[[\"zz\",[]]]", "[[\"" + POLICY + "\",[[\"ff\",\"x\"]]]]"})
             assertThrows(DescribedContract.BadCall.class, () -> DescribedContract.assets(JSON.readTree(bad)), bad);
     }
+
+    /** A step {@code Constr 0 [None, payouts, sends, mint, accepted]} whose method returned {@code accepted}. */
+    static PlutusData step(PlutusData accepted) {
+        return new PlutusData.ConstrData(0, java.util.List.of(new PlutusData.ConstrData(1, java.util.List.of()),
+                new PlutusData.ListData(java.util.List.of()), new PlutusData.ListData(java.util.List.of()),
+                new PlutusData.MapData(java.util.List.of()), accepted));
+    }
+
+    @Test
+    void aMethodAcceptingBothTokensPrepares() throws Exception {
+        // #154 Codex confirmation: the method returns funds.received() as accepted, in ledger order (0000 before ff);
+        // the canonical-CBOR check applied to the whole step refused it. Values are checked as ledger values instead.
+        var offered = DescribedContract.assets(JSON.readTree("[[\"" + POLICY + "\",[[\"ff\",\"1\"],[\"0000\",\"2\"]]]]"));
+        var t = DescribedContract.full(step(offered.toPlutusData()));
+        assertArrayEquals(SchemaCodec.cbor(offered.toPlutusData()), SchemaCodec.cbor(t.accepted().toPlutusData()));
+        // Not a ledger value: the wire order (ff before 0000), or a repeated name.
+        var name = (java.util.function.Function<String, PlutusData.Pair>) n -> new PlutusData.Pair(
+                new PlutusData.BytesData(java.util.HexFormat.of().parseHex(n)), new PlutusData.IntData(java.math.BigInteger.ONE));
+        for (var names : java.util.List.of(java.util.List.of("ff", "0000"), java.util.List.of("ff", "ff"))) {
+            var tokens = new PlutusData.MapData(names.stream().map(name).toList());
+            var bad = new PlutusData.MapData(java.util.List.of(new PlutusData.Pair(
+                    new PlutusData.BytesData(java.util.HexFormat.of().parseHex(POLICY)), tokens)));
+            assertThrows(IllegalArgumentException.class, () -> DescribedContract.full(step(bad)), names.toString());
+        }
+    }
+
+    @Test
+    void aTokenNameIsHexText() throws Exception {
+        // #154 Codex confirmation: the number 10 is not the token name "10".
+        assertThrows(DescribedContract.BadCall.class,
+                () -> DescribedContract.assets(JSON.readTree("[[\"" + POLICY + "\",[[10,\"1\"]]]]")));
+        assertThrows(DescribedContract.BadCall.class,
+                () -> DescribedContract.assets(JSON.readTree("[[\"" + POLICY.toUpperCase() + "\",[[\"10\",\"1\"]]]]")));
+        assertThrows(DescribedContract.BadCall.class,
+                () -> DescribedContract.assets(JSON.readTree("[[\"" + POLICY + "\",[[\"1A\",\"1\"]]]]")));
+        var v = DescribedContract.assets(JSON.readTree("[[\"" + POLICY + "\",[[\"10\",\"1\"]]]]"));
+        var names = ((PlutusData.MapData) ((PlutusData.MapData) v.toPlutusData()).entries().get(0).value()).entries();
+        assertArrayEquals(new byte[]{0x10}, ((PlutusData.BytesData) names.get(0).key()).value());
+    }
 }
