@@ -24,7 +24,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { SETTINGS_FILES, gradleBuildRoot, isGradle, isNpmRoot, trusted } from '../project.js';
+import { SETTINGS_FILES, isGradle, isNpmRoot, trusted } from '../project.js';
 import { launchHost } from './host.js';
 import { manifestOf, readJar } from './jar.js';
 
@@ -73,20 +73,61 @@ export function windowsCommandProblem(path) {
   return m ? `${path} contains ${JSON.stringify(m[0])}, which cmd.exe would interpret: move the project to a path without & ^ % ( ) ! " < > |` : null;
 }
 
-/**
- * The build's root (the nearest trusted directory at or above {@code root} with a settings file, as the native
- * joust's Locator.gradleBuildRoot; else the project itself) and its wrapper.
- */
-export function gradleBuild(root, { env = process.env, isTrusted = settingsTrusted, platform = process.platform } = {}) {
-  const project = realpathSync(root);
-  const buildRoot = gradleBuildRoot(project, env, isTrusted);
-  // The root itself must be trusted too: the walk falls back to the project it started in, trusted or not.
-  if (!isTrusted(buildRoot, env)) {
-    fail(`${buildRoot} is writable by others (or not yours): its build files could be replaced; run chmod go-w on it,`
-      + ' or list it in JOUST_SAFE_DIRS');
+const present = (p) => {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
   }
-  // Gradle searches upwards for a settings file itself: without one in this trusted root it would evaluate an
-  // ancestor's (perhaps another user's). So the build must have its own, and it must be the one Gradle takes:
+};
+const othersWrite = (st) => (st.mode & 0o022) !== 0;
+const listed = (dir, env) => (env.JOUST_SAFE_DIRS ?? '').split(delimiter).filter((d) => d && isAbsolute(d)).map((d) => resolve(d))
+  .includes(resolve(dir));
+
+/**
+ * The build's root and its wrapper, checked so that no other account can change what Gradle runs:
+ * - The root is the nearest directory at or above {@code root} holding a settings file (any of SETTINGS_FILES, in
+ *   Gradle 9's order; a link counts, Gradle follows it), walking only through this user's directories (or those
+ *   listed in JOUST_SAFE_DIRS), never to the filesystem root (the native joust's Locator.gradleBuildRoot). Gradle
+ *   searches upwards itself, so a build without its own settings file is refused, and one whose settings file sits in
+ *   a directory the walk may not enter is named.
+ * - Exactly one settings candidate, a regular file (not a link); the wrapper a regular, executable file (not a link).
+ * - Unless the root is listed in JOUST_SAFE_DIRS: the settings file and the wrapper are this user's (or root's), and
+ *   none of the directories walked (the project up to the root), the settings file or the wrapper is writable by
+ *   others. Every such path is named in one refusal, with one chmod line to fix them all (umask 002 systems).
+ */
+export function gradleBuild(root, { env = process.env, isTrusted = trusted, platform = process.platform } = {}) {
+  const project = realpathSync(root);
+  const stop = typeof process.getuid === 'function' ? undefined : resolve(homedir());
+  const walked = [];
+  let buildRoot = null;
+  let stoppedAt = null;
+  for (let d = project; dirname(d) !== d; d = dirname(d)) {
+    if (!isTrusted(d, env)) {
+      stoppedAt = d;
+      break;
+    }
+    walked.push(d);
+    if (SETTINGS_FILES.some((f) => present(join(d, f)))) {
+      buildRoot = d;
+      break;
+    }
+    if (d === stop) break;
+  }
+  if (!buildRoot) {
+    if (stoppedAt && SETTINGS_FILES.some((f) => present(join(stoppedAt, f)))) {
+      let owner = '';
+      try {
+        owner = ` (owned by uid ${lstatSync(stoppedAt).uid})`;
+      } catch {
+        // unreadable
+      }
+      fail(`${stoppedAt} holds the build's settings file but is not yours${owner}: list it in JOUST_SAFE_DIRS if you trust it`);
+    }
+    fail(`no settings.gradle at or above ${project} in a directory you own (or list in JOUST_SAFE_DIRS): Gradle would look`
+      + ' further up for one itself; add a settings.gradle to the build');
+  }
   // Gradle follows links, so a link (or more than one candidate) is refused.
   const candidates = SETTINGS_FILES.map((f) => {
     try {
@@ -95,17 +136,21 @@ export function gradleBuild(root, { env = process.env, isTrusted = settingsTrust
       return null;
     }
   }).filter(Boolean);
-  if (!candidates.length) {
-    fail(`no settings.gradle at or above ${project} in a directory you own (or list in JOUST_SAFE_DIRS): Gradle would look`
-      + ' further up for one itself; add a settings.gradle to the build');
-  }
   if (candidates.length > 1) fail(`${buildRoot} has ${candidates.map((c) => c.f).join(' and ')}: keep one`);
+  const settings = join(buildRoot, candidates[0].f);
   if (!candidates[0].st.isFile() || candidates[0].st.isSymbolicLink()) {
-    fail(`${join(buildRoot, candidates[0].f)} is not a regular file (a link, say): Gradle would evaluate whatever it points to`);
+    fail(`${settings} is not a regular file (a link, say): Gradle would evaluate whatever it points to`);
   }
   const gradlew = join(buildRoot, platform === 'win32' ? 'gradlew.bat' : 'gradlew');
+  let wrapper;
   try {
-    if (!statSync(gradlew).isFile()) throw new Error();
+    wrapper = lstatSync(gradlew);
+  } catch {
+    fail(`no executable Gradle wrapper at ${gradlew}: the playground runs the build's own ./gradlew, never a gradle from PATH`);
+  }
+  if (wrapper.isSymbolicLink()) fail(`${gradlew} is a link: the playground runs the build's own wrapper, a regular file, not what a link points to`);
+  try {
+    if (!wrapper.isFile()) throw new Error();
     if (platform !== 'win32') accessSync(gradlew, constants.X_OK);
   } catch {
     fail(`no executable Gradle wrapper at ${gradlew}: the playground runs the build's own ./gradlew, never a gradle from PATH`);
@@ -114,34 +159,21 @@ export function gradleBuild(root, { env = process.env, isTrusted = settingsTrust
     const problem = windowsCommandProblem(gradlew);
     if (problem) fail(problem);
   } else if (!listed(buildRoot, env)) {
-    // The files Gradle runs first, themselves: this user's (or root's), and nobody else can write them.
-    for (const file of [join(buildRoot, candidates[0].f), gradlew]) {
-      const st = lstatSync(file);
+    for (const [file, st] of [[settings, candidates[0].st], [gradlew, wrapper]]) {
       const ownerOk = typeof process.getuid !== 'function' || st.uid === process.getuid() || st.uid === 0;
       if (!ownerOk) fail(`${file} belongs to another user (uid ${st.uid}): the build's settings and wrapper must be yours, or list ${buildRoot} in JOUST_SAFE_DIRS`);
-      if (st.mode & 0o022) fail(`${file} is writable by others: run chmod go-w ${file}, or list ${buildRoot} in JOUST_SAFE_DIRS`);
+    }
+    const writable = [];
+    for (const d of walked) if (othersWrite(statSync(d))) writable.push(d);
+    if (othersWrite(candidates[0].st)) writable.push(settings);
+    if (othersWrite(wrapper)) writable.push(gradlew);
+    if (writable.length) {
+      fail(`${writable.join(', ')} ${writable.length > 1 ? 'are' : 'is'} writable by others, so another account could change`
+        + ` what Gradle runs. Fix (on a umask 002 system, say): chmod go-w ${writable.join(' ')}`
+        + ` (or list ${buildRoot} in JOUST_SAFE_DIRS)`);
     }
   }
   return { project, buildRoot, gradlew };
-}
-
-/**
- * A directory the build-root walk may enter: trusted (this user's, or listed in JOUST_SAFE_DIRS) and, unless listed,
- * not writable by others: another account could otherwise put a settings file there (a sticky bit does not stop a new
- * file being created).
- */
-const listed = (dir, env) => (env.JOUST_SAFE_DIRS ?? '').split(delimiter).filter((d) => d && isAbsolute(d)).map((d) => resolve(d))
-  .includes(resolve(dir));
-
-export function settingsTrusted(dir, env = process.env) {
-  if (!trusted(dir, env)) return false;
-  if (listed(dir, env)) return true;
-  try {
-    const mode = statSync(dir).mode;
-    return process.platform === 'win32' || (mode & 0o022) === 0;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -513,6 +545,8 @@ export function snapshotContracts(entries) {
       const plutus = owner.resources.get(`META-INF/plutus/${validator}.plutus.json`);
       if (!plutus) fail(`${title}: no compiled script META-INF/plutus/${validator}.plutus.json beside ${classFile}`);
       let script;
+      // JSON.parse keeps the last of a repeated key, another reader may keep the first: one cborHex only.
+      if ((plutus.toString('utf8').match(/"cborHex"/g) ?? []).length !== 1) fail(`${title}: its compiled script names cborHex other than once`);
       try {
         script = JSON.parse(plutus.toString('utf8')).cborHex;
       } catch {
