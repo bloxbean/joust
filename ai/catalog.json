@@ -2,7 +2,7 @@
   "name": "JOUST",
   "url": "https://joust.julc.dev",
   "repo": "https://github.com/bloxbean/joust",
-  "generatedAt": "2026-11-24T14:43:08.276Z",
+  "generatedAt": "2026-11-24T14:50:49.095Z",
   "annotations": [
     {
       "name": "@Action",
@@ -920,7 +920,7 @@
     },
     {
       "title": "Architecture decisions",
-      "description": "Every JOUST architecture decision record (ADR-0001 to ADR-0022), with its status, the decision in one paragraph and the guide that covers it.",
+      "description": "Every JOUST architecture decision record (ADR-0001 to ADR-0023), with its status, the decision in one paragraph and the guide that covers it.",
       "url": "https://joust.julc.dev/project/architecture-decisions/",
       "group": "Project"
     }

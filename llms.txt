@@ -116,7 +116,7 @@ Key facts an AI agent should know before generating JOUST code:
 ## Project
 
 - [Status and roadmap](https://joust.julc.dev/project/status-and-roadmap/): What JOUST does today, what is experimental, what comes next, what is published and how releases are made.
-- [Architecture decisions](https://joust.julc.dev/project/architecture-decisions/): Every JOUST architecture decision record (ADR-0001 to ADR-0022), with its status, the decision in one paragraph and the guide that covers it.
+- [Architecture decisions](https://joust.julc.dev/project/architecture-decisions/): Every JOUST architecture decision record (ADR-0001 to ADR-0023), with its status, the decision in one paragraph and the guide that covers it.
 
 ## Optional
 
