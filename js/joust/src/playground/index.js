@@ -47,6 +47,7 @@ function announce(server, { open, log, mode }) {
   const opened = open && openBrowser(server.url, unopened);
   if (opened) {
     log(`joust playground (${mode}): http://127.0.0.1:${server.port}/ (opened in your browser)`);
+    log('  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for the link');
     const close = server.close;
     server.close = async () => { opened.remove(); return close(); };
   } else {
@@ -81,25 +82,37 @@ async function gradlePlayground({ root, port, acceptAbi, acceptLock, open, log }
   return announce(server, { open, log, mode: 'offline, Gradle' });
 }
 
-/** Opens the URL through a private launcher file (mode 0600 in a 0700 directory); null if no browser could be asked. */
-function openBrowser(url, failed) {
-  let dir;
+/**
+ * A private launcher file (mode 0600 in a fresh 0700 directory) that forwards to the tokenised URL: the browser gets a
+ * file:// link, so the token is in no process's arguments.
+ */
+export function writeLauncher(url) {
+  const dir = mkdtempSync(join(tmpdir(), 'joust-playground-'));
   try {
-    dir = mkdtempSync(join(tmpdir(), 'joust-playground-'));
     const file = join(dir, 'open.html');
     const target = JSON.stringify(url).replace(/</g, '\\u003c');
     writeFileSync(file, `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>joust playground</title>`
       + `<script>location.replace(${target})</script>`, { mode: 0o600 });
-    const link = pathToFileURL(file).href;
-    const [cmd, args] = process.platform === 'darwin' ? ['open', [link]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', link]]
-      : ['xdg-open', [link]];
+    return { file, link: pathToFileURL(file).href, remove: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch (e) {
+    rmSync(dir, { recursive: true, force: true });
+    throw e;
+  }
+}
+
+/** Opens the URL through a launcher file; null if no browser could be asked. */
+function openBrowser(url, failed) {
+  let launcher;
+  try {
+    launcher = writeLauncher(url);
+    const [cmd, args] = process.platform === 'darwin' ? ['open', [launcher.link]]
+      : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', launcher.link]] : ['xdg-open', [launcher.link]];
     spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', failed).unref();
-    // The browser reads the file at once; it is removed after a minute, or when the playground stops.
-    const remove = () => rmSync(dir, { recursive: true, force: true });
-    setTimeout(remove, 60_000).unref();
-    return { remove };
+    // Removed after ten minutes (a browser's cold start may take a while), or when the playground stops.
+    setTimeout(launcher.remove, 600_000).unref();
+    return launcher;
   } catch {
-    if (dir) rmSync(dir, { recursive: true, force: true });
+    launcher?.remove();
     return null;
   }
 }

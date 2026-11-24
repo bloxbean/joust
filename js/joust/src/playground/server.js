@@ -196,10 +196,16 @@ export async function startPlayground({ root, engine, page, port = 0, attacks = 
       if (!hosts.includes(req.headers.host ?? '')) return refuse(res, 421, 'foreign Host');
       const origin = req.headers.origin;
       if (origin !== undefined && !hosts.map((h) => 'http://' + h).includes(origin)) return refuse(res, 403, 'foreign Origin');
-      if (req.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) {
+      const url = new URL(req.url, 'http://' + req.headers.host);
+      // Cross-site requests are refused, except a top-level navigation to the page itself: the command opens it from a
+      // file:// launcher (a cross-site initiator), the page holds no secret until its fragment brings the token, and
+      // frame-ancestors 'none' keeps it out of frames. /api/ stays same-origin only (and needs the token besides).
+      const site = req.headers['sec-fetch-site'];
+      const navigation = req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document'
+        && (req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/');
+      if (site && !['same-origin', 'none'].includes(site) && !navigation) {
         return refuse(res, 403, 'cross-site request');
       }
-      const url = new URL(req.url, 'http://' + req.headers.host);
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'POST') return refuse(res, 405, 'POST only');
         if (!sameToken(req.headers[TOKEN_HEADER])) return refuse(res, 401, 'missing or wrong session token');
