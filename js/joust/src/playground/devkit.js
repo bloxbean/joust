@@ -324,8 +324,11 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     // A tip past a journaled body's expiry margin would let the host expire it; if that body in fact landed and the
     // watcher has not told the host yet, the read fails (retryable) and the watcher runs first (final pass FE2).
     for (const e of journal.entries) {
-      if (e.state !== 'prepared' || t <= e.validTo + settlementSlots) continue;
-      if (within(await chain.txSlot(e.txHash), e, t)) {
+      if (t <= e.validTo + settlementSlots) continue;
+      // Recorded as included but not yet told the host (its settled call queued behind this one), or not yet seen.
+      const untoldInclusion = e.state === 'shallow' && untold.has(e.reservation);
+      if (e.state !== 'prepared' && !untoldInclusion) continue;
+      if (untoldInclusion || within(await chain.txSlot(e.txHash), e, t)) {
         setTimeout(() => tick().catch(() => {}), 0).unref?.();
         throw Object.assign(new Error(`the transaction ${e.txHash.slice(0, 16)}… landed and its settlement is not told yet: try again in a `
           + 'moment'), { tip: a.tip });
@@ -355,6 +358,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   let fenced = null;              // why the host builds nothing more
   // The rewind fence (#179 r4): one persisted bound (journal.fencedUntil). A rewind found now blocks builds at once
   // (rewindPending) while its fence is written, and the write is retried until it holds.
+  const untold = new Set();       // reservations recorded as included whose inclusion the host has not acknowledged yet
   let rewindPending = null;       // { bound, why } of a found rewind whose fence is not written yet
   let stableTip = null;           // the highest tip of any stable observation (the watcher's and a handout's)
   let resetOnceFenced = false;    // a rewind the watcher found: the session ends once its fence is written
@@ -635,8 +639,13 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         .sort((a, b) => o.seen.get(a.txHash) - o.seen.get(b.txHash));
       for (const e of landed) {
         const slot = o.seen.get(e.txHash);
+        untold.add(e.reservation);
         journal.update(e.reservation, { state: 'shallow', slot });
-        await inform(e, { status: 'confirmed', slot, tip: slot }, settlementSlots === 0 ? ['shallow', 'confirmed'] : ['shallow']);
+        try {
+          await inform(e, { status: 'confirmed', slot, tip: slot }, settlementSlots === 0 ? ['shallow', 'confirmed'] : ['shallow']);
+        } finally {
+          untold.delete(e.reservation);
+        }
         // D-5: the host knows at once; the page is told once Yaci Store's indexes show the outputs (bounded, after the
         // rest of this pass).
         indexing.set(e.txHash, chain.indexed(e.txHash).catch(() => {}).then(() => {

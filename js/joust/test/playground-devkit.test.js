@@ -1435,6 +1435,44 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     }
   });
 
+  test('final pass (Codex): a host read past the margin of an inclusion recorded but not yet told fails, so the host is told first', async () => {
+    const { L, chain, s, w } = await ready({ startTime: 965 });
+    try {
+      const instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      chain.hold = true;
+      const a = await increment(s, w, instance);
+      const validTo = Number(parseTx(a.prepared.cbor).ttl);
+      await s.submit(a.prepared.reservation, await signed(w, a.prepared));
+      advanceSlots(L, validTo - 2 - L.slot);
+      await chain.release();   // lands at validTo - 2
+      chain.hold = false;
+      // A host call whose chain read is held; meanwhile the watcher records the inclusion and queues its confirmation
+      // behind that call; the read then answers past the body's margin.
+      let open;
+      const gate = new Promise((ok) => { open = ok; });
+      const utxos = chain.utxos;
+      let held = true;
+      chain.utxos = async (addr) => { if (held) { held = false; await gate; } return utxos(addr); };
+      const view = s.view(COUNTER, instance).then(() => 'answered', () => 'refused');
+      await new Promise((ok) => setTimeout(ok, 100));
+      const pass = s.pass();
+      await new Promise((ok) => setTimeout(ok, 100));
+      assert.equal(s.journal.find(a.prepared.reservation).state, 'shallow', 'recorded, its confirmation queued');
+      advanceSlots(L, SETTLEMENT_SLOTS + 3);
+      open();
+      assert.equal(await view, 'refused', 'the read past the margin failed (retryable)');
+      await pass;
+      assert.equal(s.fenced, null, s.fenced);
+      chain.utxos = utxos;
+      await s.tick();
+      assert.equal(s.txStatus(a.prepared.txHash).status, 'final');
+    } finally {
+      await s.close();
+    }
+  });
+
   test('final pass (Codex): an indexing wait released after the inclusion was rolled back never shows it included', async () => {
     const { L, chain, s, w } = await ready({ startTime: 964 });
     try {
