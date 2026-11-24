@@ -28,6 +28,7 @@ class PlaygroundTest {
 
     @BeforeEach
     void tools() throws IOException {
+        tmp = tmp.toRealPath();   // the cache's paths are canonical (macOS: /var is a link to /private/var)
         bin = Files.createDirectories(tmp.resolve("tools"));
         node = JoustMainTest.exe(bin.resolve("node"));
         npm = JoustMainTest.exe(bin.resolve("npm"));
@@ -413,6 +414,31 @@ class PlaygroundTest {
         root.env.put(Playground.HOME_ENV, sticky.resolve("cache").toString());
         root.owners = p -> Optional.of(p.equals(parent) ? "0" : "me");
         assertThat(runOn(root)).isZero();
+    }
+
+    @Test
+    void theCacheIsResolvedOnceAndRunByItsCanonicalPathNotThroughLinksOthersControl() throws Exception {
+        // ~/alias/through -> shared/hop -> private: the hop sits in a directory others can write.
+        Path priv = Files.createDirectories(tmp.resolve("private"));
+        Files.setPosixFilePermissions(priv, PosixFilePermissions.fromString("rwx------"));
+        Path shared = Files.createDirectories(tmp.resolve("shared"));
+        chmod("777", shared);
+        Files.createSymbolicLink(shared.resolve("hop"), priv);
+        Path alias = Files.createDirectories(tmp.resolve("alias"));
+        Files.createSymbolicLink(alias.resolve("through"), shared.resolve("hop"));
+        FakeSys s = sys(project);
+        s.env.put(Playground.HOME_ENV, alias.resolve("through/cache").toString());
+        s.onRun = r -> fakeInstall(r, "0.1.0-pre1-rc8");
+        assertThat(runOn(s)).isZero();
+        Path cached = priv.resolve("cache/0.1.0-pre1-rc8");
+        assertThat(s.runs.get(0).dir().getParent()).as("installed under the canonical path").isEqualTo(priv.resolve("cache"));
+        assertThat(s.runs.get(1).command().get(1)).as("node runs the canonical path, never the links").isEqualTo(Playground.bin(cached).toString());
+        // The home itself a link: still refused.
+        Files.createSymbolicLink(alias.resolve("linked-home"), priv.resolve("cache"));
+        FakeSys linked = sys(project);
+        linked.env.put(Playground.HOME_ENV, alias.resolve("linked-home").toString());
+        assertThat(runOn(linked)).isEqualTo(1);
+        assertThat(linked.errText()).contains("a link; the playground's cache must be this user's own");
     }
 
     /** With a real node and npm: a local tarball installed into the cache with its integrity recorded, then run. */
