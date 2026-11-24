@@ -6,7 +6,7 @@
 // project (I10) and never in DevKit's own files (F19). A chain is keyed by its network id, protocol magic and the
 // DevKit's genesis startTime, so a reset DevKit (a new startTime) is a new chain with an empty journal: the old chain's
 // entries are never reconciled against it. Directories of earlier chains of the same DevKit (its admin URL and magic)
-// are reported once and removed, unless a playground still owns one.
+// are reported once and removed, unless one has a lock on it.
 //
 //   <state>/chains/<networkId>-<protocolMagic>-<startTime>/chain.json      { networkId, protocolMagic, startTime, admin }
 //   <state>/chains/<…>/<project key>.journal.json                          { version: 1, project, entries }
@@ -72,13 +72,13 @@ function privateDir(dir) {
   if (st.mode & 0o077) chmodSync(dir, 0o700);
 }
 
-// ---- the lock: one owner per file, taken atomically
+// ---- the lock: one owner per file, taken atomically, never taken over
 //
 // The owner's token ("<pid> <random>") is written to a private file first and hard-linked to the lock's name: link
-// fails if the name exists, so a lock is never visible without its full token. A stale lock (its pid gone) is renamed
-// aside and removed only if the renamed file is still the token judged dead; anything else is put back. Every journal
-// write checks that the lock still holds this owner's token, so even an interleaving the rename cannot exclude ends
-// with one writer.
+// fails if the name exists, so a lock is never visible without its full token. A lock whose owner is gone is not taken
+// over automatically (#179 r2: a takeover cannot be made safe against a delayed contender): it is refused with its path
+// and how to remove it, as git does with index.lock. Every journal write checks that the lock still holds this
+// owner's token.
 
 function tryLink(lock, token) {
   const tmp = writeFile(lock, token);
@@ -102,41 +102,21 @@ const read = (file) => {
 };
 const pidOf = (token) => Number(String(token).split(' ')[0]);
 const live = (token) => token !== null && Number.isSafeInteger(pidOf(token)) && pidOf(token) > 0 && alive(pidOf(token));
-const lockedBy = (lock) => live(read(lock));
 
-/** Removes {@code lock} if it is still the stale token read now. */
-function removeStale(lock) {
-  const token = read(lock);
-  if (token === null || live(token)) return;
-  const grave = `${lock}.${randomBytes(6).toString('hex')}.stale`;
-  try {
-    renameSync(lock, grave);
-  } catch (e) {
-    if (e.code === 'ENOENT') return;
-    throw e;
-  }
-  if (read(grave) !== token) {
-    try {
-      linkSync(grave, lock);   // a new owner's lock, renamed in a race: back where it was (if the name is free)
-    } catch {
-      // taken meanwhile: that owner's next write finds its token gone and stops
-    }
-  }
-  unlinkSync(grave);
-}
-
-/** Takes {@code lock} for this process; returns its token, or throws (code 'journalLocked') when a live owner has it. */
+/**
+ * Takes {@code lock} for this process and returns its token. Throws with code 'journalLocked' when a running process
+ * holds it, and 'journalStaleLock' (naming the file to remove) when its owner is gone.
+ */
 export function acquire(lock, what = 'this journal') {
   const token = `${process.pid} ${randomBytes(12).toString('hex')}`;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    if (tryLink(lock, token)) return token;
-    const held = read(lock);
-    if (live(held)) {
-      throw Object.assign(new Error(`another playground (pid ${pidOf(held)}) is using ${what}: stop it first`), { code: 'journalLocked' });
-    }
-    removeStale(lock);
+  if (tryLink(lock, token)) return token;
+  const held = read(lock);
+  if (held === null && tryLink(lock, token)) return token;   // released meanwhile
+  if (live(held)) {
+    throw Object.assign(new Error(`another playground (pid ${pidOf(held)}) is using ${what}: stop it first`), { code: 'journalLocked' });
   }
-  throw Object.assign(new Error(`could not take the lock of ${what}`), { code: 'journalLocked' });
+  throw Object.assign(new Error(`the lock of ${what} (${lock}) belongs to pid ${pidOf(held)}, which is no longer running. If no `
+    + `playground is using it, remove the lock and start again: rm '${lock}'`), { code: 'journalStaleLock', lock });
 }
 const owns = (lock, token) => {
   try {
@@ -198,7 +178,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   const key = devkitKey(chain);
   const noticesFile = join(chains, `${key}.notices.json`);
   // Earlier chains of this DevKit (same admin API and magic, another startTime): one pruning at a time per DevKit,
-  // after checking the DevKit still serves this chain; a directory a live playground owns is kept; the notice is
+  // after checking the DevKit still serves this chain; a directory with a lock on it is kept; the notice is
   // persisted before anything is deleted (a session that then fails to start still shows it next time).
   const pruneLock = join(chains, `${key}.prune.lock`);
   const pruneToken = acquire(pruneLock, 'this DevKit\'s journals (pruning)');
@@ -214,7 +194,8 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
       if (!meta || meta.admin !== admin || meta.protocolMagic !== protocolMagic || meta.networkId !== networkId
         || meta.startTime === startTime) continue;
       const files = readdirSync(d);
-      if (files.some((f) => f.endsWith('.lock') && lockedBy(join(d, f)))) continue;   // a live owner
+      // A lock (live, or left by a playground that stopped: never taken over) keeps the chain's journals.
+      if (files.some((f) => f.endsWith('.lock'))) continue;
       const transactions = files.filter((f) => f.endsWith('.journal.json')).reduce((n, f) => n + (readJson(join(d, f))?.entries?.length ?? 0), 0);
       notices.push({ startTime: meta.startTime, transactions });
       writeAtomic(noticesFile, notices);
@@ -239,9 +220,14 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   const raw = readJson(journalFile);
   // Validated as a whole: one bad entry, a wrong version or a missing file with a high-water mark is lost history.
   const parsed = raw?.version === JOURNAL_VERSION && Array.isArray(raw.entries) ? raw.entries.map(entry) : null;
-  const intact = parsed !== null && parsed.every(Boolean);
+  // #179 r2: each reservation once (two bodies under one id would share one chain observation).
+  const intact = parsed !== null && parsed.every(Boolean) && new Set(parsed.map((e) => e.reservation)).size === parsed.length
+    && (raw.removedAt === undefined || raw.removedAt === null || isSlot(raw.removedAt));
   const lost = (raw !== undefined || highWater !== null) && !intact;
   let entries = intact ? parsed : [];
+  // The highest tip at which a body left the journal (final or expired): a chain rewound below it may let that body
+  // land again, so a later session fences builds until the tip passes the high-water mark (#179 r2).
+  let removedAt = intact && isSlot(raw.removedAt) ? raw.removedAt : null;
   let closed = false;
   const mine = () => {
     if (closed || !owns(lockFile, token)) {
@@ -250,7 +236,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   };
   const save = () => {
     mine();
-    writeAtomic(journalFile, { version: JOURNAL_VERSION, project: root, entries });
+    writeAtomic(journalFile, { version: JOURNAL_VERSION, project: root, entries, removedAt });
   };
 
   return {
@@ -293,9 +279,17 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
       save();
       return true;
     },
-    remove(reservation) {
+    get removedAt() {
+      return removedAt;
+    },
+    /**
+     * Removes a body; {@code atSlot} is the chain point that settled it (final or expired), kept as the removed-history
+     * point (a discarded body needs none: it was never signed).
+     */
+    remove(reservation, atSlot = null) {
       const before = entries.length;
       entries = entries.filter((e) => e.reservation !== reservation);
+      if (atSlot !== null && isSlot(atSlot) && (removedAt === null || atSlot > removedAt)) removedAt = atSlot;
       if (entries.length !== before) save();
     },
     /** Replaces the whole journal (after a restore: the host's new reservation ids); nothing changes if one is invalid. */

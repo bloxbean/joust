@@ -21,7 +21,10 @@ import { acquire, openJournal, release } from '../src/playground/journal.js';
 import { launchNpmHost, npmSource } from '../src/playground/host.js';
 import { playgroundHandler, TOKEN_HEADER } from '../src/playground/server.js';
 import { memoryLedger } from '../src/test/offline.js';
+import { chromiumOrNull } from './playground/walkthrough.js';
 import { buildPlainTx, enterpriseAddress } from '@julclang/state-client/ledger';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { parseTx } from '@julclang/state-client';
 
 const images = existsSync(join(repo, 'js/joust/engine/joust-toolchain.js.wasm'))
@@ -84,7 +87,11 @@ function fakeChain(L, startTime) {
       return { slot: L.slot, hash: sha('tip' + L.slot), height: L.slot };
     },
     utxos: (a) => L.utxos(a),
-    output: (r) => L.output(r),
+    hiddenAt: null,      // an address whose outputs the chain API no longer shows (a rollback under an open review)
+    async output(r) {
+      const u = await L.output(r);
+      return u && u.address === c.hiddenAt ? null : u;
+    },
     protocolParams: () => L.protocolParams(),
     script: async (h) => L.script(h),
     stakeRegistered: async (addr) => (await L.account(addr)).registered,
@@ -120,6 +127,20 @@ function body(n, { ttl = 100 + n } = {}) {
   const cbor = buildPlainTx({ inputs: [{ ref: `${sha('in' + n)}#0`, value: new Map([['lovelace', 10_000_000n]]) }],
     change: enterpriseAddress({ type: 'key', hash: '00'.repeat(28) }, 0), params: PARAMS, ttl });
   return { reservation: String(n), txHash: parseTx(cbor).hash, cbor, validTo: ttl, validFrom: null };
+}
+
+/** A plain body spending {@code ref} with the given validity window (a body a lying host could hand out). */
+async function plainBody({ ref = `${sha('lie' + Math.random())}#0`, from = null, to }) {
+  const cbor = buildPlainTx({ inputs: [{ ref, value: new Map([['lovelace', 10_000_000n]]) }],
+    change: enterpriseAddress({ type: 'key', hash: '00'.repeat(28) }, 0), params: PARAMS, ttl: to });
+  if (from === null) return { cbor, txHash: parseTx(cbor).hash };
+  const core = createRequire(join(repo, 'js/state-client/package.json')).resolve('@cardano-sdk/core');
+  const { Serialization, Cardano } = await import(pathToFileURL(core));
+  const tx = Serialization.Transaction.fromCbor(cbor);
+  const b = tx.body();
+  b.setValidityStartInterval(Cardano.Slot(from));
+  const out = new Serialization.Transaction(b, tx.witnessSet()).toCbor();
+  return { cbor: out, txHash: parseTx(out).hash };
 }
 
 /** The npm host, with its replies to some methods replaced (a host that lies), or the real one. */
@@ -266,7 +287,7 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
     }
   });
 
-  test('#179 P1-10: the lock is taken atomically: many processes at once, and many recoveries of a dead owner at once', async () => {
+  test('#179 P1-10: the lock is taken atomically by one of many; a dead owner\'s lock is never taken over (as git\'s)', async () => {
     const lock = join(state, 'race.lock');
     const racer = (hold) => new Promise((ok) => {
       const p = spawn(process.execPath, ['--input-type=module', '-e', `
@@ -280,17 +301,34 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
     const once = await Promise.all(Array.from({ length: 6 }, () => racer(1500)));
     assert.equal(once.filter((x) => x === 'won').length, 1, once.join(','));
     assert.equal(once.filter((x) => x === 'journalLocked').length, 5);
-    // A dead owner's lock, recovered by six at once: one wins.
+    // A dead owner's lock: every contender refuses, naming the file and how to remove it; nobody takes it over.
     writeFileSync(lock, '999999999 deadbeef');
-    const recovered = await Promise.all(Array.from({ length: 6 }, () => racer(1500)));
-    assert.equal(recovered.filter((x) => x === 'won').length, 1, recovered.join(','));
-    // In this process: a live owner refuses; its token is released only by it.
+    const stale = await Promise.all(Array.from({ length: 6 }, () => racer(100)));
+    assert.deepEqual(stale, Array(6).fill('journalStaleLock'));
+    assert.equal(readFileSync(lock, 'utf8'), '999999999 deadbeef', 'left as it was');
+    assert.throws(() => acquire(lock), (e) => e.code === 'journalStaleLock' && e.message.includes(`rm '${lock}'`));
+    unlinkSync(lock);   // what the message says to do
     const t = acquire(lock);
     assert.throws(() => acquire(lock), (e) => e.code === 'journalLocked');
     release(lock, 'someone else');
     assert.ok(existsSync(lock));
     release(lock, t);
     assert.ok(!existsSync(lock));
+  });
+
+  test('#179 r2: two entries under one reservation id are lost history', async () => {
+    const j = await open('/p/dupid', 12);
+    j.raise(400);
+    j.record(body(1));
+    j.record(body(2));
+    j.close();
+    const raw = JSON.parse(readFileSync(j.file, 'utf8'));
+    raw.entries[1].reservation = raw.entries[0].reservation;
+    writeFileSync(j.file, JSON.stringify(raw));
+    const k = await open('/p/dupid', 12);
+    assert.equal(k.lost, true);
+    assert.deepEqual(k.entries, []);
+    k.close();
   });
 
   test('a write after another playground took the lock fails: one writer, always', async () => {
@@ -308,12 +346,15 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
     old.record(body(2));
     old.close();
     const busy = await open('/p/busy', 4);   // an earlier chain a live playground still owns
+    const crashed = await open('/p/crashed', 3);   // one a playground that stopped left its lock on
+    writeFileSync(crashed.file.replace(/\.journal\.json$/, '.lock'), '999999999 gone');
     const j = await open('/p/reset', 6);
     assert.deepEqual(j.entries, []);
     assert.equal(j.highWater, null);
     assert.ok(j.pruned.some((p) => p.startTime === 5 && p.transactions === 2));
     assert.ok(!existsSync(old.dir));
     assert.ok(existsSync(busy.dir), 'a live owner\'s chain is kept');
+    assert.ok(existsSync(crashed.dir), 'a chain with a stale lock is kept too (never taken over)');
     j.clearNotices();
     j.close();
     const k = await open('/p/reset', 6);
@@ -680,6 +721,158 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     }
   });
 
+  test('#179 r2: a rewind across the point where settled bodies left the journal fences the next session until the high-water mark', async () => {
+    const L = memoryLedger({ engine: await theEngine(), attacks: false });
+    const chain = fakeChain(L, 130);
+    let s = await session(L, chain, { startTime: 130 });
+    const w = await wallet();
+    let instance;
+    try {
+      await s.fund(w.address, String(1000n * ADA));
+      instance = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      assert.deepEqual(s.journal.entries, [], 'all settled: their history left the journal');
+      assert.ok(s.journal.removedAt >= L.slot - 1);
+    } finally {
+      await s.close();
+    }
+    const removedAt = s.journal.removedAt;
+    // The same DevKit, rewound below that point (no reset of its genesis).
+    chain.tipOverride = () => ({ slot: removedAt - 20, hash: sha('rewound'), height: 1 });
+    s = await session(L, chain, { startTime: 130 });
+    try {
+      await assert.rejects(increment(s, w, instance), (e) => e.code === 'rewound');
+      assert.ok(s.status().rewoundUntil >= removedAt);
+      chain.tipOverride = null;
+      advanceSlots(L, s.status().rewoundUntil - L.slot + 1);
+      await s.tick();
+      assert.equal(s.status().rewoundUntil, null);
+      await increment(s, w, instance);   // past the high-water mark: builds again
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r2: a body outside the asked window, a journaled body again, or one that spends a journaled body\'s input is never handed out', async () => {
+    let n = 140;
+    const cases = [
+      ['outside the asked window', async (p, prev) => ({ ...(await plainBody({ to: p.now + p.ttlSlots + 1000 })), reservation: 'lie-window' })],
+      ['empty validity window', async (p) => ({ ...(await plainBody({ from: p.now + 5, to: p.now + 5 })), reservation: 'lie-empty' })],
+      ['already journaled', async (p, prev) => ({ ...prev, reservation: 'lie-again' })],
+      ['already spends', async (p, prev) => ({ ...(await plainBody({ ref: parseTx(prev.cbor).inputs.map((x) => (typeof x === 'string' ? x : `${x.txHash}#${x.index}`))[0],
+        to: p.now + 10 })), reservation: 'lie-overlap' })],
+    ];
+    for (const [what, lie] of cases) {
+      let held = null;
+      let lying = false;
+      const { L, s, w } = await ready({ startTime: n++, launch: lyingLaunch({ prepare: async (r, p) => {
+        if (!lying) { held = r.prepared; return r; }
+        return { ...r, prepared: { ...r.prepared, ...(await lie(p, held)) } };
+      } }) });
+      try {
+        const other = await create(s, w);
+        const instance = await create(s, w);
+        advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+        await s.tick();
+        L.fund(w.address, 500n * ADA);   // a second wallet output: the held body and the lie's call spend one each
+        lying = false;
+        await increment(s, w, other);   // a body journaled (held), on the other instance
+        lying = true;
+        await assert.rejects(s.prepare({ contract: COUNTER, kind: 'action', method: 'increment', instance, address: w.address, args: { by: '7' } }),
+          (e) => e.code === 'reservation' && e.message.includes(what), what);
+        assert.ok(s.fenced, what);
+        assert.equal(s.journal.find('lie-window') ?? s.journal.find('lie-again') ?? s.journal.find('lie-overlap'), null);
+      } finally {
+        await s.close();
+      }
+    }
+  });
+
+  test('#179 r2: a discard waits for a tip from the chain (never the clock): none, the body is kept and the discard can be retried', async () => {
+    const { chain, s, w } = await ready({ startTime: 150 });
+    try {
+      const instance = await create(s, w);
+      const r = await increment(s, w, instance);
+      chain.tipOverride = () => { throw new Error('Yaci Store is down'); };
+      await assert.rejects(s.discard(r.prepared.reservation), (e) => e.code === 'chainUnavailable');
+      assert.ok(s.journal.find(r.prepared.reservation), 'kept');
+      chain.tipOverride = null;
+      await s.discard(r.prepared.reservation);
+      assert.equal(s.journal.find(r.prepared.reservation), null);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r2: a submit waiting for its window is cancelled by close; right before sending, the window and the genesis are checked again', async () => {
+    let lie = null;
+    let skew = 0;
+    let sends = 0;
+    const L = memoryLedger({ engine: await theEngine(), attacks: false });
+    const chain = fakeChain(L, 160);
+    const send = chain.submit;
+    chain.submit = (cbor) => { sends++; return send(cbor); };
+    const s = await session(L, chain, { startTime: 160, nowSlot: () => L.slot + skew,
+      launch: lyingLaunch({ prepare: async (r, p) => (lie ? { ...r, prepared: { ...r.prepared, ...(await lie(p)) } } : r) }) });
+    const w = await wallet();
+    try {
+      await s.fund(w.address, String(1000n * ADA));
+      const instance = await create(s, w);
+      // A window that opens ahead: the submit waits for it.
+      lie = async (p) => ({ ...(await plainBody({ from: p.now + 5, to: p.now + 20 })), reservation: 'ahead' });
+      const ahead = await increment(s, w, instance, '9');
+      lie = null;
+      const waiting = s.submit('ahead', ahead.prepared.cbor).then(() => 'sent', (e) => e.code);
+      // Past the window by the time it is sent: refused before sending (another instance: the host still reserves
+      // the real body behind the lie).
+      L.fund(w.address, 500n * ADA);
+      const second = await create(s, w);
+      advanceSlots(L, SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      const r = await increment(s, w, second, '2');
+      const before = sends;
+      skew = 10_000;
+      await assert.rejects(s.submit(r.prepared.reservation, await signed(w, r.prepared)), (e) => e.code === 'window');
+      skew = 0;
+      // Another genesis by the time it is sent: the session ends and nothing is sent.
+      assert.equal(sends, before);
+      await s.close();
+      assert.equal(await waiting, 'closed', 'a close cancels the wait');
+      assert.equal(sends, before, 'nothing was sent');
+    } finally {
+      await s.close();
+    }
+    const other = await ready({ startTime: 161 });
+    try {
+      const instance = await create(other.s, other.w);
+      const q = await increment(other.s, other.w, instance);
+      other.chain.genesisStart = 999;
+      await assert.rejects(other.s.submit(q.prepared.reservation, await signed(other.w, q.prepared)), (e) => e.code === 'otherChain');
+      assert.match(other.s.ended, /genesis changed/);
+    } finally {
+      await other.s.close();
+    }
+  });
+
+  test('#179 r2: a refusal of a body the chain already holds is its inclusion, the refusal only a transport detail', async () => {
+    const { chain, s, w } = await ready({ startTime: 170 });
+    try {
+      const instance = await create(s, w);
+      const r = await increment(s, w, instance);
+      chain.lose = false;
+      const send = chain.submit;
+      chain.submit = async (cbor) => { await send(cbor); throw new Error('submit failed: 400 BadInputsUTxO (already spent)'); };
+      const res = await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+      assert.equal(res.status, 'included');
+      assert.equal(res.transport, 'refused');
+      assert.ok(res.slot > 0);
+      chain.submit = send;
+    } finally {
+      await s.close();
+    }
+  });
+
   test('a restart restores the journal: a body that landed meanwhile is included, then final; handed-out ones expire', async () => {
     const L = memoryLedger({ engine: await theEngine(), attacks: false });
     const chain = fakeChain(L, 104);
@@ -842,5 +1035,108 @@ describe('ADR-0024 M3: the server in DevKit mode, mounted as joust dev mounts it
     assert.equal((await api('advance', { session: b.session, ms: 1000 })).error.code, 'devkit');
     assert.equal((await api('tx', { session: b.session, txHash: '00'.repeat(32) })).error.code, 'unknownTransaction');
     assert.equal((await api('tx', { session: b.session, txHash: 'xyz' })).error.stage, 'request');
+  });
+});
+
+// ---- the browser path over the controlled chain (#179 r2 P2s): the page itself, in Chromium
+
+const chromium = await chromiumOrNull();
+describe('ADR-0024 M3 in Chromium over the controlled chain: late refusals, a CIP-30 input that is gone', {
+  skip: skip || (!chromium && 'Playwright\'s Chromium is not installed') }, () => {
+  let root, state, L, chain, pg, server, port, browser, page, blocks, wallet;
+  const signs = { count: 0 };
+  before(async () => {
+    root = await project();
+    state = mkdtempSync(join(tmpdir(), 'joust-state-'));
+    L = memoryLedger({ engine: await theEngine(), attacks: false });
+    chain = fakeChain(L, 301);
+    const { pageFiles } = await import('../src/playground/page.js');
+    pg = playgroundHandler({ root, page: pageFiles, mode: 'devkit', devkit: { net: net(L), identity: identity(301), chain, state,
+      clock: L.clock, nowSlot: () => L.slot, ttlSlots: TTL, pollMs: 200, topUp: async (a, ada) => L.fund(a, BigInt(ada) * ADA) } });
+    server = createServer((req, res) => pg.handle(req, res));
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    port = server.address().port;
+    blocks = setInterval(() => advanceSlots(L, 1), 250);   // a block every 250 ms
+    // A CIP-30 wallet over this chain, its key in Node: the page reaches it through the CIP-30 calls only.
+    const { devWallet } = await import('@julclang/state-client/devwallet');
+    const { generateMnemonic } = await import('@scure/bip39');
+    const { wordlist } = await import('@scure/bip39/wordlists/english');
+    const view = { utxosAt: async (a) => (await L.utxos(a)).map((u) => ({ ref: `${u.txHash}#${u.index}`, address: u.address,
+      value: new Map(u.value.map((x) => [x.unit, BigInt(x.quantity)])), inlineDatum: u.inlineDatum })) };
+    wallet = devWallet({ chain: view, mnemonic: generateMnemonic(wordlist, 256), networkId: 0 });
+    browser = await chromium.launch();
+    page = await browser.newPage();
+    await page.exposeFunction('__joustTestWallet', async (method, arg) => {
+      if (method === 'signTx') signs.count++;
+      return wallet[method](arg);
+    });
+    await page.addInitScript(() => {
+      const api = Object.fromEntries(['getNetworkId', 'getUtxos', 'getBalance', 'getCollateral', 'getUsedAddresses', 'getUnusedAddresses',
+        'getChangeAddress', 'getRewardAddresses', 'signTx'].map((m) => [m, (arg) => window.__joustTestWallet(m, arg)]));
+      window.cardano = { joustfake: { name: 'Joust fake wallet', apiVersion: '0.1.0', icon: '', enable: async () => api, isEnabled: async () => true } };
+    });
+    await page.goto(`http://127.0.0.1:${port}${pg.pairingPath()}`);
+    await page.waitForSelector('body[data-ready=true]', { timeout: 180_000 });
+  });
+  after(async () => {
+    clearInterval(blocks);
+    await browser?.close();
+    await pg?.close();
+    await new Promise((r) => server?.close(r));
+    rmSync(root, { recursive: true, force: true });
+    rmSync(state, { recursive: true, force: true });
+  });
+  const idle = () => page.waitForFunction(() => !document.body.classList.contains('busy'), null, { timeout: 120_000 });
+  const has = (r) => new RegExp(r).test(document.querySelector('#history').innerText);
+  async function approveUntil(re) {
+    for (let i = 0; i < 6; i++) {
+      const done = await Promise.race([
+        page.waitForSelector('#approve', { timeout: 120_000 }).then(() => false, () => null),
+        page.waitForFunction(has, re, { timeout: 120_000 }).then(() => true, () => null),
+      ]);
+      if (done === null) assert.fail(`timed out waiting for /${re}/\n${await page.locator('#history').innerText()}\n${await page.locator('#log').innerText()}`);
+      if (done) return;
+      await page.click('#approve');
+    }
+  }
+
+  test('a 4xx for a body already on chain shows its inclusion, never a ledger failure', async () => {
+    await page.click(`[data-contract="${COUNTER}"]`);
+    await page.waitForSelector('[data-call="init:init"] button.run');
+    await page.click('[data-call="init:init"] button.run');
+    await approveUntil('init\\s+(included in slot \\d+|final)');
+    await page.waitForSelector('#instances li.selected', { timeout: 60_000 });
+    const send = chain.submit;
+    chain.submit = async (cbor) => { await send(cbor); throw new Error('submit failed: 400 BadInputsUTxO'); };
+    try {
+      await idle();
+      await page.fill('[data-call="action:increment"] input[data-kind=integer]', '3');
+      await page.click('[data-call="action:increment"] button.run');
+      await approveUntil('increment\\s+(included in slot \\d+|final)');
+      assert.doesNotMatch(await page.locator('#history').innerText(), /increment\s+failed/);
+    } finally {
+      chain.submit = send;
+    }
+  });
+
+  test('a CIP-30 wallet whose input the chain no longer shows fails at stage wallet; signTx is never called', async () => {
+    await idle();
+    await page.selectOption('#wallet-choice', 'joustfake');
+    await page.click('#connect');
+    await page.waitForFunction(() => /Joust fake wallet/.test(document.querySelector('#identities li.signer')?.innerText ?? '')
+      && !/(?:^|\s)0\.000000 ADA/.test(document.querySelector('#identities li.signer')?.innerText ?? ''), null, { timeout: 120_000 });
+    await idle();
+    await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1');
+    await page.click('[data-call="action:increment"] button.run');
+    await page.waitForSelector('#approve', { timeout: 120_000 });
+    chain.hiddenAt = wallet.address;   // the review is open; the funding output is gone from the chain API
+    try {
+      await page.click('#approve');
+      await page.waitForFunction(has, 'Joust fake wallet: increment\\s+failed\\s+at stage wallet', { timeout: 60_000 });
+      assert.match(await page.locator('#history').innerText(), /does not show the input/);
+      assert.equal(signs.count, 0, 'never asked to sign');
+    } finally {
+      chain.hiddenAt = null;
+    }
   });
 });

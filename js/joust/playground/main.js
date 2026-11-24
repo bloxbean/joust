@@ -800,22 +800,32 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
  */
 async function walletStillMatches(signer, cbor, label) {
   const refuse = (message) => new StageFailure({ stage: 'wallet', code: 'walletChanged', message, label });
-  let view;
-  try {
-    view = await walletView(signer.wallet);
-  } catch (e) {
-    throw refuse(`the wallet could not be read: ${reason(e)}`);
-  }
-  if (view.networkId !== state.session.network.networkId) throw refuse(`the wallet is now on network ${view.networkId}`);
-  if (view.change !== signer.address) throw refuse('the wallet\'s change address changed since it was connected: connect it again');
+  const read = async () => {
+    try {
+      return await walletView(signer.wallet);
+    } catch (e) {
+      throw refuse(`the wallet could not be read: ${reason(e)}`);
+    }
+  };
+  let view = await read();
+  if (view.networkId !== state.session.network.networkId) throw refuse(`the wallet is now on network ${view.networkId}: connect the wallet again`);
+  if (view.change !== signer.address) throw refuse('the wallet\'s change address changed since it was connected: connect the wallet again');
   const tx = parseTx(cbor);
   const refs = [...new Set([...tx.inputs, ...tx.collateral].map((i) => (typeof i === 'string' ? i : i.ref ?? `${i.txHash}#${i.index}`)))];
   const { outputs } = await resolveInputs(cbor);
+  // #179 r2: every input and collateral input must resolve on the chain before it is classified by address.
+  const missing = refs.find((ref) => !outputs.has(ref));
+  if (missing) throw refuse(`DevKit does not show the input ${missing} the body spends: prepare the call again`);
+  const payer = refs.filter((ref) => outputs.get(ref).address === signer.address);
   const chainUnspent = new Set((await chainView.utxosAt(signer.address)).map((u) => u.ref));
-  for (const ref of refs) {
-    if (outputs.get(ref)?.address !== signer.address) continue;
-    if (!view.utxos.has(ref)) throw refuse(`the wallet does not hold the input ${ref} the body spends (does it follow this DevKit?)`);
-    if (!chainUnspent.has(ref)) throw refuse(`DevKit does not show the input ${ref} unspent`);
+  for (const ref of payer) if (!chainUnspent.has(ref)) throw refuse(`DevKit does not show the input ${ref} unspent: prepare the call again`);
+  // D-6: a wallet indexes new outputs a moment after DevKit does: read it again for a few seconds before refusing.
+  for (let attempt = 0; ; attempt++) {
+    const absent = payer.find((ref) => !view.utxos.has(ref));
+    if (!absent) return;
+    if (attempt >= 4) throw refuse(`the wallet does not hold the input ${absent} the body spends (does it follow this DevKit?)`);
+    await new Promise((ok) => setTimeout(ok, 1000));
+    view = await read();
   }
 }
 

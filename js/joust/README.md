@@ -165,7 +165,9 @@ log line carries the token), and the playground keeps its own token, `Host` and 
   protocol magic and genesis start time): a reset DevKit starts empty, and the journal of the chain it replaced is
   reported once and removed. One playground at a time per project and DevKit (a lock); one session per playground (a
   second tab takes it over, and the first is told so). A journal that is missing or invalid while its high-water mark
-  exists is lost history: the next session waits until the chain passes that mark.
+  exists is lost history: the next session waits until the chain passes that mark, as it does when the DevKit's chain
+  is found below the point where settled transactions left the journal. A lock left by a playground that stopped is
+  never taken over: the playground names it and says how to remove it (as git does with `index.lock`).
 - No time travel (the chain's clock is the DevKit's), no ledger reset (**New session** starts a new dev host on the same
   chain) and no attack suite (the node checks every transaction).
 
