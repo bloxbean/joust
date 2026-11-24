@@ -452,7 +452,8 @@ class Checker {
       signers: [...(this.witnesses ?? [])], created: this.created ?? null,
       // The call's state (an owned call: the object's value) before, decoded from the trusted chain's target output, and
       // after, from the body's checked continuation; a destroy removes it, a creation has no before.
-      before: this.rules?.before ?? null, after: this.destroy ? null : this.rules?.after ?? null, removed: this.destroy };
+      before: this.rules?.before ?? null, after: this.destroy ? null : this.rules?.after ?? null,
+      removed: this.destroy || this.rules?.removed === true };
   }
 
   test(site, ok) {
@@ -507,7 +508,7 @@ class Checker {
     this.certificates();
     this.withdrawals();
     if (this.publish) this.publication();
-    else if (this.keyed) new KeyedRules(this).check();
+    else if (this.keyed) (this.rules = new KeyedRules(this)).check();
     else (this.rules = new CallRules(this)).check();
     const balance = new Map(this.consumed);
     addValue(balance, this.minted, 1);
@@ -1218,6 +1219,9 @@ class KeyedRules {
     this.order = sortByLedger(c.inputs);
     this.target = null;
     this.anchor = null;
+    this.before = null;
+    this.after = null;
+    this.removed = false;
   }
 
   check() {
@@ -1280,7 +1284,7 @@ class KeyedRules {
     this.instance = c.token.slice(56);
     const minted = new Map([[c.token, 1n]]);
     const state = this.output(c.token);
-    this.codec.decode(rq(c.x, 'state'), data(asText(rq(state, 'datum'))));
+    this.after = this.codec.decode(rq(c.x, 'state'), data(asText(rq(state, 'datum'))));
     this.minimum(c.token);
     this.contribution = n(state.value, 'lovelace');
     c.test('deposit/keyedState', this.contribution <= this.minAda + this.pay);
@@ -1359,12 +1363,15 @@ class KeyedRules {
         && (next(anchor) === '' || nd.key < next(anchor)));
       c.test('planMismatch/keyedObject', nd.key === textValue(path(c.prepared, 'object')));
       c.created = nd.key;
+      this.after = path(nd.datum, 'value') ?? null;
       c.test('keyedLink/insertedAt', n(nd.datum, 'linkedAt') === this.time('validTo'));
       c.test('deposit/keyedInsert', nd.coin === this.minAda + this.pay);
       this.contribution = nd.coin;
       this.relink(nd.key);
     } else if (remove) {
       c.test('mint/keyedRemove', mapEquals(c.minted, new Map([[this.target.unit, -1n]])));
+      this.before = path(this.target.datum, 'value') ?? null;
+      this.removed = true;
       this.structuralRedeemer('mint', 0, 'remove');
       c.test('keyedLink/removedNext', next(this.anchor) === this.target.key);
       this.relink(next(this.target));
@@ -1372,6 +1379,9 @@ class KeyedRules {
     } else {
       c.test('mint/keyedAction', c.minted.size === 0);
       const nd = this.continuing(this.target.unit);
+      // The object's value before and after; a retired object keeps only its retired record.
+      this.before = path(this.target.datum, 'value') ?? null;
+      this.after = retire ? nd.datum : path(nd.datum, 'value') ?? null;
       c.test('continuingOutput/keyedUpdate', nd.kind === (retire ? 'retired' : 'node') && nd.key === this.target.key
         && next(nd) === next(this.target) && jeq(rq(nd.datum, 'linkedAt'), rq(this.target.datum, 'linkedAt')));
       if (retire) {

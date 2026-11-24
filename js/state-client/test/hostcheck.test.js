@@ -96,6 +96,12 @@ const JULC_PRE22 = [
   ['6161', false, 'a text string'],
   ['f5', false, 'a simple value'],
   ['d8799f0102ff', true, 'a constructor'],
+  ['d866820780', true, 'a general constructor, a definite pair'],
+  ['d8669f0780ff', true, 'a general constructor, an indefinite pair'],
+  ['d8669f079f01ffff', true, 'an indefinite pair with indefinite fields'],
+  ['d8669f0780', false, 'an indefinite pair without its break'],
+  ['d8669f078001ff', false, 'an indefinite pair of three'],
+  ['d8669f07ff', false, 'an indefinite pair of one'],
 ];
 
 test('Plutus data as the pinned JuLC decoder reads it: byte strings of at most 64 bytes per chunk', async () => {
@@ -105,6 +111,7 @@ test('Plutus data as the pinned JuLC decoder reads it: byte strings of at most 6
     else assert.throws(() => plutusData(hex), what);
   }
   assert.deepEqual(plutusData('5f5840' + A64 + '41abff').bytes.length, 65);
+  assert.deepEqual({ ...plutusData('d8669f079f01ffff') }, { constr: 7, fields: [{ int: 1n }] });
 });
 
 test('constructor indices beyond safe integers fail closed (the data model would equate distinct ones)', async () => {
@@ -142,4 +149,22 @@ test('the report carries the state before and after, both from the trusted chain
   assert.deepEqual(problems, []);
   assert.equal(BigInt(report.after.count) - BigInt(report.before.count), BigInt(v.request.call.args.by));
   assert.equal(report.removed, false);
+});
+
+test('keyed calls report the keyed object\'s value before and after, a removal as removed', () => {
+  const read = (f) => verifyHostResult(JSON.parse(readFileSync(new URL(f, dir))));
+  const shape = (r) => ({ problems: r.problems, before: r.report.before !== null, after: r.report.after !== null, removed: r.report.removed });
+  assert.deepEqual(shape(read('registry-m3-upgrade.json')), { problems: [], before: true, after: true, removed: false });
+  assert.deepEqual(shape(read('registry-m3-claim.json')), { problems: [], before: false, after: true, removed: false });
+  for (const f of ['registry-m3-release.json', 'Registry-remove.json']) {
+    assert.deepEqual(shape(read(f)), { problems: [], before: true, after: false, removed: true }, f);
+  }
+  for (const f of ['registry-m3-retire.json', 'Registry-retire.json']) {
+    assert.deepEqual(shape(read(f)), { problems: [], before: true, after: true, removed: false }, f);
+  }
+  assert.deepEqual(shape(read('registry-m3-init.json')), { problems: [], before: false, after: true, removed: false });
+  // The update's states are the object's value, decoded with the description, and they differ.
+  const up = read('registry-m3-upgrade.json').report;
+  assert.equal(typeof up.before, 'object');
+  assert.notDeepEqual(up.before, up.after);
 });
