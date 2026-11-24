@@ -168,6 +168,10 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     set attacksEnabled(v) {
       if ('attacksEnabled' in chain) chain.attacksEnabled = !!v;
     },
+    /** The dev host's process id (tests check that it is the only process a session starts). */
+    get hostPid() {
+      return host.pid;
+    },
     status() {
       return { session: id, mode: 'offline', network: OFFLINE_NETWORK, fingerprint: fp.digest, slot: chain.slot,
         clock: chain.clock, stale: stale(), ended: host.alive ? null : host.ended, attacks: this.attacksEnabled,

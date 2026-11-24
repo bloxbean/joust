@@ -10,6 +10,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statS
 import { createHash } from 'node:crypto';
 import { join, relative } from 'node:path';
 import net from 'node:net';
+import { execFileSync } from 'node:child_process';
 import { request } from 'node:http';
 import { install, repo } from './host/client.js';
 import { offlineSession, ledgerReads } from '../src/playground/session.js';
@@ -75,6 +76,12 @@ describe('ADR-0024 M1 sessions', { skip }, () => {
     t.mock.method(net.Socket.prototype, 'connect', function (...a) { connects.push(a); throw new Error('no sockets offline'); });
     let launches = 0;
     const launch = (o) => { launches++; return launchNpmHost(o); };
+    // This process's children (pgrep does not list itself), before the session starts.
+    const children = () => execFileSync('pgrep', ['-P', String(process.pid)], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean)
+      .filter((pid) => !/^pgrep/.test(command(pid)));
+    const command = (pid) => { try { return execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim(); } catch { return ''; } };
+    let baseline;
+    try { baseline = children(); } catch { baseline = []; }
     const s = await offlineSession({ id: 's1', root, engine: e, launch });
     try {
       const { w } = await wallet();
@@ -86,6 +93,9 @@ describe('ADR-0024 M1 sessions', { skip }, () => {
       assert.ok(res.attacks > 0, 'the attack suite ran (Q7: on by default)');
       assert.deepEqual(res.acceptedAttacks, []);
       assert.deepEqual((await s.view(COUNTER, instance)).value.count, '5');
+      // The only process the session started is its dev host (the build's toolchain host predates the session).
+      const started = children().filter((pid) => !baseline.includes(pid));
+      assert.deepEqual(started, [String(s.hostPid)], 'no process but the dev host: ' + started.map(command).join('; '));
     } finally {
       await s.close();
     }
@@ -480,13 +490,20 @@ for (const kind of ['java', 'jsc']) {
     let root, server, browser, page, before0;
     const bodies = [];
     const errors = [];
+    const logs = [];
     before(async () => {
       root = await project(kind);
       before0 = treeHash(root);
       const { pageFiles } = await import('../src/playground/page.js');
-      server = await startPlayground({ root, engine: await theEngine(), page: await pageFiles() });
+      server = await startPlayground({ root, engine: await theEngine(), page: await pageFiles(), log: (l) => logs.push(String(l)) });
       browser = await chromium.launch();
       page = await browser.newPage();
+      // I1: the page's 32-byte random draws (the identities' mnemonic entropy), so the test can name every secret.
+      await page.addInitScript(() => {
+        const draw = crypto.getRandomValues.bind(crypto);
+        globalThis.__draws = [];
+        crypto.getRandomValues = (a) => { const r = draw(a); if (r.length === 32) globalThis.__draws.push([...new Uint8Array(r.buffer, r.byteOffset, 32)]); return r; };
+      });
       page.on('pageerror', (e) => errors.push(String(e.stack ?? e)));
       page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
       page.on('request', (r) => { if (r.method() === 'POST') bodies.push({ url: r.url(), body: r.postData() ?? '' }); });
@@ -584,6 +601,41 @@ for (const kind of ['java', 'jsc']) {
         }
       }
       assert.equal(treeHash(root), before0);
+    });
+    test('I1: the identities\' mnemonics and keys are nowhere in the server: not in its logs, not in its memory', async () => {
+      const { entropyToMnemonic } = await import('@scure/bip39');
+      const { wordlist } = await import('@scure/bip39/wordlists/english');
+      const { deriveAccount } = await import('@julclang/state-client/devwallet');
+      const funded = new Set(bodies.filter((b) => b.url.endsWith('/api/fund')).map((b) => JSON.parse(b.body).address));
+      // The snapshot first: once this test spells the secrets out, they are in this process's memory too. Written to a
+      // file and searched by grep (the snapshot is far larger than a string can be).
+      const { writeHeapSnapshot } = await import('node:v8');
+      const { mkdtempSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const dir = mkdtempSync(join(tmpdir(), 'joust-i1-'));
+      const heap = writeHeapSnapshot(join(dir, 'server.heapsnapshot'));
+      const draws = await page.evaluate(() => globalThis.__draws);
+      const secrets = [];
+      for (const bytes of draws) {
+        const mnemonic = entropyToMnemonic(Uint8Array.from(bytes), wordlist);
+        const acct = deriveAccount(mnemonic, 0, 0);
+        if (!funded.has(acct.address)) continue;
+        secrets.push(mnemonic, Buffer.from(bytes).toString('hex'), acct.privateKey.hex());
+      }
+      assert.ok(secrets.length >= 9, `the three identities' secrets were found (${secrets.length / 3})`);
+      const text = logs.join('\n');
+      const forms = secrets.flatMap((secret) => [secret, secret.split(' ').slice(0, 6).join(' ')]);
+      try {
+        for (const form of forms) assert.ok(!text.includes(form), 'a secret in the server\'s log');
+        writeFileSync(join(dir, 'forms'), forms.join('\n') + '\n');
+        // grep -F: fixed strings; exit 1 means none found.
+        const found = (() => {
+          try { return execFileSync('grep', ['-c', '-F', '-f', join(dir, 'forms'), heap], { encoding: 'utf8' }).trim(); } catch (e) { if (e.status === 1) return '0'; throw e; }
+        })();
+        assert.equal(found, '0', 'a secret in the server process\'s memory');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 }
