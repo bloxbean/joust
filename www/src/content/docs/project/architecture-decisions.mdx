@@ -1,6 +1,6 @@
 ---
 title: Architecture decisions
-description: Every JOUST architecture decision record (ADR-0001 to ADR-0022), with its status, the decision in one paragraph and the guide that covers it.
+description: Every JOUST architecture decision record (ADR-0001 to ADR-0023), with its status, the decision in one paragraph and the guide that covers it.
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
@@ -47,6 +47,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0020](#adr-0020-uplc-transition-programs-off-chain-a-spike) | UPLC transition programs as the off-chain meaning: a spike and its report | Proposed (r12); the spike's "adopt now" items implemented in the engine | [Program manifests](/apps/cli-and-projects/#program-manifests) |
 | [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc) | A language server and VS Code extension for `.jsc` | Proposed (r11, with r7a and r7b); M5a–M5e built (#130); the release publishes the extension as `julc.vscode-joust` (D11) | [Editors](/languages/editors/) |
 | [0022](#adr-0022-a-dev-host-for-ides) | A dev host: the project's own JOUST, driven by an IDE over stdio | Proposed (r7) | – |
+| [0023](#adr-0023-the-dev-host-serves-params-contracts-and-governor-calls) | The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7) | Proposed (r4) | – |
 
 ## The base
 
@@ -393,6 +394,16 @@ user key, writes no file, opens no socket and starts no process: every chain rea
 from the node the IDE is bound to, and time is the IDE's `now`. It returns unsigned transactions, with a validity
 bound, that the IDE checks against its own anchors before signing (D13). A JVM host serves Gradle projects and a
 Node host npm projects, behind one protocol and one conformance kit.
+
+### ADR-0023: The dev host serves params contracts and governor calls
+
+[`0023-dev-host-params-and-governors.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0023-dev-host-params-and-governors.md) · Proposed (r4)
+
+Amends ADR-0022 (its Q7). The dev host serves `@Params` contracts and `@AuthorizedBy` instance actions, with a key or a
+Plutus governor as the credential. Params travel with every request, and the IDE applies them to the script from its
+own snapshot, so it anchors on a hash it computed itself. A governor call names the governor, its params and its
+signers. The IDE checks the single zero withdrawal from that governor, and an `Approvals` redeemer naming exactly this
+policy, instance and action.
 
 ## Research behind the ADRs
 
