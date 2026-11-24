@@ -47,6 +47,15 @@ export function ledgerReads(ledger, { networkId = 0 } = {}) {
   const tip = () => ({ slot: ledger.slot, hash: sha('slot' + ledger.slot), height: ledger.slot });
   return async function read(q) {
     const t = tip();
+    try {
+      return await answer(q, t);
+    } catch (e) {
+      // Every result carries a tip, a failed read's too (else the host takes it as inconsistentRead).
+      if (e && typeof e === 'object' && !e.tip) e.tip = t;
+      throw e;
+    }
+  };
+  async function answer(q, t) {
     switch (q.kind) {
       case 'tip':
         return { tip: t, value: t };
@@ -81,7 +90,7 @@ export function ledgerReads(ledger, { networkId = 0 } = {}) {
       default:
         return { tip: t, unsupported: true };
     }
-  };
+  }
 }
 
 /**
@@ -163,7 +172,7 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       return { session: id, mode: 'offline', network: OFFLINE_NETWORK, fingerprint: fp.digest, slot: chain.slot,
         clock: chain.clock, stale: stale(), ended: host.alive ? null : host.ended, attacks: this.attacksEnabled,
         capabilities: init.capabilities ?? [], versions: init.versions ?? null,
-        contracts: (init.contracts ?? []).map((c) => ({ name: c.name, served: c.served !== false, unsupported: c.unsupported ?? null })) };
+        contracts: (init.contracts ?? []).map((c) => ({ name: c.name, served: c.served === true, unsupported: c.unsupported ?? null })) };
     },
     async describe(contract) {
       if (!describes.has(contract)) describes.set(contract, await forward('describe', { contract }));
@@ -173,15 +182,18 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     prerequisites: (contract) => forward('prerequisites', { now: chain.slot, contract }),
     async publish(contract, prerequisite, address) {
       if (stale()) throw new StageError('session', 'stale', 'the project was rebuilt: start a new session to use the new build');
-      const r = await forward('publish', { now: chain.slot, ttlSlots: TTL_SLOTS, contract, prerequisite, address });
+      // The page checks against the `now` the host was given, not a later one (another tab may move the clock).
+      const now = chain.slot;
+      const r = await forward('publish', { now, ttlSlots: TTL_SLOTS, contract, prerequisite, address });
       if (r?.prepared) remember(r.prepared, 'publish');
-      return { ...r, now: chain.slot, ttlSlots: TTL_SLOTS };
+      return { ...r, now, ttlSlots: TTL_SLOTS };
     },
     async prepare(call) {
       if (stale()) throw new StageError('session', 'stale', 'the project was rebuilt: start a new session to use the new build');
-      const r = await forward('prepare', { now: chain.slot, ttlSlots: TTL_SLOTS, call });
+      const now = chain.slot;
+      const r = await forward('prepare', { now, ttlSlots: TTL_SLOTS, call });
       remember(r.prepared, 'call');
-      return { ...r, now: chain.slot, ttlSlots: TTL_SLOTS };
+      return { ...r, now, ttlSlots: TTL_SLOTS };
     },
     view: (contract, instance, view = null, args = {}) => forward('view', { now: chain.slot, contract, instance, view, args }),
     instances: (contract, limit = 50) => forward('instances', { now: chain.slot, contract, limit }),
