@@ -142,11 +142,13 @@ final class Designation {
         /** Still unspent, as far as the provider shows; an unreadable answer counts as spent (nothing is rebuilt). */
         boolean unspent(StateRuntime rt) {
             try {
-                for (int page = 1; page <= 20; page++) {
+                for (int page = 1; page <= StateContractHandle.MAX_PAGES; page++) {   // to the listing's end (#165 Codex r6)
                     var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                     if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) return false;
+                    // One output however the listing spells its transaction id (T3, #165 Codex).
+                    String want = ref();
                     for (Utxo u : r.getValue()) {
-                        if (u.getTxHash().equals(utxo.getTxHash()) && u.getOutputIndex() == utxo.getOutputIndex()) return true;
+                        if (Designation.ref(u).equals(want)) return true;
                     }
                     if (r.getValue().size() < 100) return false;
                 }
@@ -314,8 +316,9 @@ final class Designation {
         if (store.avoids(ref) && !store.reusable(ref)) throw new ReservedInputException("the designated input", ref);
         boolean complete = false;
         // A host answers from the complete wallet listing it acquired: read all of it, so a designation past the first
-        // 2,000 outputs is found (#156 Codex review). A provider keeps the earlier bound.
-        int lastPage = rt.hostedCall() ? 100_000 : 20;
+        // 2,000 outputs is found (#156 Codex review). A provider is read to the listing's end too (#165 Codex r6),
+        // bounded by MAX_PAGES.
+        int lastPage = rt.hostedCall() ? 100_000 : StateContractHandle.MAX_PAGES;
         try {
             for (int page = 1; page <= lastPage; page++) {
                 var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
@@ -350,8 +353,8 @@ final class Designation {
             throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref, e);
         }
         if (!complete) {
-            throw new JoustException("the payer " + address + " has more UTxOs than the 2,000 read; the designated input " + ref
-                    + " was not among them (R-G3)");
+            throw new JoustException("the payer " + address + " has more UTxOs than the " + lastPage
+                    + " pages read; the designated input " + ref + " was not among them (R-G3)");
         }
         throw new JoustException("the designated input " + ref + " is not an unspent UTxO of the payer " + address
                 + " (spent: an earlier attempt of the operation may have landed; ADR-0016 D11)");
@@ -366,12 +369,18 @@ final class Designation {
         String address = payer.baseAddress();
         ClaimStore store = rt.claimStore();
         if (store instanceof JvmClaimStore j) j.purge();
+        boolean[] unanswered = {false};   // the first page failed: said in the refusal (#165 Opus P3, round 7)
         // Read and chosen under the address's lock (F63): no build of that address can spend and release a candidate
         // between the read and the designation.
         Designated chosen = locked(address, () -> {
             var candidates = new ArrayList<Utxo>();
             try {
-                var walk = new Pages(rt, address, 100, 20);
+                // To the listing's end (#165 Codex r6, r7): a failed later page is an error, a failed first one said below.
+                var walk = new Pages(rt, address, 100, StateContractHandle.MAX_PAGES)
+                        .toEnd((page, response) -> what + ": cannot read page " + page + " of the payer's UTxOs at " + address
+                                        + ": " + response,
+                                what + ": the payer's listing at " + address + " has more than "
+                                        + StateContractHandle.MAX_PAGES + " pages; not read to its end");
                 for (var list = walk.next(); list != null; list = walk.next()) {
                     for (Utxo u : list) {
                         if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
@@ -382,6 +391,9 @@ final class Designation {
                         candidates.add(u);
                     }
                 }
+                unanswered[0] = walk.unanswered();
+            } catch (JoustException e) {
+                throw e;
             } catch (Exception e) {
                 throw new JoustException(what + ": cannot read the payer's UTxOs", e);
             }
@@ -394,8 +406,9 @@ final class Designation {
             return null;
         });
         if (chosen != null) return chosen;
-        throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate (ADR-0016 D7:"
-                + " each concurrent keyed operation of a wallet needs its own)");
+        throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate"
+                + (unanswered[0] ? " (or the provider did not answer its listing)" : "")
+                + " (ADR-0016 D7: each concurrent keyed operation of a wallet needs its own)");
     }
 
     /**

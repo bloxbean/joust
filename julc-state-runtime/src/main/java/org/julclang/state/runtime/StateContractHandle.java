@@ -293,6 +293,8 @@ public final class StateContractHandle<S> {
             return TxRunner.exportPrepared(runtime, "publish the " + spec.name() + " reference script", claimed);
         } catch (ReservedInputException e) {
             throw e;
+        } catch (BodyBalance.UnbalancedException e) {
+            throw e;   // the runtime refused its own body: not a build failure (R4)
         } catch (Exception e) {
             throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
                     + e.getMessage(), e);
@@ -525,54 +527,50 @@ public final class StateContractHandle<S> {
      * the transaction spending it is built (F63, R-E4).
      */
     private Utxo pickSeed(Account caller) {
-        return Designation.pick(runtime.claimStore(), caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
+        return Designation.pick(runtime.claimStore(), caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedFrom(caller));
     }
 
-    private Utxo seedOf(Account caller) {
+    /** A bound on the pages of one listing read: a provider that never ends is refused, not followed forever. */
+    static final int MAX_PAGES = 10_000;
+
+    private Utxo seedFrom(Account caller) {
         try {
-            var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, 1);
-            if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) {
-                throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
-            }
             // Prefer a pure-ADA UTxO; any UTxO works, but never a keyed operation's designated input (ADR-0016 D7).
             var own = TxRunner.currentOperation();
             // A wallet's prepared creation in a keyed contract: the page's designated input is the seed (ADR-0016 D11).
             if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
             var store = runtime.claimStore();
-            if (store instanceof JvmClaimStore) {
-                // The default store: the first page, as always.
-                var free = r.getValue().stream().filter(u -> Designation.pickable(store, u, own)).toList();
-                if (!free.isEmpty()) {
-                    return free.stream().filter(u -> u.getAmount().size() == 1).findFirst().orElse(free.getFirst());
+            var cap = TxRunner.capture();
+            Utxo first = null;
+            // Every page until a pure-ADA seed or the listing's end (#165 Codex rounds 4, 5): the first ones may all be
+            // excluded. A page the provider fails to answer is an error, not the end; a repeated page (a provider that
+            // ignores the page) is the end (Pages). One rule for every claim store, over the eligible inputs in provider
+            // order across pages: the seed (and the instance id and bytes) does not depend on where inputs a session
+            // store (the dev host) reserves fall (#145 Codex review 5).
+            var walk = new Pages(runtime, caller.baseAddress(), 50, MAX_PAGES)
+                    .toEnd((page, response) -> "deploy: cannot read page " + page + " of the caller's UTxOs: " + response,
+                            "deploy: the caller's listing has more than " + MAX_PAGES + " pages");
+            boolean any = false;
+            for (var list = walk.next(); list != null; list = walk.next()) {
+                any = true;
+                for (Utxo u : list) {
+                    // Never one carrying a reference script (#165 Codex round 3): spending it would consume a script.
+                    if (u.getReferenceScriptHash() != null || !Designation.pickable(store, u, own)) continue;
+                    // Not an input the composition spends already (an earlier call's asset input; R2).
+                    if (cap != null && cap.inputs.contains(Designation.ref(u))) continue;
+                    if (u.getAmount().size() == 1) return u;
+                    if (first == null) first = u;
                 }
-            } else {
-                // A session store (the dev host) may reserve inputs: apply the same rule to the first 50 eligible
-                // inputs in provider order, across pages, so the seed (and the instance id and bytes) does not depend
-                // on where reserved inputs fall (#145 Codex review 5).
-                Utxo mixed = null;
-                int eligible = 0;
-                String lastFirst = null;
-                for (int page = 1; ; page++) {
-                    // A repeated page (a provider that ignores the page) is the end, checked before filtering (#145 Codex).
-                    String first = Designation.ref(r.getValue().get(0));
-                    if (first.equals(lastFirst)) break;
-                    lastFirst = first;
-                    for (Utxo u : r.getValue()) {
-                        if (!Designation.pickable(store, u, own)) continue;
-                        if (u.getAmount().size() == 1) return u;
-                        if (mixed == null) mixed = u;
-                        if (++eligible == 50) return mixed;
-                    }
-                    if (r.getValue().size() < 50) break;
-                    r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, page + 1);
-                    if (!r.isSuccessful()) throw new JoustException("deploy: cannot read the caller's UTxOs: " + r.getResponse());
-                    if (r.getValue() == null || r.getValue().isEmpty()) break;
-                }
-                if (mixed != null) return mixed;
             }
-            throw new JoustException(store instanceof JvmClaimStore
-                    ? "deploy: every UTxO of the caller is designated by a keyed operation"
-                    : "deploy: every UTxO of the caller is designated or reserved by a pending transaction");
+            if (!any) throw new JoustException("deploy: the caller's address has no UTxO to use as seed"
+                    + (walk.unanswered() ? " (or the provider did not answer its listing)" : ""));
+            // F-W3: a creation after a call that paid assets from the caller's only UTxO finds none; in the other order
+            // the seed is counted for the payment (alreadyIn). Refused with the remedy rather than reusing the input.
+            if (first == null) throw new JoustException("deploy: every UTxO of the caller carries a reference script, is"
+                    + " designated by a keyed operation" + (store instanceof JvmClaimStore ? "" : ", reserved by a pending"
+                    + " transaction") + " or spent by the composition; put the creation before a call that pays"
+                    + " assets from the same wallet, or give the wallet another UTxO");
+            return first;
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {

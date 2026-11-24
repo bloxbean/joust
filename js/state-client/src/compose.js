@@ -8,6 +8,7 @@ import { instanceIdOf } from './tokens.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
   paymentKeyHashOf, isWalletEnterprise, decodeNext,
+  scriptBearingChecks,
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
@@ -30,6 +31,7 @@ export async function verifyComposed(o) {
   } catch (e) {
     return { problems: ['not a transaction'], report };
   }
+  scriptBearingChecks(tx, wallet, problems);
 
   // Each call: its contract, a spending kind, verifiable by the page.
   const calls = steps.map((s) => {

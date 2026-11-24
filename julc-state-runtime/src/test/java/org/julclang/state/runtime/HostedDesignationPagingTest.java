@@ -46,8 +46,7 @@ class HostedDesignationPagingTest {
         String last = String.format("%064x", 2000) + "#0";
         var d = rt.inScope(CallScope.hosted(10), () -> Designation.given(rt, payer, last));
         assertEquals(last, d.ref());
-        // A provider keeps the earlier bound.
-        var e = assertThrows(JoustException.class, () -> Designation.given(rt, payer, last));
-        assertTrue(e.getMessage().contains("2,000"), e.getMessage());
+        // A provider is read to the listing's end too (#165 Codex round 6).
+        assertEquals(last, Designation.given(rt, payer, last).ref());
     }
 }

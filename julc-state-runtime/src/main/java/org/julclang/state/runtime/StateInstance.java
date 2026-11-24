@@ -257,6 +257,8 @@ public final class StateInstance<S> {
         Utxo ref = contract.findReferenceScript();
         if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
         var tx = TxRunner.collect(TxRunner.newTx(), stateUtxo, redeemer).readFrom(ref);
+        // The reads first: the asset collection never spends one of them (#165 Codex round 8).
+        call.applyReads(tx);
         TxOutRef own = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
                 BigInteger.valueOf(stateUtxo.getOutputIndex()));
         PlutusData datum = destroy ? null : PlutusDataAdapter.convert(stored);
@@ -270,7 +272,6 @@ public final class StateInstance<S> {
             if (signers.stream().noneMatch(s -> java.util.Arrays.equals(s, k))) signers.add(k);   // a set on the ledger
         }
         call.applyAuthorization(tx);
-        call.applyReads(tx);
         var scripts = new ArrayList<com.bloxbean.cardano.client.plutus.spec.PlutusScript>(List.of(contract.script));
         if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
         if (maps) scripts.add(contract.runtime.mapVerifier().script());

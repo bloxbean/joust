@@ -294,14 +294,20 @@ export function poolKeyHash(pool) {
 
 // ---------------------------------------------------------------------------------------------------- CIP-30 values
 
-/** A CIP-30 UTxO (hex CBOR of TransactionUnspentOutput) as { ref, address, value }. */
+/**
+ * A CIP-30 UTxO (hex CBOR of TransactionUnspentOutput) as { ref, address, value, inlineDatum, datumHash,
+ * referenceScriptHash }. The reference script's hash is kept (#165 Codex): a runtime never spends a wallet UTxO carrying
+ * one for its tokens (it would consume a deployment's script), and knows it only from this.
+ */
 export function unspentOutput(hex) {
   const u = Serialization.TransactionUnspentOutput.fromCbor(hex);
   const [input, output] = u.toCore();
   const datum = u.output().datum();
   const inline = datum?.asInlineData?.();
+  const script = u.output().scriptRef();
   return { ref: refOfCore(input), address: output.address, value: valueOf(output.value),
-    inlineDatum: inline ? inline.toCbor() : null, datumHash: datum?.asDataHash?.() ?? null };
+    inlineDatum: inline ? inline.toCbor() : null, datumHash: datum?.asDataHash?.() ?? null,
+    referenceScriptHash: script ? script.hash() : null };
 }
 
 /** The base address of a payment and a stake credential (bech32). */
@@ -347,12 +353,16 @@ export function valueCbor(value) {
   return Serialization.Value.fromCore(coreValue(value)).toCbor();
 }
 
-/** A UTxO ({ ref, address, value, inlineDatum? }) as CIP-30's CBOR hex of TransactionUnspentOutput. */
+/** A UTxO ({ ref, address, value, inlineDatum?, datumHash? }) as CIP-30's CBOR hex of TransactionUnspentOutput. */
 export function unspentOutputCbor(u) {
   const [txId, index] = u.ref.split('#');
-  const output = { address: Cardano.PaymentAddress(u.address), value: coreValue(u.value) };
-  if (u.inlineDatum) output.datum = Serialization.PlutusData.fromCbor(u.inlineDatum).toCore();
-  return Serialization.TransactionUnspentOutput.fromCore([{ txId: Cardano.TransactionId(txId), index: Number(index) }, output]).toCbor();
+  const core = { address: Cardano.PaymentAddress(u.address), value: coreValue(u.value) };
+  if (!u.inlineDatum && u.datumHash) core.datumHash = u.datumHash;   // as a wallet reports it, so it is not taken for a plain UTxO
+  const output = Serialization.TransactionOutput.fromCore(core);
+  // From its own CBOR (#165 Codex round 5): the sdk's fromCore drops a core datum that is falsy (the integer 0, `00`).
+  if (u.inlineDatum) output.setDatum(Serialization.Datum.newInlineData(Serialization.PlutusData.fromCbor(u.inlineDatum)));
+  const input = Serialization.TransactionInput.fromCore({ txId: Cardano.TransactionId(txId), index: Number(index) });
+  return new Serialization.TransactionUnspentOutput(input, output).toCbor();
 }
 
 /** A CIP-30 witness set (CBOR hex) holding one vkey witness. */

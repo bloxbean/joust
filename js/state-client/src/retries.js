@@ -206,10 +206,12 @@ export async function settle(record, chain, { clock, wallet, nowMs = Date.now(),
   if (now <= last + settlementSlots) {
     return pending(`attempts ${record.attempts.map((a) => a.txHash).join(', ')} may still land (until slot ${last})`);
   }
-  let inWallet = !!wallet?.utxos?.has(record.designated);
+  let inWallet = !!wallet?.utxos && [...wallet.utxos.keys()].some((r) => r.toLowerCase() === record.designated.toLowerCase());
   let atProvider = false;
   try {
-    atProvider = (await chain.utxosAt(record.address)).some((u) => u.ref === record.designated);
+    // Compared in lower case (#165 Codex round 7): one output however a provider spells its transaction id.
+    const want = record.designated.toLowerCase();
+    atProvider = (await chain.utxosAt(record.address)).some((u) => u.ref.toLowerCase() === want);
   } catch {
     atProvider = false;   // unknown: the cautious answer
   }
