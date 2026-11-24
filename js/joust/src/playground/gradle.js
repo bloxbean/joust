@@ -82,6 +82,8 @@ const present = (p) => {
   }
 };
 const othersWrite = (st) => (st.mode & 0o022) !== 0;
+/** {@code s} as one POSIX shell word: single-quoted, an embedded quote closed, escaped and reopened. */
+export const shellQuote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
 const listed = (dir, env) => (env.JOUST_SAFE_DIRS ?? '').split(delimiter).filter((d) => d && isAbsolute(d)).map((d) => resolve(d))
   .includes(resolve(dir));
 
@@ -174,7 +176,7 @@ export function gradleBuild(root, { env = process.env, isTrusted = trusted, plat
     if (writable.length) {
       const toList = [...new Set([...dirs, ...(files.length ? [buildRoot] : [])])];
       fail(`${writable.join(', ')} ${writable.length > 1 ? 'are' : 'is'} writable by others, so another account could change`
-        + ` what Gradle runs. Fix (on a umask 002 system, say): chmod go-w ${writable.join(' ')}`
+        + ` what Gradle runs. Fix (on a umask 002 system, say): chmod go-w ${writable.map(shellQuote).join(' ')}`
         + ` (or list ${toList.join(' and ')} in JOUST_SAFE_DIRS)`);
     }
   }

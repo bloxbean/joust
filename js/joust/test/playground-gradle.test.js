@@ -22,7 +22,7 @@ import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { crc32 } from 'node:zlib';
 import {
   GradleLaunchError, JVM_ARGS, MAIN_CLASS, SNAPSHOT_PREFIX, SPEC_PATH, checkJdk, gradleBuild, gradleSource, isGradleProject,
-  launchGradleHost, readHostSpec, snapshotContracts, snapshotLaunch, sweepSnapshots, windowsCommandProblem,
+  launchGradleHost, readHostSpec, shellQuote, snapshotContracts, snapshotLaunch, sweepSnapshots, windowsCommandProblem,
 } from '../src/playground/gradle.js';
 import { manifestOf, readJar } from '../src/playground/jar.js';
 import { install, repo } from './host/client.js';
@@ -405,7 +405,7 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     writeFileSync(join(sub, 'build.gradle'), '');
     chmodSync(p.root, 0o775);
     try {
-      assert.throws(() => gradleBuild(sub), new RegExp(`${esc(p.root)} is writable by others.*chmod go-w ${esc(p.root)} `));
+      assert.throws(() => gradleBuild(sub), new RegExp(`${esc(p.root)} is writable by others.*chmod go-w '${esc(p.root)}' `));
       assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root, 'unless listed in JOUST_SAFE_DIRS');
     } finally {
       chmodSync(p.root, 0o700);
@@ -416,7 +416,7 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     const p = project();
     chmodSync(p.root, 0o775);
     try {
-      assert.throws(() => gradleBuild(p.root), new RegExp(`${esc(p.root)} is writable by others, so another account could change what Gradle runs\\. Fix .*: chmod go-w ${esc(p.root)} \\(or list`));
+      assert.throws(() => gradleBuild(p.root), new RegExp(`${esc(p.root)} is writable by others, so another account could change what Gradle runs\\. Fix .*: chmod go-w '${esc(p.root)}' \\(or list`));
       assert.equal(gradleBuild(p.root, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root);
       // A sticky shared ancestor still lets another account create a settings file there: not walked into either.
       const sub = join(p.root, 'app');
@@ -424,7 +424,7 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
       chmodSync(sub, 0o755);
       writeFileSync(join(sub, 'build.gradle'), '');
       chmodSync(p.root, 0o1777);
-      assert.throws(() => gradleBuild(sub), new RegExp(`${esc(p.root)} is writable by others.*chmod go-w ${esc(p.root)} `));
+      assert.throws(() => gradleBuild(sub), new RegExp(`${esc(p.root)} is writable by others.*chmod go-w '${esc(p.root)}' `));
       assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root);
     } finally {
       chmodSync(p.root, 0o700);
@@ -437,11 +437,11 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     const settings = join(p.root, 'settings.gradle');
     const gradlew = join(p.root, 'gradlew');
     chmodSync(settings, 0o664);
-    assert.throws(() => gradleBuild(p.root), new RegExp(`${esc(settings)} is writable by others.*chmod go-w ${esc(settings)} \\(`));
+    assert.throws(() => gradleBuild(p.root), new RegExp(`${esc(settings)} is writable by others.*chmod go-w '${esc(settings)}' \\(`));
     assert.equal(gradleBuild(p.root, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root, 'listed: accepted');
     chmodSync(settings, 0o644);
     chmodSync(gradlew, 0o775);
-    assert.throws(() => gradleBuild(p.root), new RegExp(`${esc(gradlew)} is writable by others.*chmod go-w ${esc(gradlew)} \\(`));
+    assert.throws(() => gradleBuild(p.root), new RegExp(`${esc(gradlew)} is writable by others.*chmod go-w '${esc(gradlew)}' \\(`));
     chmodSync(gradlew, 0o755);
     assert.equal(gradleBuild(p.root).gradlew, gradlew);
   });
@@ -454,11 +454,38 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     chmodSync(sub, 0o777);
     try {
       assert.throws(() => gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }),
-        new RegExp(`: ${esc(sub)} is writable by others.*chmod go-w ${esc(sub)} \\(or list ${esc(sub)} in JOUST_SAFE_DIRS\\)`));
+        new RegExp(`: ${esc(sub)} is writable by others.*chmod go-w '${esc(sub)}' \\(or list ${esc(sub)} in JOUST_SAFE_DIRS\\)`));
       assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: [p.root, sub].join(delimiter) } }).buildRoot, p.root);
     } finally {
       chmodSync(sub, 0o755);
     }
+  });
+
+  test('the printed chmod command quotes each path as one shell word (spaces, $, ;, quotes)', () => {
+    const odd = "it's a $HOME; touch pwned";
+    assert.equal(shellQuote(odd), `'it'\\''s a $HOME; touch pwned'`);
+    const r = spawnSync('sh', ['-c', `printf '%s\\n' ${shellQuote(odd)} ${shellQuote('plain')}`], { encoding: 'utf8' });
+    assert.deepEqual(r.stdout.split('\n').slice(0, 2), [odd, 'plain'], 'two arguments, verbatim');
+    // In a refusal: a project under such a directory, fixed by running the printed line.
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), 'joust-pg-quote-')));
+    made.push(parent);
+    const root = join(parent, odd);
+    mkdirSync(root);
+    writeFileSync(join(root, 'settings.gradle'), '');
+    writeFileSync(join(root, 'gradlew'), '#!/bin/sh\n');
+    chmodSync(join(root, 'gradlew'), 0o755);
+    chmodSync(root, 0o777);
+    let message = '';
+    try {
+      gradleBuild(root);
+    } catch (e) {
+      message = e.message;
+    }
+    const line = /chmod go-w '.*' \(or list/.exec(message)?.[0].replace(/ \(or list$/, '');
+    assert.equal(line, `chmod go-w ${shellQuote(root)}`);
+    assert.equal(spawnSync('sh', ['-c', line], { cwd: parent }).status, 0);
+    assert.equal(existsSync(join(parent, 'pwned')), false, 'nothing else ran');
+    assert.equal(gradleBuild(root).buildRoot, root, 'the printed line fixed it');
   });
 
   test('a linked wrapper is refused like a linked settings file', () => {
@@ -497,11 +524,11 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     }
     assert.match(message, new RegExp(`^${esc(paths.join(', '))} are writable by others`));
     const line = /chmod go-w [^(]+/.exec(message)[0].trim();
-    assert.equal(line, `chmod go-w ${paths.join(' ')}`);
+    assert.equal(line, `chmod go-w ${paths.map((x) => `'${x}'`).join(' ')}`);
     assert.match(message, new RegExp(`or list ${esc([sub, dirname(sub), p].join(' and '))} in JOUST_SAFE_DIRS`));
     // Listing the root vouches for its settings file and wrapper, not for the directories below it (FG6).
     assert.throws(() => gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p } }),
-      new RegExp(`: ${esc([sub, dirname(sub)].join(', '))} are writable by others.*chmod go-w ${esc([sub, dirname(sub)].join(' '))} \\(or list`));
+      new RegExp(`: ${esc([sub, dirname(sub)].join(', '))} are writable by others.*chmod go-w ${esc([sub, dirname(sub)].map((x) => `'${x}'`).join(' '))} \\(or list`));
     assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: [sub, dirname(sub), p].join(delimiter) } }).buildRoot, p, 'or each listed');
     assert.equal(spawnSync('sh', ['-c', line]).status, 0);
     assert.deepEqual(gradleBuild(sub), { project: sub, buildRoot: p, gradlew: join(p, 'gradlew') }, 'the printed line fixes it');
