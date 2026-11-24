@@ -741,6 +741,9 @@ async function call2(request, meta, signer, cosigners, label) {
       await drawPendingOps();
       throw labelled({ ...e, message: `${e.message} (${what})` }, 'host', label);
     }
+    // A refused prepare: nothing of this operation left the page, so its designated input is free again (only while
+    // the record has no attempt: one that was handed out may still land).
+    if (op) await ops.step({ action: 'release', id: op.id }).catch(() => {});
     throw labelled(e, 'host', label);
   }
   // Until the signed body is submitted, every way out (a refusal, a decline, a check or signing that throws, a malformed
@@ -761,6 +764,8 @@ async function call2(request, meta, signer, cosigners, label) {
   } finally {
     const reservation = r?.prepared?.reservation;
     if (!report?.submitted && typeof reservation === 'string') await sapi('discard', { reservation }).catch(() => {});
+    // Nothing left the page (a check refused, a decline, a signature that failed): the designation is released too.
+    if (!report?.submitted && op) await ops.step({ action: 'release', id: op.id }).catch(() => {});
   }
   // A keyed operation is done once its transaction is in (offline at once; on DevKit at inclusion).
   if (op) {

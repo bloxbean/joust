@@ -9,6 +9,13 @@
 import { createHash } from 'node:crypto';
 import { memoryLedger, LedgerRefusal } from '../test/offline.js';
 import { memoryOperations } from './operations.js';
+
+const opsByLedger = new WeakMap();
+/** The keyed operation records of an offline ledger (one store per ledger, whichever session runs on it). */
+function ledgerOperations(ledger) {
+  if (!opsByLedger.has(ledger)) opsByLedger.set(ledger, memoryOperations());
+  return opsByLedger.get(ledger);
+}
 import { addressParts, ledgerTx, rewardAddress } from '@julclang/state-client/ledger';
 import { HostError, launchNpmHost, npmSource } from './host.js';
 
@@ -108,9 +115,12 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
   const fp = await source.open();
   const entries = fp.entries;
   // A scenario's replay brings its clock (origin and slot length), so absolute times in it mean what they meant (D10).
-  const ops = memoryOperations();
+
   const chain = ledger ?? memoryLedger({ engine, attacks, ...(clock ? { zeroTimeMs: clock.zeroTimeMs, slotLengthMs: clock.slotLengthMs } : {}) });
   const read = ledgerReads(chain);
+  // The keyed recovery records belong to the ledger: a new session that keeps the ledger keeps them too (D2); a new
+  // ledger starts with none.
+  const ops = ledgerOperations(chain);
   let host;
   try {
     host = fp.launch({ onExit: (reason) => { fp.dispose(); onEnd(reason); } });

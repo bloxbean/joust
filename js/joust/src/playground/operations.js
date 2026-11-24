@@ -27,7 +27,7 @@ export function operationRecord(r) {
 /**
  * One step on the records (a list): { action: 'create', record } (kept as it is when one exists: the existing one is
  * returned), 'addAttempt' { id, attempt }, 'removeAttempt' { id, txHash } (only that attempt), 'ambiguous' { id },
- * 'remove' { id }. Returns { rows, record } (the record after the step, or null), or throws on a malformed step.
+ * 'remove' { id }, 'release' { id } (removes it only while it has no attempt). Returns { rows, record } (the record after the step, or null), or throws on a malformed step.
  */
 export function applyOperation(rows, step) {
   const at = rows.findIndex((r) => r.id === step?.id);
@@ -63,6 +63,11 @@ export function applyOperation(rows, step) {
     }
     case 'remove':
       return { rows: at < 0 ? rows : rows.filter((_, i) => i !== at), record: null };
+    case 'release':
+      // Nothing of the operation left the page (a refused first prepare, a declined review): its designated input is
+      // free again. A record with an attempt is kept (that attempt may land).
+      if (at < 0 || rows[at].attempts.length) return { rows, record: at < 0 ? null : rows[at] };
+      return { rows: rows.filter((_, i) => i !== at), record: null };
     default:
       throw bad('no such step');
   }

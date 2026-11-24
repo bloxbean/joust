@@ -297,12 +297,12 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     // session), so a reload, another tab or a restart of the command sees them; each change is one atomic step.
     'operations': async (b) => {
       const s = use(b.session);
-      if (b.step === undefined) return s.operations();
       try {
-        return { record: s.operate(b.step) };
+        return b.step === undefined ? s.operations() : { record: s.operate(b.step) };
       } catch (e) {
         if (e.code === 'operation') throw new StageError('journal', 'operation', e.message);
-        throw new StageError('journal', 'storage', `the keyed operation journal could not be written: ${e.message}`);
+        // An unreadable or foreign file (fails closed, kept as it is) or a write that did not commit.
+        throw new StageError('journal', 'storage', e.code === 'storage' ? e.message : `the keyed operation journal could not be written: ${e.message}`);
       }
     },
     // DevKit (D7 step 7): a submitted body's settlement as the session observed it (submitted, included, final, …).

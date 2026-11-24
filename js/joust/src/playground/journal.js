@@ -330,10 +330,29 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
       }
       commit({ entries: next, removedAt: isSlot(atSlot) ? later(cur.removedAt, atSlot) : cur.removedAt });
     },
-    /** The keyed operation records on this chain (a list; an unreadable file reads as none, never as a guess). */
+    /**
+     * The keyed operation records on this chain. No file yet: none. A file that cannot be read, another version or an
+     * invalid record fails closed (code storage, naming the file): it is never read as empty, and never overwritten.
+     */
     get operations() {
-      const raw = readJson(opsFile);
-      return raw?.version === JOURNAL_VERSION && Array.isArray(raw.operations) ? raw.operations.map(operationRecord).filter(Boolean) : [];
+      let text;
+      try {
+        text = readFileSync(opsFile, 'utf8');
+      } catch (e) {
+        if (e.code === 'ENOENT') return [];
+        throw Object.assign(new Error(`the keyed operations file ${opsFile} cannot be read (${e.code ?? e.message}): fix or move it`), { code: 'storage' });
+      }
+      let raw;
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        raw = null;
+      }
+      const rows = raw?.version === JOURNAL_VERSION && Array.isArray(raw.operations) ? raw.operations.map(operationRecord) : null;
+      if (rows === null || rows.some((r) => r === null)) {
+        throw Object.assign(new Error(`the keyed operations file ${opsFile} is not one this playground wrote: fix or move it`), { code: 'storage' });
+      }
+      return rows;
     },
     /** One step on them (operations.js applyOperation), written atomically before it returns. */
     operate(step) {

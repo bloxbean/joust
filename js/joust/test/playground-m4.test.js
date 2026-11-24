@@ -21,6 +21,7 @@ import { symbolic, concrete, exportScenario, importScenario, sameOutcome, outcom
 import { operationRequest, reconcile, safeSlot, decide } from '../playground/operations.js';
 import { applyOperation } from '../src/playground/operations.js';
 import { openJournal } from '../src/playground/journal.js';
+import { readdirSync as readdirOf } from 'node:fs';
 import { windowProblem } from '../src/playground/devkit.js';
 import { classify } from '../playground/form.js';
 
@@ -229,6 +230,23 @@ describe('ADR-0024 M4 call kinds, through the page\'s check', { skip }, () => {
     }
   });
 
+  test('"new session, keep the ledger" keeps the keyed recovery records; a new ledger starts with none (Codex M4 r3)', async () => {
+    const rec = { id: 'k', contract: REGISTRY, method: 'init', instance: null, key: null, payer: alice.address,
+      designated: 'ab'.repeat(32) + '#0', attempts: [] };
+    s.operate({ action: 'create', record: rec });
+    s.operate({ action: 'addAttempt', id: 'k', attempt: { txHash: 'cd'.repeat(32), validTo: 9 } });
+    const kept = await offlineSession({ id: 's9', root, engine: await theEngine(), ledger: s.ledger });
+    const fresh = await offlineSession({ id: 's10', root, engine: await theEngine() });
+    try {
+      assert.deepEqual(kept.operations().map((r) => r.attempts.length), [1], 'the same ledger: the same records');
+      assert.deepEqual(fresh.operations(), []);
+    } finally {
+      await kept.close();
+      await fresh.close();
+      s.operate({ action: 'remove', id: 'k' });
+    }
+  });
+
   test('D11: @Params and @AuthorizedBy are shown unsupported with the host\'s code', async () => {
     const t = s.status().contracts.find((c) => c.name === TREASURY);
     assert.deepEqual([t.served, t.unsupported], [false, 'params']);
@@ -291,6 +309,30 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     const other = await openJournal({ root: '/p', chain: { ...chain, startTime: 999 }, state });
     assert.deepEqual(other.operations, []);
     other.close();
+    // Codex M4 r3: an unreadable or foreign operations file fails closed, naming itself, and is never overwritten.
+    const { readFileSync: read, writeFileSync: write, existsSync: exists } = await import('node:fs');
+    const third = await openJournal({ root: '/q', chain, state });
+    assert.deepEqual(third.operations, [], 'no file yet: none');
+    third.operate({ action: 'create', record: { ...rec, id: 'q' } });
+    const file = join(third.dir, readdirOf(third.dir).find((f) => f.endsWith('.operations.json') && read(join(third.dir, f), 'utf8').includes('"q"')));
+    for (const bad of ['{ not json', JSON.stringify({ version: 99, operations: [] }), JSON.stringify({ version: 1, operations: [{ id: 'x' }] })]) {
+      write(file, bad);
+      assert.throws(() => third.operations, (e) => e.code === 'storage' && e.message.includes(file));
+      assert.throws(() => third.operate({ action: 'create', record: { ...rec, id: 'r', designated: 'ee'.repeat(32) + '#1' } }), (e) => e.code === 'storage');
+      assert.equal(read(file, 'utf8'), bad, 'kept as it is');
+    }
+    chmodSync(file, 0o000);
+    try {
+      assert.throws(() => third.operations, (e) => e.code === 'storage' && /cannot be read/.test(e.message));
+    } finally {
+      chmodSync(file, 0o600);
+      third.close();
+    }
+    assert.ok(exists(file));
+    // A refused first prepare or a declined review releases the designation only while the record has no attempt.
+    assert.deepEqual(applyOperation([{ ...rec, attempts: [] }], { action: 'release', id: rec.id }).rows, []);
+    const held = { ...rec, attempts: [{ txHash: 'cc'.repeat(32), validTo: 5 }] };
+    assert.deepEqual(applyOperation([held], { action: 'release', id: rec.id }).rows, [held], 'an attempt may land: kept');
     assert.throws(() => applyOperation([], { action: 'create', record: { ...rec, designated: 'nope' } }), /not a new record/);
     assert.throws(() => applyOperation([], { action: 'drop' }), /no such step/);
   });
