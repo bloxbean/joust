@@ -620,6 +620,139 @@ public final class MutationVectors {
                 e.raw(e.splice(w,head(5,w.items.size()/2+1)+"01"+"d9010281"+"8200581c"+OTHER+w.raw().substring(2)));
             })
         ));
+        String removal = "registry-m3-release", action = "registry-m3-upgrade";
+        cases.addAll(List.of(
+                new Case("keyed-widened", removal, "keyedWindow/bounds", e -> e.keyedWindow(0,1)),
+                new Case("keyed-late-start", removal, "keyedWindow/bounds", e -> e.keyedWindow(3,3)),
+                new Case("keyed-before-now", action, "keyedWindow/bounds", e -> e.keyedWindow(-1,-1)),
+                new Case("keyed-empty", action, "keyedWindow/bounds", e -> e.keyedWindow(0,-20)),
+                new Case("keyed-designated", removal, "designatedInput/designated", e -> {
+                    // Spend a different (equally funded) wallet UTxO. Keep the client's persisted intent.
+                    String ref = e.v.at("/request/call/designated").asText();
+                    var u = e.v.withObject("/resolved").required(ref).deepCopy();
+                    ((ObjectNode)u).put("output_index",3);
+                    e.v.withObject("/resolved").set(ref.substring(0,65)+"3",u);
+                    var input = e.ledger.set(0).stream().filter(i -> i.at(1).uint()==2).findFirst().orElseThrow();
+                    e.swap(input.at(1),"03");
+                }),
+                new Case("keyed-token", removal, "keyedToken/unit", e -> {
+                    String unit = e.ledger.plan.required("mint").fieldNames().next();
+                    String other = unit.substring(0,58)+"aa".repeat(28);
+                    for (var u : e.v.required("resolved")) for (var a : u.required("amount"))
+                        if (unit.equals(a.required("unit").asText())) ((ObjectNode)a).put("unit",other);
+                    e.ledger = new Ledger(e.ledger.tx.raw().replace(unit.substring(56),other.substring(56)));
+                }),
+                new Case("keyed-input-value", removal, "keyedInputValue/balance", e -> {
+                    // The body still balances. Only the target's Ctx claims one extra lovelace.
+                    var ctx = e.redeemers().items.get(3).at(0).tagged(127).at(0).tagged(121);
+                    var balance = ctx.at(2);
+                    e.swap(balance,uint(balance.integer().longValueExact()+1));
+                }),
+                new Case("keyed-swapped-redeemers", removal, "keyedRedeemer/structural", e -> {
+                    // Swap Link and Remove_T while preserving both ledger pointers and their budgets.
+                    var rs = e.redeemers();
+                    String link = rs.items.get(1).at(0).raw(), burn = rs.items.get(5).at(0).raw();
+                    e.swap(rs.items.get(1).at(0),burn);
+                    e.swap(e.redeemers().items.get(5).at(0),link);
+                })));
+        // One vector per KeyedRules check and conjunct (D11 list roles), on the five recorded Registry calls.
+        String init = "registry-m3-init", insert = "registry-m3-claim", retire = "registry-m3-retire";
+        cases.addAll(List.of(
+                new Case("keyed-head-instance", init, "continuingOutput/keyedHead", e -> e.outDatum(1, e.outDatum(1).replace(e.instanceId(), ELSEWHERE))),
+                new Case("keyed-head-next", init, "continuingOutput/keyedHead", e -> e.outDatum(1, e.outDatum(1).replace(e.instanceId()+"4000ff", e.instanceId()+"416100ff"))),
+                new Case("keyed-head-linked-at", init, "continuingOutput/keyedHead", e -> e.outDatum(1, e.outDatum(1).replace(e.instanceId()+"4000ff", e.instanceId()+"4001ff"))),
+                new Case("keyed-head-deposit", init, "deposit/keyedHead", e -> e.transfer(1, 3, 1)),
+                new Case("keyed-state-deposit", init, "deposit/keyedState", e -> e.transfer(0, 3, 1)),
+                new Case("keyed-creation-mint", init, "mint/keyedCreation", e -> e.foreignMint(3)),
+                new Case("keyed-creation-script-input", init, "scriptInput/keyedCreation", e -> e.scriptInputTo(3)),
+                new Case("keyed-canonical-output", action, "continuingOutput/keyedCanonicalOutput",
+                        e -> e.swap(e.coin(0), "1b"+"%016x".formatted(e.coin(0).integer().longValueExact()))),
+                new Case("keyed-canonical-datum", action, "continuingOutput/keyedCanonicalDatum", e -> {
+                    var d = e.ledger.outputs.get(0).fields().get(2).at(1).tagged(24);
+                    var datum = Cbor.read(HEX.parseHex(d.bytes()));
+                    var fields = datum.items.getFirst();
+                    var definite = new StringBuilder(HEX.formatHex(HEX.parseHex(datum.raw()),0,fields.start)).append(head(4,fields.items.size()));
+                    fields.items.forEach(f -> definite.append(f.raw()));
+                    e.outDatum(0, definite.toString());
+                }),
+                new Case("keyed-action-mint", action, "mint/keyedAction", e -> e.foreignMint(1)),
+                new Case("keyed-wallet-loss", action, "netOutflow/keyedWallet", e -> e.transfer(0, 1, 1)),
+                new Case("keyed-change-at-enterprise", action, "walletOutput/keyedChange", e -> e.address(1, "60" + e.caller())),
+                new Case("keyed-coins", action, "notVerifiable/keyedCall", e -> e.v.withObject("/protocolParams").put("coins_per_utxo_size", 0)),
+                new Case("keyed-assets", action, "notVerifiable/keyedCall", e -> e.v.withObject("/request/call/pay").putArray("assets")
+                        .addArray().add(OTHER).addArray().addArray().add("01").add("1")),
+                new Case("keyed-extra-redeemer", action, "redeemer/keyedExtra", e -> e.addRedeemer(2)),
+                new Case("keyed-target-instance", action, "scriptInput/keyedInstance", e -> e.resolvedDatum(e.target(), e.instanceId(), ELSEWHERE)),
+                new Case("keyed-signed-by", action, "signer/keyedSignedBy", e -> e.resolvedDatum(e.target(), "581c"+e.caller(), "581c"+OTHER)),
+                new Case("keyed-wallet-script", action, "walletOutput/keyedScript", e -> {
+                    var out = e.out(1);
+                    e.swap(out, "a3"+"00"+out.at(0).raw()+"01"+out.at(1).raw()+"03"+"d81846820343010203");
+                }),
+                new Case("keyed-wallet-datum-hash", action, "walletOutput/keyedScript", e -> {
+                    var out = e.out(1);
+                    e.swap(out, "83"+out.at(0).raw()+out.at(1).raw()+"5820"+"12".repeat(32));
+                }),
+                new Case("keyed-output-address", action, "continuingOutput/keyedOutput", e -> e.address(0, "70"+OTHER)),
+                new Case("keyed-output-script", action, "continuingOutput/keyedOutput", e -> e.field(e.out(0), 3, "d81846820343010203")),
+                new Case("keyed-update-next", action, "continuingOutput/keyedUpdate", e -> e.outDatum(0, e.outDatum(0).replace(e.instanceId()+"40", e.instanceId()+"4161"))),
+                new Case("keyed-update-linked-at", action, "continuingOutput/keyedUpdate", e -> e.outDatum(0, e.bump(e.outDatum(0), e.instanceId()+"401b", 1))),
+                new Case("keyed-retire-as-node", retire, "continuingOutput/keyedUpdate", e -> e.outDatum(0, e.resolved(e.target()).required("inline_datum").asText())),
+                new Case("keyed-insert-deposit", insert, "deposit/keyedInsert", e -> e.transfer(1, 2, 1)),
+                new Case("keyed-top-up-negative", insert, "deposit/keyedTopUp", e -> e.transfer(0, 2, -1)),
+                new Case("keyed-top-up-excess", insert, "deposit/keyedTopUp", e -> e.transfer(0, 2, 1)),
+                new Case("keyed-inserted-at", insert, "keyedLink/insertedAt", e -> e.outDatum(1, e.bump(e.outDatum(1), e.instanceId()+"401b", 1))),
+                new Case("keyed-relink-at", insert, "keyedLink/relink", e -> e.outDatum(0, e.bump(e.outDatum(0), e.instanceId()+"456f746865721b", 1))),
+                new Case("keyed-relink-next", insert, "keyedLink/relink", e -> e.outDatum(0, e.outDatum(0).replace(e.instanceId()+"456f74686572", e.instanceId()+"456f74686573"))),
+                new Case("keyed-relink-value", insert, "keyedLink/fields", e -> e.outDatum(0, e.outDatum(0).replace("1a005b8d80", "1a005b8d81"))),
+                new Case("keyed-link-window", insert, "keyedLink/relink", e -> { e.v.withObject("/request").put("ttlSlots", 200); e.keyedWindow(0, 110); }),
+                new Case("keyed-cooldown", insert, "keyedLink/relink", e -> {
+                    // The predecessor was linked less than the cooldown before this window opens.
+                    var clock = e.v.required("clock");
+                    long length = clock.required("slotLengthMs").asLong();
+                    long from = clock.required("zeroTimeMs").asLong()+(e.ledger.b.get(8).integer().longValueExact()-clock.required("zeroSlot").asLong())*length;
+                    String anchorRef = e.ledger.plan.at("/inputs/0").asText();
+                    String datum = e.resolved(anchorRef).required("inline_datum").asText();
+                    int at = datum.indexOf(e.instanceId()+"40"+"1b")+e.instanceId().length()+4;
+                    e.resolved(anchorRef).put("inline_datum", datum.substring(0,at)+"%016x".formatted(from-60_000+1)+datum.substring(at+16));
+                }),
+                new Case("keyed-object-claim", insert, "planMismatch/keyedObject", e -> e.claim(p -> p.put("object","6f74686573"))),
+                new Case("keyed-anchor-ref", insert, "redeemer/anchor", e -> {
+                    String anchorId = e.ledger.plan.at("/inputs/0").asText().substring(0,64);
+                    e.replaceIn(e.rvalue(1).at(0), "5820"+anchorId, "5820"+ELSEWHERE);
+                }),
+                new Case("keyed-insert-next", insert, "continuingOutput/keyedInsert", e -> e.outDatum(1, e.outDatum(1).replace(e.instanceId()+"401b", e.instanceId()+"41611b"))),
+                new Case("keyed-insert-before-anchor", insert, "continuingOutput/keyedInsert", e -> e.rekey("6f74686572", "6161616161")),
+                new Case("keyed-removed-next", removal, "keyedLink/removedNext",
+                        e -> e.resolvedDatum(e.ledger.plan.at("/inputs/1").asText(), e.instanceId()+"456f74686572", e.instanceId()+"456f74686573")),
+                new Case("keyed-remove-mint", removal, "mint/keyedRemove", e -> e.foreignMint(2)),
+                new Case("keyed-third", removal, "netOutflow/keyedThird", e -> {
+                    e.coin(2, -1_000_000);
+                    e.outputs(List.of(e.out(0).raw(), e.out(1).raw(), e.out(2).raw(), "82581d60"+OTHER+uint(1_000_000)));
+                }),
+                new Case("keyed-payout-foreign-stake", removal, "walletOutput/keyedForeignKey", e -> e.address(1, "00"+e.caller()+"cd".repeat(28))),
+                new Case("keyed-link-constructor", removal, "keyedRedeemer/structural", e -> e.swap(e.rvalue(0).at(0), e.recordedRedeemer(action, 0))),
+                new Case("keyed-remove-anchor", removal, "keyedRedeemer/structural", e -> e.swap(e.rvalue(1).at(0),
+                        e.rvalue(1).at(0).raw().replaceFirst(e.ledger.plan.at("/inputs/1").asText().substring(0,64)+"00ff", e.ledger.plan.at("/inputs/1").asText().substring(0,64)+"02ff"))),
+                new Case("keyed-remove-removed", removal, "keyedRedeemer/structural", e -> e.swap(e.rvalue(1).at(0),
+                        e.rvalue(1).at(0).raw().replaceFirst(e.ledger.plan.at("/inputs/0").asText().substring(0,64)+"01ff", e.ledger.plan.at("/inputs/0").asText().substring(0,64)+"02ff"))),
+                new Case("keyed-validity", removal, "keyedWindow/bounds", e -> e.v.withObject("/request/call").putArray("pageLimits").add(60).add(10)),
+                new Case("keyed-designated-record", removal, "designatedInput/designated",
+                        e -> e.v.withObject("/request/call/operation").put("designated", ELSEWHERE+"#0")),
+                new Case("keyed-schemas", action, "notVerifiable/classify", e -> {
+                    // Another keyed type of the description (one this call does not use) lacks its D11 tags.
+                    for (var t : e.v.at("/anchors/description/x-joust/keyed"))
+                        if (!t.path("simple").equals(e.method().path("keyed"))) ((ObjectNode)t).remove("typeId");
+                }),
+                new Case("keyed-service", action, "notVerifiable/classify", e -> e.method().put("needsService", true)),
+                new Case("keyed-remove-without-ctx", removal, "notVerifiable/classify", e -> e.method().put("ctx", false)),
+                new Case("keyed-insert-tombstone", insert, "continuingOutput/keyedInsert", e -> {
+                    String datum = e.outDatum(1);
+                    int at = datum.indexOf(e.instanceId()+"401b")+e.instanceId().length()+2;
+                    e.outDatum(1, "d87e9f5820"+e.instanceId()+"40"+datum.substring(at, at+18)+"456f74686572"+"ff");
+                }),
+                new Case("keyed-key-length", insert, "continuingOutput/keyedInsert", e -> e.rekey("6f74686572", "7a".repeat(65))),
+                new Case("keyed-insert-after-next", "Registry-grant-61", "continuingOutput/keyedInsert", e -> e.rekey("61", "63")),
+                new Case("keyed-payout-tag", removal, "walletOutput/keyedTag", e -> e.swap(e.out(1).fields().get(2), "8201d818"+bytes("d8799f5820"+ELSEWHERE+"00ff")))));
         for (String feature : List.of("params","keyed","maps","authorizedBy","deposits","into","admits","receives","migrateTo","needsService")) {
             cases.add(new Case("unsupported-"+feature,feature.equals("keyed") ? BANK : SPEND,"notVerifiable/classify", e -> {
                 var desc=e.v.withObject("/anchors/description");
@@ -641,6 +774,84 @@ public final class MutationVectors {
                 }
             }));
         }
+        // ADR-0014 maps (#160): the map verifier's withdrawal, claims and datum roots. Swapping the map and output
+        // claims of a call with both (Locker unlock) is refused by mapClaims and redeemer/claimsShape together.
+        String token = "token-m3-mint-2";
+        cases.add(new Case("map-withdrawal",token,"mapWithdrawal/withdrawal", e -> e.body(5,"a1581df0"+OTHER+"00")));
+        cases.add(new Case("map-policy",token,"mapClaims/claim", e -> e.swap(e.mapClaim().at(0),"581c"+OTHER)));
+        cases.add(new Case("map-owner",token,"mapClaims/claim", e -> e.swap(e.mapClaim().at(1).tagged(121).at(0),"5820"+"12".repeat(32))));
+        cases.add(new Case("map-field",token,"mapClaims/claim", e -> e.swap(e.mapClaim().at(2),"01")));
+        cases.add(new Case("map-proof",token,"mapClaims/claim", e -> {
+            var after = e.mapClaim().at(5).at(0).tagged(121).at(1).tagged(121);
+            e.swap(after.at(2),"4101");
+        }));
+        cases.add(new Case("map-output-root",token,"mapDatum/root", e -> {
+            var datum = e.out(0).fields().get(2).at(1).tagged(24);
+            String root = e.mapClaim().at(6).bytes();
+            e.swap(datum,datum.raw().replace(root,"ab".repeat(32)));
+        }));
+        // Owned-object maps (Armory vaults, #160 Q1): the claim's owner is the creation's seed or the object input.
+        cases.add(new Case("owned-map-owner-instance","armory-m0-openVault","mapClaims/claim", e -> {
+            String unit = e.v.at("/anchors/policy").asText()+e.call("instance");
+            String ref = null;
+            for (var r : e.ledger.plan.required("referenceInputs")) {
+                var u = e.resolved(r.asText());
+                for (var a : u.required("amount")) if (unit.equals(a.required("unit").asText())) ref = r.asText();
+            }
+            e.swap(e.mapClaim().at(1), e.outRef(Objects.requireNonNull(ref, "no instance reference input")));
+        }));
+        cases.add(new Case("owned-map-owner-wallet","armory-m0-stash-2","mapClaims/claim",
+                e -> e.swap(e.mapClaim().at(1), e.outRef(e.walletInput()))));
+        // Q7: a destroy whose claim writes (an insert into the vault's empty map, with its new root recomputed), and a
+        // continuation whose map still lists a pending read at the right root.
+        cases.add(new Case("map-destroy-write","armory-m0-closeVault","mapClaims/destroyWrites", e -> {
+            org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
+            var claims = org.julclang.clientlib.PlutusDataAdapter.convert(org.julclang.clientlib.PlutusDataAdapter.toClientLib(
+                    CallRules.data(e.rewardData(0).raw())), org.julclang.state.api.mpf.MapClaims.class);
+            var c = claims.claims().head();
+            byte[] key = HEX.parseHex("73776f7264"), value = HEX.parseHex("01");
+            var empty = org.julclang.core.types.JulcList.<org.julclang.state.api.mpf.ProofStep>empty();
+            var write = new org.julclang.state.api.mpf.WriteProof(new org.julclang.state.api.MapEntry(key, false, new byte[0]),
+                    new org.julclang.state.api.MapEntry(key, true, value), empty);
+            byte[] root = org.julclang.state.api.mpf.Mpf.insert(c.oldRoot(), key, value, empty);
+            var claim = new org.julclang.state.api.mpf.MapClaim(c.policy(), c.owner(), c.field(), c.oldRoot(), c.reads(),
+                    org.julclang.core.types.JulcList.of(write), root);
+            var encoded = org.julclang.clientlib.PlutusDataAdapter.convert(new org.julclang.state.api.mpf.MapClaims(org.julclang.core.types.JulcList.of(claim)));
+            e.swap(e.rewardData(0), encoded.serializeToHex());
+        }));
+        cases.add(new Case("map-pending-read","armory-m0-stash-2","mapDatum/root", e -> {
+            String root = e.mapClaim().at(6).bytes();
+            for (int i = 0; i < e.ledger.outputs.size(); i++) {
+                String datum = e.ledger.plan.at("/outputs/"+i+"/datum").asText("");
+                if (datum.contains("5820"+root+"8080"))
+                    e.outDatum(i, datum.replace("5820"+root+"8080", "5820"+root+"9fd8799f4161d87a804101ffff"+"80"));
+            }
+        }));
+        cases.add(new Case("map-no-claims",token,"mapClaims/count", e -> e.swap(e.rewardData(0).tagged(121).at(0),"80")));
+        cases.add(new Case("map-claims-decode",token,"mapClaims/decode", e -> e.swap(e.rewardData(0),"d87980")));
+        cases.add(new Case("map-creation-root","token-m3-create","mapClaims/creationRoot", e -> {
+            // A new instance whose map starts at another root: no writes, old and new root equal, the datum agreeing.
+            String zero = "00".repeat(32), root = "ab".repeat(32);
+            e.swap(e.mapClaim().at(6),"5820"+root);
+            e.swap(e.mapClaim().at(3),"5820"+root);
+            e.outDatum(0,e.outDatum(0).replace("5820"+zero+"8080","5820"+root+"8080"));
+        }));
+        cases.add(new Case("map-withdrawal-amount",token,"mapWithdrawal/amount", e -> {
+            var ws = e.ledger.b.get(5);
+            e.swap(ws.items.get(1),"01");
+            e.coin(e.ledger.outputs.size()-1,1);
+        }));
+        cases.add(new Case("map-verifier-reference",token,"referenceInput/scripts", e -> {
+            var refs=e.ledger.b.get(18).tagged(258);
+            String shared=e.v.at("/anchors/mapVerifier/address").asText();
+            var kept=new StringBuilder();
+            int n=0;
+            for (var r : refs.items) {
+                String ref=r.at(0).bytes()+"#"+r.at(1).uint();
+                if (!shared.equals(e.resolved(ref).required("address").asText())) { kept.append(r.raw()); n++; }
+            }
+            e.body(18,"d90102"+head(4,n)+kept);
+        }));
         return cases;
     }
 
@@ -804,6 +1015,82 @@ public final class MutationVectors {
             var value=val(out(i));
             return value.major==4 ? value.at(0) : value;
         }
+        /**
+         * Insert another key instead (an Entry): the new node's key, its unit, the predecessor's next, the mint redeemer,
+         * the call's name argument and the claimed object all follow it, so only the key's own rules can object.
+         */
+        void rekey(String from, String to) {
+            String old = ledger.plan.required("mint").fieldNames().next();
+            byte[] preimage = HEX.parseHex(instanceId()+"05456e747279"+to);
+            String unit = old.substring(0,58)+Cbor.digest(224,preimage,0,preimage.length);
+            ledger = new Ledger(ledger.tx.raw().replace(old.substring(56), unit.substring(56)));
+            // The key appears as bytes in the new node's value (before its owner), the predecessor's next (before
+            // linkedAt) and the mint redeemer.
+            outDatum(1, unique(outDatum(1), bytes(from)+"581c", data(to)+"581c"));
+            outDatum(0, unique(outDatum(0), bytes(from)+"1b", data(to)+"1b"));
+            replaceIn(rvalue(1).at(0), bytes(from), data(to));
+            v.withObject("/request/call/args").put("name", to);
+            claim(p -> p.put("object", to));
+        }
+        /** Plutus data bytes: definite up to 64 bytes, else 64-byte chunks of an indefinite string. */
+        private static String data(String hex) {
+            if (hex.length() <= 128) return bytes(hex);
+            var chunks = new StringBuilder("5f");
+            for (int i = 0; i < hex.length(); i += 128) chunks.append(bytes(hex.substring(i, Math.min(hex.length(), i+128))));
+            return chunks.append("ff").toString();
+        }
+        private static String unique(String hex, String from, String to) {
+            if (hex.indexOf(from) < 0 || hex.indexOf(from) != hex.lastIndexOf(from)) throw new IllegalArgumentException("ambiguous edit");
+            return hex.replace(from, to);
+        }
+        String instanceId() { return v.at("/request/call/instance").asText(v.at("/result/prepared/instance").asText()); }
+        String outDatum(int i) { return ledger.plan.at("/outputs/"+i+"/datum").asText(); }
+        void outDatum(int i, String datum) { swap(out(i).fields().get(2), "8201d818"+bytes(datum)); }
+        /** Add delta to the 8-byte integer that follows the given prefix in a datum. */
+        String bump(String datum, String prefix, long delta) {
+            int at = datum.indexOf(prefix);
+            if (at < 0 || at != datum.lastIndexOf(prefix)) throw new IllegalArgumentException("ambiguous datum edit");
+            at += prefix.length();
+            return datum.substring(0,at)+"%016x".formatted(Long.parseUnsignedLong(datum.substring(at,at+16),16)+delta)+datum.substring(at+16);
+        }
+        void resolvedDatum(String ref, String from, String to) {
+            var u = resolved(ref);
+            String datum = u.required("inline_datum").asText();
+            int at = datum.indexOf(from);
+            if (at < 0) throw new IllegalArgumentException("no such datum bytes");
+            u.put("inline_datum", datum.substring(0,at)+to+datum.substring(at+from.length()));
+        }
+        /** Mint one token of a foreign policy into output i (a plain wallet output). */
+        void foreignMint(int i) {
+            var mint = ledger.b.get(9);
+            body(9, mint == null ? "a1581c"+OTHER+"a1410101" : head(5,mint.items.size()/2+1)+mint.raw().substring(2)+"581c"+OTHER+"a1410101");
+            var coin = coin(i);
+            swap(coin, "82"+coin.raw()+"a1581c"+OTHER+"a1410101");
+        }
+        /** Spend an extra 2 ADA input at the contract address, returned through output i. */
+        void scriptInputTo(int i) {
+            var extra = input(0).deepCopy().put("tx_hash","ff".repeat(32)).put("output_index",0).put("address",v.at("/anchors/address").asText());
+            extra.putNull("inline_datum");
+            extra.putArray("amount").addObject().put("unit","lovelace").put("quantity",2_000_000);
+            v.withObject("/resolved").set("ff".repeat(32)+"#0",extra);
+            var inputs = ledger.set(0);
+            var encoded = new StringBuilder(head(4,inputs.size()+1));
+            inputs.forEach(in -> encoded.append(in.raw()));
+            body(0,"d90102"+encoded+"825820"+"ff".repeat(32)+"00");
+            coin(i,2_000_000);
+        }
+        void keyedWindow(long fromDelta, long toDelta) {
+            long from = ledger.b.get(8).integer().longValueExact(), to = ledger.b.get(3).integer().longValueExact();
+            body(8,uint(from+fromDelta));
+            body(3,uint(to+toDelta));
+            var clock = v.required("clock");
+            long length = clock.required("slotLengthMs").asLong();
+            long zero = clock.required("zeroTimeMs").asLong()-clock.required("zeroSlot").asLong()*length;
+            // Rebuild the corresponding Ctx and linkedAt fields. These recordings use fixed-width timestamps.
+            String raw = ledger.tx.raw().replace(uint(zero+from*length),uint(zero+(from+fromDelta)*length))
+                    .replace(uint(zero+to*length),uint(zero+(to+toDelta)*length));
+            ledger = new Ledger(raw);
+        }
         void coin(int i,long delta) { var old=coin(i); swap(old,uint(old.integer().longValueExact()+delta)); }
         void transfer(int a,int b,long change) { coin(a,change); coin(b,-change); }
         void address(int i,String bytes) { swap(addr(out(i)),bytes(bytes)); }
@@ -824,6 +1111,15 @@ public final class MutationVectors {
             pairs.forEach((k,value) -> buf.append(uint(k)).append(value));
             swap(obj,buf.toString());
         }
+        Cbor rewardData(int index) {
+            var rs = redeemers();
+            for (int i=0;i<rs.items.size();i+=2) {
+                var pointer = rs.items.get(i);
+                if (pointer.at(0).uint()==3 && pointer.at(1).uint()==index) return rs.items.get(i+1).at(0);
+            }
+            throw new AssertionError("missing reward pointer " + index);
+        }
+        Cbor mapClaim() { return rewardData(0).tagged(121).at(0).at(0).tagged(121); }
         void swap(Cbor item,String hex) { ledger=new Ledger(splice(item,hex)); }
         String splice(Cbor item,String hex) {
             if (item.source!=ledger.tx.source) throw new IllegalArgumentException("stale edit offset");

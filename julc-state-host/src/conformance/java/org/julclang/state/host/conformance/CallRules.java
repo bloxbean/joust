@@ -2,7 +2,6 @@ package org.julclang.state.host.conformance;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 import org.julclang.state.runtime.described.SchemaCodec;
 import java.math.BigInteger;
@@ -20,6 +19,8 @@ final class CallRules {
     private final BigInteger payment;
     private final JsonNode datumSchema;
     private final Set<Integer> claimed = new HashSet<>();
+    private String seed;
+    private JsonNode mapRedeemer, before, after;
     private boolean paymentBound, assetsBound;   // the redeemer's ctx.received states the payment; its assetsIn the offer
 
     CallRules(ReferenceChecker c) {
@@ -45,6 +46,7 @@ final class CallRules {
                 var decoded = decodeDatum(c.target.required("inline_datum").asText());
                 if (c.owned) c.test("scriptInput/ownedInstance",call.required("instance").equals(decoded.required("instance")));
                 var state = c.owned ? decoded.required("value") : decoded;
+                before = state;
                 for (var f : meta.at("/policies/signedBy")) c.test("signer/signedBy",c.caller.equals(state.required(f.asText()).asText()));
             } catch (RuntimeException e) { c.test("scriptInput/datum",false); }
         }
@@ -67,35 +69,80 @@ final class CallRules {
                             c.holds("redeemer/mintRedeemer#byAction","ByAction".equals(decoded.path("$variant").textValue())) &&
                                     c.holds("redeemer/mintRedeemer#byTarget",!decoded.has("by") || Objects.equals(c.spent,ref(decoded.required("by")))));
                 } catch (RuntimeException e) { c.test("redeemer/mintRedeemer",false); }
-            } else if (tag.equals("reward") && meta.at("/returns/sends").asBoolean() && c.ledger.b.containsKey(5)) {
-                // The single withdrawal is the zero one withdrawal/account pins to the output verifier.
-                c.test("pointer/reward",index==0);
-                outputClaims(r.required("data").asText());
+            } else if (tag.equals("reward") && c.ledger.b.containsKey(5) && (meta.at("/returns/sends").asBoolean() || !c.mapFields.isEmpty())) {
+                // A map call's map-verifier redeemer sits at that account's Reward pointer; the output verifier's at its own.
+                String outputs = c.reward("outputVerifier");
+                if (!c.mapFields.isEmpty() && index >= 0 && index < c.rewards.size() && !c.rewards.get(index).equals(outputs)) mapRedeemer = r;
+                else {
+                    c.test("pointer/reward",meta.at("/returns/sends").asBoolean() && index==(c.mapFields.isEmpty() ? 0 : c.rewards.indexOf(outputs)));
+                    outputClaims(r.required("data").asText());
+                }
             } else c.test("redeemer/purpose",false);
         }
         c.test("redeemer/count", c.holds("redeemer/count#spend",counts.getOrDefault("spend",0)==(c.creation ? 0 : 1)) &&
                 c.holds("redeemer/count#mint",counts.getOrDefault("mint",0)==(c.creation || c.destroy || byAction ? 1 : 0)) &&
-                c.holds("redeemer/count#reward",counts.getOrDefault("reward",0)==(c.ledger.b.containsKey(5) && meta.at("/returns/sends").asBoolean() ? 1 : 0)));
+                c.holds("redeemer/count#reward",counts.getOrDefault("reward",0)==(!c.mapFields.isEmpty() ? c.rewards.size() :
+                        c.ledger.b.containsKey(5) && meta.at("/returns/sends").asBoolean() ? 1 : 0)));
         if (c.creation || c.destroy) c.test("mint/instance",c.holds("mint/instance#token",c.token != null) && c.holds("mint/instance#single",c.minted.size()==1) &&
                 c.holds("mint/instance#quantity",(c.creation ? ONE : ONE.negate()).equals(c.minted.get(c.token))));
         else c.test("mint/action",c.minted.isEmpty() || c.holds("mint/action#method",byAction) && c.minted.keySet().stream().allMatch(u ->
                 c.holds("mint/action#policy",u.startsWith(c.policy)) && c.holds("mint/action#notThread",!u.equals(c.token))));
         outputs();
+        if (!c.mapFields.isEmpty()) checkMaps();
     }
 
-    private JsonNode schema(String purpose) {
+    /** ADR-0014 map claims: the map verifier's MapClaims redeemer names, per map field, the owner and both roots. */
+    private void checkMaps() {
+        try {
+            org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
+            var raw = data(mapRedeemer.required("data").asText());
+            var claims = org.julclang.clientlib.PlutusDataAdapter.convert(org.julclang.clientlib.PlutusDataAdapter.toClientLib(raw),
+                    org.julclang.state.api.mpf.MapClaims.class);
+            // Round-trip the typed redeemer to reject ignored constructor fields and noncanonical alternatives.
+            var encoded = org.julclang.clientlib.PlutusDataAdapter.convert(claims);
+            c.test("mapClaims/encoding", matches(raw, data(encoded.serializeToHex())));
+            c.test("mapClaims/count", claims.claims().size() == c.mapFields.size());
+            var seen = new HashSet<Integer>();
+            for (var claim : claims.claims()) {
+                int field = claim.field().intValueExact();
+                int index = c.creation ? -1 - field : field;
+                var owner = HEX.formatHex(claim.owner().txId().hash()) + "#" + claim.owner().index();
+                c.test("mapClaims/claim", c.holds("mapClaims/claim#policy",c.policy.equals(HEX.formatHex(claim.policy()))) &&
+                        c.holds("mapClaims/claim#owner",owner.equals(c.creation ? seed : c.spent)) &&
+                        c.holds("mapClaims/claim#field",seen.add(index) && index >= 0 && index < c.mapFields.size()) &&
+                        c.holds("mapClaims/claim#proof",org.julclang.state.api.mpf.MapWitnesses.verify(claim)));
+                if (index < 0 || index >= c.mapFields.size()) continue;
+                String name = c.mapFields.get(index);
+                if (c.creation) c.test("mapClaims/creationRoot", Arrays.equals(claim.oldRoot(), new byte[32]));
+                else mapDatum(before, name, claim.oldRoot());
+                if (!c.destroy) mapDatum(after, name, claim.newRoot());
+                else c.test("mapClaims/destroyWrites", claim.writes().isEmpty());
+            }
+        } catch (RuntimeException e) { c.test("mapClaims/decode", false); }
+    }
+
+    private void mapDatum(JsonNode state, String field, byte[] root) {
+        var map = state.path(field);
+        c.test("mapDatum/root", c.holds("mapDatum/root#root",root.length == 32 && HEX.formatHex(root).equals(map.path("root").textValue())) &&
+                c.holds("mapDatum/root#pending",map.path("reads").isArray() && map.get("reads").isEmpty()
+                        && map.path("writes").isArray() && map.get("writes").isEmpty()));
+    }
+
+    JsonNode schema(String purpose) {
         for (var validator : c.description.required("validators"))
             if (validator.required("title").asText().endsWith("."+purpose)) return codec.resolve(validator.at("/redeemer/schema"));
         throw new IllegalArgumentException("no validator for purpose");
     }
-    private static PlutusData data(String hex) {
+    static PlutusData data(String hex) {
         byte[] bytes = HEX.parseHex(hex);
         Cbor.read(bytes); // Validate nesting and full consumption before the schema decoder.
-        return PlutusDataCborDecoder.decode(bytes);
+        return org.julclang.state.runtime.PlutusBytes.decode(bytes);
     }
     private JsonNode decodeDatum(String hex) { return codec.decode(datumSchema,data(hex)); }
-    private static String ref(JsonNode ref) { return ref.required("txId").asText()+"#"+ref.required("index").asText(); }
-    private void methodRedeemer(JsonNode r,String purpose) {
+    static String ref(JsonNode ref) { return ref.required("txId").asText()+"#"+ref.required("index").asText(); }
+    private void methodRedeemer(JsonNode r,String purpose) { methodRedeemer(r, purpose, null); }
+
+    JsonNode methodRedeemer(JsonNode r, String purpose, String anchor) {
         try {
             var schema = schema(purpose);
             var constr = (PlutusData.ConstrData)data(r.required("data").asText());
@@ -105,7 +152,7 @@ final class CallRules {
             if (alt==null || !alt.required("title").equals(meta.at("/redeemer/constructor")) ||
                     constr.tag()!=meta.at("/redeemer/index").longValue() || !purpose.equals(meta.at("/redeemer/purpose").asText())) {
                 c.test("redeemer/constructor",false);
-                return;
+                return null;
             }
             var decoded = codec.decode(schema,constr);
             var args = new HashSet<String>();
@@ -128,9 +175,11 @@ final class CallRules {
                         c.test("redeemer/assetsIn",assetsBound);
                     }
                     case "events" -> { /* Fully decoded by the anchored schema. The validator checks their values. */ }
+                    case "anchor" -> c.test("redeemer/anchor",anchor != null && anchor.equals(ref(decoded.required(name))));
                     case "instance" -> c.test("redeemer/instance",call.required("instance").equals(decoded.required(name)));
                     case "seed" -> {
                         var seed = decoded.required("seed");
+                        this.seed = ref(seed);
                         int i = n(seed,"index").intValueExact();
                         c.test("redeemer/seed",c.holds("redeemer/seed#creation",c.creation) && c.holds("redeemer/seed#walletInput",c.walletRefs.contains(ref(seed))) &&
                                 c.holds("redeemer/seed#index",i>=0 && i<=65535));
@@ -143,7 +192,8 @@ final class CallRules {
                 }
             }
             c.test("redeemer/args",args.isEmpty());
-        } catch (RuntimeException e) { c.test("redeemer/decode",false); }
+            return decoded;
+        } catch (RuntimeException e) { c.test("redeemer/decode",false); return null; }
     }
     private static boolean matches(PlutusData a,PlutusData b) {
         return Arrays.equals(PlutusDataCborEncoder.encode(a),PlutusDataCborEncoder.encode(b));
@@ -233,6 +283,7 @@ final class CallRules {
                 c.test("continuingOutput/script",!o.get("hasScript").booleanValue());
                 try {
                     var d = decodeDatum(o.required("datum").textValue());
+                    after = c.owned ? d.required("value") : d;
                     c.test("continuingOutput/instance",!c.owned || call.required("instance").equals(d.required("instance")));
                 } catch (RuntimeException e) { c.test("continuingOutput/datum",false); }
             } else {

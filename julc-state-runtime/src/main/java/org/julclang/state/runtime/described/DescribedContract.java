@@ -39,6 +39,15 @@ import org.julclang.state.runtime.MerkleSupport;
  */
 public final class DescribedContract {
 
+    /**
+     * The dispatcher's own refusal of a call it cannot make as asked (an argument, a kind, a shape not supported yet):
+     * still an {@link IllegalArgumentException}, so that a host can tell it from a library's (#154 review M2-5).
+     */
+    public static final class BadCall extends IllegalArgumentException {
+        BadCall(String message) { super(message); }
+        BadCall(String message, Throwable cause) { super(message, cause); }
+    }
+
     /** An unused argument (the target of a creation, a shared state not taken, a Ctx not declared). */
     static final PlutusData NONE = PlutusData.constr(0);
 
@@ -52,11 +61,19 @@ public final class DescribedContract {
     private final java.util.Map<String, org.julclang.state.runtime.KeyedType<PlutusData>> keyed = new java.util.LinkedHashMap<>();
 
     public DescribedContract(JsonNode description, String scriptCborHex, TransitionFn fn) {
+        this(description, scriptCborHex, fn, false);
+    }
+
+    /**
+     * {@code strictWire}: read call arguments and params as the dev host's wire bounds them ({@link SchemaCodec}'s
+     * strict mode), as the JVM host does (#154 Codex review).
+     */
+    public DescribedContract(JsonNode description, String scriptCborHex, TransitionFn fn, boolean strictWire) {
         this.description = description;
         this.x = description.get("x-joust");
-        if (x == null || x.path("version").asInt() < 2) throw new IllegalArgumentException("a JOUST description of version 2 is needed (with call recipes)");
+        if (x == null || x.path("version").asInt() < 2) throw new BadCall("a JOUST description of version 2 is needed (with call recipes)");
         this.name = description.path("preamble").path("title").asText();
-        this.codec = new SchemaCodec(description);
+        this.codec = new SchemaCodec(description, strictWire);
         for (JsonNode k : x.path("keyed")) {
             if (!k.isObject()) continue;   // a description before ADR-0016 M3 names keyed types only
             int link = k.path("link").path("index").asInt();
@@ -70,12 +87,14 @@ public final class DescribedContract {
                     k.path("signedKey").asBoolean(), k.path("linkCooldownMs").asLong(), k.path("linkWindowMs").asLong(),
                     PlutusData.class, new PlutusData.ConstrData(link, List.of()), removeRedeemer));
         }
+        // Absent in a description means the default limit, an hour (StateContract.maxValidityMs).
+        long maxValidityMs = x.has("maxValidityMs") ? Long.parseLong(x.get("maxValidityMs").asText()) : 3_600_000L;
         this.spec = keyed.isEmpty()
                 ? ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
-                        x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
+                        x.get("maxDatumBytes").asInt(), maxValidityMs, x.path("stakeSelf").asBoolean(),
                         mapFields(refKey(x.get("state"))))
                 : ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
-                        x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
+                        x.get("maxDatumBytes").asInt(), maxValidityMs, x.path("stakeSelf").asBoolean(),
                         mapFields(refKey(x.get("state"))), List.copyOf(keyed.values()));
         // Every evaluation's inputs are checked against the declared types first (ADR-0020 S15).
         this.fn = new TransitionInputs(description, fn);
@@ -90,19 +109,24 @@ public final class DescribedContract {
         return description;
     }
 
+    /** The contract's spec as this description gives it (its limits, its keyed types). */
+    public ContractSpec<PlutusData> spec() {
+        return spec;
+    }
+
     public SchemaCodec codec() {
         return codec;
     }
 
     public StateContractHandle<PlutusData> handle(StateRuntime runtime) {
-        if (x.has("params")) throw new IllegalArgumentException(name + " takes @Params: give them (handle(runtime, params))");
+        if (x.has("params")) throw new BadCall(name + " takes @Params: give them (handle(runtime, params))");
         return new StateContractHandle<>(runtime, spec);
     }
 
     /** The contract on a network with its deploy-time {@code @Params} (JSON, by the description's schema; ADR-0009 D1). */
     public StateContractHandle<PlutusData> handle(StateRuntime runtime, JsonNode params) {
         if (!x.has("params")) return new StateContractHandle<>(runtime, spec);
-        if (params == null || params.isNull() || params.isMissingNode()) throw new IllegalArgumentException(name + " takes @Params: the call must give them");
+        if (params == null || params.isNull() || params.isMissingNode()) throw new BadCall(name + " takes @Params: the call must give them");
         return new StateContractHandle<>(runtime, spec, DataFidelity.check(codec.encode(x.get("params"), params, "params"), "the params"));
     }
 
@@ -118,7 +142,7 @@ public final class DescribedContract {
         for (JsonNode m : x.get(list)) {
             if (m.get("name").asText().equals(method) && m.get("kind").asText().equals(kind)) return m;
         }
-        throw new IllegalArgumentException(name + " has no " + kind + " " + method);
+        throw new BadCall(name + " has no " + kind + " " + method);
     }
 
     /**
@@ -174,35 +198,40 @@ public final class DescribedContract {
                        List<Account> cosigners, Governor governor) {
         JsonNode meta = meta(kind, method);
         JsonNode recipe = meta.get("recipe");
-        if (recipe == null) throw new IllegalArgumentException(method + ": no call recipe (rebuild with JOUST's processor)");
+        if (recipe == null) throw new BadCall(method + ": no call recipe (rebuild with JOUST's processor)");
         org.julclang.ledger.Value offered = assets(payAssets);
         if (!meta.path("takesAssets").asBoolean() && !org.julclang.state.api.Assets.isEmpty(offered)) {
-            throw new IllegalArgumentException(method + " takes no native assets");
+            throw new BadCall(method + " takes no native assets");
         }
         boolean assetAware = x.path("assetAware").asBoolean();
         boolean signedByOthers = meta.path("policies").path("quorum").isObject() || !meta.path("policies").path("authorizedBy").isEmpty();
         boolean keyedKind = kind.startsWith("keyed");
         if (keyedKind && !meta.path("policies").path("authorizedBy").isEmpty()) {
-            throw new IllegalArgumentException(method + ": @AuthorizedBy on a keyed call: not supported by the described"
+            throw new BadCall(method + ": @AuthorizedBy on a keyed call: not supported by the described"
                     + " dispatcher yet (ADR-0016 M3)");
         }
-        if (signedByOthers && !kind.equals("action") && !kind.equals("destroy") && !kind.equals("keyedAction")) {
-            throw new IllegalArgumentException(method + ": @Quorum and @AuthorizedBy on " + kind + " calls: not supported yet (ADR-0015 M3)");
+        boolean hostedOwnedQuorum = runtime.hostedCall() && meta.path("policies").path("quorum").isObject()
+                && (kind.equals("ownedAction") || kind.equals("ownedDestroy"));
+        // A keyed removal takes its co-signers like a keyed action (the dispatch below adds them): the dev hosts serve
+        // both, so the npm host must not refuse what the JVM host prepares (#156 Codex review).
+        if (signedByOthers && !hostedOwnedQuorum && !kind.equals("action") && !kind.equals("destroy") && !kind.equals("keyedAction")
+                && !kind.equals("keyedRemove")) {
+            throw new BadCall(method + ": @Quorum and @AuthorizedBy on " + kind + " calls: not supported yet (ADR-0015 M3)");
         }
-        if (!signedByOthers && !cosigners.isEmpty()) throw new IllegalArgumentException(method + " takes no co-signers");
-        if (governor != null && meta.path("policies").path("authorizedBy").isEmpty()) throw new IllegalArgumentException(method + " takes no governor");
-        if (unsupported(meta)) throw new IllegalArgumentException(method + " is batched (@Batched intents): not supported yet (ADR-0015 M3)");
-        if (!meta.path("payable").asBoolean() && lovelace.signum() != 0) throw new IllegalArgumentException(method + " is not payable");
-        if (lovelace.signum() < 0) throw new IllegalArgumentException("a negative payment");
+        if (!signedByOthers && !cosigners.isEmpty()) throw new BadCall(method + " takes no co-signers");
+        if (governor != null && meta.path("policies").path("authorizedBy").isEmpty()) throw new BadCall(method + " takes no governor");
+        if (unsupported(meta)) throw new BadCall(method + " is batched (@Batched intents): not supported yet (ADR-0015 M3)");
+        if (!meta.path("payable").asBoolean() && lovelace.signum() != 0) throw new BadCall(method + " is not payable");
+        if (lovelace.signum() < 0) throw new BadCall("a negative payment");
 
         // The arguments, by the description's schemas: for the redeemer, and as the transition's args record.
         var byName = new java.util.LinkedHashMap<String, PlutusData>();
         var argList = new ArrayList<PlutusData>();
-        if (args == null || !args.isObject()) throw new IllegalArgumentException("args must be an object");
+        if (args == null || !args.isObject()) throw new BadCall("args must be an object");
         var names = new ArrayList<String>();
         meta.path("args").forEach(a -> names.add(a.get("name").asText()));
         args.fieldNames().forEachRemaining(n -> {
-            if (!names.contains(n)) throw new IllegalArgumentException("unknown argument " + n);
+            if (!names.contains(n)) throw new BadCall("unknown argument " + n);
         });
         for (JsonNode a : meta.path("args")) {
             String n = a.get("name").asText();
@@ -250,7 +279,7 @@ public final class DescribedContract {
                     layoutArgs.add(NONE);
                 } else if (a.equals("$into")) {
                     // A move reads its destination's state (@Into).
-                    if (into == null || !into.matches("[0-9a-f]{64}")) throw new IllegalArgumentException(method + " moves the object: give its destination (into)");
+                    if (into == null || !into.matches("[0-9a-f]{64}")) throw new BadCall(method + " moves the object: give its destination (into)");
                     layoutArgs.add(handle.at(into).state());
                 } else if (a.equals("$admitted")) {
                     // An @Admits action reads the arriving object as it is before the move (its id is the first argument).
@@ -259,7 +288,7 @@ public final class DescribedContract {
                     String simple = admitted.substring(admitted.lastIndexOf('.') + 1);
                     String typeKey = null;
                     for (JsonNode o : x.path("owned")) if (o.path("simple").asText().equals(simple)) typeKey = o.path("type").asText();
-                    if (typeKey == null) throw new IllegalArgumentException(name + " has no owned type " + admitted);
+                    if (typeKey == null) throw new BadCall(name + " has no owned type " + admitted);
                     layoutArgs.add(OwnedObject.at(handle.at(requireInstance(instance)), id, ownedCodec(typeKey)).value());
                 } else layoutArgs.add(byName.get(a));
             }
@@ -272,7 +301,7 @@ public final class DescribedContract {
             if (fundsSlot >= 0) l.set(fundsSlot, PlutusDataAdapter.fromClientLib(PlutusDataAdapter.convert(funds)));
             return new PlutusData.ConstrData(0, l);
         };
-        PlutusData offeredData = offered.toPlutusData();
+        PlutusData offeredData = wire(offered);
         if (into != null) byName.put("into", PlutusData.bytes(HexFormat.of().parseHex(into)));
         boolean usesCtx = meta.path("ctx").asBoolean();
         String transition = recipe.get("transition").asText();
@@ -349,7 +378,7 @@ public final class DescribedContract {
                 return OwnedObject.create(at, create, ownedCodec(meta.get("owned").asText())).objectId();
             }
             case "ownedAction", "ownedDestroy" -> {
-                if (object == null || !object.matches("4f[0-9a-f]{56}")) throw new IllegalArgumentException("an owned call needs an object id");
+                if (object == null || !object.matches("4f[0-9a-f]{56}")) throw new BadCall("an owned call needs an object id");
                 StateInstance<PlutusData> at = handle.at(requireInstance(instance));
                 var codec = ownedCodec(meta.get("owned").asText());
                 var ownedLayout = MerkleSupport.dataLayout(codec.mapFields());
@@ -359,8 +388,16 @@ public final class DescribedContract {
                         : Call.<PlutusData>action(method, caller);
                 rules(b, recipe);
                 if (meta.path("policies").path("into").asBoolean()) b.movesTo(into);   // ADR-0012 D3
-                b.usesCtx(usesCtx).received(lovelace)
-                        .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                if (hostedOwnedQuorum) {
+                    b.cosigners(caller);
+                    b.cosigners(cosigners.toArray(new Account[0]));
+                }
+                b.usesCtx(usesCtx).received(lovelace);
+                if (runtime.hostedCall() && hasField(fields, "events")) {
+                    b.redeemerWith((ctx, t) -> redeemer(alternative, fields, withEvents(byName, t), ctxData(ctx, usesCtx), null, null, offeredData));
+                } else {
+                    b.redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                }
                 if (assetAware) {
                     boolean sharedObj = recipe.path("shared").asBoolean();
                     b.receivedAssets(offered).runAssets(sharedObj, (o, sh, ctx, funds) -> full(discover(transition, ownedLayout, o,
@@ -389,7 +426,7 @@ public final class DescribedContract {
                 StateInstance<PlutusData> at = handle.at(requireInstance(instance));
                 var type = keyedType(meta.path("keyed").asText());
                 if (object == null || !object.matches("([0-9a-f]{2})+") || object.length() / 2 > type.maxKeyBytes()) {
-                    throw new IllegalArgumentException(method + ": a keyed call needs its key (1 to " + type.maxKeyBytes()
+                    throw new BadCall(method + ": a keyed call needs its key (1 to " + type.maxKeyBytes()
                             + " bytes, hex)");
                 }
                 var obj = new org.julclang.state.runtime.KeyedList<>(at, type).get(HexFormat.of().parseHex(object));
@@ -418,19 +455,19 @@ public final class DescribedContract {
                 }
                 return object;
             }
-            default -> throw new IllegalArgumentException("unknown kind " + kind);
+            default -> throw new BadCall("unknown kind " + kind);
         }
     }
 
     /** The keyed type {@code simple} (ADR-0016), as x-joust.keyed describes it. */
     private org.julclang.state.runtime.KeyedType<PlutusData> keyedType(String simple) {
         var t = keyed.get(simple);
-        if (t == null) throw new IllegalArgumentException(name + " has no keyed type " + simple);
+        if (t == null) throw new BadCall(name + " has no keyed type " + simple);
         return t;
     }
 
     private static String requireInstance(String instance) {
-        if (instance == null || !instance.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("an instance id is 32 bytes of hex");
+        if (instance == null || !instance.matches("[0-9a-f]{64}")) throw new BadCall("an instance id is 32 bytes of hex");
         return instance;
     }
 
@@ -456,7 +493,7 @@ public final class DescribedContract {
 
     private static PlutusData burn(JsonNode recipe) {
         JsonNode b = recipe.get("burn");
-        if (b == null) throw new IllegalArgumentException("a destroy's recipe has no burn redeemer");
+        if (b == null) throw new BadCall("a destroy's recipe has no burn redeemer");
         return PlutusData.constr(b.get("index").asInt());
     }
 
@@ -477,12 +514,12 @@ public final class DescribedContract {
                 case "instance" -> out.add(PlutusData.bytes(instance));
                 case "ctx" -> out.add(ctx);
                 case "assetsIn" -> {
-                    if (assetsIn == null) throw new IllegalArgumentException("the redeemer's assetsIn without offered assets");
+                    if (assetsIn == null) throw new BadCall("the redeemer's assetsIn without offered assets");
                     out.add(assetsIn);
                 }
                 default -> {
                     PlutusData a = args.get(n);
-                    if (a == null) throw new IllegalArgumentException("redeemer field " + n + " is not supported yet (ADR-0015 M3)");
+                    if (a == null) throw new BadCall("redeemer field " + n + " is not supported yet (ADR-0015 M3)");
                     out.add(a);
                 }
             }
@@ -533,39 +570,89 @@ public final class DescribedContract {
         return c.fields().size() > 2 ? t.withEvents(eventsOf(c, 2)) : t;
     }
 
-    /** An asset-aware step ({@code Constr 0 [next?, payouts, sends, mint, accepted]}) as the runtime's full transition. */
+    /**
+     * An asset-aware step ({@code Constr 0 [next?, payouts, sends, mint, accepted, deposits?, events?]}) as the runtime's
+     * full transition. The Data that reaches the transaction byte for byte (the next state, payouts, a send's address
+     * and datum, a deposit's ids and memo, events) must be in canonical CBOR order (I9, {@link DataFidelity}); the
+     * values (a send's or deposit's value, mint, accepted) are ledger values, in ledger order ({@code Assets.check}),
+     * which differs from CBOR order when token names differ in length ({@code ff} before {@code 0000} in CBOR, after
+     * it in the ledger; #154 Codex confirmation).
+     */
     static Transition<PlutusData> full(PlutusData step) {
-        var c = (PlutusData.ConstrData) DataFidelity.check(step, "the method's result");
+        var c = (PlutusData.ConstrData) step;
         var base = transition(new PlutusData.ConstrData(0, List.of(c.fields().get(0), c.fields().get(1))));
         var items = ((PlutusData.ListData) c.fields().get(2)).items();
         JulcList<org.julclang.state.api.Send> sends = JulcList.empty();
         for (int i = items.size() - 1; i >= 0; i--) {
-            sends = sends.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(items.get(i)), org.julclang.state.api.Send.class));
+            var s = (PlutusData.ConstrData) items.get(i);
+            DataFidelity.check(s.fields().get(0), "a send's address");
+            DataFidelity.check(s.fields().get(2), "a send's datum");
+            ledgerValue(s.fields().get(1), "a send's value");
+            sends = sends.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(s), org.julclang.state.api.Send.class));
         }
-        var mint = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(c.fields().get(3)), org.julclang.ledger.Value.class);
-        var accepted = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(c.fields().get(4)), org.julclang.ledger.Value.class);
+        var mint = ledgerValue(c.fields().get(3), "the mint");
+        var accepted = ledgerValue(c.fields().get(4), "the accepted value");
         JulcList<org.julclang.state.api.Deposit> deposits = JulcList.empty();
         if (c.fields().size() > 5) {
             var ds = ((PlutusData.ListData) c.fields().get(5)).items();
             for (int i = ds.size() - 1; i >= 0; i--) {
-                deposits = deposits.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(ds.get(i)), org.julclang.state.api.Deposit.class));
+                var d = (PlutusData.ConstrData) ds.get(i);
+                for (int f : new int[]{0, 1, 3}) DataFidelity.check(d.fields().get(f), "a deposit");
+                ledgerValue(d.fields().get(2), "a deposit's value");
+                deposits = deposits.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(d), org.julclang.state.api.Deposit.class));
             }
         }
+        if (c.fields().size() > 6) DataFidelity.check(c.fields().get(6), "the method's events");
         return Transition.full(base.next(), base.payouts(), sends, mint, accepted).withDeposits(deposits).withEvents(eventsOf(c, 6));
     }
 
-    /** Offered native assets: {@code [[policy, [[name, quantity]]]]} (hex), as the JS client sends them. */
+    /**
+     * A value the method returned, checked as Data (a conversion would collapse a repeated key) to be a ledger value:
+     * ledger order, no repeats, no zero quantities.
+     */
+    private static org.julclang.ledger.Value ledgerValue(PlutusData d, String what) {
+        org.julclang.state.api.Assets.check(org.julclang.ledger.Value.fromPlutusData(d), what);
+        return PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(d), org.julclang.ledger.Value.class);
+    }
+
+    /**
+     * Offered native assets: {@code [[policy, [[name, quantity]]]]} (lowercase hex text; a quantity is an integer or its
+     * decimal text), as the JS client sends them, as a value in ledger order. The shape is checked here, so nothing
+     * fails as internal; the host's further wire rules (order, bounds) are {@code Session.checkAssets}'.
+     */
     static org.julclang.ledger.Value assets(JsonNode json) {
         var v = org.julclang.state.api.Assets.none();
         if (json == null || json.isNull() || json.isMissingNode()) return v;
+        if (!json.isArray()) throw new BadCall("pay.assets: not an array");
         for (JsonNode p : json) {
+            if (!p.isArray() || p.size() != 2 || !p.get(0).isTextual() || !p.get(0).asText().matches("[0-9a-f]{56}")
+                    || !p.get(1).isArray())
+                throw new BadCall("pay.assets: not a [policy, tokens] pair");
             byte[] policy = HexFormat.of().parseHex(p.get(0).asText());
             for (JsonNode a : p.get(1)) {
+                if (!a.isArray() || a.size() != 2 || !a.get(0).isTextual() || !a.get(0).asText().matches("([0-9a-f]{2}){0,32}")
+                        || !(a.get(1).isIntegralNumber() || a.get(1).isTextual() && a.get(1).asText().matches("-?[0-9]{1,200}")))
+                    throw new BadCall("pay.assets: not a [name, quantity] token");
                 v = org.julclang.state.api.Assets.add(v, org.julclang.state.api.Assets.of(policy, HexFormat.of().parseHex(a.get(0).asText()),
                         new BigInteger(a.get(1).asText())));
             }
         }
         return v;
+    }
+
+    /**
+     * A value as a redeemer carries it ("the wire"): each policy's token names in canonical CBOR order (shorter first,
+     * then bytewise), as cardano-client-lib writes a map and the validator's {@code ValueAdapter.fromWire} reads it; the
+     * ledger orders names bytewise (#154 Codex final: {@code ff} before {@code 0000} on the wire, after it in the ledger).
+     */
+    static PlutusData wire(org.julclang.ledger.Value value) {
+        var policies = new ArrayList<PlutusData.Pair>();
+        for (var p : ((PlutusData.MapData) value.toPlutusData()).entries()) {
+            var tokens = new ArrayList<>(((PlutusData.MapData) p.value()).entries());
+            tokens.sort((a, b) -> SchemaCodec.compare(SchemaCodec.cbor(a.key()), SchemaCodec.cbor(b.key())));
+            policies.add(new PlutusData.Pair(p.key(), new PlutusData.MapData(tokens)));
+        }
+        return new PlutusData.MapData(policies);
     }
 
     /** What a creation makes. */
@@ -584,7 +671,7 @@ public final class DescribedContract {
                         (inst, v) -> PlutusData.constr(tag, PlutusData.bytes(inst), v), null, mapFields(type));
             }
         }
-        throw new IllegalArgumentException(name + " has no owned type " + type);
+        throw new BadCall(name + " has no owned type " + type);
     }
 
     /** What this dispatcher cannot run yet (ADR-0015 M3): batches, composition and deposits, moves, mints, events, co-signers. */
@@ -603,20 +690,20 @@ public final class DescribedContract {
         boolean usedGovernor = false;
         for (JsonNode path : meta.path("policies").path("authorizedBy")) {
             String at = path.asText();
-            if (!at.startsWith("params.")) throw new IllegalArgumentException(method + ": @AuthorizedBy(\"" + at + "\"): only @Params credentials are supported here yet (ADR-0015 M3)");
+            if (!at.startsWith("params.")) throw new BadCall(method + ": @AuthorizedBy(\"" + at + "\"): only @Params credentials are supported here yet (ADR-0015 M3)");
             JsonNode cred = params == null ? null : params.get(at.substring("params.".length()));
-            if (cred == null) throw new IllegalArgumentException(method + ": no " + at + " in the call's params");
+            if (cred == null) throw new BadCall(method + ": no " + at + " in the call's params");
             String hash = cred.path("hash").asText();
             if ("ScriptCredential".equals(cred.path("$variant").asText())) {
-                if (governor == null) throw new IllegalArgumentException(method + ": " + at + " is a script: give its governor (the script, applied, and its signers)");
+                if (governor == null) throw new BadCall(method + ": " + at + " is a script: give its governor (the script, applied, and its signers)");
                 String h;
                 try {
                     h = HexFormat.of().formatHex(governor.script().getScriptHash());
                 } catch (Exception e) {
-                    throw new IllegalArgumentException(method + ": cannot hash the governor script", e);
+                    throw new BadCall(method + ": cannot hash the governor script", e);
                 }
-                if (!h.equals(hash)) throw new IllegalArgumentException(method + ": the governor is script " + h + ", not " + at + " (" + hash + ")");
-                if (usedGovernor) throw new IllegalArgumentException(method + ": one governor approves one credential");
+                if (!h.equals(hash)) throw new BadCall(method + ": the governor is script " + h + ", not " + at + " (" + hash + ")");
+                if (usedGovernor) throw new BadCall(method + ": one governor approves one credential");
                 usedGovernor = true;
                 // Approvals [Approval(policy, target, action)]: the action is the spend redeemer's tag (I33).
                 var approval = com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
@@ -631,14 +718,14 @@ public final class DescribedContract {
                         governor.signers().toArray(new Account[0])));
                 continue;
             }
-            if (!"PubKeyCredential".equals(cred.path("$variant").asText())) throw new IllegalArgumentException(method + ": " + at + " is not a credential");
+            if (!"PubKeyCredential".equals(cred.path("$variant").asText())) throw new BadCall(method + ": " + at + " is not a credential");
             Account signer = null;
             if (HexFormat.of().formatHex(Keys.pkh(caller)).equals(hash)) signer = caller;
             for (Account a : cosigners) if (HexFormat.of().formatHex(Keys.pkh(a)).equals(hash)) signer = a;
-            if (signer == null) throw new IllegalArgumentException(method + " needs the signature of " + at + " (" + hash + "): the caller or a co-signer");
+            if (signer == null) throw new BadCall(method + " needs the signature of " + at + " (" + hash + "): the caller or a co-signer");
             if (signer == caller) b.cosigners(caller);   // a co-signer is a required signer already
         }
-        if (governor != null && !usedGovernor) throw new IllegalArgumentException(method + ": no script credential for the governor to approve");
+        if (governor != null && !usedGovernor) throw new BadCall(method + ": no script credential for the governor to approve");
     }
 
     /** The index of the generated validator's Lifecycle constructor {@code title} (CreateInstance, BurnInstance, ByAction…). */
@@ -646,7 +733,7 @@ public final class DescribedContract {
         for (JsonNode alt : description.path("definitions").path(lifecycleKey(description)).path("anyOf")) {
             if (alt.path("title").asText().equals(title)) return alt.path("index").asInt();
         }
-        throw new IllegalArgumentException(name + " has no " + title + " redeemer");
+        throw new BadCall(name + " has no " + title + " redeemer");
     }
 
     /**
@@ -664,7 +751,7 @@ public final class DescribedContract {
             if (k.endsWith(".Lifecycle")) found.add(k);
         });
         if (found.size() != 1) {
-            throw new IllegalArgumentException("the description has no " + exact + " and " + found.size()
+            throw new BadCall("the description has no " + exact + " and " + found.size()
                     + " other Lifecycle definitions " + found + ": which is the validator's is ambiguous");
         }
         return found.get(0);
@@ -698,6 +785,7 @@ public final class DescribedContract {
                                 PlutusData shared, PlutusData args, PlutusData ctx) {
         if (!layout.hasMaps() || target == NONE) {
             var r = fn.run(transition, target, shared, args, ctx);
+            r.raise();
             if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
             return r.step();
         }
@@ -707,42 +795,57 @@ public final class DescribedContract {
             var list = known.computeIfAbsent(HexFormat.of().formatHex(m.root()), k -> new ArrayList<>());
             for (var e : m.reads()) list.add(e);
         }
-        for (int round = 1; round <= MAX_READ_ROUNDS; round++) {
+        var r = walk(known, k -> {
             var reads = new ArrayList<JulcList<org.julclang.state.api.MapEntry>>();
             for (int idx : layout.maps()) {
-                var list = known.get(HexFormat.of().formatHex(layout.map(target, idx).root()));
+                var list = k.get(HexFormat.of().formatHex(layout.map(target, idx).root()));
                 JulcList<org.julclang.state.api.MapEntry> l = JulcList.empty();
                 for (int i = list.size() - 1; i >= 0; i--) l = l.prepend(list.get(i));
                 reads.add(l);
             }
-            var r = fn.run(transition, layout.opened(target, reads), shared, args, ctx);
-            boolean fresh = false;
+            return fn.run(transition, layout.opened(target, reads), shared, args, ctx);
+        }, (root, key) -> org.julclang.state.api.MerkleMaps.read(HexFormat.of().parseHex(root), HexFormat.of().parseHex(key)),
+                transition);
+        r.raise();   // a failure counts only on the final path: a key answered as absent may change it
+        if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
+        return r.step();
+    }
+
+    /**
+     * The path walk of read discovery: a run answers a key {@code known} lacks as absent and reports it
+     * ({@code joust:read}); its first report is the path's next lookup (every earlier one was answered as on chain), so
+     * it is {@code read} (the call's ReadSource records and proves it, as the JVM host's run would) and added for the
+     * next run. Both hosts write the same claims in the same order. A guarded lookup aborts its run, so a call takes
+     * one run per read plus the final one, which is returned.
+     */
+    static TransitionFn.Run walk(java.util.Map<String, List<org.julclang.state.api.MapEntry>> known,
+                                 java.util.function.Function<java.util.Map<String, List<org.julclang.state.api.MapEntry>>, TransitionFn.Run> runWith,
+                                 java.util.function.BiFunction<String, String, org.julclang.state.api.MapEntry> read, String what) {
+        for (int n = 0; n <= MAX_MAP_READS; n++) {
+            var r = runWith.apply(known);
+            String[] next = null;
             for (String t : r.traces()) {
                 if (!t.startsWith("joust:read ")) continue;
                 String[] p = t.split(" ");
-                String root = p[1];
                 String key = p.length > 2 ? p[2] : "";
-                var list = known.computeIfAbsent(root, k -> new ArrayList<>());
-                if (list.stream().anyMatch(e -> HexFormat.of().formatHex(e.key()).equals(key))) continue;
-                list.add(org.julclang.state.api.MerkleMaps.read(HexFormat.of().parseHex(root), HexFormat.of().parseHex(key)));
-                fresh = true;
+                if (known.getOrDefault(p[1], List.of()).stream().noneMatch(e -> HexFormat.of().formatHex(e.key()).equals(key))) {
+                    next = new String[] {p[1], key};
+                    break;
+                }
             }
-            if (!fresh) {
-                if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
-                return r.step();
-            }
+            if (next == null) return r;
+            known.computeIfAbsent(next[0], k -> new ArrayList<>()).add(read.apply(next[0], next[1]));
         }
-        throw new org.julclang.state.api.RequireException(transition + ": more than " + MAX_READ_ROUNDS
-                + " rounds of MerkleMap reads (ADR-0015 D3)");
+        throw new org.julclang.state.api.RequireException(what + ": more than " + MAX_MAP_READS
+                + " MerkleMap reads in one call (ADR-0015 D3)");
     }
 
-    /** The round limit of read discovery (ADR-0015 D3). */
     // ------------------------------------------------------------------ other purposes (ADR-0010; ADR-0015 M3)
 
     /** The purpose handler of {@code purpose} (withdraw, certify, vote, propose). */
     JsonNode purposeMeta(String purpose) {
         for (JsonNode p : x.path("purposes")) if (p.path("purpose").asText().equals(purpose)) return p;
-        throw new IllegalArgumentException(name + " has no @" + Character.toUpperCase(purpose.charAt(0)) + purpose.substring(1) + " handler");
+        throw new BadCall(name + " has no @" + Character.toUpperCase(purpose.charAt(0)) + purpose.substring(1) + " handler");
     }
 
     /** The stake credential's reward address (a {@code stakeSelf} contract's funds are staked to it). */
@@ -756,7 +859,7 @@ public final class DescribedContract {
      */
     public String delegate(StateRuntime runtime, Account caller, JsonNode params, String pool, List<Account> cosigners) {
         purposeMeta("certify");
-        if (pool == null || !(pool.matches("[0-9a-f]{56}") || pool.startsWith("pool1"))) throw new IllegalArgumentException("a pool id (hex or bech32)");
+        if (pool == null || !(pool.matches("[0-9a-f]{56}") || pool.startsWith("pool1"))) throw new BadCall("a pool id (hex or bech32)");
         return handle(runtime, params).delegateTo(pool, caller, cosigners.toArray(new Account[0]));
     }
 
@@ -767,13 +870,13 @@ public final class DescribedContract {
     public String collect(StateRuntime runtime, Account caller, JsonNode params, BigInteger amount, JsonNode args,
                           List<Account> cosigners) {
         JsonNode meta = purposeMeta("withdraw");
-        if (meta.path("ctx").asBoolean()) throw new IllegalArgumentException(meta.path("name").asText() + ": a @Withdraw taking Ctx: not supported yet (ADR-0015 M3)");
-        if (amount == null || amount.signum() < 0) throw new IllegalArgumentException("a reward amount (the whole balance)");
+        if (meta.path("ctx").asBoolean()) throw new BadCall(meta.path("name").asText() + ": a @Withdraw taking Ctx: not supported yet (ADR-0015 M3)");
+        if (amount == null || amount.signum() < 0) throw new BadCall("a reward amount (the whole balance)");
         if (args == null) args = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
         var names = new ArrayList<String>();
         meta.path("args").forEach(a -> names.add(a.get("name").asText()));
         args.fieldNames().forEachRemaining(n -> {
-            if (!names.contains(n)) throw new IllegalArgumentException("unknown argument " + n);
+            if (!names.contains(n)) throw new BadCall("unknown argument " + n);
         });
         var byName = new java.util.HashMap<String, PlutusData>();
         for (JsonNode a : meta.path("args")) {
@@ -808,7 +911,7 @@ public final class DescribedContract {
     /** The intent entry of the batched action {@code method}: its IntentCall constructor, arguments and recipe. */
     JsonNode intentMeta(String method) {
         for (JsonNode i : x.path("intents").path("calls")) if (i.path("name").asText().equals(method)) return i;
-        throw new IllegalArgumentException(name + " has no @Batched action " + method);
+        throw new BadCall(name + " has no @Batched action " + method);
     }
 
     /**
@@ -817,9 +920,9 @@ public final class DescribedContract {
      */
     public IntentCodec<PlutusData> intents(JsonNode params) {
         JsonNode in = x.get("intents");
-        if (in == null) throw new IllegalArgumentException(name + " has no @Batched actions");
-        if (x.path("assetAware").asBoolean()) throw new IllegalArgumentException(name + ": batches of an asset-aware contract: not supported yet (ADR-0015 M3)");
-        if (spec.layout().hasMaps()) throw new IllegalArgumentException(name + ": batches over MerkleMaps: not supported yet (ADR-0015 M3)");
+        if (in == null) throw new BadCall(name + " has no @Batched actions");
+        if (x.path("assetAware").asBoolean()) throw new BadCall(name + ": batches of an asset-aware contract: not supported yet (ADR-0015 M3)");
+        if (spec.layout().hasMaps()) throw new BadCall(name + ": batches over MerkleMaps: not supported yet (ADR-0015 M3)");
         PlutusData paramsData = x.has("params") && params != null ? codec.encode(x.get("params"), params, "params") : null;
         int create = in.path("create").path("index").asInt();
         int batch = in.path("batch").path("index").asInt();
@@ -865,7 +968,7 @@ public final class DescribedContract {
                 var c = (PlutusData.ConstrData) call;
                 JsonNode meta = null;
                 for (JsonNode i : in.path("calls")) if (i.path("call").path("index").asInt() == c.tag()) meta = i;
-                if (meta == null) throw new IllegalArgumentException("not an intent call of " + name + ": constructor " + c.tag());
+                if (meta == null) throw new BadCall("not an intent call of " + name + ": constructor " + c.tag());
                 var byName = new java.util.HashMap<String, PlutusData>();
                 int k = 0;
                 for (JsonNode a : meta.path("args")) byName.put(a.get("name").asText(), c.fields().get(k++));
@@ -873,7 +976,7 @@ public final class DescribedContract {
                 for (JsonNode n : meta.path("recipe").path("transitionArgs")) {
                     String a = n.asText();
                     if (a.equals("$params")) layout.add(paramsData);
-                    else if (a.startsWith("$")) throw new IllegalArgumentException(meta.path("name").asText() + ": " + a + " in a batched action: not supported yet (ADR-0015 M3)");
+                    else if (a.startsWith("$")) throw new BadCall(meta.path("name").asText() + ": " + a + " in a batched action: not supported yet (ADR-0015 M3)");
                     else layout.add(byName.get(a));
                 }
                 var r = fn.run(meta.path("recipe").path("transition").asText(), state, NONE,
@@ -891,12 +994,12 @@ public final class DescribedContract {
     public String intent(StateRuntime runtime, Account owner, String method, String instance, JsonNode args,
                          BigInteger received, JsonNode params, long deadlineMs) {
         JsonNode meta = intentMeta(method);
-        if (!meta.path("payable").asBoolean() && received.signum() != 0) throw new IllegalArgumentException(method + " is not payable");
-        if (args == null || !args.isObject()) throw new IllegalArgumentException("args must be an object");
+        if (!meta.path("payable").asBoolean() && received.signum() != 0) throw new BadCall(method + " is not payable");
+        if (args == null || !args.isObject()) throw new BadCall("args must be an object");
         var names = new ArrayList<String>();
         meta.path("args").forEach(a -> names.add(a.get("name").asText()));
         args.fieldNames().forEachRemaining(n -> {
-            if (!names.contains(n)) throw new IllegalArgumentException("unknown argument " + n);
+            if (!names.contains(n)) throw new BadCall("unknown argument " + n);
         });
         var fields = new ArrayList<PlutusData>();
         for (JsonNode a : meta.path("args")) {
@@ -911,7 +1014,7 @@ public final class DescribedContract {
 
     /** Withdraws a pending intent (its owner signs): burns its token and returns what it holds. */
     public String cancelIntent(StateRuntime runtime, Account owner, String instance, String intentId, JsonNode params) {
-        if (intentId == null || !intentId.matches("49[0-9a-f]{56}")) throw new IllegalArgumentException("an intent id is 0x49 and 28 bytes, in hex");
+        if (intentId == null || !intentId.matches("49[0-9a-f]{56}")) throw new BadCall("an intent id is 0x49 and 28 bytes, in hex");
         var at = handle(runtime, params).at(requireInstance(instance));
         return IntentHandle.at(at, intents(params), intentId).cancel(owner);
     }
@@ -938,7 +1041,8 @@ public final class DescribedContract {
         return out;
     }
 
-    static final int MAX_READ_ROUNDS = 4;
+    /** The read limit of one call's MerkleMap read discovery (ADR-0015 D3), far above what one transaction can prove. */
+    static final int MAX_MAP_READS = 128;
 
     /** The current state of {@code instance}, as JSON by the description's state schema. */
     public JsonNode state(StateRuntime runtime, String instance) {

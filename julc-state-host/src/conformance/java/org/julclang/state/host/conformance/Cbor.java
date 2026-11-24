@@ -12,9 +12,11 @@ final class Cbor {
     final BigInteger argument;
     final int payload;
     final List<Cbor> items;
+    /** Protocol 1's Plutus data bound (256 CBOR levels) plus the transaction and witness framing around a redeemer. */
+    static final int MAX_DEPTH = 256 + 16;
 
     private Cbor(byte[] source, int start, int depth) {
-        require(depth < 64 && start < source.length);
+        require(depth < MAX_DEPTH && start < source.length);
         this.source = source;
         this.start = start;
         int header = source[start] & 255;

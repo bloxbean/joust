@@ -278,6 +278,9 @@ public final class JoustServer {
         BigInteger lovelace = pay.has("lovelace") ? (BigInteger) JsonValues.fromJson(pay.get("lovelace"), BigInteger.class, "pay.lovelace") : BigInteger.ZERO;
         String instance = req.path("instance").isTextual() ? req.get("instance").asText() : null;
         String object = req.path("object").isTextual() ? req.get("object").asText() : null;
+        // ADR-0016 D11: this service designates no input, so it serves no keyed call. The shared adapter dispatches
+        // keyed kinds since ADR-0022 M3 (for the dev host, which designates); keep this service's answer as it was.
+        if (kind.startsWith("keyed")) throw new BadRequest("unknown kind " + kind);
         Object[] made = new Object[1];
         PreparedTx p = Compose.of(runtime, wallet)
                 .add(() -> made[0] = asBefore(meta.get("name").asText(),

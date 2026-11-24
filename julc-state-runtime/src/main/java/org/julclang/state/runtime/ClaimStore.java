@@ -77,6 +77,15 @@ public interface ClaimStore {
     }
 
     /**
+     * Whether a reserved transaction of this store, not yet final, creates, spends or burns the token {@code unit}
+     * (policy ++ name, lowercase hex): a key it inserts may still be rolled back, so a second insert of that key waits
+     * instead of failing for good (ADR-0022 D11, #156 Codex review). False by default.
+     */
+    default boolean reservesToken(String unit) {
+        return false;
+    }
+
+    /**
      * Whether {@code ref}, an input this store {@linkplain #avoids avoids}, is reserved for the operation the current
      * call retries (ADR-0022 D11). A host matches the persisted operation record for this call, including its instance
      * and key, before granting reuse. The input reference alone does not identify the operation. False by default: an

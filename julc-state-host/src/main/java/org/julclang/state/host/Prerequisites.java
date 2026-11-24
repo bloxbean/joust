@@ -51,28 +51,30 @@ final class Prerequisites {
                         || method.path("returns").path("deposits").asBoolean() || method.at("/policies/receives").asBoolean();
             }
         }
-        if (contract.spec().stakeSelf() || withdraw || x.has("purposes")) {
+        if (contract.stakeSelf() || withdraw || x.has("purposes")) {
             addresses.put("reward", handle.rewardAddress());
             hashes.put("stake", handle.policyId());
         }
         if (withdraw) possible.add("stakeRegistration:" + handle.policyId());
         if (withdraw && checkRegistration)
             component("stakeRegistration", handle.rewardAddress(), handle.policyId(), registered(handle.policyId()), null);
-        if (sends) {
-            var v = handle.runtime().outputVerifier();
-            addresses.put("outputVerifier", v.holder()).put("outputVerifierReward", v.rewardAddress());
-            hashes.put("outputVerifier", v.hash());
-            for (String kind : List.of("referenceScript", "stakeRegistration", "verifier")) possible.add(kind + ":" + v.hash());
-            boolean script = reference("outputVerifier", v.holder(), v.hash());
-            if (checkRegistration) {
-                Boolean registration = registered(v.hash());
-                if (!script && Boolean.FALSE.equals(registration)) {
-                    component("verifier", v.holder(), v.hash(), false, v);
-                } else {
-                    component("referenceScript", v.holder(), v.hash(), script, v);
-                    component("stakeRegistration", v.rewardAddress(), v.hash(), registration, v);
-                    if (script && Boolean.TRUE.equals(registration)) satisfied.add("verifier:" + v.hash());
-                }
+        if (sends) verifier("outputVerifier", handle.runtime().outputVerifier(), checkRegistration);
+        if (contract.maps()) verifier("mapVerifier", handle.runtime().mapVerifier(), checkRegistration);
+    }
+
+    private void verifier(String label, VerifierHandle v, boolean checkRegistration) {
+        deployment.withObject("/addresses").put(label, v.holder()).put(label + "Reward", v.rewardAddress());
+        deployment.withObject("/scriptHashes").put(label, v.hash());
+        for (String kind : List.of("referenceScript", "stakeRegistration", "verifier")) possible.add(kind + ":" + v.hash());
+        boolean script = reference(label, v.holder(), v.hash());
+        if (checkRegistration) {
+            Boolean registration = registered(v.hash());
+            if (!script && Boolean.FALSE.equals(registration)) {
+                component("verifier", v.holder(), v.hash(), false, v);
+            } else {
+                component("referenceScript", v.holder(), v.hash(), script, v);
+                component("stakeRegistration", v.rewardAddress(), v.hash(), registration, v);
+                if (script && Boolean.TRUE.equals(registration)) satisfied.add("verifier:" + v.hash());
             }
         }
     }

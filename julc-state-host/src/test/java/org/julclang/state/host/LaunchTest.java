@@ -97,7 +97,7 @@ class LaunchTest {
     }
     @Test void methodPoliciesConstrainThePlainCallMatrix() {
         var spec = org.julclang.state.examples.counter.CounterClient.SPEC;
-        var c = new Contracts.Contract("Counter", obj(), spec, null, "", null);
+        var c = new Contracts.Contract("Counter", obj(), spec.hasKeyed(), spec.stakeSelf(), null, null, "", null, true);
         assertNull(c.code("action", obj()));
         assertEquals("keyed", c.code("keyedRemove", obj()));
         assertNull(c.code("view", obj()));

@@ -14,7 +14,7 @@ import static org.julclang.state.host.Wire.*;
 /** D5a projections of the balanced body. Runtime metadata supplies only attribution and amounts owed. */
 final class Effects {
     static ObjectNode of(Contracts.Contract c, JsonNode meta, JsonNode plan, PreparedTx prepared, String address,
-                         String instance, String object, String spent) {
+                         String instance, String object, String spent, String outputReward) {
         var out = obj().putNull("state");
         var objects = out.putArray("objects");
         var events = out.putArray("events");
@@ -30,14 +30,27 @@ final class Effects {
                 out.set("state", datums.decode(str(o, "datum"), "instance")
                         .put("predicted", true).put("index", i).put("instance", instance));
             }
-            if (object != null && value.path(c.hash() + object).asText().equals("1")) {
+            if (c.keyed()) for (var units = value.fieldNames(); units.hasNext();) {
+                String unit = units.next();
+                if (!unit.startsWith(c.hash() + "4b") || unit.length() != c.hash().length() + 58) continue;
+                var decoded = datums.decode(str(o, "datum"), "keyed");
+                String effect = plan.path("mint").path(unit).asText().equals("1") ? "created"
+                        : decoded.path("type").asText().startsWith("Retired_") && meta.path("kind").asText().equals("keyedRetire") ? "retired" : "updated";
+                objects.add(decoded.put("predicted", true).put("index", i).put("object", unit.substring(c.hash().length())).put("effect", effect));
+            }
+            if (object != null && !meta.path("kind").asText().startsWith("keyed") && value.path(c.hash() + object).asText().equals("1")) {
                 var decoded = datums.decode(str(o, "datum"), "owned");
                 objects.add(decoded.put("predicted", true).put("index", i).put("object", object)
                         .put("effect", plan.path("mint").path(c.hash() + object).asText().equals("1") ? "created" : "updated"));
             }
         }
-        if (object != null && plan.path("mint").path(c.hash() + object).asText().equals("-1"))
+        if (object != null && !meta.path("kind").asText().startsWith("keyed") && plan.path("mint").path(c.hash() + object).asText().equals("-1"))
             objects.addObject().put("predicted", true).put("effect", "removed").put("object", object);
+
+        if (meta.path("kind").asText().equals("keyedRemove")) plan.path("mint").fields().forEachRemaining(m -> {
+            if (m.getKey().startsWith(c.hash() + "4b") && m.getValue().asText().equals("-1"))
+                objects.addObject().put("predicted", true).put("effect", "removed").put("object", m.getKey().substring(c.hash().length()));
+        });
 
         for (var p : prepared.payouts()) {
             boolean found = false;
@@ -51,22 +64,18 @@ final class Effects {
             // As for sends: a payout the build recorded must be in the body (final review F-B1).
             if (!found) throw new IllegalStateException("a recorded payout has no output in the body");
         }
-        sends(prepared, plan, outputs, spent, sends);
+        sends(prepared, plan, outputs, spent, sends, outputReward);
         if (meta.at("/returns/events").asBoolean()) events(c, meta, plan, spent, events);
         return out;
     }
 
-    private static void sends(PreparedTx prepared, JsonNode plan, JsonNode outputs, String spent, ArrayNode sends) {
+    private static void sends(PreparedTx prepared, JsonNode plan, JsonNode outputs, String spent, ArrayNode sends, String outputReward) {
         if (prepared.sends().isEmpty()) return;
         var metadata = new HashMap<Integer, PreparedTx.Send>();
         prepared.sends().forEach(s -> metadata.put(s.index(), s));
-        // M1 permits only the output verifier's zero withdrawal on a send (BodyBalance.checkCall), so its reward
-        // pointer is 0. A body with another withdrawal fails closed here until the pointer is located (#151 DB7).
-        var withdrawals = prepared.transaction().getBody().getWithdrawals();
-        if (withdrawals == null || withdrawals.size() != 1)
-            throw new IllegalStateException("a send needs exactly the output verifier's withdrawal");
+        int pointer = MapWithdrawal.pointer(prepared.transaction(), outputReward);
         for (var r : plan.required("redeemers")) {
-            if (!"reward".equals(r.path("tag").asText()) || r.required("index").asInt() != 0) continue;
+            if (!"reward".equals(r.path("tag").asText()) || r.required("index").asInt() != pointer) continue;
             var claims = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(ContractDatums.parse(str(r, "data"))),
                     OutputClaims.class);
             for (var claim : claims.claims()) {

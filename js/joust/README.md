@@ -20,6 +20,16 @@ project's root, pins each one the build uses by the hash of its on-chain sources
 the only part of a package the build compiles); a build with a library that is not pinned, or that changed, fails until
 it is accepted with `joust build --accept-lock` (ADR-0018 J12). `joust build --traces` keeps the contracts' traces in the scripts.
 
+## `joust-host --stdio`
+
+An IDE or another protocol-1 client can launch the dev host after `joust build`. Run the installed entry from the project root.
+
+```sh
+node node_modules/@julclang/joust/bin/joust-host.js --stdio
+```
+
+The client sends the build fingerprint, network, clock and limits in `initialize` and answers `chain/read` requests. The host loads the build and runtime engine into a worker, returns unsigned transactions, and reports diagnostics on stderr. Its `view` method reads instance state. Named views require the JVM host. The client owns signing, submission and the recovery journal. [Launch, digest and wire protocol](../../docs/protocol/dev-host-1.md#npm-host).
+
 ## The build engine's limits
 
 `joust build` (and `joust dev`) runs the compiler engine on a worker thread with these limits, set in the environment;

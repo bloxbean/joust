@@ -16,8 +16,23 @@ public interface TransitionFn {
 
     PlutusData apply(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx);
 
-    /** One run: the step, or the refusal's message (step null); and the run's traces (MerkleMap read discovery). */
-    record Run(PlutusData step, String refusal, java.util.List<String> traces) {}
+    /**
+     * One run: the step, or the refusal's message (step null); and the run's traces (MerkleMap read discovery).
+     * {@code failure}: a failed run's error (not a refusal), raised only once its traces report no unknown read: a key the
+     * run answered as absent may change its path (#160 Codex review).
+     */
+    record Run(PlutusData step, String refusal, java.util.List<String> traces, Throwable failure) {
+        public Run(PlutusData step, String refusal, java.util.List<String> traces) {
+            this(step, refusal, traces, null);
+        }
+
+        /** Throws {@code failure}, if any. */
+        public void raise() {
+            if (failure instanceof RuntimeException e) throw e;
+            if (failure instanceof Error e) throw e;
+            if (failure != null) throw new IllegalStateException(failure);
+        }
+    }
 
     /** As {@link #apply}, keeping the traces and returning a refusal instead of throwing it. */
     default Run run(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {

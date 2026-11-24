@@ -35,7 +35,11 @@ class HostVectorsTest {
             pair.set("answer", a);
             return a;
         });
-        if (feature != null) {
+        if ("cooldown".equals(feature)) {
+            error("refusal","cooldown",response);
+            vector.putObject("expected").put("kind","refusal").put("code","cooldown")
+                    .set("retryAtSlot",response.required("error").required("data").required("retryAtSlot"));
+        } else if (feature != null) {
             error("unsupported", feature, response);
             vector.put("feature", feature);
             vector.putObject("expected").put("kind", "unsupported").put("code", feature);
@@ -65,6 +69,12 @@ class HostVectorsTest {
     }
 
     static void replay(JsonNode v) throws Exception {
+        if ("maps".equals(v.path("feature").textValue())) {
+            // Preserve the historical M1b request. A maps host now asks for prerequisite evidence.
+            var current = run(v,q -> obj().put("unsupported",true).set("tip",ReadsTest.point(v.at("/params/now").asLong())));
+            error("unsupported","read:utxos",current);
+            return;
+        }
         var reads = v.required("reads").elements();
         var response = run(v, q -> {
             assertTrue(reads.hasNext(), q::toString);
@@ -73,8 +83,25 @@ class HostVectorsTest {
             return pair.required("answer");
         });
         assertFalse(reads.hasNext(), "unused recorded read");
+        checkOutcome(v, response);
+    }
+
+    /** The vector's recorded outcome against a host's response (here, and in the traced forked session). */
+    static void checkOutcome(JsonNode v, JsonNode response) throws Exception {
         var expected = v.required("expected");
-        if (v.has("feature")) {
+        if (expected.has("kind")) {
+            if (!v.has("feature")) {
+                error(str(expected,"kind"),str(expected,"code"),response);
+                if (expected.has("retryAtSlot")) assertEquals(expected.get("retryAtSlot"),response.at("/error/data/retryAtSlot"));
+                return;
+            }
+            if ("keyed".equals(v.path("feature").textValue())) {
+                // ADR-0022 D11 supersedes the M1b unsupported reply. Preserve its original wire fixture.
+                var current = JSON.readTree(DIRECTORY.resolve("keyed-needs-designated.json").toFile());
+                assertEquals(current.required("params"),v.required("params"));
+                error(str(current.required("expected"),"kind"),str(current.required("expected"),"code"),response);
+                return;
+            }
             assertEquals(v.get("feature"), expected.required("code"));
             error("unsupported", str(expected,"code"), response);
         } else {
@@ -99,6 +126,22 @@ class HostVectorsTest {
         }
         Assumptions.assumeFalse(tests.isEmpty(), "no DevKit host vectors recorded");
         return tests;
+    }
+
+    static final List<String> TOKEN = List.of("Token-publish-1","Token-publish-2","Token-publish-3","Token-init",
+            "Token-mint","Token-transfer","Token-mint-again");
+
+    @Test void freshDevKitTokenWorkflow() throws Exception {
+        Assumptions.assumeTrue(Files.exists(DIRECTORY.resolve("Token-init.json")), "record maps on a fresh DevKit");
+        for (var name : TOKEN) replay(JSON.readTree(DIRECTORY.resolve(name+".json").toFile()));
+    }
+
+    static final List<String> REGISTRY = List.of("Registry-publish-1","Registry-init","Registry-grant-62","Registry-grant-61",
+            "Registry-cooldown","Registry-remove","Registry-retire");
+
+    @Test void freshDevKitRegistryWorkflow() throws Exception {
+        Assumptions.assumeTrue(Files.exists(DIRECTORY.resolve("Registry-init.json")), "record the keyed workflow on a fresh DevKit");
+        for (var name : REGISTRY) replay(JSON.readTree(DIRECTORY.resolve(name+".json").toFile()));
     }
 
     /** Historical bounded counterpart of M0 Dex 0003 (§9). Yaci Store cannot supply a live negative registration read. */
@@ -149,8 +192,6 @@ class HostVectorsTest {
         var vectors = new LinkedHashMap<String, ObjectNode>();
         for (var example : List.of(
                 new Example("params", org.julclang.state.examples.treasury.TreasuryClient.class,"action","pay"),
-                new Example("maps", org.julclang.state.examples.token.TokenClient.class,"init","create"),
-                new Example("keyed", org.julclang.state.examples.registry.RegistryClient.class,"init","init"),
                 new Example("authorizedBy", org.julclang.state.host.fixture.HostCouncilClient.class,"action","veto"),
                 new Example("unverifiable", org.julclang.state.examples.pool.PoolClient.class,"action","donate"))) {
             var p = obj().put("now",now).put("ttlSlots",ttl);
@@ -169,7 +210,7 @@ class HostVectorsTest {
 
     @Test void everyUnsupportedFeatureReplaysWithItsTypedCodeBeforeARead() throws Exception {
         var r = IntegrationTest.record();
-        assertEquals(5, unsupportedVectors(init(),r.params().required("now").asLong(),20,
+        assertEquals(3, unsupportedVectors(init(),r.params().required("now").asLong(),20,
                 r.params().at("/call/address").asText()).size());
     }
 

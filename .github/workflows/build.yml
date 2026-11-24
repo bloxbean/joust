@@ -446,6 +446,7 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/setup-js.sh
+          ./gradlew :julc-state-host:nodeHostConformance
           # #130 r1 (design D3): migrate was removed with .jsc v1 (#111); M5d's fmt and write-regular run here.
           (cd js/joust && ../../scripts/node-test.sh joust --test-concurrency=1 test/abi.test.js test/cold-engine.test.js \
             test/fmt.test.js test/libraries.test.js test/offline-ledger.test.js test/sources.test.js test/worker-limits.test.js \

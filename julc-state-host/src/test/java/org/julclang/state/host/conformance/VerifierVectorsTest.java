@@ -18,10 +18,22 @@ class VerifierVectorsTest {
      * Checks no vector can decide alone, because every body that fails them also fails the named check. Each entry says
      * why; everyCheckDecidesSomeVector fails for any other check without a vector of its own.
      */
-    static final Map<String,String> IMPLIED = Map.of(
-            "network/client", "network/output and collateral/returnAddress: every body pays change or a collateral return to the payer",
-            "scriptInput/target", "pointer/method (a spend redeemer must point at the target) and redeemer/count",
-            "redeemer/publication", "collateral/none and collateral/present: a redeemer needs collateral, which a publication may not have");
+    static final Map<String,String> IMPLIED = Map.ofEntries(
+            Map.entry("network/client", "network/output and collateral/returnAddress: every body pays change or a collateral return to the payer"),
+            Map.entry("scriptInput/target", "pointer/method (a spend redeemer must point at the target) and redeemer/count"),
+            Map.entry("redeemer/publication", "collateral/none and collateral/present: a redeemer needs collateral, which a publication may not have"),
+            Map.entry("continuingOutput/keyedConsumed", "a list unit no rule consumes comes from the wallet (netOutflow/keyedWallet), a mint (mint/keyed*) or a second predecessor (scriptInput/keyedAnchor)"),
+            Map.entry("keyedInputValue/ctx", "a removal method without Ctx is not verifiable (notVerifiable/classify#keyedRemoveCtx)"),
+            Map.entry("keyedLink/size", "a canonical relinked output (continuingOutput/keyedCanonicalOutput) differs from its predecessor only where keyedLink/relink, keyedLink/fields and scriptInput/keyedInstance allow"),
+            Map.entry("mint/keyedInsert", "a list unit is exactly one in its output (continuingOutput/keyedOutput#single), so another quantity cannot balance"),
+            Map.entry("scriptInput/keyedAnchor", "a second predecessor's unit must be continued (continuingOutput/keyedConsumed) or burnt (mint/keyedRemove)"),
+            Map.entry("scriptInput/keyedInput", "its parts are equivalent: see EQUIVALENT"),
+            Map.entry("scriptInput/keyedRoles", "its parts are equivalent: see EQUIVALENT"),
+            Map.entry("scriptInput/keyedTarget", "two inputs cannot carry the target key's one unit"),
+            Map.entry("mapClaims/encoding", "the typed MapClaims conversion itself refuses extra fields and other alternatives (mapClaims/decode)"));
+
+    /** Checks with no vector yet and no proof that another check decides their bodies: follow-ups. */
+    static final Map<String,String> UNCOVERED_CHECKS = Map.of();
 
     @TestFactory List<DynamicTest> isolatedRejections() {
         return cases().stream().map(m -> DynamicTest.dynamicTest(m.name(), () -> {
@@ -59,7 +71,7 @@ class VerifierVectorsTest {
     static Set<String> sites() throws Exception {
         var sites = new TreeSet<String>();
         var literal = Pattern.compile("\"([a-z][A-Za-z]*/[a-z][A-Za-z]*)\"");
-        for (String file : List.of("ReferenceChecker.java","CallRules.java")) {
+        for (String file : List.of("ReferenceChecker.java","CallRules.java","KeyedRules.java")) {
             String source = Files.readString(SOURCES.resolve(file));
             literal.matcher(source).results().forEach(r -> sites.add(r.group(1)));
             // Every check names its site literally, so none escapes the enumeration.
@@ -78,8 +90,10 @@ class VerifierVectorsTest {
         for (var m : cases()) if (m.site()!=null && m.site().contains("/")) targeted.add(m.site());
         var expected = new TreeSet<>(targeted);
         expected.addAll(IMPLIED.keySet());
+        expected.addAll(UNCOVERED_CHECKS.keySet());
         assertEquals(expected,sites,"every check has a vector of its own, or is listed as implied");
         for (String site : IMPLIED.keySet()) assertFalse(targeted.contains(site),site);
+        for (String site : UNCOVERED_CHECKS.keySet()) assertFalse(targeted.contains(site),site+" has a vector now: remove it from UNCOVERED_CHECKS");
         var vectors = new ArrayList<JsonNode>();
         try (var files = Files.list(DIR)) { for (var f : files.sorted().toList()) vectors.add(JSON.readTree(f.toFile())); }
         return targeted.stream().map(site -> DynamicTest.dynamicTest(site,() -> {
@@ -98,7 +112,7 @@ class VerifierVectorsTest {
      */
     static Set<String> parts() throws Exception {
         var parts = new TreeSet<String>();
-        for (String file : List.of("ReferenceChecker.java","CallRules.java")) {
+        for (String file : List.of("ReferenceChecker.java","CallRules.java","KeyedRules.java")) {
             String source = Files.readString(SOURCES.resolve(file));
             Pattern.compile("\"([a-z][A-Za-z]*/[a-z][A-Za-z]*#[a-z][A-Za-z]*)\"").matcher(source).results().forEach(r -> parts.add(r.group(1)));
             // clean(site, output) names three parts of its site.
@@ -130,7 +144,30 @@ class VerifierVectorsTest {
             Map.entry("redeemer/seed#creation", "only creation constructors carry a seed in a description the kit anchors"),
             Map.entry("redeemer/seed#index", "#walletInput requires a spent wallet input, whose index is below 65,536 in any transaction"),
             Map.entry("withdrawal/allowed#call", "a publication has no method, so no sends (#sends)"),
-            Map.entry("withdrawal/allowed#single", "a second withdrawal needs another reward account, which withdrawal/account refuses"));
+            Map.entry("withdrawal/allowed#single", "a second withdrawal needs another reward account, which withdrawal/account refuses"),
+            Map.entry("continuingOutput/keyedOutput#datum", "a list output without an inline datum cannot be read as its role, so the body is malformed"),
+            Map.entry("continuingOutput/keyedOutput#single", "another unit in a list output comes from the wallet (netOutflow/keyedWallet) or a mint (mint/keyed*)"),
+            Map.entry("continuingOutput/keyedOutput#unique", "a unit in two outputs needs two tokens: the mint rules and the balance refuse it"),
+            Map.entry("continuingOutput/keyedUpdate#key", "the key derives the unit (keyedToken/unit)"),
+            Map.entry("keyedLink/relink#role", "the predecessor as a head or tombstone changes its later fields (keyedLink/fields) or its unit (keyedToken/unit)"),
+            Map.entry("keyedWindow/bounds#present", "a missing bound reads as 0, which #startAfterNow refuses"),
+            Map.entry("scriptInput/keyedInput#address", "an input elsewhere is not the contract's, which scriptInput/foreign refuses"),
+            Map.entry("scriptInput/keyedInput#quantity", "a list unit is one per output (continuingOutput/keyedOutput#single); more cannot balance"),
+            Map.entry("scriptInput/keyedRoles#anchor", "without its predecessor the removal or insert dereferences it and the body is malformed"),
+            Map.entry("scriptInput/keyedRoles#target", "without its target the call's spend redeemer cannot be found and the body is malformed"),
+            Map.entry("mapWithdrawal/withdrawal#present", "without the map verifier's withdrawal its claims cannot be found (mapClaims/decode)"),
+            Map.entry("mapWithdrawal/withdrawal#account", "another reward account on a map call needs a redeemer of its own (redeemer/count) or takes the claims' pointer"));
+
+    /**
+     * Parts with no deciding vector yet, and no proof of equivalence. Follow-ups: each must still change no verdict, so a
+     * vector that starts to decide one forces its removal from this list.
+     */
+    static final Map<String,String> UNCOVERED = Map.of(
+            "continuingOutput/keyedInsert#signedKey", "needs a recorded insert of a signed-key type (Registry's Ballot cast)",
+            "continuingOutput/keyedInsert#signedKeySigner", "needs a recorded insert of a signed-key type (Registry's Ballot cast)",
+            "deposit/keyedHead#maxTop", "needs a head output whose minimum exceeds minAda by 10 ADA (over 2,300 bytes)",
+            "keyedLink/relink#width", "needs a client clock giving link times outside 33 to 64 bits, with every Ctx and linkedAt re-derived",
+            "notVerifiable/keyedCall#payment", "needs a recorded keyed call to a non-payable method without Ctx (Registry's change or recover)");
 
     /**
      * Parts only a positive in which a script releases value to a third party can decide. No M1 recording has one: the
@@ -143,7 +180,10 @@ class VerifierVectorsTest {
             "netOutflow/third#target", "what the target releases to a third party",
             "netOutflow/third#mint", "what a mint releases to a third party",
             "netOutflow/third#payment", "what a spend pays others out of the payment its redeemer binds (the recorded " +
-                    "Market.buy is still refused for the buyer-funded minimum ADA of its NFT send, #170)");
+                    "Market.buy is still refused for the buyer-funded minimum ADA of its NFT send, #170)",
+            // The derived Registry payout to a stranger decided it, but the validator pays a release's refund to the
+            // entry's owner only, so that body fails the ledger gate (LedgerPositivesTest).
+            "netOutflow/keyedThird#released", "what a keyed removal releases to a third party");
 
     /**
      * DC10: equivalent parts whose reasons cite each other. Single-part mutation cannot see such a pair, so dropping both
@@ -182,6 +222,7 @@ class VerifierVectorsTest {
     @TestFactory List<DynamicTest> everyPartDecidesSomeVector() throws Exception {
         var parts = parts();
         assertTrue(parts.containsAll(EQUIVALENT.keySet()),"stale EQUIVALENT entry");
+        assertTrue(parts.containsAll(UNCOVERED.keySet()),"stale UNCOVERED entry");
         assertTrue(parts.containsAll(NEEDS_POSITIVE.keySet()),"stale NEEDS_POSITIVE entry");
         var vectors = new ArrayList<JsonNode>();
         try (var files = Files.list(DIR)) { for (var f : files.sorted().toList()) vectors.add(JSON.readTree(f.toFile())); }
@@ -190,6 +231,7 @@ class VerifierVectorsTest {
             long flipped = java.util.stream.IntStream.range(0,vectors.size())
                     .filter(i -> ReferenceChecker.check(vectors.get(i),Set.of(part)).isEmpty()!=verdicts.get(i)).count();
             if (EQUIVALENT.containsKey(part)) assertEquals(0,flipped,part+" decides vectors now: remove it from EQUIVALENT");
+            else if (UNCOVERED.containsKey(part)) assertEquals(0,flipped,part+" decides vectors now: remove it from UNCOVERED");
             else if (NEEDS_POSITIVE.containsKey(part)) assertEquals(0,flipped,part+" decides vectors now: remove it from NEEDS_POSITIVE");
             else assertTrue(flipped>0,"no vector depends on "+part);
         })).toList();

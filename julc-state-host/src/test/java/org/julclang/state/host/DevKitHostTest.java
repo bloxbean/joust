@@ -11,6 +11,8 @@ import com.fasterxml.jackson.databind.node.*;
 import org.julclang.state.examples.devkit.DevKit;
 import org.julclang.state.examples.dex.DexClient;
 import org.julclang.state.examples.bank.BankClient;
+import org.julclang.state.examples.registry.RegistryClient;
+import org.julclang.state.examples.token.TokenClient;
 import org.julclang.state.host.fixture.HostCouncilClient;
 import org.julclang.state.runtime.SlotChainTime;
 import org.junit.jupiter.api.*;
@@ -35,6 +37,8 @@ class DevKitHostTest {
         final ArrayNode evidence = JSON.createArrayNode();
         final boolean recording;
         final long magic;
+        Path journal, mapJournal;
+        long highWaterMark;
 
         Node(boolean recording) throws Exception {
             var request = HttpRequest.newBuilder(URI.create(DevKit.ADMIN_URL + "/local-cluster/api/admin/devnet"))
@@ -79,6 +83,32 @@ class DevKitHostTest {
                                 assertTrue(r.isSuccessful(), r::getResponse);
                                 for (var u : r.getValue()) values.add(JSON.valueToTree(u));
                                 if (r.getValue().size() < 100) break;
+                            }
+                        }
+                        case "assetHistory" -> {
+                            int page = Integer.parseInt(q.path("cursor").asText("1"));
+                            var r = backend.getAssetService().getTransactions(str(q,"unit"),100,page,OrderEnum.asc);
+                            if (r.code() == 404) a.put("absent",true);
+                            else {
+                                assertTrue(r.isSuccessful(), r::getResponse);
+                                var list = a.putArray("value");
+                                for (var t : r.getValue()) list.addObject().put("txHash", t.getTxHash());
+                                if (r.getValue().size() == 100) a.put("more",Integer.toString(page+1));
+                            }
+                        }
+                        case "redeemers" -> {
+                            var r = backend.getTransactionService().getTransactionRedeemers(str(q,"txHash"));
+                            assertTrue(r.isSuccessful(), () -> "Yaci Store must serve /txs/{hash}/redeemers (its script store, on by default): " + r.getResponse());
+                            var list = a.putArray("value");
+                            for (var red : r.getValue()) list.addObject().put("purpose",red.getPurpose().name().toLowerCase(Locale.ROOT))
+                                    .put("index",red.getTxIndex()).put("dataHash",red.getRedeemerDataHash()).put("scriptHash",red.getScriptHash());
+                        }
+                        case "datum" -> {
+                            var r = backend.getScriptService().getScriptDatumCbor(str(q,"hash"));
+                            if (r.code()==404) a.put("absent",true);
+                            else {
+                                assertTrue(r.isSuccessful(),r::getResponse);
+                                a.put("value",r.getValue().getCbor());
                             }
                         }
                         case "stakeRegistration" -> a.put("unsupported", true);
@@ -149,6 +179,16 @@ class DevKitHostTest {
             byte[] bytes = HexFormat.of().parseHex(str(prepared,"cbor"));
             String hash = TransactionUtil.getTxHash(bytes);
             assertEquals(str(prepared,"txHash"), hash);
+            if (journal != null && Files.exists(journal)) {
+                var record = (ObjectNode)JSON.readTree(journal.toFile());
+                long validTo = Transaction.deserialize(bytes).getBody().getTtl();
+                record.withArray("attempts").addObject().put("txHash",hash).put("validTo",validTo);
+                highWaterMark = Math.max(highWaterMark, Math.addExact(validTo,2));
+                Files.writeString(journal.resolveSibling("high-water"),Long.toString(highWaterMark));
+                ClientVectors.write(journal,record);
+                Files.write(journal.resolveSibling(hash+".cbor"),bytes);
+                while (clock.tipSlot()<prepared.path("validFrom").asLong()) Thread.sleep(250);
+            }
             Transaction tx = payer.sign(Transaction.deserialize(bytes));
             for (var signer : extraSigners) tx = signer.sign(tx);
             assertEquals(hash, TransactionUtil.getTxHash(tx.serialize()));
@@ -181,8 +221,8 @@ class DevKitHostTest {
                 var query = obj().put("contract", name).put("now",clock.tipSlot());
                 var missing = success(c.rpc("prerequisites",query,this::answer));
                 if (fresh) assertFalse(missing.isEmpty(), "expected a fresh chain");
-                if (fresh && clientClass == DexClient.class) {
-                    assertEquals(3, missing.size(), "fresh Dex reference, verifier reference and unknown registration");
+                if (fresh && (clientClass == DexClient.class || clientClass == TokenClient.class)) {
+                    assertEquals(3, missing.size(), "fresh contract reference, verifier reference and unknown registration");
                     assertEquals("referenceScript", str(missing.get(0),"kind"));
                     assertEquals("referenceScript", str(missing.get(1),"kind"));
                     assertEquals("unknown", str(missing.get(2),"present"));
@@ -199,6 +239,14 @@ class DevKitHostTest {
                         assertion.putObject("evidence").put("txHash",str(built,"txHash")).put("slot",slot);
                     }
                     missing = success(c.rpc("prerequisites",query.put("now",clock.tipSlot()),this::answer));
+                }
+                if (clientClass == TokenClient.class) {
+                    token(c,init,entry,name);
+                    return;
+                }
+                if (clientClass == RegistryClient.class) {
+                    registry(c,init,name);
+                    return;
                 }
                 var args = obj();
                 String tokenPolicy = null;
@@ -258,24 +306,117 @@ class DevKitHostTest {
             }
         }
 
+        void token(Client c, ObjectNode init, Path entry, String contract) throws Exception {
+            var created = build(c,init,"Token-init","prepare",params(call(contract,"init","create",obj())));
+            submit(c,created);
+            String instance = str(created,"instance");
+            var mint = call(contract,"action","mint",obj().put("to",key(payer)).put("amount","100")).put("instance",instance);
+            var pending = build(c,init,"Token-mint","prepare",params(mint));
+            var saved = obj().put("complete",true);
+            saved.putArray("transactions").addObject().put("state","prepared").set("cbor",pending.required("cbor"));
+            ClientVectors.write(mapJournal,saved);
+            Files.writeString(mapJournal.resolveSibling("map-high-water"),
+                    Long.toString(Math.addExact(pending.required("validTo").asLong(),2)));
+            c.close();
+            try (var restarted = new Client(new Handshake(List.of(entry)))) {
+                success(restarted.rpc("initialize",init.deepCopy().put("restoring",true)));
+                for (var assertion : evidence) success(restarted.rpc("registered",assertion));
+                var restore = JSON.readTree(mapJournal.toFile());
+                var id = success(restarted.rpc("restore",restore)).at("/reservations/0");
+                // The restored mint holds the state input.
+                error("refusal","pending",restarted.rpc("prepare",params(mint),this::answer));
+                ObjectNode imported = pending.deepCopy();
+                imported.set("reservation",id);
+                submit(restarted,imported);
+                success(restarted.rpc("reset",obj().put("now",clock.tipSlot())));
+                var transfer = call(contract,"action","transfer",obj().put("to",key(extra)).put("amount","10")).put("instance",instance);
+                submit(restarted,build(restarted,init,"Token-transfer","prepare",params(transfer)));
+                var view = obj().put("contract",contract).put("instance",instance).put("view","balanceOf").put("now",clock.tipSlot());
+                view.putObject("args").put("holder",key(payer));
+                assertEquals("90",success(restarted.rpc("view",view,this::answer)).required("value").asText());
+                // Each portable vector starts cold. Include all the history read by the independent replay.
+                success(restarted.rpc("reset",obj().put("now",clock.tipSlot())));
+                submit(restarted,build(restarted,init,"Token-mint-again","prepare",params(mint)));
+            }
+        }
+
+        ObjectNode designate(ObjectNode call) throws Exception {
+            var listing = answer(obj().put("kind","utxos").put("address",payer.baseAddress())).required("value");
+            // Choose and persist before asking, including an operation that might be refused without a body.
+            for (var u : listing) {
+                var amounts = u.required("amount");
+                if (amounts.size()!=1 || !"lovelace".equals(amounts.get(0).path("unit").asText()) ||
+                        amounts.get(0).path("quantity").asLong()<5_000_000 || u.hasNonNull("inline_datum") ||
+                        u.hasNonNull("data_hash") || u.hasNonNull("reference_script_hash")) continue;
+                call.put("designated",ClientVectors.ref(u));
+                ClientVectors.write(journal,RegistryRecording.operation(call));
+                return params(call);
+            }
+            throw new AssertionError("no ordinary funded input");
+        }
+
+        void registry(Client c,ObjectNode init,String contract) throws Exception {
+            var start = designate(call(contract,"init","init",obj()));
+            var built = build(c,init,"Registry-init","prepare",start);
+            submit(c,built);
+            String instance = str(built,"instance");
+            for (String key : List.of("62","61")) {
+                var call = call(contract,"keyedInit","grant",obj().put("name",key).put("owner",key(payer))).put("instance",instance);
+                var p = designate(call);
+                if (key.equals("61")) {
+                    // Both inserts use the head. The second relinks it before its cooldown has elapsed.
+                    call.putArray("pageLimits").add(0).add(900);
+                    var refused = HostVectorsTest.record("prepare",p.deepCopy(),init,evidence.deepCopy(),this::answer,"cooldown");
+                    assertTrue(refused.at("/expected/retryAtSlot").asLong()>p.required("now").asLong());
+                    vectors.put("Registry-cooldown",refused);
+                    Files.delete(journal); // refused first prepare, nothing handed out or reserved
+                    call.putArray("pageLimits").add(120).add(900);
+                    p = designate(call);
+                }
+                built = build(c,init,"Registry-grant-"+key,"prepare",p);
+                if (key.equals("61")) assertTrue(built.required("validFrom").asLong()>p.required("now").asLong());
+                submit(c,built);
+            }
+            var remove = call(contract,"keyedRemove","release",obj()).put("instance",instance).put("object","61");
+            remove.putArray("pageLimits").add(120).add(900);
+            submit(c,build(c,init,"Registry-remove","prepare",designate(remove)));
+            var retire = call(contract,"keyedRetire","retire",obj()).put("instance",instance).put("object","62");
+            submit(c,build(c,init,"Registry-retire","prepare",designate(retire)));
+        }
+
     }
 
-    @Test void freshChainDeployment() throws Exception {
+    @Test void freshChainDeployment(@org.junit.jupiter.api.io.TempDir Path directory) throws Exception {
         Assumptions.assumeTrue(Boolean.getBoolean("joust.host.e2e"), "enable -PjoustHostE2e on a fresh chain");
         assertTrue(DevKit.isReachable());
-        new Node(false).workflow(DexClient.class, true);
+        var node = new Node(false);
+        node.workflow(DexClient.class, true);
+        // Map contracts too (M3b), on the same fresh chain: Dex publishes neither Token nor the MapVerifier. CI's DevKit
+        // is the released one with Store's default configuration, so this also shows that the map history reads need
+        // no transaction CBOR.
+        node.mapJournal = directory.resolve("maps.json");
+        node.workflow(TokenClient.class, true);
     }
 
-    @Test void recordHostVectors() throws Exception {
+    @Test void recordHostVectors(@org.junit.jupiter.api.io.TempDir Path directory) throws Exception {
         Assumptions.assumeTrue(Boolean.getBoolean("joust.host.record"), "enable -PjoustHostFixtures on a fresh chain");
         assertTrue(DevKit.isReachable());
         var node = new Node(true);
-        node.workflow(DexClient.class,true);
-        node.workflow(HostCouncilClient.class,false);
-        node.workflow(BankClient.class,false);
-        node.vectors.putAll(HostVectorsTest.unsupportedVectors(node.initialize(counter()), node.clock.tipSlot(),
-                node.window().required("ttlSlots").asLong(), node.payer.baseAddress()));
-        node.vectors.put("Dex-combined-reconstructed", HostVectorsTest.combinedPublication());
+        if (Boolean.getBoolean("joust.host.mapsOnly")) {
+            node.mapJournal = directory.resolve("maps.json");
+            node.workflow(TokenClient.class,true);
+        } else {
+            if (!Boolean.getBoolean("joust.host.keyedOnly")) {
+                node.workflow(DexClient.class,true);
+                node.workflow(HostCouncilClient.class,false);
+                node.workflow(BankClient.class,false);
+                node.vectors.putAll(HostVectorsTest.unsupportedVectors(node.initialize(counter()), node.clock.tipSlot(),
+                        node.window().required("ttlSlots").asLong(), node.payer.baseAddress()));
+                node.vectors.put("Dex-combined-reconstructed", HostVectorsTest.combinedPublication());
+            }
+            node.journal = directory.resolve("operation.json");
+            node.workflow(RegistryClient.class,true);
+        }
         Files.createDirectories(HostVectorsTest.DIRECTORY);
         for (var v : node.vectors.entrySet())
             JSON.writerWithDefaultPrettyPrinter().writeValue(HostVectorsTest.DIRECTORY.resolve(v.getKey()+".json").toFile(),v.getValue());

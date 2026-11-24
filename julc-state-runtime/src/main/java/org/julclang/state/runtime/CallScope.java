@@ -21,6 +21,9 @@ public final class CallScope {
 
     private final boolean hosted;
 
+    /** A page's default limits for keyed windows, {@code {maxStartSlots, maxValiditySlots}} (ADR-0016 D7, ADR-0022 D11). */
+    public static final long DEFAULT_MAX_START_SLOTS = 60, DEFAULT_MAX_VALIDITY_SLOTS = 900;
+
     private CallScope(long now, long ttlSlots, long[] pageLimits, boolean hosted) {
         this.hosted = hosted;
         this.now = now;
