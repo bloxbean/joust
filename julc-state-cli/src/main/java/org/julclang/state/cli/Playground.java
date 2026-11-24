@@ -115,19 +115,18 @@ final class Playground {
         Path home = home();
         Path dir = home.resolve(key);
         try {
-            Files.createDirectories(home);
-            // A link is refused before any chmod: setting permissions would follow it to its target.
+            // A link is refused before anything else; an existing directory is checked, never changed (no chmod: one would
+            // follow a link, or take others' access away from a directory the user shares).
             if (Files.isSymbolicLink(home)) throw new Refused(home + ": a link; the playground's cache must be this user's own");
-            privateDir(home);
-            Optional<String> homeProblem = privateProblem(home);
-            if (homeProblem.isPresent()) throw new Refused(home + ": " + homeProblem.get() + "; the playground's cache must be this user's own");
+            homeIsSafe(home);
+            createPrivate(home);
+            homeIsSafe(home);
             sweepInstalls(home);
             Optional<String> problem = cacheProblem(dir, key);
             if (problem.isEmpty()) return bin(dir);
             if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) throw new Refused(dir + ": " + problem.get() + "; remove it and run again");
-            Path tmp = Files.createTempDirectory(home, ".install-");
+            Path tmp = posix(home) ? Files.createTempDirectory(home, ".install-", PRIVATE) : Files.createTempDirectory(home, ".install-");
             try {
-                privateDir(tmp);
                 // tmp is npm's local prefix: a project's or an ancestor's package.json and .npmrc are never consulted.
                 Files.writeString(tmp.resolve("package.json"), "{\"name\": \"joust-playground-cache\", \"private\": true}\n");
                 sys.out().println("joust playground: installing @julclang/joust " + version + " into " + dir + " (once)");
@@ -157,9 +156,76 @@ final class Playground {
         } catch (IOException e) {
             throw new Refused("cannot install into " + dir + ": " + e.getMessage());
         }
+        // The winner of a concurrent install, checked as a hit is: its directory and every directory above it.
+        homeIsSafe(home);
         Optional<String> problem = cacheProblem(dir, key);
         if (problem.isPresent()) throw new Refused(dir + ": " + problem.get() + "; remove it and run again");
         return bin(dir);
+    }
+
+    static final java.nio.file.attribute.FileAttribute<?> PRIVATE =
+            PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"));
+
+    static boolean posix(Path p) {
+        return p.getFileSystem().supportedFileAttributeViews().contains("posix");
+    }
+
+    /** Creates the missing directories of {@code dir}, each private from its creation (never chmod afterwards). */
+    static void createPrivate(Path dir) throws IOException {
+        java.util.ArrayDeque<Path> missing = new java.util.ArrayDeque<>();
+        for (Path p = dir.toAbsolutePath(); p != null && !Files.exists(p, LinkOption.NOFOLLOW_LINKS); p = p.getParent()) missing.push(p);
+        boolean posix = posix(dir);
+        while (!missing.isEmpty()) {
+            Path p = missing.pop();
+            try {
+                if (posix) Files.createDirectory(p, PRIVATE);
+                else Files.createDirectory(p);
+            } catch (java.nio.file.FileAlreadyExistsException e) {
+                // created meanwhile: checked below like any existing directory
+            }
+        }
+    }
+
+    /**
+     * The cache's home and its path are this user's to change only: the home itself (when it exists) private and this
+     * user's, and every directory above it, as written and as resolved, owned by this user or root and not writable by
+     * others unless sticky (/tmp): no other account can replace a component of the path after these checks.
+     */
+    void homeIsSafe(Path home) throws Refused {
+        Path abs = home.toAbsolutePath().normalize();
+        if (Files.exists(abs, LinkOption.NOFOLLOW_LINKS)) {
+            Optional<String> p = privateProblem(abs);
+            if (p.isPresent()) throw new Refused(abs + ": " + p.get() + "; the playground's cache must be this user's own");
+        }
+        java.util.LinkedHashSet<Path> above = new java.util.LinkedHashSet<>();
+        for (Path a = abs.getParent(); a != null; a = a.getParent()) if (Files.exists(a, LinkOption.NOFOLLOW_LINKS)) above.add(a);
+        Path deepest = abs;
+        while (deepest != null && !Files.exists(deepest)) deepest = deepest.getParent();
+        if (deepest != null) {
+            try {
+                Path real = deepest.toRealPath();
+                for (Path a = Files.exists(abs) ? real.getParent() : real; a != null; a = a.getParent()) above.add(a);
+            } catch (IOException e) {
+                throw new Refused("cannot resolve " + deepest + ": " + e.getMessage());
+            }
+        }
+        for (Path a : above) {
+            if (Files.isSymbolicLink(a)) continue;   // a link's target is checked as resolved; its own name, by its parent
+            Optional<String> owner = sys.owner(a);
+            if (owner.isPresent() && !owner.get().equals(sys.user()) && !owner.get().equals("0")) {
+                throw new Refused(a + " (above the playground's cache " + abs + ") is owned by another user (uid " + owner.get()
+                        + "): set " + HOME_ENV + " to a directory under your own");
+            }
+            try {
+                int mode = (Integer) Files.getAttribute(a, "unix:mode", LinkOption.NOFOLLOW_LINKS);
+                if ((mode & 0022) != 0 && (mode & 01000) == 0) {
+                    throw new Refused(a + " (above the playground's cache " + abs + ") is writable by others and not sticky: set "
+                            + HOME_ENV + " to a directory under your own");
+                }
+            } catch (UnsupportedOperationException | IllegalArgumentException | IOException ignored) {
+                // not POSIX: the user's profile directory is private already
+            }
+        }
     }
 
     /**
@@ -267,11 +333,4 @@ final class Playground {
         return v instanceof String s ? s : "(none)";
     }
 
-    private static void privateDir(Path dir) throws IOException {
-        try {
-            Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwx------"));
-        } catch (UnsupportedOperationException ignored) {
-            // not POSIX: the user's profile directory is private already
-        }
-    }
 }

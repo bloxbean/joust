@@ -356,6 +356,64 @@ class PlaygroundTest {
         assertThat(recent).exists();
     }
 
+    static String mode(Path p) throws IOException {
+        return PosixFilePermissions.toString(Files.getPosixFilePermissions(p));
+    }
+
+    static void chmod(String mode, Path p) throws Exception {
+        assertThat(new ProcessBuilder("chmod", mode, p.toString()).start().waitFor()).isZero();
+    }
+
+    @Test
+    void newCacheDirectoriesArePrivateFromCreationAndAnExistingHomeIsNeverChanged() throws Exception {
+        home = tmp.resolve("a/b/cache");
+        FakeSys s = sys(project);
+        s.env.put(Playground.HOME_ENV, home.toString());
+        s.onRun = r -> fakeInstall(r, "0.1.0-pre1-rc8");
+        assertThat(runOn(s)).isZero();
+        for (Path d : List.of(tmp.resolve("a"), tmp.resolve("a/b"), home, home.resolve("0.1.0-pre1-rc8"))) assertThat(mode(d)).as(d.toString()).isEqualTo("rwx------");
+        // An existing home others can read: refused, and left as it was (no chmod).
+        Path shared = Files.createDirectories(tmp.resolve("shared-home"));
+        Files.setPosixFilePermissions(shared, PosixFilePermissions.fromString("rwxr-xr-x"));
+        FakeSys t = sys(project);
+        t.env.put(Playground.HOME_ENV, shared.toString());
+        assertThat(runOn(t)).isEqualTo(1);
+        assertThat(t.errText()).contains("accessible to others");
+        assertThat(mode(shared)).isEqualTo("rwxr-xr-x");
+        assertThat(t.runs).isEmpty();
+    }
+
+    @Test
+    void everyDirectoryAboveTheCacheIsThisUsersOrRootsAndNotWritableByOthersUnlessSticky() throws Exception {
+        Path open = Files.createDirectories(tmp.resolve("group-writable"));
+        chmod("775", open);
+        FakeSys s = sys(project);
+        s.env.put(Playground.HOME_ENV, open.resolve("cache").toString());
+        assertThat(runOn(s)).isEqualTo(1);
+        assertThat(s.errText()).contains("group-writable").contains("writable by others and not sticky");
+        assertThat(mode(open)).isEqualTo("rwxrwxr-x");
+        assertThat(open.resolve("cache")).doesNotExist();
+        // Sticky (as /tmp): others cannot replace what this user puts there.
+        Path sticky = Files.createDirectories(tmp.resolve("sticky"));
+        chmod("1777", sticky);
+        FakeSys ok = sys(project);
+        ok.env.put(Playground.HOME_ENV, sticky.resolve("cache").toString());
+        ok.onRun = r -> fakeInstall(r, "0.1.0-pre1-rc8");
+        assertThat(runOn(ok)).isZero();
+        // Another user's directory above (root's is fine), on a hit too.
+        Path parent = sticky;
+        FakeSys foreign = sys(project);
+        foreign.env.put(Playground.HOME_ENV, sticky.resolve("cache").toString());
+        foreign.owners = p -> Optional.of(p.equals(parent) ? "1234" : "me");
+        assertThat(runOn(foreign)).isEqualTo(1);
+        assertThat(foreign.errText()).contains("is owned by another user (uid 1234)");
+        assertThat(foreign.runs).as("a cache hit is refused too").isEmpty();
+        FakeSys root = sys(project);
+        root.env.put(Playground.HOME_ENV, sticky.resolve("cache").toString());
+        root.owners = p -> Optional.of(p.equals(parent) ? "0" : "me");
+        assertThat(runOn(root)).isZero();
+    }
+
     /** With a real node and npm: a local tarball installed into the cache with its integrity recorded, then run. */
     @Test
     void aLocalTarballIsInstalledByNpmAndRun() throws Exception {
