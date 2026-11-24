@@ -1093,12 +1093,18 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
      * lookup: keyed operations reconcile their attempts with this observation (null tip: not known).
      */
     async landed(txHash) {
-      const slot = await chain.txSlot(txHash);
-      const t = await chain.tip().catch(() => null);
-      const included = slot !== null && slot !== undefined;
-      const tipSlot = t?.slot ?? null;
-      // Final only past the settlement margin: a shallow inclusion may still roll back (recovery waits, Codex M4).
-      return { landed: included, final: included && tipSlot !== null && tipSlot - slot >= settlementSlots, slot: included ? slot : null, tip: tipSlot };
+      // At one stable chain point, as the settlement watcher reads (observeOne): a chain point that moved during the
+      // lookup is no observation, and the attempt stays pending (tip null).
+      let o = null;
+      try {
+        o = await observeOne({ txHash });
+      } catch {
+        o = null;
+      }
+      if (!o) return { landed: false, final: false, slot: null, tip: null };
+      const included = o.slot !== null && o.slot !== undefined;
+      // Final strictly past the settlement margin, as the watcher's rule: a shallow inclusion may still roll back.
+      return { landed: included, final: included && o.tip > o.slot + settlementSlots, slot: included ? o.slot : null, tip: o.tip };
     },
     /** The page's keyed operation records, kept in this chain's journal (operations.js). */
     operations: () => journal.operations,

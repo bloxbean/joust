@@ -1015,6 +1015,29 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     }
   });
 
+  test('#180 M4: landed() reads one stable chain point; final only strictly past the margin; a moving chain point is no observation', async () => {
+    const { s, w, chain } = await ready({ startTime: 177 });
+    try {
+      const instance = await create(s, w);
+      const r = await increment(s, w, instance);
+      await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+      const h = r.prepared.txHash;
+      const margin = s.status().settlementSlots;
+      const slot = (await chain.txSlot(h));
+      assert.ok(Number.isSafeInteger(slot));
+      chain.tipOverride = () => ({ slot: slot + margin, hash: sha('at the margin'), height: 1 });
+      assert.deepEqual(await s.landed(h), { landed: true, final: false, slot, tip: slot + margin }, 'equality at the margin: shallow');
+      chain.tipOverride = () => ({ slot: slot + margin + 1, hash: sha('past'), height: 1 });
+      assert.equal((await s.landed(h)).final, true, 'strictly past it: final');
+      let n = 0;
+      chain.tipOverride = () => ({ slot: slot + margin + 5, hash: sha('fork' + n++), height: 1 });
+      assert.deepEqual(await s.landed(h), { landed: false, final: false, slot: null, tip: null }, 'the chain point moved: no observation (pending)');
+    } finally {
+      chain.tipOverride = null;
+      await s.close();
+    }
+  });
+
   test('#179 r2: a discard waits for a tip from the chain (never the clock): none, the body is kept and the discard can be retried', async () => {
     const { chain, s, w } = await ready({ startTime: 150 });
     try {
