@@ -104,7 +104,9 @@ public final class DevKit {
     /**
      * A runtime over a snapshot (ADR-0015 D5): configured as {@link #runtime()}, with the slot clock of
      * {@code fixtures/m0/devkit.json} (recorded from the DevKit's genesis). No I/O: a read outside the snapshot throws
-     * {@link org.julclang.state.runtime.snapshot.Need}.
+     * {@link org.julclang.state.runtime.snapshot.Need}. That clock is the genesis of the chain the {@code dapp} group
+     * was recorded on; groups recorded alone on a fresh chain (dex, fees, locker, upgrade) come from other chains, so
+     * their time-bounded steps do not replay under it.
      */
     public static StateRuntime snapshotRuntime(org.julclang.state.runtime.snapshot.Snapshot snapshot, java.nio.file.Path devkitJson) {
         return snapshotRuntime(new org.julclang.state.runtime.snapshot.SnapshotBackend(snapshot), devkitJson, b -> b);
