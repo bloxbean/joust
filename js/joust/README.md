@@ -133,12 +133,19 @@ calls wait for ADR-0023) are shown disabled with the host's code.
   CIP-30 wallet cannot be one; sign a quorum call as an identity).
 - **Keyed calls (ADR-0016).** Before its first request, each keyed operation (including a keyed contract's creation) gets
   a designated input: a lovelace-only output of at least 5 ADA at the payer that no other pending operation holds. It is
-  persisted with the operation record, and every attempt handed to the chain is journaled in it. Records are kept in page
-  memory offline (they end with the session) and in IndexedDB on DevKit. A cooldown is shown as "prepare again at slot
-  N" (offline, advance time). "May have landed" with nothing handed out picks a new designation on the next try.
+  committed with the operation record, keyed by the chain (a DevKit's genesis start time; never the build, so a rebuild
+  does not hide a pending operation). Every attempt's checked hash and expiry are journaled before the body leaves the
+  page (before a CIP-30 wallet sees it), and kept across signing errors and reloads. On DevKit the records live in
+  IndexedDB and a write that does not commit stops the call; offline they live in page memory (they end with the
+  session). On "may have landed" the page asks the chain about the recorded attempts: one on the chain closes the
+  operation; one that can still land waits; when none is on the chain and none can land any more, the pending keyed
+  operations panel asks you to acknowledge it before a new designation is chosen. A cooldown is shown as "prepare again
+  at slot N" (offline, advance time); on DevKit a keyed window may start ahead (up to 60 slots) within the stability
+  window.
 - **Scenarios (D10).** "Export scenario" saves an offline session's calls as JSON: identities as labels,
-  key hashes and created ids as symbols, no keys, mnemonics or transaction bytes. "Import scenario" replays one in a
-  fresh offline session with new identities, running every step through the same checks (without the review panel), and
+  key hashes and created ids as symbols, the offline clock's origin and slot length, no keys, mnemonics or transaction
+  bytes. Files over 1 MiB are refused. "Import scenario" replays one in a
+  fresh offline session on the scenario's own clock (so a deadline in it means what it meant) with new identities, running every step through the same checks (without the review panel), and
   reports which steps had the same outcome. A scenario from another build is replayed with a warning naming the
   contracts whose scripts differ.
 

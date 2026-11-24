@@ -17,7 +17,10 @@ import { offlineSession } from '../src/playground/session.js';
 import { startPlayground } from '../src/playground/server.js';
 import { anchorsFor, publishAll, run } from './playground/flow.js';
 import { chromiumOrNull } from './playground/walkthrough.js';
-import { symbolic, concrete, exportScenario, importScenario, sameOutcome, outcomeOf } from '../playground/scenario.js';
+import { symbolic, concrete, exportScenario, importScenario, sameOutcome, outcomeOf, quorumKeyNames, recanonical } from '../playground/scenario.js';
+import { operationStore, operationRequest, reconcile, safeSlot, chainKey } from '../playground/operations.js';
+import { windowProblem } from '../src/playground/devkit.js';
+import { classify } from '../playground/form.js';
 
 const images = existsSync(join(repo, 'js/joust/engine/joust-toolchain.js.wasm'))
   && existsSync(join(repo, 'js/joust-runtime/engine/joust-runtime.js.wasm'));
@@ -155,6 +158,27 @@ describe('ADR-0024 M4 call kinds, through the page\'s check', { skip }, () => {
       args: { choice: '3' } }, bob), { caller: bob }));
   });
 
+  test('keyed: a retained attempt (its checked expiry a bigint) goes back to the host as JSON; pending until it is released', async () => {
+    const instance = (await run(s, await designate(s, { contract: REGISTRY, kind: 'init', method: 'init', args: {} }, alice), { caller: alice })).report.created;
+    const cast = await run(s, await designate(s, { contract: REGISTRY, kind: 'keyedInit', method: 'cast', instance,
+      args: { voter: carol.keyHash, choice: '1' } }, carol), { caller: carol });
+    const key = cast.report.created;
+    const first = await designate(s, { contract: REGISTRY, kind: 'keyedAction', method: 'change', instance, object: key, args: { choice: '4' } }, carol);
+    const record = { id: 'x', chain: 'offline:s1', ...first.operation, payer: carol.address };
+    const r1 = await s.prepare({ ...first, address: carol.address });
+    // The checker's plan: validTo is a bigint there; the page journals it as the attempt's expiry.
+    record.attempts.push({ txHash: r1.prepared.txHash, validTo: BigInt(r1.prepared.validTo) });
+    const wire = JSON.parse(JSON.stringify({ ...first, operation: operationRequest(record), address: carol.address }));
+    assert.deepEqual(wire.operation.attempts, [{ txHash: r1.prepared.txHash, validTo: Number(r1.prepared.validTo) }]);
+    await assert.rejects(s.prepare(wire), (e) => e.code === 'pending', 'the retained attempt may still land');
+    // Released (as its expiry would), and past its window: the same operation prepares again.
+    await s.discard(r1.prepared.reservation);
+    s.advance((Number(r1.prepared.validTo) - s.status().slot + 2) * s.status().clock.slotLengthMs);
+    const r2 = await s.prepare(wire);
+    assert.ok(r2.prepared.txHash);
+    await s.discard(r2.prepared.reservation);
+  });
+
   test('range attacks: a @ValidBefore method without Ctx has its bounds attacked, as one with Ctx', async () => {
     const D = 'app.Deadline';
     await publishAll(s, D, alice);
@@ -176,12 +200,90 @@ describe('ADR-0024 M4 call kinds, through the page\'s check', { skip }, () => {
     }
   });
 
+  test('npm verifier anchors: only from the loaded engine when its bytes are the session\'s fingerprinted ones (#180 M4-S1)', async () => {
+    const { TOKEN_HEADER } = await import('../src/playground/server.js');
+    let tamper = false;
+    const factory = async (o) => {
+      const x = await offlineSession(o);
+      if (tamper) x.engineFiles = { ...x.engineFiles, 'joust-runtime.js.wasm': '00'.repeat(32) };
+      return x;
+    };
+    const server = await startPlayground({ root, engine: await theEngine(), page: {}, session: factory, log: () => {} });
+    try {
+      const call = async (route, body) => (await (await fetch(`http://127.0.0.1:${server.port}/api/${route}`, { method: 'POST',
+        headers: { 'content-type': 'application/json', [TOKEN_HEADER]: server.token }, body: JSON.stringify(body) })).json()).result;
+      const same = (await call('sessions/new', {})).session;
+      assert.match((await call('contract', { session: same, contract: TOKEN })).verifiers.mapVerifier, /^[0-9a-f]+$/);
+      tamper = true;   // another runtime than the one this session's fingerprint covers
+      const other = (await call('sessions/new', {})).session;
+      assert.deepEqual((await call('contract', { session: other, contract: TOKEN })).verifiers, {}, 'no verifiers: sends and maps refused');
+    } finally {
+      await server.close();
+    }
+  });
+
   test('D11: @Params and @AuthorizedBy are shown unsupported with the host\'s code', async () => {
     const t = s.status().contracts.find((c) => c.name === TREASURY);
     assert.deepEqual([t.served, t.unsupported], [false, 'params']);
     const veto = (await s.describe(COUNCIL)).calls.find((c) => c.method === 'veto');
     assert.notEqual(veto.served, true);
     assert.equal(veto.unsupported, 'authorizedBy');
+  });
+});
+
+describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
+  test('expiries are safe JSON integers at the protocol boundary, existing bigint records included', () => {
+    const r = { designated: 'aa'.repeat(32) + '#0', contract: 'c', method: 'm', instance: null, key: null, attempts: [{ txHash: 'bb'.repeat(32), validTo: 39814n }] };
+    assert.equal(JSON.stringify(operationRequest(r)).includes('39814'), true);
+    assert.equal(safeSlot('17'), 17);
+    assert.throws(() => safeSlot(2n ** 60n), /not a slot/);
+    assert.throws(() => safeSlot(-1), /not a slot/);
+  });
+  test('reconcile: landed closes, a live attempt is pending, an expired unseen one is ambiguous, none is fresh', async () => {
+    const r = (attempts) => ({ attempts });
+    assert.equal((await reconcile(r([]), { landed: async () => false, tip: 0 })).state, 'fresh');
+    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 10 }]), { landed: async (h) => h === 'a', tip: 99 })).state, 'closed');
+    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 10 }]), { landed: async () => false, tip: 12, settlementSlots: 5 })).state, 'pending');
+    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 10n }]), { landed: async () => false, tip: 16, settlementSlots: 5 })).state, 'ambiguous');
+  });
+  test('records are keyed by the verified chain (a DevKit\'s genesis start time), never the build', () => {
+    const dk = (startTime, fingerprint) => chainKey({ mode: 'devkit', network: { networkId: 0, protocolMagic: 42 }, chain: { startTime }, fingerprint });
+    assert.equal(dk(1, 'build-a'), dk(1, 'build-b'), 'a rebuild keeps the chain\'s pending operations');
+    assert.notEqual(dk(1, 'x'), dk(2, 'x'), 'a reset DevKit is another chain');
+  });
+  test('DevKit\'s store: a write that does not commit throws; a committed one is read back', async () => {
+    const fakeIdb = (fail) => {
+      const rows = new Map();
+      return { open() {
+        const req = {};
+        setTimeout(() => {
+          req.result = { transaction() {
+            const t = {};
+            const store = { put(v, k) { if (!fail) rows.set(k, v); return {}; }, delete(k) { rows.delete(k); return {}; },
+              getAll() { return { result: [...rows.values()] }; } };
+            setTimeout(() => (fail ? t.onabort?.() : t.oncomplete?.()), 1);
+            t.objectStore = () => store;
+            return t;
+          } };
+          req.onsuccess?.();
+        });
+        return req;
+      } };
+    };
+    const bad = operationStore({ idb: fakeIdb(true) });
+    await assert.rejects(bad.put({ id: 'x', chain: 'c', attempts: [] }), (e) => e.code === 'storage');
+    const good = operationStore({ idb: fakeIdb(false) });
+    await good.put({ id: 'x', chain: 'c', attempts: [{ txHash: 'h', validTo: 5n }] });
+    assert.deepEqual((await good.all('c')).map((r) => r.attempts[0].validTo), [5]);
+  });
+  test('DevKit keyed windows: a cooldown that starts inside the allowed future window is valid; beyond the limits it is not', () => {
+    const keyed = [60, 120];
+    assert.equal(windowProblem({ validFrom: 110, validTo: 170, now: 100, ttl: 60, keyed }), null, 'starts 10 slots ahead');
+    assert.match(windowProblem({ validFrom: 170, validTo: 200, now: 100, ttl: 60, keyed }), /keyed start/);
+    assert.match(windowProblem({ validFrom: 110, validTo: 171, now: 100, ttl: 60, keyed }), /keyed validity bound/);
+    assert.match(windowProblem({ validFrom: 150, validTo: 210, now: 100, ttl: 60, keyed: [60, 100] }), /keyed validity bound/, 'the page\'s end limit');
+    assert.match(windowProblem({ validFrom: 110, validTo: 170, now: 100, ttl: 60 }), /outside the asked window/, 'a plain call: as before');
+    assert.equal(windowProblem({ validFrom: null, validTo: 150, now: 100, ttl: 60 }), null);
   });
 });
 
@@ -193,21 +295,30 @@ describe('ADR-0024 D10: scenario data', () => {
     const sym = symbolic(call, ids, created);
     assert.deepEqual(sym.instance, { $created: 1 });
     assert.deepEqual(sym.args.to, { $identity: 'Bob', as: 'keyHash' });
-    assert.deepEqual(sym.cosigners, [{ $identity: 'Alice', as: 'keyHash' }]);
+    assert.deepEqual(sym.cosigners, { $sorted: [{ $identity: 'Alice', as: 'keyHash' }] }, 'cosigners stay a sorted key list');
     const fresh = [{ label: 'Alice', keyHash: '11'.repeat(28), address: 'a' }, { label: 'Bob', keyHash: '22'.repeat(28), address: 'b' }];
     const back = concrete(sym, fresh, [null, 'dd'.repeat(32)]);
     assert.deepEqual(back, { ...call, instance: 'dd'.repeat(32), args: { to: '22'.repeat(28), memo: 'hi' }, cosigners: ['11'.repeat(28)] });
     assert.throws(() => concrete({ args: { to: { $identity: 'Mallory', as: 'keyHash' } } }, fresh, []), /Mallory/);
-    // An ascending list of key hashes (@Quorum members) stays ascending with the new keys.
-    const members = symbolic({ members: ['aa'.repeat(28), 'bb'.repeat(28)] }, ids, []);
-    assert.deepEqual(members.members, { $sorted: [{ $identity: 'Alice', as: 'keyHash' }, { $identity: 'Bob', as: 'keyHash' }] });
+    // A @Quorum's key list (an argument a method's quorum names) stays ascending with the new keys.
     const swapped = [{ label: 'Alice', keyHash: '99'.repeat(28), address: 'a' }, { label: 'Bob', keyHash: '11'.repeat(28), address: 'b' }];
-    assert.deepEqual(concrete(members, swapped, []).members, ['11'.repeat(28), '99'.repeat(28)]);
+    const members = symbolic({ args: { members: ['aa'.repeat(28), 'bb'.repeat(28)] } }, ids, [], { sorted: ['members'] });
+    assert.deepEqual(members.args.members, { $sorted: [{ $identity: 'Alice', as: 'keyHash' }, { $identity: 'Bob', as: 'keyHash' }] });
+    assert.deepEqual(concrete(members, swapped, []).args.members, ['11'.repeat(28), '99'.repeat(28)]);
+    assert.deepEqual(quorumKeyNames({ 'x-joust': { actions: [{ policies: { quorum: { keys: 'members' } } }], creations: [] } }), ['members']);
+    // Codex P2: a map entry [Alice, Bob] keeps its roles (key Alice, value Bob) even when the new hashes sort the other
+    // way; the map goes back to canonical key order by its schema, not by guessing.
+    const entry = symbolic({ args: { owners: [['aa'.repeat(28), 'bb'.repeat(28)]] } }, ids, []);
+    assert.deepEqual(concrete(entry, swapped, []).args.owners, [['99'.repeat(28), '11'.repeat(28)]], 'Alice maps to Bob still');
+    const control = classify({ dataType: 'map', keys: { dataType: 'bytes' }, values: { dataType: 'bytes' } }, {}, 'args.owners');
+    const two = concrete(symbolic({ args: { owners: [['aa'.repeat(28), '01'], ['bb'.repeat(28), '02']] } }, ids, []), swapped, []).args.owners;
+    assert.deepEqual(recanonical(two, control), [['11'.repeat(28), '02'], ['99'.repeat(28), '01']], 'canonical order, each key with its value');
   });
   test('I1: an export names no key, mnemonic or transaction bytes; another build warns with the contracts that differ', () => {
     const text = exportScenario({ fingerprint: 'f'.repeat(64), contracts: { 'x.C': { spend: 'a'.repeat(56) } }, identities: ['Alice'],
       clock: { slotLengthMs: 1000, zeroTimeMs: 5 }, steps: [{ as: 'Alice', call: { contract: 'x.C', kind: 'init', method: 'init', args: {} }, expect: 'confirmed' }] });
-    assert.doesNotMatch(text, /mnemonic|xprv|"cbor"|zeroTimeMs/);
+    assert.doesNotMatch(text, /mnemonic|xprv|"cbor"/);
+    assert.deepEqual(JSON.parse(text).clock, { zeroTimeMs: 5, slotLengthMs: 1000 }, 'the offline clock goes with it');
     assert.throws(() => exportScenario({ fingerprint: 'f', contracts: {}, identities: [], clock: { slotLengthMs: 1 },
       steps: [{ as: 'A', call: { cbor: '84' } }] }), /refusing/);
     const same = importScenario(text, { fingerprint: 'f'.repeat(64), contracts: { 'x.C': { spend: 'a'.repeat(56) } } });
@@ -372,5 +483,24 @@ describe('ADR-0024 M4 walkthrough in Chromium', { skip: skip || (!chromium && 'P
     assert.equal(same, total, await page.locator('#log').innerText());
     assert.equal(total, scenario.steps.filter((st) => st.as).length);
     assert.deepEqual(errors, []);
+  });
+
+  test('D10: a deadline scenario replays on its own clock, with wall time advanced (Codex M4 P2)', async () => {
+    // Exported 30 days ago: its deadline (a day after its clock's origin) has long passed on today's clock.
+    const zero = Date.now() - 30 * 86_400_000;
+    const scenario = { scenario: 1, build: { fingerprint: 'f'.repeat(64), contracts: {} }, identities: ['Alice', 'Bob', 'Carol'],
+      clock: { zeroTimeMs: zero, slotLengthMs: 1000 }, steps: [
+        { as: 'Alice', call: { contract: 'app.Deadline', kind: 'init', method: 'init', args: { deadline: String(zero + 86_400_000) } }, expect: 'confirmed' },
+        { as: 'Alice', call: { contract: 'app.Deadline', kind: 'action', method: 'bump', instance: { $created: 0 }, args: {} }, expect: 'confirmed' },
+      ] };
+    const { mkdtempSync, writeFileSync: write } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const file = join(mkdtempSync(join(tmpdir(), 'joust-scenario-')), 'deadline.json');
+    write(file, JSON.stringify(scenario));
+    await page.evaluate(() => { delete document.body.dataset.replay; });
+    await page.setInputFiles('#import-scenario', file);
+    await page.waitForFunction(() => document.body.dataset.replay, null, { timeout: 240_000 })
+      .catch(async (e) => assert.fail(`${e.message}\n${await page.locator('#log').innerText()}`));
+    assert.equal(await page.evaluate(() => document.body.dataset.replay), '2/2', await page.locator('#log').innerText());
   });
 });

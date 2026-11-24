@@ -103,10 +103,11 @@ export function ledgerReads(ledger, { networkId = 0 } = {}) {
  * @param o.attacks  run the attack suite on every script transaction (default true, Q7)
  */
 export async function offlineSession({ id, root, engine, ledger, attacks = true, launch = launchNpmHost, onEnd = () => {},
-  source = npmSource(root, { launch }) }) {
+  source = npmSource(root, { launch }), clock = null }) {
   const fp = await source.open();
   const entries = fp.entries;
-  const chain = ledger ?? memoryLedger({ engine, attacks });
+  // A scenario's replay brings its clock (origin and slot length), so absolute times in it mean what they meant (D10).
+  const chain = ledger ?? memoryLedger({ engine, attacks, ...(clock ? { zeroTimeMs: clock.zeroTimeMs, slotLengthMs: clock.slotLengthMs } : {}) });
   const read = ledgerReads(chain);
   let host;
   try {
@@ -284,6 +285,10 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       return out;
     },
     protocolParams: () => chain.protocolParams(),
+    /** Whether a transaction is on the ledger (keyed operations reconcile their attempts with it). */
+    async landed(txHash) {
+      return typeof chain.inclusion === 'function' && chain.inclusion(txHash) !== null;
+    },
     /** Whether a script credential's stake is registered (the trusted chain's answer, for the publication checks). */
     async registered(scriptHash) {
       return (await chain.account(rewardAddress({ type: 'script', hash: scriptHash }, 0))).registered === true;

@@ -17,7 +17,8 @@ import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { classify, encode, render, unsupportedPaths, FormError } from './form.js';
 import { anchorsOf, checkPublication, pageCheck, snapToUtxo, isKeyedRequest } from './check.js';
-import { symbolic, concrete, outcomeOf, sameOutcome, exportScenario, importScenario } from './scenario.js';
+import { symbolic, concrete, outcomeOf, sameOutcome, exportScenario, importScenario, quorumKeyNames, recanonical } from './scenario.js';
+import { operationStore, chainKey, operationId, operationRequest, reconcile as reconcileAttempts, safeSlot } from './operations.js';
 
 const ADA = 1_000_000n;
 const FUND_ADA = 1000n;
@@ -100,61 +101,67 @@ const state = {
   replaying: null,        // the scenario being replayed: its steps run without the review panel
 };
 
-// ---- keyed operations (ADR-0016 M3, protocol 1 §Keyed calls): each keyed operation spends its own designated input,
-// chosen and persisted with its record before the first request, and journals every attempt handed to the chain. One
-// keyed call is in flight at a time (the page runs one action at a time). Records live in IndexedDB on DevKit (its test
-// identities outlive a page), in page memory offline (an offline session's identities and ledger end with the page).
-const operations = {
-  memory: new Map(),
-  key: (r) => [r.contract, r.method, r.instance ?? '', r.key ?? '', r.payer].join('|'),
-  async db() {
-    if (!devkit() || typeof indexedDB === 'undefined') return null;
-    this.open ??= new Promise((resolve) => {
-      try {
-        const req = indexedDB.open('joust-playground-operations', 1);
-        req.onupgradeneeded = () => req.result.createObjectStore('operations');
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve(null);
-      } catch {
-        resolve(null);
-      }
-    });
-    return this.open;
-  },
-  async tx(mode, fn) {
-    const db = await this.db();
-    if (!db) return null;
-    return new Promise((resolve) => {
-      const t = db.transaction('operations', mode);
-      const r = fn(t.objectStore('operations'));
-      t.oncomplete = () => resolve(r?.result ?? null);
-      t.onerror = () => resolve(null);
-    });
-  },
-  chain: () => `${state.session.network.networkId}:${state.session.network.protocolMagic ?? ''}:${state.session.fingerprint}`,
-  async all() {
-    const stored = devkit() ? await this.tx('readonly', (st) => st.getAll()) : null;
-    return (stored ?? [...this.memory.values()]).filter((r) => !devkit() || r.chain === this.chain());
-  },
-  async get(k) { return (await this.all()).find((r) => r.id === k) ?? null; },
+// ---- keyed operations (ADR-0016 M3, protocol 1 §Keyed calls; operations.js): each keyed operation spends its own
+// designated input, chosen and committed with its record before the first request; every attempt is journaled before
+// the body leaves the page. One keyed call is in flight at a time (the page runs one action at a time). Records are
+// keyed by the verified chain, never the build; IndexedDB on DevKit (a write that does not commit stops the call),
+// page memory offline.
+let opStore = null;
+const store = () => (opStore ??= operationStore({ idb: devkit() && typeof indexedDB !== 'undefined' ? indexedDB : null }));
+const ops = {
+  chain: () => chainKey(state.session),
+  all: async () => store().all(ops.chain()),
+  get: async (id) => store().get(ops.chain(), id),
   async put(r) {
-    this.memory.set(r.id, r);
-    if (devkit()) await this.tx('readwrite', (st) => st.put(structuredClone(r), r.id));
+    try {
+      return await store().put(r);
+    } catch (e) {
+      throw new StageFailure({ stage: 'journal', code: e.code ?? 'storage', message: e.message });
+    }
   },
   async remove(r) {
-    this.memory.delete(r.id);
-    if (devkit()) await this.tx('readwrite', (st) => st.delete(r.id));
+    try {
+      await store().remove(r);
+    } catch (e) {
+      throw new StageFailure({ stage: 'journal', code: e.code ?? 'storage', message: e.message });
+    }
   },
 };
 
-/** The operation record for a keyed request, chosen and persisted before the first request (a new designation if none). */
+/** What the chain says of a record's attempts (operations.js reconcile), through the server. */
+async function reconcileOp(r) {
+  let tip = state.session.slot;
+  const landed = async (txHash) => {
+    const a = await sapi('landed', { txHash });
+    tip = a.tip ?? tip;
+    return a.landed;
+  };
+  return reconcileAttempts(r, { landed, get tip() { return tip; }, settlementSlots: state.session.settlementSlots ?? 0 });
+}
+
+/**
+ * The operation record for a keyed request, committed before the first request. An existing one is reconciled first:
+ * an attempt on the chain closes it (a new operation may start); one that can still land keeps it (the host refuses as
+ * pending); an outcome nobody can tell any more waits for the user's acknowledgement (the pending operations panel).
+ */
 async function operationFor(request, signer) {
   const ident = { contract: request.contract, method: request.method, instance: request.instance ?? null, key: request.object ?? null,
     payer: signer.address };
-  const id = operations.key(ident);
-  const existing = await operations.get(id);
-  if (existing) return existing;
-  const taken = new Set((await operations.all()).map((r) => r.designated));
+  const id = operationId(ident);
+  const existing = await ops.get(id);
+  if (existing) {
+    if (existing.ambiguous) {
+      throw new StageFailure({ stage: 'journal', code: 'ambiguous', message: 'an earlier attempt of this keyed operation may have landed: '
+        + 'check the chain, then acknowledge it in the pending keyed operations panel' });
+    }
+    const rec = await reconcileOp(existing);
+    if (rec.state === 'closed') {
+      await ops.remove(existing);
+      note(`an earlier attempt of ${existing.method} landed (${rec.txHash.slice(0, 16)}…): that operation is done`, 'ok');
+      await drawPendingOps();
+    } else return existing;
+  }
+  const taken = new Set((await ops.all()).map((r) => r.designated));
   const utxos = await chainView.utxosAt(signer.address);
   // An ordinary lovelace-only input of at least 5 ADA that no other live operation holds.
   const d = utxos.filter((u) => u.value.size === 1 && (u.value.get('lovelace') ?? 0n) >= 5n * ADA && !u.inlineDatum && !u.datumHash
@@ -163,12 +170,40 @@ async function operationFor(request, signer) {
     throw new StageFailure({ stage: 'arguments', code: 'designation', message: `${signer.label} has no free lovelace-only output of `
       + 'at least 5 ADA to designate for a keyed call (fund the identity, or let a pending keyed call settle)' });
   }
-  const record = { id, chain: operations.chain(), ...ident, designated: d.ref, attempts: [] };
-  await operations.put(record);
-  return record;
+  return ops.put({ id, chain: ops.chain(), ...ident, designated: d.ref, attempts: [] });
 }
-const operationOf = (r) => ({ designated: r.designated, contract: r.contract, method: r.method, instance: r.instance, key: r.key,
-  attempts: r.attempts.map(({ txHash, validTo }) => ({ txHash, validTo })) });
+
+/** After mayHaveLanded: reconciles the record; returns a message for the user. */
+async function afterMayHaveLanded(op) {
+  const rec = await reconcileOp(op);
+  if (rec.state === 'fresh') {
+    await ops.remove(op);
+    return 'its designated input was spent by something else: the next try chooses another one';
+  }
+  if (rec.state === 'closed') {
+    await ops.remove(op);
+    return `an earlier attempt landed (${rec.txHash.slice(0, 16)}…): the operation is done`;
+  }
+  if (rec.state === 'pending') return `an earlier attempt can still land (until slot ${rec.until}): wait, then try again`;
+  await ops.put({ ...op, ambiguous: true });
+  return 'no attempt is on the chain and none can land any more: check the chain, then acknowledge it in the pending keyed operations panel';
+}
+
+/** The pending keyed operations (DevKit's survive reloads): an ambiguous one needs the user's acknowledgement. */
+async function drawPendingOps() {
+  const box = $('pending-ops');
+  if (!box) return;
+  const all = await ops.all().catch(() => []);
+  if (!all.length) return box.replaceChildren();
+  box.replaceChildren(h('h4', { text: 'Pending keyed operations' }), h('ul', {}, all.map((r) => h('li', { 'data-operation': r.id },
+    h('code', { text: `${r.method}${r.key ? ' ' + r.key : ''}` }), ' ', h('span', { class: 'muted', text: `designated ${r.designated.slice(0, 12)}…, `
+      + `${r.attempts.length} attempt(s)` }),
+    r.ambiguous ? h('button', { class: 'ack', text: 'Acknowledge (I checked the chain): forget it', onclick: () => guard(async () => {
+      await ops.remove(r);
+      note(`the keyed operation ${r.method} was forgotten after acknowledgement`);
+      await drawPendingOps();
+    }) }) : null))));
+}
 
 // The identities' chain view: the session's outputs, read through the server (the chain is trusted, #169).
 const chainView = {
@@ -238,6 +273,7 @@ async function refresh() {
   state.session = await sapi('session');
   drawBanner();
   await drawIdentities();
+  await drawPendingOps();
   if (state.contract) await drawInstances();
 }
 
@@ -657,7 +693,8 @@ async function run(call, meta, form) {
 /** A request, end to end (D7 steps 2–7), recorded as a scenario step; also what a scenario replay runs. */
 async function call1(request, meta, signer, cosigners, label) {
   if (cosigners.length) request.cosigners = cosigners.map((x) => x.keyHash).sort();
-  const step = { as: signer.label, call: symbolic(stripped(request), state.identities, state.scenario.created) };
+  const step = { as: signer.label, call: symbolic(stripped(request), state.identities, state.scenario.created,
+    { sorted: quorumKeyNames(state.contract?.description) }) };
   try {
     const created = await call2(request, meta, signer, cosigners, label);
     recordStep({ ...step, expect: 'confirmed' }, created);
@@ -687,14 +724,22 @@ async function call2(request, meta, signer, cosigners, label) {
   await prerequisites(signer);
   // A keyed call: its operation record and designated input, persisted before the first request.
   const op = isKeyedRequest(c.description, request) ? await operationFor(request, signer) : null;
-  if (op) Object.assign(request, { designated: op.designated, operation: operationOf(op) });
+  if (op) {
+    Object.assign(request, { designated: op.designated, operation: operationRequest(op) });
+    // DevKit: the keyed window's limits (start ahead, end within the stability window), as the server allows them.
+    if (devkit() && state.session.keyedLimits) request.pageLimits = state.session.keyedLimits;
+  }
   // 2. prepare (stage host)
   let r;
   try {
     r = await sapi('prepare', { call: request });
   } catch (e) {
-    // mayHaveLanded with no attempt handed out: something else spent the designation; the next try chooses a new one.
-    if (op && e.code === 'mayHaveLanded' && op.attempts.length === 0) await operations.remove(op);
+    // mayHaveLanded: the designation is spent; the chain says whether by one of this operation's attempts.
+    if (op && e.code === 'mayHaveLanded') {
+      const what = await afterMayHaveLanded(op);
+      await drawPendingOps();
+      throw labelled({ ...e, message: `${e.message} (${what})` }, 'host', label);
+    }
     throw labelled(e, 'host', label);
   }
   // Until the signed body is submitted, every way out (a refusal, a decline, a check or signing that throws) releases
@@ -713,7 +758,10 @@ async function call2(request, meta, signer, cosigners, label) {
     if (!report?.submitted) await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
   }
   // A keyed operation is done once its transaction is in (offline at once; on DevKit at inclusion).
-  if (op) await operations.remove(op);
+  if (op) {
+    await ops.remove(op);
+    await drawPendingOps();
+  }
   // The created instance as the body makes it (the checker derived it from the seed), not the host's claim.
   if (call.kind === 'init' && report.created) state.instance = report.created;
   await drawInstances();
@@ -839,14 +887,16 @@ function approval({ title, lines, states, predicted, who }) {
  * (#179 P2) and the handoff recorded before it sees the body: from then on the body is never discarded (only its expiry
  * releases its inputs, ADR-0022 D8).
  */
-async function signAs(r, id, label, report, approve) {
+async function signAs(r, id, label, report, approve, journal = null) {
   if (!await approve()) {
     record({ label, outcome: 'declined' });
     note(`${label}: declined by ${id.label}; the body was discarded`);
     throw Object.assign(new StageFailure({ stage: 'wallet', code: 'declined', message: `declined at review by ${id.label}`, label }), { quiet: true });
   }
+  if (id.cip30) await walletStillMatches(id, r.prepared.cbor, label);
+  // A keyed attempt is journaled (committed) before the body leaves the page: before a CIP-30 handoff, before signing.
+  if (journal) await journal();
   if (id.cip30) {
-    await walletStillMatches(id, r.prepared.cbor, label);
     try {
       await sapi('handoff', { reservation: r.prepared.reservation });
     } catch (e) {
@@ -891,16 +941,28 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
   const title = publication ? `Review publication: ${publication.kind}` : `Review: ${request.method}`;
   // 5. sign (stage wallet): the caller, then each co-signer, each after its own approval of the same checked body.
   let cbor = r.prepared.cbor;
-  for (const id of [signer, ...cosigners]) {
-    const who = id === signer ? id.label : `${id.label} (co-signer)`;
-    const w = await signAs(r, id, label, report, () => approval({ title: id === signer ? title : `${title}: co-sign`, lines, states: states(),
-      predicted, who }));
-    cbor = assemble(cbor, w).cbor;
-  }
-  // A keyed attempt is journaled before it is handed to the chain (protocol 1, keyed duty 1).
-  if (op) {
-    op.attempts.push({ txHash: r.prepared.txHash, validTo: plan.validTo });
-    await operations.put(op);
+  // The keyed journal entry (protocol 1, keyed duty 1): the checked hash and expiry, committed before the body leaves.
+  const journal = op ? async () => {
+    op.attempts.push({ txHash: r.prepared.txHash, validTo: safeSlot(plan.validTo) });
+    Object.assign(op, await ops.put(op));
+  } : null;
+  const unjournal = async () => {
+    if (!op) return;
+    op.attempts = op.attempts.filter((a) => a.txHash !== r.prepared.txHash);
+    await ops.put(op);
+  };
+  try {
+    for (const id of [signer, ...cosigners]) {
+      const who = id === signer ? id.label : `${id.label} (co-signer)`;
+      const w = await signAs(r, id, label, report, () => approval({ title: id === signer ? title : `${title}: co-sign`, lines, states: states(),
+        predicted, who }), id === signer ? journal : null);
+      cbor = assemble(cbor, w).cbor;
+    }
+  } catch (e) {
+    // A body that never left the page (an identity's signature, a co-signer declining) leaves the journal; one handed to
+    // a CIP-30 wallet stays journaled, across signing errors and reloads.
+    if (!report.submitted) await unjournal().catch(() => {});
+    throw e;
   }
   // 6. submit (stage ledger)
   let res;
@@ -932,10 +994,7 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
       // (the server refuses that discard as well); its keyed attempt stays journaled. A failure before the node saw it
       // is still released.
       if (devkit() && e.code === 'nodeRefused') report.submitted = true;
-      else if (op) {
-        op.attempts = op.attempts.filter((a) => a.txHash !== r.prepared.txHash);
-        await operations.put(op);
-      }
+      else if (!report.submitted) await unjournal();
       throw labelled(e, 'ledger', label);
     }
   }
@@ -1060,7 +1119,8 @@ async function replay(text) {
   state.identities = scenario.identities.map((l, i) => newIdentity(i, l));
   state.signer = 0;
   state.history = [];
-  await startSession();
+  // The scenario's clock: absolute times in its steps mean what they meant (an older scenario has none: today's).
+  await startSession(scenario.clock ? { clock: scenario.clock } : {});
   const created = [];
   const results = [];
   state.replaying = { created };
@@ -1085,6 +1145,9 @@ async function replay(text) {
         }
         if (state.contract?.name !== call.contract) await selectContract(call.contract);
         const meta = metaOf(state.contract.description, call);
+        // Map arguments back in canonical key order (new key hashes may sort differently); positions and roles as recorded.
+        const defs = state.contract.description.definitions;
+        for (const a of meta?.args ?? []) if (call.args && a.name in call.args) call.args[a.name] = recanonical(call.args[a.name], classify(a.schema, defs, 'args.' + a.name));
         const cosigners = state.identities.filter((x) => (call.cosigners ?? []).includes(x.keyHash));
         delete call.cosigners;
         if (call.instance) state.instance = call.instance;

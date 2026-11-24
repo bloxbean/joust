@@ -173,7 +173,7 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     lifecycle = run.catch(() => {});
     return run;
   };
-  async function create({ keepLedgerOf, attacks: a = attacks } = {}) {
+  async function create({ keepLedgerOf, attacks: a = attacks, clock = null } = {}) {
     if (closed) throw new StageError('session', 'closed', 'the playground is stopping');
     if (mode === 'devkit') {
       // One DevKit session per server: its journal is the project's on this chain (journal.js), so the previous
@@ -204,7 +204,14 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     const id = 's' + ++counter;
     let s;
     try {
-      s = await makeSession({ id, root, engine, ledger: prior?.ledger, attacks: !!a, ...(source ? { source } : {}),
+      // An offline ledger's clock (a scenario's): an origin in ms and a slot length, both bounded.
+      const c = clock === null || clock === undefined ? null : {
+        zeroTimeMs: Number(clock.zeroTimeMs), slotLengthMs: Number(clock.slotLengthMs) };
+      if (c && !(Number.isSafeInteger(c.zeroTimeMs) && c.zeroTimeMs >= 0 && Number.isSafeInteger(c.slotLengthMs) && c.slotLengthMs >= 1
+        && c.slotLengthMs <= 3_600_000) || (c && (prior || mode === 'devkit'))) {
+        throw new StageError('request', 'clock', 'a clock is { zeroTimeMs, slotLengthMs }, for a new offline ledger only');
+      }
+      s = await makeSession({ id, root, engine, ledger: prior?.ledger, attacks: !!a, ...(source ? { source } : {}), ...(c ? { clock: c } : {}),
         onEnd: (reason) => log(`session ${id}: the dev host ended (${reason})`) });
     } catch (e) {
       if (prior) sessions.set(prior.id, prior);
@@ -287,6 +294,13 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       str(String(b.lovelace ?? ''), 'lovelace', /^\d{1,16}$/)) }),
     'advance': async (b) => ({ slot: use(b.session).advance(b.ms) }),
     'history': async (b) => use(b.session).history(),
+    // Keyed operations (ADR-0016 M3): whether a recorded attempt is on the chain, and the tip it was asked at.
+    'landed': async (b) => {
+      const s = use(b.session);
+      const txHash = str(b.txHash, 'txHash', /^[0-9a-f]{64}$/);
+      const st = s.status();
+      return { landed: await s.landed(txHash), tip: st.tip ?? st.slot };
+    },
     // DevKit (D7 step 7): a submitted body's settlement as the session observed it (submitted, included, final, …).
     'tx': async (b) => {
       const s = use(b.session);
