@@ -59,7 +59,8 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * server (joust dev's /playground, D3). Its rules (D8) are the same either way: they never depend on the host server's
  * own routes or headers.
  *
- * @param o.root     the npm project (built: build/joust/contracts.json)
+ * @param o.root     the project: npm (built: build/joust/contracts.json) or Gradle (with o.source)
+ * @param o.source   the build sessions pin (default the npm project's; gradle.js's gradleSource for Gradle)
  * @param o.engine   the runtime engine (loadEngine()) for the offline ledgers
  * @param o.page     the page: { 'index.html': Buffer, 'assets/x.js': Buffer, … } (see page.js), or an async function
  *                   giving it, called on the first page request (joust dev builds it only when it is opened)
@@ -70,7 +71,7 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * @returns { token, sessions, handles(pathname), handle(req, res), close() }
  */
 export function playgroundHandler({ root, engine, page, attacks = true, log = () => {}, mode = 'offline', devkit = {}, base = '/',
-  session: makeSession = mode === 'devkit' ? devkitSession : offlineSession } = {}) {
+  session: makeSession = mode === 'devkit' ? devkitSession : offlineSession, source } = {}) {
   if (!['offline', 'devkit'].includes(mode)) throw new Error(`playground: no mode ${mode}`);
   if (!/^\/(?:[a-z]+\/)?$/.test(base)) throw new Error('playground: base is / or /<name>/');
   const token = randomBytes(32).toString('base64url');
@@ -85,7 +86,17 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     sessions.set(id, s);
     return s;
   };
+  // Session lifecycle changes (create, end, reset) run one at a time, so the bound of four holds and no two sessions
+  // ever take over one ledger (D2, I9), however many requests arrive at once.
+  let lifecycle = Promise.resolve();
+  let closed = false;
+  const serial = (fn) => {
+    const run = lifecycle.then(fn);
+    lifecycle = run.catch(() => {});
+    return run;
+  };
   async function create({ keepLedgerOf, attacks: a = attacks } = {}) {
+    if (closed) throw new StageError('session', 'closed', 'the playground is stopping');
     if (mode === 'devkit') {
       // One DevKit session per server: its journal is the project's on this chain (journal.js), so the previous
       // session ends (its reservations stay journaled) before the next one restores them.
@@ -94,44 +105,58 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
         await s.close().catch(() => {});
       }
       const id = 's' + ++counter;
-      const s = await makeSession({ id, root, ...devkit, log, onEnd: (reason) => log(`session ${id}: the dev host ended (${reason})`) });
+      const s = await makeSession({ id, root, ...devkit, ...(source ? { source } : {}), log,
+        onEnd: (reason) => log(`session ${id}: the dev host ended (${reason})`) });
+      if (closed) {
+        await s.close().catch(() => {});
+        throw new StageError('session', 'closed', 'the playground is stopping');
+      }
       sessions.set(id, s);
       return s;
     }
     const prior = keepLedgerOf ? use(keepLedgerOf) : null;
+    // Taken out at once: the old session accepts nothing more while its ledger moves to the new one.
+    if (prior) sessions.delete(prior.id);
     while (sessions.size >= MAX_SESSIONS) {
       const [oldest, s] = sessions.entries().next().value;
       sessions.delete(oldest);
       s.close().catch(() => {});
     }
     const id = 's' + ++counter;
-    const s = await makeSession({ id, root, engine, ledger: prior?.ledger, attacks: !!a,
-      onEnd: (reason) => log(`session ${id}: the dev host ended (${reason})`) });
-    if (prior) {
-      // The old session's host is done with; its ledger lives on in the new one (D2).
-      sessions.delete(prior.id);
-      prior.close().catch(() => {});
+    let s;
+    try {
+      s = await makeSession({ id, root, engine, ledger: prior?.ledger, attacks: !!a, ...(source ? { source } : {}),
+        onEnd: (reason) => log(`session ${id}: the dev host ended (${reason})`) });
+    } catch (e) {
+      if (prior) sessions.set(prior.id, prior);
+      throw e;
+    }
+    // The old session's host is done with; its ledger lives on in the new one (D2).
+    if (prior) prior.close().catch(() => {});
+    if (closed) {
+      await s.close().catch(() => {});
+      throw new StageError('session', 'closed', 'the playground is stopping');
     }
     sessions.set(id, s);
     return s;
   }
 
   const routes = {
-    'sessions/new': async (b) => (await create(b)).status(),
+    'sessions/new': (b) => serial(async () => (await create(b)).status()),
     'session': async (b) => use(b.session).status(),
-    'session/end': async (b) => {
+    'session/end': (b) => serial(async () => {
       const s = use(b.session);
       sessions.delete(s.id);
       await s.close();
       return {};
-    },
-    'session/reset': async (b) => {
+    }),
+    'session/reset': (b) => serial(async () => {
       // Reset (D2): a new ledger and a new host; the protocol's own reset is not used (it keeps reservations).
       const s = use(b.session);
       sessions.delete(s.id);
       await s.close();
       return (await create({ attacks: s.attacksEnabled })).status();
-    },
+    }),
     'session/attacks': async (b) => {
       const s = use(b.session);
       s.attacksEnabled = b.enabled === true;   // a DevKit session refuses (no attack suite there)
@@ -155,7 +180,7 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       return use(b.session).prepare(b.call);
     },
     'view': async (b) => use(b.session).view(str(b.contract, 'contract', CONTRACT), str(b.instance, 'instance', /^[0-9a-f]{64}$/),
-      b.view ?? null, b.args ?? {}),
+      b.view == null ? null : str(b.view, 'view', /^[A-Za-z_$][\w$]{0,200}$/), b.args ?? {}),
     'instances': async (b) => use(b.session).instances(str(b.contract, 'contract', CONTRACT), b.limit ?? 50),
     'objects': async (b) => use(b.session).objects(str(b.contract, 'contract', CONTRACT), str(b.instance, 'instance', /^[0-9a-f]{64}$/), b.limit ?? 50),
     'page': async (b) => use(b.session).page(b.method === 'objects' ? 'objects' : 'instances', str(b.listing, 'listing'), b.after, b.limit ?? 50),
@@ -168,6 +193,7 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       return use(b.session).outputs(b.refs.map((r) => str(r, 'ref', /^[0-9a-f]{64}#\d{1,5}$/)));
     },
     'protocolParams': async (b) => use(b.session).protocolParams(),
+    'registered': async (b) => use(b.session).registered(str(b.scriptHash, 'scriptHash', /^[0-9a-f]{56}$/)),
     'fund': async (b) => ({ ref: await use(b.session).fund(str(b.address, 'address', /^addr_test1[0-9a-z]{20,200}$/),
       str(String(b.lovelace ?? ''), 'lovelace', /^\d{1,16}$/)) }),
     'advance': async (b) => ({ slot: use(b.session).advance(b.ms) }),
@@ -215,7 +241,7 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
         if (req.method !== 'POST') return refuse(res, 405, 'POST only');
         if (!sameToken(req.headers[TOKEN_HEADER])) return refuse(res, 401, 'missing or wrong session token');
         if (!/^application\/json\b/.test(req.headers['content-type'] ?? '')) return refuse(res, 415, 'JSON only');
-        const route = routes[path.slice(5)];
+        const route = Object.hasOwn(routes, path.slice(5)) ? routes[path.slice(5)] : undefined;
         if (!route) return refuse(res, 404, 'no such route');
         let body;
         try {
@@ -241,8 +267,10 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
           throw e;
         });
       }
-      const file = (await page)[name];
-      if (!file) return refuse(res, 404, 'not found');
+      const files = await page;
+      // Own entries only: an inherited name (`/__proto__`, `/constructor`) must not reach res.end as a callback.
+      const file = Object.hasOwn(files, name) ? files[name] : undefined;
+      if (!Buffer.isBuffer(file)) return refuse(res, 404, 'not found');
       const type = name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.js') ? 'text/javascript; charset=utf-8'
         : name.endsWith('.css') ? 'text/css; charset=utf-8' : name.endsWith('.wasm') ? 'application/wasm'
           : name.endsWith('.svg') ? 'image/svg+xml' : 'application/octet-stream';
@@ -261,6 +289,7 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     handles: (pathname) => base === '/' || pathname === base.slice(0, -1) || pathname.startsWith(base),
     handle,
     async close() {
+      closed = true;
       await Promise.all([...sessions.values()].map((s) => s.close().catch(() => {})));
       sessions.clear();
     },

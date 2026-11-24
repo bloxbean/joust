@@ -204,12 +204,12 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
   await new Promise((ok, fail) => server.listen(port, '127.0.0.1', ok).on('error', fail));
   const url = `http://127.0.0.1:${server.address().port}`;
   log(`joust dev on ${url}: the page at /, the chain at /chain, the build at /joust${net.admin ? ', faucet at /dev/topup' : ''}`);
-  if (playground) {
-    log(`  the playground: ${url}/playground/#token=${playground.token}`);
-    log('  (the link carries this run\'s playground token: do not share it)');
-  }
+  // The playground's token is in no log line (ADR-0024 D8): a private launcher file forwards the browser to it.
+  const launcher = playground ? (await import('./playground/index.js')).launcherFile(`${url}/playground/#token=${playground.token}`) : null;
+  if (launcher) log(`  the playground: open ${launcher.link} (a private file that forwards to ${url}/playground/ with this run's token)`);
 
   const close = async () => {
+    launcher?.remove();
     await playground?.close();
     watcher?.close();
     clearTimeout(timer);
@@ -218,7 +218,7 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
     await running;
   };
   signal?.addEventListener('abort', close, { once: true });
-  return { url, port: server.address().port, close, rebuild: cycle };
+  return { url, port: server.address().port, close, rebuild: cycle, playground: launcher?.link ?? null };
 }
 
 /**

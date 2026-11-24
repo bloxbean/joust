@@ -1,7 +1,7 @@
-// The playground's dev-host client (ADR-0024 D1): it launches the project's npm dev host (ADR-0022, protocol 1) over
-// stdio and is its client in every respect the protocol names: framing, one call at a time, the reverse `chain/read`
-// answered by the session's chain, a hard client deadline, and the launch checks of an npm project
-// (docs/protocol/dev-host-1.md, "Launch and framing" and "npm host").
+// The playground's dev-host client (ADR-0024 D1): it launches the project's dev host (ADR-0022, protocol 1; the npm host
+// here, the JVM host of a Gradle project through gradle.js) over stdio and is its client in every respect the protocol
+// names: framing, one call at a time, the reverse `chain/read` answered by the session's chain, a hard client deadline,
+// and the launch checks of an npm project (docs/protocol/dev-host-1.md, "Launch and framing" and "npm host").
 //
 // The host is a child process; its exit ends the session (the protocol treats exit as loss of state). A protocol
 // violation by the host (an unsolicited or second response, a reverse request outside a call, a malformed frame)
@@ -100,9 +100,16 @@ export function launchNpmHost({ root, onExit = () => {}, deadlineMs = 120_000, s
   const real = realpathSync(root);
   const entry = realpathSync(join(real, 'node_modules/@julclang/joust/bin/joust-host.js'));
   if (!within(real, entry)) throw new Error('the project\'s @julclang/joust is outside the project: install it in the project');
-  const child = spawnHost(process.execPath, ['node_modules/@julclang/joust/bin/joust-host.js', '--stdio'], {
-    cwd: real, env: hostEnv(), stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  return launchHost({ command: process.execPath, args: ['node_modules/@julclang/joust/bin/joust-host.js', '--stdio'], cwd: real,
+    onExit, deadlineMs, spawnHost });
+}
+
+/**
+ * A dev host started as {@code command args} in {@code cwd} with the D3 environment allow-list, spoken to over stdio
+ * (both hosts: the npm host above, the JVM host of a Gradle project in gradle.js).
+ */
+export function launchHost({ command, args, cwd, onExit = () => {}, deadlineMs = 120_000, spawnHost = spawn }) {
+  const child = spawnHost(command, args, { cwd, env: hostEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
   let diagnostics = '';
   let ended = null;
   let nextId = 0;
@@ -228,6 +235,34 @@ export function launchNpmHost({ root, onExit = () => {}, deadlineMs = 120_000, s
       await exited;
       clearTimeout(kill);
       end('closed');
+    },
+  };
+}
+
+/**
+ * The build an npm project's session runs (ADR-0024 D2): opening it pins the bytes the npm fingerprint covers; the
+ * session asks `stale()` before every prepare (I6). gradle.js's gradleSource has the same shape.
+ *
+ * open() → { kind, root, digest, snapshot, entries: [{ description (JSON text), script }], stale(), launch(o), dispose() }
+ */
+export function npmSource(root, { launch = launchNpmHost } = {}) {
+  return {
+    kind: 'npm',
+    async open() {
+      const fp = npmFingerprint(root);
+      return {
+        kind: 'npm', root: fp.root, digest: fp.digest, snapshot: fp.root,
+        entries: JSON.parse(fp.contracts.toString('utf8')),
+        stale() {
+          try {
+            return npmFingerprint(fp.root).digest !== fp.digest;
+          } catch {
+            return true;
+          }
+        },
+        launch: (o) => launch({ root: fp.root, ...o }),
+        dispose() {},
+      };
     },
   };
 }

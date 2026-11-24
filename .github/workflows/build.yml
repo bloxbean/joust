@@ -559,7 +559,7 @@ jobs:
   cli:
     needs: engines
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -624,6 +624,36 @@ jobs:
         run: >-
           bash .github/scripts/joust-cli-e2e.sh julc-state-cli/build/native/nativeCompile/joust
           "$RUNNER_TEMP/staging" "$RUNNER_TEMP/e2e"
+
+      # ADR-0024 M2: the playground in Gradle projects. The JVM host's launch, client side (the spec, the private
+      # snapshot, the digest, links and FIFOs refused); `joust new` Gradle Counters (Java and .jsc) against the staged
+      # repository, walked through in Chromium and compared step by step with the npm walkthrough (I11); a rebuild during
+      # a session (I6); the .jsc ABI gate (I10); and the native joust's playground from its per-user cache, installed from
+      # this commit's npm tarballs (the page prebuilt, as release.yml ships it). Gradle and Chromium are required here.
+      - name: Test the Gradle playground
+        shell: bash
+        env:
+          JOUST_REQUIRE_CHROMIUM: '1'
+          JOUST_REQUIRE_GRADLE: '1'
+        run: |
+          set -euo pipefail
+          bash scripts/setup-js.sh
+          node js/joust/scripts/build-playground.mjs
+          tgz="$RUNNER_TEMP/playground-npm"
+          mkdir -p "$tgz"
+          for p in state-client joust-runtime joust; do npm pack "./js/$p" --ignore-scripts --pack-destination "$tgz" >/dev/null; done
+          pw="$RUNNER_TEMP/playwright"
+          mkdir -p "$pw" js/joust/node_modules
+          (cd "$pw" && npm init -y >/dev/null && npm install --no-audit --no-fund --ignore-scripts playwright@1.64.1 \
+            && npx playwright install --with-deps chromium)
+          ln -sfn "$pw/node_modules/playwright" js/joust/node_modules/playwright
+          ln -sfn "$pw/node_modules/playwright-core" js/joust/node_modules/playwright-core
+          export JOUST_PLAYGROUND_GRADLE_REPO="$RUNNER_TEMP/staging"
+          export JOUST_CLI="$GITHUB_WORKSPACE/julc-state-cli/build/native/nativeCompile/joust"
+          JOUST_PLAYGROUND_TARBALLS="$(ls "$tgz"/*.tgz | paste -sd: -)"
+          export JOUST_PLAYGROUND_TARBALLS
+          (cd js/joust && ../../scripts/node-test.sh joust-playground-gradle --test-concurrency=1 test/playground-gradle.test.js)
+          python3 scripts/junit-no-skips.py build/npm-test-results/joust-playground-gradle.xml
 
   # ADR-0021 D9, D11, D12: the VS Code extension packaged from this commit's engine, checked (no native code, under
   # 16 MB, the engine's digests), and tested with @vscode/test-electron on the minimum and the current VS Code: the

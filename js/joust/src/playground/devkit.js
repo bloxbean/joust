@@ -13,7 +13,7 @@
 
 import { blockfrostProvider, chainOf, parseTx, plutusScriptHash } from '@julclang/state-client';
 import { addressParts, ledgerTx, rewardAddress } from '@julclang/state-client/ledger';
-import { HostError, launchNpmHost, npmFingerprint } from './host.js';
+import { HostError, launchNpmHost, npmSource } from './host.js';
 import { LIMITS, StageError, snapshotOutput } from './session.js';
 import { openJournal, stateRoot } from './journal.js';
 
@@ -205,8 +205,10 @@ const sum = (utxos) => utxos.reduce((n, u) => n + BigInt(u.value.find?.((a) => a
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Starts a DevKit session for the npm project at {@code root} (built: build/joust/contracts.json).
+ * Starts a DevKit session for the project at {@code root}: an npm project (built: build/joust/contracts.json) or, with
+ * {@code source} a gradleSource (gradle.js), a Gradle project's verified snapshot, as offline sessions do.
  *
+ * @param o.source       the build the session pins (default npmSource(root))
  * @param o.net          the resolved network (attach()): chain, admin, clock
  * @param o.identity     devkitIdentity(net.admin) (default: read now)
  * @param o.chain        yaciChain(net) (default)
@@ -217,7 +219,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * @param o.identityBase the DevKit mnemonic's first account index the page's test identities use (default 1)
  */
 export async function devkitSession({ id, root, net, identity, chain, state = stateRoot(), ttlSlots, settlementSlots = SETTLEMENT_SLOTS,
-  nowSlot, topUp, pollMs = 1000, identityBase = 1, launch = launchNpmHost, onEnd = () => {}, log = () => {} }) {
+  nowSlot, topUp, pollMs = 1000, identityBase = 1, launch = launchNpmHost, source = npmSource(root, { launch }), onEnd = () => {},
+  log = () => {} }) {
   const clock = net.clock;
   identity ??= await devkitIdentity(net.admin);
   chain ??= yaciChain(net);
@@ -230,14 +233,21 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   const network = { networkId: 0, protocolMagic: identity.protocolMagic, mainnet: false };
   const time = { maxTtlSlots: Math.max(ttlSlots, 300), settlementSlots, maxNowAheadSlots: 120 };
 
-  const fp = npmFingerprint(root);
-  const entries = JSON.parse(fp.contracts.toString('utf8'));
-  const journal = openJournal({ root: fp.root, chain: identity, state });
+  const fp = await source.open();
+  const entries = fp.entries;
+  let journal;
+  try {
+    journal = openJournal({ root: fp.root, chain: identity, state });
+  } catch (e) {
+    fp.dispose();
+    throw e;
+  }
   const read = chainReads(chain);
   let host;
   try {
-    host = launch({ root: fp.root, onExit: (reason) => onEnd(reason) });
+    host = fp.launch({ onExit: (reason) => { fp.dispose(); onEnd(reason); } });
   } catch (e) {
+    fp.dispose();
     journal.close();
     throw e;
   }
@@ -271,7 +281,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   try {
     const restoring = journal.entries.length > 0 || journal.lost;
     init = await host.call('initialize', { protocol: [1], network, clock, time, limits: LIMITS,
-      build: { snapshot: fp.root, digest: fp.digest }, restoring });
+      build: { snapshot: fp.snapshot, digest: fp.digest }, restoring });
     if (init.fingerprint !== fp.digest) {
       throw new StageError('session', 'fingerprint', 'the dev host loaded another build than the one the playground hashed: start again');
     }
@@ -360,13 +370,8 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   watcher = setInterval(tick, pollMs);
   watcher.unref?.();
 
-  const stale = () => {
-    try {
-      return npmFingerprint(fp.root).digest !== fp.digest;
-    } catch {
-      return true;
-    }
-  };
+  /** Whether the project's build changed since this session started (I6). */
+  const stale = () => fp.stale();
   /** Before the page can sign it: the body in the journal, the high-water mark over it (ADR-0022 D8). */
   const handOut = (prepared, label) => {
     if (!prepared?.reservation) return;
@@ -390,6 +395,8 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   return {
     id,
     mode: 'devkit',
+    build: fp.kind,
+    snapshot: fp.snapshot,
     root: fp.root,
     fingerprint: fp.digest,
     entries,
@@ -403,6 +410,10 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     get attacksEnabled() {
       return false;
     },
+    /** The dev host's process id (tests check that it is the only process a session starts). */
+    get hostPid() {
+      return host.pid;
+    },
     set attacksEnabled(_v) {
       throw new StageError('session', 'devkit', 'DevKit runs no attack suite: its node checks every transaction');
     },
@@ -413,7 +424,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         chain: { startTime: identity.startTime, admin: identity.admin }, fingerprint: fp.digest, slot: now(), tip: tip?.slot ?? null,
         clock, ttlSlots, settlementSlots, identityBase, stale: stale(), ended: host.alive ? null : host.ended, attacks: false,
         capabilities: init.capabilities ?? [], versions: init.versions ?? null, restored, pruned: shown,
-        contracts: (init.contracts ?? []).map((c) => ({ name: c.name, served: c.served !== false, unsupported: c.unsupported ?? null })) };
+        contracts: (init.contracts ?? []).map((c) => ({ name: c.name, served: c.served === true, unsupported: c.unsupported ?? null })) };
     },
     describe: (() => {
       const cache = new Map();
@@ -500,6 +511,14 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       return out;
     },
     protocolParams: () => chain.protocolParams(),
+    /**
+     * Whether a script credential's stake is registered, for the publication checks: true, false, or 'unknown' (Yaci
+     * Store cannot tell; the checker accepts that for a contract's own registration, never for a verifier's).
+     */
+    async registered(scriptHash) {
+      const r = await chain.stakeRegistered(rewardAddress({ type: 'script', hash: scriptHash }, 0));
+      return r === true || r === false ? r : 'unknown';
+    },
     /** Tops an identity's address up from the DevKit's faucet (D5), then waits until the chain shows it. */
     async fund(address, lovelace) {
       let parts = null;

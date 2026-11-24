@@ -10,12 +10,14 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statS
 import { createHash } from 'node:crypto';
 import { join, relative } from 'node:path';
 import net from 'node:net';
+import { execFileSync } from 'node:child_process';
 import { request } from 'node:http';
 import { install, repo } from './host/client.js';
 import { offlineSession, ledgerReads } from '../src/playground/session.js';
 import { startPlayground, TOKEN_HEADER } from '../src/playground/server.js';
 import { launchNpmHost } from '../src/playground/host.js';
 import { classify, encode, unsupportedPaths, canonicalPairs } from '../playground/form.js';
+import { anchorsOf, checkCall, checkPublication } from '../playground/check.js';
 
 const images = existsSync(join(repo, 'js/joust/engine/joust-toolchain.js.wasm'))
   && existsSync(join(repo, 'js/joust-runtime/engine/joust-runtime.js.wasm'));
@@ -74,6 +76,12 @@ describe('ADR-0024 M1 sessions', { skip }, () => {
     t.mock.method(net.Socket.prototype, 'connect', function (...a) { connects.push(a); throw new Error('no sockets offline'); });
     let launches = 0;
     const launch = (o) => { launches++; return launchNpmHost(o); };
+    // This process's children (pgrep does not list itself), before the session starts.
+    const children = () => execFileSync('pgrep', ['-P', String(process.pid)], { encoding: 'utf8' }).trim().split(/\s+/).filter(Boolean)
+      .filter((pid) => !/^pgrep/.test(command(pid)));
+    const command = (pid) => { try { return execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim(); } catch { return ''; } };
+    let baseline;
+    try { baseline = children(); } catch { baseline = []; }
     const s = await offlineSession({ id: 's1', root, engine: e, launch });
     try {
       const { w } = await wallet();
@@ -85,6 +93,9 @@ describe('ADR-0024 M1 sessions', { skip }, () => {
       assert.ok(res.attacks > 0, 'the attack suite ran (Q7: on by default)');
       assert.deepEqual(res.acceptedAttacks, []);
       assert.deepEqual((await s.view(COUNTER, instance)).value.count, '5');
+      // The only process the session started is its dev host (the build's toolchain host predates the session).
+      const started = children().filter((pid) => !baseline.includes(pid));
+      assert.deepEqual(started, [String(s.hostPid)], 'no process but the dev host: ' + started.map(command).join('; '));
     } finally {
       await s.close();
     }
@@ -109,6 +120,32 @@ describe('ADR-0024 M1 sessions', { skip }, () => {
     assert.equal((await read({ kind: 'script', hash: '00'.repeat(28) })).absent, true);
     assert.deepEqual((await read({ kind: 'stakeRegistration', credential: '00'.repeat(28) })).value, { registered: false });
     for (const kind of ['redeemers', 'datum', 'somethingElse']) assert.equal((await read({ kind })).unsupported, true);
+  });
+
+  test('D2, I9: concurrent session requests keep the bound of four and never share a ledger', async () => {
+    let ledgers = 0;
+    const closedIds = [];
+    const stub = async ({ id, ledger }) => {
+      await new Promise((r) => setTimeout(r, 30));
+      const chain = ledger ?? { name: 'ledger' + ++ledgers };
+      return { id, ledger: chain, entries: [], status: () => ({ session: id, ledger: chain.name }),
+        close: async () => { closedIds.push(id); } };
+    };
+    const server = await startPlayground({ root, page: {}, session: stub });
+    try {
+      const call = (route, body) => post(server, route, body).then((r) => r.json);
+      await Promise.all(Array.from({ length: 12 }, () => call('sessions/new', {})));
+      assert.equal(server.sessions.size, 4, 'at most four sessions live');
+      const s1 = (await call('sessions/new', {})).result.session;
+      const [a, b] = await Promise.all([call('sessions/new', { keepLedgerOf: s1 }), call('sessions/new', { keepLedgerOf: s1 })]);
+      assert.equal([a, b].filter((r) => r.result).length, 1, 'one session takes the ledger over');
+      assert.equal([a, b].find((r) => r.error).error.code, 'unknownSession');
+      const owners = [...server.sessions.values()].filter((x) => x.ledger.name === 'ledger13');
+      assert.equal(owners.length, 1, 'one live session per ledger');
+      assert.ok(closedIds.includes(s1), 'the old session is closed');
+    } finally {
+      await server.close();
+    }
   });
 
   test('I9: resetting one session leaves another unchanged', async () => {
@@ -167,6 +204,69 @@ describe('ADR-0024 M1 sessions', { skip }, () => {
       }
     } finally {
       rmSync(r2, { recursive: true, force: true });
+    }
+  });
+
+  test('I2: the page\'s pre-sign check accepts the host\'s bodies and refuses tampered results', async () => {
+    const s = await offlineSession({ id: 's1', root, engine: await theEngine() });
+    try {
+      const alice = (await wallet()).w;
+      s.fund(alice.address, 1_000_000_000n);
+      const entry = s.entries.find((e) => JSON.parse(e.description).preamble?.title === COUNTER);
+      const anchors = anchorsOf({ description: JSON.parse(entry.description), script: entry.script });
+      const params = await s.protocolParams();
+      const { parseTx } = await import('@julclang/state-client');
+      const snapshotsOf = async (cbor) => {
+        const tx = parseTx(cbor);
+        return s.outputs([...new Set([...tx.inputs, ...tx.referenceInputs, ...tx.collateral].map((i) => (typeof i === 'string' ? i : i.ref)))]);
+      };
+      const tamper = (r, change) => { const c = structuredClone(r); change(c.prepared); return c; };
+      // The publications: each accepted as the host prepared it; a claimed signer set or window that the body does not
+      // have is refused.
+      for (const p of await s.prerequisites(COUNTER)) {
+        const r = await s.publish(COUNTER, p.id, alice.address);
+        const hash = p.id.split(':')[1];
+        const node = { scriptsAt: { [anchors.address]: [] }, registrations: { [hash]: await s.registered(hash) } };
+        const args = { contract: COUNTER, prerequisite: p.id, address: alice.address, anchors, snapshots: await snapshotsOf(r.prepared.cbor),
+          node, params, maxFee: 5_000_000n };
+        assert.deepEqual(checkPublication({ ...args, result: r }).sites, []);
+        assert.ok(checkPublication({ ...args, result: tamper(r, (x) => { x.signers = []; }) }).problems.includes('planMismatch'));
+        assert.ok(checkPublication({ ...args, result: tamper(r, (x) => { x.validTo += 1; }) }).problems.includes('planMismatch'));
+        assert.ok(checkPublication({ ...args, node: { ...node, scriptsAt: { [anchors.address]: [hash] } }, result: r }).problems
+          .includes('publicationPresence'), 'a script already at its holder is not published again');
+        await s.submit(r.prepared.reservation, await signed(alice, r.prepared));
+      }
+      const initCall = { contract: COUNTER, kind: 'init', method: 'init', address: alice.address, args: {} };
+      const init = await s.prepare(initCall);
+      const checked = checkCall({ result: init, request: initCall, anchors, snapshots: await snapshotsOf(init.prepared.cbor), params, maxFee: 5_000_000n });
+      assert.deepEqual(checked.sites, []);
+      assert.equal(checked.report.created, init.prepared.instance, 'the created id comes from the body');
+      await s.submit(init.prepared.reservation, await signed(alice, init.prepared));
+      const instance = checked.report.created;
+      const call = { contract: COUNTER, kind: 'action', method: 'increment', instance, address: alice.address, args: { by: '2' } };
+      const inc = await s.prepare(call);
+      const base = { request: call, anchors, snapshots: await snapshotsOf(inc.prepared.cbor), params, maxFee: 5_000_000n };
+      const ok = checkCall({ ...base, result: inc });
+      assert.deepEqual(ok.sites, []);
+      assert.equal(ok.report.walletNet.lovelace, ok.report.plan.fee, 'an increment costs Alice its fee');
+      const refused = (o, code) => assert.ok(checkCall(o).problems.includes(code), `${code}: ${checkCall(o).sites.join('; ')}`);
+      refused({ ...base, result: tamper(inc, (x) => { x.txHash = 'ee'.repeat(32); }) }, 'bodyHash');
+      refused({ ...base, result: tamper(inc, (x) => { x.signers = []; }) }, 'planMismatch');
+      refused({ ...base, result: tamper(inc, (x) => { x.plan.fee = '1'; }) }, 'planMismatch');
+      refused({ ...base, request: { ...call, args: { by: '3' } }, result: inc }, 'redeemer');
+      refused({ ...base, request: { ...call, address: (await wallet()).w.address }, result: inc }, 'scriptInput');
+      refused({ ...base, maxFee: 1n, result: inc }, 'fee');
+      refused({ ...base, anchors: { ...anchors, policy: 'ab'.repeat(28) }, result: inc }, 'scriptInput');
+      // A body the host altered after reserving it (another output value): not the body it described.
+      const bytes = inc.prepared.cbor;
+      const at = bytes.indexOf(inc.prepared.plan.fee === undefined ? 'zz' : BigInt(inc.prepared.plan.fee).toString(16).padStart(8, '0'));
+      if (at > 0) {
+        const altered = bytes.slice(0, at) + (BigInt(inc.prepared.plan.fee) + 1n).toString(16).padStart(8, '0') + bytes.slice(at + 8);
+        assert.ok(checkCall({ ...base, result: tamper(inc, (x) => { x.cbor = altered; }) }).problems.length > 0);
+      }
+      await s.discard(inc.prepared.reservation);
+    } finally {
+      await s.close();
     }
   });
 
@@ -272,6 +372,14 @@ describe('ADR-0024 D8: the server surface', { skip }, () => {
       assert.equal((await post(server, '', undefined, { method: 'GET', path })).status, 404, path);
     }
     assert.equal((await post(server, '', undefined, { method: 'POST', path: '/' })).status, 405);
+    // Inherited names are no assets and no routes (an inherited function reaching res.end once crashed the server).
+    for (const path of ['/__defineGetter__', '/constructor', '/__proto__', '/toString', '/hasOwnProperty']) {
+      assert.equal((await post(server, '', undefined, { method: 'GET', path })).status, 404, path);
+    }
+    for (const route of ['__defineGetter__', 'constructor', 'toString']) {
+      assert.equal((await post(server, route, {})).status, 404, route);
+    }
+    assert.equal((await post(server, 'session', { session: id })).status, 200, 'the server still answers');
   });
 
   test('D8: bounded JSON bodies; no path, command or URL is taken', async () => {
@@ -382,13 +490,20 @@ for (const kind of ['java', 'jsc']) {
     let root, server, browser, page, before0;
     const bodies = [];
     const errors = [];
+    const logs = [];
     before(async () => {
       root = await project(kind);
       before0 = treeHash(root);
       const { pageFiles } = await import('../src/playground/page.js');
-      server = await startPlayground({ root, engine: await theEngine(), page: await pageFiles() });
+      server = await startPlayground({ root, engine: await theEngine(), page: await pageFiles(), log: (l) => logs.push(String(l)) });
       browser = await chromium.launch();
       page = await browser.newPage();
+      // I1: the page's 32-byte random draws (the identities' mnemonic entropy), so the test can name every secret.
+      await page.addInitScript(() => {
+        const draw = crypto.getRandomValues.bind(crypto);
+        globalThis.__draws = [];
+        crypto.getRandomValues = (a) => { const r = draw(a); if (r.length === 32) globalThis.__draws.push([...new Uint8Array(r.buffer, r.byteOffset, 32)]); return r; };
+      });
       page.on('pageerror', (e) => errors.push(String(e.stack ?? e)));
       page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
       page.on('request', (r) => { if (r.method() === 'POST') bodies.push({ url: r.url(), body: r.postData() ?? '' }); });
@@ -473,7 +588,7 @@ for (const kind of ['java', 'jsc']) {
       const { wordlist } = await import('@scure/bip39/wordlists/english');
       const words = new Set(wordlist);
       const allowed = new Set(['session', 'contract', 'call', 'address', 'lovelace', 'ms', 'refs', 'reservation', 'cbor', 'prerequisite',
-        'instance', 'limit', 'enabled', 'keepLedgerOf', 'attacks', 'view', 'args', 'listing', 'after', 'method', 'datum']);
+        'instance', 'limit', 'enabled', 'keepLedgerOf', 'attacks', 'view', 'args', 'listing', 'after', 'method', 'datum', 'scriptHash']);
       assert.ok(bodies.length > 10);
       for (const { url, body } of bodies) {
         const json = JSON.parse(body || '{}');
@@ -486,6 +601,41 @@ for (const kind of ['java', 'jsc']) {
         }
       }
       assert.equal(treeHash(root), before0);
+    });
+    test('I1: the identities\' mnemonics and keys are nowhere in the server: not in its logs, not in its memory', async () => {
+      const { entropyToMnemonic } = await import('@scure/bip39');
+      const { wordlist } = await import('@scure/bip39/wordlists/english');
+      const { deriveAccount } = await import('@julclang/state-client/devwallet');
+      const funded = new Set(bodies.filter((b) => b.url.endsWith('/api/fund')).map((b) => JSON.parse(b.body).address));
+      // The snapshot first: once this test spells the secrets out, they are in this process's memory too. Written to a
+      // file and searched by grep (the snapshot is far larger than a string can be).
+      const { writeHeapSnapshot } = await import('node:v8');
+      const { mkdtempSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const dir = mkdtempSync(join(tmpdir(), 'joust-i1-'));
+      const heap = writeHeapSnapshot(join(dir, 'server.heapsnapshot'));
+      const draws = await page.evaluate(() => globalThis.__draws);
+      const secrets = [];
+      for (const bytes of draws) {
+        const mnemonic = entropyToMnemonic(Uint8Array.from(bytes), wordlist);
+        const acct = deriveAccount(mnemonic, 0, 0);
+        if (!funded.has(acct.address)) continue;
+        secrets.push(mnemonic, Buffer.from(bytes).toString('hex'), acct.privateKey.hex());
+      }
+      assert.ok(secrets.length >= 9, `the three identities' secrets were found (${secrets.length / 3})`);
+      const text = logs.join('\n');
+      const forms = secrets.flatMap((secret) => [secret, secret.split(' ').slice(0, 6).join(' ')]);
+      try {
+        for (const form of forms) assert.ok(!text.includes(form), 'a secret in the server\'s log');
+        writeFileSync(join(dir, 'forms'), forms.join('\n') + '\n');
+        // grep -F: fixed strings; exit 1 means none found.
+        const found = (() => {
+          try { return execFileSync('grep', ['-c', '-F', '-f', join(dir, 'forms'), heap], { encoding: 'utf8' }).trim(); } catch (e) { if (e.status === 1) return '0'; throw e; }
+        })();
+        assert.equal(found, '0', 'a secret in the server process\'s memory');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 }

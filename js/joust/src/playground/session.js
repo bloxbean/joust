@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { memoryLedger, LedgerRefusal } from '../test/offline.js';
 import { addressParts, ledgerTx, rewardAddress } from '@julclang/state-client/ledger';
-import { HostError, launchNpmHost, npmFingerprint } from './host.js';
+import { HostError, launchNpmHost, npmSource } from './host.js';
 
 export const OFFLINE_NETWORK = { networkId: 0, protocolMagic: 42, mainnet: false };
 const TIME = { maxTtlSlots: 900, settlementSlots: 0, maxNowAheadSlots: 900 };
@@ -47,6 +47,15 @@ export function ledgerReads(ledger, { networkId = 0 } = {}) {
   const tip = () => ({ slot: ledger.slot, hash: sha('slot' + ledger.slot), height: ledger.slot });
   return async function read(q) {
     const t = tip();
+    try {
+      return await answer(q, t);
+    } catch (e) {
+      // Every result carries a tip, a failed read's too (else the host takes it as inconsistentRead).
+      if (e && typeof e === 'object' && !e.tip) e.tip = t;
+      throw e;
+    }
+  };
+  async function answer(q, t) {
     switch (q.kind) {
       case 'tip':
         return { tip: t, value: t };
@@ -81,28 +90,37 @@ export function ledgerReads(ledger, { networkId = 0 } = {}) {
       default:
         return { tip: t, unsupported: true };
     }
-  };
+  }
 }
 
 /**
- * Starts an offline session for the npm project at {@code root} (its build must exist: build/joust/contracts.json).
+ * Starts an offline session for the project at {@code root}: an npm project (its build must exist:
+ * build/joust/contracts.json) or, with {@code source} a gradleSource (gradle.js), a Gradle project's verified snapshot.
  *
  * @param o.engine   the runtime engine (loadEngine()), for the ledger's script evaluation
+ * @param o.source   the build the session pins (default npmSource(root)): its digest, contract entries and host
  * @param o.ledger   keep this ledger (a new session on a rebuilt project, D2); default a new one
  * @param o.attacks  run the attack suite on every script transaction (default true, Q7)
  */
-export async function offlineSession({ id, root, engine, ledger, attacks = true, launch = launchNpmHost, onEnd = () => {} }) {
-  const fp = npmFingerprint(root);
-  const entries = JSON.parse(fp.contracts.toString('utf8'));
+export async function offlineSession({ id, root, engine, ledger, attacks = true, launch = launchNpmHost, onEnd = () => {},
+  source = npmSource(root, { launch }) }) {
+  const fp = await source.open();
+  const entries = fp.entries;
   const chain = ledger ?? memoryLedger({ engine, attacks });
   const read = ledgerReads(chain);
-  const host = launch({ root: fp.root, onExit: (reason) => onEnd(reason) });
+  let host;
+  try {
+    host = fp.launch({ onExit: (reason) => { fp.dispose(); onEnd(reason); } });
+  } catch (e) {
+    fp.dispose();
+    throw e;
+  }
   const reservations = new Map();   // reservation id -> { txHash, validTo, kind }
   const submitted = [];             // { txHash, slot, attacks }
   let init;
   try {
     init = await host.call('initialize', { protocol: [1], network: OFFLINE_NETWORK, clock: chain.clock, time: TIME,
-      limits: LIMITS, build: { snapshot: fp.root, digest: fp.digest }, restoring: false });
+      limits: LIMITS, build: { snapshot: fp.snapshot, digest: fp.digest }, restoring: false });
   } catch (e) {
     await host.close().catch(() => {});
     throw e;
@@ -117,13 +135,7 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     if (!host.alive) throw new StageError('session', 'hostEnded', `the dev host ended (${host.ended}): start a new session`);
   };
   /** Whether the project's build changed since this session started (I6). */
-  const stale = () => {
-    try {
-      return npmFingerprint(fp.root).digest !== fp.digest;
-    } catch {
-      return true;
-    }
-  };
+  const stale = () => fp.stale();
   const forward = async (method, params) => {
     live();
     try {
@@ -140,6 +152,8 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
   return {
     id,
     mode: 'offline',
+    build: fp.kind,
+    snapshot: fp.snapshot,
     root: fp.root,
     fingerprint: fp.digest,
     entries,
@@ -159,11 +173,15 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     set attacksEnabled(v) {
       if ('attacksEnabled' in chain) chain.attacksEnabled = !!v;
     },
+    /** The dev host's process id (tests check that it is the only process a session starts). */
+    get hostPid() {
+      return host.pid;
+    },
     status() {
       return { session: id, mode: 'offline', network: OFFLINE_NETWORK, fingerprint: fp.digest, slot: chain.slot,
         clock: chain.clock, stale: stale(), ended: host.alive ? null : host.ended, attacks: this.attacksEnabled,
         capabilities: init.capabilities ?? [], versions: init.versions ?? null,
-        contracts: (init.contracts ?? []).map((c) => ({ name: c.name, served: c.served !== false, unsupported: c.unsupported ?? null })) };
+        contracts: (init.contracts ?? []).map((c) => ({ name: c.name, served: c.served === true, unsupported: c.unsupported ?? null })) };
     },
     async describe(contract) {
       if (!describes.has(contract)) describes.set(contract, await forward('describe', { contract }));
@@ -173,15 +191,18 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     prerequisites: (contract) => forward('prerequisites', { now: chain.slot, contract }),
     async publish(contract, prerequisite, address) {
       if (stale()) throw new StageError('session', 'stale', 'the project was rebuilt: start a new session to use the new build');
-      const r = await forward('publish', { now: chain.slot, ttlSlots: TTL_SLOTS, contract, prerequisite, address });
+      // The page checks against the `now` the host was given, not a later one (another tab may move the clock).
+      const now = chain.slot;
+      const r = await forward('publish', { now, ttlSlots: TTL_SLOTS, contract, prerequisite, address });
       if (r?.prepared) remember(r.prepared, 'publish');
-      return { ...r, now: chain.slot, ttlSlots: TTL_SLOTS };
+      return { ...r, now, ttlSlots: TTL_SLOTS };
     },
     async prepare(call) {
       if (stale()) throw new StageError('session', 'stale', 'the project was rebuilt: start a new session to use the new build');
-      const r = await forward('prepare', { now: chain.slot, ttlSlots: TTL_SLOTS, call });
+      const now = chain.slot;
+      const r = await forward('prepare', { now, ttlSlots: TTL_SLOTS, call });
       remember(r.prepared, 'call');
-      return { ...r, now: chain.slot, ttlSlots: TTL_SLOTS };
+      return { ...r, now, ttlSlots: TTL_SLOTS };
     },
     view: (contract, instance, view = null, args = {}) => forward('view', { now: chain.slot, contract, instance, view, args }),
     instances: (contract, limit = 50) => forward('instances', { now: chain.slot, contract, limit }),
@@ -220,13 +241,20 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
         await forward('settled', { reservation, txHash: hash, status: 'discarded', tip: chain.slot }).catch(() => {});
         throw new StageError('ledger', e.rule, e.message, { rule: e.rule, notModelled: e.rule === 'NotModelled' });
       }
+      // The ledger applied it: record that first, so a host that fails to take the settlement cannot hide an applied
+      // transaction (a retried increment would apply twice).
       const slot = typeof chain.inclusion === 'function' ? chain.inclusion(hash) : chain.slot - 1;
       reservations.delete(reservation);
-      const settled = await forward('settled', { reservation, txHash: hash, status: 'confirmed', slot, tip: chain.slot });
       const ran = chain.attacks().slice(before).filter((a) => a.tx === hash);
-      const entry = { txHash: hash, slot, state: settled?.state ?? null, attacks: ran.length,
+      const entry = { txHash: hash, slot, state: null, attacks: ran.length,
         acceptedAttacks: ran.filter((a) => !a.refused).map(({ name, invariant, detail }) => ({ name, invariant, detail })) };
       submitted.push(entry);
+      try {
+        const settled = await forward('settled', { reservation, txHash: hash, status: 'confirmed', slot, tip: chain.slot });
+        entry.state = settled?.state ?? null;
+      } catch (e) {
+        entry.settlement = String(e.message ?? e).slice(0, 500);
+      }
       return entry;
     },
     /** Outputs at an address, in the protocol's snapshot encoding (the page's wallets and checks read these). */
@@ -242,6 +270,10 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       return out;
     },
     protocolParams: () => chain.protocolParams(),
+    /** Whether a script credential's stake is registered (the trusted chain's answer, for the publication checks). */
+    async registered(scriptHash) {
+      return (await chain.account(rewardAddress({ type: 'script', hash: scriptHash }, 0))).registered === true;
+    },
     /** Funds an identity's address from nowhere (offline only, D5). */
     fund(address, lovelace) {
       const parts = (() => {

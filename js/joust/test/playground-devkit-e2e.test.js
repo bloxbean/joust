@@ -5,9 +5,10 @@
 // fails instead of skipping.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { install, repo } from './host/client.js';
 
 const ADMIN = 'http://localhost:10000';
@@ -208,8 +209,13 @@ describe('ADR-0024 M3 on Yaci DevKit: joust dev serves the playground at /playgr
     const { dev } = await import('../src/dev.js');
     const d = await dev({ root, config: loadConfig(root), port: 0, log: (l) => lines.push(String(l)) });
     try {
-      const m = /\/playground\/#token=([A-Za-z0-9_-]{43})/.exec(lines.join('\n'));
-      assert.ok(m, lines.join('\n'));
+      // D8: no log line carries the token; the private launcher file the log names does (0600).
+      assert.ok(!lines.join('\n').includes('#token='), lines.join('\n'));
+      assert.ok(lines.some((l) => l.includes(d.playground)), lines.join('\n'));
+      const launcher = fileURLToPath(d.playground);
+      assert.equal(statSync(launcher).mode & 0o777, 0o600);
+      const m = /\/playground\/#token=([A-Za-z0-9_-]{43})/.exec(readFileSync(launcher, 'utf8'));
+      assert.ok(m);
       const page = await fetch(d.url + '/playground/');
       assert.equal(page.status, 200);
       assert.equal(page.headers.get('access-control-allow-origin'), null);
