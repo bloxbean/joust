@@ -800,16 +800,19 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
  */
 async function walletStillMatches(signer, cbor, label) {
   const refuse = (message) => new StageFailure({ stage: 'wallet', code: 'walletChanged', message, label });
+  // Every read, the retries' too (#179 r3): the same network and the same change address (the payer) as connected.
   const read = async () => {
+    let v;
     try {
-      return await walletView(signer.wallet);
+      v = await walletView(signer.wallet);
     } catch (e) {
       throw refuse(`the wallet could not be read: ${reason(e)}`);
     }
+    if (v.networkId !== state.session.network.networkId) throw refuse(`the wallet is now on network ${v.networkId}: connect the wallet again`);
+    if (v.change !== signer.address) throw refuse('the wallet\'s change address changed since it was connected: connect the wallet again');
+    return v;
   };
   let view = await read();
-  if (view.networkId !== state.session.network.networkId) throw refuse(`the wallet is now on network ${view.networkId}: connect the wallet again`);
-  if (view.change !== signer.address) throw refuse('the wallet\'s change address changed since it was connected: connect the wallet again');
   const tx = parseTx(cbor);
   const refs = [...new Set([...tx.inputs, ...tx.collateral].map((i) => (typeof i === 'string' ? i : i.ref ?? `${i.txHash}#${i.index}`)))];
   const { outputs } = await resolveInputs(cbor);

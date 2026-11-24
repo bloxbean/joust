@@ -144,7 +144,8 @@ export function yaciChain(net, { fetchImpl } = {}) {
     async datum(hash) {
       return (await p.get(`/scripts/datum/${hash}/cbor`, { allow404: true }))?.cbor ?? null;
     },
-    submit: (cbor) => p.submit(cbor, { retries: 3 }),
+    // One attempt: the session retries itself, checking it is still live before every POST (#179 r3).
+    submit: (cbor) => p.submit(cbor, { retries: 0 }),
     /** The slot of the block that holds {@code hash}, or null (not on chain). */
     async txSlot(hash) {
       const t = await p.get(`/txs/${hash}`, { allow404: true });
@@ -261,7 +262,7 @@ function keyedQueue() {
  * @param o.identityBase the DevKit mnemonic's first account index the page's test identities use (default 1)
  */
 export async function devkitSession({ id, root, net, identity, chain, state = stateRoot(), ttlSlots, settlementSlots = SETTLEMENT_SLOTS,
-  clock, nowSlot, topUp, pollMs = 1000, identityBase = 1, launch = launchNpmHost, source = npmSource(root, { launch }), onEnd = () => {},
+  clock, nowSlot, topUp, pollMs = 1000, retryDelayMs = 3000, identityBase = 1, launch = launchNpmHost, source = npmSource(root, { launch }), onEnd = () => {},
   log = () => {} }) {
   identity ??= await devkitIdentity(net.admin);
   chain ??= yaciChain(net);
@@ -397,14 +398,18 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
    * below that point may let them land again, so nothing is built until the tip passes the high-water mark.
    */
   async function rewindFence() {
+    // A bound found earlier holds until a tip strictly above it is seen (#179 r3), whatever this start's tip is.
+    rewoundUntil = journal.rewoundUntil;
     const at = journal.removedAt;
     if (at === null) return;
     const t = (await chain.tip()).slot;
-    if (t < at) {
-      rewoundUntil = Math.max(journal.highWater ?? at, at);
-      log(`playground (devkit): the chain is at slot ${t}, below slot ${at} where settled bodies left the journal: nothing is `
-        + `built until it passes slot ${rewoundUntil}`);
-    }
+    if (t < at) fenceRewind(Math.max(journal.highWater ?? at, at), `the chain is at slot ${t}, below slot ${at} where settled bodies left the journal`);
+  }
+  /** Persists the rewind bound first, then refuses builds until a tip strictly above it. */
+  function fenceRewind(bound, why) {
+    journal.setRewound(bound);
+    rewoundUntil = journal.rewoundUntil;
+    log(`playground (devkit): ${why}: nothing is built until the chain passes slot ${rewoundUntil}`);
   }
 
   async function restore() {
@@ -421,6 +426,8 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     const o = await observe();
     if (!o) throw new StageError('session', 'chainMoving', 'the chain kept moving while the journal was read: start again');
     const t = o.tip.slot;
+    // History this restore drops (settled while no playground ran, or lost with the journal) left at this point (#179 r3).
+    let dropped = journal.lost;
     // What may still land or still needs its depth margin, as the chain shows it now (one entry per body).
     const keep = [];
     const bodies = new Map();   // txHash -> its flags, across duplicates (a handoff or a submission is never forgotten)
@@ -436,10 +443,15 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       const slot = o.seen.get(e.txHash);
       if (within(slot, e, t)) {
         if (t - slot <= settlementSlots) keep.push({ ...e, state: 'shallow', slot });
-        else observed(e.txHash, { label: e.label, chain: 'final', slot });
+        else {
+          dropped = true;
+          // Final for the page once Yaci Store's indexes show it (bounded).
+          chain.indexed(e.txHash).catch(() => {}).then(() => observed(e.txHash, { label: e.label, chain: 'final', slot }));
+        }
       } else if (e.validTo > t) {
         keep.push({ ...e, state: 'prepared', slot: null });
       } else {
+        dropped = true;
         observed(e.txHash, { label: e.label, chain: 'expired' });
       }
     }
@@ -451,7 +463,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       || new Set(ids).size !== ids.length) {
       throw new StageError('host', 'restore', 'the dev host\'s restore did not give one distinct reservation per body: the journal is kept');
     }
-    journal.replace(keep.map((e, i) => ({ ...e, reservation: ids[i] })));
+    journal.replace(keep.map((e, i) => ({ ...e, reservation: ids[i] })), dropped ? t : null);
     for (const e of keep) {
       observed(e.txHash, { label: e.label, chain: e.state === 'shallow' ? 'included' : null, slot: e.slot,
         transport: e.submitted ? 'unknown' : null });
@@ -477,13 +489,21 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       if (!sameChain(identity, g)) return reset('its genesis changed');
       const o = await observe();
       if (!o) return;
-      if (tip && (o.tip.slot < tip.slot || (o.tip.slot === tip.slot && o.tip.hash !== tip.hash))) return reset('its tip went back');
+      if (tip && (o.tip.slot < tip.slot || (o.tip.slot === tip.slot && o.tip.hash !== tip.hash))) {
+        // Persisted when detected (#179 r3): the next session of this genesis builds nothing until a tip above it.
+        const bound = Math.max(journal.highWater ?? 0, journal.removedAt ?? 0, tip.slot);
+        fenceRewind(bound, `the chain's tip went back from slot ${tip.slot} to ${o.tip.slot}`);
+        return reset('its tip went back');
+      }
       tip = o.tip;
       const t = o.tip.slot;
-      if (rewoundUntil !== null && t > rewoundUntil) rewoundUntil = null;
+      if (rewoundUntil !== null && t > rewoundUntil) {
+        journal.setRewound(null);
+        rewoundUntil = null;
+      }
       // 1. Inclusions first, each told at its own slot (no other body crosses a threshold before its own inclusion
       //    is known: #179 P1-5), oldest first.
-      const indexing = [];
+      const indexing = new Map();   // txHash -> the bounded wait for Yaci Store's indexes, then the page's 'included'
       const landed = journal.entries.filter((e) => e.state === 'prepared' && within(o.seen.get(e.txHash), e, t))
         .sort((a, b) => o.seen.get(a.txHash) - o.seen.get(b.txHash));
       for (const e of landed) {
@@ -492,7 +512,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         await inform(e, { status: 'confirmed', slot, tip: slot }, settlementSlots === 0 ? ['shallow', 'confirmed'] : ['shallow']);
         // D-5: the host knows at once; the page is told once Yaci Store's indexes show the outputs (bounded, after the
         // rest of this pass).
-        indexing.push(chain.indexed(e.txHash).catch(() => {}).then(() => {
+        indexing.set(e.txHash, chain.indexed(e.txHash).catch(() => {}).then(() => {
           const now = status.get(e.txHash)?.chain;
           if (now === null || now === undefined || now === 'rolledBack') observed(e.txHash, { label: e.label, chain: 'included', slot });
         }));
@@ -508,7 +528,10 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       for (const e of journal.entries) {
         if (e.state === 'shallow' && t > e.slot + settlementSlots) {
           journal.remove(e.reservation, t);
-          observed(e.txHash, { chain: 'final', slot: e.slot });
+          // The host at once; the page's 'final' of an inclusion found in this pass after its indexing wait (#179 r3).
+          const shown = () => observed(e.txHash, { chain: 'final', slot: e.slot });
+          if (indexing.has(e.txHash)) indexing.set(e.txHash, indexing.get(e.txHash).then(shown));
+          else shown();
           await inform(e, { status: 'confirmed', slot: e.slot, tip: t }, ['confirmed']);
         } else if (e.state === 'prepared' && o.seen.get(e.txHash) === null && t > e.validTo + settlementSlots) {
           journal.remove(e.reservation, t);
@@ -516,7 +539,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
           await inform(e, { status: 'expired', tip: t }, ['expired']);
         }
       }
-      await Promise.all(indexing);
+      await Promise.all(indexing.values());
     } catch (err) {
       log(`playground (devkit): settlement: ${err.message ?? err}`);
     } finally {
@@ -532,7 +555,20 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
    * Before the page can sign it (ADR-0022 D8): the body in the journal under a valid, new reservation, and the
    * high-water mark over it. A body that cannot be journaled is never returned, and its host is fenced (#179 P1-4).
    */
-  const handOut = (prepared, label, { now: n, ttl }) => {
+  /** One body's inclusion slot read between two equal chain points; null if the chain moved. */
+  async function observeOne(e) {
+    const t1 = await chain.tip();
+    const slot = await chain.txSlot(e.txHash);
+    const t2 = await chain.tip();
+    return t1.slot === t2.slot && t1.hash === t2.hash ? { tip: t1.slot, slot } : null;
+  }
+  /** A pause a reset or close cancels. */
+  const pause = (ms) => new Promise((ok, no) => {
+    const timer = setTimeout(() => { waits.delete(cancel); ok(); }, ms);
+    const cancel = () => { clearTimeout(timer); waits.delete(cancel); no(new StageError('session', 'closed', 'the session ended')); };
+    waits.add(cancel);
+  });
+  const handOut = async (prepared, label, { now: n, ttl }) => {
     const tx = (() => {
       try {
         return parseTx(prepared?.cbor);
@@ -545,7 +581,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     const validFrom = tx?.validFrom === null || tx?.validFrom === undefined ? null : Number(tx.validFrom);
     const refs = tx ? new Set([...tx.inputs, ...tx.collateral].map(refOf)) : new Set();
     const held = journal.entries;
-    const overlap = held.find((e) => {
+    const overlapping = held.filter((e) => {
       const b = parseTx(e.cbor);
       return [...b.inputs, ...b.collateral].some((x) => refs.has(refOf(x)));
     });
@@ -556,17 +592,36 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
           : validTo === null ? 'no upper validity bound'
             : validTo <= n || validTo > n + ttl ? `a validity bound ${validTo} outside the asked window (${n}, ${n + ttl}]`
               : validFrom !== null && validFrom >= validTo ? 'an empty validity window'
-                : held.some((e) => e.txHash === tx.hash) ? 'the body of a reservation already journaled'
-                  : overlap ? `an input or collateral that the journaled body ${overlap.txHash.slice(0, 16)}… already spends` : null;
+                : held.some((e) => e.txHash === tx.hash) ? 'the body of a reservation already journaled' : null;
     if (problem) {
       fence(`it gave a body with ${problem}`);
       throw new StageError('host', 'reservation', `the dev host gave a body with ${problem}: it was not handed out`);
+    }
+    // An input a journaled body spends (#179 r3): the host may have seen that body expire before this session's watcher
+    // did. The chain decides: expired now, it is settled here and the new body goes out; otherwise (still live, or the
+    // chain cannot tell) the new body is refused, retryable, and the host is not blamed.
+    for (const e of overlapping) {
+      let o = null;
+      try {
+        o = e.state === 'prepared' ? await observeOne(e) : null;
+      } catch {
+        // uncertain: refused below
+      }
+      if (o && o.slot === null && o.tip > e.validTo + settlementSlots && journal.find(e.reservation)) {
+        journal.remove(e.reservation, o.tip);
+        observed(e.txHash, { chain: 'expired', slot: null });
+        await inform(e, { status: 'expired', tip: o.tip }, ['expired']);
+        continue;
+      }
+      throw new StageError('host', 'pending', `the body spends an input or collateral the journaled body ${e.txHash.slice(0, 16)}… still `
+        + 'reserves: prepare again once it settles');
     }
     journal.raise(validTo + settlementSlots);
     journal.record({ reservation, txHash: tx.hash, cbor: prepared.cbor, validTo, validFrom, state: 'prepared', label });
     observed(tx.hash, { label, chain: null, slot: null, transport: null });
   };
   const guardBuild = () => {
+    live();   // an ended (reset) session says so first
     if (rewoundUntil !== null) {
       throw new StageError('session', 'rewound', `the chain was rewound below bodies that already settled: nothing is built until it `
         + `passes slot ${rewoundUntil}`);
@@ -635,14 +690,14 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       guardBuild();
       const n = now();
       const r = await forward('publish', { now: n, ttlSlots, contract, prerequisite, address });
-      if (r?.prepared) handOut(r.prepared, `publish ${prerequisite}`, { now: n, ttl: ttlSlots });
+      if (r?.prepared) await handOut(r.prepared, `publish ${prerequisite}`, { now: n, ttl: ttlSlots });
       return { ...r, now: n, ttlSlots };
     },
     async prepare(call) {
       guardBuild();
       const n = now();
       const r = await forward('prepare', { now: n, ttlSlots, call });
-      handOut(r?.prepared, `${call.method}`, { now: n, ttl: ttlSlots });
+      await handOut(r?.prepared, `${call.method}`, { now: n, ttl: ttlSlots });
       return { ...r, now: n, ttlSlots };
     },
     view: (contract, instance, view = null, args = {}) => forward('view', { now: now(), contract, instance, view, args }),
@@ -705,46 +760,76 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
           setTimeout(cancel, 120_000).unref?.();
         });
       }
-      // Right before sending (#179 r2): the session is live, the DevKit still serves its chain, the reservation is still
-      // journaled and its window is open.
-      if (closed) throw new StageError('session', 'closed', 'the session ended');
-      live();
-      await verify().catch((err) => {
-        reset('its genesis changed');
-        throw err;
-      });
-      const still = journal.find(reservation);
-      if (!still) throw new StageError('session', 'unknownReservation', 'the reservation settled meanwhile');
-      const at = nowSlot();
-      if (at >= still.validTo || (still.validFrom !== null && at < still.validFrom)) {
-        throw new StageError('session', 'window', `slot ${at} is outside the body's window: it was not sent`);
-      }
+      // Before every POST (#179 r2, r3): the session is live, the DevKit still serves its chain (a failed read is
+      // retryable, a different genesis a reset), the reservation is still journaled and its window is open.
+      const check = async () => {
+        if (closed) throw new StageError('session', 'closed', 'the session ended');
+        live();
+        let g;
+        try {
+          g = await chain.genesis();
+        } catch (err) {
+          throw new StageError('session', 'chainUnavailable', `the chain API did not answer (${err.message ?? err}): submit again`);
+        }
+        if (!sameChain(identity, g)) {
+          reset('its genesis changed');
+          throw new StageError('session', 'otherChain', 'the DevKit now serves another chain: nothing more is sent');
+        }
+        if (closed) throw new StageError('session', 'closed', 'the session ended');
+        live();
+        const still = journal.find(reservation);
+        if (!still) throw new StageError('session', 'unknownReservation', 'the reservation settled meanwhile');
+        const at = nowSlot();
+        if (at >= still.validTo || (still.validFrom !== null && at < still.validFrom)) {
+          throw new StageError('session', 'window', `slot ${at} is outside the body's window: it was not sent`);
+        }
+      };
+      await check();
       journal.update(reservation, { submitted: true });
       observed(hash, { label: e.label, transport: 'pending' });
       submitted.push({ txHash: hash, label: e.label });
       const out = { txHash: hash, status: 'submitted', validTo: e.validTo, settlementSlots };
-      try {
-        await chain.submit(cbor);
-      } catch (err) {
-        const message = String(err.message ?? err).slice(0, 2000);
-        // The node answered (an HTTP 4xx from the submit API): refused. No answer, or the API's own failure: unclear.
-        if (/^submit failed: 4\d\d\b/.test(message)) {
-          observed(hash, { transport: 'refused', message });
-          // #179 r2: a refusal of a body the chain already holds (an earlier submission landed) is not a failure.
-          let slot = null;
+      let message = null;
+      for (let attempt = 0; ; attempt++) {
+        if (attempt > 0) {
+          // The submit API's node can be a block behind the index the inputs were read from: the same signed body
+          // again, after a pause a reset or close cancels, and only if the session still holds.
           try {
-            slot = await chain.txSlot(hash);
+            await pause(retryDelayMs);
+            await check();
           } catch {
-            // as refused
+            break;   // nothing more is sent; the last refusal stands
           }
-          const seen = status.get(hash)?.chain;
-          if (slot !== null || seen === 'included' || seen === 'final') {
-            return { ...out, status: seen === 'final' ? 'final' : 'included', slot: status.get(hash)?.slot ?? slot, transport: 'refused', message };
-          }
-          throw new StageError('ledger', 'nodeRefused', message, { note: 'its inputs stay reserved until the body expires' });
         }
-        observed(hash, { transport: 'unknown', message });
-        return { ...out, transport: 'unknown', note: `the submission's outcome is unclear (${message}): the playground follows the chain` };
+        try {
+          await chain.submit(cbor);
+          message = null;
+          break;
+        } catch (err) {
+          message = String(err.message ?? err).slice(0, 2000);
+          // No answer, or the API's own failure: unclear, followed on the chain (never resent).
+          if (!/^submit failed: 4\d\d\b/.test(message)) {
+            observed(hash, { transport: 'unknown', message });
+            return { ...out, transport: 'unknown', note: `the submission's outcome is unclear (${message}): the playground follows the chain` };
+          }
+          if (!/BadInputsUTxO/.test(message) || attempt >= 2) break;
+        }
+      }
+      if (message !== null) {
+        // The node answered (an HTTP 4xx from the submit API): refused.
+        observed(hash, { transport: 'refused', message });
+        // #179 r2: a refusal of a body the chain already holds (an earlier submission landed) is not a failure.
+        let slot = null;
+        try {
+          slot = await chain.txSlot(hash);
+        } catch {
+          // as refused
+        }
+        const seen = status.get(hash)?.chain;
+        if (slot !== null || seen === 'included' || seen === 'final') {
+          return { ...out, status: seen === 'final' ? 'final' : 'included', slot: status.get(hash)?.slot ?? slot, transport: 'refused', message };
+        }
+        throw new StageError('ledger', 'nodeRefused', message, { note: 'its inputs stay reserved until the body expires' });
       }
       observed(hash, { transport: 'accepted' });
       return { ...out, transport: 'accepted' };
