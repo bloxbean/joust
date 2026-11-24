@@ -27,6 +27,12 @@ import { parseTx } from '@julclang/state-client';
 
 import { applyOperation, operationRecord } from './operations.js';
 
+// What to do with an operations file this playground cannot use: never move or delete it (an operation it held would
+// look new, and a retry could create a second keyed instance after the first landed).
+const KEEP_OPS = 'restore its readability (its permissions and owner) or restore it from a backup, and start the playground again. '
+  + 'Do not remove or move it: that forgets the pending keyed operations, and retrying one could create a second instance after the first '
+  + 'landed';
+
 export const stateRoot = () => process.env.JOUST_STATE_DIR || join(homedir(), '.joust', 'state');
 export const JOURNAL_VERSION = 1;
 const JOURNAL_FIELDS = new Set(['version', 'project', 'entries', 'removedAt', 'fencedUntil']);
@@ -367,7 +373,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
         text = readFileSync(opsFile, 'utf8');
       } catch (e) {
         if (e.code === 'ENOENT') return [];
-        throw Object.assign(new Error(`the keyed operations file ${opsFile} cannot be read (${e.code ?? e.message}): fix or move it`), { code: 'storage' });
+        throw Object.assign(new Error(`the keyed operations file ${opsFile} cannot be read (${e.code ?? e.message}): ${KEEP_OPS}`), { code: 'storage' });
       }
       let raw;
       try {
@@ -377,7 +383,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
       }
       const rows = raw?.version === JOURNAL_VERSION && Array.isArray(raw.operations) ? raw.operations.map(operationRecord) : null;
       if (rows === null || rows.some((r) => r === null)) {
-        throw Object.assign(new Error(`the keyed operations file ${opsFile} is not one this playground wrote: fix or move it`), { code: 'storage' });
+        throw Object.assign(new Error(`the keyed operations file ${opsFile} is not one this playground wrote: ${KEEP_OPS}`), { code: 'storage' });
       }
       return rows;
     },

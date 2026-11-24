@@ -317,13 +317,17 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     const file = join(third.dir, readdirOf(third.dir).find((f) => f.endsWith('.operations.json') && read(join(third.dir, f), 'utf8').includes('"q"')));
     for (const bad of ['{ not json', JSON.stringify({ version: 99, operations: [] }), JSON.stringify({ version: 1, operations: [{ id: 'x' }] })]) {
       write(file, bad);
-      assert.throws(() => third.operations, (e) => e.code === 'storage' && e.message.includes(file));
+      assert.throws(() => third.operations, (e) => e.code === 'storage' && e.message.includes(file)
+        // Codex M4 r4: never advise moving or deleting it (a pending operation would look new: a second creation).
+        && /restore/.test(e.message) && /do not remove or move it/i.test(e.message) && /second instance/.test(e.message)
+        && !/fix or move it/.test(e.message));
       assert.throws(() => third.operate({ action: 'create', record: { ...rec, id: 'r', designated: 'ee'.repeat(32) + '#1' } }), (e) => e.code === 'storage');
       assert.equal(read(file, 'utf8'), bad, 'kept as it is');
     }
     chmodSync(file, 0o000);
     try {
-      assert.throws(() => third.operations, (e) => e.code === 'storage' && /cannot be read/.test(e.message));
+      assert.throws(() => third.operations, (e) => e.code === 'storage' && /cannot be read/.test(e.message)
+        && /permissions and owner/.test(e.message) && /do not remove or move it/i.test(e.message));
     } finally {
       chmodSync(file, 0o600);
       third.close();
