@@ -22,7 +22,7 @@ import {
   accessSync, chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync,
   readSync, realpathSync, rmSync, statSync, writeFileSync, writeSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { gradleBuildRoot, isGradle, isNpmRoot, trusted } from '../project.js';
 import { launchHost } from './host.js';
@@ -77,14 +77,26 @@ export function windowsCommandProblem(path) {
  * The build's root (the nearest trusted directory at or above {@code root} with a settings file, as the native
  * joust's Locator.gradleBuildRoot; else the project itself) and its wrapper.
  */
-export function gradleBuild(root, { env = process.env, isTrusted = trusted, platform = process.platform } = {}) {
+export function gradleBuild(root, { env = process.env, isTrusted = settingsTrusted, platform = process.platform } = {}) {
   const project = realpathSync(root);
   const buildRoot = gradleBuildRoot(project, env, isTrusted);
   // Gradle searches upwards for a settings file itself: without one in this trusted root it would evaluate an
-  // ancestor's (perhaps another user's). So the build must have its own.
-  if (!['settings.gradle', 'settings.gradle.kts'].some((f) => { try { return lstatSync(join(buildRoot, f)).isFile(); } catch { return false; } })) {
+  // ancestor's (perhaps another user's). So the build must have its own, and it must be the one Gradle takes:
+  // settings.gradle before settings.gradle.kts, and Gradle follows links, so a link (or both files) is refused.
+  const candidates = ['settings.gradle', 'settings.gradle.kts'].map((f) => {
+    try {
+      return { f, st: lstatSync(join(buildRoot, f)) };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+  if (!candidates.length) {
     fail(`no settings.gradle at or above ${project} in a directory you own (or list in JOUST_SAFE_DIRS): Gradle would look`
       + ' further up for one itself; add a settings.gradle to the build');
+  }
+  if (candidates.length > 1) fail(`${buildRoot} has both settings.gradle and settings.gradle.kts: keep one`);
+  if (!candidates[0].st.isFile() || candidates[0].st.isSymbolicLink()) {
+    fail(`${join(buildRoot, candidates[0].f)} is not a regular file (a link, say): Gradle would evaluate whatever it points to`);
   }
   const gradlew = join(buildRoot, platform === 'win32' ? 'gradlew.bat' : 'gradlew');
   try {
@@ -98,6 +110,22 @@ export function gradleBuild(root, { env = process.env, isTrusted = trusted, plat
     if (problem) fail(problem);
   }
   return { project, buildRoot, gradlew };
+}
+
+/**
+ * A directory the build-root walk may enter: trusted (this user's, or listed in JOUST_SAFE_DIRS) and, unless listed,
+ * not writable by others (unless sticky): another account could otherwise put a settings file there.
+ */
+export function settingsTrusted(dir, env = process.env) {
+  if (!trusted(dir, env)) return false;
+  const safe = (env.JOUST_SAFE_DIRS ?? '').split(delimiter).filter((d) => d && isAbsolute(d)).map((d) => resolve(d));
+  if (safe.includes(resolve(dir))) return true;
+  try {
+    const mode = statSync(dir).mode;
+    return process.platform === 'win32' || (mode & 0o022) === 0 || (mode & 0o1000) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -408,7 +436,17 @@ export function snapshotLaunch(spec, { base = tmpdir() } = {}) {
 }
 
 const VERSIONED = /^META-INF\/versions\/\d+\/(.+)$/;
-const GRADLE_CACHE = /\/caches\/modules-2\/files-2\.1\/[^/]+\/[^/]+\/[^/]+\/[0-9a-f]+\/[^/]+\.jar$/;
+/**
+ * Gradle's dependency cache, as this user's Gradle uses it (GRADLE_USER_HOME, else ~/.gradle), resolved: its modules
+ * are immutable once written. Null when there is none.
+ */
+export function moduleCache(env = process.env) {
+  try {
+    return realpathSync(join(env.GRADLE_USER_HOME || join(homedir(), '.gradle'), 'caches/modules-2/files-2.1'));
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The contracts in a verified snapshot, as the npm build's contracts.json has them ({ description: JSON text, script }),
@@ -493,7 +531,7 @@ function inventory(dir) {
  * hashed, and each jar hashed too, except a module in Gradle's dependency cache (immutable), checked by its file identity
  * at the copy. Any doubt (a file gone, a link, a FIFO) counts as changed.
  */
-export function isCurrent({ project, buildRoot, raw, spec, entries }) {
+export function isCurrent({ project, buildRoot, raw, spec, entries, cache = moduleCache() }) {
   try {
     if (!readSpecBytes(project).equals(raw)) return false;
     for (const [i, e] of spec.launch.entries()) {
@@ -504,8 +542,8 @@ export function isCurrent({ project, buildRoot, raw, spec, entries }) {
         const want = Object.keys(e.files).sort(utf8Order);
         if (names.length !== want.length || names.some((n, k) => n !== want[k])) return false;
         for (const rel of want) if (sha(readRegular(join(e.path, ...rel.split('/')))) !== e.files[rel]) return false;
-      } else if (!GRADLE_CACHE.test(e.path.split(sep).join('/'))) {
-        // The build's own jars, local file dependencies, composite builds' outputs: hashed.
+      } else if (!cache || within(buildRoot, e.path) || !within(cache, e.path)) {
+        // The build's own jars, local file dependencies, composite builds' outputs, anything cache-shaped elsewhere: hashed.
         if (sha(readRegular(e.path)) !== e.sha256) return false;
       } else {
         // A module in Gradle's dependency cache (files-2.1/<group>/<module>/<version>/<sha1>/): immutable once written.
@@ -590,7 +628,13 @@ export function launchGradleHost({ java, classPath, project, onExit, deadlineMs,
 export function gradleSource(root, { built = true, gatedSpec, gradle, log = console.log, base, launch = launchGradleHost,
   onCopied = () => {}, env, isTrusted } = {}) {
   const build = gradleBuild(root, { env, isTrusted });
-  const run = gradle ?? ((tasks) => runGradle(build, tasks, { log }));
+  const cache = moduleCache(env);
+  // The build root and its settings are resolved and checked again right before every wrapper run: a branch switch
+  // may have removed the settings file since (Gradle would then search further up itself).
+  const run = async (tasks) => {
+    const now = gradleBuild(root, { env, isTrusted });
+    return gradle ? gradle(tasks) : runGradle(now, tasks, { log });
+  };
   sweepSnapshots({ base });
   const specNow = () => {
     try {
@@ -640,7 +684,7 @@ export function gradleSource(root, { built = true, gatedSpec, gradle, log = cons
         snap.dispose();
         throw e;
       }
-      const current = () => isCurrent({ project: build.project, buildRoot: build.buildRoot, raw, spec, entries: snap.entries });
+      const current = () => isCurrent({ project: build.project, buildRoot: build.buildRoot, raw, spec, entries: snap.entries, cache });
       // Published only if the build is still the one copied: else a rebuild landed between the reads (copied again).
       if (!current()) {
         snap.dispose();

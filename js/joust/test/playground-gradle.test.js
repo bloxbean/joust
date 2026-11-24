@@ -374,7 +374,48 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     // A settings file that is a link (or a directory) does not count.
     rmSync(join(sub, 'settings.gradle'));
     symlinkSync(join(p.root, 'settings.gradle'), join(sub, 'settings.gradle'));
-    assert.throws(() => gradleBuild(sub, { isTrusted: foreign }), /no settings\.gradle at or above/);
+    assert.throws(() => gradleBuild(sub, { isTrusted: foreign }), /settings\.gradle is not a regular file \(a link, say\)/);
+  });
+
+  test('the settings file checked is the one Gradle takes: one of the two, a regular file, in a root others cannot write', () => {
+    const p = project();
+    writeFileSync(join(p.root, 'settings.gradle.kts'), '');
+    assert.throws(() => gradleBuild(p.root), /has both settings\.gradle and settings\.gradle\.kts: keep one/);
+    // A linked settings.gradle beside a regular settings.gradle.kts: still both (Gradle takes the link first).
+    rmSync(join(p.root, 'settings.gradle'));
+    symlinkSync(join(p.root, 'build.gradle'), join(p.root, 'settings.gradle'));
+    assert.throws(() => gradleBuild(p.root), /has both/);
+    rmSync(join(p.root, 'settings.gradle.kts'));
+    assert.throws(() => gradleBuild(p.root), /settings\.gradle is not a regular file \(a link, say\)/);
+    rmSync(join(p.root, 'settings.gradle'));
+    writeFileSync(join(p.root, 'settings.gradle.kts'), '');
+    assert.equal(gradleBuild(p.root).buildRoot, p.root, 'settings.gradle.kts alone is fine');
+    // An ancestor of yours that others can write is not walked into (another account could plant a settings file).
+    const sub = join(p.root, 'app');
+    mkdirSync(sub);
+    writeFileSync(join(sub, 'build.gradle'), '');
+    chmodSync(p.root, 0o775);
+    try {
+      assert.throws(() => gradleBuild(sub), /no settings\.gradle at or above .*app/);
+      assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root, 'unless listed in JOUST_SAFE_DIRS');
+    } finally {
+      chmodSync(p.root, 0o700);
+    }
+  });
+
+  test('the build root and settings are checked again before every rebuild: a settings file removed since is refused', async () => {
+    const p = project();
+    const b = base();
+    const runs = [];
+    const source = gradleSource(p.root, { base: b, log: () => {}, launch: () => ({}),
+      gradle: async (tasks) => { runs.push(tasks); p.writeSpec(); } });
+    const s = await source.open();
+    // A branch switch: the settings file goes, the build changes.
+    rmSync(join(p.root, 'settings.gradle'));
+    writeFileSync(join(p.classes, 'app/Counter.class'), 'other branch');
+    await assert.rejects(source.open(), /no settings\.gradle at or above/);
+    assert.deepEqual(runs, [], 'the wrapper never ran');
+    s.dispose();
   });
 
   test('the first session runs only the spec the gated startup build wrote; a bare joustHostSpec since builds again', async () => {
@@ -403,11 +444,16 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     made.push(outside);
     const local = join(outside, 'local.jar');
     writeFileSync(local, zip({ 'loc/A.class': 'aaaa' }));
+    // This user's Gradle home (GRADLE_USER_HOME) holds the module cache; a cache-shaped directory inside the build does not.
     const cached = join(outside, 'caches/modules-2/files-2.1/org.x/lib/1.0/0a1b2c/lib-1.0.jar');
     mkdirSync(dirname(cached), { recursive: true });
     writeFileSync(cached, zip({ 'lib/B.class': 'bbbb' }));
-    p.writeSpec(specFor([...p.entries, { kind: 'jar', path: local }, { kind: 'jar', path: cached }]));
-    const s = await gradleSource(p.root, { base: b, log: () => {}, launch: () => ({}) }).open();
+    const vendored = join(p.root, 'vendor/caches/modules-2/files-2.1/org.y/v/1.0/0d0e0f/v-1.0.jar');
+    mkdirSync(dirname(vendored), { recursive: true });
+    writeFileSync(vendored, zip({ 'v/C.class': 'cccc' }));
+    p.writeSpec(specFor([...p.entries, { kind: 'jar', path: local }, { kind: 'jar', path: cached }, { kind: 'jar', path: vendored }]));
+    const env = { ...process.env, GRADLE_USER_HOME: outside };
+    const s = await gradleSource(p.root, { base: b, log: () => {}, launch: () => ({}), env }).open();
     assert.equal(s.stale(), false);
     // A local file dependency restored in place: same size, inode and time, other bytes.
     const sameSize = (f, from, to) => {
@@ -418,6 +464,11 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     sameSize(local, 'aaaa', 'AAAA');
     assert.equal(s.stale(), true, 'a local jar outside the build root is hashed');
     sameSize(local, 'AAAA', 'aaaa');
+    assert.equal(s.stale(), false);
+    // A cache-shaped directory inside the build is the build's: hashed.
+    sameSize(vendored, 'cccc', 'CCCC');
+    assert.equal(s.stale(), true, 'a vendored cache-shaped jar is hashed');
+    sameSize(vendored, 'CCCC', 'cccc');
     assert.equal(s.stale(), false);
     // A module in Gradle's cache is immutable: its identity is what is checked (a new time is a change).
     const t = new Date(Date.now() - 60_000);

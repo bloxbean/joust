@@ -112,12 +112,15 @@ final class Playground {
         List<String> specs = specs(version);
         // Tarballs (tests, CI) are keyed by their bytes too: a rebuilt tarball is installed again, never ignored.
         String key = sys.env().get(TARBALLS_ENV) == null ? version : version + "-t" + digest(specs).substring(0, 16);
-        Path home = home();
+        Path named = home();
+        // A link is refused before anything else; an existing directory is checked, never changed (no chmod: one would
+        // follow a link, or take others' access away from a directory the user shares).
+        if (Files.isSymbolicLink(named)) throw new Refused(named + ": a link; the playground's cache must be this user's own");
+        // Resolved once: the checks, the install and the node command all use this canonical path, so no link along the
+        // way (in a directory another account controls, say) can make the checked cache and the one run differ.
+        Path home = canonical(named);
         Path dir = home.resolve(key);
         try {
-            // A link is refused before anything else; an existing directory is checked, never changed (no chmod: one would
-            // follow a link, or take others' access away from a directory the user shares).
-            if (Files.isSymbolicLink(home)) throw new Refused(home + ": a link; the playground's cache must be this user's own");
             homeIsSafe(home);
             createPrivate(home);
             homeIsSafe(home);
@@ -187,30 +190,45 @@ final class Playground {
     }
 
     /**
-     * The cache's home and its path are this user's to change only: the home itself (when it exists) private and this
-     * user's, and every directory above it, as written and as resolved, owned by this user or root and not writable by
-     * others unless sticky (/tmp): no other account can replace a component of the path after these checks.
+     * {@code path} with its deepest existing ancestor resolved to its real path (the rest appended): a canonical path,
+     * every existing component a real directory.
+     */
+    static Path canonical(Path path) throws Refused {
+        Path abs = path.toAbsolutePath().normalize();
+        java.util.ArrayDeque<String> rest = new java.util.ArrayDeque<>();
+        Path e = abs;
+        while (e != null && !Files.exists(e, LinkOption.NOFOLLOW_LINKS)) {
+            rest.push(e.getFileName().toString());
+            e = e.getParent();
+        }
+        if (e == null) throw new Refused("no directory of " + abs + " exists");
+        try {
+            Path real = e.toRealPath();
+            for (String r : rest) real = real.resolve(r);
+            return real;
+        } catch (IOException x) {
+            throw new Refused("cannot resolve " + e + ": " + x.getMessage());
+        }
+    }
+
+    /**
+     * The cache's home (a canonical path) and its path are this user's to change only: the home itself (when it exists)
+     * private and this user's, still its own real path, and every directory above it owned by this user or root and not
+     * writable by others unless sticky (/tmp): no other account can replace a component of the path after these checks.
      */
     void homeIsSafe(Path home) throws Refused {
-        Path abs = home.toAbsolutePath().normalize();
+        Path abs = home;
         if (Files.exists(abs, LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                if (!abs.toRealPath().equals(abs)) throw new Refused(abs + " changed while it was checked (it now resolves elsewhere)");
+            } catch (IOException e) {
+                throw new Refused("cannot resolve " + abs + ": " + e.getMessage());
+            }
             Optional<String> p = privateProblem(abs);
             if (p.isPresent()) throw new Refused(abs + ": " + p.get() + "; the playground's cache must be this user's own");
         }
-        java.util.LinkedHashSet<Path> above = new java.util.LinkedHashSet<>();
-        for (Path a = abs.getParent(); a != null; a = a.getParent()) if (Files.exists(a, LinkOption.NOFOLLOW_LINKS)) above.add(a);
-        Path deepest = abs;
-        while (deepest != null && !Files.exists(deepest)) deepest = deepest.getParent();
-        if (deepest != null) {
-            try {
-                Path real = deepest.toRealPath();
-                for (Path a = Files.exists(abs) ? real.getParent() : real; a != null; a = a.getParent()) above.add(a);
-            } catch (IOException e) {
-                throw new Refused("cannot resolve " + deepest + ": " + e.getMessage());
-            }
-        }
-        for (Path a : above) {
-            if (Files.isSymbolicLink(a)) continue;   // a link's target is checked as resolved; its own name, by its parent
+        for (Path a = abs.getParent(); a != null; a = a.getParent()) {
+            if (!Files.exists(a, LinkOption.NOFOLLOW_LINKS)) continue;
             Optional<String> owner = sys.owner(a);
             if (owner.isPresent() && !owner.get().equals(sys.user()) && !owner.get().equals("0")) {
                 throw new Refused(a + " (above the playground's cache " + abs + ") is owned by another user (uid " + owner.get()
