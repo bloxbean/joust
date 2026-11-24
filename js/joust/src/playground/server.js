@@ -16,10 +16,7 @@
 // - Every page response carries a strict Content-Security-Policy.
 
 import { createServer } from 'node:http';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { offlineSession, StageError } from './session.js';
 import { devkitSession } from './devkit.js';
 
@@ -79,35 +76,31 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * @returns { pairingPath() (the base with a fresh single-use code in its fragment), token (in memory, for tests),
  *   sessions, handles(pathname), handle(req, res), close() }
  */
-/** The loaded runtime engine's files, by hash (the engine loadEngine() reads: the runtime package's engine/). */
-async function loadedEngineFiles() {
-  const dir = fileURLToPath(new URL('../engine/', import.meta.resolve('@julclang/joust-runtime')));
-  const out = {};
-  for (const f of ['joust-runtime.js', 'joust-runtime.js.wasm']) out[f] = createHash('sha256').update(readFileSync(join(dir, f))).digest('hex');
-  return out;
-}
-
 /**
- * The verifiers' scripts (double-wrapped cborHex) the loaded runtime engine embeds, when its files are the session's
- * fingerprinted ones ({@code pinned}); {} otherwise, or if none is at hand.
+ * The verifiers' scripts (double-wrapped cborHex) of the runtime engine the server loaded, when the files that engine
+ * was loaded from (its identity, bound at load: joust-runtime's engineFilesOf) are the session's fingerprinted ones
+ * ({@code pinned}); {} otherwise, or if none is at hand. Never compared with the files on disk now: those may have
+ * changed (an upgrade) while the loaded engine still answers with the old scripts.
  */
 async function engineVerifiers(engine, pinned, log = () => {}) {
+  let rt;
   try {
-    const loaded = await loadedEngineFiles();
-    if (!pinned || Object.keys(pinned).some((f) => pinned[f] !== loaded[f])) {
-      log('playground: the loaded runtime engine is not the one this session\'s build pins: no shared verifiers (sends and maps are refused)');
-      return {};
-    }
+    rt = await import('@julclang/joust-runtime');
   } catch {
     return {};
   }
   let e = engine;
   if (!e) {
     try {
-      e = await (await import('@julclang/joust-runtime')).loadEngine();
+      e = await rt.loadEngine();
     } catch {
       return {};
     }
+  }
+  const loaded = rt.engineFilesOf?.(e) ?? null;
+  if (!pinned || !loaded || Object.keys(pinned).some((f) => pinned[f] !== loaded[f])) {
+    log('playground: the loaded runtime engine is not the one this session\'s build pins: no shared verifiers (sends and maps are refused)');
+    return {};
   }
   const out = {};
   for (const [key, validator] of [['outputVerifier', 'OutputVerifier'], ['mapVerifier', 'MapVerifier']]) {
@@ -298,8 +291,19 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     'landed': async (b) => {
       const s = use(b.session);
       const txHash = str(b.txHash, 'txHash', /^[0-9a-f]{64}$/);
-      const st = s.status();
-      return { landed: await s.landed(txHash), tip: st.tip ?? st.slot };
+      return s.landed(txHash);
+    },
+    // Keyed operation records (ADR-0016 M3): the server keeps them (DevKit: in the chain's journal; offline: in the
+    // session), so a reload, another tab or a restart of the command sees them; each change is one atomic step.
+    'operations': async (b) => {
+      const s = use(b.session);
+      if (b.step === undefined) return s.operations();
+      try {
+        return { record: s.operate(b.step) };
+      } catch (e) {
+        if (e.code === 'operation') throw new StageError('journal', 'operation', e.message);
+        throw new StageError('journal', 'storage', `the keyed operation journal could not be written: ${e.message}`);
+      }
     },
     // DevKit (D7 step 7): a submitted body's settlement as the session observed it (submitted, included, final, …).
     'tx': async (b) => {

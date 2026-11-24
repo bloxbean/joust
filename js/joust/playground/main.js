@@ -18,7 +18,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { classify, encode, render, unsupportedPaths, FormError } from './form.js';
 import { anchorsOf, checkPublication, pageCheck, snapToUtxo, isKeyedRequest } from './check.js';
 import { symbolic, concrete, outcomeOf, sameOutcome, exportScenario, importScenario, quorumKeyNames, recanonical } from './scenario.js';
-import { operationStore, chainKey, operationId, operationRequest, reconcile as reconcileAttempts, safeSlot } from './operations.js';
+import { operationId, operationRequest, reconcile as reconcileAttempts, decide, safeSlot } from './operations.js';
 
 const ADA = 1_000_000n;
 const FUND_ADA = 1000n;
@@ -102,64 +102,48 @@ const state = {
 };
 
 // ---- keyed operations (ADR-0016 M3, protocol 1 §Keyed calls; operations.js): each keyed operation spends its own
-// designated input, chosen and committed with its record before the first request; every attempt is journaled before
-// the body leaves the page. One keyed call is in flight at a time (the page runs one action at a time). Records are
-// keyed by the verified chain, never the build; IndexedDB on DevKit (a write that does not commit stops the call),
-// page memory offline.
-let opStore = null;
-const store = () => (opStore ??= operationStore({ idb: devkit() && typeof indexedDB !== 'undefined' ? indexedDB : null }));
+// designated input, chosen and recorded before the first request; every attempt is recorded before the body leaves the
+// page. The server keeps the records (DevKit: in the chain's journal, so reloads, tabs and restarted commands see them;
+// offline: in the session), and each change is one atomic step. One keyed call is in flight at a time.
 const ops = {
-  chain: () => chainKey(state.session),
-  all: async () => store().all(ops.chain()),
-  get: async (id) => store().get(ops.chain(), id),
-  async put(r) {
-    try {
-      return await store().put(r);
-    } catch (e) {
-      throw new StageFailure({ stage: 'journal', code: e.code ?? 'storage', message: e.message });
-    }
+  all: async () => sapi('operations'),
+  async step(step) {
+    return (await sapi('operations', { step })).record;
   },
-  async remove(r) {
-    try {
-      await store().remove(r);
-    } catch (e) {
-      throw new StageFailure({ stage: 'journal', code: e.code ?? 'storage', message: e.message });
-    }
-  },
+  get: async (id) => (await ops.all()).find((r) => r.id === id) ?? null,
 };
 
-/** What the chain says of a record's attempts (operations.js reconcile), through the server. */
+/** What the chain says of a record's attempts (operations.js reconcile), through the server's observation. */
 async function reconcileOp(r) {
-  let tip = state.session.slot;
-  const landed = async (txHash) => {
-    const a = await sapi('landed', { txHash });
-    tip = a.tip ?? tip;
-    return a.landed;
-  };
-  return reconcileAttempts(r, { landed, get tip() { return tip; }, settlementSlots: state.session.settlementSlots ?? 0 });
+  return reconcileAttempts(r, { lookup: (txHash) => sapi('landed', { txHash }), settlementSlots: state.session.settlementSlots ?? 0 });
 }
 
 /**
- * The operation record for a keyed request, committed before the first request. An existing one is reconciled first:
- * an attempt on the chain closes it (a new operation may start); one that can still land keeps it (the host refuses as
- * pending); an outcome nobody can tell any more waits for the user's acknowledgement (the pending operations panel).
+ * The operation record for a keyed request, recorded before the first request; or { recovered } when an existing
+ * record's attempt is on the chain: that operation is done, and nothing else starts in this run. An existing record
+ * that can still land is used again (the host refuses as pending); an outcome nobody can tell any more waits for the
+ * user's acknowledgement (the pending keyed operations panel).
  */
 async function operationFor(request, signer) {
   const ident = { contract: request.contract, method: request.method, instance: request.instance ?? null, key: request.object ?? null,
     payer: signer.address };
   const id = operationId(ident);
   const existing = await ops.get(id);
-  if (existing) {
-    if (existing.ambiguous) {
+  const rec = existing && !existing.ambiguous ? await reconcileOp(existing) : null;
+  switch (decide(existing, rec)) {
+    case 'ambiguous':
+      if (!existing.ambiguous) await ops.step({ action: 'ambiguous', id });
+      await drawPendingOps();
       throw new StageFailure({ stage: 'journal', code: 'ambiguous', message: 'an earlier attempt of this keyed operation may have landed: '
         + 'check the chain, then acknowledge it in the pending keyed operations panel' });
-    }
-    const rec = await reconcileOp(existing);
-    if (rec.state === 'closed') {
-      await ops.remove(existing);
-      note(`an earlier attempt of ${existing.method} landed (${rec.txHash.slice(0, 16)}…): that operation is done`, 'ok');
+    case 'recovered':
+      await ops.step({ action: 'remove', id });
       await drawPendingOps();
-    } else return existing;
+      return { recovered: rec.txHash };
+    case 'reuse':
+      return existing;
+    default:
+      break;
   }
   const taken = new Set((await ops.all()).map((r) => r.designated));
   const utxos = await chainView.utxosAt(signer.address);
@@ -170,22 +154,22 @@ async function operationFor(request, signer) {
     throw new StageFailure({ stage: 'arguments', code: 'designation', message: `${signer.label} has no free lovelace-only output of `
       + 'at least 5 ADA to designate for a keyed call (fund the identity, or let a pending keyed call settle)' });
   }
-  return ops.put({ id, chain: ops.chain(), ...ident, designated: d.ref, attempts: [] });
+  return ops.step({ action: 'create', record: { id, ...ident, designated: d.ref, attempts: [] } });
 }
 
 /** After mayHaveLanded: reconciles the record; returns a message for the user. */
 async function afterMayHaveLanded(op) {
   const rec = await reconcileOp(op);
   if (rec.state === 'fresh') {
-    await ops.remove(op);
+    await ops.step({ action: 'remove', id: op.id });
     return 'its designated input was spent by something else: the next try chooses another one';
   }
   if (rec.state === 'closed') {
-    await ops.remove(op);
+    await ops.step({ action: 'remove', id: op.id });
     return `an earlier attempt landed (${rec.txHash.slice(0, 16)}…): the operation is done`;
   }
-  if (rec.state === 'pending') return `an earlier attempt can still land (until slot ${rec.until}): wait, then try again`;
-  await ops.put({ ...op, ambiguous: true });
+  if (rec.state === 'pending') return `an earlier attempt can still land${rec.until === null ? '' : ` (until slot ${rec.until})`}: wait, then try again`;
+  await ops.step({ action: 'ambiguous', id: op.id });
   return 'no attempt is on the chain and none can land any more: check the chain, then acknowledge it in the pending keyed operations panel';
 }
 
@@ -199,7 +183,7 @@ async function drawPendingOps() {
     h('code', { text: `${r.method}${r.key ? ' ' + r.key : ''}` }), ' ', h('span', { class: 'muted', text: `designated ${r.designated.slice(0, 12)}…, `
       + `${r.attempts.length} attempt(s)` }),
     r.ambiguous ? h('button', { class: 'ack', text: 'Acknowledge (I checked the chain): forget it', onclick: () => guard(async () => {
-      await ops.remove(r);
+      await ops.step({ action: 'remove', id: r.id });
       note(`the keyed operation ${r.method} was forgotten after acknowledgement`);
       await drawPendingOps();
     }) }) : null))));
@@ -724,6 +708,13 @@ async function call2(request, meta, signer, cosigners, label) {
   await prerequisites(signer);
   // A keyed call: its operation record and designated input, persisted before the first request.
   const op = isKeyedRequest(c.description, request) ? await operationFor(request, signer) : null;
+  if (op?.recovered) {
+    // An earlier attempt of this operation landed (a lost confirmation): that is the outcome; nothing is prepared now.
+    record({ label, outcome: 'confirmed earlier (recovered)', txHash: op.recovered });
+    note(`${label}: an earlier attempt landed (${op.recovered.slice(0, 16)}…): that operation is done; run the call again for another`, 'ok');
+    await refresh();
+    return null;
+  }
   if (op) {
     Object.assign(request, { designated: op.designated, operation: operationRequest(op) });
     // DevKit: the keyed window's limits (start ahead, end within the stability window), as the server allows them.
@@ -759,7 +750,7 @@ async function call2(request, meta, signer, cosigners, label) {
   }
   // A keyed operation is done once its transaction is in (offline at once; on DevKit at inclusion).
   if (op) {
-    await ops.remove(op);
+    await ops.step({ action: 'remove', id: op.id });
     await drawPendingOps();
   }
   // The created instance as the body makes it (the checker derived it from the seed), not the host's claim.
@@ -942,14 +933,16 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
   // 5. sign (stage wallet): the caller, then each co-signer, each after its own approval of the same checked body.
   let cbor = r.prepared.cbor;
   // The keyed journal entry (protocol 1, keyed duty 1): the checked hash and expiry, committed before the body leaves.
+  // Only this run's own attempt is ever taken back out (a replaced tab cannot erase another's), one atomic step each.
+  let journaled = false;
   const journal = op ? async () => {
-    op.attempts.push({ txHash: r.prepared.txHash, validTo: safeSlot(plan.validTo) });
-    Object.assign(op, await ops.put(op));
+    await ops.step({ action: 'addAttempt', id: op.id, attempt: { txHash: r.prepared.txHash, validTo: safeSlot(plan.validTo) } });
+    journaled = true;
   } : null;
   const unjournal = async () => {
-    if (!op) return;
-    op.attempts = op.attempts.filter((a) => a.txHash !== r.prepared.txHash);
-    await ops.put(op);
+    if (!op || !journaled) return;
+    await ops.step({ action: 'removeAttempt', id: op.id, txHash: r.prepared.txHash });
+    journaled = false;
   };
   try {
     for (const id of [signer, ...cosigners]) {

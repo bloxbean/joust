@@ -8,6 +8,7 @@
 
 import { createHash } from 'node:crypto';
 import { memoryLedger, LedgerRefusal } from '../test/offline.js';
+import { memoryOperations } from './operations.js';
 import { addressParts, ledgerTx, rewardAddress } from '@julclang/state-client/ledger';
 import { HostError, launchNpmHost, npmSource } from './host.js';
 
@@ -107,6 +108,7 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
   const fp = await source.open();
   const entries = fp.entries;
   // A scenario's replay brings its clock (origin and slot length), so absolute times in it mean what they meant (D10).
+  const ops = memoryOperations();
   const chain = ledger ?? memoryLedger({ engine, attacks, ...(clock ? { zeroTimeMs: clock.zeroTimeMs, slotLengthMs: clock.slotLengthMs } : {}) });
   const read = ledgerReads(chain);
   let host;
@@ -285,10 +287,13 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       return out;
     },
     protocolParams: () => chain.protocolParams(),
-    /** Whether a transaction is on the ledger (keyed operations reconcile their attempts with it). */
+    /** Whether a transaction is on the ledger, and the ledger's slot then (keyed operations reconcile with it). */
     async landed(txHash) {
-      return typeof chain.inclusion === 'function' && chain.inclusion(txHash) !== null;
+      return { landed: typeof chain.inclusion === 'function' && chain.inclusion(txHash) !== null, tip: chain.slot };
     },
+    /** The page's keyed operation records: in this session's memory (an offline ledger ends with its session). */
+    operations: () => ops.all(),
+    operate: (step) => ops.apply(step),
     /** Whether a script credential's stake is registered (the trusted chain's answer, for the publication checks). */
     async registered(scriptHash) {
       return (await chain.account(rewardAddress({ type: 'script', hash: scriptHash }, 0))).registered === true;

@@ -25,6 +25,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseTx } from '@julclang/state-client';
 
+import { applyOperation, operationRecord } from './operations.js';
+
 export const stateRoot = () => process.env.JOUST_STATE_DIR || join(homedir(), '.joust', 'state');
 export const JOURNAL_VERSION = 1;
 
@@ -212,6 +214,8 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   const journalFile = join(dir, `${pkey}.journal.json`);
   const highFile = join(dir, `${pkey}.high-water.json`);
   const lockFile = join(dir, `${pkey}.lock`);
+  // The page's keyed operation records (operations.js), on this chain, under the same lock.
+  const opsFile = join(dir, `${pkey}.operations.json`);
   // One playground per project and chain: a second would settle the other's reservations.
   const token = acquire(lockFile, 'this project\'s journal on this DevKit');
 
@@ -317,6 +321,18 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
       entries = next;
       if (atSlot !== null && isSlot(atSlot) && (removedAt === null || atSlot > removedAt)) removedAt = atSlot;
       save();
+    },
+    /** The keyed operation records on this chain (a list; an unreadable file reads as none, never as a guess). */
+    get operations() {
+      const raw = readJson(opsFile);
+      return raw?.version === JOURNAL_VERSION && Array.isArray(raw.operations) ? raw.operations.map(operationRecord).filter(Boolean) : [];
+    },
+    /** One step on them (operations.js applyOperation), written atomically before it returns. */
+    operate(step) {
+      mine();
+      const r = applyOperation(this.operations, step);
+      writeAtomic(opsFile, { version: JOURNAL_VERSION, operations: r.rows });
+      return r.record;
     },
     /** The prune notices were shown: they are cleared. */
     clearNotices() {

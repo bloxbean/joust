@@ -18,7 +18,9 @@ import { startPlayground } from '../src/playground/server.js';
 import { anchorsFor, publishAll, run } from './playground/flow.js';
 import { chromiumOrNull } from './playground/walkthrough.js';
 import { symbolic, concrete, exportScenario, importScenario, sameOutcome, outcomeOf, quorumKeyNames, recanonical } from '../playground/scenario.js';
-import { operationStore, operationRequest, reconcile, safeSlot, chainKey } from '../playground/operations.js';
+import { operationRequest, reconcile, safeSlot, decide } from '../playground/operations.js';
+import { applyOperation } from '../src/playground/operations.js';
+import { openJournal } from '../src/playground/journal.js';
 import { windowProblem } from '../src/playground/devkit.js';
 import { classify } from '../playground/form.js';
 
@@ -202,6 +204,11 @@ describe('ADR-0024 M4 call kinds, through the page\'s check', { skip }, () => {
 
   test('npm verifier anchors: only from the loaded engine when its bytes are the session\'s fingerprinted ones (#180 M4-S1)', async () => {
     const { TOKEN_HEADER } = await import('../src/playground/server.js');
+    // The loaded engine carries the hashes of the files it was loaded from (bound at load, not read from disk later).
+    const { engineFilesOf } = await import('@julclang/joust-runtime');
+    const identity = engineFilesOf(await theEngine());
+    assert.match(identity?.['joust-runtime.js.wasm'] ?? '', /^[0-9a-f]{64}$/);
+    assert.equal(engineFilesOf({}), null, 'an engine not loaded by loadEngine has no identity');
     let tamper = false;
     const factory = async (o) => {
       const x = await offlineSession(o);
@@ -239,42 +246,53 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     assert.throws(() => safeSlot(2n ** 60n), /not a slot/);
     assert.throws(() => safeSlot(-1), /not a slot/);
   });
-  test('reconcile: landed closes, a live attempt is pending, an expired unseen one is ambiguous, none is fresh', async () => {
+  test('reconcile uses the tip observed with the lookups; an unknown tip keeps the attempt pending (Codex M4 r2)', async () => {
+    const at = (landed, tip) => async () => ({ landed, tip });
     const r = (attempts) => ({ attempts });
-    assert.equal((await reconcile(r([]), { landed: async () => false, tip: 0 })).state, 'fresh');
-    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 10 }]), { landed: async (h) => h === 'a', tip: 99 })).state, 'closed');
-    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 10 }]), { landed: async () => false, tip: 12, settlementSlots: 5 })).state, 'pending');
-    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 10n }]), { landed: async () => false, tip: 16, settlementSlots: 5 })).state, 'ambiguous');
+    assert.equal((await reconcile(r([]), { lookup: at(false, 0) })).state, 'fresh');
+    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 10 }]), { lookup: at(true, 99) })).state, 'closed');
+    // The page's slot (150) is not the chain's: the observed tip 99 has not passed 110 + 10.
+    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 110 }]), { lookup: at(false, 99), settlementSlots: 10 })).state, 'pending');
+    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 110n }]), { lookup: at(false, 121), settlementSlots: 10 })).state, 'ambiguous');
+    assert.equal((await reconcile(r([{ txHash: 'a', validTo: 1 }]), { lookup: at(false, null) })).state, 'pending', 'no tip: never ambiguous');
   });
-  test('records are keyed by the verified chain (a DevKit\'s genesis start time), never the build', () => {
-    const dk = (startTime, fingerprint) => chainKey({ mode: 'devkit', network: { networkId: 0, protocolMagic: 42 }, chain: { startTime }, fingerprint });
-    assert.equal(dk(1, 'build-a'), dk(1, 'build-b'), 'a rebuild keeps the chain\'s pending operations');
-    assert.notEqual(dk(1, 'x'), dk(2, 'x'), 'a reset DevKit is another chain');
+  test('a recovered creation ends the run: nothing new is designated or prepared (Codex M4 r2)', () => {
+    assert.equal(decide({ attempts: [{}] }, { state: 'closed', txHash: 'h' }), 'recovered');
+    assert.equal(decide({ attempts: [{}] }, { state: 'pending' }), 'reuse');
+    assert.equal(decide({ attempts: [], ambiguous: true }, null), 'ambiguous');
+    assert.equal(decide(null, null), 'new');
   });
-  test('DevKit\'s store: a write that does not commit throws; a committed one is read back', async () => {
-    const fakeIdb = (fail) => {
-      const rows = new Map();
-      return { open() {
-        const req = {};
-        setTimeout(() => {
-          req.result = { transaction() {
-            const t = {};
-            const store = { put(v, k) { if (!fail) rows.set(k, v); return {}; }, delete(k) { rows.delete(k); return {}; },
-              getAll() { return { result: [...rows.values()] }; } };
-            setTimeout(() => (fail ? t.onabort?.() : t.oncomplete?.()), 1);
-            t.objectStore = () => store;
-            return t;
-          } };
-          req.onsuccess?.();
-        });
-        return req;
-      } };
-    };
-    const bad = operationStore({ idb: fakeIdb(true) });
-    await assert.rejects(bad.put({ id: 'x', chain: 'c', attempts: [] }), (e) => e.code === 'storage');
-    const good = operationStore({ idb: fakeIdb(false) });
-    await good.put({ id: 'x', chain: 'c', attempts: [{ txHash: 'h', validTo: 5n }] });
-    assert.deepEqual((await good.all('c')).map((r) => r.attempts[0].validTo), [5]);
+  test('records are kept by the server in the chain\'s journal: they survive a restart (any page origin); a stale tab takes back only its own attempt', async () => {
+    const { mkdtempSync, chmodSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const state = mkdtempSync(join(tmpdir(), 'joust-ops-'));
+    const chain = { networkId: 0, protocolMagic: 42, startTime: 1234, admin: 'http://127.0.0.1:10000' };
+    const rec = { id: 'Registry|cast|aa||addr_test1x', contract: 'x.Registry', method: 'cast', instance: 'aa'.repeat(32), key: null,
+      payer: 'addr_test1x', designated: 'bb'.repeat(32) + '#0', attempts: [] };
+    let j = await openJournal({ root: '/p', chain, state });
+    j.operate({ action: 'create', record: rec });
+    j.operate({ action: 'addAttempt', id: rec.id, attempt: { txHash: 'cc'.repeat(32), validTo: 500 } });
+    j.close();
+    // The command restarted (another port, another page origin): the same chain's journal has the record.
+    j = await openJournal({ root: '/p', chain, state });
+    assert.deepEqual(j.operations.map((r) => r.attempts), [[{ txHash: 'cc'.repeat(32), validTo: 500 }]]);
+    // An old tab cleaning up an attempt it never added changes nothing of the newer tab's.
+    j.operate({ action: 'removeAttempt', id: rec.id, txHash: 'dd'.repeat(32) });
+    assert.equal(j.operations[0].attempts.length, 1);
+    // A write that cannot be committed throws (the server answers journal/storage; nothing is prepared).
+    chmodSync(j.dir, 0o500);
+    try {
+      assert.throws(() => j.operate({ action: 'ambiguous', id: rec.id }));
+    } finally {
+      chmodSync(j.dir, 0o700);
+      j.close();
+    }
+    // A reset DevKit (another genesis) is another chain: none of these.
+    const other = await openJournal({ root: '/p', chain: { ...chain, startTime: 999 }, state });
+    assert.deepEqual(other.operations, []);
+    other.close();
+    assert.throws(() => applyOperation([], { action: 'create', record: { ...rec, designated: 'nope' } }), /not a new record/);
+    assert.throws(() => applyOperation([], { action: 'drop' }), /no such step/);
   });
   test('DevKit keyed windows: a cooldown that starts inside the allowed future window is valid; beyond the limits it is not', () => {
     const keyed = [60, 120];

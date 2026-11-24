@@ -880,11 +880,18 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       return { ...out, transport: 'accepted' };
     }),
     /** A body's settlement as the chain shows it (I7), with the submission's transport outcome beside it. */
-    /** Whether a transaction is on the chain (by its slot, from the trusted provider; keyed operations reconcile). */
+    /**
+     * Whether a transaction is on the chain (by its slot, from the trusted provider), and the chain tip read after the
+     * lookup: keyed operations reconcile their attempts with this observation (null tip: not known).
+     */
     async landed(txHash) {
       const slot = await chain.txSlot(txHash);
-      return slot !== null && slot !== undefined;
+      const t = await chain.tip().catch(() => null);
+      return { landed: slot !== null && slot !== undefined, tip: t?.slot ?? null };
     },
+    /** The page's keyed operation records, kept in this chain's journal (operations.js). */
+    operations: () => journal.operations,
+    operate: (step) => journal.operate(step),
     txStatus(txHash) {
       const s = status.get(txHash);
       if (!s) throw new StageError('session', 'unknownTransaction', 'no such transaction in this session');
