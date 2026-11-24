@@ -448,13 +448,13 @@ async function run(call, meta, form) {
   } catch (e) {
     throw labelled(e, 'host', label);
   }
-  if (typeof r?.prepared?.cbor !== 'string' || typeof r.prepared.reservation !== 'string') {
-    throw new StageFailure({ stage: 'host', code: 'malformed', message: 'the dev host answered prepare without a prepared body', label });
-  }
-  // Until the signed body is submitted, every way out (a refusal, a decline, a check or signing that throws) releases
-  // the reservation; the server ignores a release of one it already settled.
+  // Until the signed body is submitted, every way out (a refusal, a decline, a check or signing that throws, a malformed
+  // answer) releases the reservation; the server ignores a release of one it already settled.
   let report;
   try {
+    if (typeof r?.prepared?.cbor !== 'string' || typeof r.prepared.reservation !== 'string') {
+      throw new StageFailure({ stage: 'host', code: 'malformed', message: 'the dev host answered prepare without a prepared body', label });
+    }
     // 3. check (stage verification)
     const checked = await checkCall(r, request, meta, signer);
     if (checked.problems.length) {
@@ -464,7 +464,8 @@ async function run(call, meta, form) {
     // 4. review, 5. sign, 6. submit, 7. settle
     await reviewSignSubmit(r, label, signer, { predicted: r.predicted, request, report });
   } finally {
-    if (!report?.submitted) await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
+    const reservation = r?.prepared?.reservation;
+    if (!report?.submitted && typeof reservation === 'string') await sapi('discard', { reservation }).catch(() => {});
   }
   // The created instance as the body makes it (the checker derived it from the seed), not the host's claim.
   if (call.kind === 'init' && report.created) state.instance = report.created;
