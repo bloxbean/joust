@@ -345,8 +345,9 @@ class JscV2HashStabilityTest {
         return e;
     }
 
-    // About 12 builds of each of the 72 examples. JuLC 0.1.0-pre22 compiles about 1.8x slower than pre21, so this test
-    // takes about 7.5 minutes locally and more than 10 on CI: it gets its own limit instead of the 10-minute default.
+    // 11 builds of each of the 67 example contracts (the base, 9 edits and the file rename). JuLC 0.1.0-pre22 compiles
+    // about 1.8x slower than pre21, so this test takes about 7.5 minutes locally and more than 10 on CI: it gets its own
+    // limit instead of the 10-minute default.
     @Test
     @Timeout(value = 20, unit = TimeUnit.MINUTES)
     void behaviourNeutralEdits_leaveEveryScriptHash() throws Exception {
