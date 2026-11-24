@@ -13,7 +13,7 @@ import { HostError, launchNpmHost, npmFingerprint } from './host.js';
 
 export const OFFLINE_NETWORK = { networkId: 0, protocolMagic: 42, mainnet: false };
 const TIME = { maxTtlSlots: 900, settlementSlots: 0, maxNowAheadSlots: 900 };
-const LIMITS = { callDeadlineMs: 60_000, readsPerCall: 256, readBytesPerCall: 32 * 1024 * 1024 };
+export const LIMITS = { callDeadlineMs: 60_000, readsPerCall: 256, readBytesPerCall: 32 * 1024 * 1024 };
 /** The validity window the playground asks for (slots). */
 export const TTL_SLOTS = 120;
 /** At most this much from nowhere per funding request (offline identities, D5): 1,000,000 ADA. */
@@ -34,7 +34,7 @@ export class StageError extends Error {
 }
 
 const sha = (s) => createHash('sha256').update(s).digest('hex');
-const snapshotOutput = (u) => ({ tx_hash: u.txHash, output_index: u.index, address: u.address,
+export const snapshotOutput = (u) => ({ tx_hash: u.txHash, output_index: u.index, address: u.address,
   amount: u.value.map((a) => ({ unit: a.unit, quantity: String(a.quantity) })),
   data_hash: u.datumHash ?? null, inline_datum: u.inlineDatum ?? null, reference_script_hash: u.referenceScriptHash ?? null });
 

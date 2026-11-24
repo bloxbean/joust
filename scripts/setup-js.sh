@@ -15,7 +15,7 @@ npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund --
   @aiken-lang/merkle-patricia-forestry@1.3.1 level@8.0.1 \
   @rollup/plugin-inject@5.0.5 @scure/bip39@1.6.0 vite-plugin-node-polyfills@0.28.0 \
   vscode-languageserver@11.0.0 vscode-languageserver-textdocument@1.0.16 vite@6.4.5 \
-  @emurgo/cardano-serialization-lib-nodejs@15.0.3
+  @emurgo/cardano-serialization-lib-nodejs@15.0.3 @cardano-foundation/cardano-connect-with-wallet-core@0.2.12
 mkdir -p js/node_modules/@julclang
 ln -sfn ../../state-client js/node_modules/@julclang/state-client
 ln -sfn ../../joust-runtime js/node_modules/@julclang/joust-runtime

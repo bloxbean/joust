@@ -490,10 +490,10 @@ for (const kind of ['java', 'jsc']) {
   });
 }
 
-// ---- joust playground (D3, I10): the ABI gate, offline only
+// ---- joust playground (D3, I10, I4): the ABI gate; DevKit mode only on a DevKit
 
 describe('ADR-0024 D3: joust playground', { skip }, () => {
-  test('I10: a changed .jsc interface fails the playground\'s build unless --accept-abi is given; DevKit mode is not offered yet', async () => {
+  test('I10: a changed .jsc interface fails the playground\'s build unless --accept-abi is given; I4: no mainnet, no public testnet', async () => {
     const root = await project('jsc');
     try {
       const { playground } = await import('../src/playground/index.js');
@@ -514,8 +514,12 @@ describe('ADR-0024 D3: joust playground', { skip }, () => {
       } finally {
         await p.close();
       }
-      await assert.rejects(playground({ config, root, mode: 'devkit', open: false, log: quiet }), /only --mode offline/);
-      await assert.rejects(playground({ config, root, networkName: 'devkit', open: false, log: quiet }), /only --mode offline/);
+      // I4, before anything is attached or built: mainnet never, a public testnet not in v1.
+      const main = { ...config, networks: { ...config.networks, main: { chain: 'http://127.0.0.1:9/api/v0', networkId: 1, admin: 'http://127.0.0.1:9' } } };
+      await assert.rejects(playground({ config: main, root, mode: 'devkit', networkName: 'main', open: false, log: quiet }), /mainnet/);
+      await assert.rejects(playground({ config, root, mode: 'devkit', networkName: 'preview', open: false, log: quiet }), /no DevKit admin API/);
+      await assert.rejects(playground({ config, root, networkName: 'devkit', open: false, log: quiet }), /--network needs --mode devkit/);
+      await assert.rejects(playground({ config, root, mode: 'testnet', open: false, log: quiet }), /no mode testnet/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

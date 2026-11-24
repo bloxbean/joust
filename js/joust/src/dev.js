@@ -13,6 +13,8 @@
 //                              for pages without the worker. Either way the page verifies every transaction before the
 //                              wallet signs (D7): this server is not trusted with anything.
 //   /dev/topup                 POST { address, ada? } (DevKit only)
+//   /playground/               the playground (ADR-0024 D3) on this network, DevKit only: its own session token, Host and
+//                              Origin checks and no CORS (its D8 rules, never this server's), see playground/server.js
 //   anything else              the page: Vite (when the project has it) or the page directory's files
 
 import { servePrepare } from './http-prepare.js';
@@ -148,7 +150,11 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
     createReadStream(p).pipe(res);
   }
 
+  // The playground on this server's DevKit (ADR-0024 D3): its own handler, before this server's CORS headers.
+  const playground = await mountPlayground({ root, config, net, log });
+
   const server = createServer(async (req, res) => {
+    if (playground?.handles(new URL(req.url, 'http://localhost').pathname)) return playground.handle(req, res);
     res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-headers', 'content-type');
     if (req.method === 'OPTIONS') return res.end();
@@ -198,8 +204,13 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
   await new Promise((ok, fail) => server.listen(port, '127.0.0.1', ok).on('error', fail));
   const url = `http://127.0.0.1:${server.address().port}`;
   log(`joust dev on ${url}: the page at /, the chain at /chain, the build at /joust${net.admin ? ', faucet at /dev/topup' : ''}`);
+  if (playground) {
+    log(`  the playground: ${url}/playground/#token=${playground.token}`);
+    log('  (the link carries this run\'s playground token: do not share it)');
+  }
 
   const close = async () => {
+    await playground?.close();
     watcher?.close();
     clearTimeout(timer);
     await vite?.close();
@@ -208,6 +219,29 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
   };
   signal?.addEventListener('abort', close, { once: true });
   return { url, port: server.address().port, close, rebuild: cycle };
+}
+
+/**
+ * The playground's handler for /playground/ (DevKit mode), or null: only on a DevKit network (I4), and only for a
+ * project that builds into build/joust (the dev host reads it there). Its page is built when it is first opened.
+ */
+async function mountPlayground({ root, config, net, log }) {
+  if (resolve(root, config.out) !== resolve(root, 'build/joust')) return null;
+  try {
+    const { checkDevkitNetwork } = await import('./playground/devkit.js');
+    checkDevkitNetwork(config.networks[net.name], net.name);
+  } catch {
+    return null;   // not a DevKit: no playground (its message is joust playground --mode devkit's)
+  }
+  try {
+    const [{ playgroundHandler }, { pageFiles }, { devkitOptions }] = await Promise.all([import('./playground/server.js'),
+      import('./playground/page.js'), import('./playground/index.js')]);
+    return playgroundHandler({ root, page: pageFiles, mode: 'devkit', base: '/playground/', log,
+      devkit: devkitOptions(config, net) });
+  } catch (e) {
+    log(`the playground is not available: ${e.message}`);
+    return null;
+  }
 }
 
 /** A module's entry resolved from the project (its own node_modules), as an import URL. */

@@ -457,6 +457,7 @@ jobs:
       # ADR-0024 M1: the offline playground of an npm project. Its server over this commit's npm dev host and a
       # memoryLedger (sessions, the server's token/Host/Origin surface, stale builds, isolation, no network), its forms,
       # and its page in Chromium: the Counter walkthrough in Java and .jsc. Chromium is required here, never skipped.
+      # M3 without a DevKit: DevKit sessions over a chain the test holds back or refuses (settlement, the journal, I4).
       # Playwright is installed beside the repository and linked in, so js/node_modules (setup-js) is not pruned.
       - name: Test the playground
         shell: bash
@@ -470,7 +471,8 @@ jobs:
             && npx playwright install --with-deps chromium)
           ln -sfn "$pw/node_modules/playwright" js/joust/node_modules/playwright
           ln -sfn "$pw/node_modules/playwright-core" js/joust/node_modules/playwright-core
-          (cd js/joust && ../../scripts/node-test.sh joust-playground --test-concurrency=1 test/playground.test.js)
+          (cd js/joust && ../../scripts/node-test.sh joust-playground --test-concurrency=1 test/playground.test.js \
+            test/playground-devkit.test.js)
 
       # A skipped case here is a security case not run (review r2, design F16): libraries, migrate, worker-limits and
       # keyed-window skip when an engine or a fixture is missing. Every case of this job's suites must run.
@@ -494,6 +496,66 @@ jobs:
   # generated Gradle projects built from this commit's modules and plugin only; joust new -t node isolated from hostile
   # npm configuration (with controls that must fail); an npm project built through the native joust with this commit's
   # engines, giving the Gradle projects' description.
+  # ADR-0024 M3: the playground on a real Yaci DevKit, with this commit's engines and npm dev host: joust playground
+  # --mode devkit in Chromium (a test identity and an injected CIP-30 wallet, a wrong-network wallet refused) and joust
+  # dev's /playground/. DevKit and Chromium are required (JOUST_REQUIRE_*): neither skips silently, nor does any case.
+  playground-devkit:
+    needs: engines
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      # Devnet + Yaci Store (localhost:8080), admin API on localhost:10000 (.github/ci/devkit.sh); boots meanwhile.
+      - name: Start Yaci DevKit
+        run: |
+          npm install -g --ignore-scripts @bloxbean/yaci-devkit@0.12.0
+          .github/ci/devkit.sh start
+
+      - name: Download the engines
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: engines
+          path: js
+
+      - name: Check the engines' digests and set up the npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd js && sha256sum -c engines.sha256)
+          bash scripts/setup-js.sh
+          pw="$RUNNER_TEMP/playwright"
+          mkdir -p "$pw" js/joust/node_modules
+          (cd "$pw" && npm init -y >/dev/null && npm install --no-audit --no-fund --ignore-scripts playwright@1.64.1 \
+            && npx playwright install --with-deps chromium)
+          ln -sfn "$pw/node_modules/playwright" js/joust/node_modules/playwright
+          ln -sfn "$pw/node_modules/playwright-core" js/joust/node_modules/playwright-core
+
+      - name: Wait for Yaci DevKit
+        run: |
+          .github/ci/devkit.sh wait
+          .github/ci/devkit.sh monitor
+
+      - name: Test the playground on DevKit
+        shell: bash
+        env:
+          JOUST_REQUIRE_CHROMIUM: '1'
+          JOUST_REQUIRE_DEVKIT: '1'
+        run: |
+          set -euo pipefail
+          (cd js/joust && ../../scripts/node-test.sh joust-playground-devkit --test-concurrency=1 test/playground-devkit-e2e.test.js)
+
+      - name: No case skipped
+        run: python3 scripts/junit-no-skips.py build/npm-test-results/*.xml
+
   cli:
     needs: engines
     runs-on: ubuntu-24.04
