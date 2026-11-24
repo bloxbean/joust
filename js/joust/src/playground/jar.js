@@ -39,8 +39,12 @@ export function readJar(bytes, what = 'jar') {
     const local = bytes.readUInt32LE(p + 42);
     const name = bytes.toString('utf8', p + 46, p + 46 + nameLen);
     p += 46 + nameLen + extraLen + commentLen;
-    // A name twice: which copy a class loader takes is the zip implementation's choice, so neither is taken.
-    if (entries.has(name)) fail(`${name} appears twice`);
+    // A file name twice: which copy a class loader takes is the zip implementation's choice, so neither is taken. A
+    // directory entry (a name ending in /) has no content: a repeated one is harmless and kept once.
+    if (entries.has(name)) {
+      if (name.endsWith('/')) continue;
+      fail(`${name} appears twice`);
+    }
     entries.set(name, { flags, method, compressed, uncompressed, local });
   }
   return {

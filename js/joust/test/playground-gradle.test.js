@@ -287,6 +287,9 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     const dup = Buffer.from(twice.toString('latin1').replaceAll('b.class', 'a.class'), 'latin1');
     assert.deepEqual(readJar(bytes).names, ['a.class']);
     assert.throws(() => readJar(dup), /a\.class appears twice/);
+    // A repeated directory entry carries nothing: kept once (real jars have them, e.g. archunit's).
+    const dirs = Buffer.from(zip({ 'p/': '', 'q/': '', 'p/a.class': '1' }).toString('latin1').replaceAll('q/', 'p/'), 'latin1');
+    assert.deepEqual(readJar(dirs).names.filter((n) => n === 'p/'), ['p/']);
   });
 
   test('the JVM host is launched with exactly the protocol\'s arguments, from the project, with the allow-listed environment', () => {

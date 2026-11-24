@@ -277,6 +277,19 @@ class PlaygroundTest {
     }
 
     @Test
+    void aLinkedHomeIsRefusedBeforeAnyChmodOfItsTarget() throws IOException {
+        Path target = Files.createDirectories(tmp.resolve("shared"));
+        Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rwxr-xr-x"));
+        Files.createDirectories(home.getParent());
+        Files.createSymbolicLink(home, target);
+        FakeSys s = sys(project);
+        assertThat(runOn(s)).isEqualTo(1);
+        assertThat(s.errText()).contains("a link").contains("must be this user's own");
+        assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(target))).isEqualTo("rwxr-xr-x");
+        assertThat(s.runs).isEmpty();
+    }
+
+    @Test
     void aConcurrentWinnerIsCheckedToo() {
         FakeSys s = sys(project);
         Path cached = home.resolve("0.1.0-pre1-rc8");

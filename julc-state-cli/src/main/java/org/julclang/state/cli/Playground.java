@@ -116,6 +116,8 @@ final class Playground {
         Path dir = home.resolve(key);
         try {
             Files.createDirectories(home);
+            // A link is refused before any chmod: setting permissions would follow it to its target.
+            if (Files.isSymbolicLink(home)) throw new Refused(home + ": a link; the playground's cache must be this user's own");
             privateDir(home);
             Optional<String> homeProblem = privateProblem(home);
             if (homeProblem.isPresent()) throw new Refused(home + ": " + homeProblem.get() + "; the playground's cache must be this user's own");
