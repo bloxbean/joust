@@ -22,7 +22,7 @@ import { chmodSync, closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdir
   rmSync, unlinkSync, writeSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parseTx } from '@julclang/state-client';
 
 export const stateRoot = () => process.env.JOUST_STATE_DIR || join(homedir(), '.joust', 'state');
@@ -45,7 +45,42 @@ function writeFile(file, text) {
   }
   return tmp;
 }
-const writeAtomic = (file, value) => renameSync(writeFile(file, JSON.stringify(value, null, 1) + '\n'), file);
+/** fsyncs a directory (its entries: a rename, a new file or directory in it); Windows cannot open one and is skipped. */
+function syncDir(dir) {
+  if (process.platform === 'win32') return;
+  const fd = openSync(dir, 'r');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+/** The file replaced durably (final pass): the temporary file synced, renamed over it, then its directory synced. */
+const writeAtomic = (file, value) => {
+  renameSync(writeFile(file, JSON.stringify(value, null, 1) + '\n'), file);
+  syncDir(dirname(file));
+};
+const UNREADABLE = Symbol('not JSON');
+/**
+ * A recovery file: undefined when it does not exist, UNREADABLE when its bytes are not JSON; a file that exists but
+ * cannot be read throws (fail closed: final pass), naming it and how to fix it.
+ */
+function readState(file) {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return undefined;
+    throw unreadable(file, e.code ?? e.message);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return UNREADABLE;
+  }
+}
+const unreadable = (file, why) => Object.assign(new Error(`the playground's recovery file ${file} cannot be used (${why}): fix its `
+  + 'permissions or contents, or move it aside once the transactions it guards have expired'), { code: 'journalUnreadable', file });
 const readJson = (file) => {
   try {
     return JSON.parse(readFileSync(file, 'utf8'));
@@ -65,7 +100,8 @@ function alive(pid) {
 
 /** M3-S2: a directory of this user's, not writable by others (made 0700 when it is this user's); else refused. */
 function privateDir(dir) {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const made = mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (made !== undefined) syncDir(dirname(made));   // a new directory made durable in its parent
   const st = lstatSync(dir);
   if (!st.isDirectory()) throw new Error(`journal: ${dir} is not a directory`);
   const uid = process.getuid?.();
@@ -115,7 +151,8 @@ export function acquire(lock, what = 'this journal') {
   const held = read(lock);
   if (held === null && tryLink(lock, token)) return token;   // released meanwhile
   if (live(held)) {
-    throw Object.assign(new Error(`another playground (pid ${pidOf(held)}) is using ${what}: stop it first`), { code: 'journalLocked' });
+    throw Object.assign(new Error(`another playground (pid ${pidOf(held)}) is using ${what} (its lock: ${lock}): stop it first`),
+      { code: 'journalLocked', lock });
   }
   throw Object.assign(new Error(`the lock of ${what} (${lock}) belongs to pid ${pidOf(held)}, which is no longer running. If no `
     + `playground is using it, remove the lock and start again: rm '${lock}'`), { code: 'journalStaleLock', lock });
@@ -217,9 +254,24 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   // One playground per project and chain: a second would settle the other's reservations.
   const token = acquire(lockFile, 'this project\'s journal on this DevKit');
 
-  const high = readJson(highFile);
+  // Read fail-closed (final pass): a file that exists but cannot be read, or a high-water mark or pending fence that is
+  // not one, refuses the open (the lock released); a journal whose bytes are not JSON is lost history behind the mark.
+  let high;
+  let raw;
+  let pendingRaw;
+  const pendingFile = join(dir, `${pkey}.fence-pending.json`);
+  try {
+    high = readState(highFile);
+    if (high !== undefined && !isSlot(high?.highWater)) throw unreadable(highFile, 'not a high-water mark');
+    raw = readState(journalFile);
+    pendingRaw = readState(pendingFile);
+    if (pendingRaw !== undefined && !isSlot(pendingRaw?.fencedUntil)) throw unreadable(pendingFile, 'not a fence');
+  } catch (e) {
+    release(lockFile, token);
+    throw e;
+  }
+  if (raw === UNREADABLE) raw = null;
   let highWater = isSlot(high?.highWater) ? high.highWater : null;
-  const raw = readJson(journalFile);
   // Fail closed (#179 r6): a journal of another version, or with a field this joust does not know, is not opened (its
   // meaning, a fence for instance, would be lost on the next write).
   if (raw !== undefined && raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -240,8 +292,7 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
     && (raw.fencedUntil === undefined || raw.fencedUntil === null || isSlot(raw.fencedUntil));
   const lost = (raw !== undefined || highWater !== null) && !intact;
   // A fence a closing session could not write (#179 r6): it left this marker (best effort) beside its lock.
-  const pendingFile = join(dir, `${pkey}.fence-pending.json`);
-  const pendingFence = readJson(pendingFile)?.fencedUntil;
+  const pendingFence = pendingRaw?.fencedUntil;
   // The journal's cur. Every change is written first and taken in memory only once the write succeeded (#179 r4): a
   // failed write changes nothing, so a retry writes again.
   let cur = {

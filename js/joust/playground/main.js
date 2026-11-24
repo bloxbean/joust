@@ -712,7 +712,7 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
           // The wallet as it is now (#179 P2): still on this network, the same payer, and holding every input the body
           // spends from it, as DevKit does. Then the handoff is recorded before the wallet sees the body: from here on
           // it is never discarded (only its expiry releases its inputs, ADR-0022 D8).
-          await walletStillMatches(signer, r.prepared.cbor, label);
+          await walletStillMatches(signer, r.prepared.cbor, label, { publication: !!publication });
           try {
             await sapi('handoff', { reservation: r.prepared.reservation });
           } catch (e) {
@@ -822,7 +822,7 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
  * checked for) and its UTxOs, read again; every input and collateral input the body takes from the payer's address
  * must be one the wallet holds and DevKit shows unspent.
  */
-async function walletStillMatches(signer, cbor, label) {
+async function walletStillMatches(signer, cbor, label, { publication = false } = {}) {
   const refuse = (message) => new StageFailure({ stage: 'wallet', code: 'walletChanged', message, label });
   // Every read, the retries' too (#179 r3): the same network and the same change address (the payer) as connected.
   const read = async () => {
@@ -843,6 +843,16 @@ async function walletStillMatches(signer, cbor, label) {
   // #179 r2: every input and collateral input must resolve on the chain before it is classified by address.
   const missing = refs.find((ref) => !outputs.has(ref));
   if (missing) throw refuse(`DevKit does not show the input ${missing} the body spends: prepare the call again`);
+  // The change address is the payer, and only it (final pass): an input at another address of the wallet's key, or, in
+  // a publication (all of its inputs are the wallet's), any input elsewhere, is refused before the wallet sees it.
+  for (const ref of refs) {
+    const at = outputs.get(ref).address;
+    let key = null;
+    try { key = paymentKeyHash(at); } catch { /* a script address */ }
+    if (at !== signer.address && (key === signer.keyHash || publication)) {
+      throw refuse(`the body spends ${ref} at ${at.slice(0, 24)}…, not the wallet's connected address: prepare the call again`);
+    }
+  }
   const payer = refs.filter((ref) => outputs.get(ref).address === signer.address);
   const chainUnspent = new Set((await chainView.utxosAt(signer.address)).map((u) => u.ref));
   for (const ref of payer) if (!chainUnspent.has(ref)) throw refuse(`DevKit does not show the input ${ref} unspent: prepare the call again`);

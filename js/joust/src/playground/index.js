@@ -3,7 +3,8 @@
 // configured development network as joust dev does (a Yaci DevKit only: devkit.js, I4).
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -137,12 +138,18 @@ async function gradlePlayground({ root, config, port, acceptAbi, acceptLock, ope
  */
 export function writeLauncher(url) {
   const dir = mkdtempSync(join(tmpdir(), 'joust-playground-'));
+  const page = (u) => `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>joust playground</title>`
+    + `<script>location.replace(${JSON.stringify(u).replace(/</g, '\\u003c')})</script>`;
   try {
     const file = join(dir, 'open.html');
-    const target = JSON.stringify(url).replace(/</g, '\\u003c');
-    writeFileSync(file, `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>joust playground</title>`
-      + `<script>location.replace(${target})</script>`, { mode: 0o600 });
-    return { file, link: pathToFileURL(file).href, remove: () => rmSync(dir, { recursive: true, force: true }) };
+    writeFileSync(file, page(url), { mode: 0o600 });
+    return { file, link: pathToFileURL(file).href, remove: () => rmSync(dir, { recursive: true, force: true }),
+      /** The same file (0600), now forwarding to {@code u}: a fresh pairing link (FD2). */
+      rewrite(u) {
+        const tmp = join(dir, `open.${randomBytes(6).toString('hex')}.tmp`);
+        writeFileSync(tmp, page(u), { mode: 0o600, flag: 'wx' });
+        renameSync(tmp, file);
+      } };
   } catch (e) {
     rmSync(dir, { recursive: true, force: true });
     throw e;

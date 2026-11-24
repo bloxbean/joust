@@ -80,7 +80,7 @@ export async function attach(config, name, { log = console.log, waitMs = 180_000
  * Returns { url, port, close }.
  */
 export async function dev({ root = process.cwd(), config, networkName, port = config.dev?.port ?? 5178, log = console.log, signal,
-  acceptAbi = false } = {}) {
+  acceptAbi = false, playgroundPairTtlMs } = {}) {
   const name = networkName ?? config.network;
   const net = await attach(config, name, { log });
   // One upstream session for everything this server reads (deploys, the prepare service, the page's /chain).
@@ -151,16 +151,35 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
   }
 
   // The playground on this server's DevKit (ADR-0024 D3): its own handler, before this server's CORS headers. A page
-  // pairs once with a single-use code (S8): the launcher holding it is removed when it is spent.
+  // pairs once with a single-use code (S8); the launcher is rewritten with a fresh code after each pairing and before
+  // a code expires (FD2), so a long-running joust dev stays reachable.
   let launcher = null;
-  const playground = await mountPlayground({ root, config, net, log, onPaired: () => launcher?.remove() });
+  let pairingUrl = null;
+  const freshLink = (why) => {
+    if (!launcher) return;
+    try {
+      launcher.rewrite(pairingUrl());
+      log(`  the playground: ${launcher.link} now holds a fresh single-use link (${why})`);
+    } catch (e) {
+      log(`  the playground's launcher could not be rewritten: ${e.message}`);
+    }
+  };
+  const playground = await mountPlayground({ root, config, net, log, pairTtlMs: playgroundPairTtlMs,
+    onPaired: () => freshLink('the last one was used') });
 
   const server = createServer(async (req, res) => {
-    if (playground?.handles(new URL(req.url, 'http://localhost').pathname)) return playground.handle(req, res);
+    // Parsed once, before anything else (FD1): a request line no URL parses (`GET //`) is answered 400, never thrown.
+    let url;
+    try {
+      url = new URL(req.url, 'http://localhost');
+    } catch {
+      res.writeHead(400, { 'content-type': 'text/plain' });
+      return res.end('bad request');
+    }
+    if (playground?.handles(url.pathname)) return playground.handle(req, res);
     res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-headers', 'content-type');
     if (req.method === 'OPTIONS') return res.end();
-    const url = new URL(req.url, 'http://localhost');
     try {
       if (await chainProxy.handle(req, res, url)) return;
       if (url.pathname === '/joust/network.json') {
@@ -208,12 +227,19 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
   log(`joust dev on ${url}: the page at /, the chain at /chain, the build at /joust${net.admin ? ', faucet at /dev/topup' : ''}`);
   // The playground's token is in no link, file or log line (ADR-0024 D8, S8): a private launcher file holds a
   // single-use pairing link (the page trades its code for the token at /playground/pair).
+  let refresh = null;
   if (playground) {
-    launcher = (await import('./playground/index.js')).writeLauncher(`${url}${playground.pairingPath()}`);
-    log(`  the playground: open ${launcher.link} (a private, single-use link to ${url}/playground/; restart joust dev for another)`);
+    pairingUrl = () => `${url}${playground.pairingPath()}`;
+    launcher = (await import('./playground/index.js')).writeLauncher(pairingUrl());
+    log(`  the playground: open ${launcher.link} (a private, single-use link to ${url}/playground/, renewed after each use)`);
+    // Before a code expires: a fresh one.
+    const ttl = playgroundPairTtlMs ?? 10 * 60_000;
+    refresh = setInterval(() => freshLink('the last one was about to expire'), ttl > 120_000 ? ttl - 60_000 : Math.max(200, ttl / 2));
+    refresh.unref?.();
   }
 
   const close = async () => {
+    clearInterval(refresh);
     launcher?.remove();
     await playground?.close();
     watcher?.close();
@@ -230,7 +256,7 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
  * The playground's handler for /playground/ (DevKit mode), or null: only on a DevKit network (I4), and only for a
  * project that builds into build/joust (the dev host reads it there). Its page is built when it is first opened.
  */
-async function mountPlayground({ root, config, net, log, onPaired }) {
+async function mountPlayground({ root, config, net, log, onPaired, pairTtlMs }) {
   if (resolve(root, config.out) !== resolve(root, 'build/joust')) return null;
   try {
     const { checkDevkitNetwork } = await import('./playground/devkit.js');
@@ -241,7 +267,7 @@ async function mountPlayground({ root, config, net, log, onPaired }) {
   try {
     const [{ playgroundHandler }, { pageFiles }, { devkitOptions }] = await Promise.all([import('./playground/server.js'),
       import('./playground/page.js'), import('./playground/index.js')]);
-    return playgroundHandler({ root, page: pageFiles, mode: 'devkit', base: '/playground/', log, onPaired,
+    return playgroundHandler({ root, page: pageFiles, mode: 'devkit', base: '/playground/', log, onPaired, pairTtlMs,
       devkit: devkitOptions(config, net) });
   } catch (e) {
     log(`the playground is not available: ${e.message}`);

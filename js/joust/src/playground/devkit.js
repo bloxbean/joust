@@ -167,8 +167,17 @@ export function yaciChain(net, { fetchImpl } = {}) {
  * The host's reverse reads answered from a DevKit chain at one chain point (docs/protocol/dev-host-1.md, "Reverse
  * reads"): the tip is read before and after each answer, and the answer is read again when the chain moved meanwhile.
  */
+/** The reverse reads' parameters, checked as the HTTP routes check theirs before any reaches a provider URL (FD5). */
+const READ_PARAMS = { address: /^addr_test1[0-9a-z]{20,200}$/, ref: /^[0-9a-f]{64}#\d{1,5}$/, hash: /^(?:[0-9a-f]{56}|[0-9a-f]{64})$/,
+  unit: /^[0-9a-f]{56}(?:[0-9a-f]{2}){0,32}$/, txHash: /^[0-9a-f]{64}$/, credential: /^[0-9a-f]{56}$/ };
+const NEEDS = { utxos: ['address'], output: ['ref'], script: ['hash'], stakeRegistration: ['credential'], assetHistory: ['unit'],
+  redeemers: ['txHash'], datum: ['hash'] };
+
 export function chainReads(chain, { networkId = 0 } = {}) {
   async function answer(q, tip) {
+    for (const k of NEEDS[q.kind] ?? []) {
+      if (typeof q[k] !== 'string' || !READ_PARAMS[k].test(q[k])) throw new Error(`a ${q.kind} read with an invalid ${k}`);
+    }
     switch (q.kind) {
       case 'tip':
         return { tip, value: tip };
@@ -298,7 +307,10 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     } });
   } catch (e) {
     fp.dispose();
-    if (e.code === 'devkitReset' || e.code === 'journalLocked') throw new StageError('session', e.code, e.message);
+    // Shown in full by the page (a stale lock's message names the file to remove) (FD4).
+    if (['devkitReset', 'journalLocked', 'journalStaleLock', 'journalUnknown', 'journalUnreadable'].includes(e.code)) {
+      throw new StageError('session', e.code, e.message);
+    }
     throw e;
   }
   // Every answered reverse read's chain point (stable: chainReads reads it before and after) goes through the one rewind
@@ -505,6 +517,12 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       if (done.has(raw.txHash)) continue;
       done.add(raw.txHash);
       const e = { ...raw, ...bodies.get(raw.txHash) };
+      // Never left the page (not submitted, no wallet had it; FD3): the page that could sign it is gone, so it is not
+      // restored and its inputs are free at once (a reload does not block the instance until its expiry).
+      if (!e.submitted && !e.handedOff) {
+        observed(e.txHash, { label: e.label, chain: 'discarded' });
+        continue;
+      }
       const slot = o.seen.get(e.txHash);
       if (within(slot, e, t)) {
         if (t - slot <= settlementSlots) keep.push({ ...e, state: 'shallow', slot });
