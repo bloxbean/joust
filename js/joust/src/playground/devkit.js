@@ -11,11 +11,11 @@
 // Only a Yaci DevKit is accepted (I4): a network with an admin API and network id 0. Mainnet can never be selected;
 // public testnets are not part of v1 (Q3).
 
-import { blockfrostProvider, chainOf, parseTx, plutusScriptHash } from '@julclang/state-client';
+import { blockfrostProvider, parseTx, plutusScriptHash } from '@julclang/state-client';
 import { addressParts, ledgerTx, rewardAddress } from '@julclang/state-client/ledger';
 import { HostError, launchNpmHost, npmSource } from './host.js';
 import { LIMITS, StageError, snapshotOutput } from './session.js';
-import { openJournal, stateRoot } from './journal.js';
+import { openJournal, RESERVATION, stateRoot } from './journal.js';
 
 /** Slots after inclusion before a DevKit transaction counts as final (a single-node devnet does not fork). */
 export const SETTLEMENT_SLOTS = 10;
@@ -23,6 +23,10 @@ export const SETTLEMENT_SLOTS = 10;
 export const DEFAULT_TTL_MS = 60_000;
 /** At most this much from the faucet per request. */
 export const MAX_TOPUP_ADA = 10_000n;
+/** The faucet tops an address up only while it holds less than this (D5). */
+export const TOPUP_BELOW = 100_000_000n;
+/** Mainnet's and the public testnets' magics (preprod 1, preview 2, sanchonet 4): never a DevKit's (I4). */
+export const PUBLIC_MAGICS = new Set([764824073, 1, 2, 4]);
 const ADA = 1_000_000n;
 
 /**
@@ -45,7 +49,10 @@ export function checkDevkitNetwork(raw, name) {
   }
 }
 
-/** The DevKit's identity from its admin API: { networkId, protocolMagic, startTime (s), admin }. */
+/**
+ * The DevKit's identity from its admin API: { networkId, protocolMagic, startTime (s), slotLengthMs, stabilityWindow
+ * (3k/f slots, the horizon a validity window must stay within), admin }.
+ */
 export async function devkitIdentity(admin, { fetchImpl = globalThis.fetch.bind(globalThis) } = {}) {
   const r = await fetchImpl(admin.replace(/\/$/, '') + '/local-cluster/api/admin/devnet');
   if (!r.ok) throw new Error(`DevKit admin API: ${r.status}`);
@@ -55,9 +62,20 @@ export async function devkitIdentity(admin, { fetchImpl = globalThis.fetch.bind(
   if (!Number.isSafeInteger(protocolMagic) || protocolMagic < 0 || !Number.isSafeInteger(startTime) || startTime < 0) {
     throw new Error('DevKit admin API: no protocolMagic or startTime');
   }
-  // Mainnet's magic is never a DevKit's (I4), whatever its admin API says.
-  if (protocolMagic === 764824073) throw new Error('DevKit admin API: mainnet\'s protocol magic');
-  return { networkId: 0, protocolMagic, startTime, admin: admin.replace(/\/$/, '') };
+  // Mainnet's and the public testnets' magics are never a DevKit's (I4, M3-S1), whatever its admin API says.
+  if (PUBLIC_MAGICS.has(protocolMagic)) throw new Error(`DevKit admin API: protocol magic ${protocolMagic} is a public network's`);
+  const slotLengthMs = Math.round(Number(d.slotLength ?? 1) * 1000);
+  if (!Number.isSafeInteger(slotLengthMs) || slotLengthMs <= 0) throw new Error('DevKit admin API: no slotLength');
+  const k = Number(d.securityParam);
+  const f = Number(d.activeSlotsCoeff);
+  // D-3: 3k/f slots; 300 when the admin API does not say.
+  const stabilityWindow = Number.isFinite(k) && k > 0 && Number.isFinite(f) && f > 0 && f <= 1 ? Math.floor((3 * k) / f) : 300;
+  return { networkId: 0, protocolMagic, startTime, slotLengthMs, stabilityWindow, admin: admin.replace(/\/$/, '') };
+}
+
+/** D-1: the provider serves the admin API's chain: its genesis has the same magic and start time. */
+export function sameChain(identity, genesis) {
+  return !!genesis && genesis.networkMagic === identity.protocolMagic && genesis.systemStart === identity.startTime;
 }
 
 /** One CBOR byte string's payload (hex), or null when {@code hex} is not exactly one definite byte string. */
@@ -136,7 +154,11 @@ export function yaciChain(net, { fetchImpl } = {}) {
     async indexed(hash) {
       await p.awaitTx(hash, { timeoutMs: 30_000 }).catch(() => {});
     },
-    walletChain: () => chainOf(p),
+    /** Yaci Store's genesis: { networkMagic, systemStart (s) }. */
+    async genesis() {
+      const g = await p.get('/genesis');
+      return { networkMagic: Number(g?.network_magic), systemStart: Number(g?.system_start) };
+    },
   };
 }
 
@@ -204,42 +226,77 @@ export function chainReads(chain, { networkId = 0 } = {}) {
 const sum = (utxos) => utxos.reduce((n, u) => n + BigInt(u.value.find?.((a) => a.unit === 'lovelace')?.quantity ?? 0), 0n);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** One operation at a time per key (a reservation, an address): later callers wait for the earlier ones. */
+function keyedQueue() {
+  const tails = new Map();
+  return (key, fn) => {
+    const prev = tails.get(key) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.catch(() => {});
+    tails.set(key, tail);
+    tail.then(() => { if (tails.get(key) === tail) tails.delete(key); });
+    return run;
+  };
+}
+
 /**
  * Starts a DevKit session for the project at {@code root}: an npm project (built: build/joust/contracts.json) or, with
  * {@code source} a gradleSource (gradle.js), a Gradle project's verified snapshot, as offline sessions do.
  *
+ * Settlement is the journal's and the chain's (I7): what the page is shown comes from inclusion slots and tips read at
+ * one chain point, never from the host's reply. The host is told each event and its reply checked against what the
+ * chain shows; a host that disagrees is fenced (it builds nothing more; a new session restores the journal into a
+ * fresh host). A DevKit reset (another genesis, or a tip that goes back) ends the session.
+ *
  * @param o.source       the build the session pins (default npmSource(root))
- * @param o.net          the resolved network (attach()): chain, admin, clock
- * @param o.identity     devkitIdentity(net.admin) (default: read now)
+ * @param o.net          the resolved network (attach()): chain, admin
+ * @param o.identity     devkitIdentity(net.admin) (default: read now); the session's clock is derived from it
  * @param o.chain        yaciChain(net) (default)
  * @param o.state        the per-user state directory (default ~/.joust/state)
- * @param o.ttlSlots     the validity window asked for (default 60 s of slots)
- * @param o.nowSlot      () => the current slot (default: the network's clock)
- * @param o.topUp        (address, ada) => funds it from the faucet (default devkitTopUp)
+ * @param o.ttlSlots     the validity window asked for (default 60 s of slots; at most the stability window, D-3)
+ * @param o.clock        the slot clock (default: the identity's genesis start and slot length)
+ * @param o.nowSlot      () => the current slot (default: from the clock)
+ * @param o.topUp        (address, ada) => funds it from the faucet (default the admin API's faucet only)
  * @param o.identityBase the DevKit mnemonic's first account index the page's test identities use (default 1)
  */
 export async function devkitSession({ id, root, net, identity, chain, state = stateRoot(), ttlSlots, settlementSlots = SETTLEMENT_SLOTS,
-  nowSlot, topUp, pollMs = 1000, identityBase = 1, launch = launchNpmHost, source = npmSource(root, { launch }), onEnd = () => {},
+  clock, nowSlot, topUp, pollMs = 1000, identityBase = 1, launch = launchNpmHost, source = npmSource(root, { launch }), onEnd = () => {},
   log = () => {} }) {
-  const clock = net.clock;
   identity ??= await devkitIdentity(net.admin);
   chain ??= yaciChain(net);
-  ttlSlots ??= Math.max(1, Math.ceil(DEFAULT_TTL_MS / clock.slotLengthMs));
+  // D-1: the provider must serve the admin API's chain before anything is journaled, funded or submitted.
+  const verify = async () => {
+    const g = await chain.genesis();
+    if (!sameChain(identity, g)) {
+      throw new StageError('session', 'otherChain', `the chain API (${net.chain}) serves another chain (magic ${g?.networkMagic}, start `
+        + `${g?.systemStart}) than the DevKit's admin API (magic ${identity.protocolMagic}, start ${identity.startTime})`);
+    }
+  };
+  await verify();
+  // The slot clock of the verified identity (its genesis start and slot length); tests may give another.
+  clock ??= { zeroSlot: 0, zeroTimeMs: identity.startTime * 1000, slotLengthMs: identity.slotLengthMs ?? net.clock.slotLengthMs };
+  const window = identity.stabilityWindow ?? 300;
+  ttlSlots = Math.min(ttlSlots ?? Math.max(1, Math.ceil(DEFAULT_TTL_MS / clock.slotLengthMs)), window);
   nowSlot ??= () => clock.zeroSlot + Math.floor((Date.now() - clock.zeroTimeMs) / clock.slotLengthMs);
+  // The admin API's faucet only: never a payment the server signs (it could spend an identity's outputs, #179 P1-8).
   topUp ??= async (address, ada) => {
     const { devkitTopUp } = await import('@julclang/joust-runtime');
-    await devkitTopUp(address, ada, net.admin, { chain: chain.walletChain?.() });
+    await devkitTopUp(address, ada, net.admin);
   };
   const network = { networkId: 0, protocolMagic: identity.protocolMagic, mainnet: false };
-  const time = { maxTtlSlots: Math.max(ttlSlots, 300), settlementSlots, maxNowAheadSlots: 120 };
+  const time = { maxTtlSlots: window, settlementSlots, maxNowAheadSlots: 120 };
 
   const fp = await source.open();
   const entries = fp.entries;
   let journal;
   try {
-    journal = openJournal({ root: fp.root, chain: identity, state });
+    journal = await openJournal({ root: fp.root, chain: identity, state, served: async () => {
+      const g = await chain.genesis();
+      return { protocolMagic: g.networkMagic, startTime: g.systemStart };
+    } });
   } catch (e) {
     fp.dispose();
+    if (e.code === 'devkitReset' || e.code === 'journalLocked') throw new StageError('session', e.code, e.message);
     throw e;
   }
   const read = chainReads(chain);
@@ -253,20 +310,30 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   }
   let lastNow = 0;
   const now = () => (lastNow = Math.max(lastNow, nowSlot()));
-  let tip = null;                 // the latest tip the watcher saw
-  const status = new Map();       // txHash -> { status, slot, message, label }
+  let tip = null;                 // the latest chain point a settlement pass read
+  // txHash -> { label, chain: null | 'included' | 'final' | 'expired' | 'rolledBack' | 'discarded', slot,
+  //             transport: null | 'pending' | 'accepted' | 'refused' | 'unknown', message }
+  const status = new Map();
   const submitted = [];
+  const serial = keyedQueue();
+  const topUps = new Map();
   let watcher = null;
   let closed = false;
+  let fenced = null;              // why the host builds nothing more
+  let ended = null;               // why the session ended (a DevKit reset)
 
-  const fail = async (e) => {
-    clearInterval(watcher);
-    await host.close().catch(() => {});
-    journal.close();
-    throw e;
+  const observed = (txHash, patch) => status.set(txHash, { label: '', chain: null, slot: null, transport: null, ...status.get(txHash), ...patch });
+  const fence = (why) => {
+    if (fenced) return;
+    fenced = why;
+    log(`playground (devkit): the dev host is fenced: ${why}`);
+  };
+  const live = () => {
+    if (ended) throw new StageError('session', 'reset', ended);
+    if (!host.alive) throw new StageError('session', 'hostEnded', `the dev host ended (${host.ended}): start a new session`);
   };
   const forward = async (method, params) => {
-    if (!host.alive) throw new StageError('session', 'hostEnded', `the dev host ended (${host.ended}): start a new session`);
+    live();
     try {
       return await host.call(method, params, { read });
     } catch (e) {
@@ -274,11 +341,42 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       throw e;
     }
   };
+  const fail = async (e) => {
+    clearInterval(watcher);
+    await host.close().catch(() => {});
+    journal.close();
+    throw e;
+  };
+  /** Tells the host a settlement event; a reply other than {@code expected} (or a refusal) fences it. Never throws. */
+  async function inform(e, params, expected) {
+    try {
+      const r = await forward('settled', { reservation: e.reservation, txHash: e.txHash, ...params });
+      if (!expected.includes(r?.state)) fence(`it answered ${r?.state} to ${params.status} of ${e.txHash.slice(0, 16)}…, where the chain shows ${expected.join(' or ')}`);
+    } catch (err) {
+      fence(`it refused ${params.status} of ${e.txHash.slice(0, 16)}…: ${err.message ?? err}`);
+    }
+  }
+  /** Every journaled body's inclusion slot, read between two equal chain points (#179 P1-6); null if the chain kept moving. */
+  async function observe() {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const t1 = await chain.tip();
+      const seen = new Map();
+      for (const e of journal.entries) seen.set(e.reservation, await chain.txSlot(e.txHash));
+      const t2 = await chain.tip();
+      if (t1.slot === t2.slot && t1.hash === t2.hash) return { tip: t1, seen };
+    }
+    return null;
+  }
+  const within = (slot, e, t) => slot !== null && slot >= (e.validFrom ?? 0) && slot < e.validTo && slot <= t;
 
   // ---- initialize, then restore what the journal holds (ADR-0022 D8: after a restart)
   let init;
   let restored = 0;
   try {
+    if (journal.lost && journal.highWater === null) {
+      throw new StageError('session', 'journalCorrupt', `the journal ${journal.file} is unreadable and has no high-water mark: move it `
+        + 'aside once the bodies it held have expired');
+    }
     const restoring = journal.entries.length > 0 || journal.lost;
     init = await host.call('initialize', { protocol: [1], network, clock, time, limits: LIMITS,
       build: { snapshot: fp.snapshot, digest: fp.digest }, restoring });
@@ -291,74 +389,99 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   }
 
   async function restore() {
-    // History lost: do not complete the restore until an observed tip strictly passes the high-water mark.
+    // History lost (missing or invalid): do not complete the restore until an observed tip strictly passes the mark.
     if (journal.lost) {
       const bound = journal.highWater;
       const wait = ((bound - (await chain.tip()).slot) + 1) * clock.slotLengthMs;
       if (wait > 5 * 60_000) {
-        throw new StageError('session', 'journalLost', `this project's DevKit journal is missing; start again after slot ${bound + 1}`);
+        throw new StageError('session', 'journalLost', `this project's DevKit journal is missing or invalid; start again after slot ${bound + 1}`);
       }
-      log(`the journal is missing: waiting until the chain passes slot ${bound}`);
+      log(`the journal is missing or invalid: waiting until the chain passes slot ${bound}`);
       while ((await chain.tip()).slot <= bound) await sleep(Math.min(1000, clock.slotLengthMs));
     }
-    const t = await chain.tip();
-    // What may still land or still needs its depth margin, as the chain shows it now.
+    const o = await observe();
+    if (!o) throw new StageError('session', 'chainMoving', 'the chain kept moving while the journal was read: start again');
+    const t = o.tip.slot;
+    // What may still land or still needs its depth margin, as the chain shows it now (one entry per body).
     const keep = [];
+    const bodies = new Set();
     for (const e of journal.entries) {
-      const slot = await chain.txSlot(e.txHash);
-      if (slot !== null && slot >= (e.validFrom ?? 0) && slot < e.validTo) {
-        if (t.slot - slot <= settlementSlots) keep.push({ ...e, state: 'shallow', slot });
-      } else if (e.validTo > t.slot) {
+      if (bodies.has(e.txHash)) continue;
+      bodies.add(e.txHash);
+      const slot = o.seen.get(e.reservation);
+      if (within(slot, e, t)) {
+        if (t - slot <= settlementSlots) keep.push({ ...e, state: 'shallow', slot });
+        else observed(e.txHash, { label: e.label, chain: 'final', slot });
+      } else if (e.validTo > t) {
         keep.push({ ...e, state: 'prepared', slot: null });
+      } else {
+        observed(e.txHash, { label: e.label, chain: 'expired' });
       }
     }
     const r = await forward('restore', { transactions: keep.map((e) => (e.state === 'shallow'
       ? { cbor: e.cbor, state: 'shallow', slot: e.slot } : { cbor: e.cbor, state: 'prepared' })), complete: true });
-    journal.replace(keep.map((e, i) => ({ ...e, reservation: r.reservations[i] })));
-    for (const e of keep) status.set(e.txHash, { status: e.state === 'shallow' ? 'included' : e.submitted ? 'submitted' : 'handedOut', slot: e.slot, label: e.label });
+    const ids = r?.reservations;
+    // #179 P1-4: one valid, distinct id per restored body, or the journal stays as it was.
+    if (!Array.isArray(ids) || ids.length !== keep.length || !ids.every((x) => typeof x === 'string' && RESERVATION.test(x))
+      || new Set(ids).size !== ids.length) {
+      throw new StageError('host', 'restore', 'the dev host\'s restore did not give one distinct reservation per body: the journal is kept');
+    }
+    journal.replace(keep.map((e, i) => ({ ...e, reservation: ids[i] })));
+    for (const e of keep) {
+      observed(e.txHash, { label: e.label, chain: e.state === 'shallow' ? 'included' : null, slot: e.slot,
+        transport: e.submitted ? 'unknown' : null });
+    }
     return keep.length;
   }
 
-  // ---- settlement from observed tips (D7 step 7)
-  async function settle(e, params) {
-    const r = await forward('settled', { reservation: e.reservation, txHash: e.txHash, ...params });
-    const s = r?.state;
-    const st = status.get(e.txHash) ?? { label: e.label };
-    if (s === 'shallow') {
-      journal.update(e.reservation, { state: 'shallow', slot: params.slot });
-      status.set(e.txHash, { ...st, status: 'included', slot: params.slot });
-    } else if (s === 'prepared') {
-      journal.update(e.reservation, { state: 'prepared', slot: null });
-      status.set(e.txHash, { ...st, status: params.status === 'rolledBack' ? 'rolledBack' : st.status, slot: null });
-    } else if (s === 'confirmed') {
-      journal.remove(e.reservation);
-      status.set(e.txHash, { ...st, status: 'final', slot: params.slot ?? st.slot });
-    } else if (s === 'expired' || s === 'discarded') {
-      journal.remove(e.reservation);
-      status.set(e.txHash, { ...st, status: s, slot: null });
-    }
-    return s;
+  // ---- settlement from observed chain points (D7 step 7)
+  function reset(why) {
+    ended = `the DevKit was reset (${why}): start a new session`;
+    clearInterval(watcher);
+    log(`playground (devkit): ${ended}`);
+    host.close().catch(() => {});
   }
   let ticking = false;
   async function tick() {
-    if (ticking || closed || !host.alive) return;
+    if (ticking || closed || ended || !host.alive) return;
     ticking = true;
     try {
-      tip = await chain.tip();
+      // D-2: another genesis, or a tip below the last one read, is a reset DevKit: this session's chain is gone.
+      const g = await chain.genesis();
+      if (!sameChain(identity, g)) return reset('its genesis changed');
+      const o = await observe();
+      if (!o) return;
+      if (tip && (o.tip.slot < tip.slot || (o.tip.slot === tip.slot && o.tip.hash !== tip.hash))) return reset('its tip went back');
+      tip = o.tip;
+      const t = o.tip.slot;
+      // 1. Inclusions first, each told at its own slot (no other body crosses a threshold before its own inclusion
+      //    is known: #179 P1-5), oldest first.
+      const landed = journal.entries.filter((e) => e.state === 'prepared' && within(o.seen.get(e.reservation), e, t))
+        .sort((a, b) => o.seen.get(a.reservation) - o.seen.get(b.reservation));
+      for (const e of landed) {
+        const slot = o.seen.get(e.reservation);
+        await chain.indexed(e.txHash).catch(() => {});
+        journal.update(e.reservation, { state: 'shallow', slot });
+        observed(e.txHash, { label: e.label, chain: 'included', slot });
+        await inform(e, { status: 'confirmed', slot, tip: slot }, settlementSlots === 0 ? ['shallow', 'confirmed'] : ['shallow']);
+      }
+      // 2. An inclusion the chain no longer shows: back to prepared.
+      for (const e of journal.entries.filter((x) => x.state === 'shallow' && o.seen.get(x.reservation) !== x.slot
+        && !landed.some((l) => l.reservation === x.reservation))) {
+        journal.update(e.reservation, { state: 'prepared', slot: null });
+        observed(e.txHash, { chain: 'rolledBack', slot: null });
+        await inform(e, { status: 'rolledBack', tip: t }, ['prepared']);
+      }
+      // 3. Depth and expiry at the chain point read.
       for (const e of journal.entries) {
-        const slot = await chain.txSlot(e.txHash);
-        const fresh = (await chain.tip());
-        tip = fresh.slot >= tip.slot ? fresh : tip;
-        if (e.state === 'prepared') {
-          if (slot !== null && slot >= (e.validFrom ?? 0) && slot < e.validTo && slot <= tip.slot) {
-            await chain.indexed(e.txHash);
-            await settle(e, { status: 'confirmed', slot, tip: tip.slot });
-          } else if (slot === null && tip.slot > e.validTo + settlementSlots) {
-            await settle(e, { status: 'expired', tip: tip.slot });
-          }
-        } else if (e.state === 'shallow') {
-          if (slot !== e.slot) await settle(e, { status: 'rolledBack', tip: tip.slot });
-          else if (tip.slot > e.slot + settlementSlots) await settle(e, { status: 'confirmed', slot, tip: tip.slot });
+        if (e.state === 'shallow' && t > e.slot + settlementSlots) {
+          journal.remove(e.reservation);
+          observed(e.txHash, { chain: 'final', slot: e.slot });
+          await inform(e, { status: 'confirmed', slot: e.slot, tip: t }, ['confirmed']);
+        } else if (e.state === 'prepared' && o.seen.get(e.reservation) === null && t > e.validTo + settlementSlots) {
+          journal.remove(e.reservation);
+          observed(e.txHash, { chain: 'expired', slot: null });
+          await inform(e, { status: 'expired', tip: t }, ['expired']);
         }
       }
     } catch (err) {
@@ -372,25 +495,43 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
 
   /** Whether the project's build changed since this session started (I6). */
   const stale = () => fp.stale();
-  /** Before the page can sign it: the body in the journal, the high-water mark over it (ADR-0022 D8). */
+  /**
+   * Before the page can sign it (ADR-0022 D8): the body in the journal under a valid, new reservation, and the
+   * high-water mark over it. A body that cannot be journaled is never returned, and its host is fenced (#179 P1-4).
+   */
   const handOut = (prepared, label) => {
-    if (!prepared?.reservation) return;
-    const tx = parseTx(prepared.cbor);
-    if (tx.hash !== prepared.txHash || tx.ttl === null) {
-      // Never handed out: the page could not check it anyway.
-      throw new StageError('verification', 'body', 'the dev host\'s body has another hash or no upper validity bound');
+    const tx = (() => {
+      try {
+        return parseTx(prepared?.cbor);
+      } catch {
+        return null;
+      }
+    })();
+    const reservation = prepared?.reservation;
+    const problem = !tx ? 'no transaction' : tx.hash !== prepared.txHash ? 'another hash than its txHash'
+      : tx.ttl === null ? 'no upper validity bound' : typeof reservation !== 'string' || !RESERVATION.test(reservation) ? 'no valid reservation'
+        : journal.find(reservation) ? 'a reservation already journaled' : null;
+    if (problem) {
+      fence(`it gave a body with ${problem}`);
+      throw new StageError('host', 'reservation', `the dev host gave a body with ${problem}: it was not handed out`);
     }
     const validTo = Number(tx.ttl);
     journal.raise(validTo + settlementSlots);
-    journal.record({ reservation: prepared.reservation, txHash: tx.hash, cbor: prepared.cbor, validTo,
+    journal.record({ reservation, txHash: tx.hash, cbor: prepared.cbor, validTo,
       validFrom: tx.validFrom === null ? null : Number(tx.validFrom), state: 'prepared', label });
-    status.set(tx.hash, { status: 'handedOut', slot: null, label });
+    observed(tx.hash, { label, chain: null, slot: null, transport: null });
   };
-  const guardStale = () => {
+  const guardBuild = () => {
+    if (fenced) throw new StageError('session', 'fenced', `the dev host disagrees with the chain (${fenced}): start a new session`);
     if (stale()) throw new StageError('session', 'stale', 'the project was rebuilt: start a new session to use the new build');
   };
   let pruned = journal.pruned;
   if (pruned.length) log(`playground (devkit): removed the journal of ${pruned.length} earlier DevKit chain(s): ${pruned.map((p) => `started ${p.startTime}, ${p.transactions} transaction(s)`).join('; ')}`);
+  const reservationOf = (reservation) => {
+    const e = journal.find(reservation);
+    if (!e) throw new StageError('session', 'unknownReservation', 'no such reservation in this session');
+    return e;
+  };
 
   return {
     id,
@@ -405,24 +546,30 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     stale,
     journal,
     get ended() {
-      return host.alive ? null : host.ended;
+      return ended ?? (host.alive ? null : host.ended);
+    },
+    get fenced() {
+      return fenced;
     },
     get attacksEnabled() {
       return false;
+    },
+    set attacksEnabled(_v) {
+      throw new StageError('session', 'devkit', 'DevKit runs no attack suite: its node checks every transaction');
     },
     /** The dev host's process id (tests check that it is the only process a session starts). */
     get hostPid() {
       return host.pid;
     },
-    set attacksEnabled(_v) {
-      throw new StageError('session', 'devkit', 'DevKit runs no attack suite: its node checks every transaction');
-    },
     status() {
       const shown = pruned;
-      pruned = [];   // reported once
+      if (shown.length) {
+        pruned = [];   // reported once
+        journal.clearNotices();
+      }
       return { session: id, mode: 'devkit', network: { ...network, name: net.name ?? 'devkit' },
         chain: { startTime: identity.startTime, admin: identity.admin }, fingerprint: fp.digest, slot: now(), tip: tip?.slot ?? null,
-        clock, ttlSlots, settlementSlots, identityBase, stale: stale(), ended: host.alive ? null : host.ended, attacks: false,
+        clock, ttlSlots, settlementSlots, identityBase, stale: stale(), ended: this.ended, fenced, attacks: false,
         capabilities: init.capabilities ?? [], versions: init.versions ?? null, restored, pruned: shown,
         contracts: (init.contracts ?? []).map((c) => ({ name: c.name, served: c.served === true, unsupported: c.unsupported ?? null })) };
     },
@@ -436,17 +583,17 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     deployment: (contract) => forward('deployment', { now: now(), contract }),
     prerequisites: (contract) => forward('prerequisites', { now: now(), contract }),
     async publish(contract, prerequisite, address) {
-      guardStale();
+      guardBuild();
       const n = now();
       const r = await forward('publish', { now: n, ttlSlots, contract, prerequisite, address });
       if (r?.prepared) handOut(r.prepared, `publish ${prerequisite}`);
       return { ...r, now: n, ttlSlots };
     },
     async prepare(call) {
-      guardStale();
+      guardBuild();
       const n = now();
       const r = await forward('prepare', { now: n, ttlSlots, call });
-      handOut(r.prepared, `${call.method}`);
+      handOut(r?.prepared, `${call.method}`);
       return { ...r, now: n, ttlSlots };
     },
     view: (contract, instance, view = null, args = {}) => forward('view', { now: now(), contract, instance, view, args }),
@@ -454,22 +601,35 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     objects: (contract, instance, limit = 50) => forward('objects', { now: now(), contract, instance, limit }),
     page: (method, listing, after, limit = 50) => forward(method, { listing, after, limit }),
     decode: (contract, datum) => forward('decode', { contract, datum }),
-    /** A body declined at review, before it was signed (ADR-0022 D8): the host releases its inputs. */
-    async discard(reservation) {
-      const e = journal.find(reservation);
-      if (!e) throw new StageError('session', 'unknownReservation', 'no such reservation in this session');
-      if (e.submitted) throw new StageError('session', 'submitted', 'a submitted body is settled by the chain, never discarded');
-      await settle(e, { status: 'discarded', tip: (await chain.tip()).slot });
-      return {};
-    },
     /**
-     * Submits a signed body through Yaci Store (D7 step 6). A node refusal is shown at stage ledger; the body is not
-     * discarded (it was handed out: only its expiry releases its inputs).
+     * A body declined at the page's review, before any wallet had it (ADR-0022 D8): the host releases its inputs. A body
+     * handed to a CIP-30 wallet or submitted is never discarded. One operation per reservation at a time.
      */
-    async submit(reservation, cbor) {
-      if (!host.alive) throw new StageError('session', 'hostEnded', `the dev host ended (${host.ended}): start a new session`);
-      const e = journal.find(reservation);
-      if (!e) throw new StageError('session', 'unknownReservation', 'no such reservation in this session');
+    discard: (reservation) => serial(reservation, async () => {
+      const e = reservationOf(reservation);
+      if (e.submitted || e.handedOff) {
+        throw new StageError('session', 'handedOut', 'a body a wallet had or the node saw is settled by the chain, never discarded');
+      }
+      journal.remove(reservation);
+      observed(e.txHash, { chain: 'discarded' });
+      await inform(e, { status: 'discarded', tip: tip?.slot ?? now() }, ['discarded']);
+      return {};
+    }),
+    /** Before a CIP-30 wallet sees the body (#179 P1-3): from now on it is never discarded. */
+    handOff: (reservation) => serial(reservation, async () => {
+      reservationOf(reservation);
+      journal.update(reservation, { handedOff: true });
+      return {};
+    }),
+    /**
+     * Submits a signed body through Yaci Store (D7 step 6), at most one operation per reservation at a time (the
+     * window's start included). The submission is recorded before it is sent; its transport outcome never overrides
+     * what the chain shows (#179 P1-7). A node refusal is stage ledger and the body is not discarded (it was handed
+     * out: only its expiry releases its inputs); an unclear outcome (no answer) is followed on the chain.
+     */
+    submit: (reservation, cbor) => serial(reservation, async () => {
+      live();
+      const e = reservationOf(reservation);
       let hash;
       try {
         hash = ledgerTx(cbor).hash;
@@ -480,24 +640,32 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       // A window that starts ahead (within the host's limits): submit at its start.
       for (const until = Date.now() + 120_000; e.validFrom !== null && nowSlot() < e.validFrom && Date.now() < until;) await sleep(250);
       journal.update(reservation, { submitted: true });
-      const st = status.get(hash) ?? { label: e.label };
+      observed(hash, { label: e.label, transport: 'pending' });
+      submitted.push({ txHash: hash, label: e.label });
+      const out = { txHash: hash, status: 'submitted', validTo: e.validTo, settlementSlots };
       try {
         await chain.submit(cbor);
       } catch (err) {
-        status.set(hash, { ...st, status: 'refused', message: String(err.message ?? err).slice(0, 2000) });
-        throw new StageError('ledger', 'nodeRefused', String(err.message ?? err).slice(0, 2000),
-          { note: 'its inputs stay reserved until the body expires' });
+        const message = String(err.message ?? err).slice(0, 2000);
+        // The node answered (an HTTP 4xx from the submit API): refused. No answer, or the API's own failure: unclear.
+        if (/^submit failed: 4\d\d\b/.test(message)) {
+          observed(hash, { transport: 'refused', message });
+          throw new StageError('ledger', 'nodeRefused', message, { note: 'its inputs stay reserved until the body expires' });
+        }
+        observed(hash, { transport: 'unknown', message });
+        return { ...out, transport: 'unknown', note: `the submission's outcome is unclear (${message}): the playground follows the chain` };
       }
-      status.set(hash, { ...st, status: 'submitted', slot: null });
-      const entry = { txHash: hash, status: 'submitted', validTo: e.validTo, settlementSlots };
-      submitted.push({ txHash: hash, label: e.label });
-      return entry;
-    },
-    /** A submitted (or handed-out) body's settlement as the session last observed it (I7). */
+      observed(hash, { transport: 'accepted' });
+      return { ...out, transport: 'accepted' };
+    }),
+    /** A body's settlement as the chain shows it (I7), with the submission's transport outcome beside it. */
     txStatus(txHash) {
       const s = status.get(txHash);
       if (!s) throw new StageError('session', 'unknownTransaction', 'no such transaction in this session');
-      return { txHash, ...s, tip: tip?.slot ?? null };
+      const shown = s.chain && s.chain !== 'rolledBack' ? s.chain : s.transport === 'refused' ? 'refused'
+        : s.chain === 'rolledBack' ? 'rolledBack' : s.transport ? 'submitted' : 'handedOut';
+      return { txHash, status: shown, slot: s.slot, transport: s.transport, message: s.message ?? null, label: s.label,
+        tip: tip?.slot ?? null, fenced, ended };
     },
     async utxos(address) {
       return (await chain.utxos(address)).map(snapshotOutput);
@@ -519,7 +687,10 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       const r = await chain.stakeRegistered(rewardAddress({ type: 'script', hash: scriptHash }, 0));
       return r === true || r === false ? r : 'unknown';
     },
-    /** Tops an identity's address up from the DevKit's faucet (D5), then waits until the chain shows it. */
+    /**
+     * Tops an identity's address up from the DevKit's faucet (D5) while it holds less than 100 ADA, then waits until
+     * the chain shows it; one top-up per address at a time (#179 P1-8). Answers { toppedUp }.
+     */
     async fund(address, lovelace) {
       let parts = null;
       try {
@@ -530,16 +701,23 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       if (!parts || parts.networkId !== 0) throw new StageError('session', 'address', 'not an address on the DevKit network');
       const q = BigInt(lovelace);
       if (q <= 0n || q % ADA !== 0n || q / ADA > MAX_TOPUP_ADA) throw new StageError('session', 'amount', 'top up 1 to 10,000 whole ADA');
-      const before = sum(await chain.utxos(address));
-      try {
-        await topUp(address, Number(q / ADA));
-      } catch (err) {
-        throw new StageError('session', 'faucet', `the DevKit faucet did not pay: ${err.message ?? err}`);
-      }
-      for (const until = Date.now() + 60_000; Date.now() < until; await sleep(500)) {
-        if (sum(await chain.utxos(address)) > before) return null;
-      }
-      throw new StageError('session', 'faucet', 'the top-up did not show on the chain within 60 s');
+      if (topUps.has(address)) return topUps.get(address);
+      const run = (async () => {
+        live();
+        const before = sum(await chain.utxos(address));
+        if (before >= TOPUP_BELOW) return { toppedUp: false };
+        try {
+          await topUp(address, Number(q / ADA));
+        } catch (err) {
+          throw new StageError('session', 'faucet', `the DevKit faucet did not pay: ${err.message ?? err}`);
+        }
+        for (const until = Date.now() + 60_000; Date.now() < until; await sleep(500)) {
+          if (sum(await chain.utxos(address)) > before) return { toppedUp: true };
+        }
+        throw new StageError('session', 'faucet', 'the top-up did not show on the chain within 60 s');
+      })().finally(() => topUps.delete(address));
+      topUps.set(address, run);
+      return run;
     },
     advance() {
       throw new StageError('session', 'devkit', 'time on DevKit is the network\'s own: it cannot be advanced');

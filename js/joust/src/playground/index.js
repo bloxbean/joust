@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../build.js';
 import { attach } from '../dev.js';
-import { checkDevkitNetwork, DEFAULT_TTL_MS } from './devkit.js';
+import { checkDevkitNetwork, DEFAULT_TTL_MS, devkitIdentity, sameChain, yaciChain } from './devkit.js';
 import { pageFiles } from './page.js';
 import { startPlayground } from './server.js';
 import { gradleBuild, gradleSource, isGradleProject, runGradle } from './gradle.js';
@@ -58,7 +58,14 @@ async function devkitNetwork(config, networkName, log) {
   const name = networkName ?? config.network;
   checkDevkitNetwork(config.networks?.[name], name);
   const net = await attach(config, name, { log });
-  log(`attached to ${name} (${net.chain}, admin ${net.admin})`);
+  // D-1, M3-S1: the chain API must serve the admin API's chain (a public network's API behind a DevKit admin fails).
+  const identity = await devkitIdentity(net.admin);
+  const g = await yaciChain(net).genesis().catch((e) => { throw new Error(`joust playground: ${net.chain}/genesis: ${e.message}`); });
+  if (!sameChain(identity, g)) {
+    throw new Error(`joust playground: ${name}'s chain API (${net.chain}) serves another chain (magic ${g.networkMagic}) than its DevKit`
+      + ` admin API (magic ${identity.protocolMagic}, start ${identity.startTime})`);
+  }
+  log(`attached to ${name} (${net.chain}, admin ${net.admin}, magic ${identity.protocolMagic})`);
   return net;
 }
 

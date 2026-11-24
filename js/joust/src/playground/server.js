@@ -79,8 +79,12 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
   const sessions = new Map();     // id -> session (Map order = least recently used first)
   let counter = 0;
 
+  const replaced = new Set();     // DevKit: sessions ended because another tab started one (D-4)
   const use = (id) => {
     const s = sessions.get(str(id, 'session', /^s\d{1,9}$/));
+    if (!s && replaced.has(id)) {
+      throw new StageError('session', 'replaced', 'another tab took this DevKit session: this one is closed (reload to continue here)');
+    }
     if (!s) throw new StageError('session', 'unknownSession', 'no such session: start a new one');
     sessions.delete(id);
     sessions.set(id, s);
@@ -102,6 +106,7 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       // session ends (its reservations stay journaled) before the next one restores them.
       for (const [sid, s] of [...sessions]) {
         sessions.delete(sid);
+        replaced.add(sid);
         await s.close().catch(() => {});
       }
       const id = 's' + ++counter;
@@ -186,6 +191,12 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     'page': async (b) => use(b.session).page(b.method === 'objects' ? 'objects' : 'instances', str(b.listing, 'listing'), b.after, b.limit ?? 50),
     'decode': async (b) => use(b.session).decode(str(b.contract, 'contract', CONTRACT), str(b.datum, 'datum', HEX)),
     'discard': async (b) => use(b.session).discard(str(b.reservation, 'reservation')),
+    // DevKit: the body goes to a CIP-30 wallet next; from now on it is never discarded (#179 P1-3).
+    'handoff': async (b) => {
+      const s = use(b.session);
+      if (typeof s.handOff !== 'function') throw new StageError('session', 'offline', 'offline sessions sign in the page');
+      return s.handOff(str(b.reservation, 'reservation'));
+    },
     'submit': async (b) => use(b.session).submit(str(b.reservation, 'reservation'), str(b.cbor, 'cbor', HEX)),
     'utxos': async (b) => use(b.session).utxos(str(b.address, 'address', /^addr_test1[0-9a-z]{20,200}$/)),
     'outputs': async (b) => {

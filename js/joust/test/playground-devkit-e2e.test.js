@@ -56,18 +56,28 @@ async function injectWallets(page) {
   const { devWallet } = await import('@julclang/state-client/devwallet');
   const { generateMnemonic } = await import('@scure/bip39');
   const { wordlist } = await import('@scure/bip39/wordlists/english');
+  const { blockfrostProvider, chainOf } = await import('@julclang/state-client');
+  // A wallet that follows this DevKit holds its outputs; one that follows another chain shows none of them.
+  const devkitChain = chainOf(blockfrostProvider(STORE));
   const noChain = { utxosAt: async () => [] };
   const wallets = {
-    joustyano: devWallet({ chain: noChain, mnemonic: generateMnemonic(wordlist, 256), networkId: 0 }),
+    joustyano: devWallet({ chain: devkitChain, mnemonic: generateMnemonic(wordlist, 256), networkId: 0 }),
     joustmainnet: devWallet({ chain: noChain, mnemonic: generateMnemonic(wordlist, 256), networkId: 1 }),
+    joustelsewhere: devWallet({ chain: noChain, mnemonic: generateMnemonic(wordlist, 256), networkId: 0 }),
   };
-  await page.exposeFunction('__joustTestWallet', async (name, method, arg) => wallets[name][method](arg));
+  const signs = { joustyano: 0, joustmainnet: 0, joustelsewhere: 0 };
+  await page.exposeFunction('__joustTestWallet', async (name, method, arg) => {
+    if (method === 'signTx') signs[name]++;
+    return wallets[name][method](arg);
+  });
+  wallets.signs = signs;
   await page.addInitScript(() => {
     const api = (name) => Object.fromEntries(['getNetworkId', 'getUtxos', 'getBalance', 'getCollateral', 'getUsedAddresses',
       'getUnusedAddresses', 'getChangeAddress', 'getRewardAddresses', 'signTx']
       .map((m) => [m, (arg) => window.__joustTestWallet(name, m, arg)]));
     window.cardano = window.cardano ?? {};
-    for (const [key, name] of [['joustyano', 'Joust test wallet (Yano)'], ['joustmainnet', 'Joust mainnet wallet']]) {
+    for (const [key, name] of [['joustyano', 'Joust test wallet (Yano)'], ['joustmainnet', 'Joust mainnet wallet'],
+      ['joustelsewhere', 'Joust wallet on another testnet']]) {
       window.cardano[key] = { name, apiVersion: '0.1.0', icon: '', enable: async () => api(key), isEnabled: async () => true };
     }
   });
@@ -181,6 +191,25 @@ describe('ADR-0024 M3 on Yaci DevKit: joust playground --mode devkit in Chromium
     await page.waitForFunction(() => /"count": "7"/.test(document.querySelector('#instances li.selected pre')?.textContent ?? ''),
       null, { timeout: 60_000 });
     assert.ok(wallets.joustyano.address.startsWith('addr_test1'));
+  });
+
+  test('#179 P2: a wallet that follows another chain is refused before it is asked to sign', async () => {
+    await idle();
+    await page.selectOption('#wallet-choice', 'joustelsewhere');
+    await idle();
+    await page.click('#connect');
+    await page.waitForFunction(() => {
+      const t = document.querySelector('#identities li.signer')?.innerText ?? '';
+      return /another testnet/.test(t) && !/(?:^|\s)0\.000000 ADA/.test(t);
+    }, null, { timeout: 120_000 });
+    await idle();
+    await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1');
+    await idle();
+    await page.click('[data-call="action:increment"] button.run');
+    await approveUntil(has, 'another testnet: increment\\s+failed\\s+at stage wallet');
+    assert.match(await history(), /does not hold the input/);
+    assert.equal(wallets.signs.joustelsewhere, 0, 'never asked to sign');
+    assert.ok(wallets.signs.joustyano > 0);
   });
 
   test('I1: no request carries a mnemonic or a key (the test identities\' public one included); no page error', async () => {

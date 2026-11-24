@@ -237,7 +237,10 @@ function drawDevkitBanner(s, b) {
     s.stale ? h('div', { class: 'stale', id: 'stale' },
       h('strong', { text: 'The project was rebuilt.' }), ' This session runs the build it started with and prepares nothing more. ',
       h('button', { text: 'New session on the new build', onclick: () => guard(() => startSession()) })) : null,
-    s.ended ? h('div', { class: 'stale', text: `The dev host ended (${s.ended}). Start a new session.` }) : null,
+    s.fenced ? h('div', { class: 'stale', id: 'fenced' }, h('strong', { text: 'The dev host disagrees with the chain' }),
+      ` (${s.fenced}). It prepares nothing more; what is shown is what the chain shows. `,
+      h('button', { text: 'New session', onclick: () => guard(() => startSession()) })) : null,
+    s.ended ? h('div', { class: 'stale', id: 'ended', text: `The session ended: ${s.ended}` }) : null,
   );
 }
 
@@ -673,13 +676,23 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
       try {
         // 5. sign (stage wallet), after the explicit approval
         let witnesses;
+        if (signer.cip30) {
+          // The wallet as it is now (#179 P2): still on this network, the same payer, and holding every input the body
+          // spends from it, as DevKit does. Then the handoff is recorded before the wallet sees the body: from here on
+          // it is never discarded (only its expiry releases its inputs, ADR-0022 D8).
+          await walletStillMatches(signer, r.prepared.cbor, label);
+          try {
+            await sapi('handoff', { reservation: r.prepared.reservation });
+          } catch (e) {
+            throw labelled(e, 'wallet', label);
+          }
+          report.submitted = true;
+        }
         try {
           // CIP-30 signTx(tx, partialSign): the wallet adds its own witnesses only.
           witnesses = await signer.wallet.signTx(r.prepared.cbor, true);
         } catch (e) {
-          // A CIP-30 wallet had the body: it is handed out, so it is never discarded (only its expiry releases its
-          // inputs, ADR-0022 D8). An identity's keys are in this page: its body went nowhere and is discarded.
-          if (signer.cip30) report.submitted = true;
+          // An identity's keys are in this page: its body went nowhere and is discarded on the way out.
           throw new StageFailure({ stage: 'wallet', code: e?.code === 2 ? 'declined' : 'sign', message: reason(e), label });
         }
         const signed = assemble(r.prepared.cbor, witnesses);
@@ -748,6 +761,32 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
     panel.scrollIntoView({ block: 'nearest' });
   });
 }
+/**
+ * A CIP-30 wallet just before it signs (#179 P2): its network, its change address (the payer the body was built and
+ * checked for) and its UTxOs, read again; every input and collateral input the body takes from the payer's address
+ * must be one the wallet holds and DevKit shows unspent.
+ */
+async function walletStillMatches(signer, cbor, label) {
+  const refuse = (message) => new StageFailure({ stage: 'wallet', code: 'walletChanged', message, label });
+  let view;
+  try {
+    view = await walletView(signer.wallet);
+  } catch (e) {
+    throw refuse(`the wallet could not be read: ${reason(e)}`);
+  }
+  if (view.networkId !== state.session.network.networkId) throw refuse(`the wallet is now on network ${view.networkId}`);
+  if (view.change !== signer.address) throw refuse('the wallet\'s change address changed since it was connected: connect it again');
+  const tx = parseTx(cbor);
+  const refs = [...new Set([...tx.inputs, ...tx.collateral].map((i) => (typeof i === 'string' ? i : i.ref ?? `${i.txHash}#${i.index}`)))];
+  const { outputs } = await resolveInputs(cbor);
+  const chainUnspent = new Set((await chainView.utxosAt(signer.address)).map((u) => u.ref));
+  for (const ref of refs) {
+    if (outputs.get(ref)?.address !== signer.address) continue;
+    if (!view.utxos.has(ref)) throw refuse(`the wallet does not hold the input ${ref} the body spends (does it follow this DevKit?)`);
+    if (!chainUnspent.has(ref)) throw refuse(`DevKit does not show the input ${ref} unspent`);
+  }
+}
+
 /**
  * DevKit (D7 step 7): follows a submitted transaction until it is included (the call then resolves and state is read
  * again), then on to final in the background. Never shown as confirmed before the chain reported it included (I7);
@@ -821,6 +860,11 @@ async function guard(fn) {
   try {
     await fn();
   } catch (e) {
+    if (e.code === 'replaced') {
+      // D-4: another tab started a DevKit session; this one is closed.
+      $('banner').replaceChildren(h('div', { class: 'stale', id: 'replaced', text: e.message }));
+      return;
+    }
     if (!e.quiet) {
       const notModelled = e.code === 'NotModelled' || e.notModelled;
       const message = notModelled ? `not modelled offline: try DevKit (${e.message})` : e.message;
