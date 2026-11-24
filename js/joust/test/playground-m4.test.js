@@ -140,8 +140,11 @@ describe('ADR-0024 M4 call kinds, through the page\'s check', { skip }, () => {
       args: { voter: alice.keyHash, choice: '1' } }, alice), { caller: alice });
     const key = cast.report.created;
     assert.equal(key, cast.prepared.object, 'the key, as the body makes it');
-    await run(s, await designate(s, { contract: REGISTRY, kind: 'keyedAction', method: 'change', instance, object: key, args: { choice: '2' } }, alice),
-      { caller: alice });
+    const change = await run(s, await designate(s, { contract: REGISTRY, kind: 'keyedAction', method: 'change', instance, object: key,
+      args: { choice: '2' } }, alice), { caller: alice });
+    // change reads no time: its attempt's window is bookkeeping, so the attack suite tampers with no bound of it (and the
+    // scripts accept no attack).
+    assert.deepEqual(change.res.acceptedAttacks, []);
     // Bob is not the voter: his change is refused (signedBy against the keyed target).
     await assert.rejects(run(s, await designate(s, { contract: REGISTRY, kind: 'keyedAction', method: 'change', instance, object: key,
       args: { choice: '3' } }, bob), { caller: bob }));

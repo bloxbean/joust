@@ -1,12 +1,29 @@
 package org.julclang.state.runtime.wasm;
 
+import com.bloxbean.cardano.client.address.AddressProvider;
+import com.bloxbean.cardano.client.address.Credential;
+import com.bloxbean.cardano.client.common.model.Networks;
 import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.BytesPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.ExUnits;
+import com.bloxbean.cardano.client.plutus.spec.ListPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
+import com.bloxbean.cardano.client.plutus.spec.Redeemer;
+import com.bloxbean.cardano.client.plutus.spec.RedeemerTag;
+import com.bloxbean.cardano.client.transaction.spec.Asset;
+import com.bloxbean.cardano.client.transaction.spec.MultiAsset;
 import com.bloxbean.cardano.client.transaction.spec.Transaction;
+import com.bloxbean.cardano.client.transaction.spec.TransactionBody;
+import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
+import com.bloxbean.cardano.client.transaction.spec.TransactionWitnessSet;
+import com.bloxbean.cardano.client.transaction.spec.Value;
 import com.bloxbean.cardano.client.util.HexUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.julclang.state.examples.devkit.Fixtures;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -75,6 +92,63 @@ class OfflineTest {
         }
         var none = Offline.evaluate(new Offline.EvaluateRequest(any.get("unsignedTx").asText(), "{}", zeroSlot, zeroTime, slot));
         assertFalse(none.ok());
+    }
+
+    // ---- range attacks only on the bounds a script binds (as the JVM testkit gates them on a real range)
+
+    static final long ZERO_TIME = 1_700_000_000_000L;
+    static final Offline.EvaluateRequest CLOCK = new Offline.EvaluateRequest("", "{}", 0, ZERO_TIME, 1000);
+
+    /** A body with the window [100, 160) (slots), a redeemer, and outputs. */
+    static Transaction windowed(PlutusData redeemer, TransactionOutput... outputs) {
+        var body = TransactionBody.builder().inputs(new ArrayList<>()).outputs(new ArrayList<>(List.of(outputs)))
+                .fee(BigInteger.valueOf(200_000)).ttl(160).validityStartInterval(100).build();
+        var ws = new TransactionWitnessSet();
+        ws.setRedeemers(new ArrayList<>(List.of(Redeemer.builder().tag(RedeemerTag.Spend).index(BigInteger.ZERO).data(redeemer)
+                .exUnits(ExUnits.builder().mem(BigInteger.ONE).steps(BigInteger.ONE).build()).build())));
+        return Transaction.builder().body(body).witnessSet(ws).build();
+    }
+    static BigInteger ms(long slot) { return BigInteger.valueOf(ZERO_TIME + slot * 1000); }
+    static ConstrPlutusData constr(long tag, PlutusData... fields) {
+        return ConstrPlutusData.builder().alternative(tag).data(ListPlutusData.builder().plutusDataList(new ArrayList<>(List.of(fields))).build()).build();
+    }
+    /** A keyed node output: a 29-byte 0x4B token at a script address, Keyed_T(instance, next, linkedAt, value). */
+    static TransactionOutput keyedNode(BigInteger linkedAt) {
+        byte[] name = Offline.fill(29, 0x11);
+        name[0] = 0x4B;
+        var asset = Asset.builder().name("0x" + HexUtil.encodeHexString(name)).value(BigInteger.ONE).build();
+        var value = Value.builder().coin(BigInteger.valueOf(2_000_000))
+                .multiAssets(List.of(MultiAsset.builder().policyId(HexUtil.encodeHexString(Offline.fill(28, 0xAB))).assets(List.of(asset)).build())).build();
+        String script = AddressProvider.getEntAddress(Credential.fromScript(Offline.fill(28, 0xAB)), Networks.testnet()).toBech32();
+        return TransactionOutput.builder().address(script).value(value)
+                .inlineDatum(constr(1, BytesPlutusData.of(Offline.fill(32, 1)), BytesPlutusData.of(Offline.fill(1, 2)), BigIntPlutusData.of(linkedAt),
+                        BigIntPlutusData.of(7))).build();
+    }
+
+    @Test
+    void anUntimedKeyedAction_bindsNoBound_soNoRangeAttack() {
+        // Registry's change: no Ctx, its node continues with its old linkedAt; the attempt's window is bookkeeping only.
+        var tx = windowed(constr(1, BigIntPlutusData.of(2)), keyedNode(ms(40)));
+        assertEquals(Offline.Binding.NONE, Offline.binding(tx, CLOCK));
+    }
+
+    @Test
+    void aCtxOrBatchCarryingTheWindow_bindsBothBounds() {
+        var ctx = constr(0, BytesPlutusData.of(Offline.fill(28, 3)), BigIntPlutusData.of(0), BigIntPlutusData.of(0), BigIntPlutusData.of(ms(100)),
+                BigIntPlutusData.of(ms(160)));
+        assertEquals(Offline.Binding.CTX, Offline.binding(windowed(constr(2, BigIntPlutusData.of(5), ctx)), CLOCK));
+        assertEquals(Offline.Binding.CTX, Offline.binding(windowed(constr(3, BigIntPlutusData.of(ms(100)), BigIntPlutusData.of(ms(160)))), CLOCK),
+                "a batch's Batch(validFrom, validTo)");
+        // A Ctx with another window binds nothing of this one.
+        var other = constr(0, BytesPlutusData.of(Offline.fill(28, 3)), BigIntPlutusData.of(0), BigIntPlutusData.of(0), BigIntPlutusData.of(ms(99)),
+                BigIntPlutusData.of(ms(160)));
+        assertEquals(Offline.Binding.NONE, Offline.binding(windowed(constr(2, other)), CLOCK));
+    }
+
+    @Test
+    void aLinkWithoutCtx_bindsTheUpperBoundAsLinkedAt() {
+        var tx = windowed(constr(0, BytesPlutusData.of(Offline.fill(1, 9))), keyedNode(ms(160)));
+        assertEquals(Offline.Binding.LINK, Offline.binding(tx, CLOCK));
     }
 
     /** Review r2 (#82 S5): only a script's refusal counts as refused; an evaluator or suite error does not. */
