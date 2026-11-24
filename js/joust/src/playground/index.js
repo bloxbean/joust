@@ -9,7 +9,6 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../build.js';
 import { pageFiles } from './page.js';
-import { startPlayground } from './server.js';
 import { gradleBuild, gradleSource, isGradleProject, readSpecBytes, runGradle } from './gradle.js';
 
 /**
@@ -31,7 +30,9 @@ export async function playground({ config, root = process.cwd(), mode = 'offline
   // The ABI and lock gates, as joust build: a changed ABI or lock fails here unless its flag is given (I10).
   const r = await build({ root, src: config.contracts, out: config.out, acceptAbi, acceptLock, log });
   if (!r.ok) throw new Error('joust playground: the build failed (see above)');
-  const { loadEngine } = await import('@julclang/joust-runtime');
+  // Loaded only now: the server's offline ledger needs this package's own dependencies, which a refusal above (a
+  // Gradle build without its wrapper, a failed build) must not.
+  const [{ loadEngine }, { startPlayground }] = await Promise.all([import('@julclang/joust-runtime'), import('./server.js')]);
   const [engine, page] = await Promise.all([loadEngine(), pageFiles()]);
   return announce((o) => startPlayground({ root, engine, page, port: port ?? 0, log, ...o }), { open, log, mode: 'offline' });
 }
@@ -93,7 +94,7 @@ async function gradlePlayground({ root, port, acceptAbi, acceptLock, open, log }
   }
   // The spec this gated build wrote: the first session runs it, or builds again (gates included) if it changed since.
   const source = gradleSource(build.project, { log, gatedSpec: readSpecBytes(build.project) });
-  const { loadEngine } = await import('@julclang/joust-runtime');
+  const [{ loadEngine }, { startPlayground }] = await Promise.all([import('@julclang/joust-runtime'), import('./server.js')]);
   const [engine, page] = await Promise.all([loadEngine(), pageFiles()]);
   return announce((o) => startPlayground({ root: build.project, engine, page, port: port ?? 0, log, source, ...o }),
     { open, log, mode: 'offline, Gradle' });
