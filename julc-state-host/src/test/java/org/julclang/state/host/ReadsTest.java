@@ -25,9 +25,10 @@ class ReadsTest {
         n.set("tip",point(tip));
         return n.set("value",v);
     }
+    static final String TOKEN = "ab".repeat(28) + "74";
     static ObjectNode output(int index) {
         var n = obj().put("tx_hash",HASH).put("output_index",index).put("address",ADDRESS);
-        n.putArray("amount").addObject().put("unit",index % 2 == 0 ? "token" : "lovelace").put("quantity",1);
+        n.putArray("amount").addObject().put("unit",index % 2 == 0 ? TOKEN : "lovelace").put("quantity",1);
         return n;
     }
     static Reads reads(Function<ObjectNode, JsonNode> peer, long count, long bytes) {
@@ -53,8 +54,8 @@ class ReadsTest {
         }).getUtxoService();
         assertEquals(6,b.getUtxos(ADDRESS,1,1).getValue().getFirst().getOutputIndex());
         assertEquals(3,b.getUtxos(ADDRESS,1,2).getValue().getFirst().getOutputIndex());
-        assertEquals(0,b.getUtxos(ADDRESS,"token",1,2).getValue().getFirst().getOutputIndex());
-        assertTrue(b.getUtxos(ADDRESS,"token",1,3).getValue().isEmpty());
+        assertEquals(0,b.getUtxos(ADDRESS,TOKEN,1,2).getValue().getFirst().getOutputIndex());
+        assertTrue(b.getUtxos(ADDRESS,TOKEN,1,3).getValue().isEmpty());
         assertEquals(List.of(obj().put("kind","utxos").put("address",ADDRESS),
                 obj().put("kind","utxos").put("address",ADDRESS).put("cursor","next")), requests);
     }
@@ -93,6 +94,12 @@ class ReadsTest {
         amounts.remove(2);
         ((ObjectNode) amounts.get(0)).put("quantity", 0.4);
         failure("internal", "inconsistentRead", () -> backend(q -> value(first, 10)).getUtxoService().getTxOutput(HASH, 0));
+        // #151 review SB4: one spelling per asset; another spelling of the same unit is not a second key.
+        ((ObjectNode) amounts.get(0)).put("quantity", 1);
+        for (String spelling : List.of(TOKEN.toUpperCase(), "0x" + TOKEN, "token", "ab".repeat(28) + "00".repeat(33))) {
+            ((ObjectNode) amounts.get(0)).put("unit", spelling);
+            failure("internal", "inconsistentRead", () -> backend(q -> value(first, 10)).getUtxoService().getTxOutput(HASH, 0));
+        }
     }
     @Test void separateLookupsAgreeAndTipsCannotMoveBackwards() throws Exception {
         for (boolean rollback : List.of(true,false)) {
@@ -223,6 +230,43 @@ class ReadsTest {
         assertDoesNotThrow(() -> Reads.backend(() -> accepted).getUtxoService().getUtxos(ADDRESS, 10, 1));
         assertFalse(table.avoids("spend"));
         assertFalse(table.avoids("collateral"));
+    }
+    /** #151 Codex review: a listing holding a contract's unique token twice is refused before its tip counts. */
+    @Test void aListingHoldingAUniqueTokenTwiceReleasesNoReservation() {
+        String policy = "cd".repeat(28), object = policy + "4f" + "11".repeat(28);
+        java.util.function.IntFunction<ObjectNode> holding = i -> {
+            var n = obj().put("tx_hash", "%064x".formatted(i)).put("output_index", 0).put("address", ADDRESS);
+            n.putArray("amount").addObject().put("unit", object).put("quantity", 1);
+            return n;
+        };
+        for (var answer : List.of(JSON.createArrayNode().add(holding.apply(1)).add(holding.apply(2)),
+                JSON.createArrayNode().add(holding.apply(2)).add(holding.apply(1)),
+                JSON.createArrayNode().add(holding.apply(1).put("tx_hash", "%064x".formatted(3))
+                        .set("amount", JSON.createArrayNode().add(obj().put("unit", object).put("quantity", 2)))))) {
+            var table = new Reservations(3, false, 0);
+            table.commit(table.prepare(new Reservations.Body("b".repeat(64), Set.of("spend"), Set.of(), 0, 200), 190));
+            var reads = new Reads(req -> new Call.Answer(obj().set("result", value(answer, 204)), 128),
+                    199, 20, 10, 8192, 0, table::observe).uniqueTokens(Map.of(policy, false));
+            failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+            assertTrue(table.avoids("spend"), answer::toString);
+        }
+        // A fungible name may repeat, and a 0x4B name too unless the contract is keyed (ADR-0016 I44, Codex re-review).
+        for (String name : List.of("74", "4b" + "22".repeat(28))) {
+            var fungible = JSON.createArrayNode();
+            for (int i = 1; i <= 2; i++) {
+                var n = holding.apply(i);
+                ((ObjectNode) n.withArray("amount").get(0)).put("unit", policy + name);
+                fungible.add(n);
+            }
+            for (boolean keyed : List.of(false, true)) {
+                var table = new Reservations(3, false, 0);
+                var reads = new Reads(req -> new Call.Answer(obj().set("result", value(fungible, 204)), 128),
+                        199, 20, 10, 8192, 0, table::observe).uniqueTokens(Map.of(policy, keyed));
+                if (keyed && name.startsWith("4b"))
+                    failure("internal", "inconsistentRead", () -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1));
+                else assertDoesNotThrow(() -> Reads.backend(() -> reads).getUtxoService().getUtxos(ADDRESS, 10, 1), name + " " + keyed);
+            }
+        }
     }
     @Test void hashesAreJsonStrings() {
         var table = new Reservations(3, false, 0);

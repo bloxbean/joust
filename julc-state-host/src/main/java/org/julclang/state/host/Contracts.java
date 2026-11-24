@@ -10,8 +10,20 @@ import static org.julclang.state.host.Wire.*;
 
 /** Verified descriptions and the generated entry points they describe (D4/D5/D16). */
 record Contracts(Map<String, Contract> all) {
-    record Contract(String name, JsonNode description, ContractSpec<?> spec, ServedContract adapter,
-                    String hash, String unsupported) {
+    /**
+     * Every catalogued contract's policy (its script hash) with whether it has keyed types, for the unique-token check
+     * of Reads: 0x4B names are reserved only in keyed contracts (ADR-0016 I44).
+     */
+    Map<String, Boolean> policies() {
+        var out = new HashMap<String, Boolean>();
+        for (var c : all.values()) if (c.hash() != null) out.merge(c.hash(), c.keyed(), Boolean::logicalOr);
+        return out;
+    }
+
+    record Contract(String name, JsonNode description, boolean keyed, boolean stakeSelf, JsonNode messages,
+                    org.julclang.state.serve.ContractCalls adapter,
+                    String hash, String unsupported, boolean views) {
+        boolean maps() { return description.path("definitions").has("org.julclang.state.api.MerkleMap"); }
         JsonNode meta(String kind, String method) {
             var x = description.path("x-joust");
             for (String group : List.of("creations", "actions", "views", "purposes")) {
@@ -24,23 +36,31 @@ record Contracts(Map<String, Contract> all) {
         private String kind(String group, JsonNode m) {
             return m.path("kind").asText(group.equals("views") ? "view" : m.path("purpose").textValue());
         }
+        String keyedLimitation(String kind, JsonNode meta) {
+            if (kind.startsWith("keyed") && (!keyed || !meta.hasNonNull("keyed"))) return "missing keyed type description";
+            if ((kind.startsWith("keyed") || keyed && kind.equals("init")) && meta.path("needsService").asBoolean())
+                return "keyed verifier cannot bind service-supplied arguments";
+            // ADR-0022 D6/D11: a balance equation cannot determine both unknown script inputs.
+            if (kind.equals("keyedRemove") && !meta.path("ctx").asBoolean())
+                return "two-input removal requires Ctx to bind the target's value";
+            return null;
+        }
         String code(String kind, JsonNode meta) {
             if (unsupported != null) return unsupported;
-            if (kind.startsWith("keyed") || kind.equals("init") && spec.hasKeyed()) return "keyed";
-            if (kind.equals("view")) return "notYet";
+            if (kind.equals("view")) return views ? null : "views";
             var p = meta.path("policies");
             if (p.path("authorizedBy").size() > 0) return "authorizedBy";
-            if (p.path("batched").asBoolean() || p.path("into").asBoolean() || p.hasNonNull("admits")
+            if (keyedLimitation(kind,meta) != null) return "keyed";
+            if (p.hasNonNull("migrateTo") || p.path("batched").asBoolean() || p.path("into").asBoolean() || p.hasNonNull("admits")
                     || p.path("receives").asBoolean() || meta.path("returns").path("deposits").asBoolean()
-                    || meta.path("needsService").asBoolean() && (!meta.hasNonNull("recipe")
-                    || meta.path("returns").path("sends").asBoolean())) return "unverifiable";
-            if (p.hasNonNull("quorum") || kind.startsWith("owned")) return "m1b";
-            return Set.of("init", "action", "destroy").contains(kind) ? null : "unverifiable";
+                    || meta.path("needsService").asBoolean() && !meta.hasNonNull("recipe")) return "unverifiable";
+            if (p.hasNonNull("quorum") && !Set.of("action", "destroy", "ownedAction", "ownedDestroy", "keyedAction", "keyedRemove", "keyedRetire").contains(kind)) return "unverifiable";
+            return Set.of("init", "action", "destroy", "ownedInit", "ownedAction", "ownedDestroy", "keyedInit", "keyedAction", "keyedRemove", "keyedRetire").contains(kind) ? null : "unverifiable";
         }
         ObjectNode describe() {
             var out = obj();
             out.set("description", description);
-            out.set("messages", JscMessages.messageMap(spec));
+            out.set("messages", messages);
             var calls = out.putArray("calls");
             for (String group : List.of("creations", "actions", "views", "purposes")) {
                 for (var m : description.path("x-joust").path(group)) {
@@ -66,9 +86,9 @@ record Contracts(Map<String, Contract> all) {
             var script = com.bloxbean.cardano.client.plutus.spec.PlutusV3Script.builder()
                     .cborHex(ValidatorScripts.output(spec.validatorClass()).cborHex()).build();
             String hash = HexFormat.of().formatHex(script.getScriptHash());
-            String code = x.has("params") ? "params" : desc.path("definitions").has("org.julclang.state.api.MerkleMap") ? "maps" : null;
+            String code = x.has("params") ? "params" : null;
             var adapter = code == null ? ServedContract.of(client) : null;
-            all.put(name, new Contract(name, desc, spec, adapter, hash, code));
+            all.put(name, new Contract(name, desc, spec.hasKeyed(), spec.stakeSelf(), JscMessages.messageMap(spec), adapter, hash, code, true));
         }
         return new Contracts(all);
     }
@@ -85,7 +105,7 @@ record Contracts(Map<String, Contract> all) {
             if ("params".equals(c.unsupported())) hashes.put("unapplied", c.hash());
             else {
                 hashes.put("spend", c.hash()).put("mint", c.hash());
-                if (c.spec().stakeSelf() || c.description().path("x-joust").has("purposes")) hashes.put("stake", c.hash());
+                if (c.stakeSelf() || c.description().path("x-joust").has("purposes")) hashes.put("stake", c.hash());
             }
             status(e, c.unsupported());
         }

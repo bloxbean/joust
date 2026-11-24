@@ -16,6 +16,9 @@ import static org.junit.jupiter.api.Assertions.*;
 class ReplayTest {
     /** The plain calls the dApp recording must replay (ADR-0022 §9): Counter's init, action and destroy; Bank's init and action. */
     static final Set<String> PLAIN = Set.of("Counter init", "Counter action", "Counter destroy", "Bank init", "Bank action");
+    /** With Bank's owned calls (M1b): its owned init, action and destroy. */
+    static final Set<String> PLAIN_AND_OWNED = Set.of("Counter init", "Counter action", "Counter destroy", "Bank init",
+            "Bank action", "Bank ownedInit", "Bank ownedAction", "Bank ownedDestroy");
     static final Path FIXTURES = Path.of(System.getProperty("joust.host.fixtures", "../fixtures/m0"));
 
     /** The first M3 recording of {@code contract}'s {@code method} ({@code NNN-method.json}): re-recording renumbers them. */
@@ -92,13 +95,13 @@ class ReplayTest {
         String contract = f.at("/call/contract").asText();
         return contract.substring(contract.lastIndexOf('.') + 1) + " " + f.at("/call/kind").asText();
     }
-    @TestFactory Stream<DynamicTest> plainPrepares() throws Exception {
+    @TestFactory Stream<DynamicTest> plainAndOwnedPrepares() throws Exception {
         var tests = new ArrayList<DynamicTest>();
         var replayed = new HashSet<String>();
         try (var paths = Files.list(FIXTURES.resolve("dapp"))) {
             for (Path path : paths.sorted().toList()) {
                 var f = JSON.readTree(path.toFile());
-                if (!Set.of("init", "action", "destroy").contains(f.at("/call/kind").asText())) continue;
+                if (!f.hasNonNull("call")) continue;
                 replayed.add(covered(f));
                 boolean counter = f.at("/call/contract").asText().endsWith(".Counter");
                 Path entry = counter ? counter() : Path.of(org.julclang.state.examples.bank.BankClient.class
@@ -110,7 +113,23 @@ class ReplayTest {
                         if (counter) assertEquals("f46416f87d4622250ec7554fc583bd1f9d46bf2de04521ceddefa5cb",
                                 hello.at("/contracts/0/scriptHashes/mint").asText());
                         var result = success(client.rpc("prepare", recording.params, recording::answer));
-                        assertFalse(result.has("predicted"));
+                        var effects = result.required("predicted");
+                        String kind = recording.params.at("/call/kind").asText();
+                        if (kind.startsWith("owned")) {
+                            var effect = effects.required("objects").required(0);
+                            assertEquals(switch (kind) {
+                                case "ownedInit" -> "created";
+                                case "ownedDestroy" -> "removed";
+                                default -> "updated";
+                            }, effect.required("effect").asText());
+                            assertEquals(kind.equals("ownedInit") ? result.at("/prepared/object") : recording.params.at("/call/object"),
+                                    effect.required("object"));
+                        } else if (kind.equals("destroy")) assertTrue(effects.required("state").isNull());
+                        else assertTrue(effects.at("/state/predicted").asBoolean());
+                        for (var payout : effects.required("payouts")) {
+                            assertEquals(result.at("/prepared/plan/outputs/" + payout.required("index") + "/value"), payout.required("value"));
+                            assertTrue(payout.required("owed").has("lovelace"));
+                        }
                         var tx = result.required("prepared");
                         assertEquals(f.get("unsignedTx"), tx.get("cbor"));
                         assertEquals(f.get("txHash"), tx.get("txHash"));
@@ -127,8 +146,9 @@ class ReplayTest {
                 }));
             }
         }
-        // ADR-0022 §9: every plain recording replays, and together they cover each plain kind of both dApp contracts.
-        assertCovers(replayed, PLAIN, "ADR-0022 §9 plain recordings");
+        // ADR-0022 §9: every plain and owned recording replays, and together they cover each plain and owned kind of the
+        // dApp's contracts.
+        assertCovers(replayed, PLAIN_AND_OWNED, "ADR-0022 §9 plain and owned recordings");
         return tests.stream();
     }
 }

@@ -80,7 +80,7 @@ class LaunchTest {
             assertEquals("runtimeVersion", assertThrows(HostError.class, () -> Launch.runtimeVersion(loader)).code);
         }
     }
-    @Test void ownedCallsDescribeAndPrepareWithTheSameUnsupportedCode() throws Exception {
+    @Test void ownedCallsAreAdvertised() throws Exception {
         Path bank = Path.of(org.julclang.state.examples.bank.BankClient.class.getProtectionDomain().getCodeSource().getLocation().toURI());
         try (var c = new Client(new Handshake(List.of(bank)))) {
             String name = success(c.rpc("initialize", init(bank))).at("/contracts/0/name").asText();
@@ -90,23 +90,20 @@ class LaunchTest {
                 String kind = method.required("kind").asText();
                 if (!kind.startsWith("owned")) continue;
                 seen.add(kind);
-                assertEquals("m1b", method.required("unsupported").asText());
-                var p = obj().put("now", 5).put("ttlSlots", 1);
-                p.putObject("call").put("kind", kind).put("method", method.required("method").asText()).put("contract", name);
-                error("unsupported", "m1b", c.rpc("prepare", p));
+                assertTrue(method.required("served").booleanValue());
             }
             assertEquals(Set.of("ownedAction", "ownedInit", "ownedDestroy"), seen);
         }
     }
     @Test void methodPoliciesConstrainThePlainCallMatrix() {
         var spec = org.julclang.state.examples.counter.CounterClient.SPEC;
-        var c = new Contracts.Contract("Counter", obj(), spec, null, "", null);
+        var c = new Contracts.Contract("Counter", obj(), spec.hasKeyed(), spec.stakeSelf(), null, null, "", null, true);
         assertNull(c.code("action", obj()));
         assertEquals("keyed", c.code("keyedRemove", obj()));
-        assertEquals("notYet", c.code("view", obj()));
+        assertNull(c.code("view", obj()));
         var m = obj();
         m.putObject("policies").putObject("quorum").put("threshold", 2);
-        assertEquals("m1b", c.code("action", m));
+        assertNull(c.code("action", m));
         m.withObject("/policies").putArray("authorizedBy").add("owner");
         assertEquals("authorizedBy", c.code("action", m));
         for (String policy : List.of("batched", "into", "admits", "receives")) {
@@ -137,9 +134,8 @@ class LaunchTest {
             var desc = success(c.rpc("describe",obj().put("contract",result.at("/contracts/0/name").asText())));
             assertEquals("Counter",desc.at("/description/x-joust/contract").asText());
             assertTrue(desc.get("messages").isNull());
-            assertTrue(desc.get("calls").findValues("unsupported").stream().anyMatch(v -> v.asText().equals("notYet")));
-            for (String method : List.of("deployment","prerequisites","publish","view","instances","objects","decode","registered"))
-                error("unsupported","notYet",c.rpc(method,obj()));
+            assertTrue(desc.get("calls").findValues("served").stream().allMatch(v -> v.booleanValue()));
+            assertEquals(List.of("views", "objects", "quorum"), JSON.convertValue(result.required("capabilities"), List.class));
             success(c.rpc("shutdown",obj()));
             error("bad","request",c.rpc("describe",obj()));
         }

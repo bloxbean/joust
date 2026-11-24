@@ -36,6 +36,8 @@ class KeyedSeriesTest {
     /** A scripted provider: the wallet's UTxOs (mutable), units that answer by asset, a tip, and a count of reads. */
     static final class Chain {
         final List<Utxo> wallet = new ArrayList<>();
+        /** When set, an address listing answers {@code count} items per page, as a provider does; else all on page 1. */
+        volatile boolean paged;
         final List<Utxo> script = new ArrayList<>();
         final AtomicLong tip = new AtomicLong(1_000);
         final AtomicInteger reads = new AtomicInteger();
@@ -49,8 +51,16 @@ class KeyedSeriesTest {
                         if (a.length == 3 || a.length == 4 && a[1] instanceof Integer) {
                             int page = (Integer) a[2];
                             synchronized (this) {
-                                for (Utxo u : wallet) if (u.getAddress().equals(a[0]) && page == 1) out.add(u);
-                                for (Utxo u : script) if (u.getAddress().equals(a[0]) && page == 1) out.add(u);
+                                if (paged) {
+                                    var all = new ArrayList<Utxo>();
+                                    for (Utxo u : wallet) if (u.getAddress().equals(a[0])) all.add(u);
+                                    for (Utxo u : script) if (u.getAddress().equals(a[0])) all.add(u);
+                                    long from = (long) (page - 1) * (Integer) a[1];
+                                    for (long i = from; i < Math.min(all.size(), from + (Integer) a[1]); i++) out.add(all.get((int) i));
+                                } else {
+                                    for (Utxo u : wallet) if (u.getAddress().equals(a[0]) && page == 1) out.add(u);
+                                    for (Utxo u : script) if (u.getAddress().equals(a[0]) && page == 1) out.add(u);
+                                }
                             }
                         } else {
                             String unit = (String) a[1];

@@ -1,0 +1,2566 @@
+{
+  "source" : "Registry-grant-62",
+  "method" : "prepare",
+  "request" : {
+    "now" : 1845,
+    "ttlSlots" : 20,
+    "call" : {
+      "contract" : "org.julclang.state.examples.registry.Registry",
+      "kind" : "keyedInit",
+      "method" : "grant",
+      "address" : "addr_test1qzdhlg6en09chceexc8nslfns9p2g0rr8857fs2xgwsx5cjgp7kctu33vm4feezpy3gqs79e62tstkpjwehv04hjsaush075r5",
+      "args" : {
+        "name" : "62",
+        "owner" : "9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62"
+      },
+      "instance" : "288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc2288",
+      "designated" : "7b49c45e069a2f736c393d34cfb719f5b0848f94f820fdc62c2bb10a1447501f#0",
+      "operation" : {
+        "contract" : "org.julclang.state.examples.registry.Registry",
+        "method" : "grant",
+        "designated" : "7b49c45e069a2f736c393d34cfb719f5b0848f94f820fdc62c2bb10a1447501f#0",
+        "instance" : "288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc2288",
+        "key" : null,
+        "attempts" : [ ]
+      }
+    }
+  },
+  "networkId" : 0,
+  "maxFee" : "3000000",
+  "anchors" : {
+    "description" : {
+      "preamble" : {
+        "title" : "org.julclang.state.examples.registry.Registry",
+        "description" : "JOUST contract Registry (ADR-0013 D3)",
+        "version" : "0.0.0",
+        "plutusVersion" : "v3",
+        "compiler" : {
+          "name" : "joust"
+        }
+      },
+      "validators" : [ {
+        "title" : "RegistryValidator.mint",
+        "redeemer" : {
+          "title" : "redeemer",
+          "schema" : {
+            "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Lifecycle"
+          }
+        }
+      }, {
+        "title" : "RegistryValidator.spend",
+        "datum" : {
+          "title" : "datum",
+          "schema" : {
+            "title" : "Datum",
+            "description" : "The state (instance tokens), an owned object's Holding (0x4f tokens), or a keyed list's head, node or retired node (0x4b tokens)",
+            "anyOf" : [ {
+              "$ref" : "#/definitions/org.julclang.state.examples.registry.Registry.State"
+            }, {
+              "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Head_Ballot"
+            }, {
+              "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Keyed_Ballot"
+            }, {
+              "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Retired_Ballot"
+            }, {
+              "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Head_Entry"
+            }, {
+              "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Keyed_Entry"
+            }, {
+              "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Retired_Entry"
+            } ]
+          }
+        },
+        "redeemer" : {
+          "title" : "redeemer",
+          "schema" : {
+            "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Calls"
+          }
+        }
+      } ],
+      "x-joust" : {
+        "version" : 2,
+        "contract" : "Registry",
+        "package" : "org.julclang.state.examples.registry",
+        "validator" : "RegistryValidator",
+        "client" : "RegistryClient",
+        "state" : {
+          "$ref" : "#/definitions/org.julclang.state.examples.registry.Registry.State"
+        },
+        "stakeSelf" : false,
+        "minAda" : 3300000,
+        "maxDatumBytes" : 384,
+        "assetAware" : false,
+        "owned" : [ ],
+        "keyed" : [ {
+          "type" : "org.julclang.state.examples.registry.Registry.Ballot",
+          "simple" : "Ballot",
+          "lookup" : "ballot",
+          "key" : "voter",
+          "keyIndex" : 0,
+          "maxKeyBytes" : 28,
+          "signedKey" : true,
+          "linkCooldownMs" : 60000,
+          "linkWindowMs" : 120000,
+          "typeId" : "0642616c6c6f74",
+          "head" : {
+            "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Head_Ballot"
+          },
+          "headTag" : 0,
+          "node" : {
+            "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Keyed_Ballot"
+          },
+          "nodeTag" : 1,
+          "retired" : {
+            "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Retired_Ballot"
+          },
+          "retiredTag" : 2,
+          "link" : {
+            "purpose" : "spend",
+            "constructor" : "Link",
+            "index" : 8
+          },
+          "remove" : null,
+          "inserts" : [ "cast" ],
+          "actions" : [ "change" ],
+          "removes" : [ ],
+          "retires" : [ "leave" ]
+        }, {
+          "type" : "org.julclang.state.examples.registry.Registry.Entry",
+          "simple" : "Entry",
+          "lookup" : "entry",
+          "key" : "name",
+          "keyIndex" : 0,
+          "maxKeyBytes" : 64,
+          "signedKey" : false,
+          "linkCooldownMs" : 60000,
+          "linkWindowMs" : 120000,
+          "typeId" : "05456e747279",
+          "head" : {
+            "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Head_Entry"
+          },
+          "headTag" : 3,
+          "node" : {
+            "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Keyed_Entry"
+          },
+          "nodeTag" : 4,
+          "retired" : {
+            "$ref" : "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Retired_Entry"
+          },
+          "retiredTag" : 5,
+          "link" : {
+            "purpose" : "spend",
+            "constructor" : "Link",
+            "index" : 8
+          },
+          "remove" : {
+            "purpose" : "mint",
+            "constructor" : "Remove_Entry",
+            "index" : 5
+          },
+          "inserts" : [ "claim", "grant" ],
+          "actions" : [ "upgrade", "withdraw", "recover" ],
+          "removes" : [ "release" ],
+          "retires" : [ "retire" ]
+        } ],
+        "creations" : [ {
+          "name" : "init",
+          "kind" : "init",
+          "redeemer" : {
+            "purpose" : "mint",
+            "constructor" : "CreateInstance",
+            "index" : 0
+          },
+          "args" : [ ],
+          "ctx" : true,
+          "payable" : false,
+          "takesAssets" : false,
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "init",
+            "redeemerFields" : [ "seed", "ctx" ],
+            "target" : "org.julclang.state.examples.registry.Registry.State",
+            "shared" : false,
+            "signers" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "cast",
+          "kind" : "keyedInit",
+          "redeemer" : {
+            "purpose" : "mint",
+            "constructor" : "Insert_cast",
+            "index" : 2
+          },
+          "args" : [ {
+            "name" : "voter",
+            "type" : "byte[]",
+            "schema" : {
+              "dataType" : "bytes"
+            }
+          }, {
+            "name" : "choice",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          } ],
+          "ctx" : true,
+          "payable" : false,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Ballot",
+          "keyed" : "Ballot",
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "cast",
+            "redeemerFields" : [ "instance", "anchor", "voter", "choice", "ctx" ],
+            "target" : "org.julclang.state.examples.registry.Registry.Ballot",
+            "shared" : true,
+            "signers" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "voter", "choice" ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "claim",
+          "kind" : "keyedInit",
+          "redeemer" : {
+            "purpose" : "mint",
+            "constructor" : "Insert_claim",
+            "index" : 3
+          },
+          "args" : [ {
+            "name" : "name",
+            "type" : "byte[]",
+            "schema" : {
+              "dataType" : "bytes"
+            }
+          }, {
+            "name" : "tier",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          }, {
+            "name" : "guardians",
+            "type" : "JulcList<byte[]>",
+            "schema" : {
+              "dataType" : "list",
+              "items" : {
+                "dataType" : "bytes"
+              }
+            }
+          }, {
+            "name" : "needed",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          } ],
+          "ctx" : true,
+          "payable" : true,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Entry",
+          "keyed" : "Entry",
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "claim",
+            "redeemerFields" : [ "instance", "anchor", "name", "tier", "guardians", "needed", "ctx" ],
+            "target" : "org.julclang.state.examples.registry.Registry.Entry",
+            "shared" : false,
+            "signers" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "name", "tier", "guardians", "needed" ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "grant",
+          "kind" : "keyedInit",
+          "redeemer" : {
+            "purpose" : "mint",
+            "constructor" : "Insert_grant",
+            "index" : 4
+          },
+          "args" : [ {
+            "name" : "name",
+            "type" : "byte[]",
+            "schema" : {
+              "dataType" : "bytes"
+            }
+          }, {
+            "name" : "owner",
+            "type" : "byte[]",
+            "schema" : {
+              "dataType" : "bytes"
+            }
+          } ],
+          "ctx" : true,
+          "payable" : false,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Entry",
+          "keyed" : "Entry",
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "grant",
+            "redeemerFields" : [ "instance", "anchor", "name", "owner", "ctx" ],
+            "target" : "org.julclang.state.examples.registry.Registry.Entry",
+            "shared" : true,
+            "signers" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "name", "owner" ],
+            "stepEvents" : false
+          }
+        } ],
+        "actions" : [ {
+          "name" : "setOpen",
+          "kind" : "action",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "SetOpen",
+            "index" : 0
+          },
+          "fields" : [ "open" ],
+          "args" : [ {
+            "name" : "open",
+            "type" : "boolean",
+            "schema" : {
+              "title" : "Bool",
+              "anyOf" : [ {
+                "title" : "False",
+                "dataType" : "constructor",
+                "index" : 0,
+                "fields" : [ ]
+              }, {
+                "title" : "True",
+                "dataType" : "constructor",
+                "index" : 1,
+                "fields" : [ ]
+              } ]
+            }
+          } ],
+          "ctx" : false,
+          "payable" : false,
+          "takesAssets" : false,
+          "policies" : {
+            "signedBy" : [ "admin" ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : null,
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : true,
+            "payouts" : false,
+            "sends" : false,
+            "mint" : false,
+            "accepted" : false,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "setOpen",
+            "redeemerFields" : [ "open" ],
+            "target" : "org.julclang.state.examples.registry.Registry.State",
+            "shared" : false,
+            "signers" : [ {
+              "field" : "admin",
+              "index" : 0
+            } ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "open" ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "change",
+          "kind" : "keyedAction",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "Change",
+            "index" : 1
+          },
+          "fields" : [ "choice" ],
+          "args" : [ {
+            "name" : "choice",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          } ],
+          "ctx" : false,
+          "payable" : false,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Ballot",
+          "keyed" : "Ballot",
+          "policies" : {
+            "signedBy" : [ "voter" ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : null,
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : true,
+            "payouts" : false,
+            "sends" : false,
+            "mint" : false,
+            "accepted" : false,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "change",
+            "redeemerFields" : [ "choice" ],
+            "target" : "org.julclang.state.examples.registry.Registry.Ballot",
+            "shared" : false,
+            "signers" : [ {
+              "field" : "voter",
+              "index" : 0
+            } ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "choice" ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "upgrade",
+          "kind" : "keyedAction",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "Upgrade",
+            "index" : 2
+          },
+          "fields" : [ "tier", "ctx" ],
+          "args" : [ {
+            "name" : "tier",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          } ],
+          "ctx" : true,
+          "payable" : true,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Entry",
+          "keyed" : "Entry",
+          "policies" : {
+            "signedBy" : [ "owner" ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : null,
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : true,
+            "payouts" : false,
+            "sends" : false,
+            "mint" : false,
+            "accepted" : false,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "upgrade",
+            "redeemerFields" : [ "tier", "ctx" ],
+            "target" : "org.julclang.state.examples.registry.Registry.Entry",
+            "shared" : false,
+            "signers" : [ {
+              "field" : "owner",
+              "index" : 1
+            } ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "tier" ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "withdraw",
+          "kind" : "keyedAction",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "Withdraw",
+            "index" : 3
+          },
+          "fields" : [ "amount", "ctx" ],
+          "args" : [ {
+            "name" : "amount",
+            "type" : "BigInteger",
+            "schema" : {
+              "dataType" : "integer"
+            }
+          } ],
+          "ctx" : true,
+          "payable" : false,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Entry",
+          "keyed" : "Entry",
+          "policies" : {
+            "signedBy" : [ "owner" ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : null,
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : true,
+            "payouts" : true,
+            "sends" : false,
+            "mint" : false,
+            "accepted" : false,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "withdraw",
+            "redeemerFields" : [ "amount", "ctx" ],
+            "target" : "org.julclang.state.examples.registry.Registry.Entry",
+            "shared" : false,
+            "signers" : [ {
+              "field" : "owner",
+              "index" : 1
+            } ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "amount" ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "recover",
+          "kind" : "keyedAction",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "Recover",
+            "index" : 4
+          },
+          "fields" : [ "newOwner" ],
+          "args" : [ {
+            "name" : "newOwner",
+            "type" : "byte[]",
+            "schema" : {
+              "dataType" : "bytes"
+            }
+          } ],
+          "ctx" : false,
+          "payable" : false,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Entry",
+          "keyed" : "Entry",
+          "policies" : {
+            "signedBy" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : {
+              "keys" : "guardians",
+              "threshold" : "needed"
+            },
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : true,
+            "payouts" : false,
+            "sends" : false,
+            "mint" : false,
+            "accepted" : false,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "recover",
+            "redeemerFields" : [ "newOwner" ],
+            "target" : "org.julclang.state.examples.registry.Registry.Entry",
+            "shared" : false,
+            "signers" : [ ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ "newOwner" ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "leave",
+          "kind" : "keyedRetire",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "Leave",
+            "index" : 5
+          },
+          "fields" : [ "ctx" ],
+          "args" : [ ],
+          "ctx" : true,
+          "payable" : false,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Ballot",
+          "keyed" : "Ballot",
+          "policies" : {
+            "signedBy" : [ "voter" ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : null,
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : false,
+            "payouts" : true,
+            "sends" : false,
+            "mint" : false,
+            "accepted" : false,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "leave",
+            "redeemerFields" : [ "ctx" ],
+            "target" : "org.julclang.state.examples.registry.Registry.Ballot",
+            "shared" : false,
+            "signers" : [ {
+              "field" : "voter",
+              "index" : 0
+            } ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "release",
+          "kind" : "keyedRemove",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "Release",
+            "index" : 6
+          },
+          "fields" : [ "ctx" ],
+          "args" : [ ],
+          "ctx" : true,
+          "payable" : false,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Entry",
+          "keyed" : "Entry",
+          "policies" : {
+            "signedBy" : [ "owner" ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : null,
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : false,
+            "payouts" : true,
+            "sends" : false,
+            "mint" : false,
+            "accepted" : false,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "release",
+            "redeemerFields" : [ "ctx" ],
+            "burn" : {
+              "constructor" : "Remove_Entry",
+              "index" : 5
+            },
+            "target" : "org.julclang.state.examples.registry.Registry.Entry",
+            "shared" : false,
+            "signers" : [ {
+              "field" : "owner",
+              "index" : 1
+            } ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ ],
+            "stepEvents" : false
+          }
+        }, {
+          "name" : "retire",
+          "kind" : "keyedRetire",
+          "redeemer" : {
+            "purpose" : "spend",
+            "constructor" : "Retire",
+            "index" : 7
+          },
+          "fields" : [ "ctx" ],
+          "args" : [ ],
+          "ctx" : true,
+          "payable" : false,
+          "takesAssets" : false,
+          "owned" : "org.julclang.state.examples.registry.Registry.Entry",
+          "keyed" : "Entry",
+          "policies" : {
+            "signedBy" : [ "owner" ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "quorum" : null,
+            "authorizedBy" : [ ],
+            "shared" : false,
+            "into" : false,
+            "admits" : null,
+            "receives" : false,
+            "batched" : false,
+            "migrateTo" : null
+          },
+          "returns" : {
+            "state" : false,
+            "payouts" : true,
+            "sends" : false,
+            "mint" : false,
+            "accepted" : false,
+            "events" : false,
+            "deposits" : false
+          },
+          "needsService" : false,
+          "recipe" : {
+            "transition" : "retire",
+            "redeemerFields" : [ "ctx" ],
+            "target" : "org.julclang.state.examples.registry.Registry.Entry",
+            "shared" : false,
+            "signers" : [ {
+              "field" : "owner",
+              "index" : 1
+            } ],
+            "validAfter" : [ ],
+            "validBefore" : [ ],
+            "params" : false,
+            "reads" : [ ],
+            "transitionArgs" : [ ],
+            "stepEvents" : false
+          }
+        } ],
+        "views" : [ ],
+        "tokens" : {
+          "instance" : "blake2b_256(seed txId ++ I2OSP(seed index, 2)), 32 bytes",
+          "object" : "0x4f ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes",
+          "intent" : "0x49 ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes",
+          "keyed" : "0x4b ++ blake2b_224(instance ++ typeId ++ key), 29 bytes; a list head's key is empty"
+        },
+        "encoding" : {
+          "canonicalMaps" : true,
+          "note" : "inline datums are canonical CBOR: map keys sorted (SortedMaps); records are constructor 0",
+          "json" : {
+            "integer" : "a decimal string (or a safe JavaScript integer)",
+            "bytes" : "lowercase hex",
+            "constructor" : "an object by field title; a sum type adds \"$variant\" (its constructor title)",
+            "Bool" : "true or false",
+            "Optional" : "null for None, else the value",
+            "list" : "an array",
+            "map" : "an array of [key, value] pairs, in canonical key order",
+            "Data" : "hex CBOR of any Plutus data"
+          }
+        }
+      },
+      "definitions" : {
+        "org.julclang.state.api.Ctx" : {
+          "title" : "Ctx",
+          "anyOf" : [ {
+            "title" : "Ctx",
+            "dataType" : "constructor",
+            "index" : 0,
+            "fields" : [ {
+              "title" : "caller",
+              "dataType" : "bytes"
+            }, {
+              "title" : "received",
+              "dataType" : "integer"
+            }, {
+              "title" : "balance",
+              "dataType" : "integer"
+            }, {
+              "title" : "validFrom",
+              "dataType" : "integer"
+            }, {
+              "title" : "validTo",
+              "dataType" : "integer"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.RegistryValidator.Calls" : {
+          "title" : "Calls",
+          "anyOf" : [ {
+            "title" : "SetOpen",
+            "dataType" : "constructor",
+            "index" : 0,
+            "fields" : [ {
+              "title" : "open",
+              "anyOf" : [ {
+                "title" : "False",
+                "dataType" : "constructor",
+                "index" : 0,
+                "fields" : [ ]
+              }, {
+                "title" : "True",
+                "dataType" : "constructor",
+                "index" : 1,
+                "fields" : [ ]
+              } ]
+            } ]
+          }, {
+            "title" : "Change",
+            "dataType" : "constructor",
+            "index" : 1,
+            "fields" : [ {
+              "title" : "choice",
+              "dataType" : "integer"
+            } ]
+          }, {
+            "title" : "Upgrade",
+            "dataType" : "constructor",
+            "index" : 2,
+            "fields" : [ {
+              "title" : "tier",
+              "dataType" : "integer"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            } ]
+          }, {
+            "title" : "Withdraw",
+            "dataType" : "constructor",
+            "index" : 3,
+            "fields" : [ {
+              "title" : "amount",
+              "dataType" : "integer"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            } ]
+          }, {
+            "title" : "Recover",
+            "dataType" : "constructor",
+            "index" : 4,
+            "fields" : [ {
+              "title" : "newOwner",
+              "dataType" : "bytes"
+            } ]
+          }, {
+            "title" : "Leave",
+            "dataType" : "constructor",
+            "index" : 5,
+            "fields" : [ {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            } ]
+          }, {
+            "title" : "Release",
+            "dataType" : "constructor",
+            "index" : 6,
+            "fields" : [ {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            } ]
+          }, {
+            "title" : "Retire",
+            "dataType" : "constructor",
+            "index" : 7,
+            "fields" : [ {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            } ]
+          }, {
+            "title" : "Link",
+            "dataType" : "constructor",
+            "index" : 8,
+            "fields" : [ ]
+          } ]
+        },
+        "org.julclang.ledger.TxOutRef" : {
+          "title" : "TxOutRef",
+          "anyOf" : [ {
+            "title" : "TxOutRef",
+            "dataType" : "constructor",
+            "index" : 0,
+            "fields" : [ {
+              "title" : "txId",
+              "dataType" : "bytes"
+            }, {
+              "title" : "index",
+              "dataType" : "integer"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.RegistryValidator.Lifecycle" : {
+          "title" : "Lifecycle",
+          "anyOf" : [ {
+            "title" : "CreateInstance",
+            "dataType" : "constructor",
+            "index" : 0,
+            "fields" : [ {
+              "title" : "seed",
+              "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            } ]
+          }, {
+            "title" : "BurnInstance",
+            "dataType" : "constructor",
+            "index" : 1,
+            "fields" : [ ]
+          }, {
+            "title" : "Insert_cast",
+            "dataType" : "constructor",
+            "index" : 2,
+            "fields" : [ {
+              "title" : "instance",
+              "dataType" : "bytes"
+            }, {
+              "title" : "anchor",
+              "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
+            }, {
+              "title" : "voter",
+              "dataType" : "bytes"
+            }, {
+              "title" : "choice",
+              "dataType" : "integer"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            } ]
+          }, {
+            "title" : "Insert_claim",
+            "dataType" : "constructor",
+            "index" : 3,
+            "fields" : [ {
+              "title" : "instance",
+              "dataType" : "bytes"
+            }, {
+              "title" : "anchor",
+              "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
+            }, {
+              "title" : "name",
+              "dataType" : "bytes"
+            }, {
+              "title" : "tier",
+              "dataType" : "integer"
+            }, {
+              "title" : "guardians",
+              "dataType" : "list",
+              "items" : {
+                "dataType" : "bytes"
+              }
+            }, {
+              "title" : "needed",
+              "dataType" : "integer"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            } ]
+          }, {
+            "title" : "Insert_grant",
+            "dataType" : "constructor",
+            "index" : 4,
+            "fields" : [ {
+              "title" : "instance",
+              "dataType" : "bytes"
+            }, {
+              "title" : "anchor",
+              "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
+            }, {
+              "title" : "name",
+              "dataType" : "bytes"
+            }, {
+              "title" : "owner",
+              "dataType" : "bytes"
+            }, {
+              "title" : "ctx",
+              "$ref" : "#/definitions/org.julclang.state.api.Ctx"
+            } ]
+          }, {
+            "title" : "Remove_Entry",
+            "dataType" : "constructor",
+            "index" : 5,
+            "fields" : [ {
+              "title" : "anchor",
+              "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
+            }, {
+              "title" : "removed",
+              "$ref" : "#/definitions/org.julclang.ledger.TxOutRef"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.Registry.State" : {
+          "title" : "State",
+          "anyOf" : [ {
+            "title" : "State",
+            "dataType" : "constructor",
+            "index" : 0,
+            "fields" : [ {
+              "title" : "admin",
+              "dataType" : "bytes"
+            }, {
+              "title" : "open",
+              "anyOf" : [ {
+                "title" : "False",
+                "dataType" : "constructor",
+                "index" : 0,
+                "fields" : [ ]
+              }, {
+                "title" : "True",
+                "dataType" : "constructor",
+                "index" : 1,
+                "fields" : [ ]
+              } ]
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.Registry.Ballot" : {
+          "title" : "Ballot",
+          "anyOf" : [ {
+            "title" : "Ballot",
+            "dataType" : "constructor",
+            "index" : 0,
+            "fields" : [ {
+              "title" : "voter",
+              "dataType" : "bytes"
+            }, {
+              "title" : "choice",
+              "dataType" : "integer"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.RegistryValidator.Head_Ballot" : {
+          "title" : "Head_Ballot",
+          "anyOf" : [ {
+            "title" : "Head_Ballot",
+            "dataType" : "constructor",
+            "index" : 0,
+            "fields" : [ {
+              "title" : "instance",
+              "dataType" : "bytes"
+            }, {
+              "title" : "next",
+              "dataType" : "bytes"
+            }, {
+              "title" : "linkedAt",
+              "dataType" : "integer"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.RegistryValidator.Keyed_Ballot" : {
+          "title" : "Keyed_Ballot",
+          "anyOf" : [ {
+            "title" : "Keyed_Ballot",
+            "dataType" : "constructor",
+            "index" : 1,
+            "fields" : [ {
+              "title" : "instance",
+              "dataType" : "bytes"
+            }, {
+              "title" : "next",
+              "dataType" : "bytes"
+            }, {
+              "title" : "linkedAt",
+              "dataType" : "integer"
+            }, {
+              "title" : "value",
+              "$ref" : "#/definitions/org.julclang.state.examples.registry.Registry.Ballot"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.RegistryValidator.Retired_Ballot" : {
+          "title" : "Retired_Ballot",
+          "anyOf" : [ {
+            "title" : "Retired_Ballot",
+            "dataType" : "constructor",
+            "index" : 2,
+            "fields" : [ {
+              "title" : "instance",
+              "dataType" : "bytes"
+            }, {
+              "title" : "next",
+              "dataType" : "bytes"
+            }, {
+              "title" : "linkedAt",
+              "dataType" : "integer"
+            }, {
+              "title" : "key",
+              "dataType" : "bytes"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.Registry.Entry" : {
+          "title" : "Entry",
+          "anyOf" : [ {
+            "title" : "Entry",
+            "dataType" : "constructor",
+            "index" : 0,
+            "fields" : [ {
+              "title" : "name",
+              "dataType" : "bytes"
+            }, {
+              "title" : "owner",
+              "dataType" : "bytes"
+            }, {
+              "title" : "stake",
+              "dataType" : "integer"
+            }, {
+              "title" : "tier",
+              "dataType" : "integer"
+            }, {
+              "title" : "guardians",
+              "dataType" : "list",
+              "items" : {
+                "dataType" : "bytes"
+              }
+            }, {
+              "title" : "needed",
+              "dataType" : "integer"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.RegistryValidator.Head_Entry" : {
+          "title" : "Head_Entry",
+          "anyOf" : [ {
+            "title" : "Head_Entry",
+            "dataType" : "constructor",
+            "index" : 3,
+            "fields" : [ {
+              "title" : "instance",
+              "dataType" : "bytes"
+            }, {
+              "title" : "next",
+              "dataType" : "bytes"
+            }, {
+              "title" : "linkedAt",
+              "dataType" : "integer"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.RegistryValidator.Keyed_Entry" : {
+          "title" : "Keyed_Entry",
+          "anyOf" : [ {
+            "title" : "Keyed_Entry",
+            "dataType" : "constructor",
+            "index" : 4,
+            "fields" : [ {
+              "title" : "instance",
+              "dataType" : "bytes"
+            }, {
+              "title" : "next",
+              "dataType" : "bytes"
+            }, {
+              "title" : "linkedAt",
+              "dataType" : "integer"
+            }, {
+              "title" : "value",
+              "$ref" : "#/definitions/org.julclang.state.examples.registry.Registry.Entry"
+            } ]
+          } ]
+        },
+        "org.julclang.state.examples.registry.RegistryValidator.Retired_Entry" : {
+          "title" : "Retired_Entry",
+          "anyOf" : [ {
+            "title" : "Retired_Entry",
+            "dataType" : "constructor",
+            "index" : 5,
+            "fields" : [ {
+              "title" : "instance",
+              "dataType" : "bytes"
+            }, {
+              "title" : "next",
+              "dataType" : "bytes"
+            }, {
+              "title" : "linkedAt",
+              "dataType" : "integer"
+            }, {
+              "title" : "key",
+              "dataType" : "bytes"
+            } ]
+          } ]
+        }
+      }
+    },
+    "language" : "PlutusScriptV3",
+    "policy" : "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f",
+    "address" : "addr_test1wrjt8f82c6jg6wuj4rnynjtl89237ftj6vxmfdv0mkyf50ce9ehf6",
+    "outputVerifier" : {
+      "language" : "PlutusScriptV3",
+      "hash" : "dd15fe5da434a91d00aa7f3a6891b77a59cfd4e442506d47189b703d",
+      "address" : "addr_test1wrw3tlja5s62j8gq4fln56y3kaa9nn75u3p9qm28rzdhq0gttstvm"
+    }
+  },
+  "resolved" : {
+    "7b49c45e069a2f736c393d34cfb719f5b0848f94f820fdc62c2bb10a1447501f#0" : {
+      "tx_hash" : "7b49c45e069a2f736c393d34cfb719f5b0848f94f820fdc62c2bb10a1447501f",
+      "output_index" : 0,
+      "address" : "addr_test1qzdhlg6en09chceexc8nslfns9p2g0rr8857fs2xgwsx5cjgp7kctu33vm4feezpy3gqs79e62tstkpjwehv04hjsaush075r5",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 30000000
+      } ],
+      "data_hash" : null,
+      "inline_datum" : null,
+      "reference_script_hash" : null
+    },
+    "466aa26931cf6e86bcaa06f0284fbbbb6ac7435d0c9529f06a4fcf9527a3b8ad#1" : {
+      "tx_hash" : "466aa26931cf6e86bcaa06f0284fbbbb6ac7435d0c9529f06a4fcf9527a3b8ad",
+      "output_index" : 1,
+      "address" : "addr_test1qzdhlg6en09chceexc8nslfns9p2g0rr8857fs2xgwsx5cjgp7kctu33vm4feezpy3gqs79e62tstkpjwehv04hjsaush075r5",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 444503573
+      } ],
+      "data_hash" : null,
+      "inline_datum" : null,
+      "reference_script_hash" : null
+    },
+    "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35#3" : {
+      "tx_hash" : "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35",
+      "output_index" : 3,
+      "address" : "addr_test1qzdhlg6en09chceexc8nslfns9p2g0rr8857fs2xgwsx5cjgp7kctu33vm4feezpy3gqs79e62tstkpjwehv04hjsaush075r5",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 39615956
+      } ],
+      "data_hash" : null,
+      "inline_datum" : null,
+      "reference_script_hash" : null
+    },
+    "466aa26931cf6e86bcaa06f0284fbbbb6ac7435d0c9529f06a4fcf9527a3b8ad#0" : {
+      "tx_hash" : "466aa26931cf6e86bcaa06f0284fbbbb6ac7435d0c9529f06a4fcf9527a3b8ad",
+      "output_index" : 0,
+      "address" : "addr_test1wrjt8f82c6jg6wuj4rnynjtl89237ftj6vxmfdv0mkyf50ce9ehf6",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 54784490
+      } ],
+      "data_hash" : null,
+      "inline_datum" : null,
+      "reference_script_hash" : "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f"
+    },
+    "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35#0" : {
+      "tx_hash" : "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35",
+      "output_index" : 0,
+      "address" : "addr_test1wrjt8f82c6jg6wuj4rnynjtl89237ftj6vxmfdv0mkyf50ce9ehf6",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 3300000
+      }, {
+        "unit" : "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc2288",
+        "quantity" : 1
+      } ],
+      "data_hash" : null,
+      "inline_datum" : "d8799f581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62d87a80ff",
+      "reference_script_hash" : null
+    },
+    "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35#1" : {
+      "tx_hash" : "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35",
+      "output_index" : 1,
+      "address" : "addr_test1wrjt8f82c6jg6wuj4rnynjtl89237ftj6vxmfdv0mkyf50ce9ehf6",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 3300000
+      }, {
+        "unit" : "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f4bc0c37b6fcd34d99f7e15cc761e6caf0834c063eb31d969a342c5d20b",
+        "quantity" : 1
+      } ],
+      "data_hash" : "3e6416ff240e52bbd89839e3e6e039e0fe002be700b50f424d9e633e215c2999",
+      "inline_datum" : "d8799f5820288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc22884000ff",
+      "reference_script_hash" : null
+    },
+    "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35#2" : {
+      "tx_hash" : "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35",
+      "output_index" : 2,
+      "address" : "addr_test1wrjt8f82c6jg6wuj4rnynjtl89237ftj6vxmfdv0mkyf50ce9ehf6",
+      "amount" : [ {
+        "unit" : "lovelace",
+        "quantity" : 3300000
+      }, {
+        "unit" : "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f4b1a60324fda0f9bb232ef767c5c724aa64c2cfbb64091c92ab45685e5",
+        "quantity" : 1
+      } ],
+      "data_hash" : null,
+      "inline_datum" : "d87c9f5820288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc22884000ff",
+      "reference_script_hash" : null
+    }
+  },
+  "node" : {
+    "scriptsAt" : {
+      "addr_test1qzdhlg6en09chceexc8nslfns9p2g0rr8857fs2xgwsx5cjgp7kctu33vm4feezpy3gqs79e62tstkpjwehv04hjsaush075r5" : [ ],
+      "addr_test1wrjt8f82c6jg6wuj4rnynjtl89237ftj6vxmfdv0mkyf50ce9ehf6" : [ "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f" ]
+    }
+  },
+  "protocolParams" : {
+    "min_fee_a" : 44,
+    "min_fee_b" : 155381,
+    "max_block_size" : 90112,
+    "max_tx_size" : 16384,
+    "max_block_header_size" : 1100,
+    "key_deposit" : "2000000",
+    "pool_deposit" : "500000000",
+    "a0" : 0,
+    "rho" : 0.003,
+    "tau" : 0.2,
+    "decentralisation_param" : 0,
+    "extra_entropy" : null,
+    "protocol_major_ver" : 11,
+    "protocol_minor_ver" : 0,
+    "min_utxo" : "4310",
+    "min_pool_cost" : "170000000",
+    "nonce" : null,
+    "cost_models" : {
+      "PlutusV1" : {
+        "000" : 100788,
+        "001" : 420,
+        "002" : 1,
+        "003" : 1,
+        "004" : 1000,
+        "005" : 173,
+        "006" : 0,
+        "007" : 1,
+        "008" : 1000,
+        "009" : 59957,
+        "010" : 4,
+        "011" : 1,
+        "012" : 11183,
+        "013" : 32,
+        "014" : 201305,
+        "015" : 8356,
+        "016" : 4,
+        "017" : 16000,
+        "018" : 100,
+        "019" : 16000,
+        "020" : 100,
+        "021" : 16000,
+        "022" : 100,
+        "023" : 16000,
+        "024" : 100,
+        "025" : 16000,
+        "026" : 100,
+        "027" : 16000,
+        "028" : 100,
+        "029" : 100,
+        "030" : 100,
+        "031" : 16000,
+        "032" : 100,
+        "033" : 94375,
+        "034" : 32,
+        "035" : 132994,
+        "036" : 32,
+        "037" : 61462,
+        "038" : 4,
+        "039" : 72010,
+        "040" : 178,
+        "041" : 0,
+        "042" : 1,
+        "043" : 22151,
+        "044" : 32,
+        "045" : 91189,
+        "046" : 769,
+        "047" : 4,
+        "048" : 2,
+        "049" : 85848,
+        "050" : 228465,
+        "051" : 122,
+        "052" : 0,
+        "053" : 1,
+        "054" : 1,
+        "055" : 1000,
+        "056" : 42921,
+        "057" : 4,
+        "058" : 2,
+        "059" : 30623,
+        "060" : 28755,
+        "061" : 75,
+        "062" : 1,
+        "063" : 898148,
+        "064" : 27279,
+        "065" : 1,
+        "066" : 51775,
+        "067" : 558,
+        "068" : 1,
+        "069" : 39184,
+        "070" : 1000,
+        "071" : 60594,
+        "072" : 1,
+        "073" : 141895,
+        "074" : 32,
+        "075" : 83150,
+        "076" : 32,
+        "077" : 15299,
+        "078" : 32,
+        "079" : 76049,
+        "080" : 1,
+        "081" : 13169,
+        "082" : 4,
+        "083" : 22100,
+        "084" : 10,
+        "085" : 28999,
+        "086" : 74,
+        "087" : 1,
+        "088" : 28999,
+        "089" : 74,
+        "090" : 1,
+        "091" : 43285,
+        "092" : 552,
+        "093" : 1,
+        "094" : 44749,
+        "095" : 541,
+        "096" : 1,
+        "097" : 33852,
+        "098" : 32,
+        "099" : 68246,
+        "100" : 32,
+        "101" : 72362,
+        "102" : 32,
+        "103" : 7243,
+        "104" : 32,
+        "105" : 7391,
+        "106" : 32,
+        "107" : 11546,
+        "108" : 32,
+        "109" : 85848,
+        "110" : 228465,
+        "111" : 122,
+        "112" : 0,
+        "113" : 1,
+        "114" : 1,
+        "115" : 90434,
+        "116" : 519,
+        "117" : 0,
+        "118" : 1,
+        "119" : 74433,
+        "120" : 32,
+        "121" : 85848,
+        "122" : 228465,
+        "123" : 122,
+        "124" : 0,
+        "125" : 1,
+        "126" : 1,
+        "127" : 85848,
+        "128" : 228465,
+        "129" : 122,
+        "130" : 0,
+        "131" : 1,
+        "132" : 1,
+        "133" : 270652,
+        "134" : 22588,
+        "135" : 4,
+        "136" : 1457325,
+        "137" : 64566,
+        "138" : 4,
+        "139" : 20467,
+        "140" : 1,
+        "141" : 4,
+        "142" : 0,
+        "143" : 141992,
+        "144" : 32,
+        "145" : 100788,
+        "146" : 420,
+        "147" : 1,
+        "148" : 1,
+        "149" : 81663,
+        "150" : 32,
+        "151" : 59498,
+        "152" : 32,
+        "153" : 20142,
+        "154" : 32,
+        "155" : 24588,
+        "156" : 32,
+        "157" : 20744,
+        "158" : 32,
+        "159" : 25933,
+        "160" : 32,
+        "161" : 24623,
+        "162" : 32,
+        "163" : 53384111,
+        "164" : 14333,
+        "165" : 10,
+        "166" : 955506,
+        "167" : 213312,
+        "168" : 0,
+        "169" : 2,
+        "170" : 43053543,
+        "171" : 10,
+        "172" : 43574283,
+        "173" : 26308,
+        "174" : 10,
+        "175" : 16000,
+        "176" : 100,
+        "177" : 16000,
+        "178" : 100,
+        "179" : 962335,
+        "180" : 18,
+        "181" : 2780678,
+        "182" : 6,
+        "183" : 442008,
+        "184" : 1,
+        "185" : 52538055,
+        "186" : 3756,
+        "187" : 18,
+        "188" : 267929,
+        "189" : 18,
+        "190" : 76433006,
+        "191" : 8868,
+        "192" : 18,
+        "193" : 52948122,
+        "194" : 18,
+        "195" : 1995836,
+        "196" : 36,
+        "197" : 3227919,
+        "198" : 12,
+        "199" : 901022,
+        "200" : 1,
+        "201" : 166917843,
+        "202" : 4307,
+        "203" : 36,
+        "204" : 284546,
+        "205" : 36,
+        "206" : 158221314,
+        "207" : 26549,
+        "208" : 36,
+        "209" : 74698472,
+        "210" : 36,
+        "211" : 333849714,
+        "212" : 1,
+        "213" : 254006273,
+        "214" : 72,
+        "215" : 2174038,
+        "216" : 72,
+        "217" : 2261318,
+        "218" : 64571,
+        "219" : 4,
+        "220" : 207616,
+        "221" : 8310,
+        "222" : 4,
+        "223" : 1293828,
+        "224" : 28716,
+        "225" : 63,
+        "226" : 0,
+        "227" : 1,
+        "228" : 1006041,
+        "229" : 43623,
+        "230" : 251,
+        "231" : 0,
+        "232" : 1,
+        "233" : 100181,
+        "234" : 726,
+        "235" : 719,
+        "236" : 0,
+        "237" : 1,
+        "238" : 100181,
+        "239" : 726,
+        "240" : 719,
+        "241" : 0,
+        "242" : 1,
+        "243" : 100181,
+        "244" : 726,
+        "245" : 719,
+        "246" : 0,
+        "247" : 1,
+        "248" : 107878,
+        "249" : 680,
+        "250" : 0,
+        "251" : 1,
+        "252" : 95336,
+        "253" : 1,
+        "254" : 281145,
+        "255" : 18848,
+        "256" : 0,
+        "257" : 1,
+        "258" : 180194,
+        "259" : 159,
+        "260" : 1,
+        "261" : 1,
+        "262" : 158519,
+        "263" : 8942,
+        "264" : 0,
+        "265" : 1,
+        "266" : 159378,
+        "267" : 8813,
+        "268" : 0,
+        "269" : 1,
+        "270" : 107490,
+        "271" : 3298,
+        "272" : 1,
+        "273" : 106057,
+        "274" : 655,
+        "275" : 1,
+        "276" : 1964219,
+        "277" : 24520,
+        "278" : 3,
+        "279" : 607153,
+        "280" : 231697,
+        "281" : 53144,
+        "282" : 0,
+        "283" : 1,
+        "284" : 116711,
+        "285" : 1957,
+        "286" : 4,
+        "287" : 231883,
+        "288" : 10,
+        "289" : 1000,
+        "290" : 24838,
+        "291" : 7,
+        "292" : 1,
+        "293" : 232010,
+        "294" : 32,
+        "295" : 321837444,
+        "296" : 25087669,
+        "297" : 18,
+        "298" : 617887431,
+        "299" : 67302824,
+        "300" : 36,
+        "301" : 356924,
+        "302" : 18413,
+        "303" : 45,
+        "304" : 21,
+        "305" : 219951,
+        "306" : 9444,
+        "307" : 1,
+        "308" : 1000,
+        "309" : 172116,
+        "310" : 183150,
+        "311" : 6,
+        "312" : 24,
+        "313" : 21,
+        "314" : 213283,
+        "315" : 618401,
+        "316" : 1998,
+        "317" : 28258,
+        "318" : 1,
+        "319" : 1000,
+        "320" : 38159,
+        "321" : 2,
+        "322" : 22,
+        "323" : 1000,
+        "324" : 95933,
+        "325" : 1,
+        "326" : 1,
+        "327" : 11,
+        "328" : 1000,
+        "329" : 277577,
+        "330" : 12,
+        "331" : 21
+      },
+      "PlutusV2" : {
+        "000" : 100788,
+        "001" : 420,
+        "002" : 1,
+        "003" : 1,
+        "004" : 1000,
+        "005" : 173,
+        "006" : 0,
+        "007" : 1,
+        "008" : 1000,
+        "009" : 59957,
+        "010" : 4,
+        "011" : 1,
+        "012" : 11183,
+        "013" : 32,
+        "014" : 201305,
+        "015" : 8356,
+        "016" : 4,
+        "017" : 16000,
+        "018" : 100,
+        "019" : 16000,
+        "020" : 100,
+        "021" : 16000,
+        "022" : 100,
+        "023" : 16000,
+        "024" : 100,
+        "025" : 16000,
+        "026" : 100,
+        "027" : 16000,
+        "028" : 100,
+        "029" : 100,
+        "030" : 100,
+        "031" : 16000,
+        "032" : 100,
+        "033" : 94375,
+        "034" : 32,
+        "035" : 132994,
+        "036" : 32,
+        "037" : 61462,
+        "038" : 4,
+        "039" : 72010,
+        "040" : 178,
+        "041" : 0,
+        "042" : 1,
+        "043" : 22151,
+        "044" : 32,
+        "045" : 91189,
+        "046" : 769,
+        "047" : 4,
+        "048" : 2,
+        "049" : 85848,
+        "050" : 228465,
+        "051" : 122,
+        "052" : 0,
+        "053" : 1,
+        "054" : 1,
+        "055" : 1000,
+        "056" : 42921,
+        "057" : 4,
+        "058" : 2,
+        "059" : 30623,
+        "060" : 28755,
+        "061" : 75,
+        "062" : 1,
+        "063" : 898148,
+        "064" : 27279,
+        "065" : 1,
+        "066" : 51775,
+        "067" : 558,
+        "068" : 1,
+        "069" : 39184,
+        "070" : 1000,
+        "071" : 60594,
+        "072" : 1,
+        "073" : 141895,
+        "074" : 32,
+        "075" : 83150,
+        "076" : 32,
+        "077" : 15299,
+        "078" : 32,
+        "079" : 76049,
+        "080" : 1,
+        "081" : 13169,
+        "082" : 4,
+        "083" : 22100,
+        "084" : 10,
+        "085" : 28999,
+        "086" : 74,
+        "087" : 1,
+        "088" : 28999,
+        "089" : 74,
+        "090" : 1,
+        "091" : 43285,
+        "092" : 552,
+        "093" : 1,
+        "094" : 44749,
+        "095" : 541,
+        "096" : 1,
+        "097" : 33852,
+        "098" : 32,
+        "099" : 68246,
+        "100" : 32,
+        "101" : 72362,
+        "102" : 32,
+        "103" : 7243,
+        "104" : 32,
+        "105" : 7391,
+        "106" : 32,
+        "107" : 11546,
+        "108" : 32,
+        "109" : 85848,
+        "110" : 228465,
+        "111" : 122,
+        "112" : 0,
+        "113" : 1,
+        "114" : 1,
+        "115" : 90434,
+        "116" : 519,
+        "117" : 0,
+        "118" : 1,
+        "119" : 74433,
+        "120" : 32,
+        "121" : 85848,
+        "122" : 228465,
+        "123" : 122,
+        "124" : 0,
+        "125" : 1,
+        "126" : 1,
+        "127" : 85848,
+        "128" : 228465,
+        "129" : 122,
+        "130" : 0,
+        "131" : 1,
+        "132" : 1,
+        "133" : 955506,
+        "134" : 213312,
+        "135" : 0,
+        "136" : 2,
+        "137" : 270652,
+        "138" : 22588,
+        "139" : 4,
+        "140" : 1457325,
+        "141" : 64566,
+        "142" : 4,
+        "143" : 20467,
+        "144" : 1,
+        "145" : 4,
+        "146" : 0,
+        "147" : 141992,
+        "148" : 32,
+        "149" : 100788,
+        "150" : 420,
+        "151" : 1,
+        "152" : 1,
+        "153" : 81663,
+        "154" : 32,
+        "155" : 59498,
+        "156" : 32,
+        "157" : 20142,
+        "158" : 32,
+        "159" : 24588,
+        "160" : 32,
+        "161" : 20744,
+        "162" : 32,
+        "163" : 25933,
+        "164" : 32,
+        "165" : 24623,
+        "166" : 32,
+        "167" : 43053543,
+        "168" : 10,
+        "169" : 53384111,
+        "170" : 14333,
+        "171" : 10,
+        "172" : 43574283,
+        "173" : 26308,
+        "174" : 10,
+        "175" : 1293828,
+        "176" : 28716,
+        "177" : 63,
+        "178" : 0,
+        "179" : 1,
+        "180" : 1006041,
+        "181" : 43623,
+        "182" : 251,
+        "183" : 0,
+        "184" : 1,
+        "185" : 16000,
+        "186" : 100,
+        "187" : 16000,
+        "188" : 100,
+        "189" : 962335,
+        "190" : 18,
+        "191" : 2780678,
+        "192" : 6,
+        "193" : 442008,
+        "194" : 1,
+        "195" : 52538055,
+        "196" : 3756,
+        "197" : 18,
+        "198" : 267929,
+        "199" : 18,
+        "200" : 76433006,
+        "201" : 8868,
+        "202" : 18,
+        "203" : 52948122,
+        "204" : 18,
+        "205" : 1995836,
+        "206" : 36,
+        "207" : 3227919,
+        "208" : 12,
+        "209" : 901022,
+        "210" : 1,
+        "211" : 166917843,
+        "212" : 4307,
+        "213" : 36,
+        "214" : 284546,
+        "215" : 36,
+        "216" : 158221314,
+        "217" : 26549,
+        "218" : 36,
+        "219" : 74698472,
+        "220" : 36,
+        "221" : 333849714,
+        "222" : 1,
+        "223" : 254006273,
+        "224" : 72,
+        "225" : 2174038,
+        "226" : 72,
+        "227" : 2261318,
+        "228" : 64571,
+        "229" : 4,
+        "230" : 207616,
+        "231" : 8310,
+        "232" : 4,
+        "233" : 100181,
+        "234" : 726,
+        "235" : 719,
+        "236" : 0,
+        "237" : 1,
+        "238" : 100181,
+        "239" : 726,
+        "240" : 719,
+        "241" : 0,
+        "242" : 1,
+        "243" : 100181,
+        "244" : 726,
+        "245" : 719,
+        "246" : 0,
+        "247" : 1,
+        "248" : 107878,
+        "249" : 680,
+        "250" : 0,
+        "251" : 1,
+        "252" : 95336,
+        "253" : 1,
+        "254" : 281145,
+        "255" : 18848,
+        "256" : 0,
+        "257" : 1,
+        "258" : 180194,
+        "259" : 159,
+        "260" : 1,
+        "261" : 1,
+        "262" : 158519,
+        "263" : 8942,
+        "264" : 0,
+        "265" : 1,
+        "266" : 159378,
+        "267" : 8813,
+        "268" : 0,
+        "269" : 1,
+        "270" : 107490,
+        "271" : 3298,
+        "272" : 1,
+        "273" : 106057,
+        "274" : 655,
+        "275" : 1,
+        "276" : 1964219,
+        "277" : 24520,
+        "278" : 3,
+        "279" : 607153,
+        "280" : 231697,
+        "281" : 53144,
+        "282" : 0,
+        "283" : 1,
+        "284" : 116711,
+        "285" : 1957,
+        "286" : 4,
+        "287" : 231883,
+        "288" : 10,
+        "289" : 1000,
+        "290" : 24838,
+        "291" : 7,
+        "292" : 1,
+        "293" : 232010,
+        "294" : 32,
+        "295" : 321837444,
+        "296" : 25087669,
+        "297" : 18,
+        "298" : 617887431,
+        "299" : 67302824,
+        "300" : 36,
+        "301" : 356924,
+        "302" : 18413,
+        "303" : 45,
+        "304" : 21,
+        "305" : 219951,
+        "306" : 9444,
+        "307" : 1,
+        "308" : 1000,
+        "309" : 172116,
+        "310" : 183150,
+        "311" : 6,
+        "312" : 24,
+        "313" : 21,
+        "314" : 213283,
+        "315" : 618401,
+        "316" : 1998,
+        "317" : 28258,
+        "318" : 1,
+        "319" : 1000,
+        "320" : 38159,
+        "321" : 2,
+        "322" : 22,
+        "323" : 1000,
+        "324" : 95933,
+        "325" : 1,
+        "326" : 1,
+        "327" : 11,
+        "328" : 1000,
+        "329" : 277577,
+        "330" : 12,
+        "331" : 21
+      },
+      "PlutusV3" : {
+        "000" : 100788,
+        "001" : 420,
+        "002" : 1,
+        "003" : 1,
+        "004" : 1000,
+        "005" : 173,
+        "006" : 0,
+        "007" : 1,
+        "008" : 1000,
+        "009" : 59957,
+        "010" : 4,
+        "011" : 1,
+        "012" : 11183,
+        "013" : 32,
+        "014" : 201305,
+        "015" : 8356,
+        "016" : 4,
+        "017" : 16000,
+        "018" : 100,
+        "019" : 16000,
+        "020" : 100,
+        "021" : 16000,
+        "022" : 100,
+        "023" : 16000,
+        "024" : 100,
+        "025" : 16000,
+        "026" : 100,
+        "027" : 16000,
+        "028" : 100,
+        "029" : 100,
+        "030" : 100,
+        "031" : 16000,
+        "032" : 100,
+        "033" : 94375,
+        "034" : 32,
+        "035" : 132994,
+        "036" : 32,
+        "037" : 61462,
+        "038" : 4,
+        "039" : 72010,
+        "040" : 178,
+        "041" : 0,
+        "042" : 1,
+        "043" : 22151,
+        "044" : 32,
+        "045" : 91189,
+        "046" : 769,
+        "047" : 4,
+        "048" : 2,
+        "049" : 85848,
+        "050" : 123203,
+        "051" : 7305,
+        "052" : -900,
+        "053" : 1716,
+        "054" : 960,
+        "055" : 57,
+        "056" : 85848,
+        "057" : 0,
+        "058" : 1,
+        "059" : 1,
+        "060" : 1000,
+        "061" : 42921,
+        "062" : 4,
+        "063" : 2,
+        "064" : 30623,
+        "065" : 28755,
+        "066" : 75,
+        "067" : 1,
+        "068" : 898148,
+        "069" : 27279,
+        "070" : 1,
+        "071" : 51775,
+        "072" : 558,
+        "073" : 1,
+        "074" : 39184,
+        "075" : 1000,
+        "076" : 60594,
+        "077" : 1,
+        "078" : 141895,
+        "079" : 32,
+        "080" : 83150,
+        "081" : 32,
+        "082" : 15299,
+        "083" : 32,
+        "084" : 76049,
+        "085" : 1,
+        "086" : 13169,
+        "087" : 4,
+        "088" : 22100,
+        "089" : 10,
+        "090" : 28999,
+        "091" : 74,
+        "092" : 1,
+        "093" : 28999,
+        "094" : 74,
+        "095" : 1,
+        "096" : 43285,
+        "097" : 552,
+        "098" : 1,
+        "099" : 44749,
+        "100" : 541,
+        "101" : 1,
+        "102" : 33852,
+        "103" : 32,
+        "104" : 68246,
+        "105" : 32,
+        "106" : 72362,
+        "107" : 32,
+        "108" : 7243,
+        "109" : 32,
+        "110" : 7391,
+        "111" : 32,
+        "112" : 11546,
+        "113" : 32,
+        "114" : 85848,
+        "115" : 123203,
+        "116" : 7305,
+        "117" : -900,
+        "118" : 1716,
+        "119" : 960,
+        "120" : 57,
+        "121" : 85848,
+        "122" : 0,
+        "123" : 1,
+        "124" : 90434,
+        "125" : 519,
+        "126" : 0,
+        "127" : 1,
+        "128" : 74433,
+        "129" : 32,
+        "130" : 85848,
+        "131" : 123203,
+        "132" : 7305,
+        "133" : -900,
+        "134" : 1716,
+        "135" : 960,
+        "136" : 57,
+        "137" : 85848,
+        "138" : 0,
+        "139" : 1,
+        "140" : 1,
+        "141" : 85848,
+        "142" : 123203,
+        "143" : 7305,
+        "144" : -900,
+        "145" : 1716,
+        "146" : 960,
+        "147" : 57,
+        "148" : 85848,
+        "149" : 0,
+        "150" : 1,
+        "151" : 955506,
+        "152" : 213312,
+        "153" : 0,
+        "154" : 2,
+        "155" : 270652,
+        "156" : 22588,
+        "157" : 4,
+        "158" : 1457325,
+        "159" : 64566,
+        "160" : 4,
+        "161" : 20467,
+        "162" : 1,
+        "163" : 4,
+        "164" : 0,
+        "165" : 141992,
+        "166" : 32,
+        "167" : 100788,
+        "168" : 420,
+        "169" : 1,
+        "170" : 1,
+        "171" : 81663,
+        "172" : 32,
+        "173" : 59498,
+        "174" : 32,
+        "175" : 20142,
+        "176" : 32,
+        "177" : 24588,
+        "178" : 32,
+        "179" : 20744,
+        "180" : 32,
+        "181" : 25933,
+        "182" : 32,
+        "183" : 24623,
+        "184" : 32,
+        "185" : 43053543,
+        "186" : 10,
+        "187" : 53384111,
+        "188" : 14333,
+        "189" : 10,
+        "190" : 43574283,
+        "191" : 26308,
+        "192" : 10,
+        "193" : 16000,
+        "194" : 100,
+        "195" : 16000,
+        "196" : 100,
+        "197" : 962335,
+        "198" : 18,
+        "199" : 2780678,
+        "200" : 6,
+        "201" : 442008,
+        "202" : 1,
+        "203" : 52538055,
+        "204" : 3756,
+        "205" : 18,
+        "206" : 267929,
+        "207" : 18,
+        "208" : 76433006,
+        "209" : 8868,
+        "210" : 18,
+        "211" : 52948122,
+        "212" : 18,
+        "213" : 1995836,
+        "214" : 36,
+        "215" : 3227919,
+        "216" : 12,
+        "217" : 901022,
+        "218" : 1,
+        "219" : 166917843,
+        "220" : 4307,
+        "221" : 36,
+        "222" : 284546,
+        "223" : 36,
+        "224" : 158221314,
+        "225" : 26549,
+        "226" : 36,
+        "227" : 74698472,
+        "228" : 36,
+        "229" : 333849714,
+        "230" : 1,
+        "231" : 254006273,
+        "232" : 72,
+        "233" : 2174038,
+        "234" : 72,
+        "235" : 2261318,
+        "236" : 64571,
+        "237" : 4,
+        "238" : 207616,
+        "239" : 8310,
+        "240" : 4,
+        "241" : 1293828,
+        "242" : 28716,
+        "243" : 63,
+        "244" : 0,
+        "245" : 1,
+        "246" : 1006041,
+        "247" : 43623,
+        "248" : 251,
+        "249" : 0,
+        "250" : 1,
+        "251" : 100181,
+        "252" : 726,
+        "253" : 719,
+        "254" : 0,
+        "255" : 1,
+        "256" : 100181,
+        "257" : 726,
+        "258" : 719,
+        "259" : 0,
+        "260" : 1,
+        "261" : 100181,
+        "262" : 726,
+        "263" : 719,
+        "264" : 0,
+        "265" : 1,
+        "266" : 107878,
+        "267" : 680,
+        "268" : 0,
+        "269" : 1,
+        "270" : 95336,
+        "271" : 1,
+        "272" : 281145,
+        "273" : 18848,
+        "274" : 0,
+        "275" : 1,
+        "276" : 180194,
+        "277" : 159,
+        "278" : 1,
+        "279" : 1,
+        "280" : 158519,
+        "281" : 8942,
+        "282" : 0,
+        "283" : 1,
+        "284" : 159378,
+        "285" : 8813,
+        "286" : 0,
+        "287" : 1,
+        "288" : 107490,
+        "289" : 3298,
+        "290" : 1,
+        "291" : 106057,
+        "292" : 655,
+        "293" : 1,
+        "294" : 1964219,
+        "295" : 24520,
+        "296" : 3,
+        "297" : 607153,
+        "298" : 231697,
+        "299" : 53144,
+        "300" : 0,
+        "301" : 1,
+        "302" : 116711,
+        "303" : 1957,
+        "304" : 4,
+        "305" : 231883,
+        "306" : 10,
+        "307" : 1000,
+        "308" : 24838,
+        "309" : 7,
+        "310" : 1,
+        "311" : 232010,
+        "312" : 32,
+        "313" : 321837444,
+        "314" : 25087669,
+        "315" : 18,
+        "316" : 617887431,
+        "317" : 67302824,
+        "318" : 36,
+        "319" : 356924,
+        "320" : 18413,
+        "321" : 45,
+        "322" : 21,
+        "323" : 219951,
+        "324" : 9444,
+        "325" : 1,
+        "326" : 1000,
+        "327" : 172116,
+        "328" : 183150,
+        "329" : 6,
+        "330" : 24,
+        "331" : 21,
+        "332" : 213283,
+        "333" : 618401,
+        "334" : 1998,
+        "335" : 28258,
+        "336" : 1,
+        "337" : 1000,
+        "338" : 38159,
+        "339" : 2,
+        "340" : 22,
+        "341" : 1000,
+        "342" : 95933,
+        "343" : 1,
+        "344" : 1,
+        "345" : 11,
+        "346" : 1000,
+        "347" : 277577,
+        "348" : 12,
+        "349" : 21
+      }
+    },
+    "price_mem" : 0.0577,
+    "price_step" : 7.21E-5,
+    "max_tx_ex_mem" : "16500000",
+    "max_tx_ex_steps" : "10000000000",
+    "max_block_ex_mem" : "72000000",
+    "max_block_ex_steps" : "20000000000",
+    "max_val_size" : "5000",
+    "collateral_percent" : 150.0,
+    "max_collateral_inputs" : 3,
+    "coins_per_utxo_size" : "4310",
+    "coins_per_utxo_word" : "4310",
+    "pvt_motion_no_confidence" : 0.51,
+    "pvt_committee_normal" : 0.51,
+    "pvt_committee_no_confidence" : 0.51,
+    "pvt_hard_fork_initiation" : 0.51,
+    "dvt_motion_no_confidence" : 0.67,
+    "dvt_committee_normal" : 0.67,
+    "dvt_committee_no_confidence" : 0.6,
+    "dvt_update_to_constitution" : 0.75,
+    "dvt_hard_fork_initiation" : 0.6,
+    "dvt_treasury_withdrawal" : 0.67,
+    "committee_min_size" : 0,
+    "committee_max_term_length" : 146,
+    "gov_action_lifetime" : 6,
+    "gov_action_deposit" : 1000000000,
+    "drep_deposit" : 500000000,
+    "drep_activity" : 20,
+    "min_fee_ref_script_cost_per_byte" : 15,
+    "emax" : 18,
+    "nopt" : 100,
+    "e_max" : 18,
+    "n_opt" : 100,
+    "cost_models_raw" : {
+      "PlutusV3" : [ 100788, 420, 1, 1, 1000, 173, 0, 1, 1000, 59957, 4, 1, 11183, 32, 201305, 8356, 4, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 100, 100, 16000, 100, 94375, 32, 132994, 32, 61462, 4, 72010, 178, 0, 1, 22151, 32, 91189, 769, 4, 2, 85848, 123203, 7305, -900, 1716, 960, 57, 85848, 0, 1, 1, 1000, 42921, 4, 2, 30623, 28755, 75, 1, 898148, 27279, 1, 51775, 558, 1, 39184, 1000, 60594, 1, 141895, 32, 83150, 32, 15299, 32, 76049, 1, 13169, 4, 22100, 10, 28999, 74, 1, 28999, 74, 1, 43285, 552, 1, 44749, 541, 1, 33852, 32, 68246, 32, 72362, 32, 7243, 32, 7391, 32, 11546, 32, 85848, 123203, 7305, -900, 1716, 960, 57, 85848, 0, 1, 90434, 519, 0, 1, 74433, 32, 85848, 123203, 7305, -900, 1716, 960, 57, 85848, 0, 1, 1, 85848, 123203, 7305, -900, 1716, 960, 57, 85848, 0, 1, 955506, 213312, 0, 2, 270652, 22588, 4, 1457325, 64566, 4, 20467, 1, 4, 0, 141992, 32, 100788, 420, 1, 1, 81663, 32, 59498, 32, 20142, 32, 24588, 32, 20744, 32, 25933, 32, 24623, 32, 43053543, 10, 53384111, 14333, 10, 43574283, 26308, 10, 16000, 100, 16000, 100, 962335, 18, 2780678, 6, 442008, 1, 52538055, 3756, 18, 267929, 18, 76433006, 8868, 18, 52948122, 18, 1995836, 36, 3227919, 12, 901022, 1, 166917843, 4307, 36, 284546, 36, 158221314, 26549, 36, 74698472, 36, 333849714, 1, 254006273, 72, 2174038, 72, 2261318, 64571, 4, 207616, 8310, 4, 1293828, 28716, 63, 0, 1, 1006041, 43623, 251, 0, 1, 100181, 726, 719, 0, 1, 100181, 726, 719, 0, 1, 100181, 726, 719, 0, 1, 107878, 680, 0, 1, 95336, 1, 281145, 18848, 0, 1, 180194, 159, 1, 1, 158519, 8942, 0, 1, 159378, 8813, 0, 1, 107490, 3298, 1, 106057, 655, 1, 1964219, 24520, 3, 607153, 231697, 53144, 0, 1, 116711, 1957, 4, 231883, 10, 1000, 24838, 7, 1, 232010, 32, 321837444, 25087669, 18, 617887431, 67302824, 36, 356924, 18413, 45, 21, 219951, 9444, 1, 1000, 172116, 183150, 6, 24, 21, 213283, 618401, 1998, 28258, 1, 1000, 38159, 2, 22, 1000, 95933, 1, 1, 11, 1000, 277577, 12, 21 ],
+      "PlutusV2" : [ 100788, 420, 1, 1, 1000, 173, 0, 1, 1000, 59957, 4, 1, 11183, 32, 201305, 8356, 4, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 100, 100, 16000, 100, 94375, 32, 132994, 32, 61462, 4, 72010, 178, 0, 1, 22151, 32, 91189, 769, 4, 2, 85848, 228465, 122, 0, 1, 1, 1000, 42921, 4, 2, 30623, 28755, 75, 1, 898148, 27279, 1, 51775, 558, 1, 39184, 1000, 60594, 1, 141895, 32, 83150, 32, 15299, 32, 76049, 1, 13169, 4, 22100, 10, 28999, 74, 1, 28999, 74, 1, 43285, 552, 1, 44749, 541, 1, 33852, 32, 68246, 32, 72362, 32, 7243, 32, 7391, 32, 11546, 32, 85848, 228465, 122, 0, 1, 1, 90434, 519, 0, 1, 74433, 32, 85848, 228465, 122, 0, 1, 1, 85848, 228465, 122, 0, 1, 1, 955506, 213312, 0, 2, 270652, 22588, 4, 1457325, 64566, 4, 20467, 1, 4, 0, 141992, 32, 100788, 420, 1, 1, 81663, 32, 59498, 32, 20142, 32, 24588, 32, 20744, 32, 25933, 32, 24623, 32, 43053543, 10, 53384111, 14333, 10, 43574283, 26308, 10, 1293828, 28716, 63, 0, 1, 1006041, 43623, 251, 0, 1, 16000, 100, 16000, 100, 962335, 18, 2780678, 6, 442008, 1, 52538055, 3756, 18, 267929, 18, 76433006, 8868, 18, 52948122, 18, 1995836, 36, 3227919, 12, 901022, 1, 166917843, 4307, 36, 284546, 36, 158221314, 26549, 36, 74698472, 36, 333849714, 1, 254006273, 72, 2174038, 72, 2261318, 64571, 4, 207616, 8310, 4, 100181, 726, 719, 0, 1, 100181, 726, 719, 0, 1, 100181, 726, 719, 0, 1, 107878, 680, 0, 1, 95336, 1, 281145, 18848, 0, 1, 180194, 159, 1, 1, 158519, 8942, 0, 1, 159378, 8813, 0, 1, 107490, 3298, 1, 106057, 655, 1, 1964219, 24520, 3, 607153, 231697, 53144, 0, 1, 116711, 1957, 4, 231883, 10, 1000, 24838, 7, 1, 232010, 32, 321837444, 25087669, 18, 617887431, 67302824, 36, 356924, 18413, 45, 21, 219951, 9444, 1, 1000, 172116, 183150, 6, 24, 21, 213283, 618401, 1998, 28258, 1, 1000, 38159, 2, 22, 1000, 95933, 1, 1, 11, 1000, 277577, 12, 21 ],
+      "PlutusV1" : [ 100788, 420, 1, 1, 1000, 173, 0, 1, 1000, 59957, 4, 1, 11183, 32, 201305, 8356, 4, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 100, 100, 16000, 100, 94375, 32, 132994, 32, 61462, 4, 72010, 178, 0, 1, 22151, 32, 91189, 769, 4, 2, 85848, 228465, 122, 0, 1, 1, 1000, 42921, 4, 2, 30623, 28755, 75, 1, 898148, 27279, 1, 51775, 558, 1, 39184, 1000, 60594, 1, 141895, 32, 83150, 32, 15299, 32, 76049, 1, 13169, 4, 22100, 10, 28999, 74, 1, 28999, 74, 1, 43285, 552, 1, 44749, 541, 1, 33852, 32, 68246, 32, 72362, 32, 7243, 32, 7391, 32, 11546, 32, 85848, 228465, 122, 0, 1, 1, 90434, 519, 0, 1, 74433, 32, 85848, 228465, 122, 0, 1, 1, 85848, 228465, 122, 0, 1, 1, 270652, 22588, 4, 1457325, 64566, 4, 20467, 1, 4, 0, 141992, 32, 100788, 420, 1, 1, 81663, 32, 59498, 32, 20142, 32, 24588, 32, 20744, 32, 25933, 32, 24623, 32, 53384111, 14333, 10, 955506, 213312, 0, 2, 43053543, 10, 43574283, 26308, 10, 16000, 100, 16000, 100, 962335, 18, 2780678, 6, 442008, 1, 52538055, 3756, 18, 267929, 18, 76433006, 8868, 18, 52948122, 18, 1995836, 36, 3227919, 12, 901022, 1, 166917843, 4307, 36, 284546, 36, 158221314, 26549, 36, 74698472, 36, 333849714, 1, 254006273, 72, 2174038, 72, 2261318, 64571, 4, 207616, 8310, 4, 1293828, 28716, 63, 0, 1, 1006041, 43623, 251, 0, 1, 100181, 726, 719, 0, 1, 100181, 726, 719, 0, 1, 100181, 726, 719, 0, 1, 107878, 680, 0, 1, 95336, 1, 281145, 18848, 0, 1, 180194, 159, 1, 1, 158519, 8942, 0, 1, 159378, 8813, 0, 1, 107490, 3298, 1, 106057, 655, 1, 1964219, 24520, 3, 607153, 231697, 53144, 0, 1, 116711, 1957, 4, 231883, 10, 1000, 24838, 7, 1, 232010, 32, 321837444, 25087669, 18, 617887431, 67302824, 36, 356924, 18413, 45, 21, 219951, 9444, 1, 1000, 172116, 183150, 6, 24, 21, 213283, 618401, 1998, 28258, 1, 1000, 38159, 2, 22, 1000, 95933, 1, 1, 11, 1000, 277577, 12, 21 ]
+    },
+    "pvt_p_p_security_group" : 0.51,
+    "dvt_p_p_network_group" : 0.67,
+    "dvt_p_p_economic_group" : 0.67,
+    "dvt_p_p_technical_group" : 0.67,
+    "dvt_p_p_gov_group" : 0.75
+  },
+  "clock" : {
+    "zeroSlot" : 0,
+    "zeroTimeMs" : 1795340722000,
+    "slotLengthMs" : 1000
+  },
+  "result" : {
+    "prepared" : {
+      "object" : "62",
+      "plan" : {
+        "inputs" : [ "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35#2", "7b49c45e069a2f736c393d34cfb719f5b0848f94f820fdc62c2bb10a1447501f#0" ],
+        "referenceInputs" : [ "466aa26931cf6e86bcaa06f0284fbbbb6ac7435d0c9529f06a4fcf9527a3b8ad#0", "749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35#0" ],
+        "collateral" : [ "7b49c45e069a2f736c393d34cfb719f5b0848f94f820fdc62c2bb10a1447501f#0" ],
+        "outputs" : [ {
+          "address" : "addr_test1wrjt8f82c6jg6wuj4rnynjtl89237ftj6vxmfdv0mkyf50ce9ehf6",
+          "value" : {
+            "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f4b1a60324fda0f9bb232ef767c5c724aa64c2cfbb64091c92ab45685e5" : "1",
+            "lovelace" : "3300000"
+          },
+          "datum" : "d87c9f5820288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc228841621b000001a202c1d478ff",
+          "datumHash" : null,
+          "hasScript" : false
+        }, {
+          "address" : "addr_test1wrjt8f82c6jg6wuj4rnynjtl89237ftj6vxmfdv0mkyf50ce9ehf6",
+          "value" : {
+            "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f4b661f4988586dd46406703553f71daf7b79d7642a4b5fa57fb81dedb3" : "1",
+            "lovelace" : "3300000"
+          },
+          "datum" : "d87d9f5820288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc2288401b000001a202c1d478d8799f4162581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a6200009f581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62ff01ffff",
+          "datumHash" : null,
+          "hasScript" : false
+        }, {
+          "address" : "addr_test1qzdhlg6en09chceexc8nslfns9p2g0rr8857fs2xgwsx5cjgp7kctu33vm4feezpy3gqs79e62tstkpjwehv04hjsaush075r5",
+          "value" : {
+            "lovelace" : "26218807"
+          },
+          "datum" : null,
+          "datumHash" : null,
+          "hasScript" : false
+        } ],
+        "collateralReturn" : {
+          "address" : "addr_test1qzdhlg6en09chceexc8nslfns9p2g0rr8857fs2xgwsx5cjgp7kctu33vm4feezpy3gqs79e62tstkpjwehv04hjsaush075r5",
+          "value" : {
+            "lovelace" : "29278210"
+          },
+          "datum" : null,
+          "datumHash" : null,
+          "hasScript" : false
+        },
+        "totalCollateral" : "721790",
+        "mint" : {
+          "e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f4b661f4988586dd46406703553f71daf7b79d7642a4b5fa57fb81dedb3" : "1"
+        },
+        "redeemers" : [ {
+          "tag" : "spend",
+          "index" : 0,
+          "data" : "d9050180",
+          "mem" : "142956",
+          "steps" : "46662305"
+        }, {
+          "tag" : "mint",
+          "index" : 0,
+          "data" : "d87d9f5820288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc2288d8799f5820749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e3502ff4162581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62d8799f581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a6200001b000001a202c186581b000001a202c1d478ffff",
+          "mem" : "898537",
+          "steps" : "301622792"
+        } ],
+        "requiredSigners" : [ "9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62" ],
+        "validFrom" : 1845,
+        "validTo" : 1865,
+        "fee" : "481193",
+        "networkId" : null,
+        "scriptDataHash" : "5f5f9766a0769af6be19f0283afd11fec982b1f6823dc9cbabb8e5984e1b38cb",
+        "auxiliaryDataHash" : null,
+        "certificates" : 0,
+        "withdrawals" : 0,
+        "votes" : false,
+        "proposals" : 0,
+        "donation" : null,
+        "currentTreasuryValue" : null,
+        "auxiliaryData" : false,
+        "isValid" : true
+      },
+      "reservation" : "1",
+      "cbor" : "84ac00d9010282825820749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e35028258207b49c45e069a2f736c393d34cfb719f5b0848f94f820fdc62c2bb10a1447501f000183a300581d70e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f01821a00325aa0a1581ce4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3fa1581d4b1a60324fda0f9bb232ef767c5c724aa64c2cfbb64091c92ab45685e501028201d8185831d87c9f5820288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc228841621b000001a202c1d478ffa300581d70e4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3f01821a00325aa0a1581ce4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3fa1581d4b661f4988586dd46406703553f71daf7b79d7642a4b5fa57fb81dedb301028201d8185877d87d9f5820288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc2288401b000001a202c1d478d8799f4162581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a6200009f581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62ff01ffff825839009b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62480fad85f23166ea9ce44124500878b9d29705d832766ec7d6f287791a01901137021a000757a9031907490819073509a1581ce4b3a4eac6a48d3b92a8e649c97f39551f2572d30db4b58fdd889a3fa1581d4b661f4988586dd46406703553f71daf7b79d7642a4b5fa57fb81dedb3010b58205f5f9766a0769af6be19f0283afd11fec982b1f6823dc9cbabb8e5984e1b38cb0dd90102818258207b49c45e069a2f736c393d34cfb719f5b0848f94f820fdc62c2bb10a1447501f000ed9010281581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a6210825839009b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62480fad85f23166ea9ce44124500878b9d29705d832766ec7d6f287791a01bec002111a000b037e12d9010282825820466aa26931cf6e86bcaa06f0284fbbbb6ac7435d0c9529f06a4fcf9527a3b8ad00825820749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e3500a105a282000082d9050180821a00022e6c1a02c802a182010082d87d9f5820288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc2288d8799f5820749521e550b1c6082f3a82c19c8e9c475f06c46b2fcd74ca9054c1f41a675e3502ff4162581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62d8799f581c9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a6200001b000001a202c186581b000001a202c1d478ffff821a000db5e91a11fa6608f5f6",
+      "txHash" : "b39c36017af608003e8e71e60bbe195aa2d4b62c90a657e57d28c4d97ed9f826",
+      "validTo" : 1865,
+      "validFrom" : 1845,
+      "signers" : [ "9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62" ]
+    },
+    "predicted" : {
+      "state" : null,
+      "objects" : [ {
+        "type" : "Head_Entry",
+        "value" : {
+          "instance" : "288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc2288",
+          "next" : "62",
+          "linkedAt" : "1795342587000"
+        },
+        "predicted" : true,
+        "index" : 0,
+        "object" : "4b1a60324fda0f9bb232ef767c5c724aa64c2cfbb64091c92ab45685e5",
+        "effect" : "updated"
+      }, {
+        "type" : "Keyed_Entry",
+        "value" : {
+          "instance" : "288731a278de42ee3acc67f3bd9a90758404b10570a002c00e622e42aefc2288",
+          "next" : "",
+          "linkedAt" : "1795342587000",
+          "value" : {
+            "name" : "62",
+            "owner" : "9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62",
+            "stake" : "0",
+            "tier" : "0",
+            "guardians" : [ "9b7fa3599bcb8be339360f387d338142a43c6339e9e4c14643a06a62" ],
+            "needed" : "1"
+          }
+        },
+        "predicted" : true,
+        "index" : 1,
+        "object" : "4b661f4988586dd46406703553f71daf7b79d7642a4b5fa57fb81dedb3",
+        "effect" : "created"
+      } ],
+      "events" : [ ],
+      "payouts" : [ ],
+      "sends" : [ ]
+    }
+  },
+  "violations" : [ ]
+}
