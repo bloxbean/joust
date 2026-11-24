@@ -59,6 +59,7 @@ which `bloxbean-maven.sh discover` counts on top of the projects (ADR-0017 D1).
 | `julc-state-verifier` | the MerkleMap verifier |
 | `julc-state-dsl` | the `.jsc` DSL |
 | `julc-state-serve` | the transport-independent adapter over generated clients (ADR-0022 D16), used by the prepare service |
+| `julc-state-host` | the JVM stdio dev host (ADR-0022) |
 | `julc-state-server` | the prepare service |
 | `julc-state-gradle-plugin` | the Gradle plugin `org.julclang.joust` (+ its plugin marker) |
 
@@ -330,7 +331,7 @@ version bump's commit before approving its tag.
   -PstagingRepository=$PWD/build/r2-maven -PskipSigning=true
 V=$(./gradlew -q properties | awk '/^version:/ {print $2; exit}')
 bash -c "python3 .github/scripts/verify-maven-staging.py build/r2-maven none org/julclang $V \
-  julc-state-api julc-state-dsl julc-state-processor julc-state-runtime julc-state-serve julc-state-server julc-state-testkit \
+  julc-state-api julc-state-dsl julc-state-processor julc-state-runtime julc-state-serve julc-state-host julc-state-server julc-state-testkit \
   julc-state-verifier"
 MAVEN_USERNAME=x MAVEN_PASSWORD=x ./gradlew nmcpZipAggregation -PskipSigning=true    # build/nmcp/zip/aggregation.zip
 for p in state-client joust-runtime joust create-joust; do (cd js/$p && npm pack --dry-run); done

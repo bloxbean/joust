@@ -399,13 +399,19 @@ final class TxRunner {
      * thrown, an {@code Error} included), nothing escaped and the claim ends at once (F71, F77).
      */
     static Transaction exportPrepared(StateRuntime rt, String what, Designation.Claimed claimed) {
+        return exportPrepared(rt, what, claimed, null);
+    }
+
+    static Transaction exportPrepared(StateRuntime rt, String what, Designation.Claimed claimed, Long validTo) {
         boolean returned = false;
         try {
             rt.built(what, claimed.tx(), true);
             returned = true;
             return claimed.tx();
         } finally {
-            if (returned) claimed.claim().releaseAt(ClaimStore.Expiry.atMs(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS));
+            if (returned) claimed.claim().releaseAt(validTo == null
+                    ? ClaimStore.Expiry.atMs(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS)
+                    : new ClaimStore.Expiry(Math.min(safeMs(rt.chainTime(), validTo), Long.MAX_VALUE - 10_000) + 10_000, validTo));
             else claimed.claim().release();
         }
     }

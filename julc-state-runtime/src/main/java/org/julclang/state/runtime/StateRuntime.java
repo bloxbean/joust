@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Everything a generated client needs to talk to a network: backend, optional script evaluator, network id, clock,
@@ -32,6 +33,7 @@ public final class StateRuntime {
     private volatile com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
     private final String mapStorePath;
     private final MerkleSupport.Prover mapProver;
+    private final Function<String, MerkleSupport.Prover> unitProver;
     private final Consumer<BuiltTx> onBuilt;
     private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts;
     private final java.util.List<Relay> relays;
@@ -61,6 +63,7 @@ public final class StateRuntime {
         this.mapStore = b.mapStore;               // null: the default store, opened when a map contract first needs it
         this.mapStorePath = b.mapStorePath;
         this.mapProver = b.mapProver;
+        this.unitProver = b.unitProver;
         this.onBuilt = b.onBuilt;
         this.referenceScripts = Map.copyOf(b.referenceScripts);
         this.relays = b.relays.isEmpty() ? java.util.List.of(Relay.of(b.backend)) : java.util.List.copyOf(b.relays);
@@ -133,6 +136,26 @@ public final class StateRuntime {
         return s == null ? null : s.scope();
     }
 
+    /** Whether this call uses the protocol host's validated clock, reads and signer rules. */
+    public boolean hostedCall() {
+        var call = callScope();
+        return call != null && call.hosted();
+    }
+
+    /** D6/D8: the host owns a complete, call-local address snapshot. Never reuse an older finder's cached hit. */
+    com.bloxbean.cardano.client.api.model.Utxo hostedReference(String holder, String hash) {
+        try {
+            var result = backend.getUtxoService().getUtxos(holder, Integer.MAX_VALUE, 1);
+            if (!result.isSuccessful()) throw new org.julclang.state.runtime.snapshot.ReadFailed("utxos", holder, result.getResponse());
+            for (var u : result.getValue()) {
+                if (hash.equalsIgnoreCase(u.getReferenceScriptHash())) return u;
+            }
+            return null;
+        } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+            throw new org.julclang.state.runtime.snapshot.ReadFailed("utxos", holder, e.getMessage());
+        }
+    }
+
     void requireUnscopedSubmission() {
         if (callScope() != null) throw new IllegalStateException("submitting inside a call scope");
     }
@@ -164,13 +187,19 @@ public final class StateRuntime {
      */
     public long settlementSlots() { return settlementSlots; }
     /**
-     * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null: keyed
-     * calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
+     * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null (never
+     * in a hosted call): keyed calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
      */
     public long[] pageLimits() {
         Scoped s = scope.get();
-        if (s != null && s.scope().pageLimits() != null) return s.scope().pageLimits();
-        return pageLimits == null ? null : pageLimits.clone();
+        long[] limits = s == null ? null : s.scope().pageLimits();
+        if (limits == null && pageLimits != null) limits = pageLimits.clone();
+        // A hosted call always has limits: the scope's, the runtime's, or the defaults.
+        if (limits == null && s != null && s.scope().hosted())
+            limits = new long[]{CallScope.DEFAULT_MAX_START_SLOTS, CallScope.DEFAULT_MAX_VALIDITY_SLOTS};
+        // A hosted cooldown must leave at least one slot before the absolute end ceiling (D7).
+        if (limits != null && s != null && s.scope().hosted()) limits[0] = Math.min(limits[0], limits[1] - 1);
+        return limits;
     }
     void log(String message) { log.accept(message); }
     /** Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). */
@@ -223,6 +252,7 @@ public final class StateRuntime {
      * is rebuilt from that unit's chain history first (ADR-0015 §13.12 M4).
      */
     public MerkleSupport.Prover mapProver(String unit) {
+        if (unitProver != null) return unitProver.apply(unit);
         if (mapProver != null) return mapProver;
         return new MerkleSupport.TrieProver(mapStore(), () -> {
             int n = MapHistory.rebuild(this, unit);
@@ -253,6 +283,7 @@ public final class StateRuntime {
         private com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
         private String mapStorePath;
         private MerkleSupport.Prover mapProver;
+        private Function<String, MerkleSupport.Prover> unitProver;
         private Consumer<BuiltTx> onBuilt;
         private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts = new HashMap<>();
         private final java.util.List<Relay> relays = new java.util.ArrayList<>();
@@ -296,6 +327,11 @@ public final class StateRuntime {
         public Builder mapStorePath(String path) { this.mapStorePath = path; return this; }
         /** Map proofs from elsewhere: the runtime engine's caller supplies them (ADR-0015 §13.12 M1). */
         public Builder mapProver(MerkleSupport.Prover prover) { this.mapProver = prover; return this; }
+        /** Supply the prover for a particular token, including its history source. */
+        public Builder unitProver(Function<String, MerkleSupport.Prover> prover) {
+            unitProver = prover;
+            return this;
+        }
 
         /**
          * A known reference script output (a deployment's pin, ADR-0013 D2): contracts whose script hash it carries use it

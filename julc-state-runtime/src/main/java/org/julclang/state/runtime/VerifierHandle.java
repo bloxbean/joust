@@ -82,10 +82,28 @@ public final class VerifierHandle {
         }
     }
 
+    public enum Component { SCRIPT, REGISTRATION, BOTH }
+
+    /** Builds exactly the selected components, with the upper bound in place before balancing. */
+    public PreparedTx prepare(String payerAddress, long validTo, List<Utxo> holderOutputs, Component component) {
+        var tx = new Tx();
+        java.util.Objects.requireNonNull(component, "publication component");
+        if (component != Component.REGISTRATION) {
+            if (Publication.present(holderOutputs, holder, hash)) {
+                if (component == Component.SCRIPT) return null;
+                throw new IllegalArgumentException("combined publication requires an absent reference script");
+            }
+            tx.payToAddress(holder, List.of(Amount.lovelace(deposit())), script);
+        }
+        if (component != Component.SCRIPT) tx.registerStakeAddress(rewardAddress);
+        return Publication.build(runtime, payerAddress, validTo, tx);
+    }
+
     /** The verifier's reference script, publishing it (and registering its stake credential) first if needed. */
     public Utxo ensure(Account payer) {
         Utxo found = find();
         if (found != null) return found;
+        if (runtime.hostedCall()) throw new CallScope.Refusal("prerequisite", "missing reference script at " + holder);
         var tx = new Tx()
                 .payToAddress(holder, List.of(Amount.lovelace(deposit())), script)
                 .registerStakeAddress(rewardAddress)
@@ -121,6 +139,7 @@ public final class VerifierHandle {
     static final int PIN_PAGES = 10_000;
 
     private Utxo find() {
+        if (runtime.hostedCall()) return runtime.hostedReference(holder, hash);
         // ADR-0022 D8: a scoped (hosted) call sees only its own answers, so it neither reads nor fills the cache that
         // unscoped callers keep; a rollback between two calls cannot hand the second call the first call's hit.
         boolean scoped = runtime.callScope() != null;

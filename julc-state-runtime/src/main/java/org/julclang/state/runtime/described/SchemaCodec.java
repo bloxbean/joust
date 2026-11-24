@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 
 import java.math.BigInteger;
@@ -39,9 +38,63 @@ public final class SchemaCodec {
     private static final HexFormat HEX = HexFormat.of();
 
     private final JsonNode definitions;
+    private final boolean strict;
 
     public SchemaCodec(JsonNode description) {
+        this(description, false);
+    }
+
+    /**
+     * {@code strict}: the dev host's wire (ADR-0022), as the JVM host reads it (JsonValues.TYPED): a JSON number is an
+     * integer only as a safe integer (|n| at most 2^53 - 1, larger ones are decimal strings), a decimal string has at
+     * most 200 digits, hex at most 16,384 bytes, a list or map at most 1,024 items, nesting at most 32 levels; so both
+     * hosts accept and refuse the same arguments (#154 Codex review).
+     */
+    public SchemaCodec(JsonNode description, boolean strict) {
         this.definitions = description.path("definitions");
+        this.strict = strict;
+    }
+
+    static final long MAX_SAFE_INTEGER = (1L << 53) - 1;
+    static final int MAX_DEPTH = 32, MAX_ITEMS = 1024, MAX_DIGITS = 200, MAX_HEX_BYTES = 16384;
+    /** Plutus data nested deeper than this is refused on the strict wire: the protocol's bound (dev-host-1). Decoding is
+     *  iterative ({@code PlutusBytes}), but code after it still recurses per level, and on the Web Image a stack
+     *  overflow is a trap that ends the session (#154 review G3-4: 16,383 levels trapped there). */
+    public static final int MAX_DATA_DEPTH = 256;
+
+    /**
+     * Refuses CBOR whose arrays, maps and tags nest deeper than {@link #MAX_DATA_DEPTH}, by a linear scan before
+     * decoding. Malformed input passes: the decoder refuses it.
+     */
+    public static void checkNesting(byte[] b, String path) {
+        var open = new java.util.ArrayDeque<long[]>();   // items left in each open container; -1: indefinite
+        int i = 0;
+        while (i < b.length) {
+            int head = b[i++] & 0xff, major = head >>> 5, info = head & 31;
+            if (head == 0xff) { if (open.isEmpty()) return; open.pop(); }
+            else {
+                long n = info;
+                int size = info == 24 ? 1 : info == 25 ? 2 : info == 26 ? 4 : info == 27 ? 8 : 0;
+                if (info > 27 && info != 31 || i + size > b.length) return;
+                if (size > 0) { n = 0; for (int k = 0; k < size; k++) n = n << 8 | (b[i++] & 0xff); }
+                if ((major == 2 || major == 3) && info != 31) {
+                    if (n < 0 || n > b.length - i) return;
+                    i += (int) n;
+                } else if (major == 4 || major == 5 || major == 6) {
+                    long items = info == 31 ? -1 : major == 5 ? 2 * n : major == 6 ? 1 : n;
+                    if (items != 0) {
+                        open.push(new long[]{items});
+                        if (open.size() > MAX_DATA_DEPTH) throw new DataError(path + ": Plutus data nested too deeply");
+                        continue;
+                    }
+                } else if (info == 31) {   // an indefinite byte or text string: its chunks, then a break
+                    open.push(new long[]{-1});
+                    continue;
+                }
+            }
+            // One item ended: count it against the containers it completes.
+            while (!open.isEmpty() && open.peek()[0] > 0 && --open.peek()[0] == 0) open.pop();
+        }
     }
 
     public JsonNode resolve(JsonNode s) {
@@ -96,63 +149,79 @@ public final class SchemaCodec {
     }
 
     public PlutusData encode(JsonNode schema, JsonNode v, String path) {
+        return encode(schema, v, path, 0);
+    }
+
+    private PlutusData encode(JsonNode schema, JsonNode v, String path, int depth) {
+        if (strict && depth > MAX_DEPTH) throw new DataError(path + ": nested too deeply");
+        // An absent value is missing, not None: only an explicit null clears an optional, as on the JVM host.
+        if (strict && (v == null || v.isMissingNode())) throw new DataError(path + ": missing");
         JsonNode s = resolve(schema);
         switch (kindOf(s)) {
             case "integer":
                 return PlutusData.integer(integer(v, path));
             case "bytes":
-                if (v == null || !v.isTextual() || !v.asText().matches("([0-9a-f]{2})*")) throw new DataError(path + ": not lowercase hex");
+                if (v == null || !v.isTextual() || !v.asText().matches("([0-9a-f]{2})*") || tooLong(v)) throw new DataError(path + ": not lowercase hex");
                 return PlutusData.bytes(HEX.parseHex(v.asText()));
             case "bool":
                 if (v == null || !v.isBoolean()) throw new DataError(path + ": not a boolean");
                 return PlutusData.constr(v.asBoolean() ? 1 : 0);
             case "optional":
                 return v == null || v.isNull() || v.isMissingNode() ? PlutusData.constr(1)
-                        : PlutusData.constr(0, encode(s.get("anyOf").get(0).get("fields").get(0), v, path));
+                        : PlutusData.constr(0, encode(s.get("anyOf").get(0).get("fields").get(0), v, path, depth + 1));
             case "list": {
                 if (v == null || !v.isArray()) throw new DataError(path + ": not an array");
+                if (strict && v.size() > MAX_ITEMS) throw new DataError(path + ": too many items");
                 var items = new ArrayList<PlutusData>();
-                for (int i = 0; i < v.size(); i++) items.add(encode(s.get("items"), v.get(i), path + "[" + i + "]"));
+                for (int i = 0; i < v.size(); i++) items.add(encode(s.get("items"), v.get(i), path + "[" + i + "]", depth + 1));
                 return new PlutusData.ListData(items);
             }
             case "map": {
                 if (v == null || !v.isArray()) throw new DataError(path + ": a map is an array of [key, value] pairs");
+                if (strict && v.size() > MAX_ITEMS) throw new DataError(path + ": too many entries");
                 var entries = new ArrayList<PlutusData.Pair>();
                 for (int i = 0; i < v.size(); i++) {
                     JsonNode e = v.get(i);
                     if (!e.isArray() || e.size() != 2) throw new DataError(path + "[" + i + "]: not a [key, value] pair");
-                    entries.add(new PlutusData.Pair(encode(s.get("keys"), e.get(0), path + "[" + i + "][0]"),
-                            encode(s.get("values"), e.get(1), path + "[" + i + "][1]")));
+                    entries.add(new PlutusData.Pair(encode(s.get("keys"), e.get(0), path + "[" + i + "][0]", depth + 1),
+                            encode(s.get("values"), e.get(1), path + "[" + i + "][1]", depth + 1)));
                 }
-                // Canonical order (RFC 8949 length-first, as CCL writes inline datums), no duplicates.
-                entries.sort((a, b) -> compare(cbor(a.key()), cbor(b.key())));
+                // Canonical order (RFC 8949 length-first, as CCL writes inline datums), no duplicates. The strict wire
+                // takes the order as given, as the JVM host does (#154 review G3-3); pages may send any order.
+                if (!strict) entries.sort((a, b) -> compare(cbor(a.key()), cbor(b.key())));
                 for (int i = 1; i < entries.size(); i++) {
-                    if (compare(cbor(entries.get(i - 1).key()), cbor(entries.get(i).key())) == 0) throw new DataError(path + ": duplicate key");
+                    int order = compare(cbor(entries.get(i - 1).key()), cbor(entries.get(i).key()));
+                    if (order == 0) throw new DataError(path + ": duplicate key");
+                    if (order > 0) throw new DataError(path + ": map keys not in canonical order");
                 }
                 return new PlutusData.MapData(entries);
             }
             case "sum": {
                 JsonNode alts = s.get("anyOf");
-                if (alts.size() == 1) return encodeFields(alts.get(0), v, path);
+                if (alts.size() == 1) return encodeFields(alts.get(0), v, path, depth);
                 String name = v != null && v.isObject() ? v.path("$variant").asText(null) : null;
-                for (JsonNode c : alts) if (title(c).equals(name)) return encodeFields(c, v, path);
+                for (JsonNode c : alts) if (title(c).equals(name)) return encodeFields(c, v, path, depth);
                 var names = new ArrayList<String>();
                 alts.forEach(c -> names.add(title(c)));
                 throw new DataError(path + ": $variant must be one of " + String.join(", ", names));
             }
             case "constructor":
-                return encodeFields(s, v, path);
+                return encodeFields(s, v, path, depth);
             default:
-                if (v == null || !v.isTextual()) throw new DataError(path + ": Data is hex CBOR");
+                if (v == null || !v.isTextual() || tooLong(v)) throw new DataError(path + ": Data is hex CBOR");
+                if (strict && !v.asText().matches("([0-9a-f]{2})*")) throw new DataError(path + ": not lowercase hex");
+                byte[] cbor;
+                try { cbor = HEX.parseHex(v.asText()); } catch (IllegalArgumentException e) { throw new DataError(path + ": Data is hex CBOR"); }
+                if (strict) checkNesting(cbor, path);   // the protocol's nesting bound, on every strict value
                 try {
-                    return PlutusDataCborDecoder.decode(HEX.parseHex(v.asText()));
+                    return org.julclang.state.runtime.PlutusBytes.decode(cbor);
                 } catch (Exception e) {
                     throw new DataError(path + ": not CBOR Plutus data");
                 }
         }
     }
 
-    private PlutusData encodeFields(JsonNode c, JsonNode v, String path) {
+    private PlutusData encodeFields(JsonNode c, JsonNode v, String path, int depth) {
         if (v == null || !v.isObject()) throw new DataError(path + ": expected an object for " + title(c));
         var known = new ArrayList<String>(List.of("$variant"));
         c.path("fields").forEach(f -> known.add(title(f)));
@@ -162,15 +231,23 @@ public final class SchemaCodec {
         var fields = new ArrayList<PlutusData>();
         for (JsonNode f : c.path("fields")) {
             if (!v.has(title(f))) throw new DataError(path + ": missing field " + title(f) + " of " + title(c));
-            fields.add(encode(f, v.get(title(f)), path + "." + title(f)));
+            fields.add(encode(f, v.get(title(f)), path + "." + title(f), depth + 1));
         }
         return new PlutusData.ConstrData(c.path("index").asInt(), fields);
     }
 
-    private static BigInteger integer(JsonNode v, String path) {
-        if (v != null && v.isIntegralNumber()) return v.bigIntegerValue();
-        if (v != null && v.isTextual() && v.asText().matches("-?[0-9]+")) return new BigInteger(v.asText());
+    private BigInteger integer(JsonNode v, String path) {
+        if (v != null && v.isIntegralNumber()) {
+            if (!strict) return v.bigIntegerValue();
+            if (v.canConvertToLong() && v.longValue() >= -MAX_SAFE_INTEGER && v.longValue() <= MAX_SAFE_INTEGER) return v.bigIntegerValue();
+            throw new DataError(path + ": not an integer (beyond 2^53 - 1, send a decimal string)");
+        }
+        if (v != null && v.isTextual() && v.asText().matches(strict ? "-?[0-9]{1," + MAX_DIGITS + "}" : "-?[0-9]+")) return new BigInteger(v.asText());
         throw new DataError(path + ": not an integer: " + v);
+    }
+
+    private boolean tooLong(JsonNode v) {
+        return strict && v.asText().length() > 2 * MAX_HEX_BYTES;
     }
 
     // ------------------------------------------------------------------ Data → JSON

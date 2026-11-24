@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "error.schema.json",
+  "title": "Terminal JSON-RPC error",
+  "$defs": {
+    "site": {
+      "type": "object",
+      "properties": {
+        "file": {"type": "string", "minLength": 1},
+        "line": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "col": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "kind": {"type": "string", "minLength": 1},
+        "in": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+        "what": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]}
+      },
+      "required": ["file", "line", "col", "kind", "in", "what"],
+      "additionalProperties": false
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "kind": {"enum": ["bad", "internal", "unsupported", "refusal"]},
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string"},
+        "sites": {"type": "array", "items": {"$ref": "#/$defs/site"}},
+        "retryAtSlot": {"anyOf": [{"type": "integer", "minimum": 0, "maximum": 9223372036854775807}, {"type": "null"}]}
+      },
+      "required": ["kind", "code", "message", "sites", "retryAtSlot"],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {"const": "bad"},
+            "code": {
+              "enum": ["busy", "network", "nowDecreased", "nowImplausible", "tooLarge", "stageMismatch", "unknownReservation", "conflict", "notExpired", "unbounded", "restoreClosed", "request", "contract", "method", "readLimit", "listingGone", "operation"]
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {"const": "refusal"},
+            "code": {
+              "enum": ["pending", "window", "prerequisite", "reconcile", "deepRollback", "expiredOnArrival", "runtime", "require", "cooldown", "needsDesignated", "mayHaveLanded"]
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {"const": "internal"},
+            "code": {
+              "enum": ["readFailed", "chainMoved", "inconsistentRead", "unbalanced", "evaluator", "cancelled", "deadline", "tooDeep", "internal", "need", "transport"]
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {"const": "unsupported"},
+            "code": {
+              "anyOf": [
+                {
+                  "enum": ["protocol", "runtimeVersion", "outsideProject", "views", "params", "maps", "keyed", "unverifiable", "authorizedBy"]
+                },
+                {"type": "string", "pattern": "^read:[A-Za-z][A-Za-z0-9.]*$"}
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "type": "object",
+  "properties": {
+    "jsonrpc": {"const": "2.0"},
+    "id": {"type": ["string", "integer"]},
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {"enum": [-32602, -32603, -32001, -32003, -32800]},
+        "message": {"type": "string"},
+        "data": {"$ref": "#/$defs/data"}
+      },
+      "required": ["code", "message", "data"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["jsonrpc", "id", "error"],
+  "additionalProperties": false
+}

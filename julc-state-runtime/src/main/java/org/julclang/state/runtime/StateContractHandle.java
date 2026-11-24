@@ -221,6 +221,7 @@ public final class StateContractHandle<S> {
      * thread token: the validator never lets it be spent (I10), so it stays available. Found on chain, or null.
      */
     public Utxo findReferenceScript() {
+        if (runtime.hostedCall()) return runtime.hostedReference(address, policyId);
         // As VerifierHandle.find: a scoped call neither reads nor fills the cross-call cache (ADR-0022 D8).
         boolean scoped = runtime.callScope() != null;
         if (!scoped && referenceScript != null) return referenceScript;
@@ -262,6 +263,7 @@ public final class StateContractHandle<S> {
     public Utxo ensureReferenceScript(Account payer) {
         Utxo existing = findReferenceScript();
         if (existing != null) return existing;
+        if (runtime.hostedCall()) throw new CallScope.Refusal("prerequisite", "missing reference script at " + address);
         var tx = new com.bloxbean.cardano.client.quicktx.Tx()
                 .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
                 .from(payer.baseAddress());
@@ -295,6 +297,20 @@ public final class StateContractHandle<S> {
             throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
                     + e.getMessage(), e);
         }
+    }
+
+    /** Bounded wallet publication using the complete holder answer for this call (ADR-0022 D14). */
+    public PreparedTx prepareReferenceScript(String payerAddress, long validTo, List<Utxo> holderOutputs) {
+        if (Publication.present(holderOutputs, address, policyId)) return null;
+        var tx = new com.bloxbean.cardano.client.quicktx.Tx()
+                .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script);
+        return Publication.build(runtime, payerAddress, validTo, tx);
+    }
+
+    /** Pure registration of this contract's withdrawal credential. */
+    public PreparedTx prepareStakeRegistration(String payerAddress, long validTo) {
+        return Publication.build(runtime, payerAddress, validTo,
+                new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(rewardAddress));
     }
 
     private BigInteger referenceScriptDeposit() {
@@ -554,7 +570,9 @@ public final class StateContractHandle<S> {
                 }
                 if (mixed != null) return mixed;
             }
-            throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
+            throw new JoustException(store instanceof JvmClaimStore
+                    ? "deploy: every UTxO of the caller is designated by a keyed operation"
+                    : "deploy: every UTxO of the caller is designated or reserved by a pending transaction");
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {

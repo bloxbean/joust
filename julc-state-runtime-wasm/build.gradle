@@ -4,6 +4,7 @@ description = 'JOUST runtime engine (ADR-0015 D4/D5, gate S0): prepares calls fr
 // known by their descriptions and transition programs (DescribedContract): no contract classes in the image.
 dependencies {
     implementation project(':julc-state-runtime')
+    implementation project(':julc-state-host') // Shared wire session, without the JVM launch/transport.
     implementation libs.julc.vm.java
 
     testImplementation project(':examples:devkit')       // Fixtures: the M0 fixtures as snapshots

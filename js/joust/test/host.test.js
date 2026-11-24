@@ -1,0 +1,378 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { bundle, client, closure, fixture, repo } from './host/client.js';
+import { encode, frameReader, MAX_BODY, MAX_DEPTH } from '../src/host/frames.js';
+
+test('D2 fragmented frames, UTF-8 byte lengths, and the exact header/body caps', () => {
+  const m = { jsonrpc: '2.0', id: 'π', method: 'describe' };
+  const frames = [];
+  const r = frameReader(v => frames.push(v), assert.fail);
+  for (const b of encode(JSON.stringify(m))) r.chunk(Buffer.from([b]));
+  const s = JSON.stringify(m);
+  const first = 'content-length: ' + Buffer.byteLength(s) + '\r\nContent-Type: ';
+  r.chunk(Buffer.from(first + 'X'.repeat(1024 - first.length - 4) + '\r\n\r\n' + s));
+  assert.deepEqual(frames, [m, m]);
+  assert.ok(encode(' '.repeat(MAX_BODY)));
+  assert.equal(encode(' '.repeat(MAX_BODY + 1)), null);
+});
+
+test('D2 rejects invalid framing, encoding, duplicate keys and envelopes', () => {
+  const body = text => Buffer.concat([Buffer.from('Content-Length: ' + text.length + '\r\n\r\n'), text]);
+  for (const bytes of [
+    Buffer.from('X'.repeat(1024)), Buffer.from('Foo: 0\r\n\r\n'), Buffer.from('Content-Length: 4194305\r\n\r\n'),
+    Buffer.from('Content-Length: 2\r\ncontent-length: 2\r\n\r\n{}'), body(Buffer.from([0xff])),
+    body(Buffer.from('{"jsonrpc":"2.0","id":1,"method":"x","params":{"x":1,"\\u0078":2}}')),
+    body(Buffer.from('{"jsonrpc":"2.0","id":false,"method":"x"}')), body(Buffer.from('{"jsonrpc":"2.0","id":1}')),
+  ]) {
+    const r = frameReader(assert.fail, assert.fail);
+    try { assert.throws(() => r.chunk(bytes)); } finally { r.clear(); }
+  }
+});
+
+test('D2 scans a frame in linear time: an unterminated string of escaped quotes is refused at once (#154 final review F-N1)', () => {
+  const evil = encode('{"jsonrpc":"2.0","id":1,"method":"x","params":"' + '\\"'.repeat(1_500_000));
+  const r = frameReader(assert.fail, assert.fail);
+  const start = process.hrtime.bigint();
+  try { assert.throws(() => r.chunk(evil)); } finally { r.clear(); }
+  assert.ok(process.hrtime.bigint() - start < 2_000_000_000n, 'refused within 2 s');
+  // A legal 4 MiB-class frame of many strings parses without holding every token (review r2 M2-13).
+  const many = encode('{"jsonrpc":"2.0","id":1,"method":"x","params":[' + Array(300_000).fill('"ab"').join(',') + ']}');
+  const accepted = [];
+  const ok = frameReader(m => accepted.push(m), assert.fail);
+  try { ok.chunk(many); } finally { ok.clear(); }
+  assert.equal(accepted.length, 1);
+});
+
+test('D2 bounds JSON nesting as the JVM host does: more than 1,000 levels is malformed (#154 review M2-2)', () => {
+  const nested = levels => '{"jsonrpc":"2.0","id":1,"method":"x","params":' + '['.repeat(levels - 1) + ']'.repeat(levels - 1) + '}';
+  const accepted = [];
+  const r = frameReader(m => accepted.push(m), assert.fail);
+  r.chunk(encode(nested(MAX_DEPTH)));
+  assert.equal(accepted.length, 1);
+  for (const levels of [MAX_DEPTH + 1, 20_000]) {
+    const deep = frameReader(assert.fail, assert.fail);
+    try { assert.throws(() => deep.chunk(encode(nested(levels))), /nested more than 1000 levels/); } finally { deep.clear(); }
+  }
+  // Brackets inside strings are not nesting.
+  r.chunk(encode('{"jsonrpc":"2.0","id":2,"method":"x","params":"' + '['.repeat(5000) + '"}'));
+  assert.equal(accepted.length, 2);
+  r.clear();
+});
+
+test('D2 stalls time from the first byte and partial EOF fails', async () => {
+  let r;
+  const stalled = new Promise(resolve => { r = frameReader(assert.fail, resolve, 15); });
+  r.chunk(Buffer.from('C'));
+  assert.equal(await stalled, 'stalled frame');
+  r.clear();
+  let cause;
+  r = frameReader(assert.fail, m => { cause = m; });
+  r.chunk(Buffer.from('Content-Length: 7\r\n\r\n{'));
+  r.end();
+  assert.match(cause, /inside a frame/);
+});
+
+test('I1/I10 guard redirects diagnostics, preserves only the frame writer, and denies side effects', () => {
+  const guard = new URL('../src/host/guard.js', import.meta.url).href;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { guard } from ${JSON.stringify(guard)};
+    import fs from 'node:fs';
+    import { connect } from 'node:net';
+    import { log } from 'node:console';
+    import { resolve4 } from 'node:dns/promises';
+    import { spawn } from 'node:child_process';
+    import { Worker } from 'node:worker_threads';
+    import { enableCompileCache } from 'node:module';
+    import inspector from 'node:inspector';
+    import v8 from 'node:v8';
+    import assert from 'node:assert/strict';
+    const { writeFrame: write, Worker: captured } = guard();
+    console.log('diagnostic');
+    log('module diagnostic');
+    for (const op of [() => process.stdout.write('forged'), () => process.stdout.end('forged'), () => fs.writeSync(1, 'forged'),
+      () => connect(1), () => resolve4('example.invalid'), () => spawn('node'),
+      () => fetch('http://localhost'), () => fs.writeFileSync('x','x'), () => fs.promises.mkdir('x'),
+      () => fs.openSync('x','w+'), () => fs.promises.open('x',fs.constants.O_RDWR),
+      // #154 review M2-7.
+      () => new Worker('1', { eval: true }), () => process.report.writeReport('report.json'), () => enableCompileCache('cc'),
+      () => inspector.open(0), () => process.stdout._write(Buffer.from('forged'), 'buffer', () => {}),
+      () => process.stdout._writev([{ chunk: Buffer.from('forged'), encoding: 'buffer' }], () => {}),
+      () => v8.writeHeapSnapshot(), () => v8.setHeapSnapshotNearHeapLimit(1),
+      () => process.binding('fs'), () => process.dlopen({}, 'x')]) assert.throws(op, /dev host forbids/);
+    assert.equal(typeof captured, 'function');
+    const handle = await fs.promises.open(process.execPath, 'r');
+    assert.throws(() => handle.chmod(0o600), /dev host forbids/);
+    await handle.close();
+    // #154 review M2-8: the two-argument form is a read-only open.
+    await new Promise((resolve, reject) => fs.open(process.execPath, (e, fd) => e ? reject(e) : fs.close(fd, resolve)));
+    write(Buffer.from('frame'));
+  `], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, 'frame');
+  assert.equal(r.stderr, 'diagnostic\nmodule diagnostic\n');
+});
+
+// A controlled synchronous engine exercises transport races independently of real-contract CPU speed.
+function probe(t) {
+  const root = mkdtempSync(join(tmpdir(), 'joust-worker-probe-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const packages = join(root, 'node_modules/@julclang');
+  for (const [pkg, dirs] of [['joust', ['bin', 'src/host', 'package.json']], ['joust-runtime', ['src', 'package.json']]]) {
+    for (const name of dirs) cpSync(join(repo, 'js', pkg, name), join(packages, pkg, name), { recursive: true });
+  }
+  mkdirSync(join(root, 'build/joust'), { recursive: true });
+  const engine = join(packages, 'joust-runtime/engine');
+  mkdirSync(engine);
+  writeFileSync(join(engine, 'joust-runtime.js.wasm'), '');
+  writeFileSync(join(engine, 'joust-runtime.js'), `
+    let committed = 0, claimed = null;
+    const spin = ms => { const end = performance.now() + ms; while (performance.now() < end) {} };
+    console.log('engine diagnostic');
+    // The worker's guard (#154 review M2-9): each attempt must fail, and no byte may reach the protocol stdout.
+    const attempts = {};
+    const fs = process.getBuiltinModule('node:fs');
+    for (const [name, op] of Object.entries({
+      write: () => process.stdout.write('forged frame'),
+      _write: () => process.stdout._write(Buffer.from('forged frame'), 'buffer', () => {}),
+      writeSync: () => fs.writeSync(1, 'forged frame'),
+      writeFile: () => fs.writeFileSync('forged.txt', 'x'),
+      worker: () => new (process.getBuiltinModule('node:worker_threads').Worker)('1', { eval: true }),
+      binding: () => process.binding('fs'),
+    })) { try { op(); attempts[name] = 'allowed'; } catch (e) { attempts[name] = e.message; } }
+    onJulcReady({ joust: { info: () => ({ joust: 'dev', julc: 'test' }), host(r) {
+      if (r.commit) { committed++; return {}; }
+      const { method } = JSON.parse(r.frame);
+      if (method === 'guarded') return { response: JSON.stringify({ result: attempts }) };
+      // #154 review M2-4: a mutation holding the call, and one attempted after the call has ended.
+      if (method === 'hold') { claimed = globalThis.joustHostClaim(); spin(300); globalThis.joustHostRelease(); }
+      if (method === 'late') { spin(300); claimed = globalThis.joustHostClaim(); if (claimed) globalThis.joustHostRelease(); }
+      if (method === 'claimed') return { response: JSON.stringify({ result: claimed }) };
+      if (method === 'spin' || method === 'read') {
+        globalThis.joustHostRead('{"kind":"tip"}');
+        if (method === 'spin') {
+          const end = performance.now() + 400;
+          while (performance.now() < end) {}
+        }
+      }
+      return { response: JSON.stringify({ result: method === 'large' ? 'x'.repeat(4194304) : method === 'wide' ? 'x'.repeat(1 << 20) : committed }) };
+    } } });
+  `);
+  return { root, build: bundle(root, []) };
+}
+
+test('D10 busy while a cancelled CPU call drains, abandoned generation, deadline and oversized result never commit', async t => {
+  const { root, build } = probe(t);
+  const peer = client(root);
+  t.after(() => peer.close());
+  const init = fixture('sessions/bank').frames[2].client.params;
+  assert.equal((await peer.rpc('initialize', { ...init, build, limits: { ...init.limits, callDeadlineMs: 300 } })).result, 0);
+  peer.send({ jsonrpc: '2.0', method: 'spin', id: 'reused' });
+  const read = await peer.receive();
+  peer.send({ jsonrpc: '2.0', id: read.id, result: {} });
+  peer.send({ jsonrpc: '2.0', method: '$/cancelRequest', params: { id: 'reused' } });
+  assert.equal((await peer.receive()).error.data.code, 'cancelled');
+  assert.equal((await peer.rpc('whileDraining', {})).error.data.code, 'busy');
+  await new Promise(resolve => setTimeout(resolve, 450));
+  peer.send({ jsonrpc: '2.0', id: 'reused', method: 'read' });
+  const next = await peer.receive();
+  assert.notEqual(read.id, next.id);
+  peer.send({ jsonrpc: '2.0', id: read.id, result: {} });
+  assert.equal((await peer.receive()).error.data.code, 'deadline');
+  assert.equal((await peer.rpc('large', {})).error.data.code, 'tooLarge');
+  assert.equal((await peer.rpc('count', {})).result, 1);
+});
+
+test('the worker runs guarded: writes, nested workers and bindings fail, and stdout carries frames only', async t => {
+  const { root, build } = probe(t);
+  const peer = client(root);
+  t.after(() => peer.close());
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build })).result, 0);
+  const attempts = (await peer.rpc('guarded', {})).result;
+  assert.deepEqual(Object.keys(attempts).sort(), ['_write', 'binding', 'worker', 'write', 'writeFile', 'writeSync']);
+  for (const [name, outcome] of Object.entries(attempts)) assert.match(outcome, /dev host forbids/, name);
+  assert.ok(!existsSync(join(root, 'forged.txt')));
+});
+
+test('D10 a session mutation and the latch are one step (#154 review M2-4)', async t => {
+  const { root, build } = probe(t);
+  const peer = client(root);
+  t.after(() => peer.close());
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build })).result, 0);
+  const cancel = async (method, after) => {
+    peer.send({ jsonrpc: '2.0', method, id: method });
+    await new Promise(resolve => setTimeout(resolve, after));
+    const sent = performance.now();
+    peer.send({ jsonrpc: '2.0', method: '$/cancelRequest', params: { id: method } });
+    assert.equal((await peer.receive()).error.data.code, 'cancelled');
+    const waited = performance.now() - sent;
+    await new Promise(resolve => setTimeout(resolve, 450));
+    return waited;
+  };
+  // Cancelled while the worker holds the call: the report waits for its release.
+  assert.ok(await cancel('hold', 100) >= 150);
+  assert.equal((await peer.rpc('claimed', {})).result, true);
+  // Cancelled first: the later mutation's claim fails.
+  assert.ok(await cancel('late', 50) < 150);
+  assert.equal((await peer.rpc('claimed', {})).result, false);
+  // A competing request before the cancellation is answered: busy comes first, and the cancellation only after the
+  // worker releases the call (#154 Codex review).
+  peer.send({ jsonrpc: '2.0', method: 'hold', id: 'held' });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const sent = performance.now();
+  peer.send({ jsonrpc: '2.0', method: '$/cancelRequest', params: { id: 'held' } });
+  peer.send({ jsonrpc: '2.0', method: 'competing', id: 'competing' });
+  const first = await peer.receive();
+  assert.equal(first.id, 'competing');
+  assert.equal(first.error.data.code, 'busy');
+  const second = await peer.receive();
+  assert.equal(second.id, 'held');
+  assert.equal(second.error.data.code, 'cancelled');
+  assert.ok(performance.now() - sent >= 150);
+  await new Promise(resolve => setTimeout(resolve, 450));
+  assert.equal((await peer.rpc('claimed', {})).result, true);
+});
+
+test('D2 a client that stops reading stdout ends the session within the write bound, stdin still open (#154 Codex review)', async t => {
+  const { root, build } = probe(t);
+  const peer = client(root);
+  t.after(() => peer.child.kill('SIGKILL'));
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build })).result, 0);
+  let diagnostics = '';
+  peer.child.stderr.on('data', b => { diagnostics += b; });
+  // A 1 MiB result fills the pipe: the client never reads it, and keeps stdin open.
+  const sent = performance.now();
+  peer.send({ jsonrpc: '2.0', method: 'wide', id: 'wide' });
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(Error('host still running')), 20_000));
+  await Promise.race([new Promise(resolve => peer.child.once('exit', resolve)), timeout]);
+  const waited = performance.now() - sent;
+  assert.ok(waited >= 9_000 && waited < 15_000, 'ended after ' + waited + ' ms');
+  assert.match(diagnostics, /stalled protocol write/);
+});
+
+test('I7 the fingerprint covers the host closure, and the host runs the bytes it hashed (#154 review M2-6)', async t => {
+  const { root, build } = probe(t);
+  const init = fixture('sessions/bank').frames[2].client.params;
+  // A digest of another closure: each file is in the fingerprint.
+  for (const file of closure) {
+    const path = join(root, file);
+    const original = readFileSync(path);
+    writeFileSync(path, Buffer.concat([original, Buffer.from('\n')]));
+    const changed = bundle(root);
+    writeFileSync(path, original);
+    assert.notEqual(changed.digest, build.digest, file);
+  }
+  // Edited on disk after launch: the client's digest of the files now is refused, and the hashed bytes still run.
+  const worker = join(root, 'node_modules/@julclang/joust/src/host/worker.js');
+  const peer = client(root);
+  t.after(() => peer.close());
+  assert.equal((await peer.rpc('describe', {})).error.data.code, 'request');
+  writeFileSync(worker, 'throw Error("the edited worker ran");\n' + readFileSync(worker, 'utf8'));
+  assert.equal((await peer.rpc('initialize', { ...init, build: bundle(root) })).error.data.code, 'stageMismatch');
+  assert.equal((await peer.rpc('initialize', { ...init, build })).result, 0);
+});
+
+test('a missing runtime installation is a stage mismatch (#154 review M2-5)', async t => {
+  const { root, build } = probe(t);
+  rmSync(join(root, 'node_modules/@julclang/joust-runtime'), { recursive: true });
+  const peer = client(root);
+  t.after(() => peer.close());
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build })).error.data.code, 'stageMismatch');
+});
+
+test('D2 a frame nested too deeply ends the session, as on the JVM host', async t => {
+  const { root } = probe(t);
+  const peer = client(root);
+  const body = Buffer.from('{"jsonrpc":"2.0","id":1,"method":"describe","params":' + '['.repeat(2000) + ']'.repeat(2000) + '}');
+  peer.child.stdin.write(Buffer.concat([Buffer.from('Content-Length: ' + body.length + '\r\n\r\n'), body]));
+  await assert.rejects(peer.receive(), /unexpected host EOF/);
+  await peer.close();
+  assert.equal(peer.child.exitCode, 1);
+});
+
+test('D3 refuses a runtime import resolving outside the project before loading it', async t => {
+  const { root } = probe(t);
+  const dep = join(root, 'node_modules/@julclang/joust-runtime/src/exnref.js');
+  const outside = mkdtempSync(join(tmpdir(), 'joust-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(join(outside, 'probe.js'), 'throw Error("outside module loaded")');
+  rmSync(dep);
+  symlinkSync(join(outside, 'probe.js'), dep);
+  const peer = client(root);
+  const r = await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build: bundle(root) });
+  assert.equal(r.error.data.code, 'outsideProject');
+  await peer.close();
+  assert.notEqual(peer.child.exitCode, 0);
+});
+
+test('D4 rejects a mismatched installed runtime before the engine starts', async t => {
+  const { root } = probe(t);
+  const pkg = join(root, 'node_modules/@julclang/joust-runtime/package.json');
+  const runtime = JSON.parse(readFileSync(pkg, 'utf8'));
+  writeFileSync(pkg, JSON.stringify({ ...runtime, version: '0.0.1' }));
+  const peer = client(root);
+  t.after(() => peer.close());
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build: bundle(root) })).error.data.code, 'runtimeVersion');
+});
+
+test('D4 rejects an engine image stamped with another JOUST version (#154 review M2-10)', async t => {
+  const { root } = probe(t);
+  const engine = join(root, 'node_modules/@julclang/joust-runtime/engine/joust-runtime.js');
+  writeFileSync(engine, readFileSync(engine, 'utf8').replace("joust: 'dev'", "joust: '0.0.1'"));
+  const peer = client(root);
+  t.after(() => peer.close());
+  const r = await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build: bundle(root) });
+  assert.equal(r.error.data.code, 'runtimeVersion');
+  assert.match(r.error.message, /image is JOUST 0\.0\.1/);
+});
+
+test('D4 refuses contracts another JOUST version built (#154 review G3-2)', async t => {
+  const { root } = probe(t);
+  const runtime = JSON.parse(readFileSync(join(root, 'node_modules/@julclang/joust-runtime/package.json'), 'utf8')).version;
+  const other = runtime.replace(/^(\d+\.\d+)\..*/, '$1.99');   // the same minor: the description check passes
+  const description = { preamble: { title: 'probe.Probe' }, 'x-joust': { version: 2 } };
+  const peer = client(root);
+  t.after(() => peer.close());
+  const r = await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params,
+    build: bundle(root, [{ description, script: '', built: { joust: other } }]) });
+  assert.equal(r.error.data.code, 'runtimeVersion');
+  assert.match(r.error.message, /contracts built by JOUST .*: rebuild with joust build/);
+});
+
+test('D3 checks transitive runtime imports before evaluating the imported module', async t => {
+  const { root } = probe(t);
+  const outside = mkdtempSync(join(tmpdir(), 'joust-transitive-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  const file = join(outside, 'probe.mjs');
+  writeFileSync(file, 'throw Error("outside module loaded")');
+  const entry = join(root, 'node_modules/@julclang/joust-runtime/src/host-service.js');
+  writeFileSync(entry, 'import ' + JSON.stringify(file) + ';\n' + readFileSync(entry, 'utf8'));
+  const peer = client(root);
+  t.after(() => peer.close());
+  assert.equal((await peer.rpc('initialize', { ...fixture('sessions/bank').frames[2].client.params, build: bundle(root) })).error.data.code, 'outsideProject');
+});
+
+test('D3 refuses modules outside the hashed closure and D4 reports asynchronous image load errors', async t => {
+  const { root } = probe(t);
+  const modules = join(root, 'node_modules/@julclang/joust-runtime/src');
+  const outside = mkdtempSync(join(tmpdir(), 'joust-required-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  const file = join(outside, 'probe.cjs');
+  writeFileSync(file, 'throw Error("outside module loaded")');
+  writeFileSync(join(modules, 'nested.cjs'), 'require(' + JSON.stringify(file) + ')');
+  const entry = join(modules, 'exnref.js');
+  const original = readFileSync(entry, 'utf8');
+  writeFileSync(entry, "import './nested.cjs';\n" + original);
+  const init = fixture('sessions/bank').frames[2].client.params;
+  const a = client(root);
+  try { assert.equal((await a.rpc('initialize', { ...init, build: bundle(root) })).error.data.code, 'outsideProject'); }
+  finally { await a.close(); }
+  writeFileSync(entry, original);
+  writeFileSync(join(modules, '../engine/joust-runtime.js'), "Promise.reject(Error('invalid image'))");
+  const b = client(root);
+  try { assert.equal((await b.rpc('initialize', { ...init, build: bundle(root) })).error.data.code, 'runtimeVersion'); }
+  finally { await b.close(); }
+});
